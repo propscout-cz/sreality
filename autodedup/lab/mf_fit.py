@@ -207,9 +207,35 @@ def _digest(g: Sequence[Ground], masks: Sequence[np.ndarray]) -> str:
     return hashlib.sha1(json.dumps(body).encode()).hexdigest()[:12]
 
 
-def _touching(g: Ground, key: str) -> np.ndarray:
+def advert_blocks(grounds: Sequence[Ground]) -> dict[int, frozenset[str]]:
+    """Every advert's blocks across the grounds' exports: one advert can sit in two exports under
+    two block names (the post-heal trial's Praha negative control shares adverts with c18's
+    quarter490156), so the town seal is read on adverts, not on block names."""
+    import gzip
+
+    seen: dict[int, set[str]] = {}
+    for g in grounds:
+        path = g.meta.get("export")
+        if not path:
+            continue
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith('{"t": "listing"'):
+                    row = json.loads(line)
+                    seen.setdefault(int(row["id"]), set()).add(str(row["block"]))
+    return {k: frozenset(v) for k, v in seen.items()}
+
+
+def _touching(g: Ground, key: str, blocks_of: Mapping[int, frozenset[str]] | None = None
+              ) -> np.ndarray:
     towns = key.split("+")
-    return np.isin(g.blocks[:, 0], towns) | np.isin(g.blocks[:, 1], towns)
+    hit = np.isin(g.blocks[:, 0], towns) | np.isin(g.blocks[:, 1], towns)
+    if blocks_of:
+        wanted = set(towns)
+        hit |= np.array([bool(wanted & blocks_of.get(a, frozenset()))
+                         or bool(wanted & blocks_of.get(b, frozenset()))
+                         for a, b in g.keys.tolist()], dtype=bool)
+    return hit
 
 
 def sealed(grounds: Sequence[Ground], scored: Sequence[str], source: str, calibration: str,
@@ -226,10 +252,17 @@ def sealed(grounds: Sequence[Ground], scored: Sequence[str], source: str, calibr
     masks = {g.name: keep(g.origin) for g in grounds}
     by_name = {g.name: g for g in grounds}
     fitted: dict[tuple[Any, ...], tuple[Fitted, dict[str, Any]]] = {}
+    blocks_of = advert_blocks(grounds)
+    touch_memo: dict[tuple[str, str], np.ndarray] = {}
+
+    def touching(h: Ground, key: str) -> np.ndarray:
+        if (h.name, key) not in touch_memo:
+            touch_memo[(h.name, key)] = _touching(h, key, blocks_of)
+        return touch_memo[(h.name, key)]
 
     def model_for(key: str) -> tuple[Any, ...]:
         """The town set's model: every kept row of every ground that touches a town of it is out."""
-        out_rows = [masks[h.name] & _touching(h, key) for h in grounds]
+        out_rows = [masks[h.name] & touching(h, key) for h in grounds]
         key = tuple((h.name, tuple(np.flatnonzero(m).tolist()))
                     for h, m in zip(grounds, out_rows) if m.any())
         if key not in fitted:
@@ -265,12 +298,21 @@ def sealed(grounds: Sequence[Ground], scored: Sequence[str], source: str, calibr
                for name in scored}
     maps: dict[str, tuple[Any, dict[str, Any]]] = {}
     for name in scored:
+        scored_towns = "+".join(sorted(by_name[name].towns))
+
+        def off_scored(h: Ground) -> np.ndarray:
+            """A row touching an advert of the scored cohort never fits another cohort's map."""
+            if h.name == name:
+                return np.ones(len(h.y), dtype=bool)
+            return ~touching(h, scored_towns)
         if calibration == "trial":
-            base = [(by_name["trial"], np.ones(len(by_name["trial"].y), dtype=bool))]
+            trial = by_name["trial"]
+            base = [(trial, off_scored(trial))]
         elif calibration == "pooled":
             base = [(g, masks[g.name]) for g in grounds if masks[g.name].any()]
         else:
-            base = [(g, masks[g.name]) for g in grounds if g.name != name and masks[g.name].any()]
+            base = [(g, masks[g.name] & off_scored(g)) for g in grounds
+                    if g.name != name and (masks[g.name] & off_scored(g)).any()]
         if not base:
             raise ValueError(f"{name}: no ground outside it holds a {source} label to fit its map")
         xs = np.concatenate([raw_of(g)[m] for g, m in base])
