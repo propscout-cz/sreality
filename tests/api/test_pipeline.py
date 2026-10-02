@@ -7,6 +7,7 @@ is exercised against a scripted fake connection.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -194,6 +195,7 @@ class _FakeConn:
 
 
 _CARD_ROW = (42, 1, "interested", "Zájem", 5, None, None, None, "1", "copper")
+_CARD = uuid.UUID("33333333-3333-3333-3333-333333333333")
 
 
 def test_add_card_inserts_at_entry_stage_and_logs_event():
@@ -201,15 +203,17 @@ def test_add_card_inserts_at_entry_stage_and_logs_event():
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),  # property active -> itself
         (lambda q: "WHERE is_entry" in q, [(1,)]),
         (lambda q: "max(board_position)" in q, [(5,)]),
-        (lambda q: "INSERT INTO property_pipeline (" in q, [(42,)]),  # RETURNING -> inserted
+        (lambda q: "INSERT INTO property_pipeline (" in q, [(_CARD,)]),  # RETURNING -> inserted
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q, [_CARD_ROW]),
     ])
     out = pipeline_module.add_card(conn, s.AddPipelineCardIn(property_id=42), account_id=_ACCT)
     assert out["added"] is True
     assert out["stage_key"] == "interested"
-    assert any(
-        "INSERT INTO property_pipeline_events" in e[0] for e in conn.executed
-    )
+    events = [(q, p) for q, p in conn.executed if "INSERT INTO property_pipeline_events" in q]
+    assert len(events) == 1
+    sql, params = events[0]
+    assert "account_id, card_id)" in sql
+    assert params == (42, 1, _ACCT, _CARD)  # the card the INSERT just minted
 
 
 def test_add_card_idempotent_returns_existing_stage_no_event():
@@ -236,7 +240,7 @@ def test_add_card_redirects_merged_away_property_to_survivor():
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "WHERE is_entry" in q, [(1,)]),
         (lambda q: "max(board_position)" in q, [(5,)]),
-        (lambda q: "INSERT INTO property_pipeline (" in q, [(42,)]),
+        (lambda q: "INSERT INTO property_pipeline (" in q, [(_CARD,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q, [_CARD_ROW]),
     ])
     out = pipeline_module.add_card(conn, s.AddPipelineCardIn(property_id=99), account_id=_ACCT)
@@ -257,7 +261,7 @@ def test_add_card_locks_entry_stage_before_computing_board_position():
         (lambda q: "WHERE is_entry" in q, [(1,)]),
         (lambda q: "FOR UPDATE" in q, [(1,)]),
         (lambda q: "max(board_position)" in q, [(5,)]),
-        (lambda q: "INSERT INTO property_pipeline (" in q, [(42,)]),
+        (lambda q: "INSERT INTO property_pipeline (" in q, [(_CARD,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q, [_CARD_ROW]),
     ])
     pipeline_module.add_card(conn, s.AddPipelineCardIn(property_id=42), account_id=_ACCT)
@@ -301,7 +305,8 @@ def test_add_card_no_active_survivor_is_422():
 
 def test_move_card_to_new_stage_logs_event_and_stamps_entered():
     conn = _FakeConn([
-        (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
+        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+         [(1, _CARD)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
          [(42, 3, "offer", "Nabídka", 2, None, None, None, "3", "teal")]),
     ])
@@ -321,26 +326,29 @@ def test_remove_card_redirects_merged_away_to_survivor():
     and the ledger event is stamped with a retired property forever."""
     conn = _FakeConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # 99 merged into active 42
-        (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(3,)]),
+        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+         [(3, _CARD)]),
     ])
     assert pipeline_module.remove_card(conn, 99, account_id=_ACCT) == {"removed": True}
     dels = [p for q, p in conn.executed if "DELETE FROM property_pipeline" in q]
     assert dels and dels[0] == (42, _ACCT)
     evs = [p for q, p in conn.executed if "INSERT INTO property_pipeline_events" in q]
     assert evs and evs[0][0] == 42  # the ledger row carries the survivor
+    assert evs[0][-1] == _CARD  # ...and names the card it ended
 
 
 def test_remove_card_unresolvable_id_stays_idempotent():
     conn = _FakeConn([(lambda q: "RECURSIVE chain" in q, [])])
     assert pipeline_module.remove_card(conn, 7, account_id=_ACCT) == {"removed": False}
-    reads = [p for q, p in conn.executed if "SELECT stage_id FROM property_pipeline" in q]
+    reads = [p for q, p in conn.executed if "SELECT stage_id, card_id FROM property_pipeline" in q]
     assert reads and reads[0] == (7, _ACCT)  # raw id, still looked up
 
 
 def test_move_card_redirects_merged_away_to_survivor():
     conn = _FakeConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
-        (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
+        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+         [(1, _CARD)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
          [(42, 3, "offer", "Nabídka", 2, None, None, None, "3", "teal")]),
     ])
@@ -349,13 +357,15 @@ def test_move_card_redirects_merged_away_to_survivor():
     assert locks and locks[0] == (42, _ACCT)
     evs = [p for q, p in conn.executed if "INSERT INTO property_pipeline_events" in q]
     assert evs and evs[0][0] == 42
+    assert evs[0][-1] == _CARD  # the moved card keeps its identity
 
 
 def test_move_card_stage_change_asks_the_live_deal_rule():
     """Re-opening a closed, dismissed deal makes it live — the lift must follow.
     A move INTO a closed stage runs the same statement; the data says no-op."""
     conn = _FakeConn([
-        (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(9,)]),
+        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+         [(9, _CARD)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
          [(42, 2, "call", "For Call", 2, None, None, None, "2", "teal")]),
     ])
@@ -366,7 +376,8 @@ def test_move_card_stage_change_asks_the_live_deal_rule():
 
 def test_move_card_reorder_only_leaves_dismissals_alone():
     conn = _FakeConn([
-        (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
+        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+         [(1, _CARD)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
          [(42, 1, "interested", "Zájem", 3, None, None, None, "1", "copper")]),
     ])
@@ -407,7 +418,8 @@ def test_stage_edits_that_reopen_nothing_leave_dismissals_alone():
 
 def test_move_card_reorder_only_logs_no_event():
     conn = _FakeConn([
-        (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
+        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+         [(1, _CARD)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
          [(42, 1, "interested", "Zájem", 3, None, None, None, "1", "copper")]),
     ])

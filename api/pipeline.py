@@ -16,7 +16,12 @@ row claims, it cannot choose one. The columns are NOT NULL (migration 295), so a
 NULL-tolerant spelling would tolerate nothing; it would only convert a lost
 account into silence. The card INSERT's ON CONFLICT stays bare (no inference
 target) so it works against both the (property_id) PK and the
-(account_id, property_id) PK migration 295 swaps in.
+(account_id, property_id) PK migration 295 swaps in; it also arbitrates
+migration 582's unique `card_id`, which a fresh column default never hits.
+
+Every ledger event names its card (`card_id`, migration 582): the merge carrier
+(`toolkit.pipeline_identity`) finds a deal by it on a detach, so an add, a stage
+move and a remove all stamp it. A re-add after a remove is a new card.
 """
 
 from __future__ import annotations
@@ -279,16 +284,17 @@ def add_card(
                 "INSERT INTO property_pipeline "
                 "  (property_id, stage_id, board_position, account_id) "
                 "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING "
-                "RETURNING property_id",
+                "RETURNING card_id",
                 (pid, entry_stage_id, next_pos, account_id),
             )
-            added = cur.fetchone() is not None
-            if added:
+            inserted = cur.fetchone()
+            added = inserted is not None
+            if inserted is not None:
                 cur.execute(
                     "INSERT INTO property_pipeline_events "
-                    "  (property_id, to_stage_id, reason, account_id) "
-                    "VALUES (%s, %s, 'operator', %s)",
-                    (pid, entry_stage_id, account_id),
+                    "  (property_id, to_stage_id, reason, account_id, card_id) "
+                    "VALUES (%s, %s, 'operator', %s, %s)",
+                    (pid, entry_stage_id, account_id, inserted[0]),
                 )
             lift_dismissals_of_live_deals(cur, [pid])
     except psycopg.errors.ForeignKeyViolation:
@@ -317,14 +323,14 @@ def remove_card(
     with conn.transaction(), conn.cursor() as cur:
         property_id = resolve_active_property_id(conn, property_id) or property_id
         cur.execute(
-            "SELECT stage_id FROM property_pipeline "
+            "SELECT stage_id, card_id FROM property_pipeline "
             "WHERE property_id = %s AND account_id = %s",
             (property_id, account_id),
         )
         row = cur.fetchone()
         if row is None:
             return {"removed": False}
-        from_stage_id = int(row[0])
+        from_stage_id, card_id = int(row[0]), row[1]
         cur.execute(
             "DELETE FROM property_pipeline "
             "WHERE property_id = %s AND account_id = %s",
@@ -332,9 +338,9 @@ def remove_card(
         )
         cur.execute(
             "INSERT INTO property_pipeline_events "
-            "  (property_id, from_stage_id, reason, account_id) "
-            "VALUES (%s, %s, 'operator', %s)",
-            (property_id, from_stage_id, account_id),
+            "  (property_id, from_stage_id, reason, account_id, card_id) "
+            "VALUES (%s, %s, 'operator', %s, %s)",
+            (property_id, from_stage_id, account_id, card_id),
         )
     return {"removed": True}
 
@@ -352,14 +358,14 @@ def move_card(
     with conn.transaction(), conn.cursor() as cur:
         property_id = resolve_active_property_id(conn, property_id) or property_id
         cur.execute(
-            "SELECT stage_id FROM property_pipeline WHERE property_id = %s "
+            "SELECT stage_id, card_id FROM property_pipeline WHERE property_id = %s "
             "AND account_id = %s FOR UPDATE",
             (property_id, account_id),
         )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(404, "pipeline card not found")
-        from_stage_id = int(row[0])
+        from_stage_id, card_id = int(row[0]), row[1]
         stage_changed = body.stage_id is not None and body.stage_id != from_stage_id
 
         sets: list[str] = []
@@ -386,9 +392,9 @@ def move_card(
             if stage_changed:
                 cur.execute(
                     "INSERT INTO property_pipeline_events "
-                    "  (property_id, from_stage_id, to_stage_id, reason, account_id) "
-                    "VALUES (%s, %s, %s, 'operator', %s)",
-                    (property_id, from_stage_id, body.stage_id, account_id),
+                    "  (property_id, from_stage_id, to_stage_id, reason, account_id, card_id) "
+                    "VALUES (%s, %s, %s, 'operator', %s, %s)",
+                    (property_id, from_stage_id, body.stage_id, account_id, card_id),
                 )
                 # Re-opening a closed, dismissed deal makes it live again.
                 lift_dismissals_of_live_deals(cur, [property_id])

@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from tests import sql_corpus
+from toolkit import pipeline_identity as pi
 from toolkit import property_carriers as carriers
 from toolkit.property_carriers import (
     CARRIER_SQL,
@@ -259,6 +260,9 @@ class _StrictCur:
     def fetchone(self) -> tuple | None:
         return self.fetch
 
+    def fetchall(self) -> list[tuple]:
+        return []
+
 
 def _walk(carrier: Carrier, *, fetch: tuple | None = (41,), source: str = "operator",
           undo: tuple[Hop, ...] = (Hop(1, G, 10, 20),), left: int = 10) -> _StrictCur:
@@ -326,17 +330,74 @@ def test_curation_dispatches_and_dismissals_give_nothing_back_on_a_detach():
         assert cur.ran == [], carrier.name
 
 
-def test_the_pipeline_restore_drops_the_absorbed_card_only_where_today_does():
-    """With one hop (or any detach whose property left is that merge's survivor) the card the
-    survivor absorbed comes off it; off a later survivor on a chain, the restore runs alone."""
-    pipeline = next(c for c in PROPERTY_CARRIERS if c.name == "pipeline")
-    one_hop = _walk(pipeline)
-    detach = one_hop.ran[4:]
-    assert [p for _s, p in detach] == [{"g": G, "r": 20, "s": 10}] * 2
-    chained = _StrictCur(pipeline)
-    pipeline.on_detach(chained, DetachStep(20, 5, (Hop(1, G, 10, 20), Hop(2, G2, 5, 10)),
-                                           "operator"))
-    assert [(s.split()[0], p) for s, p in chained.ran] == [("INSERT", {"g": G, "r": 20, "s": None})]
+_PIPELINE = next(c for c in PROPERTY_CARRIERS if c.name == "pipeline")
+
+
+def test_the_pipeline_merge_snapshots_card_ids_and_moves_the_winning_row():
+    """Both sides' cards are snapshotted with their card_id; where the retired card wins, its ROW
+    moves onto the survivor (card_id, stage and dates its own) and the survivor's is parked."""
+    cur = _StrictCur(_PIPELINE)
+    _PIPELINE.on_merge(cur, MergeStep(10, 20, G, "operator"))
+    assert [s for s, _p in cur.ran] == [_n(s) for s in (
+        pi._SNAPSHOT_SQL, pi._MOVE_IF_EMPTY_SQL, pi._RETIRED_WINS_SQL, pi._DROP_RETIRED_SQL)]
+    assert [p for _s, p in cur.ran] == [{"r": 20, "s": 10, "g": G}] * 4
+    snapshot, wins = _n(pi._SNAPSHOT_SQL), _n(pi._RETIRED_WINS_SQL)
+    assert "note_snapshot, card_id)" in snapshot and "note, card_id FROM" in snapshot
+    assert wins.startswith("WITH beaten AS ( DELETE FROM property_pipeline s")
+    assert "SET property_id = %(s)s" in wins and "stage_id =" not in wins.split("UPDATE")[1], (
+        "the winning row moves; nothing is copied onto the survivor's row")
+
+
+def test_a_one_hop_detach_sends_home_by_card_id_and_falls_back_for_a_pre_582_merge():
+    detach = _walk(_PIPELINE).ran[4:]
+    assert [s for s, _p in detach] == [_n(s) for s in (
+        pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._RESTORE_SQL, pi._REFILL_SQL,
+        pi._DROP_ABSORBED_SQL, pi._LIFT_DISMISSALS_SQL)]
+    params = {"g": G, "r": 20, "s": 10, "s0": 10, "path": [10]}
+    assert [p for _s, p in detach[:3]] == [params] * 3
+    assert detach[3][1] == {**params, "left_accounts": [], "left_ids": []}
+    assert detach[4][1] == params
+    assert detach[5][1] == {"ids": [20]}
+
+
+def test_a_chained_detach_drops_nothing_by_inference():
+    """Off a later survivor the pre-582 one-hop drop never runs; the keyed path gets the whole
+    advert path and the merge that retired the property (`undo[0]`)."""
+    cur = _StrictCur(_PIPELINE)
+    _PIPELINE.on_detach(cur, DetachStep(20, 5, (Hop(1, G, 10, 20), Hop(2, G2, 5, 10)),
+                                        "operator"))
+    assert [s for s, _p in cur.ran] == [_n(s) for s in (
+        pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._RESTORE_SQL, pi._REFILL_SQL,
+        pi._LIFT_DISMISSALS_SQL)]
+    assert cur.ran[1][1] == {"g": G, "r": 20, "s": 5, "s0": 10, "path": [10, 5]}
+
+
+def test_the_pre_582_fallback_reads_only_unkeyed_snapshots_and_the_keyed_path_only_keyed():
+    for fallback in (pi._RESTORE_SQL, pi._DROP_ABSORBED_SQL):
+        assert "e.card_id IS NULL" in _n(fallback)
+    for keyed in (pi._SEND_HOME_SQL, pi._REFILL_SQL):
+        assert "card_id IS NOT NULL" in _n(keyed)
+
+
+def test_every_card_id_lookup_names_its_account():
+    """card_id is unique across accounts, yet the carrier runs as service role: every pairing on
+    it also pairs the account (tenancy shape 3)."""
+    pair = re.compile(r"\b(\w+)\.card_id = (\w+)\.card_id\b")
+    for statement in (pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._REFILL_SQL):
+        s = _n(statement)
+        for a, b in pair.findall(s):
+            assert f"{a}.account_id = {b}.account_id" in s, (a, b, s[:120])
+
+
+def test_a_removed_deal_comes_back_at_the_stage_it_ended_at():
+    assert "COALESCE(l.to_stage_id, l.from_stage_id)" in _n(pi._SEND_HOME_SQL)
+
+
+def test_a_put_back_lifts_a_dismissal_only_under_a_live_card():
+    lift = _n(pi._LIFT_DISMISSALS_SQL)
+    assert "lift_reason = 'pipeline'" in lift and "NOT ps.is_terminal" in lift
+    assert "pp.account_id = d.account_id" in lift
+    assert "split_carry" in _n(pi._REFILL_SQL) and "unmerge_restore" in _n(pi._SEND_HOME_SQL)
 
 
 def test_every_carrier_statement_is_in_the_prepare_corpus():

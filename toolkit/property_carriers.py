@@ -22,7 +22,9 @@ Carrier invariants:
 The hard ordering: the ledger INSERT comes before the re-point (it selects the adverts the
 re-point then moves; that lives in `property_identity._merge_pair`); Pipeline before Dismissals
 (the dismissal lift reads the live card the pipeline carry just placed); every carrier before
-the retire, which under migration 559 is the last write. The rest write disjoint tables.
+the retire, which under migration 559 is the last write. The rest write disjoint tables, but
+for one sanctioned crossing: on a detach (the list reversed, so Dismissals' no-op runs first) the
+pipeline lifts the dismissal a live card it puts back contradicts.
 
 Adding one: a SET or APPEND table keyed on `property_id` is one `CurationTable(...)` line before
 `Pipeline()`; any other shape is one class meeting `Carrier`; a column that must NOT follow a
@@ -238,7 +240,8 @@ WHERE r.property_id = %(retired)s AND cs.notification_id = r.id
 
 
 class Pipeline:
-    """Rule 22's single-valued card, terminal-aware; implemented in `toolkit.pipeline_identity`."""
+    """Rule 22's single-valued card, terminal-aware, found by its `card_id` (migration 582);
+    implemented in `toolkit.pipeline_identity`."""
 
     name = "pipeline"
     columns = (("property_pipeline", "property_id"), ("property_pipeline_events", "property_id"))
