@@ -2229,19 +2229,19 @@ renumber.** Navigate by area:
     **TERMINAL-AWARE**: a live (non-terminal) stage always beats a closed/terminal one, so a
     merge never buries a live deal under `lost`/`won`; within the same terminality the higher
     `position` wins (tie → later `updated_at`, then the survivor). The winning ROW ends on the
-    survivor (its `card_id`, stage, `added_at` and `entered_stage_at` its own; the survivor's
-    note if it had one); the losing deal is **parked**: its row is deleted and its snapshot is
-    its record. `reconcile_pipeline_on_detach` is a lookup, not an inference: when a detach
+    survivor (its `card_id`, stage, `added_at`, `entered_stage_at` and note all its own); the
+    losing deal is **parked**: its row is deleted and its snapshot (note included) is its
+    record. `reconcile_pipeline_on_detach` is a lookup, not an inference: when a detach
     reactivates R, the card R held at the merge that retired it comes home BY ITS `card_id` —
     its row moves from wherever it lives now, so progress made since travels; a card that no
     longer lives (parked, or ended by the operator) is re-inserted at the stage of its newest
-    event — unless a later detach already sent it to a property off R's lineage. R and every
-    property a card just left then take back the most-advanced deal parked on them (or inside
-    them, through a standing merge), and a live card put back lifts that account's dismissal
-    (Dismissals' own detach runs first and writes nothing). Nothing is deleted by inference: a
-    survivor's own deal, a side merge's deal and the operator's new deal are never touched. A
-    merge snapshotted before 582 (`card_id` NULL) keeps the old restore until it is undone.
-    Known residuals: `roadmap/operator-workflow-track.md` (F1). Writes go through the
+    event — unless a later detach already sent it home to a property that held it before R did.
+    R and every property a card just left then take back the most-advanced deal parked on them
+    (or inside them, through a standing merge), and a live card put back lifts that account's
+    dismissal (Dismissals' own detach runs first and writes nothing). Nothing is deleted by
+    inference: a survivor's own deal, a side merge's deal and the operator's new deal are never
+    touched. A merge snapshotted before 582 (`card_id` NULL) keeps the old restore until it is
+    undone. Known residuals: `roadmap/operator-workflow-track.md` (P1). Writes go through the
     JWT-gated API (`tenant_conn`; `POST/DELETE /pipeline/cards` to
     bookmark/un-bookmark, `PATCH /pipeline/cards/{id}` to move stage — a stage change stamps
     `entered_stage_at` and logs an `operator` event naming the card, a pure within-stage
@@ -2281,14 +2281,14 @@ renumber.** Navigate by area:
     row, there is no restore path in the UI or the API, and re-adding stamps a fresh `added_at` — so
     a stray click in a 60-card grid, undone the obvious way, silently reset "in pipeline since" and
     every time-in-stage figure the board sorts on. (The transition trail survives in
-    `property_pipeline_events`; nothing reads it back. Operator notes are property-grain — rule #18 —
-    and were never at risk: `property_pipeline.note` is a separate column with no writer in any
-    surface.) The confirm therefore names that consequence and points at the terminal stages, which
-    close a deal while KEEPING its record — the data-preserving alternative to deletion. The menu
-    also replaced the listing header's own `<select>` + bare ✕, and the Chrome-extension panel gained
-    the same confirm on its ✕ (`buildConfirmRow` — one destructive-confirm shape for the whole panel,
-    not one per action). The kanban is the sanctioned exception, on both counts: moves are
-    drag-and-drop and its trash already carried the confirm.
+    `property_pipeline_events`; only a detach reads it back, re-inserting a removed deal at its last
+    logged stage. Operator notes are property-grain, rule #18, and never at risk:
+    `property_pipeline.note` has no API writer.) The confirm therefore names that consequence and
+    points at the terminal stages, which close a deal while KEEPING its record — the data-preserving
+    alternative to deletion. The menu also replaced the listing header's own `<select>` + bare ✕,
+    and the Chrome-extension panel gained the same confirm on its ✕ (`buildConfirmRow` — one
+    destructive-confirm shape for the whole panel, not one per action). The kanban is the sanctioned
+    exception, on both counts: moves are drag-and-drop and its trash already carried the confirm.
     **Menus hang off `<AnchoredPopover>`, which portals to `<body>`.** Not a style choice: the funnel
     sits inside an `overflow-hidden` card AND inside that card's `<Link>`, so the app's other
     popovers (`absolute` inside their own container) would be clipped to the photo and every click

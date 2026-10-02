@@ -15,8 +15,16 @@
 --
 -- ADDITIVE. No RLS, grant or view change: table grants cover the new columns, the policies
 -- key on account_id, and every reader names its columns. Today's code names its columns on
--- every write, so it inherits the defaults and runs unchanged with this applied. Apply
--- BEFORE the code that names card_id merges (the API and the realtime worker run from main).
+-- every write, so it inherits the defaults and runs unchanged with this applied.
+--
+-- APPLY FIRST, THEN MERGE the code that names card_id (`database` skill: apply before you merge
+-- when the code reads the new schema; the migration 438 outage). Railway deploys the API and
+-- the realtime worker on merge, and without this column that code raises UndefinedColumn:
+-- every pipeline add / move / remove would 500, and every merge (operator and engine) and every
+-- detach that reactivates a property would abort. Verify before merging: two rows from
+--   SELECT table_name FROM information_schema.columns WHERE column_name = 'card_id'
+--     AND table_name IN ('property_pipeline', 'property_pipeline_events');
+-- and the index property_pipeline_card_id_uq in pg_indexes.
 
 begin;
 

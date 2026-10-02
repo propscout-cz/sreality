@@ -16,12 +16,13 @@ both sides hold one keeps ONE deal and parks the other:
     the merge that retired it (its snapshot at `undo[0]`) comes home BY ITS card_id. Live
     anywhere -> its row moves to R with its current stage (progress travels). Not live
     (parked, or ended by the operator) -> it is re-inserted on R at its last logged stage.
-    Skipped where a later detach already sent it to a property off R's lineage (R, the
-    survivors this advert passed through, the merged_into chain from R's survivor). Then R and
-    each property a card left, if it holds no card for that account, take back the most
-    advanced deal PARKED on it or on a property a standing merge folded into it. A live
-    card placed on a property lifts that account's dismissal of it (`api.dismissals`' rule;
-    Dismissals' own detach runs before this one and does nothing).
+    Skipped where a later detach already sent it home to a property that held it BEFORE R did
+    (that send-home's merge snapshot is older than R's): the older home keeps it, while a
+    survivor it only passed through after R gives it up. Then R and each property a card
+    left, if it holds no card for that account, take back the most advanced deal PARKED on
+    it or on a property a standing merge folded into it. A live card placed on a property
+    lifts that account's dismissal of it (`api.dismissals`' rule; Dismissals' own detach runs
+    before this one and does nothing).
   - a merge snapshotted before migration 582 (card_id NULL) is detached as before: its snapshot
     is restored, and on one hop the survivor's absorbed card dropped.
 
@@ -62,9 +63,9 @@ _MOVE_IF_EMPTY_SQL = (
 
 # (2) both sides hold a card and the retired one is more advanced (terminal-aware) -> the
 #     survivor's is parked (deleted; snapshotted in (0)) and the retired ROW moves onto the
-#     survivor in the same statement, its card_id, stage and dates with it. The PK slot the
-#     DELETE frees is reusable within the statement: a row this transaction deleted is dead
-#     to the unique check.
+#     survivor in the same statement, its card_id, stage, dates and note with it (the parked
+#     note lives in its snapshot). The PK slot the DELETE frees is reusable within the
+#     statement: a row this transaction deleted is dead to the unique check.
 _RETIRED_WINS_SQL = """
 WITH beaten AS (
     DELETE FROM property_pipeline s
@@ -77,10 +78,10 @@ WITH beaten AS (
            OR (rs.is_terminal = ss.is_terminal
                AND (rs.position > ss.position
                     OR (rs.position = ss.position AND r.updated_at > s.updated_at))))
-    RETURNING s.account_id, s.note
+    RETURNING s.account_id
 )
 UPDATE property_pipeline r
-SET property_id = %(s)s, note = COALESCE(b.note, r.note), updated_at = now()
+SET property_id = %(s)s, updated_at = now()
 FROM beaten b
 WHERE r.property_id = %(r)s AND r.account_id IS NOT DISTINCT FROM b.account_id
 """
@@ -101,25 +102,25 @@ _LOCK_OWN_SQL = (
 # Detach (a): the card R held at the merge that retired it comes home by its card_id. Live ->
 # its row moves (stage, dates, board place travel); not live -> re-inserted at the stage of
 # its newest event (a removal logs the stage it ended at) with its newest snapshot's note.
-# Skipped where a later send-home put it on a property off R's lineage: R, the advert's path,
-# and the merged_into chain from R's survivor (`up`). Returns each (account_id, property_id)
-# the card was last on, for (b).
+# Skipped where a later send-home (h) put it on another property whose claim is OLDER than
+# R's: the snapshot that send-home answered (c, its merge_absorb on h's property in h's group)
+# precedes R's (e). A send-home to a survivor it reached after R (the engine undoes a chain one
+# group at a time, newest first) never blocks R. Returns each (account_id, property_id) the
+# card was last on, for (b).
 _SEND_HOME_SQL = """
-WITH RECURSIVE up(id, depth) AS (
-    SELECT %(s0)s::bigint, 0
-    UNION ALL
-    SELECT p.merged_into, u.depth + 1 FROM properties p JOIN up u ON p.id = u.id
-    WHERE p.status = 'merged_away' AND p.merged_into IS NOT NULL AND u.depth < 20
-), own AS (
+WITH own AS (
     SELECT e.account_id, e.card_id FROM property_pipeline_events e
     WHERE e.merge_group_id = %(g)s::uuid AND e.reason = 'merge_absorb'
       AND e.property_id = %(r)s::bigint AND e.card_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM property_pipeline_events h
+        JOIN property_pipeline_events c
+          ON c.card_id = h.card_id AND c.account_id = h.account_id
+         AND c.merge_group_id = h.merge_group_id AND c.reason = 'merge_absorb'
+         AND c.property_id = h.property_id
         WHERE h.card_id = e.card_id AND h.account_id = e.account_id AND h.id > e.id
           AND h.reason = 'unmerge_restore' AND h.to_stage_id IS NOT NULL
-          AND h.property_id <> %(r)s::bigint AND h.property_id <> ALL(%(path)s::bigint[])
-          AND h.property_id NOT IN (SELECT id FROM up))
+          AND h.property_id <> %(r)s::bigint AND c.id < e.id)
 ), live AS (
     SELECT o.account_id, o.card_id, c.property_id AS was FROM own o
     JOIN property_pipeline c ON c.card_id = o.card_id AND c.account_id = o.account_id
@@ -282,9 +283,7 @@ def reconcile_pipeline_on_detach(
     (`undo[0]`); put back what was parked on every property left without a card; lift the
     dismissals a placed live card contradicts. A pre-582 merge restores its snapshot
     (dropping the absorbed card on one hop) as before."""
-    g, s0 = undo[0].group, undo[0].survivor
-    params = {"g": g, "r": restored_id, "s": left_id, "s0": s0,
-              "path": [h.survivor for h in undo]}
+    params = {"g": undo[0].group, "r": restored_id, "s": left_id}
     cur.execute(_LOCK_OWN_SQL, params)
     cur.execute(_SEND_HOME_SQL, params)
     left = cur.fetchall()
@@ -292,6 +291,6 @@ def reconcile_pipeline_on_detach(
     cur.execute(_REFILL_SQL, {**params, "left_accounts": [a for a, _p in left],
                               "left_ids": [p for _a, p in left]})
     placed = [int(p) for (p,) in cur.fetchall()]
-    if left_id == s0:
+    if left_id == undo[0].survivor:
         cur.execute(_DROP_ABSORBED_SQL, params)
     cur.execute(_LIFT_DISMISSALS_SQL, {"ids": sorted({restored_id, *placed})})

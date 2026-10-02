@@ -326,22 +326,25 @@ def test_remove_card_redirects_merged_away_to_survivor():
     and the ledger event is stamped with a retired property forever."""
     conn = _FakeConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # 99 merged into active 42
-        (lambda q: "SELECT stage_id, card_id FROM property_pipeline WHERE property_id" in q,
+        (lambda q: "DELETE FROM property_pipeline" in q and "RETURNING stage_id, card_id" in q,
          [(3, _CARD)]),
     ])
     assert pipeline_module.remove_card(conn, 99, account_id=_ACCT) == {"removed": True}
+    assert not [q for q, _p in conn.executed if q.startswith("SELECT stage_id")], (
+        "an unlocked read before the DELETE can name a card the DELETE did not remove")
     dels = [p for q, p in conn.executed if "DELETE FROM property_pipeline" in q]
     assert dels and dels[0] == (42, _ACCT)
     evs = [p for q, p in conn.executed if "INSERT INTO property_pipeline_events" in q]
     assert evs and evs[0][0] == 42  # the ledger row carries the survivor
-    assert evs[0][-1] == _CARD  # ...and names the card it ended
+    assert evs[0][1:] == (3, _ACCT, _CARD)  # ...the stage and the card the DELETE ended
 
 
 def test_remove_card_unresolvable_id_stays_idempotent():
     conn = _FakeConn([(lambda q: "RECURSIVE chain" in q, [])])
     assert pipeline_module.remove_card(conn, 7, account_id=_ACCT) == {"removed": False}
-    reads = [p for q, p in conn.executed if "SELECT stage_id, card_id FROM property_pipeline" in q]
-    assert reads and reads[0] == (7, _ACCT)  # raw id, still looked up
+    dels = [p for q, p in conn.executed if "DELETE FROM property_pipeline" in q]
+    assert dels and dels[0] == (7, _ACCT)  # raw id, still tried
+    assert not [q for q, _p in conn.executed if "INSERT INTO property_pipeline_events" in q]
 
 
 def test_move_card_redirects_merged_away_to_survivor():

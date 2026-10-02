@@ -39,12 +39,13 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   `detach_listings` call (the injected `detach=` takes the set); the one-advert adapter is deleted.
 - **Done (2026-10-02):** pipeline card identity — migration 582 `property_pipeline.card_id`; a
   detach sends each deal home by id, parks the loser of a both-cards merge, puts parked deals back
-  on emptied properties (supersedes draft #1681, closed). Pre-582 merges keep the old restore.
-- **Next:** F1 — a deal parked inside a property that has since merged on stays hidden until that
+  on emptied properties (supersedes draft #1681 — closed unmerged when this lands). Pre-582 merges
+  keep the old restore.
+- **Next:** P1 — a deal parked inside a property that has since merged on stays hidden until that
   property is detached (strict xfail
-  `test_a_deal_parked_inside_a_property_that_merged_on_shows_on_its_survivor`); F2 — expose
+  `test_a_deal_parked_inside_a_property_that_merged_on_shows_on_its_survivor`); P2 — expose
   `card_id` and key the SPA board/cache by it (closes the multi-membership `property_id`
-  collision); F3 — delete the pre-582 fallback once no standing pre-582 snapshot remains; R3 — an
+  collision); P3 — delete the pre-582 fallback once no standing pre-582 snapshot remains; R3 — an
   origin merged twice and reactivated through its older merge reclaims that merge's card, not the
   later one.
   After PR 2 deploys, `dirty_broker_listings` depth steps up after merges (the fix

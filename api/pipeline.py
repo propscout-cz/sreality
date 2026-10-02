@@ -318,24 +318,22 @@ def remove_card(
 
     Resolves the same stale property_id `add_card` does — the two halves of one
     <PipelineMark> toggle (rule #22) must agree on which property they mean, and
-    the ledger event below would otherwise be stamped with a retired id.
+    the ledger event below would otherwise be stamped with a retired id. One
+    DELETE … RETURNING, so the event names the card it deleted even when a
+    concurrent detach has just put another deal on this property.
     """
     with conn.transaction(), conn.cursor() as cur:
         property_id = resolve_active_property_id(conn, property_id) or property_id
         cur.execute(
-            "SELECT stage_id, card_id FROM property_pipeline "
-            "WHERE property_id = %s AND account_id = %s",
+            "DELETE FROM property_pipeline "
+            "WHERE property_id = %s AND account_id = %s "
+            "RETURNING stage_id, card_id",
             (property_id, account_id),
         )
         row = cur.fetchone()
         if row is None:
             return {"removed": False}
         from_stage_id, card_id = int(row[0]), row[1]
-        cur.execute(
-            "DELETE FROM property_pipeline "
-            "WHERE property_id = %s AND account_id = %s",
-            (property_id, account_id),
-        )
         cur.execute(
             "INSERT INTO property_pipeline_events "
             "  (property_id, from_stage_id, reason, account_id, card_id) "

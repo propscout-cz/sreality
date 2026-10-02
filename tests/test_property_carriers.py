@@ -346,6 +346,7 @@ def test_the_pipeline_merge_snapshots_card_ids_and_moves_the_winning_row():
     assert wins.startswith("WITH beaten AS ( DELETE FROM property_pipeline s")
     assert "SET property_id = %(s)s" in wins and "stage_id =" not in wins.split("UPDATE")[1], (
         "the winning row moves; nothing is copied onto the survivor's row")
+    assert "note =" not in wins.split("UPDATE")[1], "the winning deal keeps its own note"
 
 
 def test_a_one_hop_detach_sends_home_by_card_id_and_falls_back_for_a_pre_582_merge():
@@ -353,7 +354,7 @@ def test_a_one_hop_detach_sends_home_by_card_id_and_falls_back_for_a_pre_582_mer
     assert [s for s, _p in detach] == [_n(s) for s in (
         pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._RESTORE_SQL, pi._REFILL_SQL,
         pi._DROP_ABSORBED_SQL, pi._LIFT_DISMISSALS_SQL)]
-    params = {"g": G, "r": 20, "s": 10, "s0": 10, "path": [10]}
+    params = {"g": G, "r": 20, "s": 10}
     assert [p for _s, p in detach[:3]] == [params] * 3
     assert detach[3][1] == {**params, "left_accounts": [], "left_ids": []}
     assert detach[4][1] == params
@@ -361,15 +362,16 @@ def test_a_one_hop_detach_sends_home_by_card_id_and_falls_back_for_a_pre_582_mer
 
 
 def test_a_chained_detach_drops_nothing_by_inference():
-    """Off a later survivor the pre-582 one-hop drop never runs; the keyed path gets the whole
-    advert path and the merge that retired the property (`undo[0]`)."""
+    """Off a later survivor the pre-582 one-hop drop never runs; the keyed path gets only the
+    merge that retired the property (`undo[0]`): which later send-home outranks it is read off
+    the ledger's snapshot order, never off the advert's path."""
     cur = _StrictCur(_PIPELINE)
     _PIPELINE.on_detach(cur, DetachStep(20, 5, (Hop(1, G, 10, 20), Hop(2, G2, 5, 10)),
                                         "operator"))
     assert [s for s, _p in cur.ran] == [_n(s) for s in (
         pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._RESTORE_SQL, pi._REFILL_SQL,
         pi._LIFT_DISMISSALS_SQL)]
-    assert cur.ran[1][1] == {"g": G, "r": 20, "s": 5, "s0": 10, "path": [10, 5]}
+    assert cur.ran[1][1] == {"g": G, "r": 20, "s": 5}
 
 
 def test_the_pre_582_fallback_reads_only_unkeyed_snapshots_and_the_keyed_path_only_keyed():

@@ -747,11 +747,11 @@ def test_a_deal_parked_inside_a_property_that_merged_on_comes_home_with_it(cur, 
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="F1: a deal parked inside a property that has since merged on stays "
+                   reason="P1: a deal parked inside a property that has since merged on stays "
                           "hidden until that property is detached")
 def test_a_deal_parked_inside_a_property_that_merged_on_shows_on_its_survivor(cur, accounts):
     """D's detach empties S while S∪R stands; R's own deal, parked inside R, should show on S
-    until R's detach (today it stays hidden: roadmap/operator-workflow-track.md F1)."""
+    until R's detach (today it stays hidden: roadmap/operator-workflow-track.md P1)."""
     x, _y = accounts
     t = _x2_seed(cur, x)
     _detached(cur, t["adverts"][t["d"]], t["d"])
@@ -760,8 +760,8 @@ def test_a_deal_parked_inside_a_property_that_merged_on_shows_on_its_survivor(cu
 
 def test_a_detach_never_takes_a_deal_that_went_home_elsewhere(cur, accounts):
     """B's deal followed B's advert to A then C, went home with B's detach, and joined C again
-    when B merged back. A's detach finds that its snapshot's card has since arrived on B, off A's
-    lineage, and leaves it on C: A gets no copy."""
+    when B merged back. A's detach finds that its snapshot's card has since gone home to B,
+    which held it before A did, and leaves it on C: A gets no copy."""
     x, _y = accounts
     (c, a, b), adverts = _chain(cur, "sreality", "idnes", "remax")
     live_x = _stage(cur, x, position=2)
@@ -776,6 +776,41 @@ def test_a_detach_never_takes_a_deal_that_went_home_elsewhere(cur, accounts):
     _detached(cur, adverts[a], a)
     assert _cards(cur, x) == {c: live_x}, "A took a copy of a deal that went home elsewhere"
     assert _ids(cur, x) == {c: x_b}
+
+
+def _undone(cur: Any, group: str, *listing_ids: int) -> None:
+    """One merge group undone as the engine's `unapply` does it: ONE group-scoped detach over
+    the adverts that merge moved."""
+    out = detach_listings(cur.connection, list(listing_ids), decided_by=OP, source="autodedup",
+                          merge_group_id=group)["data"]["adverts"]
+    _require(all(a["outcome"] == "detached" for a in out), f"the group undo stalled: {out}")
+
+
+@pytest.mark.parametrize("middle_closed", [False, True], ids=["C empty", "C closed"])
+def test_a_chain_undone_group_by_group_sends_the_deal_home(cur, accounts, middle_closed):
+    """A < B < C < E. E's live deal followed E's advert into C (beating C's closed deal, which
+    is parked), then B, then A. The engine undoes the chain one group at a time, newest first,
+    so every detach's path is one hop: the deal passes back through B and C and ends home on E
+    as itself, and C gets its own closed deal back. A send-home to a survivor the deal reached
+    after E never holds it there."""
+    x, _y = accounts
+    (a, b, c, e), adverts = _chain(cur, "sreality", "idnes", "remax", "bazos")
+    live_x, closed_x = _stage(cur, x, position=2), _stage(cur, x, position=5, terminal=True)
+    want_cards, want_ids = {e: live_x}, {e: _card(cur, x, e, live_x)}
+    if middle_closed:
+        want_cards[c], want_ids[c] = closed_x, _card(cur, x, c, closed_x)
+
+    g1 = _merged(cur, c, e, source="autodedup")
+    g2 = _merged(cur, b, c, source="autodedup")
+    g3 = _merged(cur, a, b, source="autodedup")
+    _require(_cards(cur, x) == {a: live_x}, "E's deal did not follow the chain to A")
+    _undone(cur, g3, adverts[b], adverts[c], adverts[e])
+    _require(_cards(cur, x) == {b: live_x}, "the newest undo did not send the deal to B")
+    _undone(cur, g2, adverts[c], adverts[e])
+    _require(_cards(cur, x) == {c: live_x}, "the middle undo did not send the deal to C")
+    _undone(cur, g1, adverts[e])
+    assert _cards(cur, x) == want_cards, "a deal stayed on a survivor it only passed through"
+    assert _ids(cur, x) == want_ids
 
 
 def test_progress_travels_home_and_the_survivor_gets_its_own_deal_back(cur, accounts):
@@ -794,6 +829,27 @@ def test_progress_travels_home_and_the_survivor_gets_its_own_deal_back(cur, acco
     _detached(cur, advert, r)
     assert _cards(cur, x) == {r: new_x, s: live_x}
     assert _ids(cur, x) == {r: x_r, s: x_s}
+
+
+def test_each_deal_keeps_its_own_note(cur, accounts):
+    """R's ahead deal beats S's live one: its row moves onto S with R's own note (S's note is
+    in S's snapshot), and the detach gives each deal back with its own note."""
+    x, _y = accounts
+    s, r, _s_advert, advert = _pair(cur)
+    live_x, ahead_x = _stage(cur, x, position=2), _stage(cur, x, position=3)
+    for pid, stage, note in ((s, live_x, "S-note"), (r, ahead_x, "R-note")):
+        _card(cur, x, pid, stage)
+        cur.execute("UPDATE property_pipeline SET note = %s WHERE account_id = %s "
+                    "AND property_id = %s", (note, x, pid))
+
+    def notes() -> dict[int, str]:
+        cur.execute("SELECT property_id, note FROM property_pipeline WHERE account_id = %s", (x,))
+        return {int(pid): note for pid, note in cur.fetchall()}
+
+    _merged(cur, s, r)
+    assert notes() == {s: "R-note"}, "the winning deal took the parked deal's note"
+    _detached(cur, advert, r)
+    assert notes() == {s: "S-note", r: "R-note"}
 
 
 def test_a_put_back_live_deal_lifts_the_dismissal(cur, accounts):
@@ -902,7 +958,7 @@ def test_a_removed_deal_comes_back_at_the_stage_it_ended_at(cur, accounts):
 
 def test_a_deal_that_went_home_leaves_no_copy_on_the_middle(cur, accounts):
     """B's deal followed B's advert to A then C and went home with B's detach; A's detach then
-    finds it gone home off A's lineage and leaves A empty."""
+    finds it gone home to B, which held it before A did, and leaves A empty."""
     x, _y = accounts
     (c, a, b), adverts = _chain(cur, "sreality", "idnes", "remax")
     live_x = _stage(cur, x, position=2)
