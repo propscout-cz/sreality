@@ -99,8 +99,12 @@ Plus a **composite FK** so a card's stage can't cross accounts even though FK ch
 bypass RLS: `pipeline_stages` gets a `unique (account_id, id)` index, and
 `property_pipeline.stage_id` becomes a composite FK `(account_id, stage_id) references
 pipeline_stages (account_id, id)`. Without this, a cross-account `stage_id` write would
-make the account-partitioned reconciler's keep-most-advanced step silently no-op and then
-drop the retired card — a correctness bug, not just an isolation one.
+make the account-partitioned reconciler's retired-wins step silently no-op and park the
+retired card — a correctness bug, not just an isolation one.
+
+**`card_id` (migration 582)** is unique across accounts (one global unique index, a uuid from
+the column default — no sequence grant needed for `authenticated` inserts), yet every carrier
+lookup by it also names `account_id`: shape 3 below.
 
 ## Tenant role and pool
 

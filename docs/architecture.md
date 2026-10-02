@@ -1790,7 +1790,9 @@ renumber.** Navigate by area:
     the census) carries that state inside the merge transaction, in a fixed order: the asset link;
     collections, tags, notes AND `notification_dispatches` as `CurationTable`s (SET tables union
     with collision-collapse; APPEND tables move every row); the pipeline (rule #22); then
-    dismissals, AFTER the pipeline so a live card lifts its account's dismissal. The private
+    dismissals, AFTER the pipeline so a live card lifts its account's dismissal. A detach runs
+    the list reversed, so there the pipeline lifts the dismissal a live card it puts back
+    contradicts — the one write a carrier makes outside its own tables. The private
     `_merge_pair` (one per retired property of a `merge_property_set`) is the only writer that
     retires a property, and it runs every carrier before the retire, so no operator-state row can
     orphan onto a `merged_away` property — by construction, and executed: CI's live suite
@@ -2210,25 +2212,40 @@ renumber.** Navigate by area:
     `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
 
 22. **The deal pipeline is single-valued, property-grain operator state (migration 205).**
-    `property_pipeline` holds at most ONE card per property (PK on `property_id`) at one
+    `property_pipeline` holds at most ONE card per property per account (PK
+    `(account_id, property_id)`, migration 295) at one
     `stage_id` (`pipeline_stages`, a TABLE not an enum so the operator can rename/reorder/add
     columns with no migration — the curated-index precedent). **A "bookmark / interested" is
     just the entry stage** (`pipeline_stages.is_entry`), not a separate flag: presence of a
     `property_pipeline` row == the property is in the pipeline. Single-valued-ness is why it
     can't live at advert grain (unlike the m2m curation of rule #18) — so it gets its OWN
     carrier, the `Pipeline` entry of `PROPERTY_CARRIERS` (over `toolkit/pipeline_identity.py`),
-    in the merge transaction: it snapshots BOTH sides'
-    pre-merge cards to the append-only `property_pipeline_events` ledger, then keeps the
-    most-advanced stage on the survivor — **TERMINAL-AWARE**: a live (non-terminal) stage
-    always beats a closed/terminal one, so a merge never buries a live deal under `lost`/`won`;
-    within the same terminality the higher `position` wins (tie → later `updated_at`).
-    `reconcile_pipeline_on_detach` restores a retired property's card from that snapshot when a
-    detach reactivates it (**lossless**: the reactivated property gets its pre-merge stage back,
-    and in the move-if-empty case the survivor's absorbed card is dropped so it isn't
-    duplicated); the survivor's own stage is left as-is — a chained-merge-safe best-effort, so a
-    survivor that absorbed the retired's stage keeps it until the operator adjusts. Writes go through the JWT-gated API (`tenant_conn`; `POST/DELETE /pipeline/cards` to
+    in the merge transaction. **Every card has an identity, `card_id` (migration 582)**: minted
+    at birth (the column default), kept through stage moves and merges, never reused (a re-add
+    after a remove is a new card); every `property_pipeline_events` row written since 582 names
+    the card it is about. On a merge the carrier snapshots BOTH sides' cards, with their
+    `card_id`, to the append-only ledger (`merge_absorb`), moves a retired card onto a survivor
+    that holds none for that account, and where both hold one keeps the most-advanced deal —
+    **TERMINAL-AWARE**: a live (non-terminal) stage always beats a closed/terminal one, so a
+    merge never buries a live deal under `lost`/`won`; within the same terminality the higher
+    `position` wins (tie → later `updated_at`, then the survivor). The winning ROW ends on the
+    survivor (its `card_id`, stage, `added_at` and `entered_stage_at` its own; the survivor's
+    note if it had one); the losing deal is **parked**: its row is deleted and its snapshot is
+    its record. `reconcile_pipeline_on_detach` is a lookup, not an inference: when a detach
+    reactivates R, the card R held at the merge that retired it comes home BY ITS `card_id` —
+    its row moves from wherever it lives now, so progress made since travels; a card that no
+    longer lives (parked, or ended by the operator) is re-inserted at the stage of its newest
+    event — unless a later detach already sent it to a property off R's lineage. R and every
+    property a card just left then take back the most-advanced deal parked on them (or inside
+    them, through a standing merge), and a live card put back lifts that account's dismissal
+    (Dismissals' own detach runs first and writes nothing). Nothing is deleted by inference: a
+    survivor's own deal, a side merge's deal and the operator's new deal are never touched. A
+    merge snapshotted before 582 (`card_id` NULL) keeps the old restore until it is undone.
+    Known residuals: `roadmap/operator-workflow-track.md` (F1). Writes go through the
+    JWT-gated API (`tenant_conn`; `POST/DELETE /pipeline/cards` to
     bookmark/un-bookmark, `PATCH /pipeline/cards/{id}` to move stage — a stage change stamps
-    `entered_stage_at` and logs a `moved` event, a pure within-stage reorder logs nothing;
+    `entered_stage_at` and logs an `operator` event naming the card, a pure within-stage
+    reorder logs nothing;
     `GET /pipeline/stages`). **The "Přidat do pipeline" affordance is the shared `<PipelineMark>`
     (`<FunnelIcon>` — a funnel with three arrows, filled body = in-pipeline — plus the stage
     badge), rendered by the listing-detail header (`PipelineToggle`, in the top action bar next to

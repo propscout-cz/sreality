@@ -928,12 +928,13 @@ export interface PipelineBoardCard {
   board_position: number;
   /* Stamped by the API on a real stage change only (a pure within-stage
    * reorder is not deal history) — so "how long has this sat where it is".
-   * Audited against property_pipeline_events: for every live card the newest
-   * reason='operator' event matches this to the microsecond. */
+   * A card only the API has touched matches its newest reason='operator'
+   * event to the microsecond; a card a detach re-inserts restarts it. */
   entered_stage_at: string;
-  /* When the property entered the pipeline at all. Defaulted at INSERT and
-   * never updated, EXCEPT by an unmerge restore, which re-INSERTs the card and
-   * resets it to now() — see the sort-option docstring in lib/pipelineSort. */
+  /* When this deal entered the pipeline. Defaulted at INSERT and kept through
+   * stage moves, merges (the winning card's row moves) and a detach that sends
+   * a live card home; reset to now() only when a detach re-inserts a deal that
+   * no longer lived (parked, or removed). */
   added_at: string;
   sreality_id: number | null;
   /* Representative listing's portal + native id (migration 091) — builds the
