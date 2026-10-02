@@ -1,0 +1,42 @@
+-- 582: a stable identity for each deal-pipeline card (rule 22, operator decision 2026-10-02).
+--
+-- `property_pipeline.card_id` is minted when a card is born (this column default: `add_card`,
+-- a raw insert, a test seed) and kept through every stage move, reorder and merge: the merge
+-- carrier moves the winning ROW onto the survivor instead of copying its stage. Removing a
+-- card deletes the row; a re-add is a NEW card with a new id. Unique, so the carrier finds a
+-- deal by this id alone; it still names account_id in every lookup (it runs as service role).
+-- The volatile default rewrites this small table once, giving every existing card its own id.
+--
+-- `property_pipeline_events.card_id` names the card an event is about: the API's add / move /
+-- remove events, the merge snapshot (`merge_absorb`), a detach's send-home (`unmerge_restore`)
+-- and put-back (`split_carry`). NULL on every row written before this migration, and no
+-- default: a default would invent ids no card ever had. A merge snapshotted before 582 keeps
+-- today's detach (toolkit/pipeline_identity.py's card_id IS NULL fallback).
+--
+-- ADDITIVE. No RLS, grant or view change: table grants cover the new columns, the policies
+-- key on account_id, and every reader names its columns. Today's code names its columns on
+-- every write, so it inherits the defaults and runs unchanged with this applied. Apply
+-- BEFORE the code that names card_id merges (the API and the realtime worker run from main).
+
+begin;
+
+set local lock_timeout = '6s';
+
+alter table property_pipeline
+  add column if not exists card_id uuid not null default gen_random_uuid();
+
+create unique index if not exists property_pipeline_card_id_uq on property_pipeline (card_id);
+
+comment on column property_pipeline.card_id is
+  'Stable deal identity (rule 22, migration 582): kept through stage moves and merges; '
+  'a re-add after a remove is a new card.';
+
+alter table property_pipeline_events add column if not exists card_id uuid;
+
+create index if not exists property_pipeline_events_card
+  on property_pipeline_events (card_id, id) where card_id is not null;
+
+comment on column property_pipeline_events.card_id is
+  'The property_pipeline.card_id this event is about (migration 582); NULL before 582.';
+
+commit;
