@@ -274,7 +274,9 @@ def _walk(carrier: Carrier, *, fetch: tuple | None = (41,), source: str = "opera
 
 @pytest.mark.parametrize("carrier", PROPERTY_CARRIERS, ids=lambda c: c.name)
 def test_every_carrier_runs_only_its_declared_sql_with_its_params_supplied(carrier):
-    cur = _walk(carrier)
+    # One fetched row serves both readers: the asset link's retired asset (41), and the
+    # pipeline's last retiring merge, whose survivor (10) is the property left: one hop.
+    cur = _walk(carrier, fetch=(41, 10))
     assert {s for s, _p in cur.ran} == {_n(s) for s in carrier.sql}, (
         f"{carrier.name} declares SQL it never runs")
 
@@ -349,43 +351,90 @@ def test_the_pipeline_merge_snapshots_card_ids_and_moves_the_winning_row():
     assert "note =" not in wins.split("UPDATE")[1], "the winning deal keeps its own note"
 
 
+_KEYED = (pi._RETIRED_BY_SQL, pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL)
+_TAIL = (pi._RESTORE_SQL, pi._LOCK_STRAYS_SQL, pi._STRAYS_HOME_SQL, pi._REFILL_SQL,
+         pi._LIFT_DISMISSALS_SQL)
+
+
 def test_a_one_hop_detach_sends_home_by_card_id_and_falls_back_for_a_pre_582_merge():
-    detach = _walk(_PIPELINE).ran[4:]
+    detach = _walk(_PIPELINE, fetch=(G, 10)).ran[4:]
     assert [s for s, _p in detach] == [_n(s) for s in (
-        pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._RESTORE_SQL, pi._REFILL_SQL,
-        pi._DROP_ABSORBED_SQL, pi._LIFT_DISMISSALS_SQL)]
+        *_KEYED, pi._MOVE_ABSORBED_SQL, *_TAIL)]
     params = {"g": G, "r": 20, "s": 10}
-    assert [p for _s, p in detach[:3]] == [params] * 3
-    assert detach[3][1] == {**params, "left_accounts": [], "left_ids": []}
-    assert detach[4][1] == params
-    assert detach[5][1] == {"ids": [20]}
+    assert detach[0][1] == {"r": 20}
+    assert [p for _s, p in detach[1:6]] == [params] * 5
+    assert detach[6][1] == {**params, "cards": []}
+    assert detach[7][1] == {**params, "left_accounts": [], "left_ids": []}
+    assert detach[8][1] == {"ids": [20]}
 
 
-def test_a_chained_detach_drops_nothing_by_inference():
-    """Off a later survivor the pre-582 one-hop drop never runs; the keyed path gets only the
-    merge that retired the property (`undo[0]`): which later send-home outranks it is read off
-    the ledger's snapshot order, never off the advert's path."""
+def test_a_chained_detach_moves_nothing_by_inference():
+    """Off a later survivor the pre-582 one-hop move never runs. With no ledger row the keyed
+    path falls back to `undo[0]`; which later send-home outranks it is read off the ledger's
+    snapshot order, never off the advert's path."""
     cur = _StrictCur(_PIPELINE)
     _PIPELINE.on_detach(cur, DetachStep(20, 5, (Hop(1, G, 10, 20), Hop(2, G2, 5, 10)),
                                         "operator"))
-    assert [s for s, _p in cur.ran] == [_n(s) for s in (
-        pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._RESTORE_SQL, pi._REFILL_SQL,
-        pi._LIFT_DISMISSALS_SQL)]
-    assert cur.ran[1][1] == {"g": G, "r": 20, "s": 5}
+    assert [s for s, _p in cur.ran] == [_n(s) for s in (*_KEYED, *_TAIL)]
+    assert cur.ran[2][1] == {"g": G, "r": 20, "s": 5}
+
+
+def test_the_deal_comes_home_from_the_merge_that_last_retired_the_property():
+    """An advert whose only live ledger row is an older merge (G) the property has since come
+    back from reactivates it through G; its deal is the one it held at the merge that LAST
+    retired it (G2, read off the ledger), and every keyed statement and log names G2."""
+    cur = _StrictCur(_PIPELINE, fetch=(G2, 5))
+    _PIPELINE.on_detach(cur, DetachStep(20, 5, (Hop(1, G, 5, 20),), "operator"))
+    assert cur.ran[0] == (_n(pi._RETIRED_BY_SQL), {"r": 20})
+    assert {p["g"] for _s, p in cur.ran[1:] if "g" in p} == {G2}
+    by = _n(pi._RETIRED_BY_SQL)
+    assert "WHERE retired_property_id = %(r)s ORDER BY id DESC LIMIT 1" in by
 
 
 def test_the_pre_582_fallback_reads_only_unkeyed_snapshots_and_the_keyed_path_only_keyed():
-    for fallback in (pi._RESTORE_SQL, pi._DROP_ABSORBED_SQL):
+    for fallback in (pi._RESTORE_SQL, pi._MOVE_ABSORBED_SQL):
         assert "e.card_id IS NULL" in _n(fallback)
     for keyed in (pi._SEND_HOME_SQL, pi._REFILL_SQL):
         assert "card_id IS NOT NULL" in _n(keyed)
+
+
+def test_the_pre_582_fallback_moves_the_absorbed_card_back_and_never_deletes_one():
+    """By inference, so never a DELETE, and a card the ledger names as another deal since 582
+    (an operator add, or a snapshot on another property) stays where it is."""
+    move = _n(pi._MOVE_ABSORBED_SQL)
+    assert "DELETE" not in move.upper()
+    assert "UPDATE property_pipeline pp SET property_id = %(r)s::bigint" in move
+    assert "(a.reason = 'operator' AND a.from_stage_id IS NULL)" in move
+    assert "(a.reason = 'merge_absorb' AND a.property_id <> %(s)s::bigint)" in move
+
+
+def test_a_stray_is_a_live_card_born_in_the_lineage_and_follows_it_or_parks():
+    """A card belongs to the family of the property it was born on (its first logged event): one
+    born in R's lineage that sits off R follows R home, onto R when R is empty for its account,
+    else parked; each leave is logged, so its own property's detach can re-insert it."""
+    strays, home = _n(pi._LOCK_STRAYS_SQL), _n(pi._STRAYS_HOME_SQL)
+    assert "JOIN property_pipeline_events born ON born.property_id = fam.h" in strays
+    assert "o.id < born.id" in strays, "the card's FIRST logged event names where it was born"
+    assert "(born.reason = 'operator' AND born.from_stage_id IS NULL) OR NOT EXISTS" in strays, (
+        "an add is a birth; a first snapshot is one only where no pre-582 merge fed that property")
+    assert strays.endswith("FOR UPDATE OF pp")
+    assert "ORDER BY s.account_id, s.is_terminal, s.position DESC" in home
+    assert "parked AS ( DELETE FROM property_pipeline pp" in home
+    assert "card_id FROM parked" in home, "a park logs its leave"
+
+
+def test_a_put_back_never_lands_outside_the_family_the_deal_was_born_in():
+    refill = _n(pi._REFILL_SQL)
+    assert "b.property_id NOT IN (SELECT f2.h FROM fam f2 WHERE f2.t = f.t)" in refill
+    assert "o.id < b.id" in refill, "a birth is the card's FIRST logged event"
 
 
 def test_every_card_id_lookup_names_its_account():
     """card_id is unique across accounts, yet the carrier runs as service role: every pairing on
     it also pairs the account (tenancy shape 3)."""
     pair = re.compile(r"\b(\w+)\.card_id = (\w+)\.card_id\b")
-    for statement in (pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._REFILL_SQL):
+    for statement in (pi._LOCK_OWN_SQL, pi._SEND_HOME_SQL, pi._MOVE_ABSORBED_SQL,
+                      pi._LOCK_STRAYS_SQL, pi._STRAYS_HOME_SQL, pi._REFILL_SQL):
         s = _n(statement)
         for a, b in pair.findall(s):
             assert f"{a}.account_id = {b}.account_id" in s, (a, b, s[:120])

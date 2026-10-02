@@ -1,5 +1,5 @@
 """Offline guard over migration 582's TEXT (rule 1's additive gate, rule 22): two columns, a
-unique index and a partial index; nothing dropped, deleted, revoked or rewritten. Its effect
+unique index and two lookup indexes; nothing dropped, deleted, revoked or rewritten. Its effect
 on rows is executed in CI's migrations job (tests/test_property_carriers_live.py)."""
 
 from __future__ import annotations
@@ -36,3 +36,8 @@ def test_a_card_is_minted_its_id_and_an_event_is_never_given_one() -> None:
 def test_its_lock_wait_is_bounded_inside_one_transaction() -> None:
     assert _BODY.startswith("begin; set local lock_timeout = '6s';"), _BODY[:80]
     assert _BODY.endswith("commit;")
+
+
+def test_the_merge_that_last_retired_a_property_is_an_index_read() -> None:
+    assert ("create index if not exists property_merge_events_retired_idx "
+            "on property_merge_events (retired_property_id, id);") in _BODY

@@ -39,15 +39,21 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   `detach_listings` call (the injected `detach=` takes the set); the one-advert adapter is deleted.
 - **Done (2026-10-02):** pipeline card identity — migration 582 `property_pipeline.card_id`; a
   detach sends each deal home by id, parks the loser of a both-cards merge, puts parked deals back
-  on emptied properties (supersedes draft #1681 — closed unmerged when this lands). Pre-582 merges
-  keep the old restore.
+  on emptied properties (supersedes draft #1681 — closed unmerged when this lands). The deal comes
+  home from the merge that LAST retired the property (R3); a put-back deal follows the family it
+  was born in off the survivor when the property in between leaves, and is never put back outside
+  it. Pre-582 merges keep the old inference, made non-destructive (the absorbed card moves back; a
+  deal begun since 582 stays).
 - **Next:** P1 — a deal parked inside a property that has since merged on stays hidden until that
   property is detached (strict xfail
-  `test_a_deal_parked_inside_a_property_that_merged_on_shows_on_its_survivor`); P2 — expose
-  `card_id` and key the SPA board/cache by it (closes the multi-membership `property_id`
-  collision); P3 — delete the pre-582 fallback once no standing pre-582 snapshot remains; R3 — an
-  origin merged twice and reactivated through its older merge reclaims that merge's card, not the
-  later one.
+  `test_a_deal_parked_inside_a_property_that_merged_on_shows_on_its_survivor`); hidden the same
+  way: a put-back deal parked behind the returning property's own deal, a deal parked on a survivor
+  its family has since left (never put back there), and a survivor's own deal parked behind a
+  winner the operator then removes while no detach empties that survivor. P2 — expose `card_id`
+  and key the SPA board/cache by it (closes the multi-membership `property_id` collision). P3 —
+  delete the pre-582 fallback once no standing pre-582 snapshot remains (2026-10-02: 13 standing
+  groups hold snapshots, none on a retired side, so the fallback has nothing to restore; a
+  chained pre-582 detach still restores a copy).
   After PR 2 deploys, `dirty_broker_listings` depth steps up after merges (the fix
   working); `property_sweep_last_complete` should stay fresh.
 

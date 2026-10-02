@@ -599,18 +599,19 @@ def test_an_origin_merged_twice_gets_one_card_at_the_stage_it_reached(cur, accou
     assert _cards(cur, y) == {a: live_y}, "a card B never held was dropped"
 
 
-def test_an_origin_merged_back_with_a_deal_it_took_in_keeps_that_deal(cur, accounts):
+def test_an_origin_merged_back_with_a_deal_it_took_in_takes_that_deal_home(cur, accounts):
     """R (two adverts) merges into S, comes back with one (its card home, off S), then absorbs
-    D's ahead deal, which beats its own (R's is parked), and merges into S again, filling the
-    emptied S. The second advert's detach undoes the FIRST merge: R's own deal is re-inserted on
-    R by its card_id, and S keeps D's (D still stands merged into R). One hop, as the engine's
-    unapply."""
+    D's ahead deal, which beats its own (R's is parked inside R), and merges into S again,
+    filling the emptied S. The second advert's only live ledger row is the FIRST merge, yet R
+    went into S with D's deal: it comes home to R (D still stands merged into R), and S, which
+    never held a deal, is left empty. One hop, as the engine's unapply."""
     x, _y = accounts
     (s, r, d), adverts = _chain(cur, "sreality", "idnes", "remax")
     second = _advert(cur, r, source="bazos")
     _recompute(cur, r)
     live_x, ahead_x = _stage(cur, x, position=2), _stage(cur, x, position=3)
-    x_r, x_d = _card(cur, x, r, live_x), _card(cur, x, d, ahead_x)
+    _card(cur, x, r, live_x)
+    x_d = _card(cur, x, d, ahead_x)
 
     _merged(cur, s, r)
     _detached(cur, adverts[r], r)
@@ -619,8 +620,33 @@ def test_an_origin_merged_back_with_a_deal_it_took_in_keeps_that_deal(cur, accou
     _merged(cur, s, r)
     _require(_cards(cur, x) == {s: ahead_x}, "D's deal did not fill the emptied S")
     _detached(cur, second, r)
-    assert _cards(cur, x) == {s: ahead_x, r: live_x}, "D's deal dropped with S's card"
-    assert _ids(cur, x) == {s: x_d, r: x_r}
+    assert _cards(cur, x) == {r: ahead_x}, "D's deal stayed on S, which never held a deal"
+    assert _ids(cur, x) == {r: x_d}
+
+
+def test_an_origin_back_through_its_older_merge_takes_home_the_deal_of_its_newer_one(
+        cur, accounts):
+    """B (two adverts) merges into A, whose ahead deal parks B's; B comes back with one advert
+    (its deal re-inserted), absorbs D's new deal (B's own parked again) and merges into A again,
+    where D's deal beats A's own (parked on A). The second advert's only live ledger row is the
+    FIRST merge, so B is reactivated through it, yet B went into A with D's deal: it comes home
+    to B, and A takes its own deal back. Read off the merge that LAST retired B, not `undo[0]`."""
+    x, _y = accounts
+    (a, b, d), adverts = _chain(cur, "sreality", "idnes", "remax")
+    second = _advert(cur, b, source="bazos")
+    _recompute(cur, b)
+    live_x, ahead_x, new_x = (_stage(cur, x, position=p) for p in (2, 3, 4))
+    z_a, x_b, x_d = _card(cur, x, a, ahead_x), _card(cur, x, b, live_x), _card(cur, x, d, new_x)
+
+    _merged(cur, a, b)
+    _detached(cur, adverts[b], b)
+    _require(_ids(cur, x) == {a: z_a, b: x_b, d: x_d}, "B's detach did not re-insert its deal")
+    _merged(cur, b, d)
+    _merged(cur, a, b)
+    _require(_ids(cur, x) == {a: x_d}, "D's deal did not beat A's on the second merge")
+    _detached(cur, second, b)
+    assert _ids(cur, x) == {a: z_a, b: x_d}, "A's own deal stayed parked, or D's stayed on A"
+    assert _cards(cur, x) == {a: ahead_x, b: new_x}
 
 
 @pytest.mark.parametrize("a_moves_on", [False, True], ids=["A stays", "A merges into Z"])
@@ -875,8 +901,9 @@ def test_a_put_back_live_deal_lifts_the_dismissal(cur, accounts):
 
 
 def test_a_merge_snapshotted_before_582_detaches_as_before(cur, accounts):
-    """A merge whose snapshots carry no card_id keeps the old restore: R's snapshot comes back,
-    and the card A's survivor absorbed comes off it; B keeps the copy it always has."""
+    """A merge whose snapshots carry no card_id keeps the old inference: the card A's survivor
+    absorbed moves back to R as itself; B, whose survivor held its own card, gets R's snapshot
+    restored and keeps the copy it always has."""
     a, b = accounts
     t = _t4_seed(cur, accounts)
     s, r = t["s"], t["r"]
@@ -884,6 +911,7 @@ def test_a_merge_snapshotted_before_582_detaches_as_before(cur, accounts):
     _unkeyed(cur, group)
     _detached(cur, t["advert"], r)
     assert _cards(cur, a) == {r: t["live_a"]}
+    assert _ids(cur, a) == {r: t["a_r"]}
     assert _cards(cur, b) == {s: t["live_b"], r: t["live_b"]}
 
 
@@ -922,6 +950,104 @@ def test_a_deal_parked_inside_a_folded_property_refills_the_emptied_survivor(cur
     _detached(cur, adverts[r], r)
     assert _cards(cur, x) == {xp: ahead_x, r: live_x}
     assert _ids(cur, x) == {xp: x_xp, r: x_r}
+
+
+def test_a_put_back_deal_follows_its_lineage_home(cur, accounts):
+    """A < C < D < E. C absorbs D's new deal (C's ahead deal is parked inside C), then E's new
+    deal (a tie: the survivor's stays, E's is parked inside E); A absorbs C, D's deal moving to
+    the empty A. D's detach sends D's deal home and puts E's back on the emptied A (E folds into
+    A through C). Undoing A<-C takes E's deal off A with C: C gets it (E still stands merged into
+    C, and it beats C's own parked deal), and A, which never held a deal, is left empty."""
+    x, _y = accounts
+    (a, c, d, e), adverts = _chain(cur, "sreality", "idnes", "remax", "bazos")
+    ahead_x, new_x = _stage(cur, x, position=3), _stage(cur, x, position=4)
+    _card(cur, x, c, ahead_x)
+    x_d, x_e = _card(cur, x, d, new_x), _card(cur, x, e, new_x)
+
+    _merged(cur, c, d)
+    _merged(cur, c, e)
+    group = _merged(cur, a, c)
+    _require(_ids(cur, x) == {a: x_d}, "D's deal did not follow C into A")
+    _detached(cur, adverts[d], d)
+    _require(_ids(cur, x) == {d: x_d, a: x_e}, "E's parked deal was not put back on A")
+    _undone(cur, group, adverts[c], adverts[e])
+    assert _ids(cur, x) == {d: x_d, c: x_e}, "E's deal stayed on A after C left it"
+    assert _cards(cur, x) == {d: new_x, c: new_x}
+
+
+def test_a_put_back_deal_behind_its_familys_own_is_parked_until_its_own_detach(cur, accounts):
+    """A < C < D < E. C's ahead deal beats E's live one (parked inside E) and moves on to the
+    empty A, where the operator removes it; D's deal fills A and goes home with D's detach, which
+    puts E's deal back on A. Undoing A<-C brings C back with its own deal (re-inserted at the
+    stage it ended at), so E's, born in C's family, cannot sit on C: it is parked, logged, and
+    E's own detach re-inserts it on E."""
+    x, _y = accounts
+    (a, c, d, e), adverts = _chain(cur, "sreality", "idnes", "remax", "bazos")
+    live_x, ahead_x, new_x = (_stage(cur, x, position=p) for p in (2, 3, 4))
+    x_c, x_d, x_e = _card(cur, x, c, ahead_x), _card(cur, x, d, new_x), _card(cur, x, e, live_x)
+
+    _merged(cur, c, e)
+    group = _merged(cur, a, c)
+    _removed(cur, x, a)
+    _merged(cur, a, d)
+    _detached(cur, adverts[d], d)
+    _require(_ids(cur, x) == {d: x_d, a: x_e}, "E's parked deal was not put back on A")
+    _undone(cur, group, adverts[c], adverts[e])
+    assert _ids(cur, x) == {c: x_c, d: x_d}, "E's deal stayed on A, or doubled C's"
+    _detached(cur, adverts[e], e)
+    assert _ids(cur, x) == {c: x_c, d: x_d, e: x_e}
+    assert _cards(cur, x) == {c: ahead_x, d: new_x, e: live_x}
+
+
+def test_a_deal_parked_on_a_survivor_its_family_left_is_not_put_back_there(cur, accounts):
+    """A < B < C < D < E. B's new deal parks D's live one inside D, follows B into the empty A
+    and is removed there. E's deal fills A and goes home with E, which puts D's back on A (D
+    folds into A through B); C's ahead deal then parks it on A. Undoing A<-B takes D back into
+    B's family, so when C's deal goes home A is NOT refilled with D's: it was born in D, which
+    now folds into B. It stays parked until D's own detach re-inserts it on D."""
+    x, _y = accounts
+    (a, b, c, d, e), adverts = _chain(cur, "sreality", "idnes", "remax", "bazos", "mmreality")
+    live_x, ahead_x, new_x = (_stage(cur, x, position=p) for p in (2, 3, 4))
+    x_b, x_c = _card(cur, x, b, new_x), _card(cur, x, c, ahead_x)
+    x_d, x_e = _card(cur, x, d, live_x), _card(cur, x, e, live_x)
+
+    _merged(cur, b, d)
+    via_b = _merged(cur, a, b)
+    _removed(cur, x, a)
+    via_e = _merged(cur, a, e)
+    _undone(cur, via_e, adverts[e])
+    _require(_ids(cur, x) == {e: x_e, a: x_d, c: x_c}, "D's parked deal was not put back on A")
+    via_c = _merged(cur, a, c)
+    _undone(cur, via_b, adverts[b], adverts[d])
+    _require(_ids(cur, x) == {e: x_e, a: x_c, b: x_b}, "B did not get its removed deal back")
+    _undone(cur, via_c, adverts[c])
+    assert _ids(cur, x) == {e: x_e, b: x_b, c: x_c}, "A took a deal born outside its family"
+    _detached(cur, adverts[d], d)
+    assert _ids(cur, x) == {e: x_e, b: x_b, c: x_c, d: x_d}
+    assert _cards(cur, x)[d] == live_x
+
+
+def test_a_pre_582_one_hop_detach_keeps_a_deal_begun_since_and_moves_the_absorbed_one(
+        cur, accounts):
+    """Before 582, S took R's card empty-handed in both accounts. Since 582, X ended it on S and
+    began a new deal there (its add names it): R's detach keeps that deal and restores R's
+    snapshot. Y moved R's card on to won on S: it moves back to R as itself, at won."""
+    x, y = accounts
+    s, r, _s_advert, advert = _pair(cur)
+    live_x, new_x = _stage(cur, x, position=2), _stage(cur, x, position=4)
+    live_y, won_y = _stage(cur, y, position=2), _stage(cur, y, position=5, terminal=True)
+    _card(cur, x, r, live_x)
+    y_r = _card(cur, y, r, live_y)
+
+    _unkeyed(cur, _merged(cur, s, r))
+    _removed(cur, x, s)
+    x_s = _added(cur, x, s, new_x)
+    _moved(cur, y, s, won_y)
+    _detached(cur, advert, r)
+    assert _cards(cur, x) == {s: new_x, r: live_x}, "the deal begun on S was deleted"
+    assert _ids(cur, x)[s] == x_s
+    assert _cards(cur, y) == {r: won_y}, "the absorbed deal was reset to its pre-merge stage"
+    assert _ids(cur, y) == {r: y_r}
 
 
 def test_removing_the_winner_then_splitting_gets_both_deals_back(cur, accounts):

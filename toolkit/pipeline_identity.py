@@ -13,21 +13,27 @@ both sides hold one keeps ONE deal and parks the other:
     survivor): the winning ROW ends on the survivor, so its card_id, stage and dates stay its
     own; the losing deal is PARKED: its row is deleted and its snapshot is its record.
   - on detach, when an advert's return reactivates the retired property R: the card R held at
-    the merge that retired it (its snapshot at `undo[0]`) comes home BY ITS card_id. Live
-    anywhere -> its row moves to R with its current stage (progress travels). Not live
-    (parked, or ended by the operator) -> it is re-inserted on R at its last logged stage.
-    Skipped where a later detach already sent it home to a property that held it BEFORE R did
-    (that send-home's merge snapshot is older than R's): the older home keeps it, while a
-    survivor it only passed through after R gives it up. Then R and each property a card
-    left, if it holds no card for that account, take back the most advanced deal PARKED on
-    it or on a property a standing merge folded into it. A live card placed on a property
-    lifts that account's dismissal of it (`api.dismissals`' rule; Dismissals' own detach runs
-    before this one and does nothing).
-  - a merge snapshotted before migration 582 (card_id NULL) is detached as before: its snapshot
-    is restored, and on one hop the survivor's absorbed card dropped.
+    the merge that most recently retired it (its snapshot there; not `undo[0]`, which can be an
+    older merge R has since come back from) comes home BY ITS card_id. Live anywhere -> its row
+    moves to R with its current stage (progress travels). Not live (parked, or ended by the
+    operator) -> it is re-inserted on R at its last logged stage. Skipped where a later detach
+    already sent it home to a property that held it BEFORE R did (that send-home's merge
+    snapshot is older than R's): the older home keeps it, while a survivor it only passed
+    through after R gives it up. Then a live card born in R's lineage (its first logged event
+    is on R, or on a property a standing merge folds into R) that a put-back placed off R
+    follows R home: onto R if R holds none for that account, else parked. Then R and each
+    property a card left, if it holds no card for that account, take back the most advanced
+    deal PARKED on it or on a property a standing merge folded into it, never one born outside
+    that family (a card's birth: the property its first logged event names). A live card placed
+    on a property lifts that account's dismissal of it (`api.dismissals`' rule; Dismissals' own
+    detach runs before this one and does nothing).
+  - a merge snapshotted before migration 582 (card_id NULL) is detached by inference, as before:
+    on one hop the card the survivor absorbed MOVES back (never deleted; a card the ledger
+    shows to be another deal since 582 stays), and the snapshot is restored where none moved.
 
-Logged with the card_id: a send-home `unmerge_restore` twice (leaving: from stage only;
-arriving: to stage only), a re-insert `unmerge_restore` (arriving), a put-back `split_carry`.
+Logged with the card_id: a send-home or a move back `unmerge_restore` twice (leaving: from
+stage only; arriving: to stage only), a re-insert `unmerge_restore` (arriving), a park
+`unmerge_restore` (leaving), a put-back `split_carry`.
 
 Every predicate over an account's rows names the account. That is the third shape of the
 tenancy doctrine and the only place it is legal: this runs as service-role (BYPASSRLS), so the
@@ -89,6 +95,14 @@ WHERE r.property_id = %(r)s AND r.account_id IS NOT DISTINCT FROM b.account_id
 # (3) the retired cards still there lost to the survivor's: parked (their snapshot is in (0)).
 _DROP_RETIRED_SQL = "DELETE FROM property_pipeline WHERE property_id = %(r)s"
 
+# Detach: the merge that most recently retired R. Not `undo[0]`: an advert whose only live
+# ledger row is an older merge R has since come back from reactivates R through that one, yet R
+# went into its current survivor with what it held at the newer merge.
+_RETIRED_BY_SQL = (
+    "SELECT merge_group_id::text, survivor_property_id FROM property_merge_events "
+    "WHERE retired_property_id = %(r)s ORDER BY id DESC LIMIT 1"
+)
+
 # Detach (a0): lock the cards R held at that merge wherever they live now, in a statement of
 # their own: an API move/remove or a merge on a property this detach did not lock finishes
 # first, and (a)'s fresh READ COMMITTED snapshot sees what it did (`Dispatches.LOCK_SQL`).
@@ -99,9 +113,9 @@ _LOCK_OWN_SQL = (
     "ORDER BY pp.card_id FOR UPDATE OF pp"
 )
 
-# Detach (a): the card R held at the merge that retired it comes home by its card_id. Live ->
-# its row moves (stage, dates, board place travel); not live -> re-inserted at the stage of
-# its newest event (a removal logs the stage it ended at) with its newest snapshot's note.
+# Detach (a): the card R held at the merge that last retired it comes home by its card_id.
+# Live -> its row moves (stage, dates, board place travel); not live -> re-inserted at the stage
+# of its newest event (a removal logs the stage it ended at) with its newest snapshot's note.
 # Skipped where a later send-home (h) put it on another property whose claim is OLDER than
 # R's: the snapshot that send-home answered (c, its merge_absorb on h's property in h's group)
 # precedes R's (e). A send-home to a survivor it reached after R (the engine undoes a chain one
@@ -171,7 +185,45 @@ SELECT g.account_id, g.was FROM gone g JOIN restored USING (account_id, card_id)
 WHERE g.was <> %(r)s::bigint
 """
 
-# Before migration 582 (snapshot card_id NULL): restore per (account_id, property_id).
+# Before migration 582 (snapshot card_id NULL), on one hop: a survivor that held no card of its
+# own in that merge got R's card, by inference the one it holds now (582 minted its card_id).
+# It MOVES back, progress and id with it, before the restore, so the snapshot is restored only
+# where none moved. Never deleted, and a card the ledger names as another deal since 582 stays:
+# one the operator added (a new deal), or one snapshotted on another property (it came from
+# elsewhere). Returns (account_id, property_id) for each card moved, for (b).
+_MOVE_ABSORBED_SQL = """
+WITH back AS (
+    UPDATE property_pipeline pp SET property_id = %(r)s::bigint
+    WHERE pp.property_id = %(s)s::bigint
+      AND EXISTS (SELECT 1 FROM property_pipeline_events e
+        WHERE e.merge_group_id = %(g)s::uuid AND e.reason = 'merge_absorb'
+          AND e.property_id = %(r)s::bigint AND e.to_stage_id IS NOT NULL
+          AND e.card_id IS NULL AND e.account_id = pp.account_id)
+      AND NOT EXISTS (SELECT 1 FROM property_pipeline_events e
+        WHERE e.merge_group_id = %(g)s::uuid AND e.reason = 'merge_absorb'
+          AND e.property_id = %(s)s::bigint AND e.account_id = pp.account_id)
+      AND NOT EXISTS (SELECT 1 FROM property_pipeline_events a
+        WHERE a.card_id = pp.card_id AND a.account_id = pp.account_id
+          AND ((a.reason = 'operator' AND a.from_stage_id IS NULL)
+               OR (a.reason = 'merge_absorb' AND a.property_id <> %(s)s::bigint)))
+      AND NOT EXISTS (SELECT 1 FROM property_pipeline c
+        WHERE c.property_id = %(r)s::bigint AND c.account_id = pp.account_id)
+    RETURNING pp.account_id, pp.card_id, pp.stage_id, pp.note
+), logged AS (
+    INSERT INTO property_pipeline_events
+        (account_id, property_id, from_stage_id, to_stage_id, reason, merge_group_id,
+         note_snapshot, card_id)
+    SELECT account_id, %(s)s::bigint, stage_id, NULL::bigint, 'unmerge_restore', %(g)s::uuid,
+           NULL::text, card_id FROM back
+    UNION ALL
+    SELECT account_id, %(r)s::bigint, NULL::bigint, stage_id, 'unmerge_restore', %(g)s::uuid,
+           note, card_id FROM back
+)
+SELECT account_id, %(s)s::bigint FROM back
+"""
+
+# Before migration 582 (snapshot card_id NULL): restore per (account_id, property_id), where
+# nothing came home.
 _RESTORE_SQL = (
     "INSERT INTO property_pipeline (account_id, property_id, stage_id, note) "
     "SELECT e.account_id, e.property_id, e.to_stage_id, e.note_snapshot "
@@ -181,11 +233,93 @@ _RESTORE_SQL = (
     "ON CONFLICT DO NOTHING"
 )
 
+# A card's BIRTH, as a predicate over its event row `b`: the property its first logged event names
+# (its add; for a card older than 582, where it sat when first logged). A first snapshot on a
+# property that absorbed a card before 582 names no birth: that card may have come from there.
+def _born(b: str) -> str:
+    return (
+        f"NOT EXISTS (SELECT 1 FROM property_pipeline_events o "
+        f"  WHERE o.card_id = {b}.card_id AND o.account_id = {b}.account_id AND o.id < {b}.id) "
+        f"AND (({b}.reason = 'operator' AND {b}.from_stage_id IS NULL) OR NOT EXISTS ( "
+        f"  SELECT 1 FROM property_pipeline_events u "
+        f"  JOIN property_merge_events m "
+        f"    ON m.merge_group_id = u.merge_group_id AND m.retired_property_id = u.property_id "
+        f"  WHERE u.card_id IS NULL AND u.reason = 'merge_absorb' "
+        f"    AND u.account_id = {b}.account_id AND m.survivor_property_id = {b}.property_id))"
+    )
+
+
+# Detach (a2): lock each live card BORN in R's lineage (on R, or on a property a standing merge
+# folds into R) that sits off R. Its deal is R's family's; a put-back (b) placed it on a
+# property R had been folded into, and R has left.
+_LOCK_STRAYS_SQL = f"""
+WITH RECURSIVE fam(h, depth) AS (
+    SELECT %(r)s::bigint, 0
+    UNION ALL
+    SELECT p.id, f.depth + 1 FROM fam f
+    JOIN properties p ON p.merged_into = f.h AND p.status = 'merged_away'
+    WHERE f.depth < 20
+)
+SELECT pp.card_id FROM fam
+JOIN property_pipeline_events born ON born.property_id = fam.h AND born.card_id IS NOT NULL
+JOIN property_pipeline pp ON pp.card_id = born.card_id AND pp.account_id = born.account_id
+WHERE pp.property_id <> %(r)s::bigint AND {_born("born")}
+ORDER BY pp.card_id
+FOR UPDATE OF pp
+"""
+
+# Detach (a3): those cards follow R home, on a fresh snapshot: per account the most advanced
+# (terminal-aware) moves onto R if R holds no card for that account (its own came first);
+# every other is PARKED (deleted; its leaving event logs the stage it reached, which a re-insert
+# reads when its own property's detach sends it home). Returns each (account_id, property_id)
+# a card left, for (b).
+_STRAYS_HOME_SQL = """
+WITH stray AS (
+    SELECT pp.account_id, pp.card_id, pp.property_id AS was, ps.is_terminal, ps.position
+    FROM property_pipeline pp
+    JOIN pipeline_stages ps ON ps.id = pp.stage_id AND ps.account_id = pp.account_id
+    WHERE pp.card_id = ANY(%(cards)s::uuid[]) AND pp.property_id <> %(r)s::bigint
+), home AS (
+    SELECT DISTINCT ON (s.account_id) s.account_id, s.card_id FROM stray s
+    WHERE NOT EXISTS (SELECT 1 FROM property_pipeline c
+                      WHERE c.property_id = %(r)s::bigint AND c.account_id = s.account_id)
+    ORDER BY s.account_id, s.is_terminal, s.position DESC, s.card_id
+), moved AS (
+    UPDATE property_pipeline pp SET property_id = %(r)s::bigint
+    FROM home h JOIN stray s ON s.card_id = h.card_id AND s.account_id = h.account_id
+    WHERE pp.card_id = h.card_id AND pp.account_id = h.account_id
+    RETURNING pp.account_id, pp.card_id, pp.stage_id, pp.note, s.was
+), parked AS (
+    DELETE FROM property_pipeline pp USING stray s
+    WHERE pp.card_id = s.card_id AND pp.account_id = s.account_id
+      AND NOT EXISTS (SELECT 1 FROM home h
+                      WHERE h.card_id = s.card_id AND h.account_id = s.account_id)
+    RETURNING pp.account_id, pp.card_id, pp.stage_id, s.was
+), logged AS (
+    INSERT INTO property_pipeline_events
+        (account_id, property_id, from_stage_id, to_stage_id, reason, merge_group_id,
+         note_snapshot, card_id)
+    SELECT account_id, was, stage_id, NULL::bigint, 'unmerge_restore', %(g)s::uuid, NULL::text,
+           card_id FROM moved
+    UNION ALL
+    SELECT account_id, %(r)s::bigint, NULL::bigint, stage_id, 'unmerge_restore', %(g)s::uuid,
+           note, card_id FROM moved
+    UNION ALL
+    SELECT account_id, was, stage_id, NULL::bigint, 'unmerge_restore', %(g)s::uuid, NULL::text,
+           card_id FROM parked
+)
+SELECT account_id, was FROM moved
+UNION
+SELECT account_id, was FROM parked
+"""
+
 # Detach (b): R (any account) and each (account, property) (a) returned, when active and
 # holding no card for that account, take back the most advanced (terminal-aware) deal PARKED
 # on it, or on a property a standing merge folded into it (that merge's own snapshot): a card
-# whose newest event is that snapshot and which lives nowhere. Returns the properties it filled.
-_REFILL_SQL = """
+# whose newest event is that snapshot, which lives nowhere, and whose birth, if it names one,
+# is in that family (a deal parked on a survivor whose lineage has since left stays parked
+# until its own property's detach). Returns the properties it filled.
+_REFILL_SQL = f"""
 WITH RECURSIVE target(account_id, property_id) AS (
     SELECT NULL::uuid, %(r)s::bigint
     UNION ALL
@@ -216,6 +350,10 @@ WITH RECURSIVE target(account_id, property_id) AS (
                         AND n.id > e.id)
       AND NOT EXISTS (SELECT 1 FROM property_pipeline c
                       WHERE c.property_id = f.t AND c.account_id = e.account_id)
+      AND NOT EXISTS (SELECT 1 FROM property_pipeline_events b
+                      WHERE b.card_id = e.card_id AND b.account_id = e.account_id
+                        AND {_born("b")}
+                        AND b.property_id NOT IN (SELECT f2.h FROM fam f2 WHERE f2.t = f.t))
     ORDER BY e.account_id, f.t, ps.is_terminal, ps.position DESC, e.id DESC
 ), placed AS (
     INSERT INTO property_pipeline (account_id, property_id, stage_id, note, card_id)
@@ -243,26 +381,11 @@ _LIFT_DISMISSALS_SQL = (
     "  AND NOT ps.is_terminal)"
 )
 
-# Before migration 582, move-if-empty on one hop: a survivor that held no card of its own in
-# that merge got this property's card; drop it there so the restored card isn't duplicated.
-_DROP_ABSORBED_SQL = (
-    "DELETE FROM property_pipeline "
-    "WHERE property_id = %(s)s "
-    "  AND EXISTS (SELECT 1 FROM property_pipeline_events e "
-    "    WHERE e.merge_group_id = %(g)s AND e.reason = 'merge_absorb' "
-    "      AND e.property_id = %(r)s AND e.to_stage_id IS NOT NULL AND e.card_id IS NULL "
-    "      AND e.account_id IS NOT DISTINCT FROM property_pipeline.account_id) "
-    "  AND NOT EXISTS (SELECT 1 FROM property_pipeline_events e "
-    "    WHERE e.merge_group_id = %(g)s AND e.reason = 'merge_absorb' "
-    "      AND e.property_id = %(s)s "
-    "      AND e.account_id IS NOT DISTINCT FROM property_pipeline.account_id)"
-)
-
 # Every statement the carrier can run (its `sql`: the strict-cursor test and the PREPARE corpus).
 STATEMENTS: tuple[str, ...] = (
     _SNAPSHOT_SQL, _MOVE_IF_EMPTY_SQL, _RETIRED_WINS_SQL, _DROP_RETIRED_SQL,
-    _LOCK_OWN_SQL, _SEND_HOME_SQL, _RESTORE_SQL, _REFILL_SQL, _DROP_ABSORBED_SQL,
-    _LIFT_DISMISSALS_SQL,
+    _RETIRED_BY_SQL, _LOCK_OWN_SQL, _SEND_HOME_SQL, _MOVE_ABSORBED_SQL, _RESTORE_SQL,
+    _LOCK_STRAYS_SQL, _STRAYS_HOME_SQL, _REFILL_SQL, _LIFT_DISMISSALS_SQL,
 )
 
 
@@ -279,18 +402,26 @@ def reconcile_pipeline_on_merge(
 def reconcile_pipeline_on_detach(
     cur: psycopg.Cursor, *, restored_id: int, left_id: int, undo: Sequence[Hop]
 ) -> None:
-    """Send the reactivated property's deal home by card_id from the merge that retired it
-    (`undo[0]`); put back what was parked on every property left without a card; lift the
-    dismissals a placed live card contradicts. A pre-582 merge restores its snapshot
-    (dropping the absorbed card on one hop) as before."""
-    params = {"g": undo[0].group, "r": restored_id, "s": left_id}
+    """Send the reactivated property's deal home by card_id from the merge that most recently
+    retired it, and the live deals born in its lineage that sit off it; put back what was parked
+    on every property left without a card; lift the dismissals a placed live card contradicts.
+    A pre-582 merge moves the absorbed card back on one hop and restores its snapshot."""
+    cur.execute(_RETIRED_BY_SQL, {"r": restored_id})
+    row = cur.fetchone()
+    group, survivor = (str(row[0]), int(row[1])) if row else (undo[0].group, undo[0].survivor)
+    params = {"g": group, "r": restored_id, "s": left_id}
     cur.execute(_LOCK_OWN_SQL, params)
     cur.execute(_SEND_HOME_SQL, params)
-    left = cur.fetchall()
+    left = list(cur.fetchall())
+    if left_id == survivor:
+        cur.execute(_MOVE_ABSORBED_SQL, params)
+        left += cur.fetchall()
     cur.execute(_RESTORE_SQL, params)
+    cur.execute(_LOCK_STRAYS_SQL, params)
+    strays = [card for (card,) in cur.fetchall()]
+    cur.execute(_STRAYS_HOME_SQL, {**params, "cards": strays})
+    left += cur.fetchall()
     cur.execute(_REFILL_SQL, {**params, "left_accounts": [a for a, _p in left],
                               "left_ids": [p for _a, p in left]})
     placed = [int(p) for (p,) in cur.fetchall()]
-    if left_id == undo[0].survivor:
-        cur.execute(_DROP_ABSORBED_SQL, params)
     cur.execute(_LIFT_DISMISSALS_SQL, {"ids": sorted({restored_id, *placed})})

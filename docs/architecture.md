@@ -2232,16 +2232,27 @@ renumber.** Navigate by area:
     survivor (its `card_id`, stage, `added_at`, `entered_stage_at` and note all its own); the
     losing deal is **parked**: its row is deleted and its snapshot (note included) is its
     record. `reconcile_pipeline_on_detach` is a lookup, not an inference: when a detach
-    reactivates R, the card R held at the merge that retired it comes home BY ITS `card_id` —
-    its row moves from wherever it lives now, so progress made since travels; a card that no
-    longer lives (parked, or ended by the operator) is re-inserted at the stage of its newest
-    event — unless a later detach already sent it home to a property that held it before R did.
-    R and every property a card just left then take back the most-advanced deal parked on them
-    (or inside them, through a standing merge), and a live card put back lifts that account's
-    dismissal (Dismissals' own detach runs first and writes nothing). Nothing is deleted by
-    inference: a survivor's own deal, a side merge's deal and the operator's new deal are never
-    touched. A merge snapshotted before 582 (`card_id` NULL) keeps the old restore until it is
-    undone. Known residuals: `roadmap/operator-workflow-track.md` (P1). Writes go through the
+    reactivates R, the card R held at the merge that LAST retired it (read off
+    `property_merge_events`, not the advert's oldest undone hop: an advert can reactivate R
+    through an older merge R has since come back from) comes home BY ITS `card_id` — its row
+    moves from wherever it lives now, so progress made since travels; a card that no longer
+    lives (parked, or ended by the operator) is re-inserted at the stage of its newest event —
+    unless a later detach already sent it home to a property that held it before R did. A live
+    deal born in R's lineage (on R, or on a property a standing merge folds into R) that an
+    earlier put-back placed on the survivor follows R off it: onto R if R holds none for that
+    account, else parked. R and every property a card just left then take back the most-advanced
+    deal parked on them (or inside them, through a standing merge), never one born outside that
+    family (a card's birth is the property its first logged event names: its add, or for a card
+    older than 582 where it sat when first logged), and a live card put back lifts that
+    account's dismissal (Dismissals' own detach runs first and writes nothing). Outside the
+    pre-582 fallback, a deal leaves a property only by its `card_id`: a survivor's own deal, a
+    side merge's deal and the operator's new deal are never touched. A merge snapshotted before
+    582 (`card_id` NULL) keeps the old inference until it is undone, made non-destructive: on
+    one hop the card the survivor absorbed MOVES back to R (progress and id with it; never
+    deleted), unless the ledger names it as another deal since 582 (the operator added it, or it
+    was snapshotted on another property), and R's snapshot is restored only where nothing moved.
+    A chained pre-582 detach still restores a copy, as before. Known residuals:
+    `roadmap/operator-workflow-track.md` (P1). Writes go through the
     JWT-gated API (`tenant_conn`; `POST/DELETE /pipeline/cards` to
     bookmark/un-bookmark, `PATCH /pipeline/cards/{id}` to move stage — a stage change stamps
     `entered_stage_at` and logs an `operator` event naming the card, a pure within-stage

@@ -11,7 +11,12 @@
 -- remove events, the merge snapshot (`merge_absorb`), a detach's send-home (`unmerge_restore`)
 -- and put-back (`split_carry`). NULL on every row written before this migration, and no
 -- default: a default would invent ids no card ever had. A merge snapshotted before 582 keeps
--- today's detach (toolkit/pipeline_identity.py's card_id IS NULL fallback).
+-- today's inference (toolkit/pipeline_identity.py's card_id IS NULL fallback), made
+-- non-destructive: the card a survivor absorbed moves back, never deleted.
+--
+-- `property_merge_events_retired_idx`: a detach reads the merge that LAST retired the property
+-- it reactivates (the deal it went in with), by retired_property_id, newest first; no index
+-- served that column (~128k rows on 2026-10-02).
 --
 -- ADDITIVE. No RLS, grant or view change: table grants cover the new columns, the policies
 -- key on account_id, and every reader names its columns. Today's code names its columns on
@@ -24,7 +29,10 @@
 -- detach that reactivates a property would abort. Verify before merging: two rows from
 --   SELECT table_name FROM information_schema.columns WHERE column_name = 'card_id'
 --     AND table_name IN ('property_pipeline', 'property_pipeline_events');
--- and the index property_pipeline_card_id_uq in pg_indexes.
+-- and the indexes property_pipeline_card_id_uq and property_merge_events_retired_idx in
+-- pg_indexes. Then deploy the API and the realtime worker together and keep merges and detaches
+-- off until both run the new code: a new merge (the winning row moves, the loser is parked)
+-- undone by an old detach (it restores a copy) duplicates a deal and strands the parked one.
 
 begin;
 
@@ -46,5 +54,8 @@ create index if not exists property_pipeline_events_card
 
 comment on column property_pipeline_events.card_id is
   'The property_pipeline.card_id this event is about (migration 582); NULL before 582.';
+
+create index if not exists property_merge_events_retired_idx
+  on property_merge_events (retired_property_id, id);
 
 commit;
