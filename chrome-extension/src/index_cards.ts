@@ -16,11 +16,15 @@
  * Operator state is PROPERTY-grain: a write repaints every card of that
  * property on the page, and the panel when it shows the same property.
  *
+ * A card in the pipeline also gets the stage drawn over its photo
+ * (index_stage.ts): the photo toned in the stage colour, the badge large.
+ *
  * The cluster lives in a closed shadow root per card, so the portal's CSS
  * can't reach it; the two menus share one page-level shadow host, positioned
  * against the button that opened them (a card's own overflow would clip a
  * menu drawn inside it). The only things written into the portal's DOM are
- * the host element and two attributes on the card. */
+ * the two host elements (the cluster's, the stage mark's) and two attributes
+ * on the card. */
 
 import tokens from './tokens.css?inline';
 import {
@@ -33,6 +37,7 @@ import {
   stageAccent,
   stageBadge,
 } from './glyphs';
+import { STAGE_HOST_CLASS, createStageMark } from './index_stage';
 import { detailRef, type PortalRef } from './portals';
 import type {
   ApiMessage,
@@ -652,6 +657,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     const badge = button('badge');
     bar.append(funnel, save, hide, badge);
     shadow.append(style, bar);
+    const mark = createStageMark(card, PROCESSED_ATTR);
 
     const current = (): { listing: PortalListing; propertyId: number } | null => {
       const listing = cache.get(sourceId);
@@ -768,8 +774,13 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       }
 
       host.toggleAttribute('data-veiled', veiled);
-      if (dismissed && holdsOneListing(card, sourceId)) card.setAttribute(DISMISSED_ATTR, '');
+      // A card guess that holds several results would tone another one's photo.
+      const single = (dismissed || inPipe) && holdsOneListing(card, sourceId);
+      if (dismissed && single) card.setAttribute(DISMISSED_ATTR, '');
       else card.removeAttribute(DISMISSED_ATTR);
+      mark.show(inPipe && !veiled && single
+        ? { color: p?.stage_color ?? null, badge: code, label: p?.stage_label ?? null }
+        : null);
     }
 
     handles.set(card, {
@@ -777,6 +788,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       paint,
       destroy(): void {
         if (menu?.anchorHost === host) closeMenu(false);
+        mark.destroy();
         host.remove();
       },
     });
@@ -792,6 +804,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     handle?.destroy();
     // A host left by an overlay run that has since stopped has no handle here.
     card.querySelector(`:scope > .${HOST_CLASS}`)?.remove();
+    card.querySelector(`:scope > .${STAGE_HOST_CLASS}`)?.remove();
     card.removeAttribute(PROCESSED_ATTR);
     card.removeAttribute(DISMISSED_ATTR);
   }
