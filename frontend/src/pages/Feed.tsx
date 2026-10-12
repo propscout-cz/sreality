@@ -20,6 +20,8 @@ import { useNavigationType } from 'react-router-dom';
 
 import FeedCard from '@/components/phone/FeedCard';
 import DayRule from '@/components/phone/DayRule';
+import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
+import { PHOTOS_PER_CARD, RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
@@ -58,10 +60,6 @@ import {
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 
-/* Every photo the Browse carousel would hold, so the cover choice is the same and
- * the hydration cache is shared with Browse (BrowseExperience's perId). */
-const PHOTOS_PER_CARD = 50;
-
 /* The hidden roll is keyed under Browse's `cards` root so a restore — which
  * re-reads every Browse list — re-reads it too; `showDismissed: true` keeps a
  * dismissal from patching rows out of it. */
@@ -74,17 +72,6 @@ const PORTALS: ReadonlyArray<string> = (filterById('portals')?.enum_values ?? []
 
 /* Window scroll per roll, so "open a card → back" lands where it left. */
 const scrollMemory = new Map<string, number>();
-
-const CHIP =
-  'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] border transition-colors';
-const CHIP_MD = 'h-8 px-3 text-[13px]';
-const CHIP_SM = 'h-7 px-2 text-[12px]';
-const chipState = (pressed: boolean) =>
-  pressed
-    ? 'border-[var(--color-ink-2)] bg-[var(--color-inset)] font-medium text-[var(--color-ink)]'
-    : 'border-[var(--color-rule-strong)] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]';
-const CHIP_ROW =
-  'flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
 
 export default function Feed() {
   const qc = useQueryClient();
@@ -258,7 +245,7 @@ export default function Feed() {
             </button>
           );
         })}
-        <span aria-hidden className="my-1 w-px shrink-0 bg-[var(--color-rule-strong)]" />
+        <span aria-hidden className={CHIP_DIVIDER} />
         <button
           type="button"
           aria-pressed={hidden}
@@ -341,18 +328,7 @@ function Roll({
     return (
       <>
         <DayRule label={hidden ? 'Skryté' : 'Dnes'} />
-        <p className="sr-only" role="status">
-          Načítám…
-        </p>
-        {[0, 1].map((i) => (
-          <div key={i} aria-hidden className="border-t border-[var(--color-rule)]">
-            <div className="aspect-[4/3] animate-pulse bg-[var(--color-inset)] motion-reduce:animate-none" />
-            <div className="flex flex-col gap-2 px-4 pb-4 pt-3">
-              <div className="h-5 w-40 rounded-[var(--radius-xs)] bg-[var(--color-inset)]" />
-              <div className="h-4 w-56 rounded-[var(--radius-xs)] bg-[var(--color-inset)]" />
-            </div>
-          </div>
-        ))}
+        <RollSkeleton />
       </>
     );
   }
@@ -361,7 +337,7 @@ function Roll({
     return (
       <>
         <DayRule label={topLabel} {...refresh} />
-        <Empty
+        <RollEmpty
           title={hidden ? 'Skryté se nepodařilo načíst.' : 'Nové se nepodařilo načíst.'}
           detail="Spojení nebo databáze teď neodpověděly. Zkuste to znovu."
           action={{ label: 'Zkusit znovu', onClick: onRetry }}
@@ -375,12 +351,12 @@ function Roll({
       <>
         <DayRule label={topLabel} {...refresh} />
         {hidden ? (
-          <Empty
+          <RollEmpty
             title="Nic skrytého."
             detail="Nemovitost skryjete okem na kartě; odtud ji zase vrátíte."
           />
         ) : (
-          <Empty
+          <RollEmpty
             title="V tomhle výběru nic není."
             detail="Předvolba ani portály teď nenacházejí žádnou nemovitost."
             action={portalsOn ? { label: 'Zrušit filtr portálů', onClick: onClearPortals } : undefined}
@@ -415,30 +391,4 @@ function Roll({
     });
   }
   return <div>{items}</div>;
-}
-
-function Empty({
-  title,
-  detail,
-  action,
-}: {
-  title: string;
-  detail: string;
-  action?: { label: string; onClick: () => void };
-}) {
-  return (
-    <div className="mx-4 mb-4 mt-1 flex flex-col items-start gap-2 rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] px-4 py-6">
-      <p className="font-display text-[17px] text-[var(--color-ink)]">{title}</p>
-      <p className="text-[13px] text-[var(--color-ink-3)]">{detail}</p>
-      {action && (
-        <button
-          type="button"
-          onClick={action.onClick}
-          className="inline-flex h-9 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-3 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
-        >
-          {action.label}
-        </button>
-      )}
-    </div>
-  );
 }

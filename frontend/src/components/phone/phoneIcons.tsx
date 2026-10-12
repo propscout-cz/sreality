@@ -66,6 +66,61 @@ export function RefreshIcon(p: IconProps) {
   );
 }
 
+/* A row that opens a page of its own. */
+export function ChevronIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M9 5l7 7-7 7" />
+    </Svg>
+  );
+}
+
+export function PlusIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function SearchIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="M15 15l5 5" />
+    </Svg>
+  );
+}
+
+/* Clears a field. */
+export function ClearIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M7 7l10 10M17 7L7 17" />
+    </Svg>
+  );
+}
+
+/* A place filter. */
+export function PinIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 21s-6.5-6.2-6.5-11.2a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z" />
+      <circle cx="12" cy="9.8" r="2.2" />
+    </Svg>
+  );
+}
+
+/* A monitored collection ("sledováno"). */
+export function BellIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3.5a5 5 0 0 0-5 5c0 4.5-2 6-2 6h14s-2-1.5-2-6a5 5 0 0 0-5-5z" />
+      <path d="M10 18.5a2 2 0 0 0 4 0" />
+    </Svg>
+  );
+}
+
 export function CheckIcon(p: IconProps) {
   return (
     <Svg {...p}>
