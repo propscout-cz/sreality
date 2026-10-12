@@ -10,6 +10,7 @@ import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
+import Feed from './pages/Feed';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
 import BuildingDetail from './pages/BuildingDetail';
 import EstimationDetail from './pages/EstimationDetail';
@@ -90,6 +91,7 @@ export const routes: RouteObject[] = [
       // and refine it at runtime with usePageTitle — see lib/pageTitle.tsx.
       { index: true, element: <HomeRedirect /> },
       { path: ROUTES.browse.childPath, element: <Browse />, handle: { title: 'Browse' } },
+      { path: ROUTES.feed.childPath, element: <Feed />, handle: { title: 'Nové' } },
       { path: ROUTES.property.childPath, element: <PropertyDetail />, handle: { title: 'Property' } },
       // Advert addresses, kept forever (emails, the extension, bookmarks): the
       // natural key (migration 091), the legacy numeric id (negative for

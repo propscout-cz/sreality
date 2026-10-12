@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { APP_NAME } from './brand';
+import { ROUTES } from './routes';
 
 // vitest runs from frontend/; import.meta.url is not a file: URL under vite.
 const publicDir = join(process.cwd(), 'public');
@@ -19,6 +20,12 @@ describe('manifest.webmanifest', () => {
     /* The home-screen label: the header's wordmark (BrandMark), which is all the
      * header shows on a narrow screen too. */
     expect(manifest.short_name).toBe(APP_NAME.split(' ')[0]);
+  });
+
+  /* The installed app opens on the phone shell's start screen (#1766); a route
+   * the router does not know would open on the 404 page. */
+  it('starts on the feed', () => {
+    expect(manifest.start_url).toBe(ROUTES.feed.pattern);
   });
 
   it('holds no hostname', () => {

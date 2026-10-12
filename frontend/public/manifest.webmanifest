@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Limen Reality",
   "short_name": "Limen",
-  "start_url": "/browse",
+  "start_url": "/feed",
   "scope": "/",
   "display": "standalone",
   "theme_color": "#f6f3ec",
