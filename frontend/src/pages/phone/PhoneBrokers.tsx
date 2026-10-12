@@ -77,7 +77,12 @@ export default function PhoneBrokers() {
   return (
     <div className="pt-3">
       <SearchField value={q} onChange={setQ} />
-      {searching ? <SearchResults typed={q.trim()} term={debounced} /> : <Leaderboard />}
+      {searching && <SearchResults typed={q.trim()} term={debounced} />}
+      {/* Hidden, not unmounted, while a name is typed: the place, category and
+        * metric the operator set are still there when the search is cleared. */}
+      <div hidden={searching}>
+        <Leaderboard />
+      </div>
     </div>
   );
 }

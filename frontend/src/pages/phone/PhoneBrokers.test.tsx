@@ -120,10 +120,11 @@ describe('<Brokers> on the phone', () => {
     expect(within(sheet).getByRole('textbox', { name: 'Místo' })).toBeInTheDocument();
   });
 
-  it('searching by name swaps the roll for the results, clearing brings it back', async () => {
+  it('searching by name swaps the roll for the results, clearing brings it back as it was', async () => {
     const user = userEvent.setup();
     renderPage();
     await screen.findByRole('list', { name: 'Žebříček makléřů' });
+    await user.click(screen.getByRole('button', { name: 'Domy' }));
     await user.type(screen.getByRole('searchbox', { name: 'Hledat makléře podle jména' }), 'Kub');
 
     const results = await screen.findByRole('list', { name: 'Nalezení makléři' });
@@ -135,6 +136,8 @@ describe('<Brokers> on the phone', () => {
 
     await user.click(screen.getByRole('button', { name: 'Vymazat hledání' }));
     expect(await screen.findByRole('list', { name: 'Žebříček makléřů' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Domy' })).toHaveAttribute('aria-pressed', 'true');
+    expect(lastParams().categoryMain).toBe('dum');
   });
 
   it('says a failed leaderboard failed', async () => {
