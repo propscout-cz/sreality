@@ -84,10 +84,12 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   so the pair budget bounds a pass's memory.
 - **E951 (2026-10-12, a build stuck at small passes):** in a build a pass's time budget is three
   quarters of the 1,050 s deadline (787.5 s, was 525 s), and a pass the clock cut that claimed its
-  whole share and finished inside half the deadline (525 s) doubles the stored rate instead of
-  blending it, so its doubled successor stays inside the deadline; the heartbeat adds
-  `pass_budget_s` and `rate_doubled`. Simulated at today's store: 14 to 500 adverts in 11 passes,
-  ~1.7 h (16 passes, ~2.3 h, with the bigger budget alone).
+  whole share and finished inside half the deadline (525 s) stores at least twice its starting rate
+  instead of the blend; the heartbeat adds `pass_budget_s` and `rate_doubled`. At the live ~0.032/s
+  and ~490 s of fixed cost a pass claimed 16 adverts and the old budget capped it near 58; simulated,
+  the remaining ~11.4k adverts take ≈ 7.0 h (≈ 7.4 h by the bigger budget alone, 36–110 h before).
+  Owed: `wanted_pairs` and `attempts` in the heartbeat before full claims meet the `max_pairs` 150k
+  wall (the review's estimate: ~134k pairs at 500 adverts on a 38.5k store).
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

@@ -1233,7 +1233,7 @@ def test_a_pass_that_measured_itself_overwrites_the_half(tmp_path) -> None:
 
 
 BUILD_BUDGET_S = 787.5
-DEADLINE_S = 1050.0
+LIVE_RATE = 0.031918        # rt_pass_rate_per_s:rt at 2026-10-12 05:50Z, before a pass halved it
 
 
 def _bound(by: str, limit: int, budget: float = BUILD_BUDGET_S) -> dict:
@@ -1241,27 +1241,52 @@ def _bound(by: str, limit: int, budget: float = BUILD_BUDGET_S) -> dict:
 
 
 def test_a_pass_the_clock_cut_that_had_room_doubles_the_rate() -> None:
-    """2026-10-12: nine deaths left the build at 0.018/s, and at a small claim the pass's fixed
-    cost holds claimed/elapsed down, so the blend grew the claim ~15 % a pass. A pass the clock
-    cut that claimed all of it inside half the deadline doubles instead: 0.018, 0.036, 0.072."""
+    """While each pass the clock cut fills its claim and ends inside half the deadline, the
+    stored rate doubles: 0.018, 0.036, 0.072, 0.144."""
     from autodedup.incremental_lane import _measure_rate
 
     rate = 0.018
     for expected in (0.036, 0.072, 0.144):
         limit = int(BUILD_BUDGET_S * rate)
-        rate, doubled = _measure_rate(limit, 300.0, rate, _bound("time", limit), DEADLINE_S)
+        rate, doubled = _measure_rate(limit, 300.0, rate, _bound("time", limit))
         assert (rate, doubled) == (expected, True)
 
 
-def test_half_the_deadline_not_half_the_budget_is_the_room() -> None:
-    """The production pass at 14 adverts spends ~400 s on its fixed cost, past half the build's
-    budget (393.75 s): judged against the budget it could never double. A pass of T under half
-    the deadline is at most 2T doubled, inside the deadline whatever share of T is fixed."""
+def test_the_live_build_doubles_twice_then_blends() -> None:
+    """2026-10-12: the build ran at ~0.032/s, 16 adverts in 494.6 s under the 525 s budget, ~490 s
+    of it fixed. Under the build's budget, at ~0.6 s an advert, 25 and 50 adverts end inside
+    525 s and double; 100 end at 550 s, and the blend carries the claim on from there."""
     from autodedup.incremental_lane import _measure_rate
 
-    assert _measure_rate(14, 524.0, 0.018, _bound("time", 14), DEADLINE_S) == (0.036, True)
-    rate, doubled = _measure_rate(14, 526.0, 0.018, _bound("time", 14), DEADLINE_S)
-    assert (rate, doubled) == (round(0.5 * 14 / 526.0 + 0.5 * 0.018, 6), False)
+    rate = LIVE_RATE
+    for claimed, expected in ((25, 0.063836), (50, 0.127672)):
+        assert int(BUILD_BUDGET_S * rate) == claimed
+        rate, doubled = _measure_rate(claimed, 490.0 + 0.6 * claimed, rate,
+                                      _bound("time", claimed))
+        assert (rate, doubled) == (expected, True)
+    assert int(BUILD_BUDGET_S * rate) == 100
+    assert _measure_rate(100, 550.0, rate, _bound("time", 100)) == (
+        round(0.5 * 100 / 550.0 + 0.5 * rate, 6), False)
+
+
+def test_half_the_deadline_not_half_the_budget_is_the_room() -> None:
+    """The live pass spends ~490 s on its fixed cost, past half the build's budget (393.75 s):
+    judged against the budget it could never double. Half the deadline bounds a doubled pass by
+    2T only while its next adverts cost no more each, its fixed part has not grown and the
+    database is no slower; at 524 s that leaves 2 s, and E71's saturating neighbourhood is the
+    margin (a doubling cost x1.14-1.19 on 2026-10-10)."""
+    from autodedup.incremental_lane import _measure_rate
+
+    assert _measure_rate(25, 524.0, LIVE_RATE, _bound("time", 25)) == (0.063836, True)
+    assert _measure_rate(25, 526.0, LIVE_RATE, _bound("time", 25)) == (
+        round(0.5 * 25 / 526.0 + 0.5 * LIVE_RATE, 6), False)
+
+
+def test_a_blend_that_beats_the_doubling_is_stored_and_not_called_a_doubling() -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    assert _measure_rate(25, 10.0, LIVE_RATE, _bound("time", 25)) == (
+        round(0.5 * 25 / 10.0 + 0.5 * LIVE_RATE, 6), False)
 
 
 @pytest.mark.parametrize("claimed, bound", [
@@ -1272,7 +1297,7 @@ def test_half_the_deadline_not_half_the_budget_is_the_room() -> None:
 def test_only_a_claim_the_clock_cut_and_filled_doubles(claimed: int, bound: dict) -> None:
     from autodedup.incremental_lane import _measure_rate
 
-    rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound, DEADLINE_S)
+    rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound)
     assert (rate, doubled) == (round(0.5 * claimed / 200.0 + 0.5 * 2.0, 6), False)
     assert rate < 4.0
 
@@ -1316,6 +1341,25 @@ def test_a_build_pass_with_room_doubles_the_stored_rate(tmp_path, monkeypatch) -
         assert bound["bound_by"] == "time" and out["counts"]["claimed"] >= bound["limit"]
         assert out["rate_doubled"] is True and out["bootstrap"]["active"] is True
         assert conn.settings[key] == expected and conn.settings_by[key].endswith(":rate")
+
+
+def test_a_live_pass_with_room_doubles_the_stored_rate(tmp_path, monkeypatch) -> None:
+    """(a) holds after the build too: the live budget (525 s) is the threshold, a live limit is
+    shared out a fifth a feed so a pass rarely fills it, and the reconcile runs after the commit."""
+    from autodedup.incremental import bootstrap_key
+    from autodedup.incremental_lane import PASS_BUDGET_S, pass_rate_key
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    conn.settings[bootstrap_key()] = False
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    out = _timed_pass(monkeypatch, conn, 524.0)
+    bound = out["claim_bound"]
+    assert out["bootstrap"]["active"] is False and bound["pass_budget_s"] == PASS_BUDGET_S
+    assert bound["bound_by"] == "time" and out["counts"]["claimed"] >= bound["limit"]
+    assert out["rate_doubled"] is True and conn.settings[key] == 0.0036
 
 
 def test_a_build_pass_past_half_the_deadline_blends_the_stored_rate(tmp_path,
