@@ -48,6 +48,15 @@ export function BackIcon(p: IconProps) {
   );
 }
 
+/* The stage badge's "opens a menu" caret. */
+export function ChevronDownIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M7 10l5 5 5-5" />
+    </Svg>
+  );
+}
+
 export function RefreshIcon(p: IconProps) {
   return (
     <Svg {...p}>
