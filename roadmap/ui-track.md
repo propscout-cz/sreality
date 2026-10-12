@@ -11,7 +11,7 @@ toolkit work.
 - The platform on the operator's iPhone home screen: the same SPA at the same address, a
   phone shell by screen width. Waves W0 prototype → W1 feed → W2 property page → W3 pipeline
   → W4 collections + brokers; a wave closes on the operator's install walk, not the merge.
-- **W1 slice: the installable shell** (this PR's branch `feature/phone-installable-shell`):
+- **W1 slice: the installable shell** ([#1777](https://github.com/waiff/sreality/pull/1777)):
   self-hosted fonts, `manifest.webmanifest` + icons (`frontend/scripts/make-icons.py`), the iOS
   meta tags, and a version-agnostic `public/sw.js` (navigations network-first, `/assets/*`
   cache-first; buildSkew stays the update signal). Decided in #1763 and #1764. No phone layout yet.
