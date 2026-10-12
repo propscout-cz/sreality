@@ -61,7 +61,7 @@ import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
 import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
-import PhoneProperty from '@/components/phone/PhoneProperty';
+import PhonePropertySkeleton from '@/components/phone/PhonePropertySkeleton';
 import { mergedAdvertsKeys, parseLetters, propertyKeys } from '@/lib/mergedAdverts';
 import { usePhoneShell } from '@/lib/phoneShell';
 import type { PastedLinkState } from '@/pages/Link';
@@ -81,6 +81,10 @@ const SoldCompsBlock = lazyChunk(
 const EstimationsBlock = lazyChunk(
   () => import('@/components/listing-detail/EstimationsBlock'),
 );
+
+/* The phone layout is its own chunk: the desktop never downloads it, and the
+ * first visit stays inside scripts/bundle-budget.mjs. */
+const PhoneProperty = lazyChunk(() => import('@/components/phone/PhoneProperty'));
 
 const NO_SNAPSHOTS: ListingSnapshotPublic[] = [];
 
@@ -218,6 +222,7 @@ export default function PropertyDetail() {
 
   if (phone) {
     return (
+      <Suspense fallback={<PhonePropertySkeleton />}>
       <PhoneProperty
         property={property}
         sources={sources}
@@ -233,6 +238,7 @@ export default function PropertyDetail() {
         advertIds={advertIds}
         openedAdvertId={advertParam}
       />
+      </Suspense>
     );
   }
 
@@ -683,9 +689,7 @@ function MapPinGlyph() {
 /* The phone frame draws its own back affordance, so its states drop the crumb. */
 function LoadingState() {
   const phone = usePhoneShell();
-  if (phone) {
-    return <div className="px-4 py-8 text-[14px] text-[var(--color-ink-3)]">Načítám…</div>;
-  }
+  if (phone) return <PhonePropertySkeleton />;
   return (
     <Page>
       <Crumb />

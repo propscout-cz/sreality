@@ -7,7 +7,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
@@ -221,6 +221,14 @@ afterEach(() => {
   window.matchMedia = originalMatchMedia;
 });
 
+/* PhoneProperty is a lazy chunk (the first-visit budget): import it once up front so
+ * no test pays the module load inside a findBy window on a loaded runner. */
+beforeAll(async () => {
+  await import('./PhoneProperty');
+}, 30_000);
+
+const LOADED = { timeout: 5_000 };
+
 const noMaps = () => {
   expect(screen.queryByTestId('detail-map')).toBeNull();
   expect(screen.queryByTestId('comparables-map')).toBeNull();
@@ -232,7 +240,7 @@ const noMaps = () => {
 describe('the phone property page', () => {
   it('draws a sale: price, its move, per-m² in Kč/m², the MF badge, facts and the ads', async () => {
     renderAt('/property/304388');
-    const page = await screen.findByRole('article', { name: 'Nemovitost' });
+    const page = await screen.findByRole('article', { name: 'Nemovitost' }, LOADED);
     const head = within(page.querySelector('header') as HTMLElement);
     expect(plain(head.getByText(/7\s490\s000/).textContent)).toBe('7 490 000 Kč');
     expect(head.getByText((_, el) => plain(el?.textContent) === '−5 %' && el?.tagName === 'SPAN'))
@@ -251,7 +259,7 @@ describe('the phone property page', () => {
     expect(facts.getByText('Vlastnictví').nextSibling).toHaveTextContent('Osobní');
 
     /* Every ad, the canonical one marked, each a same-window link to its portal. */
-    const ads = within(await screen.findByRole('region', { name: 'Inzeráty' }));
+    const ads = within(await screen.findByRole('region', { name: 'Inzeráty' }, LOADED));
     expect(ads.getByText('hlavní inzerát')).toBeInTheDocument();
     const links = ads.getAllByRole('link', { name: /Otevřít na portálu/ });
     expect(links).toHaveLength(2);
@@ -268,8 +276,8 @@ describe('the phone property page', () => {
     expect(screen.getByRole('button', { name: 'Přidat do pipeline' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Uložit do sbírky' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skrýt nemovitost' })).toBeInTheDocument();
-    expect(await screen.findByText('Vývoj ceny')).toBeInTheDocument();
-    expect(await screen.findByText('Poznámky')).toBeInTheDocument();
+    expect(await screen.findByText('Vývoj ceny', {}, LOADED)).toBeInTheDocument();
+    expect(await screen.findByText('Poznámky', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Stáhnout \(PDF \+ fotky\)/ })).toBeInTheDocument();
     await waitFor(() => expect(queries.fetchEstimationsForListings).toHaveBeenCalled());
     noMaps();
@@ -282,7 +290,7 @@ describe('the phone property page', () => {
       ad({ property_id: 5, id: 5005, sreality_id: -4411, source: 'bezrealitky', price_czk: 22_500 }),
     ]);
     renderAt('/property/5');
-    const page = await screen.findByRole('article', { name: 'Nemovitost' });
+    const page = await screen.findByRole('article', { name: 'Nemovitost' }, LOADED);
     const head = within(page.querySelector('header') as HTMLElement);
     expect(head.getByText('/měs')).toBeInTheDocument();
     expect(head.getByText((_, el) => plain(el?.textContent) === '375 Kč/m²/měs' && el?.tagName === 'SPAN'))
@@ -296,7 +304,7 @@ describe('the phone property page', () => {
   it('shows no per-m² figure when the basis is missing — never a bare number', async () => {
     vi.mocked(queries.fetchProperty).mockResolvedValue({ ...SALE, price_per_m2_basis: null } as PropertyPublic);
     renderAt('/property/304388');
-    const page = await screen.findByRole('article', { name: 'Nemovitost' });
+    const page = await screen.findByRole('article', { name: 'Nemovitost' }, LOADED);
     expect(within(page.querySelector('header') as HTMLElement).queryByText(/138\s704/)).toBeNull();
   });
 
@@ -310,7 +318,7 @@ describe('the phone property page', () => {
       ]) as unknown as queries.PipelineMembers,
     );
     renderAt('/property/304388');
-    const cell = await screen.findByRole('button', { name: 'Fáze Prohlídka, změnit' });
+    const cell = await screen.findByRole('button', { name: 'Fáze Prohlídka, změnit' }, LOADED);
     expect(cell).toHaveTextContent('P1 · Prohlídka');
     /* A live deal is never hidden. */
     expect(screen.getByRole('button', { name: 'Rozpracovaný obchod nelze skrýt' })).toHaveAttribute(
@@ -318,14 +326,14 @@ describe('the phone property page', () => {
       'true',
     );
     await userEvent.click(cell);
-    expect(await screen.findByRole('dialog', { name: 'Přesunout do fáze' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Přesunout do fáze' }, LOADED)).toBeInTheDocument();
   });
 
   it('says in Czech that a pasted advert is not in the database, with the portal link', async () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
     const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
     renderAt({ pathname: '/listing/bazos/196123456', state: { pastedUrl: url } });
-    expect(await screen.findByText('Tento inzerát v databázi nemáme')).toBeInTheDocument();
+    expect(await screen.findByText('Tento inzerát v databázi nemáme', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByText('196123456')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
   });
