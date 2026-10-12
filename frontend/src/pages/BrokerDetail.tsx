@@ -17,6 +17,8 @@ import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
 import { advertPath, propertyPath } from '@/lib/listingUrl';
 import { categoryMainLabel, categoryTypeLabel, listingKindLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
+import { usePhoneShell } from '@/lib/phoneShell';
+import PhoneBrokerDetail from './phone/PhoneBrokerDetail';
 
 
 // Mirror the Žebříček (leaderboard) filter chips, but the broker's own inventory
@@ -34,7 +36,13 @@ const OFFER_OPTIONS: ReadonlyArray<{ value: string | null; label: string }> = [
   { value: 'pronajem', label: 'Pronájem' },
 ];
 
+/* Under the phone shell: the dossier without the map, footprint as numbers
+ * (#1760 Q12); the explore-on-map modal is desktop only. */
 export default function BrokerDetail() {
+  return usePhoneShell() ? <PhoneBrokerDetail /> : <BrokerDetailDesktop />;
+}
+
+function BrokerDetailDesktop() {
   const { id } = useParams<{ id: string }>();
   const brokerId = Number(id);
 
