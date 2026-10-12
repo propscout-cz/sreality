@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -26,7 +26,8 @@ import {
 } from '@/lib/queries';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { usePhoneShell } from '@/lib/phoneShell';
-import PhonePipeline from '@/components/phone/PhonePipeline';
+import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { useLegacyChipUpgrade } from '@/lib/useLegacyChipUpgrade';
@@ -87,12 +88,22 @@ const CATEGORY_MAIN_OPTIONS = enumOptions('category_main');
 /* One stable empty board, so every memo below can depend on `cards` itself. */
 const NO_CARDS: PipelineBoardCard[] = [];
 
+/* A chunk of its own: the desktop never downloads it, and the first-visit
+ * budget (scripts/bundle-budget.mjs) does not pay for it. */
+const PhonePipeline = lazyChunk(() => import('@/components/phone/PhonePipeline'));
+
 /* One route, two faces: under the phone shell the stages are swiped pages
  * (#1768 — no drag, no stage management, #1760 Q8/Q13), and the kanban below,
  * with its drag sensors and stage editor, is never mounted. Both read the same
  * two cache entries (lib/pipelineReads) and write through usePipelineCard. */
 export default function Pipeline() {
-  return usePhoneShell() ? <PhonePipeline /> : <PipelineBoardPage />;
+  return usePhoneShell() ? (
+    <Suspense fallback={<PhonePipelineSkeleton />}>
+      <PhonePipeline />
+    </Suspense>
+  ) : (
+    <PipelineBoardPage />
+  );
 }
 
 function PipelineBoardPage() {
