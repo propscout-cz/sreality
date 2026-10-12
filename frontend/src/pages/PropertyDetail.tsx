@@ -62,6 +62,8 @@ import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSecti
 import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
 import { mergedAdvertsKeys, parseLetters, propertyKeys } from '@/lib/mergedAdverts';
+import { usePhoneShell } from '@/lib/phoneShell';
+import type { PastedLinkState } from '@/pages/Link';
 
 /* The freshness block moved to its own file (shared with the phone layout);
  * re-exported so older imports keep resolving. */
@@ -381,7 +383,62 @@ export function AdvertRedirect() {
   }
   if (q.isLoading) return <LoadingState />;
   if (q.error) return <FailedState error={q.error} />;
+  if (source && nativeId) {
+    return (
+      <AdvertNotFound
+        source={source}
+        nativeId={nativeId}
+        pastedUrl={(location.state as Partial<PastedLinkState> | null)?.pastedUrl ?? null}
+      />
+    );
+  }
   return <NotFoundState id={legacyParam ?? nativeId ?? propertyParam} />;
+}
+
+/* A portal advert we hold no row for — most often a link pasted on the phone
+   (#1767) to an ad the scrapers have not reached yet. On the phone it says so
+   in Czech and, when the paste carried the URL, offers the portal's own page
+   (same window: an installed iOS app opens it in its in-app Safari sheet). The
+   desktop keeps the generic not-found. */
+function AdvertNotFound({
+  source,
+  nativeId,
+  pastedUrl,
+}: {
+  source: string;
+  nativeId: string;
+  pastedUrl: string | null;
+}) {
+  const phone = usePhoneShell();
+  if (!phone) return <NotFoundState id={nativeId} />;
+  return (
+    <div className="px-4 py-8">
+      <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
+        Nenalezeno
+      </p>
+      <h2 className="mt-2 font-display text-[22px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)]">
+        Tento inzerát v databázi nemáme
+      </h2>
+      <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-[var(--color-ink-2)]">
+        <span className="inline-flex h-5 items-center rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 text-[11px]">
+          {portalLabel(source) ?? source}
+        </span>
+        <span className="break-all font-mono text-[12px] tabular-nums">{nativeId}</span>
+      </p>
+      <p className="mt-3 text-[13px] leading-relaxed text-[var(--color-ink-3)]">
+        Buď je nový a k nám ještě nedorazil, nebo ho portál stáhl dřív, než jsme ho přečetli.
+      </p>
+      {pastedUrl && (
+        <a
+          href={pastedUrl}
+          className="mt-4 inline-flex h-11 items-center gap-1 text-[15px] font-medium text-[var(--color-copper)]"
+        >
+          Otevřít na portálu {portalLabel(source) ?? source}
+          <span aria-hidden>↗</span>
+        </a>
+      )}
+    </div>
+  );
 }
 
 /* A merged-away property is not in properties_public (active rows only). The

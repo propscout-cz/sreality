@@ -71,10 +71,10 @@ export function usePhoneShell(): boolean {
 export const TAB_BAR_INSET = 'max(8px, env(safe-area-inset-bottom))';
 export const TAB_BAR_SPACE = `calc(56px + ${TAB_BAR_INSET})`;
 
-/* The four W1 areas of the bottom tab bar. The fifth, Odkaz (paste a link),
- * lands with W2. `owns` decides which tab a path belongs to: a collection's
+/* The five areas of the bottom tab bar: the four of W1 and Odkaz (paste a
+ * link, W2 #1767). `owns` decides which tab a path belongs to: a collection's
  * own page is under Sbírky, a broker's under Makléři. */
-export type PhoneTabKey = 'feed' | 'pipeline' | 'collections' | 'brokers';
+export type PhoneTabKey = 'feed' | 'pipeline' | 'collections' | 'brokers' | 'link';
 
 export interface PhoneTab {
   key: PhoneTabKey;
@@ -96,6 +96,7 @@ export const PHONE_TABS: ReadonlyArray<PhoneTab> = [
     owns: (p) => under(p, ROUTES.collections.pattern) || under(p, '/collection'),
   },
   { key: 'brokers', label: 'Makléři', to: ROUTES.brokers.build(), owns: (p) => under(p, ROUTES.brokers.pattern) },
+  { key: 'link', label: 'Odkaz', to: ROUTES.link.build(), owns: (p) => under(p, ROUTES.link.pattern) },
 ];
 
 export const phoneTabFor = (pathname: string): PhoneTab | null =>

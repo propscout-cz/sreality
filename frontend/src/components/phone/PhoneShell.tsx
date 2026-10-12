@@ -1,6 +1,6 @@
 /* The phone frame around the routes (#1766, design #1762): a 3.5 rem header with
  * the page's title, a back affordance off the tab roots and the account button;
- * a bottom tab bar for the four W1 areas. Shell.tsx picks this frame or the
+ * a bottom tab bar for the five areas (W1's four and Odkaz, W2 #1767). Shell.tsx picks this frame or the
  * desktop one by `usePhoneShell()`; the route body is the same either way.
  *
  * THE HEADER IS EXACTLY `h-14`, as the desktop TopBar is (Shell.tsx explains
@@ -32,7 +32,7 @@ import { useTheme, type ThemeMode } from '@/lib/theme';
 import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
-import { BackIcon, PersonIcon, RollIcon } from './phoneIcons';
+import { BackIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
@@ -182,6 +182,7 @@ const TAB_ICON: Record<PhoneTabKey, ReactNode> = {
   pipeline: <FunnelIcon className="h-[22px] w-[22px]" />,
   collections: <CollectionMark className="h-[22px] w-[22px]" />,
   brokers: <PersonIcon className="h-[22px] w-[22px]" />,
+  link: <LinkIcon className="h-[22px] w-[22px]" />,
 };
 
 function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneTab; hidden: boolean }) {
@@ -192,7 +193,7 @@ function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneT
       className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--color-rule-strong)] bg-[var(--color-paper)]"
       style={{ paddingBottom: TAB_BAR_INSET }}
     >
-      <div className="grid h-14 grid-cols-4">
+      <div className="grid h-14 grid-cols-5">
         {PHONE_TABS.map((t) => {
           const owns = t.owns(pathname);
           const on = owns || t.key === marked.key;
