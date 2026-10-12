@@ -750,12 +750,16 @@ rules. Identify which one a task belongs to before you start.
 **Chrome-extension territory** (`chrome-extension/`):
 - Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
   listing pages. The content script matches **every scraped portal's host** (sreality,
-  bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix). `src/portals.ts`
-  (host→portal + detail-URL→native-id) is the single source of truth for the host list —
+  bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
+  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) is the single source of
+  truth for the host list, shared with the SPA's paste-a-link (`parsePortalUrl` →
+  `/listing/:source/:nativeId`) and imported cross-tree exactly like `lib/brand.ts` (it lives under
+  `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
-  used there for `name` + `host_permissions`), so onboarding a new portal only means adding it
-  to `src/portals.ts` — no second hand-maintained match list to keep in sync. `host_permissions`
+  used there for `name` + `host_permissions`), and `portalIds.test.ts` fails when the template
+  and the rules name different hosts, so onboarding a new portal means adding it to
+  `portalIds.ts` plus its line in the template. `host_permissions`
   is narrowed at build time to just the two live API/auth origins the background worker fetches
   (`VITE_API_BASE_URL` + `VITE_SUPABASE_URL`), not a broad wildcard. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
@@ -831,8 +835,8 @@ rules. Identify which one a task belongs to before you start.
   lookup is out per generation (a sign-in or the retry starts a new one, older answers are
   dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late
   `ok` still badges;
-  `stop()` removes the notice on route change. `src/portals.ts` is the single source of truth for
-  host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
+  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
+  truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
@@ -2475,7 +2479,8 @@ renumber.** Navigate by area:
     confirm (`components/pipeline/BoardCard.tsx`). The Chrome-extension panel reproduces the glyph
     by value in vanilla TS (separate territory, no React import) and also hand-copies
     `stageBadge` / `stageAccent` into `content.ts` — pure TS it could import from
-    `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand` and `lib/mfReference`.
+    `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand`, `lib/mfReference` and
+    `lib/portalIds`.
     The kanban's shape is sanctioned (its writes already go through `usePipelineCard`); its grey
     `stageColor` and the extension's copies are owed (`roadmap/operator-workflow-track.md` § Rule #22).
     **TENANCY NOTE — stated here once, for rule #18 as well.** Pipeline MEMBERSHIP has exactly ONE
