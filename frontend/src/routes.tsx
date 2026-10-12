@@ -54,6 +54,8 @@ const AutodedupProposedSplits = lazyChunk(() => import('./pages/AutodedupPropose
 const AutodedupCategorySplits = lazyChunk(() => import('./pages/AutodedupCategorySplits'));
 const AutodedupRulings = lazyChunk(() => import('./pages/AutodedupRulings'));
 const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
+// The Phone app's Odkaz tab (#1767): phone-only, so outside the first visit.
+const LinkPage = lazyChunk(() => import('./pages/Link'));
 // TODO(estimation-5 Part C1): remove DevConfidencePreview + its route
 // once design is approved and the indicator is in real use.
 const DevConfidencePreview = lazyChunk(() => import('./pages/DevConfidencePreview'));
@@ -92,6 +94,15 @@ export const routes: RouteObject[] = [
       { index: true, element: <HomeRedirect /> },
       { path: ROUTES.browse.childPath, element: <Browse />, handle: { title: 'Browse' } },
       { path: ROUTES.feed.childPath, element: <Feed />, handle: { title: 'Nové' } },
+      {
+        path: ROUTES.link.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={240} className="mx-4 my-4" />}>
+            <LinkPage />
+          </Suspense>
+        ),
+        handle: { title: 'Odkaz' },
+      },
       { path: ROUTES.property.childPath, element: <PropertyDetail />, handle: { title: 'Property' } },
       // Advert addresses, kept forever (emails, the extension, bookmarks): the
       // natural key (migration 091), the legacy numeric id (negative for

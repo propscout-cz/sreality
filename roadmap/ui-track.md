@@ -37,6 +37,13 @@ toolkit work.
   `lib/brand.ts`; `parsePortalUrl` is what the paste-a-link box calls to land on
   `/listing/:source/:nativeId`. Also fixed: bezrealitky's English site (`www.bezrealitky.com`,
   `/properties-flats-houses/`), which no rule matched before. Next in W2: the paste box itself.
+- **W2: the property page on the phone and Odkaz** (#1767, [#1782](https://github.com/waiff/sreality/pull/1782)): under the phone shell
+  the property page is the prototype's "Nemovitost" — photo swiper with the stage wash, price + basis,
+  the curation row, then every non-map section as reading + curation (estimations read-only; no maps,
+  no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
+  property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
+  portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
+  install walk.
 - **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
   `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
   (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per

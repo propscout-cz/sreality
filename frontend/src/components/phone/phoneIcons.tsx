@@ -128,3 +128,40 @@ export function CheckIcon(p: IconProps) {
     </Svg>
   );
 }
+
+/* Odkaz: two links of a chain. */
+export function LinkIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M10 14a4 4 0 0 0 5.66 0l3.17-3.17a4 4 0 0 0-5.66-5.66L12 6.34" />
+      <path d="M14 10a4 4 0 0 0-5.66 0l-3.17 3.17a4 4 0 0 0 5.66 5.66L12 17.66" />
+    </Svg>
+  );
+}
+
+/* A clipboard: paste from it. */
+export function PasteIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="5.5" y="4.5" width="13" height="16" rx="1.5" />
+      <path d="M9 4.5V3.5h6v1M9 10.5h6M9 14h4" />
+    </Svg>
+  );
+}
+
+/* Leaves the app: the portal's own page. */
+export function ExternalIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M8 16L16 8M9.5 8H16V14.5" />
+    </Svg>
+  );
+}
+
+export function DownloadIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14" />
+    </Svg>
+  );
+}

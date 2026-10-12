@@ -35,7 +35,7 @@ const MINUS = '−';
 const MARGIN_PX = 44;
 
 /* A dark room for the photo after dusk, as the prototype dims it (26 %); the
- * pipeline's thumbnails take the same. */
+ * pipeline's thumbnails and the property page's gallery take the same. */
 export const PHOTO_DARK =
   '[:root[data-theme=dark]_&]:brightness-[0.74] [@media(prefers-color-scheme:dark)]:[:root:not([data-theme=light])_&]:brightness-[0.74]';
 
@@ -63,7 +63,9 @@ export function feedLayout(r: Pick<CardRow, 'category_main' | 'disposition' | 's
 }
 
 /* Line 2: layout · area · place. */
-export function feedLine2(r: CardRow): string {
+export function feedLine2(
+  r: Pick<CardRow, 'category_main' | 'disposition' | 'subtype' | 'area_m2' | 'display_label'>,
+): string {
   const parts = [feedLayout(r)];
   if (r.area_m2 != null) parts.push(fmtArea(r.area_m2, areaKindOf(r.category_main)));
   if (r.display_label) parts.push(r.display_label);

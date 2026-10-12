@@ -733,6 +733,12 @@ rules. Identify which one a task belongs to before you start.
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
   its lazily loaded phone layout by `usePhoneShell()`, so `routes.tsx` does not change.
+  The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
+  query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
+  `pages/Link` is, so the first-visit budget never pays for them; no maps, no estimation start —
+  RunPanel skips `ComparablesMap` under the shell), and the fifth tab `/link`
+  resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
+  `/listing/:source/:nativeId` alias.
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical

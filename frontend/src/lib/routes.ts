@@ -89,6 +89,8 @@ export const ROUTES = {
   browse: def('/browse'),
   // The Phone app's start screen (#1766): Browse's read, newest first, as a roll.
   feed: def('/feed'),
+  // The Phone app's fifth tab (#1767): paste a portal link, land on its property.
+  link: def('/link'),
   // THE property page (decision 11): one real property, one stable address.
   property: def('/property/:propertyId'),
   // Advert addresses, kept forever as aliases (bookmarks, emails, the
