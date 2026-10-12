@@ -1233,6 +1233,7 @@ def test_a_pass_that_measured_itself_overwrites_the_half(tmp_path) -> None:
 
 
 BUILD_BUDGET_S = 787.5
+DEADLINE_S = 1050.0
 
 
 def _bound(by: str, limit: int, budget: float = BUILD_BUDGET_S) -> dict:
@@ -1242,23 +1243,25 @@ def _bound(by: str, limit: int, budget: float = BUILD_BUDGET_S) -> dict:
 def test_a_pass_the_clock_cut_that_had_room_doubles_the_rate() -> None:
     """2026-10-12: nine deaths left the build at 0.018/s, and at a small claim the pass's fixed
     cost holds claimed/elapsed down, so the blend grew the claim ~15 % a pass. A pass the clock
-    cut that claimed all of it inside half its budget doubles instead: 0.018, 0.036, 0.072."""
+    cut that claimed all of it inside half the deadline doubles instead: 0.018, 0.036, 0.072."""
     from autodedup.incremental_lane import _measure_rate
 
     rate = 0.018
     for expected in (0.036, 0.072, 0.144):
         limit = int(BUILD_BUDGET_S * rate)
-        rate, doubled = _measure_rate(limit, 300.0, rate, _bound("time", limit))
+        rate, doubled = _measure_rate(limit, 300.0, rate, _bound("time", limit), DEADLINE_S)
         assert (rate, doubled) == (expected, True)
 
 
-def test_a_pass_that_used_more_than_half_its_budget_keeps_the_blend() -> None:
-    """The production pass at 14 adverts: ~400 s of fixed cost, past half the build's budget."""
+def test_half_the_deadline_not_half_the_budget_is_the_room() -> None:
+    """The production pass at 14 adverts spends ~400 s on its fixed cost, past half the build's
+    budget (393.75 s): judged against the budget it could never double. A pass of T under half
+    the deadline is at most 2T doubled, inside the deadline whatever share of T is fixed."""
     from autodedup.incremental_lane import _measure_rate
 
-    rate, doubled = _measure_rate(14, 408.0, 0.018, _bound("time", 14))
-    assert (rate, doubled) == (round(0.5 * 14 / 408.0 + 0.5 * 0.018, 6), False)
-    assert _measure_rate(14, 393.0, 0.018, _bound("time", 14)) == (0.036, True)
+    assert _measure_rate(14, 524.0, 0.018, _bound("time", 14), DEADLINE_S) == (0.036, True)
+    rate, doubled = _measure_rate(14, 526.0, 0.018, _bound("time", 14), DEADLINE_S)
+    assert (rate, doubled) == (round(0.5 * 14 / 526.0 + 0.5 * 0.018, 6), False)
 
 
 @pytest.mark.parametrize("claimed, bound", [
@@ -1269,7 +1272,7 @@ def test_a_pass_that_used_more_than_half_its_budget_keeps_the_blend() -> None:
 def test_only_a_claim_the_clock_cut_and_filled_doubles(claimed: int, bound: dict) -> None:
     from autodedup.incremental_lane import _measure_rate
 
-    rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound)
+    rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound, DEADLINE_S)
     assert (rate, doubled) == (round(0.5 * claimed / 200.0 + 0.5 * 2.0, 6), False)
     assert rate < 4.0
 
@@ -1308,15 +1311,15 @@ def test_a_build_pass_with_room_doubles_the_stored_rate(tmp_path, monkeypatch) -
     key = pass_rate_key("rt")
     conn.settings[key] = 0.0018
     for expected in (0.0036, 0.0072):
-        out = _timed_pass(monkeypatch, conn, 390.0)
+        out = _timed_pass(monkeypatch, conn, 524.0)
         bound = out["claim_bound"]
         assert bound["bound_by"] == "time" and out["counts"]["claimed"] >= bound["limit"]
         assert out["rate_doubled"] is True and out["bootstrap"]["active"] is True
         assert conn.settings[key] == expected and conn.settings_by[key].endswith(":rate")
 
 
-def test_a_build_pass_past_half_its_budget_blends_the_stored_rate(tmp_path,
-                                                                   monkeypatch) -> None:
+def test_a_build_pass_past_half_the_deadline_blends_the_stored_rate(tmp_path,
+                                                                     monkeypatch) -> None:
     from autodedup.incremental_lane import pass_rate_key
     from tests.autodedup import lane_world
 
@@ -1324,11 +1327,11 @@ def test_a_build_pass_past_half_its_budget_blends_the_stored_rate(tmp_path,
     lane_world.seed_lane(conn, tmp_path)
     key = pass_rate_key("rt")
     conn.settings[key] = 0.0018
-    out = _timed_pass(monkeypatch, conn, 400.0)
+    out = _timed_pass(monkeypatch, conn, 526.0)
     claimed = out["counts"]["claimed"]
     assert out["claim_bound"]["bound_by"] == "time" and claimed >= out["claim_bound"]["limit"]
     assert out["rate_doubled"] is False
-    assert conn.settings[key] == round(0.5 * claimed / 400.0 + 0.5 * 0.0018, 6)
+    assert conn.settings[key] == round(0.5 * claimed / 526.0 + 0.5 * 0.0018, 6)
 
 
 def test_a_pass_past_its_deadline_still_halves_and_never_doubles(tmp_path) -> None:

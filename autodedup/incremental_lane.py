@@ -355,9 +355,10 @@ PASS_RATE_MIN_CLAIM: int = 20
 # How much of the new measurement the stored rate takes. A build ramps from the conservative
 # default to the real rate in two passes at 0.5 and cannot be knocked out of it by one slow pass.
 PASS_RATE_ALPHA: float = 0.5
-# E951: a pass the clock cut that claimed all of it and committed inside this share of its
-# budget DOUBLES the stored rate instead of blending it: at a small claim the pass's fixed cost
-# holds claimed/elapsed down, so the blend cannot climb, and a deadline hit already halves.
+# E951: a pass the clock cut that claimed all of it and committed inside this share of the
+# DEADLINE doubles the stored rate instead of blending it: at a small claim the pass's fixed
+# cost holds claimed/elapsed down, so the blend cannot climb. Safe by construction: a pass of
+# T < 525 s costs at most 2T < 1,050 s doubled, whatever share of its cost scales with the claim.
 RAMP_HEADROOM: float = 0.5
 # E951: a build's pass budget as a share of the deadline: a build's pass need not finish fast
 # for latency, and its fixed cost is spread over more adverts than half the deadline holds.
@@ -2170,22 +2171,22 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
 
 
 def _measure_rate(claimed: int, elapsed_s: float, previous: float,
-                  bound: Mapping[str, Any]) -> tuple[float | None, bool]:
+                  bound: Mapping[str, Any], deadline_s: float) -> tuple[float | None, bool]:
     """This pass's claimed-listings-per-second, blended with what the generation had (E98),
     and whether it was doubled instead (E951).
 
     Recorded only when the quotient means something: the pass claimed `PASS_RATE_MIN_CLAIM`
     listings, or it claimed everything the time budget allowed it (a claim the budget cut is a
     measurement at any size — without that, a rate halved to a one-listing claim would never be
-    measured again). Such a pass that committed inside `RAMP_HEADROOM` of its budget had room:
-    the rate becomes at least twice the one it started from."""
+    measured again). Such a pass that committed inside `RAMP_HEADROOM` of its deadline had
+    room: the rate becomes at least twice the one it started from."""
     limit = int(bound.get("limit") or 0)
     saturated = bound.get("bound_by") == "time" and limit > 0 and claimed >= limit
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
         return None, False
     blended = (PASS_RATE_ALPHA * (claimed / float(elapsed_s))
                + (1.0 - PASS_RATE_ALPHA) * max(1e-6, previous))
-    if saturated and elapsed_s < RAMP_HEADROOM * float(bound.get("pass_budget_s") or 0.0):
+    if saturated and elapsed_s < RAMP_HEADROOM * deadline_s:
         return round(max(blended, 2.0 * max(1e-6, previous)), 6), True
     return round(blended, 6), False
 
@@ -2631,7 +2632,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             # too little to measure itself (an idle one) leaves that rate. Not once the lane is
             # not its own: the next holder's rows are not its to write.
             measured, doubled = _measure_rate(len(result.claimed), elapsed, rate_per_s,
-                                              work.claim_bound)
+                                              work.claim_bound, deadline_s)
             if measured is not None:
                 _write_rate(conn, generation, measured, "rate")
         coverage = (None if not facts.images_with_phash else round(
