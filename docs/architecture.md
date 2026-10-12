@@ -725,6 +725,10 @@ rules. Identify which one a task belongs to before you start.
   "Skryté" roll (`fetchDismissedCards`): Browse has no hidden-only lens, and the dismissed set
   may not ride in a URL, so it reads one page of the caller's dismissals at a time and those
   properties' card rows from the plain `browse_list`.
+  `/pipeline` on the phone frame is `components/phone/PhonePipeline.tsx`, one swiped page per
+  stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
+  not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
+  stage management on the phone (#1768).
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical

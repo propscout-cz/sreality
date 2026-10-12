@@ -37,6 +37,12 @@ toolkit work.
   `lib/brand.ts`; `parsePortalUrl` is what the paste-a-link box calls to land on
   `/listing/:source/:nativeId`. Also fixed: bezrealitky's English site (`www.bezrealitky.com`,
   `/properties-flats-houses/`), which no rule matched before. Next in W2: the paste box itself.
+- **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
+  `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
+  (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per
+  stage, each scrolling on its own; cards are a stage-washed 104 px thumbnail, price, layout, place,
+  days in the stage and MF; the stage badge opens the stage sheet (move, two-step remove through
+  `usePipelineCard`). Same reads as the board (`lib/pipelineReads`); no drag, no stage management.
 
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first
