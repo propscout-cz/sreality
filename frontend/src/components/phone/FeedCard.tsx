@@ -34,12 +34,16 @@ const MINUS = '−';
 /* The margin column's width; the wash keeps its badge clear of it. */
 const MARGIN_PX = 44;
 
-/* A dark room for the photo after dusk, as the prototype dims it (26 %). */
-const PHOTO_DARK =
+/* A dark room for the photo after dusk, as the prototype dims it (26 %); the
+ * pipeline's thumbnails take the same. */
+export const PHOTO_DARK =
   '[:root[data-theme=dark]_&]:brightness-[0.74] [@media(prefers-color-scheme:dark)]:[:root:not([data-theme=light])_&]:brightness-[0.74]';
 
 /* The price as line 1 prints it; `perMonth` adds the muted "/měs" of a rent. */
-export function feedPrice(r: CardRow): { text: string | null; perMonth: boolean } {
+export function feedPrice(r: Pick<CardRow, 'price_czk' | 'category_type'>): {
+  text: string | null;
+  perMonth: boolean;
+} {
   if (r.price_czk == null) return { text: null, perMonth: false };
   return { text: fmtCzk(r.price_czk), perMonth: r.category_type === 'pronajem' };
 }
@@ -53,7 +57,7 @@ export function feedPricePerM2(r: Pick<CardRow, 'price_per_m2' | 'price_per_m2_b
 }
 
 /* "2+kk", "Dům 5+1", "Pozemek" — the disposition is the noun for a flat. */
-export function feedLayout(r: CardRow): string {
+export function feedLayout(r: Pick<CardRow, 'category_main' | 'disposition' | 'subtype'>): string {
   if (r.category_main === 'byt' && r.disposition) return r.disposition;
   return [listingTypeLabel(r), r.disposition].filter(Boolean).join(' ');
 }
@@ -85,7 +89,9 @@ export const portalsWord = (n: number): string =>
   `${n}${NBSP}${czPlural(n, 'portál', 'portály', 'portálů')}`;
 
 /* MF gross yield, sale flats only (the column is null elsewhere; the gate says so). */
-export function feedMfYield(r: CardRow): string | null {
+export function feedMfYield(
+  r: Pick<CardRow, 'mf_gross_yield_pct' | 'category_main' | 'category_type'>,
+): string | null {
   if (r.mf_gross_yield_pct == null || r.category_main !== 'byt' || r.category_type !== 'prodej') return null;
   return `MF ${r.mf_gross_yield_pct.toLocaleString('cs-CZ', {
     minimumFractionDigits: 1,

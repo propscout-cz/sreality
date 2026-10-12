@@ -10,6 +10,10 @@
  * the badge `stageBadge` (the stage's code, else its ordinal) — both computed by
  * the caller from the one shared membership read.
  *
+ * Two sizes, as the prototype draws them: `lg` over a full-width photo (feed,
+ * property header) and `sm` over the pipeline card's 104 px thumbnail, where
+ * the frame steps in 5 px and the caller passes no label (the badge alone).
+ *
  * The parent must isolate (`isolation: isolate`) so the blend stops at the photo. */
 
 import type { CSSProperties } from 'react';
@@ -23,9 +27,10 @@ export interface StageWashProps {
   label: string | null;
   /* Keep the badge clear of a column laid over the photo's right edge (px). */
   insetRight?: number;
+  size?: 'lg' | 'sm';
 }
 
-export default function StageWash({ color, badge, label, insetRight = 0 }: StageWashProps) {
+export default function StageWash({ color, badge, label, insetRight = 0, size = 'lg' }: StageWashProps) {
   const layer: CSSProperties = { background: color };
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0">
@@ -35,7 +40,7 @@ export default function StageWash({ color, badge, label, insetRight = 0 }: Stage
         className="absolute inset-y-0 left-0 flex flex-col items-center justify-center overflow-hidden text-center"
         style={{ right: insetRight, color: ON_WASH, containerType: 'size' }}
       >
-        <div className="absolute inset-[10px] border border-white/50" />
+        <div className={`absolute border border-white/50 ${size === 'sm' ? 'inset-[5px]' : 'inset-[10px]'}`} />
         {badge && (
           <div
             className="whitespace-nowrap font-light"
