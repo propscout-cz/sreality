@@ -161,6 +161,10 @@ The package a user installs into their assistant to connect it to the platform: 
 connection to the platform's tools.
 _Avoid_: connector, extension, integration
 
+**Phone app**:
+The platform's web app installed on a phone's home screen: the same app in a phone-sized shell.
+_Avoid_: PWA (in prose), mobile app, native app, companion app
+
 ### A property's working files
 
 **Workbook**:
