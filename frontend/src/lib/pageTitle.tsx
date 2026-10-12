@@ -54,6 +54,13 @@ type SetOverride = (next: TitleOverride | null) => void;
 
 const SetTitleContext = createContext<SetOverride>(() => {});
 
+/* The segment TitleController just wrote, for chrome that names the page in
+ * its own words: the phone shell's header (#1766) shows it as the page title.
+ * Read-only — a page still sets its title through usePageTitle. */
+const TitleSegmentContext = createContext<string | null>(null);
+
+export const useTitleSegment = (): string | null => useContext(TitleSegmentContext);
+
 /* Walk the matched route chain (deepest wins) for a handle title. */
 function handleTitleFor(routes: RouteObject[], pathname: string): string | null {
   const matches = matchRoutes(routes, pathname);
@@ -94,7 +101,7 @@ export function TitleController({
 
   return (
     <SetTitleContext.Provider value={setOverride}>
-      {children}
+      <TitleSegmentContext.Provider value={segment}>{children}</TitleSegmentContext.Provider>
     </SetTitleContext.Provider>
   );
 }

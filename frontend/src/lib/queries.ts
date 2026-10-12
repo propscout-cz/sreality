@@ -1156,6 +1156,62 @@ export const fetchListingsForCards = async (
   return { rows: baseRows, nextCursor };
 };
 
+/* The feed's "Skryté" roll (#1766): the caller's dismissed properties ONLY,
+ * most recently hidden first. Browse has no such lens — its switch
+ * (`showDismissed`, readSource above) either hides them or shows them among the
+ * rest — and the dismissed set cannot ride in a GET URL (it grows without
+ * bound), so it is read a PAGE at a time: one page of dismissals, keyset-paged on
+ * (dismissed_at, property_id), then those properties' card rows from the plain
+ * browse_list — the reveal side of readSource, the same CARD_COLS. At most one
+ * page of ids is ever in the URL. A dismissed property browse_list does not
+ * serve (no served location, merged away) is simply absent from its page.
+ * `nextCursor` follows the DISMISSAL page, so a page that lost rows still pages
+ * on. */
+export type DismissedCardRow = CardRow & { dismissed_at: string };
+
+export interface DismissedCardsResult {
+  rows: DismissedCardRow[];
+  nextCursor: KeysetCursor | null;
+}
+
+const DISMISSED_SORT = { field: 'dismissed_at', direction: 'desc' } as unknown as SortSpec;
+
+export const fetchDismissedCards = async (
+  cursor: KeysetCursor | null,
+  { signal }: PgReadOptions = {},
+): Promise<DismissedCardsResult> => {
+  const page = applyKeyset(
+    supabase
+      .from('property_dismissals_public')
+      .select('property_id,dismissed_at') as unknown as KeysetBuilder,
+    DISMISSED_SORT,
+    cursor,
+  ) as unknown as ReturnType<typeof selectFrom>;
+  const { data: dismissals } = await pgRead<{ property_id: number; dismissed_at: string }[] | null>(
+    page.limit(CARD_PAGE_SIZE),
+    { signal },
+  );
+  const hidden = dismissals ?? [];
+  if (hidden.length === 0) return { rows: [], nextCursor: null };
+  const { data: cards } = await pgRead<CardRow[] | null>(
+    selectFrom(BROWSE_LIST_RELATION, CARD_COLS).in(
+      'property_id',
+      hidden.map((d) => d.property_id),
+    ),
+    { signal },
+  );
+  const byId = new Map((cards ?? []).map((c) => [c.property_id, c]));
+  const rows = hidden.flatMap((d) => {
+    const card = byId.get(d.property_id);
+    return card ? [{ ...card, dismissed_at: d.dismissed_at }] : [];
+  });
+  const nextCursor =
+    hidden.length < CARD_PAGE_SIZE
+      ? null
+      : nextCursorFrom(hidden as unknown as Record<string, unknown>[], DISMISSED_SORT);
+  return { rows, nextCursor };
+};
+
 
 export interface BrowseStatsDispositionRow {
   disposition: string;

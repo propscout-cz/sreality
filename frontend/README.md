@@ -135,7 +135,7 @@ as-is, and Caddy serves each from its own `handle` block, real file or
 real 404, never the SPA fallback:
 
 - **`manifest.webmanifest`** (`no-cache`, `application/manifest+json`):
-  root-relative URLs only (`id` `/`, `scope` `/`, `start_url` `/browse`),
+  root-relative URLs only (`id` `/`, `scope` `/`, `start_url` `/feed`),
   so the brand-domain move needs nothing but a reinstall. Its `name` and
   `short_name` are literal copies of `src/lib/brand.ts` (JSON can't import
   it); `src/lib/manifest.test.ts` fails when they drift. iOS reads the
@@ -165,6 +165,21 @@ The three typefaces are self-hosted (`src/assets/fonts/`, SIL OFL 1.1,
 licence files beside them; `src/styles/fonts.css`), so the page makes no
 cross-origin request before first paint and the worker needs no
 cross-origin rule.
+
+### Phone shell
+
+Under 768 px wide, `Shell.tsx` renders the routes inside the phone frame
+(`src/components/phone/PhoneShell.tsx`) instead of the desktop top bar:
+an `h-14` header (never taller — the Browse and Pipeline panes pin to
+3.5 rem), a four-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři) and an
+account sheet. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
+account sheet's "Desktopová verze" sets a per-device override
+(`localStorage` `sreality.phone.desktopView`) and the desktop account menu's
+"Mobilní verze" clears it. Pages are not forked: a route without a phone
+design renders its desktop page inside the frame. The feed (`/feed`,
+`src/pages/Feed.tsx`) reuses Browse's read layer; its cards are
+`src/components/phone/FeedCard.tsx`. To see the frame on a desktop
+browser, narrow the window below 768 px or use the device toolbar.
 
 ### Build-time vs runtime env vars
 

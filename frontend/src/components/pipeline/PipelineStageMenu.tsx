@@ -17,12 +17,18 @@
  * operator notes are property-grain — rule #18 — so those are never at risk.)
  * Hence the two-step confirm, matching the kanban trash, and the nudge toward a
  * terminal stage: closing a deal into "Passed / Bought / Lost" keeps the record.
+ *
+ * TWO CONTAINERS, ONE MENU. The desktop surfaces hang it off their control in an
+ * AnchoredPopover; the phone feed (#1766) opens the same body in a bottom sheet
+ * (`size="sheet"`: thumb-sized rows, the sheet's own heading). The rows, the
+ * writes and the two-step remove are this one component either way.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import AnchoredPopover from '@/components/AnchoredPopover';
+import { CheckIcon } from '@/components/phone/phoneIcons';
 import { fetchPipelineStages, pipelineKeys } from '@/lib/queries';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
@@ -47,6 +53,87 @@ export default function PipelineStageMenu({
   anchorRef,
   onClose,
 }: PipelineStageMenuProps) {
+  return (
+    <AnchoredPopover
+      anchorRef={anchorRef}
+      onClose={onClose}
+      ariaLabel="Fáze v pipeline"
+      className="w-[15.5rem] py-1"
+    >
+      <PipelineStageMenuBody
+        property_id={property_id}
+        stageId={stageId}
+        cohortScoped={cohortScoped}
+        onClose={onClose}
+      />
+    </AnchoredPopover>
+  );
+}
+
+/* Class sets per container. `popover` is the desktop menu, unchanged; `sheet`
+ * is the phone's 48 px rows (#1762 prototype `.srow` / `.sremove` / `.sconfirm`). */
+const SIZES = {
+  popover: {
+    heading: 'px-2.5 pb-1 pt-1 text-[0.62rem] uppercase tracking-[0.18em] text-[var(--color-ink-4)]',
+    loading: 'px-2.5 py-1.5 text-[0.75rem] text-[var(--color-ink-4)]',
+    divider:
+      'mt-1 border-t border-[var(--color-rule-soft)] px-2.5 pb-1 pt-1.5 text-[0.62rem] uppercase tracking-[0.18em] text-[var(--color-ink-4)]',
+    row: 'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.8rem] transition-colors',
+    rowIdle: 'text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)]',
+    badge:
+      'inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border px-1 font-mono text-[0.62rem] tabular-nums',
+    foot: 'mt-1 border-t border-[var(--color-rule-soft)] pt-1',
+    confirm: 'px-2.5 py-1.5',
+    question: 'text-[0.75rem] font-medium text-[var(--color-ink)]',
+    why: 'mt-1 text-[0.7rem] leading-snug text-[var(--color-ink-3)]',
+    buttons: 'mt-2 flex items-center gap-1.5',
+    danger:
+      'rounded-[var(--radius-sm)] border border-[var(--color-brick)] px-2 py-0.5 text-[0.72rem] text-[var(--color-brick)] transition-colors hover:bg-[var(--color-brick)]/10 disabled:opacity-50',
+    cancel:
+      'rounded-[var(--radius-sm)] border border-[var(--color-rule)] px-2 py-0.5 text-[0.72rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-rule-strong)] hover:bg-[var(--color-rule-soft)]',
+    remove:
+      'flex w-full items-center px-2.5 py-1.5 text-left text-[0.78rem] text-[var(--color-ink-3)] transition-colors hover:bg-[var(--color-brick-soft)] hover:text-[var(--color-brick)] disabled:opacity-50',
+  },
+  sheet: {
+    heading: '',
+    loading: 'px-4 py-3 text-[14px] text-[var(--color-ink-3)]',
+    divider:
+      'mt-1 border-t border-[var(--color-rule-soft)] px-4 pb-1 pt-3 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]',
+    row: 'flex h-12 w-full items-center gap-3 px-4 text-left text-[15px]',
+    rowIdle: 'text-[var(--color-ink-2)] active:bg-[var(--color-paper-2)]',
+    badge:
+      'inline-flex h-5 min-w-8 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border px-1 font-mono text-[11px] font-medium leading-none tabular-nums',
+    foot: 'mt-1 border-t border-[var(--color-rule-soft)]',
+    confirm: 'flex flex-col gap-1 px-4 pb-1 pt-3',
+    question: 'text-[14px] font-medium text-[var(--color-ink)]',
+    why: 'text-[12px] leading-[1.45] text-[var(--color-ink-3)]',
+    buttons: 'mt-2 flex items-center gap-2',
+    danger:
+      'inline-flex h-9 items-center rounded-[var(--radius-sm)] border border-[var(--color-brick)] bg-[var(--color-paper)] px-3 text-[13px] text-[var(--color-brick)] active:bg-[var(--color-brick-soft)] disabled:opacity-50',
+    cancel:
+      'inline-flex h-9 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-3 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]',
+    remove:
+      'flex h-12 w-full items-center px-4 text-left text-[14px] text-[var(--color-ink-3)] active:bg-[var(--color-brick-soft)] active:text-[var(--color-brick)] disabled:opacity-50',
+  },
+} as const;
+
+export interface PipelineStageMenuBodyProps {
+  property_id: number;
+  stageId: number;
+  cohortScoped?: boolean;
+  onClose: () => void;
+  size?: keyof typeof SIZES;
+}
+
+export function PipelineStageMenuBody({
+  property_id,
+  stageId,
+  cohortScoped = false,
+  onClose,
+  size = 'popover',
+}: PipelineStageMenuBodyProps) {
+  const cls = SIZES[size];
+  const sheet = size === 'sheet';
   const stagesQ = useQuery({
     queryKey: pipelineKeys.stages,
     queryFn: fetchPipelineStages,
@@ -103,60 +190,49 @@ export default function PipelineStageMenu({
   const hasTerminalSplit = firstTerminal > 0;
 
   return (
-    <AnchoredPopover
-      anchorRef={anchorRef}
-      onClose={onClose}
-      ariaLabel="Fáze v pipeline"
-      className="w-[15.5rem] py-1"
-    >
-      <div ref={listRef} role="menu" aria-label="Fáze v pipeline" onKeyDown={onKeyDown}>
-        <p className="px-2.5 pb-1 pt-1 text-[0.62rem] uppercase tracking-[0.18em] text-[var(--color-ink-4)]">
-          Přesunout do fáze
-        </p>
+    <div ref={listRef} role="menu" aria-label="Fáze v pipeline" onKeyDown={onKeyDown}>
+      {!sheet && <p className={cls.heading}>Přesunout do fáze</p>}
 
-        {stagesQ.isLoading && (
-          <p className="px-2.5 py-1.5 text-[0.75rem] text-[var(--color-ink-4)]">Načítám…</p>
-        )}
+      {stagesQ.isLoading && <p className={cls.loading}>Načítám…</p>}
 
-        {stages.map((stage, i) => {
-          const current = stage.id === stageId;
-          const accent = stageAccent(stage);
-          const badge = stageBadge(stage, stages);
-          return (
-            <div key={stage.id}>
-              {hasTerminalSplit && i === firstTerminal && (
-                <p className="mt-1 border-t border-[var(--color-rule-soft)] px-2.5 pb-1 pt-1.5 text-[0.62rem] uppercase tracking-[0.18em] text-[var(--color-ink-4)]">
-                  Uzavřené
-                </p>
-              )}
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={current}
-                tabIndex={-1}
-                /* NOT disabled when it is the current stage — a disabled button
-                 * can't hold focus, and this is the item the menu opens on.
-                 * `moveTo` no-ops instead. */
-                disabled={pending}
-                onClick={() => moveTo(stage)}
-                className={[
-                  'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.8rem] transition-colors',
-                  'disabled:cursor-default disabled:opacity-50',
-                  current
-                    ? 'cursor-default font-medium text-[var(--color-ink)]'
-                    : 'text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)]',
-                ].join(' ')}
-                style={current ? { background: accent.soft } : undefined}
+      {stages.map((stage, i) => {
+        const current = stage.id === stageId;
+        const accent = stageAccent(stage);
+        const badge = stageBadge(stage, stages);
+        return (
+          <div key={stage.id}>
+            {hasTerminalSplit && i === firstTerminal && <p className={cls.divider}>Uzavřené</p>}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={current}
+              tabIndex={-1}
+              /* NOT disabled when it is the current stage — a disabled button
+               * can't hold focus, and this is the item the menu opens on.
+               * `moveTo` no-ops instead. */
+              disabled={pending}
+              onClick={() => moveTo(stage)}
+              className={[
+                cls.row,
+                'disabled:cursor-default disabled:opacity-50',
+                current ? 'cursor-default font-medium text-[var(--color-ink)]' : cls.rowIdle,
+              ].join(' ')}
+              style={current ? { background: accent.soft } : undefined}
+            >
+              <span
+                aria-hidden
+                className={cls.badge}
+                style={{ color: accent.fg, borderColor: accent.fg }}
               >
-                <span
-                  aria-hidden
-                  className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border px-1 font-mono text-[0.62rem] tabular-nums"
-                  style={{ color: accent.fg, borderColor: accent.fg }}
-                >
-                  {badge ?? '·'}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{stage.label}</span>
-                {current && (
+                {badge ?? '·'}
+              </span>
+              <span className="min-w-0 flex-1 truncate">{stage.label}</span>
+              {current &&
+                (sheet ? (
+                  <span className="ml-auto shrink-0" style={{ color: accent.fg }} aria-hidden>
+                    <CheckIcon className="h-[18px] w-[18px]" />
+                  </span>
+                ) : (
                   <span
                     className="shrink-0 text-[0.7rem]"
                     style={{ color: accent.fg }}
@@ -164,65 +240,62 @@ export default function PipelineStageMenu({
                   >
                     ✓
                   </span>
-                )}
+                ))}
+            </button>
+          </div>
+        );
+      })}
+
+      <div className={cls.foot}>
+        {confirming ? (
+          <div className={cls.confirm}>
+            <p className={cls.question}>Odebrat z pipeline?</p>
+            <p className={cls.why}>
+              Karta zmizí z nástěnky a ztratí „v pipeline od“ i „ve fázi od“ — po
+              opětovném přidání se počítají znovu.
+              {hasTerminalSplit
+                ? ' Uzavřený obchod raději přesuňte do některé z uzavřených fází.'
+                : ''}
+            </p>
+            <div className={cls.buttons}>
+              <button
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                autoFocus
+                disabled={pending}
+                onClick={() => {
+                  remove.mutate(property_id);
+                  onClose();
+                }}
+                className={cls.danger}
+              >
+                Odebrat
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                onClick={() => setConfirming(false)}
+                className={cls.cancel}
+              >
+                Zrušit
               </button>
             </div>
-          );
-        })}
-
-        <div className="mt-1 border-t border-[var(--color-rule-soft)] pt-1">
-          {confirming ? (
-            <div className="px-2.5 py-1.5">
-              <p className="text-[0.75rem] font-medium text-[var(--color-ink)]">
-                Odebrat z pipeline?
-              </p>
-              <p className="mt-1 text-[0.7rem] leading-snug text-[var(--color-ink-3)]">
-                Karta zmizí z nástěnky a ztratí „v pipeline od“ i „ve fázi od“ — po
-                opětovném přidání se počítají znovu.
-                {hasTerminalSplit
-                  ? ' Uzavřený obchod raději přesuňte do některé z uzavřených fází.'
-                  : ''}
-              </p>
-              <div className="mt-2 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  role="menuitem"
-                  tabIndex={-1}
-                  autoFocus
-                  disabled={pending}
-                  onClick={() => {
-                    remove.mutate(property_id);
-                    onClose();
-                  }}
-                  className="rounded-[var(--radius-sm)] border border-[var(--color-brick)] px-2 py-0.5 text-[0.72rem] text-[var(--color-brick)] transition-colors hover:bg-[var(--color-brick)]/10 disabled:opacity-50"
-                >
-                  Odebrat
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  tabIndex={-1}
-                  onClick={() => setConfirming(false)}
-                  className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] px-2 py-0.5 text-[0.72rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-rule-strong)] hover:bg-[var(--color-rule-soft)]"
-                >
-                  Zrušit
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              role="menuitem"
-              tabIndex={-1}
-              disabled={pending}
-              onClick={() => setConfirming(true)}
-              className="flex w-full items-center px-2.5 py-1.5 text-left text-[0.78rem] text-[var(--color-ink-3)] transition-colors hover:bg-[var(--color-brick-soft)] hover:text-[var(--color-brick)] disabled:opacity-50"
-            >
-              Odebrat z pipeline
-            </button>
-          )}
-        </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            disabled={pending}
+            onClick={() => setConfirming(true)}
+            className={cls.remove}
+          >
+            Odebrat z pipeline
+          </button>
+        )}
       </div>
-    </AnchoredPopover>
+    </div>
   );
 }

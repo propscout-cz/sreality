@@ -700,6 +700,19 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "is that its prices are realized ones.",
     ),
     RegisteredSite(
+        path="frontend/src/components/phone/FeedCard.test.tsx",
+        arm="unit",
+        hits=5,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="Pins the phone feed card's per-m² line (#1766): a sale renders the "
+        "capital unit, a rent the MONTHLY one beside its '/měs' price, a land "
+        "row the plot unit — each the server's measure under the server's "
+        "basis token through the shared formatter — and a row whose basis is "
+        "NULL or mixed renders no per-m² figure at all, never a bare number. "
+        "The card itself spells no unit (FeedCard.tsx reads fmtMeasuredPricePerM2).",
+    ),
+    RegisteredSite(
         path="frontend/src/lib/growthChoropleth.test.ts",
         arm="unit",
         hits=2,
