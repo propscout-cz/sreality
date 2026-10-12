@@ -300,7 +300,8 @@ compare only WITHIN a rendition**. Timeout guard = `--image-max-seconds`, NOT th
   rotated/went stale into `listing_detail_queue` (low priority) so the detail drain repoints them.
 - `sreality_image_remaster.yml` (`15 */2`, 6 shards; scheduled runs gated on the `SREALITY_REMASTER_CRON` repo
   variable — the kill-switch, dispatch always runs) — re-downloads `rendition IS NULL` rows at the master template,
-  OVERWRITING each R2 object under its stored key; dead URLs re-resolve from live detail. Final: `REMASTER done …`.
+  OVERWRITING each R2 object under its stored key, then deleting its `thumb/w1080/…webp` phone copy (best-effort:
+  a failure logs `REMASTER copy_delete_failed`); dead URLs re-resolve from live detail. Final: `REMASTER done …`.
 
 **Cadence:** `*/15` for each half, deliberately — frequent index walks surface delistings fast, while
 the bounded drain keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so effective

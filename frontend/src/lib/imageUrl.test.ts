@@ -3,12 +3,13 @@
  * Focused on the CDN fallback (no R2 copy yet, storage_path null), which must
  * normalise sreality's render-transform onto the URL: a BARE sdn.cz URL 401s,
  * and a stored LEGACY chain would serve the 4:3 crop instead of the master.
+ * The API path (storage_path set) is pinned too, with and without the phone-size copy.
  */
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { imageSrc } from './imageUrl';
 
@@ -70,5 +71,37 @@ describe('imageSrc — the shared scraper/SPA probe contract', () => {
 
   it.each(contract.probes)('$why', ({ input, expected }) => {
     expect(imageSrc({ sreality_url: input, storage_path: null })).toBe(expected);
+  });
+});
+
+describe('imageSrc — the API path (storage_path set)', () => {
+  // API_BASE is read once at module load, so each test loads a fresh copy under the stub.
+  const load = async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example/');
+    return (await import('./imageUrl')).imageSrc;
+  };
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  const stored = { sreality_url: 'https://d18-a.sdn.cz/d_18/x/c6cb.jpeg', storage_path: '2872083276/0001.jpg' };
+
+  it('serves the full-size photo by default', async () => {
+    const src = await load();
+    expect(src(stored)).toBe('https://api.example/images/2872083276/0001.jpg?v=2');
+  });
+
+  it('asks for the phone-size copy with { w: 1080 }', async () => {
+    const src = await load();
+    expect(src(stored, { w: 1080 })).toBe('https://api.example/images/2872083276/0001.jpg?v=2&w=1080');
+  });
+
+  it('keeps the portal-CDN fallback unchanged when there is no R2 copy yet', async () => {
+    const src = await load();
+    const fresh = { ...stored, storage_path: null };
+    expect(src(fresh, { w: 1080 })).toBe(src(fresh));
+    expect(src(fresh, { w: 1080 })).toBe(`https://d18-a.sdn.cz/d_18/x/c6cb.jpeg?fl=${OPS}`);
   });
 });

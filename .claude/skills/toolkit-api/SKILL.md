@@ -392,15 +392,15 @@ Image storage (Cloudflare R2, S3-compatible):
   (JWT) zips them with a PDF of the ad — the bucket sends no CORS header. If the **API** lacks them,
   every listing photo 503s and the UI looks imageless though the DB reports the bytes "stored"
   — the API logs a boot WARNING and `GET /health` reports `image_storage: "unconfigured"`.
-- `IMAGE_PRESIGN_ANCHOR_SECONDS` (optional, API service, default `86400`) — the width of the
-  bucket `GET /images/{key}` pins its SigV4 signing time to, so the same key presigns to a
-  byte-identical URL all day. The browser's HTTP cache keys on the whole URL including the
-  signature; without this the hourly redirect re-mint handed back a fresh signature and
-  every photo re-downloaded hourly despite R2's own 30-day `max-age`. Read per request, so
-  it takes effect without a redeploy: set it to `0` to fall back to per-request signing
-  (the kill switch if R2 ever rejects a backdated signature). Values are capped at half the
-  7-day presign TTL — the last URL minted in a bucket was signed at the bucket's *start*,
-  so anchor and TTL meeting would serve an already-expired URL.
+- `IMAGE_PRESIGN_ANCHOR_SECONDS` (optional, API service, default `86400`) — the width of the bucket
+  `GET /images/{key}` pins its SigV4 signing time to, so a key presigns to a byte-identical URL all
+  day (the browser caches on the whole URL; a fresh signature per hourly re-mint re-downloaded every
+  photo despite R2's 30-day `max-age`). Read per request: `0` = per-request signing (the kill switch
+  if R2 rejects a backdated signature). Capped at half the 7-day presign TTL, or the last URL minted
+  in a bucket would already be expired.
+- **Phone copy** (#1765): `GET /images/{key}?v=2&w=1080` (any other `w` → 404) redirects to
+  `thumb/w1080/{id}/{seq}.webp` (WebP q75), made from the master on first request (≤ 4 at once);
+  any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`.
 
 LLM + maps (FastAPI service + scoring jobs):
 - `ANTHROPIC_API_KEY` — required for the URL parser, summarize/vision tools, condition
