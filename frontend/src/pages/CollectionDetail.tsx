@@ -36,12 +36,19 @@ import type {
 import { Hairline } from '@/components/section';
 import { Th } from '@/components/table';
 import { usePhoneShell } from '@/lib/phoneShell';
-import PhoneCollectionDetail from './phone/PhoneCollectionDetail';
+import { PhoneSuspense } from '@/components/phone/RollParts';
+import { lazyChunk } from '@/lib/lazyChunk';
+
+const PhoneCollectionDetail = lazyChunk(() => import('./phone/PhoneCollectionDetail'));
 
 /* Under the phone shell: the members as feed cards, removal through the
  * card's collection sheet (#1760 Q11); editing and monitoring stay here. */
 export default function CollectionDetail() {
-  return usePhoneShell() ? <PhoneCollectionDetail /> : <CollectionDetailDesktop />;
+  return usePhoneShell() ? (
+    <PhoneSuspense>
+      <PhoneCollectionDetail />
+    </PhoneSuspense>
+  ) : <CollectionDetailDesktop />;
 }
 
 function CollectionDetailDesktop() {

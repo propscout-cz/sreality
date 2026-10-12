@@ -18,7 +18,10 @@ import { advertPath, propertyPath } from '@/lib/listingUrl';
 import { categoryMainLabel, categoryTypeLabel, listingKindLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
 import { usePhoneShell } from '@/lib/phoneShell';
-import PhoneBrokerDetail from './phone/PhoneBrokerDetail';
+import { PhoneSuspense } from '@/components/phone/RollParts';
+import { lazyChunk } from '@/lib/lazyChunk';
+
+const PhoneBrokerDetail = lazyChunk(() => import('./phone/PhoneBrokerDetail'));
 
 
 // Mirror the Žebříček (leaderboard) filter chips, but the broker's own inventory
@@ -39,7 +42,11 @@ const OFFER_OPTIONS: ReadonlyArray<{ value: string | null; label: string }> = [
 /* Under the phone shell: the dossier without the map, footprint as numbers
  * (#1760 Q12); the explore-on-map modal is desktop only. */
 export default function BrokerDetail() {
-  return usePhoneShell() ? <PhoneBrokerDetail /> : <BrokerDetailDesktop />;
+  return usePhoneShell() ? (
+    <PhoneSuspense>
+      <PhoneBrokerDetail />
+    </PhoneSuspense>
+  ) : <BrokerDetailDesktop />;
 }
 
 function BrokerDetailDesktop() {

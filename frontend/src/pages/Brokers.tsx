@@ -26,7 +26,10 @@ import { ROUTES } from '@/lib/routes';
 import { fmtCount } from '../lib/format';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { useDebouncedTerm } from '@/lib/useDebouncedTerm';
-import PhoneBrokers from './phone/PhoneBrokers';
+import { PhoneSuspense } from '@/components/phone/RollParts';
+import { lazyChunk } from '@/lib/lazyChunk';
+
+const PhoneBrokers = lazyChunk(() => import('./phone/PhoneBrokers'));
 
 const CATEGORY_OPTIONS: ReadonlyArray<{ value: string | null; label: string }> = [
   { value: 'byt', label: 'Byty' },
@@ -50,7 +53,11 @@ const LIMIT_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
 /* Under the phone shell the leaderboard is the reduced phone screen (#1760 Q12:
  * place, category/type, metric, name search); everything else stays here. */
 export default function Brokers() {
-  return usePhoneShell() ? <PhoneBrokers /> : <BrokersDesktop />;
+  return usePhoneShell() ? (
+    <PhoneSuspense>
+      <PhoneBrokers />
+    </PhoneSuspense>
+  ) : <BrokersDesktop />;
 }
 
 function BrokersDesktop() {

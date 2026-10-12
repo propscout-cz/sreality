@@ -4,7 +4,7 @@
  * feed keeps its own day-cut roll (pages/Feed.tsx) but paints its loading and
  * empty states from here, so the four screens wait and fail in one voice. */
 
-import { useMemo, type ReactNode } from 'react';
+import { Suspense, useMemo, type ReactNode } from 'react';
 
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { useCardCoverTag } from '@/lib/browseLayout';
@@ -34,6 +34,23 @@ export function RollSkeleton({ count = 2 }: { count?: number }) {
         </div>
       ))}
     </>
+  );
+}
+
+/* The boundary a phone layout loads behind: the collection and broker screens
+ * are their own chunks (a desktop first visit never pays for them), and while
+ * one loads — or a stale one recovers by reloading — the roll's skeleton holds. */
+export function PhoneSuspense({ children }: { children: ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="pt-3">
+          <RollSkeleton count={1} />
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
   );
 }
 
