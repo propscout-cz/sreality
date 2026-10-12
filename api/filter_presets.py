@@ -4,12 +4,15 @@ A preset is a named filter set restored entirely client-side; the backend
 never interprets `filter_spec` (it is the native Browse `ListingFilters`
 object, stored verbatim as an opaque JSONB blob). This module is plain
 psycopg I/O mirroring the subscription CRUD in `api/notifications.py`,
-minus everything firing-related.
+minus everything firing-related. Every call runs on the caller's tenant
+connection: RLS (migration 290's policy) scopes the reads, updates and
+deletes, and an insert names its one owner.
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -69,14 +72,18 @@ def create_preset(
     name: str,
     filter_spec: dict[str, Any],
     color: str | None = None,
+    account_id: uuid.UUID | str,
 ) -> dict[str, Any]:
+    # account_id is NOT NULL (migration 595) and REQUIRED here (no default): the
+    # route resolves exactly one via tenant_pool.require_account_id. The MAX(position)
+    # subquery sees only the caller's presets (RLS), so a new one appends to their row.
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO filter_presets (name, filter_spec, color, position) "
+            "INSERT INTO filter_presets (name, filter_spec, color, position, account_id) "
             "VALUES (%s, %s::jsonb, %s, "
-            "(SELECT COALESCE(MAX(position), -1) + 1 FROM filter_presets)) "
+            "(SELECT COALESCE(MAX(position), -1) + 1 FROM filter_presets), %s) "
             "RETURNING id",
-            (name, json.dumps(filter_spec), color),
+            (name, json.dumps(filter_spec), color, account_id),
         )
         row = cur.fetchone()
     assert row is not None
