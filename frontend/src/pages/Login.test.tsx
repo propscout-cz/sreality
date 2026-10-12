@@ -71,10 +71,12 @@ describe('<Login> already-authed deep link', () => {
     );
   });
 
-  it('falls back to the registry Browse route when nothing was stashed', async () => {
+  /* `/` and not /browse: the index route starts each shell where it starts — the
+     feed on a phone, Browse on a desktop (#1767). */
+  it('falls back to the app root when nothing was stashed', async () => {
     asAuth({ user: { id: 'u1' } });
     renderLogin(null);
-    expect(await screen.findByTestId('landed')).toHaveTextContent(ROUTES.browse.build());
+    expect(await screen.findByTestId('landed')).toHaveTextContent(/^\/$/);
   });
 });
 
@@ -98,10 +100,11 @@ describe('<Login> post-sign-in redirect', () => {
     );
   });
 
-  it('still lands on Browse when there was no stashed location', async () => {
+  it('lands on the app root when there was no stashed location', async () => {
     asAuth(null);
     renderLogin(null);
     await signIn();
-    expect(await screen.findByTestId('landed')).toHaveTextContent(ROUTES.browse.build());
+    expect(await screen.findByTestId('landed')).toHaveTextContent(/^\/$/);
+    expect(screen.getByTestId('landed').textContent).not.toBe(ROUTES.browse.build());
   });
 });
