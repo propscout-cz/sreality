@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "maplibre-gl/dist/maplibre-gl.css";
+@import "./fonts.css";
 
 /*
  * Design tokens. The world this UI lives in: residential Prague — sandstone
