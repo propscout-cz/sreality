@@ -42,7 +42,7 @@ from autodedup.incremental_store import MemoryStore
 from autodedup.model import hand_initialised
 from autodedup.incremental_store import CohortFacts, Schedule
 from autodedup.score_lane import FAMILY_BITS, families_bitmask, families_of_bitmask
-from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg
 from tests.autodedup.test_incremental import (
     _calibration,
     _dataset,
@@ -103,7 +103,7 @@ def _sql_drain(ds, settings, calibration, order, batch: int = 5, db: FakePg | No
     # A floor of zero keeps every decided pair, because THIS comparison is about the adapter
     # and not about retention (E79, which has its own test): a store that dropped the sub-floor
     # rejects would make "the SQL store equals the twin" a weaker claim than it reads as.
-    store = SqlStore(conn, GEN, store_floor=0.0)
+    store = SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY)
     facts = CohortFacts(ds)
     work = Schedule(list(order))
     model = hand_initialised()
@@ -197,7 +197,7 @@ def test_the_twin_keeps_and_drops_conflicts_exactly_as_the_sql_store_does() -> N
              ([1], [cluster(1, [1, 2])], [refused, inside]),
              ([1], [cluster(1, [1, 2, 9])], [])]
     conn = FakePg()
-    sql, memory = SqlStore(conn, GEN, store_floor=0.0), MemoryStore()
+    sql, memory = SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY), MemoryStore()
     seen = []
     for drop, rows, conflicts in steps:
         sql.write_clusters(drop, rows, conflicts)
@@ -254,7 +254,7 @@ def test_a_second_drain_scores_nothing_through_the_sql_store() -> None:
 ])
 def test_a_pair_round_trips_its_certificate_and_its_families(families, certificate) -> None:
     conn = FakePg()
-    store = SqlStore(conn, GEN)
+    store = SqlStore(conn, GEN, **LEDGER_KEY)
     row = PairRow(lo=10, hi=20, probes=["img"], from_lo=True, from_hi=False, zone="merge",
                   score=0.9, families=sorted(families), certificate=certificate, veto=None,
                   reason="model", evidence={"a": "b"}, context={"block": "o1"},
@@ -302,7 +302,7 @@ def test_a_certified_merge_survives_the_round_trip_and_clusters() -> None:
 
 def test_stamped_merges_reads_the_blocks_it_was_given() -> None:
     conn = FakePg()
-    store = SqlStore(conn, GEN)
+    store = SqlStore(conn, GEN, **LEDGER_KEY)
     stamped = PairRow(lo=1, hi=2, probes=[], from_lo=True, from_hi=True, zone="merge",
                       score=0.95, families=["IMG", "TXT"], certificate=None, veto=None,
                       reason="context_rule:fungible",
@@ -435,7 +435,7 @@ def test_a_pass_that_cannot_fit_its_pair_set_writes_nothing() -> None:
     settings = _settings()
     calibration = _calibration(ds, settings)
     conn = FakePg()
-    store = SqlStore(conn, GEN)
+    store = SqlStore(conn, GEN, **LEDGER_KEY)
     facts = CohortFacts(ds)
     work = Schedule(arrival_order(ds))
     result = run_pass(store, facts, work, settings, hand_initialised(), calibration,
@@ -469,7 +469,7 @@ def test_the_bounded_runner_shrinks_the_claim_before_it_gives_up() -> None:
     settings = _settings()
     calibration = _calibration(ds, settings)
     conn = FakePg()
-    store = SqlStore(conn, GEN)
+    store = SqlStore(conn, GEN, **LEDGER_KEY)
     work = _RecordingWork(arrival_order(ds))
     result = run_pass_bounded(store, CohortFacts(ds), work, settings, hand_initialised(),
                               calibration, limits=Limits(max_listings=16, max_pairs=1),
@@ -497,7 +497,8 @@ def test_a_generous_budget_is_never_refused() -> None:
 
 def _wanted(ds, settings, calibration, order, claim: int) -> int:
     """The wanted pair set of one claim of `claim` arrivals against an empty store."""
-    return run_pass(SqlStore(FakePg(), GEN), CohortFacts(ds), Schedule(list(order)), settings,
+    return run_pass(SqlStore(FakePg(), GEN, **LEDGER_KEY), CohortFacts(ds),
+                    Schedule(list(order)), settings,
                     hand_initialised(), calibration,
                     limits=Limits(max_listings=claim, max_pairs=10 ** 9),
                     generation=GEN).wanted_pairs
@@ -513,7 +514,8 @@ def test_a_pass_refused_once_reports_two_attempts_and_the_accepted_wanted_set() 
     whole, quarter = (_wanted(ds, settings, calibration, order, claim) for claim in (16, 4))
     assert quarter < whole, "the world must need the shrink"
     work = _RecordingWork(order)
-    result = run_pass_bounded(SqlStore(FakePg(), GEN), CohortFacts(ds), work, settings,
+    result = run_pass_bounded(SqlStore(FakePg(), GEN, **LEDGER_KEY), CohortFacts(ds), work,
+                              settings,
                               hand_initialised(), calibration,
                               limits=Limits(max_listings=16, max_pairs=quarter), generation=GEN)
     assert work.asked == [16, 4]
@@ -534,7 +536,7 @@ def test_a_pass_refused_on_every_attempt_reports_five_and_the_reason() -> None:
     order = arrival_order(ds)
     conn, store, _passes = _sql_drain(ds, settings, calibration, order[:-1])
     pairs = dict(conn.pairs)
-    alone = run_pass(SqlStore(conn, GEN, store_floor=0.0), CohortFacts(ds),
+    alone = run_pass(SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY), CohortFacts(ds),
                      Schedule(order[-1:]), settings, hand_initialised(), calibration,
                      limits=Limits(max_listings=1, max_pairs=0), generation=GEN).wanted_pairs
     work = _RecordingWork(order[-1:])
@@ -577,7 +579,8 @@ def test_a_refused_claim_the_clock_cut_is_re_claimed_at_a_quarter_of_what_it_mad
     eight, two = (_wanted(ds, settings, calibration, order, claim) for claim in (8, 2))
     assert two < eight, "the world must need the shrink"
     work = _ClockedWork(order, clock=8)
-    result = run_pass_bounded(SqlStore(FakePg(), GEN), CohortFacts(ds), work, settings,
+    result = run_pass_bounded(SqlStore(FakePg(), GEN, **LEDGER_KEY), CohortFacts(ds), work,
+                              settings,
                               hand_initialised(), calibration,
                               limits=Limits(max_listings=500, max_pairs=two), generation=GEN)
     assert work.made == [8, 2] and work.asked == [500, 2]
@@ -653,7 +656,7 @@ def test_a_pass_is_bounded_in_statements() -> None:
     settings = _settings()
     calibration = _calibration(ds, settings)
     conn = FakePg()
-    store = SqlStore(conn, GEN)
+    store = SqlStore(conn, GEN, **LEDGER_KEY)
     facts = CohortFacts(ds)
     work = Schedule(arrival_order(ds))
     run_pass(store, facts, work, settings, hand_initialised(), calibration,
@@ -676,7 +679,7 @@ def test_the_lease_outlives_the_longest_pass() -> None:
 
 def test_the_store_serves_a_fingerprint_row_it_has_not_flushed_yet() -> None:
     conn = FakePg()
-    store = SqlStore(conn, GEN)
+    store = SqlStore(conn, GEN, **LEDGER_KEY)
     row = FpRow(GuardRow(5, "byt", "prodej", 60.0, "2+kk", 3), "digest", "o1", "byt", True)
     store.put_listing(5, row, [("img", "t1")])
     assert store.rows([5])[5] == row

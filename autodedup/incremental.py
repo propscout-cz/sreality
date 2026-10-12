@@ -45,7 +45,8 @@ import hashlib
 import json
 import math
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 
 from autodedup.blocking import BlockIndex
@@ -290,6 +291,10 @@ class PairRow:
     # The three feature slots the D43 cluster relation reads (F2, E909): carried on the way out
     # AND read back, because the lane clusters with the relation the batch pass clusters with.
     slots: dict[str, tuple[float, bool]] | None = None
+    # Each side's `decision_digest`, carried only on the way OUT: the reject ledger (E943) keys
+    # a pair decided below `store_floor` on them, and a row re-read from the store carries none.
+    dd_lo: str = ""
+    dd_hi: str = ""
 
     def decision(self) -> Decision:
         return Decision(self.lo, self.hi, self.zone, self.score, set(self.families),
@@ -536,8 +541,9 @@ class Store(Protocol):
     def pairs_touching(self, ids: Iterable[int]) -> dict[tuple[int, int], PairRow]: ...
     def pairs_within(self, members: Iterable[int]) -> list[PairRow]: ...
     def merge_neighbours(self, ids: Iterable[int]) -> dict[int, set[int]]: ...
-    def upsert_pairs(self, rows: Sequence[PairRow]) -> None: ...
+    def upsert_pairs(self, rows: Sequence[PairRow]) -> int: ...
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None: ...
+    def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]: ...
     def clusters_touching(self, members: Iterable[int]) -> dict[int, list[int]]: ...
     def write_clusters(self, drop_keys: Sequence[int], rows: Sequence[dict[str, Any]],
                        conflicts: Sequence[dict[str, Any]]) -> None: ...
@@ -704,10 +710,9 @@ class Limits:
     smaller slice, which is the same work at the same answer."""
 
     max_listings: int = 500
-    # Sized from the measurement rather than from a round number: the densest pass over the g6
-    # cohort wants {{WANTED_MAX}} pairs at a 200-listing claim, and a block seen for the FIRST
-    # time has to score its whole pair set however small the claim is (which is what the seed
-    # backfill, E76, exists to pay once). A build's lane hands the pass a larger one (E952).
+    # The pairs a pass will DECIDE, build and live alike (E943): a pair the reject ledger
+    # answers costs no scoring time, and its 1-2 KB is noise beside the 56-67 KB an endpoint
+    # read costs anyway; 150k scored is ~480 s beside ~450 s of fixed cost, inside 1,050 s.
     max_pairs: int = 150_000
     max_component: int = 400
 
@@ -721,6 +726,11 @@ class PassResult:
     pairs_scored: int = 0
     pairs_written: int = 0
     pairs_deleted: int = 0
+    # E943: wanted pairs the reject ledger answered instead of a re-score, the pairs the pass
+    # then had to decide (what `max_pairs` is checked against) and the rejects it ledgered.
+    ledger_skipped: int = 0
+    pairs_to_decide: int = 0
+    ledger_written: int = 0
     components: int = 0
     clusters_written: int = 0
     clusters_dropped: int = 0
@@ -743,13 +753,15 @@ class PassResult:
     oversized_components: list[int] = field(default_factory=list)
     cursors: dict[str, Any] = field(default_factory=dict)
     feeds: dict[str, int] = field(default_factory=dict)
-    # Set when the wanted pair set did not fit `max_pairs`. The pass then wrote no pair, no
+    # Set when the pairs to decide did not fit `max_pairs` (E943). The pass then wrote no pair, no
     # cluster and no cursor: `aborted` is the reason a caller shrinks the claim and retries.
     aborted: str = ""
     wanted_pairs: int = 0
     attempts: int = 1
     # E952: each attempt's wanted pair set, the refused ones first (`run_pass_bounded`).
     wanted_by_attempt: list[int] = field(default_factory=list)
+    # E943: each attempt's pairs to decide, the number the budget refused or accepted.
+    pairs_to_decide_by_attempt: list[int] = field(default_factory=list)
     # The groups this pass (re)wrote — what the lane's reconcile (A9) looks at first.
     cluster_keys: list[int] = field(default_factory=list)
 
@@ -763,6 +775,9 @@ class PassResult:
                 "pairs_scored": self.pairs_scored,
                 "pairs_written": self.pairs_written,
                 "pairs_deleted": self.pairs_deleted,
+                "ledger_skipped": self.ledger_skipped,
+                "pairs_to_decide": self.pairs_to_decide,
+                "ledger_written": self.ledger_written,
                 "components": self.components,
                 "clusters_written": self.clusters_written,
                 "clusters_dropped": self.clusters_dropped,
@@ -774,6 +789,7 @@ class PassResult:
                 "wanted_pairs": self.wanted_pairs,
                 "attempts": self.attempts,
                 "wanted_by_attempt": list(self.wanted_by_attempt),
+                "pairs_to_decide_by_attempt": list(self.pairs_to_decide_by_attempt),
             },
             "feeds": dict(self.feeds),
             "aborted": self.aborted,
@@ -834,6 +850,58 @@ def fp_digest(fp: Fingerprint, images: Sequence[Image]) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
+    """What a below-floor decision depends on of ONE side (E943): the whole listing and its
+    gallery as the engine reads them, CLIP tags included. Not the CLIP vectors, which an
+    unscored endpoint is read without: `clip_tagged_at` stands for them, the stamp the CLIP job
+    writes last, after the tags and the vector, and a re-master nulls
+    (`invalidate_derived_signals`).
+
+    Not `fp_digest`: that hashes the body as its SimHash and token count, which a one-token edit
+    keeps, and it misses broker identity, granularity, attrs, subtype, the URL and the CLIP job."""
+    payload = json.dumps(
+        [asdict(listing),
+         sorted((img.image_id, img.seq, img.phash, img.pop, img.tags, img.clip_tagged_at)
+                for img in images)],
+        sort_keys=True, default=str,
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+# The modules a below-floor decision is computed by (E943): the import closure, inside
+# `autodedup`, of `decide`, `features`, `fingerprint`, `guards`, `model`, `store_score` and
+# `dataset` (a test holds it to this list), plus this module, whose `context_for` builds the
+# features' context. A deploy that changes any of them moves `engine_digest`, so the reject
+# ledger re-decides every wanted reject once rather than standing in for code that is gone.
+DECISION_MODULES: tuple[str, ...] = (
+    "body_align", "d43", "dataset", "decide", "demonstrate", "development", "family",
+    "features", "fingerprint", "floor_convention", "guards", "hazard_context", "incremental",
+    "indistinguishable", "model", "normalize", "settings", "stock", "store_score", "text_facts",
+)
+
+
+def source_digest(root: Path, modules: Sequence[str]) -> str:
+    """The named modules' source bytes, hashed in order."""
+    digest = hashlib.sha1()
+    for name in modules:
+        digest.update(name.encode("utf-8"))
+        digest.update((root / f"{name}.py").read_bytes())
+    return digest.hexdigest()[:16]
+
+
+# Read once, at import: the code a running process decides with cannot change under it.
+DECISION_SOURCE_DIGEST: str = source_digest(Path(__file__).resolve().parent, DECISION_MODULES)
+
+
+def engine_digest(settings: Settings, model: LogisticModel) -> str:
+    """The decision code, the model and the settings a reject is decided under (E943): the
+    reject ledger's fifth key. The model is hashed as loaded (`to_json`), so the hand-set prior,
+    which has no file, is covered as `models/<version>.json` is."""
+    payload = json.dumps([DECISION_SOURCE_DIGEST, model.to_json(), settings.to_dict()],
+                         sort_keys=True, default=str)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
 class _Working:
     """Fingerprints, listings and galleries of one pass's working set, fetched once."""
 
@@ -881,10 +949,10 @@ class _Overlay:
 
     A pass refuses a claim it cannot fit, and the refusal has to leave nothing behind: a store
     that already held the new postings would tell the next, smaller attempt that those listings
-    are unchanged, and their pairs would never be scored at all. So steps 1-4 read and write
-    through this view — postings, fingerprint rows and census cells — and `apply` is the single
-    moment it all lands. Everything else delegates, because nothing else is written before the
-    budget check."""
+    are unchanged, and their pairs would never be scored at all. So everything up to the budget
+    check reads and writes through this view — postings, fingerprint rows and census cells —
+    and `apply` is the single moment it all lands. Everything else delegates, because nothing
+    else is written before the budget check."""
 
     def __init__(self, store: Store) -> None:
         self.store = store
@@ -1166,7 +1234,7 @@ def run_pass(
             touched_blocks.add(old.cell_key)
         view.put_listing(
             listing_id,
-            # The evidence (E92) is filled in once the budget has agreed (E952, step 4).
+            # The evidence (E92) is filled in once the budget has agreed (E952, step 5).
             FpRow(guard_row(fp), digest, cell[0], cell[1], bool(listing.is_active),
                   # The FIRST decision's stamp is carried, never restamped: the evidence
                   # horizon is measured from it, and a refresh that reset it would hold a
@@ -1249,9 +1317,41 @@ def run_pass(
             wanted[(lo, hi)] = entry
 
     result.wanted_pairs = len(wanted)
+
+    # --- 5. score what is new or stale -----------------------------------------------------
+    # Read before the budget (E943), so a refused attempt pays the endpoints' facts and the
+    # ledger lookup again; what it never pays is the CLIP vectors, read once it has agreed.
+    endpoints = {i for pair in wanted for i in pair}
+    working.ensure(endpoints)
+    digests = {i: fp_digest(working.fps[i], working.images.get(i, ()))
+               for i in endpoints if i in working.fps}
+    # A stored decision stands while neither side's digest moved and neither side was refreshed.
+    # Only the pairs it does not cover are decided, and only their two sides read photographs —
+    # the features the CLIP vectors, E93's hold their presence — so only they carry them (E933).
+    decide: set[tuple[int, int]] = set()
+    for lo, hi in wanted:
+        if lo not in working.fps or hi not in working.fps:
+            continue
+        previous = stored.get((lo, hi))
+        if (previous is None or previous.fp_lo != digests.get(lo, "")
+                or previous.fp_hi != digests.get(hi, "") or lo in changed or hi in changed):
+            decide.add((lo, hi))
+    dds = {i: decision_digest(working.listings[i], working.images.get(i, ()))
+           for i in {i for pair in decide for i in pair}}
+    # E943: a pair decided below `store_floor` is not stored, so it reaches here with no row. The
+    # ledger answers it while both sides' decision digests and the store's calibration, feature
+    # version and engine digest all still match, which is exactly when a re-score would decide
+    # it the same. A refreshed side is never answered: its pairs are re-decided whatever its
+    # digest says.
+    skipped = store.rejected(
+        [(lo, hi, dds[lo], dds[hi]) for lo, hi in sorted(decide)
+         if (lo, hi) not in stored and lo not in changed and hi not in changed])
+    decide -= skipped
+    result.ledger_skipped = len(skipped)
+    result.pairs_to_decide = len(decide)
     # E75: the budget is refused BEFORE the first write, because a partial pair set re-clusters
     # from a partial edge set and the watermark would then step over the difference for ever.
-    if len(wanted) > caps.max_pairs:
+    if len(decide) > caps.max_pairs:
         # Nothing of this pass has reached the store yet, so the refusal IS the rollback.
         result.aborted = "pair_budget"
         result.timings["total_s"] = sum(
@@ -1270,22 +1370,6 @@ def run_pass(
         store.delete_pairs(dropped)
         result.pairs_deleted = len(dropped)
 
-    # --- 5. score what is new or stale -----------------------------------------------------
-    endpoints = {i for pair in wanted for i in pair}
-    working.ensure(endpoints)
-    digests = {i: fp_digest(working.fps[i], working.images.get(i, ()))
-               for i in endpoints if i in working.fps}
-    # A stored decision stands while neither side's digest moved and neither side was refreshed.
-    # Only the pairs it does not cover are decided, and only their two sides read photographs —
-    # the features the CLIP vectors, E93's hold their presence — so only they carry them (E933).
-    decide: set[tuple[int, int]] = set()
-    for lo, hi in wanted:
-        if lo not in working.fps or hi not in working.fps:
-            continue
-        previous = stored.get((lo, hi))
-        if (previous is None or previous.fp_lo != digests.get(lo, "")
-                or previous.fp_hi != digests.get(hi, "") or lo in changed or hi in changed):
-            decide.add((lo, hi))
     working.ensure({i for pair in decide for i in pair}, clip=True)
     ctx = context_for(calibration, settings, working.fps, working.listings)
     census = _census(store, working.listings, working.images)
@@ -1304,8 +1388,11 @@ def run_pass(
         previous = stored.get((lo, hi))
         dlo = digests.get(lo, "")
         dhi = digests.get(hi, "")
-        if previous is not None and (lo, hi) not in decide:
-            if (set(previous.probes) != entry["probes"] or previous.from_lo != entry["from_lo"]
+        if (lo, hi) not in decide:
+            # A stored decision that stands, or a reject the ledger answered (no row to touch).
+            if previous is not None and (
+                    set(previous.probes) != entry["probes"]
+                    or previous.from_lo != entry["from_lo"]
                     or previous.from_hi != entry["from_hi"]):
                 previous.probes = sorted(entry["probes"])
                 previous.from_lo = bool(entry["from_lo"])
@@ -1353,8 +1440,9 @@ def run_pass(
                      "block": address_block_key(la)},
             fp_lo=dlo, fp_hi=dhi, feats=feats,
             slots={name: feats[name] for name in FEATURE_SLOTS if name in feats},
+            dd_lo=dds[lo], dd_hi=dds[hi],
         ))
-    store.upsert_pairs(rows)
+    result.ledger_written = store.upsert_pairs(rows)
     result.pairs_written = len(rows)
     result.timings["score_s"] = time.perf_counter() - clock
 
@@ -1431,6 +1519,7 @@ def run_pass_bounded(
     result = run_pass(store, facts, work, settings, model, calibration, caps, generation, now,
                       hold, deadline, stopping)
     wanted = [result.wanted_pairs]
+    to_decide = [result.pairs_to_decide]
     while result.aborted and len(wanted) < attempts:
         made = min(caps.max_listings, int(
             (getattr(work, "claim_bound", None) or {}).get("limit") or caps.max_listings))
@@ -1440,8 +1529,10 @@ def run_pass_bounded(
         result = run_pass(store, facts, work, settings, model, calibration, caps, generation,
                           now, hold, deadline, stopping)
         wanted.append(result.wanted_pairs)
+        to_decide.append(result.pairs_to_decide)
     result.attempts = len(wanted)
     result.wanted_by_attempt = wanted
+    result.pairs_to_decide_by_attempt = to_decide
     return result
 
 

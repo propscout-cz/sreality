@@ -39,7 +39,7 @@ import socket
 import sys
 import time
 from contextlib import nullcontext, suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterable, Iterator, Mapping, Sequence
@@ -95,6 +95,7 @@ from autodedup.incremental import (
     WorkItem,
     _in_time,
     bootstrap_key,
+    engine_digest,
     key_token,
     run_pass_bounded,
     seed_current,
@@ -141,6 +142,7 @@ from autodedup.incremental_sql import (
     RT_FRESH_FP_KEY_SQL,
     RT_FRESH_LEASE_SQL,
     RT_FRESH_PAIRS_SQL,
+    RT_FRESH_REJECT_LEDGER_SQL,
     RT_FRESH_RETIRE_EVENT_SQL,
     RT_FRESH_RT_FP_SQL,
     RT_FRESH_SCOPE_IDS_SQL,
@@ -170,6 +172,9 @@ from autodedup.incremental_sql import (
     RT_PAIR_UPSERT_SQL,
     RT_PAIRS_TOUCHING_SQL,
     RT_PAIRS_WITHIN_SQL,
+    RT_REJECT_LEDGER_DELETE_SQL,
+    RT_REJECT_LEDGER_LOOKUP_SQL,
+    RT_REJECT_LEDGER_UPSERT_SQL,
     RT_REVIVED_SQL,
     RT_ROW_CENSUS_SQL,
     RT_ROW_ESTIMATE_SQL,
@@ -366,15 +371,6 @@ RAMP_HEADROOM: float = 0.5
 # for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
 # deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
 BOOTSTRAP_BUDGET_FRACTION: float = 0.75
-# E952: a build's pair budget, in place of `PASS_LIMITS.max_pairs` 150,000: at a 27k-advert store
-# a 30-advert claim already WANTS more (E71's neighbourhood), so every build pass was refused down
-# to about that size. A scheduling bound (E75) that keeps a pass inside its deadline: a scored
-# pair costs ~3 ms (run 35520830343; 3.0-3.4 ms marginal on 10-10), so 1,050 s holds ~237k beside
-# ~340-400 s of fixed cost, and a pass scores ~0.5-0.8 of what it wants (a reject under
-# `store_floor` is re-scored every pass), so 300k wanted is ~150-240k scored where 450k sat at the
-# deadline. Erring low is cheap: a refusal costs 15-60 s, a deadline hit ~18 min. Peak memory:
-# endpoints 1.5-5 GB, ~1-2 KB a pair, ~1.3 GB baseline, ~4-9 GB of 22.9 GB.
-BOOTSTRAP_PAIR_BUDGET: int = 300_000
 # --- the claim cap (E948) --------------------------------------------------------------------
 #
 # The rate bounds a pass's TIME, never its MEMORY, and the neighbourhood a pass re-reads grows
@@ -443,18 +439,20 @@ MAX_RETIRE_FRACTION: float = 0.05
 # So the seed's second check (E941) projects 464 + 60 - 129 + 668 = ~1,063 MB (~1,190 MB were
 # none of the reset's space reused), and 1,500 leaves ~310-440 MB: about three months of the
 # widened scope's arrivals (~95-135 MB a month: E939's Prague rate scaled to 38,000 adverts, or
-# E79's ~20 % of the store a month at 18 KiB), not a second widening. The whole town is
-# E946's (5,000 MB, once the operator has read the database's disk, D907). 800 rested on
-# E916's trial measurements; a DELETE never shrinks a file, so the schema's size is a
-# high-water mark that pruned generations leave behind.
+# E79's ~20 % of the store a month at 18 KiB), not a second widening. E943's reject ledger
+# adds ~2 KiB an advert (20 KiB): ~1,137 MB projected, ~360 MB left, about two and a half
+# months. The whole town is E946's (5,000 MB, once the operator has read the database's disk,
+# D907). 800 rested on E916's trial measurements; a DELETE never shrinks a file, so the
+# schema's size is a high-water mark that pruned generations leave behind.
 MAX_SCHEMA_MB: float = 1500.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
 # 25,609 pairs 100.8 MB, 14.1 KiB an advert: 3.5 pairs an advert at ~4.1 kB each on disk with
 # their indexes, TOAST and reused dead space apportioned; fp_key 2.8 KiB). E916's ~12 kB was
-# the trial build's row cost (2.76 pairs an advert at 2,869 B).
-BUILD_BYTES_PER_LISTING: int = 18 * 1024
+# the trial build's row cost (2.76 pairs an advert at 2,869 B). Plus E943's reject ledger:
+# ~10-12 below-floor rejects an advert at the end of a build, ~182 B each with its key, ~2 KiB.
+BUILD_BYTES_PER_LISTING: int = 20 * 1024
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000
@@ -465,6 +463,9 @@ POP_CHUNK: int = 5_000
 # STATEMENT_TIMEOUT_MS. Every cohort statement is a plain `= any(ids)` filter ordered within a
 # listing, so slices of whole listings read exactly what the whole array would.
 FACT_CHUNK: int = 500
+# How many pairs one reject-ledger statement carries (E943): a lookup or a write of a full
+# 150k-pair pass is eight statements of ~1 MB of bound arrays each, not one that grows with it.
+LEDGER_CHUNK: int = 20_000
 STATEMENT_TIMEOUT_MS: int = 120_000
 LOCK_TIMEOUT_MS: int = 5_000
 # Above the pass's own deadline (PASS_DEADLINE_S) and under the lease (LEASE_TTL_S): the scoring
@@ -524,9 +525,9 @@ class SqlStore:
     unchanged corpus costs **4**, where the per-listing spelling cost ~17,700 for a 166-listing
     claim."""
 
-    def __init__(self, conn: Any, generation: str = GENERATION,
-                 store_floor: float = 0.02, model_version: str | None = None,
-                 calibration_digest: str | None = None) -> None:
+    def __init__(self, conn: Any, generation: str = GENERATION, *, calibration_digest: str,
+                 engine_digest: str, store_floor: float = 0.02,
+                 model_version: str | None = None) -> None:
         self.conn = conn
         self.generation = generation
         # WHICH SCORER TOOK THE DECISION, stamped on every row this store writes (E90a). The
@@ -537,6 +538,10 @@ class SqlStore:
         # are held here rather than fished out of a per-pair evidence bag.
         self.model_version = model_version
         self.calibration_digest = calibration_digest
+        # E943: the reject ledger's key besides the two decision digests is the store's ALONE —
+        # this calibration digest, this engine digest and `FEATURE_VERSION` — read by the
+        # lookup and written by the write, so the two can never disagree about a row.
+        self.engine_digest = engine_digest
         # The batch lane's own retention floor, carried here so the two stores keep the same
         # rows. It comes from the pass's settings, never from a constant of this module.
         self.store_floor = float(store_floor)
@@ -735,7 +740,7 @@ class SqlStore:
             out.setdefault(int(row[0]), set()).add(int(row[1]))
         return out
 
-    def upsert_pairs(self, rows: Sequence[PairRow]) -> None:
+    def upsert_pairs(self, rows: Sequence[PairRow]) -> int:
         # RETENTION (E79), and it is the batch lane's rule rather than a new one:
         # `score_lane.persist` writes only `storable(row, store_floor)` — the whole merge and
         # band zones whatever they scored, plus the reject tail at or above `store_floor`
@@ -743,19 +748,19 @@ class SqlStore:
         # on the scoped cohort: 13,043 of 44,724 decisions are storable (the live `pairs` table
         # says the same of the batch generations: 15,811 of 48,908 over the whole cohort), so
         # this is a 3.4x saving and not a rounding. A pair that falls BELOW the floor is
-        # deleted, not left behind, and being re-decided next pass costs CPU rather than bytes.
+        # deleted, not left behind, and ledgered (E943) so the next pass does not re-decide it.
         keep: list[PairRow] = []
-        evicted: list[tuple[int, int]] = []
+        evicted: list[PairRow] = []
         for row in rows:
             if storable({"zone": row.zone, "score": row.score, "evidence": row.evidence},
                         self.store_floor):
                 keep.append(row)
             else:
-                evicted.append((row.lo, row.hi))
+                evicted.append(row)
         self.pairs_retained += len(keep)
         self.pairs_evicted += len(evicted)
         if evicted:
-            self.delete_pairs(evicted)
+            self.delete_pairs([(row.lo, row.hi) for row in evicted])
         self._run_many(RT_PAIR_UPSERT_SQL, [{
             "generation": self.generation,
             "listing_lo": row.lo, "listing_hi": row.hi, "probes": list(row.probes),
@@ -777,6 +782,39 @@ class SqlStore:
             "feature_version": FEATURE_VERSION,
             "model_version": row.evidence.get("_model") or self.model_version,
         } for row in keep])
+        self._ledger(evicted, keep)
+        return len(evicted)
+
+    def _ledger(self, evicted: Sequence[PairRow], kept: Sequence[PairRow]) -> None:
+        """E943: every pair deleted for its score goes into the reject ledger under the store's
+        key, and every pair stored leaves it — inside the pass's transaction, so a pass that
+        rolls back ledgers nothing."""
+        for start in range(0, len(evicted), LEDGER_CHUNK):
+            chunk = evicted[start:start + LEDGER_CHUNK]
+            self._run(RT_REJECT_LEDGER_UPSERT_SQL, {
+                "generation": self.generation,
+                "los": [row.lo for row in chunk], "his": [row.hi for row in chunk],
+                "dd_los": [row.dd_lo for row in chunk], "dd_his": [row.dd_hi for row in chunk],
+                "calibration_digest": self.calibration_digest,
+                "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest})
+        for start in range(0, len(kept), LEDGER_CHUNK):
+            chunk = kept[start:start + LEDGER_CHUNK]
+            self._run(RT_REJECT_LEDGER_DELETE_SQL, {
+                "generation": self.generation,
+                "los": [row.lo for row in chunk], "his": [row.hi for row in chunk]})
+
+    def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
+        out: set[tuple[int, int]] = set()
+        for start in range(0, len(keys), LEDGER_CHUNK):
+            chunk = keys[start:start + LEDGER_CHUNK]
+            out.update((int(row[0]), int(row[1])) for row in self._query(
+                RT_REJECT_LEDGER_LOOKUP_SQL, {
+                    "generation": self.generation,
+                    "los": [key[0] for key in chunk], "his": [key[1] for key in chunk],
+                    "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk],
+                    "calibration_digest": self.calibration_digest,
+                    "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest}))
+        return out
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         self._run_many(RT_PAIR_DELETE_SQL, [
@@ -1146,7 +1184,10 @@ class SqlFacts:
             record = build_image_record(row, clip=clips.get(image_id),
                                         tags=tag_pairs(tags.get(image_id, [])),
                                         pop=population)
-            out.setdefault(int(row["listing_id"]), []).append(Image.from_json(record))
+            # E943: the CLIP job's stamp, for the decision digest only; the export's record
+            # (and so every artifact) does not carry it.
+            out.setdefault(int(row["listing_id"]), []).append(Image.from_json(
+                {**record, "clip_tagged_at": _iso(row.get("clip_tagged_at"))}))
         return out
 
 
@@ -1993,6 +2034,7 @@ RESET_TABLES: tuple[tuple[str, str], ...] = (
     ("rt_scope_ids", RT_FRESH_SCOPE_IDS_SQL),
     ("rt_scope_scan", RT_FRESH_SCOPE_SCAN_SQL),
     ("rt_retire_event", RT_FRESH_RETIRE_EVENT_SQL),
+    ("rt_reject_ledger", RT_FRESH_REJECT_LEDGER_SQL),
 )
 
 
@@ -2437,7 +2479,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
@@ -2493,16 +2535,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         calibration = Calibration.from_json(
             payload if isinstance(payload, dict) else json.loads(payload or "{}"))
         settings, model = pass_config(rows[0][5], rows[0][6], generation)
-        store = SqlStore(conn, generation, store_floor=settings.store_floor,
-                         model_version=model.version,
-                         calibration_digest=calibration.digest())
+        store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
+                         engine_digest=engine_digest(settings, model),
+                         store_floor=settings.store_floor, model_version=model.version)
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]))
-        limits = (replace(PASS_LIMITS, max_pairs=BOOTSTRAP_PAIR_BUDGET) if bootstrap
-                  else PASS_LIMITS)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2521,7 +2561,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 _exec(conn, RT_IDLE_GUARD_SQL, {"idle_timeout_ms": IDLE_TIMEOUT_MS})
                 pass_now = time.time()
                 result = run_pass_bounded(
-                    store, facts, work, settings, model, calibration, limits=limits,
+                    store, facts, work, settings, model, calibration, limits=PASS_LIMITS,
                     generation=generation, now=pass_now,
                     hold=EvidenceHold(pass_now, EVIDENCE_HORIZON_HOURS * 3600.0),
                     deadline=deadline, stopping=stopping)
@@ -2684,7 +2724,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         summary["enter_scan"] = dict(work.enter_scan)
         # E952: the pair budget beside the clock's and the cap's: a refusal (`aborted`
         # "pair_budget", `counts.attempts`) is read against it.
-        summary["claim_bound"] = {**work.claim_bound, "max_pairs": limits.max_pairs}
+        summary["claim_bound"] = {**work.claim_bound, "max_pairs": PASS_LIMITS.max_pairs}
         summary["rate_doubled"] = doubled
         summary["bootstrap"] = {
             "active": bool(bootstrap),
@@ -2699,6 +2739,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         }
         summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(rows[0][7]),
                                   "built_age_days": age_days(rows[0][7])}
+        # E943: the reject ledger's engine key; a pass after it moved decides every reject anew.
+        summary["engine_digest"] = store.engine_digest
         summary["retention"] = {"store_floor": settings.store_floor,
                                 "pairs_retained": store.pairs_retained,
                                 "pairs_evicted": store.pairs_evicted}
@@ -2785,7 +2827,7 @@ def run_rt_seed(
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
         if existing and not fresh:
             raise SystemExit(

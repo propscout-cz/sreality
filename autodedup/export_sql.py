@@ -205,7 +205,8 @@ SELECT
     i.listing_id   AS listing_id,
     i.sequence     AS sequence,
     i.storage_path AS storage_path,
-    i.phash        AS phash
+    i.phash        AS phash,
+    i.clip_tagged_at AS clip_tagged_at
 FROM images i
 WHERE i.listing_id = any(%(ids)s::bigint[])
 ORDER BY i.listing_id, i.sequence NULLS LAST, i.id

@@ -19,7 +19,7 @@ from autodedup.harness import model_of_version
 from autodedup.incremental_lane import scope_setting_key
 from autodedup.rt_equivalence import EQUIVALENCE_FILE, SCORE_ONLY_MAX, run_equivalence
 from autodedup.score_lane import families_of_bitmask
-from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg
 
 LIVE = "rt"
 BATCH = "g6"
@@ -700,7 +700,7 @@ def test_a_real_harness_run_directory_against_the_lane_drained_over_the_same_coh
         db.scope_ids[(LIVE, "obec:563510", listing_id)] = {"resolved_at": EXPORTED}
         db.listings[listing_id] = {"id": listing_id,
                                    "first_seen_at": EXPORTED - timedelta(days=5)}
-    store = SqlStore(db, LIVE, store_floor=settings.store_floor)
+    store = SqlStore(db, LIVE, store_floor=settings.store_floor, **LEDGER_KEY)
     work = Schedule(sorted(dataset.listings))
     calibration = harness.calibrated(dataset, settings)[1]
     while not work.exhausted():

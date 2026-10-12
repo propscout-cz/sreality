@@ -2221,6 +2221,13 @@ def _autodedup_outcome(
             wanted_pairs=counts.get("wanted_pairs"),
             wanted_by_attempt=counts.get("wanted_by_attempt"),
             aborted=aborted[:AUTODEDUP_REASON_CHARS] or None,
+            # E943: what the pair budget counts — the pairs left to decide once the reject
+            # ledger answered, the last claim's and each claim's — the wanted pairs the ledger
+            # answered instead of a re-score, and the rejects this pass ledgered.
+            pairs_to_decide=counts.get("pairs_to_decide"),
+            pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
+            ledger_skipped=counts.get("ledger_skipped"),
+            ledger_written=counts.get("ledger_written"),
         )
     return last
 
@@ -2269,7 +2276,7 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540) is "
+                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596) is "
                     "absent on this database; the lane skips every tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False

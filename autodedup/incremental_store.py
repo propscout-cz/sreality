@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from dataclasses import replace
 
 from autodedup.dataset import Dataset, Image, Listing
+from autodedup.features import FEATURE_VERSION
 from autodedup.hazard_context import ContextStamp, address_block_key, category_group
 from autodedup.incremental import (
     SET_CAP,
@@ -26,7 +27,7 @@ from autodedup.incremental import (
     WorkItem,
     key_token,
 )
-from autodedup.store_score import PAIR_SCORE_SQL_TYPE, narrow
+from autodedup.store_score import PAIR_SCORE_SQL_TYPE, narrow, storable
 
 
 def shape_token(listing: Listing) -> str:
@@ -38,7 +39,8 @@ def shape_token(listing: Listing) -> str:
 
 class MemoryStore:
     def __init__(self, now: float | None = None,
-                 score_sql_type: str = PAIR_SCORE_SQL_TYPE) -> None:
+                 score_sql_type: str = PAIR_SCORE_SQL_TYPE, store_floor: float = 0.0,
+                 calibration_digest: str = "", engine_digest: str = "") -> None:
         # The twin's clock, for `first_decided_at` (E92). Production reads the server's; a
         # replay that never sets one leaves the stamp NULL, which is what keeps the plain
         # replay byte-for-byte what it was before the evidence horizon existed.
@@ -48,6 +50,14 @@ class MemoryStore:
         # `double precision` this is the identity; passing `real` reproduces the pre-541
         # column, which is how W9m's regression arm shows the proof would now catch E114.
         self.score_sql_type = score_sql_type
+        # E943: the reject ledger, as `SqlStore` keeps it — a pair decided below `store_floor`
+        # is ledgered under its two decision digests and the store's key (the calibration, the
+        # feature version, the engine). Unlike the SQL store the twin still keeps every pair, so
+        # at the default floor of 0 nothing is ledgered and a replay is what it was before.
+        self.store_floor = float(store_floor)
+        self.calibration_digest = calibration_digest
+        self.engine_digest = engine_digest
+        self.ledger: dict[tuple[int, int], tuple[str, str, str, int, str]] = {}
         self.postings: dict[tuple[str, str], list[int]] = {}
         self.keys: dict[int, list[tuple[str, str]]] = {}
         self.fp: dict[int, FpRow] = {}
@@ -131,11 +141,26 @@ class MemoryStore:
     def merge_neighbours(self, ids: Iterable[int]) -> dict[int, set[int]]:
         return {i: set(self._merge_adj.get(i, ())) for i in ids}
 
-    def upsert_pairs(self, rows: Sequence[PairRow]) -> None:
+    def upsert_pairs(self, rows: Sequence[PairRow]) -> int:
+        ledgered = 0
         for row in rows:
             stored = replace(row, score=narrow(row.score, self.score_sql_type))
             self.pairs[(stored.lo, stored.hi)] = stored
             self._reindex(stored)
+            if storable({"zone": row.zone, "score": row.score, "evidence": row.evidence},
+                        self.store_floor):
+                self.ledger.pop((row.lo, row.hi), None)
+            else:
+                self.ledger[(row.lo, row.hi)] = (row.dd_lo, row.dd_hi, *self._ledger_key())
+                ledgered += 1
+        return ledgered
+
+    def _ledger_key(self) -> tuple[str, int, str]:
+        return (self.calibration_digest, FEATURE_VERSION, self.engine_digest)
+
+    def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
+        return {(lo, hi) for lo, hi, dd_lo, dd_hi in keys
+                if self.ledger.get((lo, hi)) == (dd_lo, dd_hi, *self._ledger_key())}
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         for key in keys:
