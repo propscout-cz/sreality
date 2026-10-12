@@ -7,6 +7,17 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Phone app (in progress — map [#1759](https://github.com/waiff/sreality/issues/1759))
+- The platform on the operator's iPhone home screen: the same SPA at the same address, a
+  phone shell by screen width. Waves W0 prototype → W1 feed → W2 property page → W3 pipeline
+  → W4 collections + brokers; a wave closes on the operator's install walk, not the merge.
+- **W1 slice: the installable shell** (this PR's branch `feature/phone-installable-shell`):
+  self-hosted fonts, `manifest.webmanifest` + icons (`frontend/scripts/make-icons.py`), the iOS
+  meta tags, and a version-agnostic `public/sw.js` (navigations network-first, `/assets/*`
+  cache-first; buildSkew stays the update signal). Decided in #1763 and #1764. No phone layout yet.
+- Next in W1: per-account presets (#1761), the 1080 px photo copy on first request (#1765), the
+  feed route (it becomes the manifest's `start_url`), then the install walk on the iPhone.
+
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first
   photo) or a CLIP logical tag (fasáda, kuchyně, obývací pokoj, ložnice, koupelna, WC,

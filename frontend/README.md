@@ -119,11 +119,52 @@ for the click-by-click setup.
 
 `Caddyfile` handles SPA routing (`try_files {path} /index.html`),
 gzip + zstd compression, immutable caching for hashed `assets/*`
-bundles, and a `/healthz` endpoint that Railway uses for liveness.
+bundles, the installable app's own files (below), and a `/healthz`
+endpoint that Railway uses for liveness.
 
 CI lives at `.github/workflows/frontend-build.yml` and runs
 `npm install && npm run build` on every push to catch broken builds
-before Railway sees them.
+before Railway sees them; it also fails when `dist/sw.js` or
+`dist/manifest.webmanifest` is missing.
+
+### The installable app: manifest, icons, service worker
+
+The SPA installs to a phone's home screen as the Phone app (map #1759).
+Three things in `public/` make that work; Vite copies them into `dist/`
+as-is, and Caddy serves each from its own `handle` block, real file or
+real 404, never the SPA fallback:
+
+- **`manifest.webmanifest`** (`no-cache`, `application/manifest+json`):
+  root-relative URLs only (`id` `/`, `scope` `/`, `start_url` `/browse`),
+  so the brand-domain move needs nothing but a reinstall. Its `name` and
+  `short_name` are literal copies of `src/lib/brand.ts` (JSON can't import
+  it); `src/lib/manifest.test.ts` fails when they drift. iOS reads the
+  manifest once, at install: a change reaches an installed app only when
+  it is reinstalled.
+- **Icons** (`icons/*`, `apple-touch-icon.png`, `favicon.ico`;
+  `max-age=86400`): drawn by `python3 scripts/make-icons.py` (Pillow, the
+  self-hosted Fraunces); rerun it and commit the PNGs to change them.
+- **`sw.js`** (`no-cache`, `text/javascript`): a hand-written service
+  worker, registered by `src/lib/serviceWorker.ts` in production builds
+  only. It caches by URL, never by build: page navigations go to the
+  network first (the last good `index.html` only after 3 s, offline or on
+  a 5xx) and hashed `/assets/*` files are served from its cache; it
+  touches nothing else (API, images, Supabase, tiles). It never reloads a
+  page: `lib/buildSkew` stays the one "newer version" signal and
+  `lib/lazyChunk` the one recovery from a missing chunk. Design and
+  reasons: #1764 and the header of `public/sw.js`.
+
+**Retiring the worker.** Never delete `public/sw.js`: an installed worker
+whose script 404s simply stays installed. Replace the file's contents
+with the self-unregistering version in its header comment (clears its
+caches, unregisters itself), make `registerServiceWorker()` unregister
+instead of register in the same PR, deploy, and keep that file served
+for months.
+
+The three typefaces are self-hosted (`src/assets/fonts/`, SIL OFL 1.1,
+licence files beside them; `src/styles/fonts.css`), so the page makes no
+cross-origin request before first paint and the worker needs no
+cross-origin rule.
 
 ### Build-time vs runtime env vars
 
