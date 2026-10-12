@@ -729,6 +729,10 @@ rules. Identify which one a task belongs to before you start.
   stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
   not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
   stage management on the phone (#1768).
+  The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
+  broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
+  lists and the dossier are the desktop pages' own API calls, and each page component picks
+  its lazily loaded phone layout by `usePhoneShell()`, so `routes.tsx` does not change.
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical

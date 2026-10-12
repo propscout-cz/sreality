@@ -43,6 +43,15 @@ toolkit work.
   stage, each scrolling on its own; cards are a stage-washed 104 px thumbnail, price, layout, place,
   days in the stage and MF; the stage badge opens the stage sheet (move, two-step remove through
   `usePipelineCard`). Same reads as the board (`lib/pipelineReads`); no drag, no stage management.
+- **W4: collections and brokers on the phone** (#1769): `/collections` is a hairline list with
+  "Nová sbírka" (a name in a bottom sheet, `createCollection`, monitoring off) and `/collection/:id`
+  the members as feed cards (`fetchListingsForCards`, the collection as prefilter; the card's
+  collection sheet is the removal; a member with no served location stays as a plain line);
+  `/brokers` a reduced leaderboard (name search in place, place in a sheet, byty/domy,
+  prodej/pronájem, metric) and `/brokers/:id` the dossier without the map (masked contact,
+  "Kopírovat", kraje and per-type counts as numbers, firms, the live ads as feed cards by
+  `brokerId`). Rename, delete, monitoring and the broker map stay on the desktop (#1760 Q11/Q12).
+  Closes on the install walk.
 
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first
