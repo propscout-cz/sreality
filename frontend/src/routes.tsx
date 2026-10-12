@@ -5,6 +5,7 @@ import { Link, Navigate, type RouteObject } from 'react-router-dom';
 import Shell from './components/Shell';
 import Skeleton from './components/Skeleton';
 import { RequireAdmin, RequireAuth } from './components/guards';
+import HomeRedirect from './components/phone/HomeRedirect';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
@@ -87,7 +88,7 @@ export const routes: RouteObject[] = [
       // single source of truth, read by TitleController via matchRoutes).
       // Dynamic pages (a listing, a broker, …) carry a generic fallback here
       // and refine it at runtime with usePageTitle — see lib/pageTitle.tsx.
-      { index: true, element: <Navigate to={ROUTES.browse.build()} replace /> },
+      { index: true, element: <HomeRedirect /> },
       { path: ROUTES.browse.childPath, element: <Browse />, handle: { title: 'Browse' } },
       { path: ROUTES.property.childPath, element: <PropertyDetail />, handle: { title: 'Property' } },
       // Advert addresses, kept forever (emails, the extension, bookmarks): the

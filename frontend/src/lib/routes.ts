@@ -87,6 +87,8 @@ export const ROUTES = {
   resetPassword: def('/reset-password'),
 
   browse: def('/browse'),
+  // The Phone app's start screen (#1766): Browse's read, newest first, as a roll.
+  feed: def('/feed'),
   // THE property page (decision 11): one real property, one stable address.
   property: def('/property/:propertyId'),
   // Advert addresses, kept forever as aliases (bookmarks, emails, the

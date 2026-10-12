@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/lib/auth';
 import { ROUTES } from '@/lib/routes';
+import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
 
 /* Additive UI only — does not gate anything. Anonymous users see a "Sign in"
  * link; logged-in users see who they are + a sign-out affordance. */
@@ -9,6 +10,9 @@ export default function AccountMenu() {
   const { user, loading, signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  /* Set from the phone shell's account sheet ("Desktopová verze"); this is the
+   * way back, and it shows only on a device that took that switch. */
+  const [desktopView] = useState(readDesktopView);
 
   useEffect(() => {
     if (!open) return;
@@ -61,6 +65,16 @@ export default function AccountMenu() {
             Signed in as {label}
           </div>
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
+          {desktopView && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => switchDesktopView(false)}
+              className="block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] hover:text-[var(--color-ink)]"
+            >
+              Mobilní verze
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"
