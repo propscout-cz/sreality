@@ -82,6 +82,12 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   encoded a slice at a time. Decisions are a fresh process's and `SEED_VERSION` is unchanged; the
   claim cap stays at 25 until a seed or, E948b, a bigger container. Next: Part 2, chunked scoring,
   so the pair budget bounds a pass's memory.
+- **E951 (2026-10-12, a build stuck at small passes):** in a build a pass's time budget is three
+  quarters of the 1,050 s deadline (787.5 s, was 525 s), and a pass the clock cut that claimed its
+  whole share and finished inside half its budget doubles the stored rate instead of blending it;
+  the heartbeat adds `pass_budget_s` and `rate_doubled`. No pass at today's store (~400 s fixed
+  cost) ends inside 393.75 s, so this build grows by the bigger budget alone (simulated: 14 to 500
+  adverts in 16 passes, ~2.3 h); the doubling serves smaller stores.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

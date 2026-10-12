@@ -2196,6 +2196,10 @@ def _autodedup_outcome(
             latency_p50_s=latency.get("p50"),
             latency_p95_s=latency.get("p95"),
             bound_by=(summary.get("claim_bound") or {}).get("bound_by"),
+            # E951: the clock's budget the claim was cut from (a build's 787.5 s, else 525 s),
+            # and whether the pass had room and doubled the rate instead of blending it.
+            pass_budget_s=(summary.get("claim_bound") or {}).get("pass_budget_s"),
+            rate_doubled=bool(summary.get("rate_doubled")),
             # E948: the claim cap a death halves ({cap, reason, limit_mb}; a bigger container
             # resets it, E948b), and the lease of a dead predecessor of this container this
             # pass released (None: there was none).

@@ -254,7 +254,9 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
     readings = iter([290.0, 301.5])
     monkeypatch.setattr(rw, "_return_memory", lambda: next(readings))
     _settings(monkeypatch)
-    seen = _stub_engine(monkeypatch, _summary())
+    seen = _stub_engine(monkeypatch, _summary(
+        claim_bound={"bound_by": "time", "limit": 100, "pass_budget_s": 787.5},
+        rate_doubled=True))
 
     last = rw._autodedup_sync()
 
@@ -277,7 +279,9 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         "ran": True, "claimed": 12, "scored": 40, "grouped": 3, "merged": 2, "skipped": 0,
         "errors": 0, "seconds": last["seconds"], "held": 1, "retired": 0, "reconcile": "ran",
         "deadline_exceeded": False, "latency_p50_s": 310.2, "latency_p95_s": 355.0,
-        "bound_by": "count", "reconcile_groups": 0, "reconcile_seconds": None,
+        "bound_by": "time", "reconcile_groups": 0, "reconcile_seconds": None,
+        # E951: the budget the claim was cut from (a build's 787.5 s), and the doubled rate
+        "pass_budget_s": 787.5, "rate_doubled": True,
         "reconcile_refused": 0, "reconcile_failed": 0, "reconcile_waiting": 0,
         "reconcile_skipped_at_apply": 0, "reconcile_quarantined": 0, "reconcile_deferred": 0,
         "must_link_dissolved": 0,
@@ -544,7 +548,7 @@ def test_a_pass_past_its_own_deadline_rolls_back_and_halves_its_rate(
     last = rw._autodedup_sync()
 
     assert last["ran"] is True and last["errors"] == 1 and last["deadline_exceeded"] is True
-    assert last["aborted"] == "deadline"
+    assert last["aborted"] == "deadline" and last["rate_doubled"] is False
     assert world.rolled_back == rolled_back + 1
     assert world.cursors == cursors and not world.pairs and not world.rt_fp
     rate = world.settings[incremental_lane.pass_rate_key(incremental_lane.GENERATION)]

@@ -1229,6 +1229,144 @@ def test_a_pass_that_measured_itself_overwrites_the_half(tmp_path) -> None:
     assert conn.settings[key] > 0.0001 / 2 and conn.settings_by[key].endswith(":rate")
 
 
+# ------------------------------------------- E951: a pass with room doubles; a build's budget
+
+
+BUILD_BUDGET_S = 787.5
+
+
+def _bound(by: str, limit: int, budget: float = BUILD_BUDGET_S) -> dict:
+    return {"bound_by": by, "limit": limit, "pass_budget_s": budget}
+
+
+def test_a_pass_the_clock_cut_that_had_room_doubles_the_rate() -> None:
+    """2026-10-12: nine deaths left the build at 0.018/s, and at a small claim the pass's fixed
+    cost holds claimed/elapsed down, so the blend grew the claim ~15 % a pass. A pass the clock
+    cut that claimed all of it inside half its budget doubles instead: 0.018, 0.036, 0.072."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.018
+    for expected in (0.036, 0.072, 0.144):
+        limit = int(BUILD_BUDGET_S * rate)
+        rate, doubled = _measure_rate(limit, 300.0, rate, _bound("time", limit))
+        assert (rate, doubled) == (expected, True)
+
+
+def test_a_pass_that_used_more_than_half_its_budget_keeps_the_blend() -> None:
+    """The production pass at 14 adverts: ~400 s of fixed cost, past half the build's budget."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate, doubled = _measure_rate(14, 408.0, 0.018, _bound("time", 14))
+    assert (rate, doubled) == (round(0.5 * 14 / 408.0 + 0.5 * 0.018, 6), False)
+    assert _measure_rate(14, 393.0, 0.018, _bound("time", 14)) == (0.036, True)
+
+
+@pytest.mark.parametrize("claimed, bound", [
+    (500, _bound("count", 500, 525.0)),     # the count bound it: the clock had room to spare
+    (250, _bound("cap", 250, 525.0)),       # E948's cap bound it: memory, not time
+    (60, _bound("time", 100)),              # the clock cut it, but the feeds held less
+])
+def test_only_a_claim_the_clock_cut_and_filled_doubles(claimed: int, bound: dict) -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound)
+    assert (rate, doubled) == (round(0.5 * claimed / 200.0 + 0.5 * 2.0, 6), False)
+    assert rate < 4.0
+
+
+class _LaneClock:
+    """The lane's `time`, its pass `elapsed_s` seconds long: the first `perf_counter` (the
+    pass's start) is real, every later one that start plus `elapsed_s`."""
+
+    def __init__(self, elapsed_s: float) -> None:
+        self.started: float | None = None
+        self.elapsed_s = elapsed_s
+
+    def perf_counter(self) -> float:
+        if self.started is None:
+            self.started = time.perf_counter()
+            return self.started
+        return self.started + self.elapsed_s
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+def _timed_pass(monkeypatch, conn, elapsed_s: float) -> dict:
+    from autodedup import incremental_lane
+
+    monkeypatch.setattr(incremental_lane, "time", _LaneClock(elapsed_s))
+    return incremental_lane.run_incremental(lambda: conn)
+
+
+def test_a_build_pass_with_room_doubles_the_stored_rate(tmp_path, monkeypatch) -> None:
+    from autodedup.incremental_lane import pass_rate_key
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    for expected in (0.0036, 0.0072):
+        out = _timed_pass(monkeypatch, conn, 390.0)
+        bound = out["claim_bound"]
+        assert bound["bound_by"] == "time" and out["counts"]["claimed"] >= bound["limit"]
+        assert out["rate_doubled"] is True and out["bootstrap"]["active"] is True
+        assert conn.settings[key] == expected and conn.settings_by[key].endswith(":rate")
+
+
+def test_a_build_pass_past_half_its_budget_blends_the_stored_rate(tmp_path,
+                                                                   monkeypatch) -> None:
+    from autodedup.incremental_lane import pass_rate_key
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    out = _timed_pass(monkeypatch, conn, 400.0)
+    claimed = out["counts"]["claimed"]
+    assert out["claim_bound"]["bound_by"] == "time" and claimed >= out["claim_bound"]["limit"]
+    assert out["rate_doubled"] is False
+    assert conn.settings[key] == round(0.5 * claimed / 400.0 + 0.5 * 0.0018, 6)
+
+
+def test_a_pass_past_its_deadline_still_halves_and_never_doubles(tmp_path) -> None:
+    from autodedup.incremental_lane import pass_rate_key, run_incremental
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    out = run_incremental(lambda: conn, deadline_s=0.0)
+    assert out["aborted"] == "deadline" and out["rate_doubled"] is False
+    assert conn.settings[key] == 0.0009 and conn.settings_by[key].endswith(":halved")
+
+
+def test_a_build_s_budget_is_three_quarters_of_the_deadline(tmp_path) -> None:
+    """A build's pass need not finish fast for latency, and its fixed cost is spread over more
+    adverts; the deadline, the lease and the lane's timeout stay as they are."""
+    from autodedup.incremental import bootstrap_key
+    from autodedup.incremental_lane import (BOOTSTRAP_BUDGET_FRACTION, PASS_BUDGET_S,
+                                            PASS_DEADLINE_S, run_incremental)
+    from tests.autodedup import lane_world
+
+    assert BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S == BUILD_BUDGET_S
+    assert (PASS_DEADLINE_S, PASS_BUDGET_S) == (1050.0, 525.0)
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    building = run_incremental(lambda: conn)
+    assert building["bootstrap"]["active"] is True
+    assert building["claim_bound"]["pass_budget_s"] == BUILD_BUDGET_S
+    assert building["deadline_s"] == PASS_DEADLINE_S
+
+    conn.settings[bootstrap_key()] = False
+    built = run_incremental(lambda: conn)
+    assert built["bootstrap"]["active"] is False
+    assert built["claim_bound"]["pass_budget_s"] == PASS_BUDGET_S
+
+
 def test_the_fact_reads_are_sliced_by_whole_listings(tmp_path, monkeypatch) -> None:
     """Every cohort statement is a plain any(ids) filter ordered within a listing and every
     consumer keys by listing or image, so slices of whole listings read exactly what the whole
