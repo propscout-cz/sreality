@@ -18,8 +18,16 @@ import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import { fmtCount, fmtRelative, fmtAbsolute } from '@/lib/format';
 import type { Collection } from '@/lib/types';
+import { usePhoneShell } from '@/lib/phoneShell';
+import PhoneCollections from './phone/PhoneCollections';
 
+/* Under the phone shell: the list and "Nová sbírka" only (#1760 Q11); rename,
+ * delete and monitoring stay on this desktop page. */
 export default function Collections() {
+  return usePhoneShell() ? <PhoneCollections /> : <CollectionsDesktop />;
+}
+
+function CollectionsDesktop() {
   const qc = useQueryClient();
 
   const listQ = useQuery<{ data: Collection[]; total: number }, Error>({

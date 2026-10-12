@@ -35,8 +35,16 @@ import type {
 } from '@/lib/types';
 import { Hairline } from '@/components/section';
 import { Th } from '@/components/table';
+import { usePhoneShell } from '@/lib/phoneShell';
+import PhoneCollectionDetail from './phone/PhoneCollectionDetail';
 
+/* Under the phone shell: the members as feed cards, removal through the
+ * card's collection sheet (#1760 Q11); editing and monitoring stay here. */
 export default function CollectionDetail() {
+  return usePhoneShell() ? <PhoneCollectionDetail /> : <CollectionDetailDesktop />;
+}
+
+function CollectionDetailDesktop() {
   const { id: idParam } = useParams();
   const id = idParam && /^\d+$/.test(idParam) ? Number(idParam) : null;
 
