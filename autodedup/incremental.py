@@ -748,6 +748,8 @@ class PassResult:
     aborted: str = ""
     wanted_pairs: int = 0
     attempts: int = 1
+    # E952: each attempt's wanted pair set, the refused ones first (`run_pass_bounded`).
+    wanted_by_attempt: list[int] = field(default_factory=list)
     # The groups this pass (re)wrote — what the lane's reconcile (A9) looks at first.
     cluster_keys: list[int] = field(default_factory=list)
 
@@ -771,6 +773,7 @@ class PassResult:
                 "must_link_dissolved": len(self.dissolved),
                 "wanted_pairs": self.wanted_pairs,
                 "attempts": self.attempts,
+                "wanted_by_attempt": list(self.wanted_by_attempt),
             },
             "feeds": dict(self.feeds),
             "aborted": self.aborted,
@@ -1418,19 +1421,27 @@ def run_pass_bounded(
     """`run_pass`, re-claiming a SMALLER slice when the pair budget refused the last one.
 
     An aborted pass has written nothing and advanced no cursor (E75), so a retry is the same
-    work over fewer arrivals rather than a resumption of a half-written one. When even a
-    single-listing claim will not fit, the lane STOPS: a neighbourhood that alone exceeds the
-    budget is a block worth an operator's eye, not a number to quietly truncate."""
+    work over fewer arrivals rather than a resumption of a half-written one. The retry asks for
+    a `shrink`th of the claim the source MADE (its `claim_bound["limit"]`, which a clock or a
+    cap may have cut below `max_listings`; E952): a quarter of `max_listings` above that would
+    re-claim the identical slice. When even a single-listing claim will not fit, the lane
+    STOPS: a neighbourhood that alone exceeds the budget is a block worth an operator's eye,
+    not a number to quietly truncate."""
     caps = limits or Limits()
     result = run_pass(store, facts, work, settings, model, calibration, caps, generation, now,
                       hold, deadline, stopping)
-    tries = 1
-    while result.aborted and tries < attempts and caps.max_listings > 1:
-        caps = replace(caps, max_listings=max(1, caps.max_listings // shrink))
+    wanted = [result.wanted_pairs]
+    while result.aborted and len(wanted) < attempts:
+        made = min(caps.max_listings, int(
+            (getattr(work, "claim_bound", None) or {}).get("limit") or caps.max_listings))
+        if made <= 1:
+            break
+        caps = replace(caps, max_listings=max(1, made // shrink))
         result = run_pass(store, facts, work, settings, model, calibration, caps, generation,
                           now, hold, deadline, stopping)
-        tries += 1
-    result.attempts = tries
+        wanted.append(result.wanted_pairs)
+    result.attempts = len(wanted)
+    result.wanted_by_attempt = wanted
     return result
 
 

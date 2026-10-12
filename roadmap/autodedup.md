@@ -91,11 +91,12 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   Owed: `wanted_pairs` and `attempts` in the heartbeat before full claims meet the `max_pairs` 150k
   wall (the review's estimate: ~134k pairs at 500 adverts on a 38.5k store).
 - **E952 (2026-10-12, the build held near 30 adverts by the pair budget):** a build's pass may want
-  450,000 pairs (`BOOTSTRAP_PAIR_BUDGET`; live stays 150,000), since a 30-advert claim on the 27k
-  store already wanted more and each refusal re-claimed a quarter; the heartbeat now carries
-  `attempts`, `wanted_pairs` and `aborted`, and a refused attempt no longer reads the claim's CLIP
-  vectors. Owed: a wanted set bounded by the neighbourhood's design (E943), a ladder that shrinks
-  the claim actually made.
+  300,000 pairs (`BOOTSTRAP_PAIR_BUDGET`; live stays 150,000), since a 30-advert claim on the 27k
+  store already wanted more; a refusal now re-claims a quarter of the claim actually made, not of
+  `max_listings`, and no longer reads the claim's CLIP vectors; the heartbeat carries `attempts`,
+  `wanted_pairs`, `wanted_by_attempt` and `aborted`. Owed: before `rt_bootstrap` flips, read
+  `wanted_pairs` over the last build passes and decide whether live passes fit 150k (hold the phase
+  or raise the live budget until E943's ledger of rejected pairs bounds the wanted set).
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

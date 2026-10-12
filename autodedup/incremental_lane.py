@@ -368,11 +368,13 @@ RAMP_HEADROOM: float = 0.5
 BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # E952: a build's pair budget, in place of `PASS_LIMITS.max_pairs` 150,000: at a 27k-advert store
 # a 30-advert claim already WANTS more (E71's neighbourhood), so every build pass was refused down
-# to about that size. It is a scheduling bound (E75) and the deadline the guard (rolled back, the
-# rate halved): only the new or stale of the wanted are scored, ~1.7 ms and ~6.6 KB each (10-10),
-# so ~175k scored fit the 787.5 s budget beside ~490 s of fixed cost and ~330k the deadline, and
-# all 450k scored would hold ~3 GB of a 24 GB container.
-BOOTSTRAP_PAIR_BUDGET: int = 450_000
+# to about that size. A scheduling bound (E75) that keeps a pass inside its deadline: a scored
+# pair costs ~3 ms (run 35520830343; 3.0-3.4 ms marginal on 10-10), so 1,050 s holds ~237k beside
+# ~340-400 s of fixed cost, and a pass scores ~0.5-0.8 of what it wants (a reject under
+# `store_floor` is re-scored every pass), so 300k wanted is ~150-240k scored where 450k sat at the
+# deadline. Erring low is cheap: a refusal costs 15-60 s, a deadline hit ~18 min. Peak memory:
+# endpoints 1.5-5 GB, ~1-2 KB a pair, ~1.3 GB baseline, ~4-9 GB of 22.9 GB.
+BOOTSTRAP_PAIR_BUDGET: int = 300_000
 # --- the claim cap (E948) --------------------------------------------------------------------
 #
 # The rate bounds a pass's TIME, never its MEMORY, and the neighbourhood a pass re-reads grows

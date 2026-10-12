@@ -1417,7 +1417,7 @@ def test_a_build_s_budget_is_three_quarters_of_the_deadline(tmp_path) -> None:
 # ---------------------------------- E952: a build's pair budget; the pass reports its attempts
 
 
-def test_a_build_s_pair_budget_is_450k_and_a_live_pass_s_stays_150k(tmp_path, monkeypatch) -> None:
+def test_a_build_s_pair_budget_is_300k_and_a_live_pass_s_stays_150k(tmp_path, monkeypatch) -> None:
     """At a 27k-advert store a 30-advert claim already wants more than 150k pairs, so a build
     runs the pass under `BOOTSTRAP_PAIR_BUDGET`; after it the live 150,000 of E75 holds. The
     budget is a `Limits` the lane hands the pass, beside the claim bound in the summary."""
@@ -1439,26 +1439,37 @@ def test_a_build_s_pair_budget_is_450k_and_a_live_pass_s_stays_150k(tmp_path, mo
     conn.settings[bootstrap_key()] = False
     built = incremental_lane.run_incremental(lambda: conn)
 
-    assert incremental_lane.BOOTSTRAP_PAIR_BUDGET == 450_000
+    assert incremental_lane.BOOTSTRAP_PAIR_BUDGET == 300_000
     assert incremental_lane.PASS_LIMITS == Limits(max_listings=500, max_pairs=150_000,
                                                   max_component=400)
-    assert [limits.max_pairs for limits in handed] == [450_000, 150_000]
+    assert [limits.max_pairs for limits in handed] == [300_000, 150_000]
     assert all((limits.max_listings, limits.max_component) == (500, 400) for limits in handed)
     assert building["bootstrap"]["active"] is True and not building["aborted"]
-    assert building["claim_bound"]["max_pairs"] == 450_000
+    assert building["claim_bound"]["max_pairs"] == 300_000
     assert built["bootstrap"]["active"] is False and not built["aborted"]
     assert built["claim_bound"]["max_pairs"] == 150_000
 
 
 def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
                                                                   monkeypatch) -> None:
-    """A budget nothing fits refuses all five claims of the ladder (500, 125, 31, 7, 1): the
-    summary says so — `counts.attempts` 5, the last claim's `wanted_pairs`, `aborted`
-    "pair_budget" — and nothing is written. The live pass after it runs under its own budget."""
+    """A budget nothing fits refuses all four claims of the ladder: the clock's 78, then a
+    quarter of each claim MADE (19, 4, 1; a quarter of `max_listings` would re-claim the same
+    78 twice). The summary says so — `counts.attempts` 4, each claim's wanted set, the last
+    one's `wanted_pairs`, `aborted` "pair_budget" — and nothing is written. The live pass after
+    it runs under its own budget."""
     from autodedup import incremental_lane
     from autodedup.incremental import bootstrap_key
     from tests.autodedup import lane_world
 
+    made: list[int] = []
+    real_claim = incremental_lane.SqlWork.claim
+
+    def claim(self, limit: int):
+        items = real_claim(self, limit)
+        made.append(self.claim_bound["limit"])
+        return items
+
+    monkeypatch.setattr(incremental_lane.SqlWork, "claim", claim)
     monkeypatch.setattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET", -1)
     conn = lane_world.world()
     lane_world.seed_lane(conn, tmp_path)
@@ -1467,7 +1478,10 @@ def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
     refused = incremental_lane.run_incremental(lambda: conn)
     assert refused["aborted"] == "pair_budget"
     # The last claim, one advert against a store holding none, wants no pair: -1 refuses it.
-    assert (refused["counts"]["attempts"], refused["counts"]["wanted_pairs"]) == (5, 0)
+    assert made == [78, 19, 4, 1]
+    assert (refused["counts"]["attempts"], refused["counts"]["wanted_pairs"]) == (4, 0)
+    assert len(refused["counts"]["wanted_by_attempt"]) == 4
+    assert refused["counts"]["wanted_by_attempt"][-1] == 0
     # What production read as "count" (2026-10-12): the ladder's last claim, not the clock's.
     assert refused["claim_bound"]["max_pairs"] == -1
     assert (refused["claim_bound"]["max_listings"], refused["claim_bound"]["bound_by"]) == (
