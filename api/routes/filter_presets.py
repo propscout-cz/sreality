@@ -1,23 +1,31 @@
 """FastAPI routes for Browse saved filter presets.
 
-Mounted under `/filter-presets/*`. Bearer-gated by the standard
-`require_token` dependency. Straight psycopg CRUD — a preset is a named
-filter set restored client-side, so there is no matcher, no background
-work, and the `filter_spec` is stored/returned as an opaque dict.
+Mounted under `/filter-presets/*`. Per account (ticket #1761): every route
+rides the caller's Supabase JWT and the **tenant pool**
+(`tenant_pool.tenant_conn`), so migration 290's `filter_presets_tenant_rw`
+policy is the boundary — the static bundle token reaches none of them. Reads,
+the reorder and UPDATE/DELETE by id take no account (`current_account_ids()`
+is the scope; a row of another account is a 404); `POST` is the one insert and
+names exactly one owner via `tenant_pool.require_account_id`. Doctrine:
+`.claude/skills/database/references/tenancy.md`.
 
-Deliberately decoupled from the Watchdog (`/notifications/*`) surface so a
-preset can never fire a notification; see `migrations/150_filter_presets.sql`.
+Straight psycopg CRUD — a preset is a named filter set restored client-side,
+so there is no matcher, no background work, and the `filter_spec` is
+stored/returned as an opaque dict. Deliberately decoupled from the Watchdog
+(`/notifications/*`) surface so a preset can never fire a notification; see
+`migrations/151_filter_presets.sql`.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from api import dependencies as deps
 from api import filter_presets as fp
+from api import tenant_pool
 from api.schemas import TagColor
 
 router = APIRouter(prefix="/filter-presets", tags=["filter-presets"])
@@ -45,8 +53,7 @@ class ReorderPresetsIn(BaseModel):
 
 @router.get("")
 def get_presets(
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     rows = fp.list_presets(conn)
     return {"data": rows, "total": len(rows)}
@@ -55,11 +62,15 @@ def get_presets(
 @router.post("")
 def post_preset(
     body: CreatePresetIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    conn: Any = Depends(tenant_pool.tenant_conn),
+    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     return fp.create_preset(
-        conn, name=body.name, filter_spec=body.filter_spec, color=body.color
+        conn,
+        name=body.name,
+        filter_spec=body.filter_spec,
+        color=body.color,
+        account_id=account_id,
     )
 
 
@@ -68,8 +79,7 @@ def post_preset(
 @router.put("/reorder")
 def reorder_presets(
     body: ReorderPresetsIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     rows = fp.reorder_presets(conn, body.ids)
     return {"data": rows, "total": len(rows)}
@@ -78,8 +88,7 @@ def reorder_presets(
 @router.get("/{preset_id}")
 def get_one_preset(
     preset_id: str,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     row = fp.get_preset(conn, preset_id)
     if row is None:
@@ -91,8 +100,7 @@ def get_one_preset(
 def put_preset(
     preset_id: str,
     body: UpdatePresetIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     # Only pass `color` when the client actually sent it, so an omitted color
     # leaves it untouched while an explicit `null` clears it (fp._UNSET default).
@@ -108,8 +116,7 @@ def put_preset(
 @router.delete("/{preset_id}")
 def delete_preset(
     preset_id: str,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     if not fp.delete_preset(conn, preset_id):
         raise HTTPException(status_code=404, detail="preset not found")
