@@ -17,6 +17,11 @@ toolkit work.
   cache-first; buildSkew stays the update signal). Decided in #1763 and #1764. No phone layout yet.
 - Next in W1: per-account presets (#1761), the 1080 px photo copy on first request (#1765), the
   feed route (it becomes the manifest's `start_url`), then the install walk on the iPhone.
+- **W2 groundwork: one set of portal-id rules** (#1767): the extension's URL→`(source, native id)`
+  rules moved to `frontend/src/lib/portalIds.ts`, imported by the extension cross-tree like
+  `lib/brand.ts`; `parsePortalUrl` is what the paste-a-link box calls to land on
+  `/listing/:source/:nativeId`. Also fixed: bezrealitky's English site (`www.bezrealitky.com`,
+  `/properties-flats-houses/`), which no rule matched before. Next in W2: the paste box itself.
 
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first

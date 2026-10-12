@@ -12,7 +12,7 @@
  * worker (host_permissions + the portal's CORS don't apply there). */
 
 import styles from './styles.css?inline';
-import { detailRef, portalForHost, portalForUrl, type PortalRef } from './portals';
+import { detailRef, portalForHost, portalForUrl, type PortalRef } from '../../frontend/src/lib/portalIds';
 import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,

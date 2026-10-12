@@ -1,15 +1,26 @@
-/* Portal registry — the extension's single source of truth for "which host
- * is which portal" and "how to pull a listing's native id out of a URL".
+/* The portal-id rules: which host is which portal, and how a listing's native
+ * id comes out of its detail URL. ONE copy for BOTH browser surfaces, shared the
+ * way lib/brand.ts is:
+ *   - the SPA's paste-a-link (`parsePortalUrl` → /listing/:source/:nativeId);
+ *   - the Chrome extension (content / background / index_overlay / index_cards,
+ *     and its vite.config.ts, which builds manifest `content_scripts.matches`
+ *     from PORTALS[].hosts).
+ * Zero imports, no React, no DOM at module load: safe in either build. It lives
+ * under frontend/ because the SPA's Docker build context is frontend/ only (a
+ * repo-root file would break the Railway image); the extension always builds
+ * from the whole repo and reaches in by relative import.
  *
- * Mirrors the backend's source set (the `portals` table / source_dispatcher).
- * The native id we extract here is exactly `listings.source_id_native`, so the
- * /listings/lookup endpoint resolves it directly. Sale-apartment gating and the
- * MF rent/yield come from the lookup, not from this file.
+ * `source` is `listings.source` and the id is exactly `listings.source_id_native`,
+ * so /listings/lookup and the SPA's advert route resolve the pair directly. Sale-
+ * apartment gating and the MF rent/yield come from the lookup, not from here.
  *
- * The id extractor doubles as a "is this a detail URL?" test (returns null for
- * index/search pages) AND as the index-overlay matcher: on a search page we scan
- * every <a href> and keep the ones whose href yields an id — robust to the
- * portals' card-container markup changing under us. */
+ * The id extractor doubles as a "is this a detail URL?" test (null for index /
+ * search pages) AND as the extension's index-overlay matcher: on a search page it
+ * scans every <a href> and keeps the ones that yield an id — robust to the
+ * portals' card markup changing under us.
+ *
+ * Adding a host here means adding it to chrome-extension/manifest.json too;
+ * portalIds.test.ts fails when the two lists differ. */
 
 export interface PortalRef {
   source: string;
@@ -61,10 +72,12 @@ export const PORTALS: Portal[] = [
     detailId: (p) => firstMatch(/\/inzerat\/(\d+)\//, p),
   },
   {
+    // .com is the English site: www-canonical (the apex 302s to www), the same
+    // ids as .cz under its own path word. Checked live 2026-10-12.
     source: 'bezrealitky',
-    hosts: ['www.bezrealitky.cz', 'bezrealitky.cz', 'bezrealitky.com'],
-    // /nemovitosti-byty-domy/{id}-{slug}
-    detailId: (p) => firstMatch(/\/nemovitosti-byty-domy\/(\d+)/, p),
+    hosts: ['www.bezrealitky.cz', 'bezrealitky.cz', 'www.bezrealitky.com', 'bezrealitky.com'],
+    // /nemovitosti-byty-domy/{id}-{slug} (.cz) · /properties-flats-houses/{id}-{slug} (.com)
+    detailId: (p) => firstMatch(/\/(?:nemovitosti-byty-domy|properties-flats-houses)\/(\d+)/, p),
   },
   {
     source: 'idnes',
@@ -151,4 +164,15 @@ export function detailRef(url: string, host: string = location.hostname): Portal
 
 export function isDetailPage(url: string): boolean {
   return detailRef(url) != null;
+}
+
+/* A pasted portal link → the pair the SPA's /listing/:source/:nativeId route
+ * takes, or null when it is not a portal listing's detail URL. Whitespace is
+ * trimmed and a missing scheme assumed https; query and fragment are ignored. A
+ * relative path pins no portal here (the host fallback is empty). */
+export function parsePortalUrl(url: string): { source: string; nativeId: string } | null {
+  const text = url.trim();
+  if (text === '') return null;
+  const ref = detailRef(/^[a-z][a-z\d+.-]*:\/\//i.test(text) ? text : `https://${text}`, '');
+  return ref == null ? null : { source: ref.source, nativeId: ref.sourceId };
 }

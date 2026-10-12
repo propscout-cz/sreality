@@ -38,7 +38,7 @@ import {
   stageBadge,
 } from './glyphs';
 import { STAGE_HOST_CLASS, createStageMark } from './index_stage';
-import { detailRef, type PortalRef } from './portals';
+import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type {
   ApiMessage,
   ApiResult,

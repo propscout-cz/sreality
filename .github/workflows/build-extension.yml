@@ -19,14 +19,17 @@ on:
     branches: [main]
     paths:
       - 'chrome-extension/**'
-      # The extension imports the shared brand from the SPA tree, so a brand
-      # change must re-validate the extension build (manifest name + wordmark).
+      # The extension imports the shared brand and portal-id rules from the SPA
+      # tree, so a change to either must re-validate the extension build
+      # (manifest name + wordmark; content_scripts.matches + the id extractors).
       - 'frontend/src/lib/brand.ts'
+      - 'frontend/src/lib/portalIds.ts'
       - '.github/workflows/build-extension.yml'
   pull_request:
     paths:
       - 'chrome-extension/**'
       - 'frontend/src/lib/brand.ts'
+      - 'frontend/src/lib/portalIds.ts'
       - '.github/workflows/build-extension.yml'
   workflow_dispatch:
 
