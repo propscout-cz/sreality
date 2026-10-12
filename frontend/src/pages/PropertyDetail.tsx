@@ -13,7 +13,7 @@
  * Every advert address ever handed out (`/listing/{source}/{native}`,
  * `/listing/{sreality_id}`, `/listing?property=`) is an alias: `AdvertRedirect`
  * resolves the advert's property and lands here with its row open. */
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useMemo } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -23,7 +23,7 @@ import {
 import { useExploreAreaModal } from '@/components/ExploreAreaModal';
 import { listingTypeLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   fetchAdvertProperty,
   fetchListingsForListingIds,
@@ -38,21 +38,9 @@ import { propertyBrokers } from '@/lib/brokers';
 import { useListingBrokers } from '@/lib/hydration';
 import BrokerContactCard from '@/components/BrokerContactCard';
 import { portalLabel } from '@/lib/portals';
-import {
-  ApiError,
-  fetchPropertyOrigins,
-  verifyListingFreshness,
-  type FreshnessOutcome,
-  type VerifyFreshnessResult,
-} from '@/lib/api';
+import { fetchPropertyOrigins } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import {
-  fmtCzk,
-  fmtPct,
-  fmtRelative,
-  fmtAbsolute,
-  fmtShortDate,
-} from '@/lib/format';
+import { fmtCzk } from '@/lib/format';
 import type {
   ImagePublic,
   ListingPublic,
@@ -60,14 +48,7 @@ import type {
   ListingFreshnessCheckPublic,
   PropertySource,
 } from '@/lib/types';
-import {
-  buildPriceSeries,
-  lowestActivePrice,
-  priceChangeEvents,
-  type PriceAdvert,
-} from '@/lib/priceHistory';
-import { timeLabelFull } from '@/lib/chartAxis';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { lowestActivePrice, type PriceAdvert } from '@/lib/priceHistory';
 import Skeleton from '@/components/Skeleton';
 import { ListingOverview } from '@/components/listing-detail/ListingOverview';
 import PipelineToggle from '@/components/listing-detail/PipelineToggle';
@@ -78,11 +59,13 @@ import DownloadPropertyButton from '@/components/listing-detail/DownloadProperty
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
+import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
+import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
 import { mergedAdvertsKeys, parseLetters, propertyKeys } from '@/lib/mergedAdverts';
 
-const PriceLineChart = lazyChunk(
-  () => import('@/components/listing-detail/PriceLineChart'),
-);
+/* The freshness block moved to its own file (shared with the phone layout);
+ * re-exported so older imports keep resolving. */
+export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
 );
@@ -608,318 +591,6 @@ function MapPinGlyph() {
       />
       <circle cx="8" cy="6" r="1.6" stroke="currentColor" strokeWidth="1.2" />
     </svg>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Price history (every advert's own series · the property's span)            */
-/* -------------------------------------------------------------------------- */
-
-/* One rule per field (decision 18): the span (first / last seen, days on market)
-   is the property's, any advert active; the price-change tiles are the canonical
-   advert's lineage (MS10: its same-portal predecessors, one step per handover),
-   the same `price_change_count` / `total_price_change_pct` Browse filters on. The
-   chart and the dated moves are every advert's own (MS9, MS10); a step drawn
-   there never spans two adverts. */
-function PriceHistoryBlock({
-  property,
-  adverts,
-  snapshots,
-}: {
-  property: PropertyPublic;
-  adverts: PriceAdvert[];
-  snapshots: ListingSnapshotPublic[];
-}) {
-  // Date.now() is captured once at mount (not per render) and threaded into the
-  // pure helpers so they stay deterministic. A per-render `now` gave `series` a
-  // new reference on every staggered query resolution, re-rendering
-  // PriceLineChart mid-measure and tripping recharts' #310 crash.
-  const [now] = useState(() => Date.now());
-  const series = useMemo(
-    () => buildPriceSeries(adverts, snapshots, now),
-    [adverts, snapshots, now],
-  );
-  // Dated price moves, from the same series the chart draws: the exact day and
-  // size of each step (readable even if the chart itself fails to render).
-  const changes = useMemo(() => priceChangeEvents(series), [series]);
-
-  return (
-    <div>
-      <SectionLabel>Price history</SectionLabel>
-
-      <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-4">
-        <Stat
-          label="First seen"
-          value={fmtShortDate(property.first_seen_at)}
-          title={fmtAbsolute(property.first_seen_at)}
-        />
-        <Stat
-          label="Last seen"
-          value={property.is_active ? 'now' : fmtShortDate(property.last_seen_at)}
-          title={fmtAbsolute(property.last_seen_at)}
-        />
-        <Stat label="Days on market" value={String(property.tom_days ?? '—')} mono />
-        <Stat
-          label="Price changes"
-          value={String(property.price_change_count ?? 0)}
-          title="Změny ceny hlavního inzerátu a jeho předchůdců na stejném portálu, včetně kroku při každém novém vložení; seznam pod grafem ukazuje změny všech inzerátů"
-          mono
-        />
-        <Stat
-          label="Price change"
-          value={fmtPct(property.total_price_change_pct, { signed: true })}
-          mono
-          pct={property.total_price_change_pct}
-        />
-      </div>
-
-      {series.length > 0 && (
-        <div className="mt-6">
-          <ErrorBoundary
-            label="price-chart"
-            fallback={
-              <div className="flex h-[230px] items-center justify-center rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule)] text-sm text-[var(--color-ink-3)]">
-                Price chart unavailable
-              </div>
-            }
-          >
-            <Suspense
-              fallback={
-                <div className="h-[230px] rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
-              }
-            >
-              <PriceLineChart series={series} />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      )}
-
-      {changes.length > 0 && (
-        <ul aria-label="Price moves" className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5">
-          {changes.map((c) => (
-            <li
-              key={`${c.seriesId}-${c.t}`}
-              className="flex items-center gap-2 text-[0.78rem] tabular-nums"
-            >
-              <span className="text-[var(--color-ink-2)]">{c.label}</span>
-              <span className="font-mono text-[var(--color-ink-3)]">
-                {timeLabelFull(c.t, 'day')}
-              </span>
-              <span className="font-mono text-[var(--color-ink-3)]">{fmtCzk(c.from)}</span>
-              <span className="text-[var(--color-ink-4)]">→</span>
-              <span className="font-mono text-[var(--color-ink)]">{fmtCzk(c.to)}</span>
-              <span
-                className="font-mono"
-                style={{ color: c.pct > 0 ? 'var(--color-brick)' : 'var(--color-sage)' }}
-              >
-                {fmtPct(c.pct, { signed: true })}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  title,
-  mono,
-  pct,
-}: {
-  label: string;
-  value: string;
-  title?: string;
-  mono?: boolean;
-  pct?: number | null;
-}) {
-  const color =
-    pct == null || pct === 0
-      ? undefined
-      : pct > 0
-        ? 'var(--color-brick)'
-        : 'var(--color-sage)';
-  return (
-    <div>
-      <p className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </p>
-      <p
-        className={['mt-1 text-sm text-[var(--color-ink)]', mono ? 'font-mono tabular-nums' : ''].join(' ')}
-        title={title}
-        style={color ? { color } : undefined}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Freshness checks                                                           */
-/* -------------------------------------------------------------------------- */
-
-export function FreshnessBlock({
-  sreality_id,
-  checks,
-}: {
-  sreality_id: number;
-  checks: ListingFreshnessCheckPublic[];
-}) {
-  const qc = useQueryClient();
-  const count = checks.length;
-
-  const verify = useMutation<VerifyFreshnessResult, Error>({
-    mutationFn: () => verifyListingFreshness(sreality_id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['freshness', sreality_id] });
-      // Bare prefixes: the page's keys are the property id and the advert's
-      // surrogate id, neither of which this component knows.
-      qc.invalidateQueries({ queryKey: ['property'] });
-      qc.invalidateQueries({ queryKey: ['snapshots'] });
-    },
-  });
-
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-4">
-        <SectionLabel>
-          <span>Freshness checks</span>
-          <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
-            ({count})
-          </span>
-        </SectionLabel>
-        <button
-          type="button"
-          onClick={() => verify.mutate()}
-          disabled={verify.isPending}
-          className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {verify.isPending ? 'Ověřuji…' : 'Ověřit aktuálnost'}
-        </button>
-      </div>
-
-      <VerifyResult mutation={verify} />
-
-      {count === 0 ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">
-          No on-demand freshness checks recorded.
-        </p>
-      ) : (
-        <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] bg-[var(--color-paper-2)]">
-                <th className="px-3 py-2 font-medium">Checked</th>
-                <th className="px-3 py-2 font-medium">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...checks]
-                .sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime())
-                .map((c) => (
-                  <tr key={c.id} className="border-t border-[var(--color-rule-soft)]">
-                    <td className="px-3 py-2 text-[var(--color-ink-2)] cursor-help" title={fmtAbsolute(c.checked_at)}>
-                      {fmtRelative(c.checked_at)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <OutcomeChip outcome={c.outcome} />
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VerifyResult({
-  mutation,
-}: {
-  mutation: ReturnType<
-    typeof useMutation<VerifyFreshnessResult, Error>
-  >;
-}) {
-  if (mutation.isPending) {
-    return (
-      <p className="mt-3 text-sm text-[var(--color-ink-3)]">
-        Re-fetching the listing from the source…
-      </p>
-    );
-  }
-  if (mutation.isError) {
-    const err = mutation.error;
-    const msg = err instanceof ApiError ? err.message : err.message;
-    return (
-      <p className="mt-3 text-sm text-[var(--color-brick)]">
-        Verification failed: {msg}
-      </p>
-    );
-  }
-  if (mutation.isSuccess) {
-    const { outcome, what_changed } = mutation.data.data;
-    return (
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-[var(--color-ink-2)]">
-        <OutcomeChip outcome={outcome} />
-        <span>{freshnessOutcomeMessage(outcome, what_changed)}</span>
-      </div>
-    );
-  }
-  return null;
-}
-
-function freshnessOutcomeMessage(
-  outcome: FreshnessOutcome,
-  whatChanged: string[],
-): string {
-  switch (outcome) {
-    case 'unchanged':
-      return 'Still listed — nothing changed since the last snapshot.';
-    case 'updated':
-      return whatChanged.length > 0
-        ? `Still listed — updated: ${whatChanged.join(', ')}.`
-        : 'Still listed — the listing was updated; a new snapshot was recorded.';
-    case 'gone':
-      return 'No longer listed — marked inactive.';
-    case 'cached':
-      return 'Recently verified — still considered fresh, no re-fetch needed.';
-    case 'fetch_error':
-      return 'Could not reach the source listing; nothing was changed.';
-    default:
-      return '';
-  }
-}
-
-function OutcomeChip({ outcome }: { outcome: string }) {
-  const lower = outcome.toLowerCase();
-  let bg = 'var(--color-rule-soft)';
-  let fg = 'var(--color-ink-2)';
-  if (lower === 'unchanged') {
-    bg = 'var(--color-sage-soft)';
-    fg = 'var(--color-sage)';
-  } else if (lower === 'updated' || lower === 'changed') {
-    bg = 'var(--color-copper-soft)';
-    fg = 'var(--color-copper)';
-  } else if (
-    lower === 'gone' ||
-    lower === 'inactive' ||
-    lower === 'error' ||
-    lower === 'fetch_error'
-  ) {
-    bg = 'var(--color-brick-soft)';
-    fg = 'var(--color-brick)';
-  }
-  return (
-    <span
-      className="inline-block px-2 py-0.5 text-[0.65rem] tracking-[0.14em] uppercase rounded-[var(--radius-xs)]"
-      style={{ background: bg, color: fg }}
-    >
-      {outcome}
-    </span>
   );
 }
 

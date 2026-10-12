@@ -106,7 +106,9 @@ export function RunBody({
 }: {
   run: EstimationRun;
   subject: ListingPublic | null;
-  onRerun: (overrides?: RerunOverrides) => void;
+  /* Absent = read-only (the phone, #1767): no re-run controls, the detail
+   * popup still opens. */
+  onRerun?: (overrides?: RerunOverrides) => void;
   rerunPending: boolean;
   rerunError: ApiError | null;
   embedded?: boolean;
@@ -140,13 +142,17 @@ export function RunBody({
         <div className="mt-4">
           <Timeline trace={run.trace} runId={run.id} />
         </div>
-        <Hairline />
-        <RerunBlock
-          run={run}
-          onRerun={onRerun}
-          pending={rerunPending}
-          error={rerunError}
-        />
+        {onRerun && (
+          <>
+            <Hairline />
+            <RerunBlock
+              run={run}
+              onRerun={onRerun}
+              pending={rerunPending}
+              error={rerunError}
+            />
+          </>
+        )}
       </>
     );
   }
@@ -166,13 +172,17 @@ export function RunBody({
       )}
 
       <Hairline />
-      <RerunBlock
-        run={run}
-        onRerun={onRerun}
-        pending={rerunPending}
-        error={rerunError}
-        onShowDetail={() => setDetailOpen(true)}
-      />
+      {onRerun ? (
+        <RerunBlock
+          run={run}
+          onRerun={onRerun}
+          pending={rerunPending}
+          error={rerunError}
+          onShowDetail={() => setDetailOpen(true)}
+        />
+      ) : (
+        <ShowDetailButton onClick={() => setDetailOpen(true)} />
+      )}
 
       {detailOpen && (
         <RunDetailModal run={run} onClose={() => setDetailOpen(false)} />
@@ -1426,6 +1436,18 @@ function adjustStateFromRun(run: EstimationRun): AdjustState {
   };
 }
 
+function ShowDetailButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+    >
+      Show estimation detail
+    </button>
+  );
+}
+
 function RerunBlock({
   run,
   onRerun,
@@ -1472,15 +1494,7 @@ function RerunBlock({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        {onShowDetail && (
-          <button
-            type="button"
-            onClick={onShowDetail}
-            className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-          >
-            Show estimation detail
-          </button>
-        )}
+        {onShowDetail && <ShowDetailButton onClick={onShowDetail} />}
         <button
           type="button"
           disabled={!rerunnable || pending}
