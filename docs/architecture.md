@@ -1138,10 +1138,12 @@ renumber.** Navigate by area:
    `thumb/w1080/{id}/{seq}.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
    builds from the master on its first request (≤ 4 at once, `api/routes/images.py`) and, on any
    failure, swaps for a 5-minute redirect to the master; only the pipeline board's thumbnails and the
-   property page's grid tiles ask for it, and a re-master does not refresh a copy already made (writing
-   copies at download, two widths, waits on the operator's cost hold). Downstream, the image phase's
-   bound is wall-clock (`--image-max-seconds`), not the count cap — per-image cost moved, and a count
-   cap calibrated against the old rate overruns the CI job timeout into a SIGKILL that skips finalize.
+   property page's grid tiles ask for it. **A re-master deletes the copy** right after it overwrites
+   the master (best-effort, `image_storage.copy_key`), so the next request makes it from the new
+   bytes. Writing copies at download (two widths) waits on the operator's cost hold. Downstream, the
+   image phase's bound is wall-clock (`--image-max-seconds`), not the count cap — per-image cost
+   moved, and a count cap calibrated against the old rate overruns the CI job timeout into a SIGKILL
+   that skips finalize.
 7. **No new dependencies without justification.** Each entry in `pyproject.toml` should
    have a clear reason. Prefer the stdlib.
 8. **Latest-wins data model with snapshot history.** The `listings` table always reflects

@@ -14,7 +14,8 @@ shape `-?<id>/<seq>.jpg` so this can never presign the operator-private
 `?w=1080` asks for the phone-size copy instead (#1765): a WebP 1080 px wide at
 `thumb/w1080/<id>/<seq>.webp`, derived from the validated key (never taken from
 the client), made from the full-size photo on its first request and redirected
-to like any photo after that. Any failure serves the full-size photo instead.
+to like any photo after that. Any failure serves the full-size photo instead. A
+re-master that overwrites the photo deletes its copy (scripts/remaster_sreality_images.py).
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ _PRESIGN_ANCHOR_DEFAULT = 86400  # 1 day
 
 # The phone copy. One width by operator ruling (2026-10-12); any other `w` is a 404, so
 # nobody can mint arbitrary sizes into the bucket.
-_COPY_WIDTHS = frozenset({"1080"})
+_COPY_WIDTHS = frozenset(str(w) for w in image_storage.COPY_WIDTHS)
 _COPY_QUALITY = 75
 # A fallback redirect to the full-size photo is cached briefly, so the copy is tried
 # again within minutes instead of being skipped for the hour.
@@ -87,11 +88,6 @@ def r2_client() -> image_storage.R2Client | None:
     if _client is None and image_storage.is_configured():
         _client = image_storage.R2Client.from_env()
     return _client
-
-
-def copy_key(key: str, width: int) -> str:
-    """`thumb/w<width>/<id>/<seq>.webp` for a key `_KEY_RE` has already accepted."""
-    return f"thumb/w{width}/{key.removesuffix('.jpg')}.webp"
 
 
 def make_copy(data: bytes, width: int) -> bytes:
@@ -137,7 +133,7 @@ def _redirect(client: image_storage.R2Client, key: str, max_age: int) -> Redirec
 async def _copy_redirect(
     client: image_storage.R2Client, key: str, width: int
 ) -> RedirectResponse:
-    copy = copy_key(key, width)
+    copy = image_storage.copy_key(key, width)
     try:
         if await asyncio.to_thread(client.object_size, copy) is None:
             await asyncio.wait_for(_COPY_SLOTS.acquire(), _COPY_WAIT_SECONDS)

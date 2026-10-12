@@ -105,14 +105,21 @@ class _Conn:
 
 
 class _R2:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, fail_delete: bool = False) -> None:
         self.puts: list[tuple[str, bytes, str]] = []
+        self.deletes: list[str] = []
         self.fail = fail
+        self.fail_delete = fail_delete
 
     def upload_bytes(self, key: str, data: bytes, content_type: str = "image/jpeg") -> None:
         if self.fail:
             raise RuntimeError("r2 down")
         self.puts.append((key, data, content_type))
+
+    def delete_object(self, key: str) -> None:
+        if self.fail_delete:
+            raise RuntimeError("r2 delete refused")
+        self.deletes.append(key)
 
 
 def _http_error(status: int) -> requests.HTTPError:
@@ -185,6 +192,53 @@ def test_remastered_stamps_master_and_puts_to_the_rows_exact_key(
     assert stamps == [(image_storage.RENDITION_SREALITY_MASTER, 1800, 1200, 4242, None, 9001)]
     # ... and the derived signals were re-armed in the same call.
     assert any("phash = NULL" in sql for sql, _ in conn.statements)
+
+
+def test_an_overwrite_deletes_the_phone_copy_made_from_the_old_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The API makes `thumb/w1080/...` on first request and never re-checks it, so a
+    copy of the old crop would outlive the master that replaced it."""
+    conn = _one_image_conn()
+    r2 = _R2()
+    monkeypatch.setattr(remaster, "_download_bytes", lambda url: JPEG)
+
+    _run(conn, r2)
+
+    assert r2.deletes == ["thumb/w1080/101/0003.webp"]
+
+
+def test_a_failed_copy_delete_logs_and_never_fails_the_remaster(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    conn = _one_image_conn()
+    monkeypatch.setattr(remaster, "_download_bytes", lambda url: JPEG)
+
+    with caplog.at_level(logging.WARNING, logger="remaster_sreality_images"):
+        stats = _run(conn, _R2(fail_delete=True))
+
+    assert stats.remastered == 1 and stats.deferred == 0
+    assert any("copy_delete_failed" in r.message for r in caplog.records)
+
+
+def test_a_failed_overwrite_leaves_the_copy_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    r2 = _R2(fail=True)
+    monkeypatch.setattr(remaster, "_download_bytes", lambda url: JPEG)
+
+    _run(_one_image_conn(), r2)
+
+    assert r2.deletes == []
+
+
+def test_r2_delete_object_is_a_plain_s3_delete() -> None:
+    calls: list[dict[str, str]] = []
+    client = object.__new__(image_storage.R2Client)
+    client.bucket = "sreality-images"
+    client._client = type("_S3", (), {"delete_object": lambda self, **kw: calls.append(kw)})()
+
+    client.delete_object("thumb/w1080/101/0003.webp")
+
+    assert calls == [{"Bucket": "sreality-images", "Key": "thumb/w1080/101/0003.webp"}]
 
 
 def test_stale_url_is_re_resolved_from_the_current_detail(
