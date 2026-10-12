@@ -39,7 +39,7 @@ import socket
 import sys
 import time
 from contextlib import nullcontext, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterable, Iterator, Mapping, Sequence
@@ -366,6 +366,13 @@ RAMP_HEADROOM: float = 0.5
 # for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
 # deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
 BOOTSTRAP_BUDGET_FRACTION: float = 0.75
+# E952: a build's pair budget, in place of `PASS_LIMITS.max_pairs` 150,000: at a 27k-advert store
+# a 30-advert claim already WANTS more (E71's neighbourhood), so every build pass was refused down
+# to about that size. It is a scheduling bound (E75) and the deadline the guard (rolled back, the
+# rate halved): only the new or stale of the wanted are scored, ~1.7 ms and ~6.6 KB each (10-10),
+# so ~175k scored fit the 787.5 s budget beside ~490 s of fixed cost and ~330k the deadline, and
+# all 450k scored would hold ~3 GB of a 24 GB container.
+BOOTSTRAP_PAIR_BUDGET: int = 450_000
 # --- the claim cap (E948) --------------------------------------------------------------------
 #
 # The rate bounds a pass's TIME, never its MEMORY, and the neighbourhood a pass re-reads grows
@@ -2492,6 +2499,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]))
+        limits = (replace(PASS_LIMITS, max_pairs=BOOTSTRAP_PAIR_BUDGET) if bootstrap
+                  else PASS_LIMITS)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2510,7 +2519,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 _exec(conn, RT_IDLE_GUARD_SQL, {"idle_timeout_ms": IDLE_TIMEOUT_MS})
                 pass_now = time.time()
                 result = run_pass_bounded(
-                    store, facts, work, settings, model, calibration, limits=PASS_LIMITS,
+                    store, facts, work, settings, model, calibration, limits=limits,
                     generation=generation, now=pass_now,
                     hold=EvidenceHold(pass_now, EVIDENCE_HORIZON_HOURS * 3600.0),
                     deadline=deadline, stopping=stopping)
@@ -2671,7 +2680,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         summary["scope"] = scope.as_json()
         summary["windows"] = dict(work.windows)
         summary["enter_scan"] = dict(work.enter_scan)
-        summary["claim_bound"] = dict(work.claim_bound)
+        # E952: the pair budget beside the clock's and the cap's: a refusal (`aborted`
+        # "pair_budget", `counts.attempts`) is read against it.
+        summary["claim_bound"] = {**work.claim_bound, "max_pairs": limits.max_pairs}
         summary["rate_doubled"] = doubled
         summary["bootstrap"] = {
             "active": bool(bootstrap),

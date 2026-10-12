@@ -707,7 +707,7 @@ class Limits:
     # Sized from the measurement rather than from a round number: the densest pass over the g6
     # cohort wants {{WANTED_MAX}} pairs at a 200-listing claim, and a block seen for the FIRST
     # time has to score its whole pair set however small the claim is (which is what the seed
-    # backfill, E76, exists to pay once).
+    # backfill, E76, exists to pay once). A build's lane hands the pass a larger one (E952).
     max_pairs: int = 150_000
     max_component: int = 400
 
@@ -842,8 +842,8 @@ class _Working:
         self.fps: dict[int, Fingerprint] = {}
         # E933: who carries CLIP vectors. A gallery is fetched without them unless asked: the
         # probe-key neighbourhood is O(store) a pass and no fingerprint, key, guard, digest or
-        # census reads one. The claim (its refresh records their PRESENCE, E92) and the scored
-        # endpoints ask.
+        # census reads one. The listings a pass refreshed (their row records the vectors'
+        # PRESENCE, E92; read once the pair budget agreed, E952) and the scored endpoints ask.
         self.vectored: set[int] = set()
 
     def ensure(self, ids: Iterable[int], *, clip: bool = False) -> None:
@@ -1105,7 +1105,9 @@ def run_pass(
 
     keyer = Keyer(settings, calibration)
     working = _Working(facts, settings)
-    working.ensure(claimed, clip=True)
+    # Without vectors: nothing up to the budget check reads one, so a refused attempt never
+    # pays for them (E952); the refreshed listings' are read once the budget has agreed.
+    working.ensure(claimed)
     # Everything this pass writes before the budget check goes through the overlay, so a
     # refusal leaves the store exactly as it found it (E75).
     view = _Overlay(store)
@@ -1161,12 +1163,12 @@ def run_pass(
             touched_blocks.add(old.cell_key)
         view.put_listing(
             listing_id,
+            # The evidence (E92) is filled in once the budget has agreed (E952, step 4).
             FpRow(guard_row(fp), digest, cell[0], cell[1], bool(listing.is_active),
-                  evidence_of(working.images.get(listing_id, ())),
                   # The FIRST decision's stamp is carried, never restamped: the evidence
                   # horizon is measured from it, and a refresh that reset it would hold a
                   # merge for ever (E92). The store coalesces it on the way down too.
-                  old.first_decided_at if old is not None else None),
+                  first_decided_at=old.first_decided_at if old is not None else None),
             new_keys, old_keys,
         )
         view.bump_cell(listing)
@@ -1253,6 +1255,12 @@ def run_pass(
             value for key, value in result.timings.items() if key.endswith("_s"))
         return result
 
+    # E92's evidence counts the refreshed listings' CLIP vectors, the one read of the claim the
+    # wanted set does not need: read only now, so a refused attempt never pays it (E952).
+    working.ensure(sorted(changed), clip=True)
+    for listing_id in changed:
+        view.fp[listing_id] = replace(
+            view.fp[listing_id], evidence=evidence_of(working.images.get(listing_id, ())))
     view.apply()
     dropped = [key for key in stored if key not in wanted]
     if dropped:
