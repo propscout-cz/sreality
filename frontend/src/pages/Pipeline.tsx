@@ -20,12 +20,13 @@ import {
 } from '@/lib/api';
 import {
   curationKeys,
-  fetchPipelineBoard,
-  fetchPipelineStages,
   fetchPropertyCollectionMemberSet,
   matchesDistricts,
   pipelineKeys,
 } from '@/lib/queries';
+import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
+import { usePhoneShell } from '@/lib/phoneShell';
+import PhonePipeline from '@/components/phone/PhonePipeline';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { useLegacyChipUpgrade } from '@/lib/useLegacyChipUpgrade';
@@ -86,7 +87,15 @@ const CATEGORY_MAIN_OPTIONS = enumOptions('category_main');
 /* One stable empty board, so every memo below can depend on `cards` itself. */
 const NO_CARDS: PipelineBoardCard[] = [];
 
+/* One route, two faces: under the phone shell the stages are swiped pages
+ * (#1768 — no drag, no stage management, #1760 Q8/Q13), and the kanban below,
+ * with its drag sensors and stage editor, is never mounted. Both read the same
+ * two cache entries (lib/pipelineReads) and write through usePipelineCard. */
 export default function Pipeline() {
+  return usePhoneShell() ? <PhonePipeline /> : <PipelineBoardPage />;
+}
+
+function PipelineBoardPage() {
   const [manage, setManage] = useState(false);
   /* Filters AND sort live in the URL (lib/pipelineState) using Browse's own
    * param vocabulary, so a filtered/sorted board is linkable and survives a
@@ -114,16 +123,8 @@ export default function Pipeline() {
    * a shared link carries which deals to look at, not how this browser likes
    * its photos. Same split Browse draws for its own image-size switch. */
   const cardSize = usePipelineCardSize();
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
-  const boardQ = useQuery({
-    queryKey: pipelineKeys.board,
-    queryFn: fetchPipelineBoard,
-    staleTime: 30_000,
-  });
+  const stagesQ = usePipelineStages();
+  const boardQ = usePipelineBoard();
 
   /* The collection lens (rule #18), on the two keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
