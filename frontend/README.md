@@ -171,15 +171,18 @@ cross-origin rule.
 Under 768 px wide, `Shell.tsx` renders the routes inside the phone frame
 (`src/components/phone/PhoneShell.tsx`) instead of the desktop top bar:
 an `h-14` header (never taller — the Browse and Pipeline panes pin to
-3.5 rem), a four-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři) and an
-account sheet. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
+3.5 rem), a five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
+`/link`) and an account sheet. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
 account sheet's "Desktopová verze" sets a per-device override
 (`localStorage` `sreality.phone.desktopView`) and the desktop account menu's
 "Mobilní verze" clears it. Pages are not forked: a route without a phone
 design renders its desktop page inside the frame. The feed (`/feed`,
 `src/pages/Feed.tsx`) reuses Browse's read layer; its cards are
-`src/components/phone/FeedCard.tsx`. To see the frame on a desktop
-browser, narrow the window below 768 px or use the device toolbar.
+`src/components/phone/FeedCard.tsx`. The property page draws
+`src/components/phone/PhoneProperty.tsx` from `PropertyDetail`'s own reads;
+Odkaz (`src/pages/Link.tsx`) takes a pasted portal link to
+`/listing/:source/:nativeId`. To see the frame on a desktop browser, narrow
+the window below 768 px or use the device toolbar.
 
 ### Build-time vs runtime env vars
 
