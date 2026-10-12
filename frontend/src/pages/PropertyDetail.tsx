@@ -61,6 +61,7 @@ import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
 import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
+import PhoneProperty from '@/components/phone/PhoneProperty';
 import { mergedAdvertsKeys, parseLetters, propertyKeys } from '@/lib/mergedAdverts';
 import { usePhoneShell } from '@/lib/phoneShell';
 import type { PastedLinkState } from '@/pages/Link';
@@ -203,6 +204,10 @@ export default function PropertyDetail() {
       : null,
   );
 
+  // The phone frame's own layout (#1767): reading + curation, no maps, no
+  // estimation runs. Read above the early returns (#310); the reads stay here.
+  const phone = usePhoneShell();
+
   if (propertyId == null) return <NotFoundState id={idParam ?? null} />;
   if (propertyQ.isLoading) return <LoadingState />;
   if (propertyQ.error) return <FailedState error={propertyQ.error} />;
@@ -210,6 +215,26 @@ export default function PropertyDetail() {
 
   const images = imagesQ.data ?? [];
   const advertIds = sources.length > 0 ? sources.map((s) => s.id) : [property.id];
+
+  if (phone) {
+    return (
+      <PhoneProperty
+        property={property}
+        sources={sources}
+        sourcesFailed={sourcesFailed}
+        onRetrySources={() => void sourcesQ.refetch()}
+        adDetails={detailsQ.data}
+        images={images}
+        imagesLoading={imagesQ.isLoading}
+        chartAdverts={chartAdverts}
+        snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
+        checks={checksQ.data ?? []}
+        priceNote={priceNote}
+        advertIds={advertIds}
+        openedAdvertId={advertParam}
+      />
+    );
+  }
 
   return (
     <Page>
@@ -655,7 +680,12 @@ function MapPinGlyph() {
 /* Loading / failed / 404 states                                              */
 /* -------------------------------------------------------------------------- */
 
+/* The phone frame draws its own back affordance, so its states drop the crumb. */
 function LoadingState() {
+  const phone = usePhoneShell();
+  if (phone) {
+    return <div className="px-4 py-8 text-[14px] text-[var(--color-ink-3)]">Načítám…</div>;
+  }
   return (
     <Page>
       <Crumb />
@@ -665,6 +695,14 @@ function LoadingState() {
 }
 
 function FailedState({ error }: { error: Error }) {
+  const phone = usePhoneShell();
+  if (phone) {
+    return (
+      <div className="px-4 py-8 text-[14px] text-[var(--color-brick)]">
+        Nepodařilo se načíst: {error.message}
+      </div>
+    );
+  }
   return (
     <Page>
       <Crumb />
@@ -674,6 +712,22 @@ function FailedState({ error }: { error: Error }) {
 }
 
 function NotFoundState({ id }: { id: string | null }) {
+  const phone = usePhoneShell();
+  if (phone) {
+    return (
+      <div className="px-4 py-8">
+        <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
+          Nenalezeno
+        </p>
+        <h2 className="mt-2 font-display text-[22px] font-medium leading-tight text-[var(--color-ink)]">
+          {id == null ? 'Nic nevybráno' : 'Tuto nemovitost nemáme'}
+        </h2>
+        {id != null && (
+          <p className="mt-2 break-all font-mono text-[12px] tabular-nums text-[var(--color-ink-2)]">{id}</p>
+        )}
+      </div>
+    );
+  }
   return (
     <Page>
       <Crumb />

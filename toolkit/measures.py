@@ -713,6 +713,19 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "The card itself spells no unit (FeedCard.tsx reads fmtMeasuredPricePerM2).",
     ),
     RegisteredSite(
+        path="frontend/src/components/phone/PhoneProperty.test.tsx",
+        arm="unit",
+        hits=4,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="Pins the phone property page's price header (#1767): a sale renders "
+        "the capital unit and a rent the MONTHLY one beside its '/měs' price — "
+        "each the server's measure under the server's basis token through the "
+        "feed card's shared helper — and a NULL basis renders no per-m² figure "
+        "at all. The page itself spells no unit (PhoneProperty.tsx and "
+        "PropertySections.tsx read fmtMeasuredPricePerM2 / feedPricePerM2).",
+    ),
+    RegisteredSite(
         path="frontend/src/lib/growthChoropleth.test.ts",
         arm="unit",
         hits=2,

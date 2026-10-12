@@ -18,6 +18,7 @@ import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { usePhoneShell } from '@/lib/phoneShell';
 import {
   keepPreviousData,
   useMutation,
@@ -1097,6 +1098,8 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   /* Shared hover id — drives the bidirectional table↔map highlight. */
   const [hoveredId, setHoveredId] = useState<number | null>(null);
+  /* The phone frame draws no maps (#1760 Q10): the table alone carries the comparables. */
+  const phone = usePhoneShell();
 
   const listingsQ = useQuery<Map<number, ListingPublic>, Error>({
     queryKey: ['estimation-comparables', 'listings', cids.join(',')],
@@ -1186,7 +1189,7 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
         </p>
       </div>
 
-      {subjectLat != null && subjectLng != null && mapPoints.length > 0 && (
+      {!phone && subjectLat != null && subjectLng != null && mapPoints.length > 0 && (
         <div className="mt-4">
           <Suspense
             fallback={
