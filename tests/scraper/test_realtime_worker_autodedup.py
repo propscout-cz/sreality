@@ -128,7 +128,7 @@ def _stub_engine(monkeypatch: pytest.MonkeyPatch, result: Any) -> dict[str, Any]
 def _summary(**over: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "counts": {"claimed": 12, "pairs_scored": 40, "clusters_written": 3, "held": 1,
-                   "retired": 0},
+                   "retired": 0, "wanted_pairs": 52, "attempts": 1, "wanted_by_attempt": [52]},
         "aborted": "",
         "latency_s": {"n": 12, "p50": 310.2, "p95": 355.0},
         "claim_bound": {"bound_by": "count", "limit": 100},
@@ -299,6 +299,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # memory was handed back, before the pass began and as it ended
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "rss_at_start_mb": 290.0, "rss_after_trim_mb": 301.5,
+        # E952: the claims the pass made, each one's wanted pair set and the last's, no refusal
+        "attempts": 1, "wanted_pairs": 52, "wanted_by_attempt": [52], "aborted": None,
     }
     for gone in ("AUTODEDUP_PASS_DEADLINE_SECONDS", "AUTODEDUP_PASS_BUDGET_SECONDS",
                  "_AUTODEDUP_BACKOFF", "_DeadlineConnection", "_AutodedupDeadline"):
@@ -393,6 +395,33 @@ def test_an_aborted_pass_ran_but_counts_as_an_error(monkeypatch: pytest.MonkeyPa
 
     assert last["ran"] is True and last["errors"] == 1
     assert last["aborted"].startswith("max_pairs")
+
+
+@pytest.mark.parametrize("counts, aborted, expected", [
+    # E952 (2026-10-12): refused twice by the pair budget, the third, smaller claim committed
+    ({"attempts": 3, "wanted_pairs": 141_207,
+      "wanted_by_attempt": [168_870, 158_112, 141_207]}, "",
+     (3, 141_207, [168_870, 158_112, 141_207], None, 0)),
+    # every claim of the ladder refused: each one's wanted set, the last one's, and why
+    ({"attempts": 4, "wanted_pairs": 151_384,
+      "wanted_by_attempt": [212_904, 180_255, 160_031, 151_384]}, "pair_budget",
+     (4, 151_384, [212_904, 180_255, 160_031, 151_384], "pair_budget", 1)),
+    # a pass the engine did not see to its end (a deadline) has no count to report
+    ({}, "deadline", (None, None, None, "deadline", 1)),
+])
+def test_the_heartbeat_carries_the_pass_s_attempts(monkeypatch: pytest.MonkeyPatch, counts,
+                                                  aborted, expected) -> None:
+    """E952: a pair-budget refusal is visible in production — `attempts` (each refusal
+    re-claims a quarter of the claim made, E75), each claim's `wanted_by_attempt`, the
+    `wanted_pairs` of the last and `aborted` (None once the pass committed)."""
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: _Conn())
+    _settings(monkeypatch)
+    _stub_engine(monkeypatch, _summary(counts={"claimed": 31, **counts}, aborted=aborted))
+
+    last = rw._autodedup_sync()
+
+    assert (last["attempts"], last["wanted_pairs"], last["wanted_by_attempt"], last["aborted"],
+            last["errors"]) == expected
 
 
 def test_any_other_failure_is_the_lanes_failed_pass_and_closes_the_connection(
@@ -492,6 +521,29 @@ def test_one_worker_pass_is_the_engines_pass(world, tmp_path, monkeypatch) -> No
         assert targets, "the pass wrote nothing"
         assert all(t.startswith("autodedup.") for t in targets), sorted(targets)
         assert world.statements_in_tx, "the pass ran as the engine's one transaction"
+
+
+def test_a_pass_the_build_s_pair_budget_refuses_reports_its_attempts(world, tmp_path,
+                                                                     monkeypatch) -> None:
+    """E952, driven for real: a build whose pair budget nothing fits makes the ladder's four
+    claims (the clock's, then a quarter of each claim made), and the heartbeat says so, with
+    each claim's wanted set; a committed pass reports one attempt and no refusal."""
+    seed_lane(world, tmp_path)
+    _worker_on(monkeypatch, world)
+    budget = incremental_lane.BOOTSTRAP_PAIR_BUDGET
+    monkeypatch.setattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET", -1)
+
+    refused = rw._autodedup_sync()
+
+    assert (refused["ran"], refused["errors"], refused["aborted"]) == (True, 1, "pair_budget")
+    assert (refused["attempts"], refused["wanted_pairs"]) == (4, 0)
+    assert len(refused["wanted_by_attempt"]) == 4 and refused["wanted_by_attempt"][-1] == 0
+    monkeypatch.setattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET", budget)
+
+    ran = rw._autodedup_sync()
+
+    assert (ran["errors"], ran["aborted"], ran["attempts"]) == (0, None, 1)
+    assert ran["wanted_pairs"] > 0 and ran["wanted_by_attempt"] == [ran["wanted_pairs"]]
 
 
 def test_a_worker_pass_inside_a_seed_is_a_green_skip(world, tmp_path, monkeypatch) -> None:

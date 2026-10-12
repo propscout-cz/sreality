@@ -2214,9 +2214,14 @@ def _autodedup_outcome(
             # E949: what the engine's body and token memos held at the pass's end, before it
             # emptied them.
             memo_entries=summary.get("memo_entries"),
+            # E952: the claims the pass made (each the pair budget refused re-claims a quarter
+            # of the claim made, E75), each one's wanted pair set and the last's, and why the
+            # pass stopped (None: committed).
+            attempts=counts.get("attempts"),
+            wanted_pairs=counts.get("wanted_pairs"),
+            wanted_by_attempt=counts.get("wanted_by_attempt"),
+            aborted=aborted[:AUTODEDUP_REASON_CHARS] or None,
         )
-        if aborted:
-            last["aborted"] = aborted[:AUTODEDUP_REASON_CHARS]
     return last
 
 
