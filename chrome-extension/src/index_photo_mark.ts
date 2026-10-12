@@ -1,16 +1,19 @@
-/* The deal-pipeline stage drawn OVER a search-page card's photo, so a property
- * in the pipeline reads from across the grid: the photo toned in the stage's
- * colour (the operator's, copper when none — glyphs.stageAccent) with the
- * stage's badge set large on it and its name beneath. The funnel in the card's
- * cluster stays the control; this is only the mark (aria-hidden — the funnel's
- * label already says the stage). Hovering the card lifts the tone to show the
- * photo.
+/* The operator's state drawn OVER a search-page card's photo, so it reads from
+ * across the grid:
+ *   pipeline   — the photo toned in the stage's colour (the operator's, copper
+ *                when none — glyphs.stageAccent), the stage's badge and name
+ *                set over it. Hovering the card lifts the tone to show the photo.
+ *   collection — a copper rim round the photo and a copper tag in its top-right
+ *                corner naming the collection (+N for more). The photo keeps
+ *                its colours, so a saved card never reads as a stage.
+ * A property can carry both. The card's cluster stays the control; this is
+ * only the mark (aria-hidden — the funnel's and bookmark's labels say it).
  *
  * The photo is found by geometry, not markup, like the card itself: the
  * largest image the card shows, cut to the boxes that clip it, each corner
  * rounded like the clipping box whose corner it shares. Re-measured when the
  * card or the photo resizes and when an image in the card loads. No photo
- * found → no mark; the funnel's badge still says the stage.
+ * found → no mark; the cluster still says it all.
  *
  * Its host is a second element in the card, beside the cluster's. The host
  * makes no stacking context: the tone layers blend with the photo, and a blend
@@ -19,22 +22,24 @@
  * hosts' order in the card. */
 
 import tokens from './tokens.css?inline';
-import { stageAccent } from './glyphs';
+import { bookmarkIconSvg, stageAccent } from './glyphs';
 
-export const STAGE_HOST_CLASS = '__mf_stage_host';
+export const PHOTO_MARK_HOST_CLASS = '__mf_photo_mark_host';
 /* Anything smaller is a broker logo or an icon, not the listing's photo. */
 const MIN_PHOTO_SIDE = 80;
 const FRAME_INSET = 10;
 
-export interface StageMarkView {
-  color: string | null;
-  badge: string | null;
-  label: string | null;
+export interface PhotoMarkView {
+  /* The deal's stage; null out of the pipeline. */
+  stage: { color: string | null; badge: string | null; label: string | null } | null;
+  /* The names of the collections the property sits in, checklist order — empty
+   * while the list is loading; null when it is in none. */
+  collections: string[] | null;
 }
 
-export interface StageMark {
-  /* null takes the mark down (out of the pipeline, or the card is veiled). */
-  show: (view: StageMarkView | null) => void;
+export interface PhotoMark {
+  /* null takes the mark down (nothing to say, or the card is veiled). */
+  show: (view: PhotoMarkView | null) => void;
   destroy: () => void;
 }
 
@@ -56,8 +61,8 @@ const css = (cardAttr: string): string => `
     display: block !important; pointer-events: none !important;
   }
   [hidden] { display: none !important; }
-  .box { position: absolute; }
-  .tone, .shade, .face {
+  .box { position: absolute; font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  .tone, .shade, .face, .rim {
     position: absolute; inset: 0; z-index: 899; border-radius: inherit;
     transition: opacity 220ms ease;
   }
@@ -67,27 +72,37 @@ const css = (cardAttr: string): string => `
   .face {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     overflow: hidden; container-type: size; color: #fff; text-align: center;
-    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-    text-shadow: 0 1px 18px rgba(0, 0, 0, 0.28);
+    text-shadow: 0 1px 12px rgba(0, 0, 0, 0.3);
   }
   .frame {
     position: absolute; inset: ${FRAME_INSET}px;
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.45);
   }
   .badge {
-    font-size: clamp(40px, min(50cqh, 40cqw), 168px); font-weight: 300;
-    line-height: 0.8; letter-spacing: -0.04em;
+    font-size: clamp(22px, min(20cqh, 16cqw), 64px); font-weight: 300;
+    line-height: 0.85; letter-spacing: -0.02em; opacity: 0.9;
     font-variant-numeric: lining-nums tabular-nums; white-space: nowrap;
   }
   .rule {
-    width: 28px; height: 1px; flex-shrink: 0; background: rgba(255, 255, 255, 0.75);
-    margin: clamp(10px, 5cqh, 20px) 0 clamp(7px, 3cqh, 12px);
+    width: 20px; height: 1px; flex-shrink: 0; background: rgba(255, 255, 255, 0.6);
+    margin: clamp(6px, 3cqh, 10px) 0 clamp(5px, 2cqh, 8px);
   }
   .label {
     max-width: calc(100% - 48px); overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; font-size: clamp(10px, 4cqh, 13px); font-weight: 600;
-    line-height: 1.2; letter-spacing: 0.22em; text-transform: uppercase;
+    white-space: nowrap; font-size: clamp(9px, 3.4cqh, 11px); font-weight: 600;
+    line-height: 1.2; letter-spacing: 0.2em; text-transform: uppercase; opacity: 0.9;
   }
+  .rim { box-shadow: inset 0 0 0 3px var(--copper); }
+  .tag {
+    position: absolute; top: 6px; right: 6px; z-index: 899;
+    box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px;
+    max-width: 55%; height: 24px; padding: 0 8px 0 6px;
+    font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: 0.02em;
+    color: #fff; background: var(--copper); white-space: nowrap;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  }
+  .tag svg { width: 13px; height: 13px; flex-shrink: 0; }
+  .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   :host-context([${cardAttr}]:hover) .tone { opacity: 0.25; }
   :host-context([${cardAttr}]:hover) .shade { opacity: 0.15; }
   @media (prefers-reduced-motion: reduce) { .tone, .shade, .face { transition: none; } }
@@ -177,12 +192,20 @@ function place(card: HTMLElement, host: HTMLElement): Placement | null {
 
 const px = (radii: number[]): string => radii.map((r) => `${Math.round(r * 10) / 10}px`).join(' ');
 
-export function createStageMark(card: HTMLElement, cardAttr: string): StageMark {
+/* The tag's words: the first collection's name, "+N" for the rest; before the
+ * names load, the glyph alone. */
+function tagText(names: string[]): string {
+  if (names.length === 0) return '';
+  return names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
+}
+
+export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark {
   let host: HTMLElement | null = null;
   let parts: {
-    box: HTMLElement; frame: HTMLElement; badge: HTMLElement; rule: HTMLElement; label: HTMLElement;
+    box: HTMLElement; stage: HTMLElement[]; frame: HTMLElement; badge: HTMLElement;
+    rule: HTMLElement; label: HTMLElement; rim: HTMLElement; tag: HTMLElement; tagName: HTMLElement;
   } | null = null;
-  let view: StageMarkView | null = null;
+  let view: PhotoMarkView | null = null;
   let shown = '';
   let watched: Element | null = null;
   let frame: number | null = null;
@@ -191,7 +214,7 @@ export function createStageMark(card: HTMLElement, cardAttr: string): StageMark 
 
   function build(): NonNullable<typeof parts> {
     host = document.createElement('div');
-    host.className = STAGE_HOST_CLASS;
+    host.className = PHOTO_MARK_HOST_CLASS;
     const shadow = host.attachShadow({ mode: 'closed' });
     const style = document.createElement('style');
     style.textContent = css(cardAttr);
@@ -204,11 +227,15 @@ export function createStageMark(card: HTMLElement, cardAttr: string): StageMark 
     box.setAttribute('aria-hidden', 'true');
     box.hidden = true;
     const face = div('face');
+    const tag = div('tag');
     const built = {
-      box, frame: div('frame'), badge: div('badge'), rule: div('rule'), label: div('label'),
+      box, stage: [div('tone'), div('shade'), face], frame: div('frame'), badge: div('badge'),
+      rule: div('rule'), label: div('label'), rim: div('rim'), tag, tagName: div('tag-name'),
     };
     face.append(built.frame, built.badge, built.rule, built.label);
-    box.append(div('tone'), div('shade'), face);
+    tag.innerHTML = bookmarkIconSvg(true);
+    tag.append(built.tagName);
+    box.append(...built.stage, built.rim, tag);
     shadow.append(style, box);
     card.appendChild(host);
     resizes.observe(card);
@@ -238,7 +265,7 @@ export function createStageMark(card: HTMLElement, cardAttr: string): StageMark 
       : [at.top, at.left, at.width, at.height, ...at.radii].map(Math.round).join(',');
     if (key === shown) return;
     shown = key;
-    const { box, frame: rim } = parts;
+    const { box, frame: hairline } = parts;
     box.hidden = at == null;
     if (at == null) return;
     box.style.top = `${at.top}px`;
@@ -246,10 +273,10 @@ export function createStageMark(card: HTMLElement, cardAttr: string): StageMark 
     box.style.width = `${at.width}px`;
     box.style.height = `${at.height}px`;
     box.style.borderRadius = px(at.radii);
-    rim.style.borderRadius = px(at.radii.map((r) => Math.max(0, r - FRAME_INSET)));
+    hairline.style.borderRadius = px(at.radii.map((r) => Math.max(0, r - FRAME_INSET)));
   }
 
-  function show(next: StageMarkView | null): void {
+  function show(next: PhotoMarkView | null): void {
     if (JSON.stringify(next) === JSON.stringify(view)) return;
     view = next;
     if (next == null) {
@@ -258,13 +285,22 @@ export function createStageMark(card: HTMLElement, cardAttr: string): StageMark 
       return;
     }
     parts ??= build();
-    const { box, badge, rule, label } = parts;
-    box.style.setProperty('--stage', stageAccent(next.color).fg);
-    badge.textContent = next.badge ?? '';
-    badge.hidden = next.badge == null;
-    label.textContent = next.label ?? '';
-    label.hidden = next.label == null;
-    rule.hidden = next.badge == null || next.label == null;
+    const { box, stage, badge, rule, label, rim, tag, tagName } = parts;
+    const s = next.stage;
+    for (const layer of stage) layer.hidden = s == null;
+    if (s != null) {
+      box.style.setProperty('--stage', stageAccent(s.color).fg);
+      badge.textContent = s.badge ?? '';
+      badge.hidden = s.badge == null;
+      label.textContent = s.label ?? '';
+      label.hidden = s.label == null;
+      rule.hidden = s.badge == null || s.label == null;
+    }
+    rim.hidden = next.collections == null;
+    tag.hidden = next.collections == null;
+    const text = tagText(next.collections ?? []);
+    tagName.textContent = text;
+    tagName.hidden = text === '';
     shown = '';
     measure();
   }
