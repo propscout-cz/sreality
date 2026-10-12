@@ -2138,7 +2138,7 @@
     {
       "filename": "frontend-build.yml",
       "name": "CI: frontend build",
-      "description": "Builds the frontend/ Vite SPA on every push or pull request that touches frontend code, to catch build/type errors before deploy. Type-checks, lints for Rules of Hooks, builds the production bundle, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
+      "description": "Builds the frontend/ Vite SPA on every push or pull request that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
       "portal": null,
       "manual": false,
       "schedules": [],

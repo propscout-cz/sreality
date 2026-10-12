@@ -690,6 +690,24 @@ rules. Identify which one a task belongs to before you start.
   invisibly by `lazyChunk`. Every uncertainty — failed probe, non-OK response, unhashed dev
   entry — reads as "no news", because a false positive here is a toast telling the operator
   to reload a tab that is already current.
+- **The SPA is installable, and its service worker never decides which build runs**
+  (`frontend/public/manifest.webmanifest`, `public/sw.js`, `src/lib/serviceWorker.ts`; the
+  Phone app map #1759, design #1764). The manifest uses root-relative URLs only, so a host
+  move costs a reinstall and nothing else. The worker is hand-written and caches by URL,
+  never by build, so it does not change when the app deploys: page navigations go to the
+  network first (navigation preload; the last good `index.html` only after 3 s, offline or
+  on a 5xx; the URL never rewritten) and same-origin `/assets/*` is cache-first (200s only,
+  newest 200, 14 days). Nothing else is answered — not the API or its `/images` redirects,
+  not Supabase, not buildSkew's `/index.html` probe. Each kind of staleness has one owner:
+  the running document is buildSkew's (unchanged, plus one probe 10 s after mount when a
+  worker controls the page, since that page may have booted from the cached shell); the
+  cached shell is the navigation handler's (refreshed on every online navigation); the
+  worker script is the browser's plus an hourly `registration.update()` on resume (a
+  resumed iPhone app is not a navigation). No worker code reloads a page; "offered, never
+  imposed" holds (#1771), and a chunk 404 still goes to `lazyChunk`, whose reload lands on
+  the network-first `index.html`. Retiring it is a deploy, never a deletion: a deleted
+  `sw.js` leaves the installed worker running, so the file is replaced by the
+  self-unregistering version in its header and registration flips to unregister.
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical

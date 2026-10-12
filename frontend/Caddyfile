@@ -29,6 +29,41 @@
 		file_server
 	}
 
+	# The installable shell's own files: a real file or a real 404, never the
+	# SPA fallback below. A missing /sw.js answered 200 text/html fails
+	# registration, and an installed worker whose script fails its update
+	# check stays installed — so these must never reach try_files. Each
+	# handle block is exclusive; single-path blocks sort before the
+	# matcher-less catch-all, the named @icons one keeps its place above it,
+	# and file_server's 404 goes through handle_errors (no-store). Content
+	# types are explicit because the caddy:2-alpine tag floats and
+	# file_server sends none for an extension its MIME table lacks.
+	#
+	# The service worker: no-cache (the browser already skips its HTTP cache
+	# for this script; proxies must too). Never delete public/sw.js — retire
+	# it with the self-unregistering version described in its header.
+	handle /sw.js {
+		header Cache-Control "no-cache"
+		header Content-Type "text/javascript; charset=utf-8"
+		header X-Content-Type-Options "nosniff"
+		file_server
+	}
+
+	# The web app manifest: iOS reads it once, at install.
+	handle /manifest.webmanifest {
+		header Cache-Control "no-cache"
+		header Content-Type "application/manifest+json"
+		file_server
+	}
+
+	# Home-screen and tab icons; Safari probes the two apple-touch names on
+	# its own, so the one we do not ship answers 404, not the shell.
+	@icons path /icons/* /apple-touch-icon.png /apple-touch-icon-precomposed.png /favicon.ico
+	handle @icons {
+		header Cache-Control "public, max-age=86400"
+		file_server
+	}
+
 	# Everything else: SPA fallback to /index.html, no aggressive cache.
 	handle {
 		header Cache-Control "public, max-age=0, must-revalidate"
