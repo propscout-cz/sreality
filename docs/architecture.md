@@ -708,6 +708,23 @@ rules. Identify which one a task belongs to before you start.
   the network-first `index.html`. Retiring it is a deploy, never a deletion: a deleted
   `sw.js` leaves the installed worker running, so the file is replaced by the
   self-unregistering version in its header and registration flips to unregister.
+- **One SPA, two frames: the phone shell is chosen by screen width, and the routes do not
+  change** (`frontend/src/lib/phoneShell.ts`, `components/phone/`; the Phone app map #1759, W1
+  #1766). `usePhoneShell()` is `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
+  override (`localStorage` `sreality.phone.desktopView`, set from the phone's account sheet and
+  cleared from the desktop account menu's "Mobilní verze"; flipping it reloads). When it is on,
+  `Shell` renders the same `<Outlet>` inside a phone frame — an `h-14` header (the 3.5 rem that
+  `top-14` / `calc(100dvh-3.5rem)` in Filters, BrowseExperience and Pipeline depend on), a
+  bottom tab bar for the W1 areas, toasts above it — instead of the TopBar and footer; every
+  route outside those areas renders its desktop page inside it, cramped but reachable, and the
+  desktop frame is untouched. `/` redirects to `/feed` on the phone frame, `/browse` otherwise.
+  The feed (`pages/Feed.tsx`) adds no query path: it is Browse's `fetchListingsForCards` under
+  Browse's query key (so dismissal, merge and pipeline sweeps reach it), presets applied the way
+  Browse loads them, and a phone menu is the desktop menu's body in a bottom sheet
+  (`PipelineStageMenuBody`, `CollectionSaveList`) over `lib/useDialog`. The one new read is the
+  "Skryté" roll (`fetchDismissedCards`): Browse has no hidden-only lens, and the dismissed set
+  may not ride in a URL, so it reads one page of the caller's dismissals at a time and those
+  properties' card rows from the plain `browse_list`.
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical

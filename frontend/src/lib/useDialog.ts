@@ -9,9 +9,10 @@
  * and three with focus-theft effects that re-ran on a prop change and yanked
  * focus back out of whatever the operator had tabbed to.
  *
- * This is a HOOK and not only a component because two dialogs own bespoke
+ * This is a HOOK and not only a component because three dialogs own bespoke
  * chrome that <Dialog> cannot render — estimation/RunPanel is a side sheet
- * with its own layout, ImageLightbox is a full-bleed viewer — and they must
+ * with its own layout, ImageLightbox is a full-bleed viewer, the phone shell's
+ * phone/BottomSheet rises from the bottom edge — and they must
  * still get the same Escape, focus and scroll-lock behaviour. <Dialog>
  * (components/Dialog.tsx) is this hook plus the standard backdrop + panel.
  *

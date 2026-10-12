@@ -7,7 +7,7 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
-### Phone app (in progress — map [#1759](https://github.com/waiff/sreality/issues/1759))
+### Phone app (W1 merged 2026-10-12, closes on the install walk; W2–W4 next — map [#1759](https://github.com/waiff/sreality/issues/1759))
 - The platform on the operator's iPhone home screen: the same SPA at the same address, a
   phone shell by screen width. Waves W0 prototype → W1 feed → W2 property page → W3 pipeline
   → W4 collections + brokers; a wave closes on the operator's install walk, not the merge.
@@ -15,8 +15,23 @@ toolkit work.
   self-hosted fonts, `manifest.webmanifest` + icons (`frontend/scripts/make-icons.py`), the iOS
   meta tags, and a version-agnostic `public/sw.js` (navigations network-first, `/assets/*`
   cache-first; buildSkew stays the update signal). Decided in #1763 and #1764. No phone layout yet.
-- Next in W1: per-account presets (#1761), the 1080 px photo copy on first request (#1765), the
-  feed route (it becomes the manifest's `start_url`), then the install walk on the iPhone.
+- **W1 slices: per-account presets** ([#1775](https://github.com/waiff/sreality/pull/1775)) and **the
+  1080 px photo copy on first request** ([#1776](https://github.com/waiff/sreality/pull/1776)).
+- **W1 slice: the phone shell and the feed** (#1766): under 768 px `Shell.tsx` renders the routes in
+  a phone frame (`components/phone/`, `lib/phoneShell.ts`) — an `h-14` header with the page title,
+  a back affordance and the account sheet (theme, "Desktopová verze" = a per-device override, sign
+  out); a four-tab bar (Nové, Pipeline, Sbírky, Makléři) hidden while typing. Every other route
+  keeps its desktop page inside it. `/feed` ("Nové", the manifest's `start_url`, `/` on the phone)
+  is Browse's read newest first (`fetchListingsForCards`, keyset, `CARD_COLS`, Browse's query key)
+  with "Vše" + the account's presets (remembered per device), portal chips (one portal = that
+  portal's newest-ad order) and "Skryté" (the hidden properties only, a page of dismissals at a
+  time); Prague day rules with refresh; the prototype's card: the 1080 px cover, the margin of
+  marks (`usePipelineCard`, the collection list, `useDismissal` — the stage and collection menus
+  are the desktop bodies in a bottom sheet), the extension's stage wash, per-m² through
+  `lib/measure` (rule 23).
+- Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
+  `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
+  reading + curation and the paste box (the fifth tab, Odkaz).
 - **W2 groundwork: one set of portal-id rules** (#1767): the extension's URL→`(source, native id)`
   rules moved to `frontend/src/lib/portalIds.ts`, imported by the extension cross-tree like
   `lib/brand.ts`; `parsePortalUrl` is what the paste-a-link box calls to land on
