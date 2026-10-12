@@ -778,7 +778,8 @@
       "paths": [
         ".github/workflows/build-extension.yml",
         "chrome-extension/**",
-        "frontend/src/lib/brand.ts"
+        "frontend/src/lib/brand.ts",
+        "frontend/src/lib/portalIds.ts"
       ],
       "inputs": [],
       "secrets": [
