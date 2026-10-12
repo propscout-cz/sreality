@@ -341,11 +341,12 @@ BOOTSTRAP_MIN_CLAIM: int = 1
 # The claim is bounded by SECONDS as well as by counts: every pass measures its OWN rate (claimed
 # listings per second of pass wall time, reconcile included) into
 # `rt_pass_rate_per_s:<generation>`, and the next pass claims at most `budget x rate`. The
-# budget is half the deadline, so a pass may run twice as slow as its measured rate before the
-# deadline stops it. The default rate is the one measurement taken before any was recorded — a
-# conservative start the second pass corrects. The row is halved BEFORE every pass, put back as
-# soon as the pass commits and then overwritten by its measurement (E941), so a pass the system
-# kills mid-way has already halved the next claim.
+# budget is half the deadline (a build's three quarters, E951), so a pass may run twice (a
+# build's 4/3) as slow as its measured rate before the deadline stops it. The default rate is
+# the one measurement taken before any was recorded — a conservative start the second pass
+# corrects. The row is halved BEFORE every pass, put back as soon as the pass commits and then
+# overwritten by its measurement (E941), so a pass the system kills mid-way has already halved
+# the next claim.
 PASS_BUDGET_S: float = PASS_DEADLINE_S / 2
 PASS_RATE_PER_S: float = 0.1
 # A rate is only recorded when the pass actually claimed enough for the quotient to mean
@@ -354,6 +355,17 @@ PASS_RATE_MIN_CLAIM: int = 20
 # How much of the new measurement the stored rate takes. A build ramps from the conservative
 # default to the real rate in two passes at 0.5 and cannot be knocked out of it by one slow pass.
 PASS_RATE_ALPHA: float = 0.5
+# E951: a pass the clock cut that claimed all of it and committed inside this share of the
+# DEADLINE doubles the stored rate instead of blending it: at a small claim the pass's fixed
+# cost holds claimed/elapsed down, so the blend cannot climb. A doubled pass of T < 525 s stays
+# under 2T only if its next adverts cost no more each, its fixed part has not grown and the
+# database is no slower (2 s to spare at the threshold); the margin is E71's neighbourhood
+# saturating (2026-10-10: 62/125/250 adverts in 331/395/450 s, x1.14-1.19 a doubling).
+RAMP_HEADROOM: float = 0.5
+# E951: a build's pass budget as a share of the deadline: a build's pass need not finish fast
+# for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
+# deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
+BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # --- the claim cap (E948) --------------------------------------------------------------------
 #
 # The rate bounds a pass's TIME, never its MEMORY, and the neighbourhood a pass re-reads grows
@@ -2162,20 +2174,19 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
 
 
 def _measure_rate(claimed: int, elapsed_s: float, previous: float,
-                  bound: Mapping[str, Any]) -> float | None:
-    """This pass's claimed-listings-per-second, blended with what the generation had (E98).
-
-    Recorded only when the quotient means something: the pass claimed `PASS_RATE_MIN_CLAIM`
-    listings, or it claimed everything the time budget allowed it (a claim the budget cut is a
-    measurement at any size — without that, a rate halved to a one-listing claim would never be
-    measured again)."""
+                  bound: Mapping[str, Any]) -> tuple[float | None, bool]:
+    """The rate a pass stores (E98's blend, E951's doubling) and whether the doubling won."""
+    # A claim the clock cut is a measurement at any size: without that, a rate halved to a
+    # one-listing claim would never be measured again.
     limit = int(bound.get("limit") or 0)
     saturated = bound.get("bound_by") == "time" and limit > 0 and claimed >= limit
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
-        return None
-    blended = (PASS_RATE_ALPHA * (claimed / float(elapsed_s))
-               + (1.0 - PASS_RATE_ALPHA) * max(1e-6, previous))
-    return round(blended, 6)
+        return None, False
+    start = max(1e-6, previous)
+    blended = PASS_RATE_ALPHA * (claimed / float(elapsed_s)) + (1.0 - PASS_RATE_ALPHA) * start
+    if saturated and elapsed_s < RAMP_HEADROOM * PASS_DEADLINE_S and 2.0 * start > blended:
+        return round(2.0 * start, 6), True
+    return round(blended, 6), False
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
@@ -2364,9 +2375,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     before the pass's transaction opens, so a pass the system kills — a deploy, a restart, the
     kernel's OOM killer — has already slowed the next claim; a pass that committed puts the
     previous rate back before its reconcile and overwrites it with its measurement after it
-    (an idle pass, too small to measure, leaves the previous rate), and a refused one puts the
-    previous rate back too. A pass past its deadline rolls back and
-    keeps the halving (E913); so does a pass that RAISED, which writes it again through
+    (doubled when it had room, E951; an idle pass, too small to measure, leaves the previous
+    rate), and a refused one puts the previous rate back too. A pass past its deadline rolls
+    back and keeps the halving (E913); so does a pass that RAISED, which writes it again through
     `fresh_conn` — a factory for a NEW connection, since its own may be dead — or on its own
     connection when the caller gives none (E930).
 
@@ -2478,8 +2489,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                          calibration_digest=calibration.digest())
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
-                       pass_budget_s=PASS_BUDGET_S, rate_per_s=rate_per_s,
-                       claim_cap=int(cap["cap"]))
+                       pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
+                                      else PASS_BUDGET_S),
+                       rate_per_s=rate_per_s, claim_cap=int(cap["cap"]))
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2611,13 +2623,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         def owns_the_lane() -> bool:
             return not lost and not shutting_down()
 
+        doubled = False
         if not stopped and result is not None and owns_the_lane():
             # The pass's measurement, reconcile included, blended with the rate it started
-            # from, replaces the rate put back above; a pass that claimed too little to measure
-            # itself (an idle one) leaves that rate. Not once the lane is not its own: the next
-            # holder's rows are not its to write.
-            measured = _measure_rate(len(result.claimed), elapsed, rate_per_s,
-                                     work.claim_bound)
+            # from (or doubled, E951), replaces the rate put back above; a pass that claimed
+            # too little to measure itself (an idle one) leaves that rate. Not once the lane is
+            # not its own: the next holder's rows are not its to write.
+            measured, doubled = _measure_rate(len(result.claimed), elapsed, rate_per_s,
+                                              work.claim_bound)
             if measured is not None:
                 _write_rate(conn, generation, measured, "rate")
         coverage = (None if not facts.images_with_phash else round(
@@ -2659,6 +2672,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         summary["windows"] = dict(work.windows)
         summary["enter_scan"] = dict(work.enter_scan)
         summary["claim_bound"] = dict(work.claim_bound)
+        summary["rate_doubled"] = doubled
         summary["bootstrap"] = {
             "active": bool(bootstrap),
             "backlog": work.bootstrap_backlog,
