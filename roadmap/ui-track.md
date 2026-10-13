@@ -29,6 +29,7 @@ toolkit work.
   marks (`usePipelineCard`, the collection list, `useDismissal` — the stage and collection menus
   are the desktop bodies in a bottom sheet), the extension's stage wash, per-m² through
   `lib/measure` (rule 23).
+  Follow-up: a photo strip per card (up to eight, cover first, the wash on each; `/feed` a lazy chunk), PR [#1785](https://github.com/waiff/sreality/pull/1785).
 - Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
   `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
   reading + curation and the paste box (the fifth tab, Odkaz).
