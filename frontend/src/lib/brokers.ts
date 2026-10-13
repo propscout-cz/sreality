@@ -18,8 +18,7 @@ export function prettyPhone(p: string): string {
  * Amendment A6 revoked every broker view/RPC from `authenticated`, so the direct
  * reads had been silently dark since 2026-07-12 — each one degraded to "no
  * broker" instead of failing. The API's service-role path is now the only one
- * that answers, and it rejects the static VITE_API_TOKEN outright, so `jwt: true`
- * is mandatory on every call below.
+ * that answers, on the session JWT every request carries.
  *
  * Contact PII is masked server-side per caller (toolkit.brokers.apply_pii_policy):
  * a non-admin's rows carry `has_email` / `has_phone` flags INSTEAD of the value
@@ -258,8 +257,6 @@ interface Envelope<T> {
   metadata?: { pii_masked?: boolean; capped?: boolean };
 }
 
-const JWT = true;
-
 /* The `detail` string the /brokers routes send when 404 is an ANSWER ("no such
  * broker"), from api/routes/brokers.py. Status alone is
  * not enough: Railway's edge answers an unrouted domain with 404, a stale
@@ -314,7 +311,6 @@ export async function fetchBrokerLeaderboard(
       include_unknown_subtype: p.includeUnknownSubtype ?? false,
     },
     signal,
-    JWT,
   );
   return r.data ?? [];
 }
@@ -329,8 +325,6 @@ export async function searchBrokersByName(
   const r = await apiGet<Envelope<BrokerPublic[]>>(
     '/brokers/search',
     { q: term, limit },
-    undefined,
-    JWT,
   );
   return r.data ?? [];
 }
@@ -345,8 +339,6 @@ export async function searchBrokerFirms(
   const r = await apiGet<Envelope<BrokerFirmOption[]>>(
     '/brokers/firm-options',
     { q: q.trim() || undefined, limit },
-    undefined,
-    JWT,
   );
   return r.data ?? [];
 }
@@ -365,8 +357,6 @@ export async function fetchListingBrokersByIds(
     const r = await apiPost<Envelope<ListingBroker[]>>(
       '/brokers/by-listings',
       { listing_ids: slice },
-      undefined,
-      JWT,
     );
     // Inherited from the deleted fetchBrokersByIds twin, and now load-bearing here
     // instead: a 200 with no envelope is an SPA-fallback HTML page or a proxy page,
@@ -429,9 +419,6 @@ export async function fetchBrokerDossier(
   try {
     const r = await apiGet<Envelope<Omit<BrokerDossier, 'pii_masked'>>>(
       `/brokers/${brokerId}`,
-      undefined,
-      undefined,
-      JWT,
     );
     // A 200 that carries no envelope is not an empty dossier — it's an HTML
     // SPA-fallback or a proxy page. Spreading it would yield a broker-less object
@@ -453,8 +440,6 @@ export async function fetchBrokerListings(
   const r = await apiGet<Envelope<BrokerListing[]>>(
     `/brokers/${brokerId}/listings`,
     { limit },
-    undefined,
-    JWT,
   );
   return r.data ?? [];
 }
@@ -484,8 +469,6 @@ export function fetchBrokerPropertyIds(
   const ids = apiGet<Envelope<number[]>>(
     `/brokers/${brokerId}/property-ids`,
     { status, portal: [...portals] },
-    undefined,
-    JWT,
   ).then((r) => {
     if (r.metadata?.capped) {
       console.warn(`broker ${brokerId}: property-ids capped — the explore map shows a subset`);

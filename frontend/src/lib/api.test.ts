@@ -1,14 +1,12 @@
-/* Query-param serialization + the auth mode in lib/api's request(). Imported
- * dynamically because BASE_URL and TOKEN are read from import.meta.env at
- * module-evaluation time. Every /brokers call passes `jwt: true` — those routes
- * are verify_jwt-gated and 401 on the static token. */
+/* Query-param serialization + the one credential in lib/api's request().
+ * Imported dynamically because BASE_URL is read from import.meta.env at
+ * module-evaluation time. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { supabase } from './supabase';
 
 async function loadApi() {
   vi.stubEnv('VITE_API_BASE_URL', 'https://api.test.invalid');
-  vi.stubEnv('VITE_API_TOKEN', 'STATIC-BUNDLE-TOKEN');
   return import('./api');
 }
 
@@ -33,14 +31,14 @@ describe('apiGet query params', () => {
   it('serializes an array as repeated params, not a comma join', async () => {
     const { urls } = captureFetch();
     const { apiGet } = await loadApi();
-    await apiGet('/brokers', { ids: [1, 2, 3] }, undefined, true);
+    await apiGet('/brokers', { ids: [1, 2, 3] });
     expect(new URL(urls[0]).search).toBe('?ids=1&ids=2&ids=3');
   });
 
   it('omits an empty array and nullish values entirely', async () => {
     const { urls } = captureFetch();
     const { apiGet } = await loadApi();
-    await apiGet('/brokers', { ids: [], q: undefined, limit: 5 }, undefined, true);
+    await apiGet('/brokers', { ids: [], q: undefined, limit: 5 });
     expect(new URL(urls[0]).search).toBe('?limit=5');
   });
 
@@ -50,35 +48,28 @@ describe('apiGet query params', () => {
      * with the entire estimation_runs table. An empty string is not a filter. */
     const { urls } = captureFetch();
     const { apiGet } = await loadApi();
-    await apiGet('/estimations', { listing_ids: '', limit: 5 }, undefined, true);
+    await apiGet('/estimations', { listing_ids: '', limit: 5 });
     expect(new URL(urls[0]).search).toBe('?limit=5');
   });
 
   it('still sets a scalar once', async () => {
     const { urls } = captureFetch();
     const { apiGet } = await loadApi();
-    await apiGet('/brokers/search', { q: 'alfa', limit: 12 }, undefined, true);
+    await apiGet('/brokers/search', { q: 'alfa', limit: 12 });
     expect(new URL(urls[0]).search).toBe('?q=alfa&limit=12');
   });
 });
 
 describe('apiGet auth mode', () => {
-  it('sends the caller session JWT when jwt: true — what /brokers/* requires', async () => {
+  it('sends the caller session JWT — the one credential, on every route', async () => {
     vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
       data: { session: { access_token: 'USER-JWT' } },
       error: null,
     } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
     const { headers } = captureFetch();
     const { apiGet } = await loadApi();
-    await apiGet('/brokers/leaderboard', { limit: 5 }, undefined, true);
-    expect(headers[0].Authorization).toBe('Bearer USER-JWT');
-  });
-
-  it('falls back to the static bundle token when jwt is omitted — a 401 on /brokers/*', async () => {
-    const { headers } = captureFetch();
-    const { apiGet } = await loadApi();
     await apiGet('/brokers/leaderboard', { limit: 5 });
-    expect(headers[0].Authorization).toBe('Bearer STATIC-BUNDLE-TOKEN');
+    expect(headers[0].Authorization).toBe('Bearer USER-JWT');
   });
 });
 
@@ -111,7 +102,7 @@ describe('estimation trace payload + feedback', () => {
   /* Tenant-scoped since 2026-10-02 (api/main.py: the tenant pool): the static
    * bundle token is a 401 there — it used to read any account's trace payloads
    * and spend refiner LLM credit on any run. */
-  it('sends the caller JWT on all three routes, never the bundle token', async () => {
+  it('sends the caller JWT on all three routes', async () => {
     vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
       data: { session: { access_token: 'USER-JWT' } },
       error: null,
@@ -204,7 +195,7 @@ describe('request() error detail', () => {
         }),
     }) as Response);
     const { apiGet } = await loadApi();
-    await expect(apiGet('/autodedup/groups', {}, undefined, true)).rejects.toThrow(
+    await expect(apiGet('/autodedup/groups', {})).rejects.toThrow(
       /min_size: Input should be a valid integer/,
     );
   });
@@ -411,5 +402,49 @@ describe('autodedup wire conformance', () => {
       store_ready: true,
     };
     expect(body.data?.items[0].reasons).toContain('engine');
+  });
+});
+
+describe('the one credential (authHeader)', () => {
+  it('sends no Authorization header without a session — the server answers, never a fallback credential', async () => {
+    vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
+      data: { session: null },
+      error: null,
+    } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
+    const { headers } = captureFetch();
+    const { apiGet } = await loadApi();
+    await apiGet('/maps/suggest', { query: 'Brno' });
+    expect(headers[0].Authorization).toBeUndefined();
+  });
+
+  it('surfaces a failed session refresh as a transient ApiError, retried by the one rule', async () => {
+    const { AuthRetryableFetchError } = await import('@supabase/supabase-js');
+    vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
+      data: { session: null },
+      error: new AuthRetryableFetchError('refresh failed: network', 0),
+    } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
+    const { urls } = captureFetch();
+    const { apiGet, isTransientApiError } = await loadApi();
+    const err = await apiGet('/maps/suggest', { query: 'Brno' }).catch((e: unknown) => e);
+    expect(isTransientApiError(err)).toBe(true);
+    expect(urls).toHaveLength(0);
+  });
+
+  it("a session that is gone for good is a 401, not the sign-in server's status", async () => {
+    /* supabase-js answers a revoked refresh token with an AuthApiError 400 and
+     * has already signed the tab out; the request that was in flight must read
+     * as unauthenticated, not as a bad request on whatever route it hit. */
+    const { AuthApiError } = await import('@supabase/supabase-js');
+    vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
+      data: { session: null },
+      error: new AuthApiError('Invalid Refresh Token: Already Used', 400, 'refresh_token_already_used'),
+    } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
+    const { urls } = captureFetch();
+    const { ApiError, apiGet, isTransientApiError } = await loadApi();
+    const err = await apiGet('/maps/suggest', { query: 'Brno' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as InstanceType<typeof ApiError>).status).toBe(401);
+    expect(isTransientApiError(err)).toBe(false);
+    expect(urls).toHaveLength(0);
   });
 });

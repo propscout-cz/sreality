@@ -1,6 +1,6 @@
 /* Location quality — typed wrappers over the admin-gated `/location/*` API.
- * Every call is `jwt: true`: the location tables are service-role-only, so the
- * identity-gated API is the SPA's only path to them. Envelope shape follows
+ * The location tables are service-role-only, so the identity-gated API is the
+ * SPA's only path to them. Envelope shape follows
  * toolkit convention: `{ data, metadata }`.
  *
  * W2-b cut the page over to `listing_location` (the location program's one
@@ -82,24 +82,22 @@ export const LOCATION_SOURCES = [
 ] as const;
 
 export const fetchCorpusSummary = () =>
-  apiGet<Envelope<{ grain: string; sources: CorpusSummaryRow[] }>>(
-    '/location/quality/summary', undefined, undefined, true);
+  apiGet<Envelope<{ grain: string; sources: CorpusSummaryRow[] }>>('/location/quality/summary');
 
 export const fetchSourceOverview = (source: string) =>
-  apiGet<Envelope<SourceOverview>>(
-    `/location/quality/source/${source}`, undefined, undefined, true);
+  apiGet<Envelope<SourceOverview>>(`/location/quality/source/${source}`);
 
 export const fetchInspector = (listingId: string) => {
   const trimmed = listingId.trim();
   return /^\d+$/.test(trimmed)
-    ? apiGet<Envelope<Inspector>>(`/location/listing/${trimmed}`, undefined, undefined, true)
+    ? apiGet<Envelope<Inspector>>(`/location/listing/${trimmed}`)
     : Promise.reject(new Error('enter a numeric listing id'));
 };
 
 export const fetchInspectorByNative = (source: string, nativeId: string) =>
   apiGet<Envelope<Inspector>>(
     `/location/listing/by-native/${source}/${encodeURIComponent(nativeId.trim())}`,
-    undefined, undefined, true);
+  );
 
 export const submitCorrection = (input: {
   listing_id: number;
@@ -107,4 +105,4 @@ export const submitCorrection = (input: {
   value_text: string;
   note?: string;
 }) =>
-  apiPost<Envelope<CorrectionResult>>('/location/corrections', input, undefined, true);
+  apiPost<Envelope<CorrectionResult>>('/location/corrections', input);

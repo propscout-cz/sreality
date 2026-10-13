@@ -145,7 +145,7 @@ it (`api/`). They do not apply to the scraper.
    `tests/api/test_broker_routes.py` holds two standing gates: no `/brokers` route may
    ride `require_token`, and every non-admin one must stamp `pii_masked` — a new route
    must be added to that table. The SPA is the main consumer since 2026-08-12
-   (`frontend/src/lib/brokers.ts`, every call `jwt: true`); it previously read the
+   (`frontend/src/lib/brokers.ts`, on the session JWT); it previously read the
    underlying views straight off PostgREST and had been dark since migration 299 revoked
    them. Migration 395 revoked the last one A6 missed (`firms_public`, default-ACL drift).
    Because the cap is a 422 on the WHOLE batch, `fetchListingBrokersByIds` chunks
@@ -488,12 +488,12 @@ NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in
-the browser), and `VITE_API_BASE_URL` / `VITE_API_TOKEN` for the SPA (Path 1 posture: the
-static token is embedded in a build shipped only to trusted operators, until the
-platform-wide rotation cutover). The **extension** (`EXT_API_BASE_URL` /
-`EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY` repo secrets → `VITE_API_BASE_URL` /
-`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` at build) no longer carries `VITE_API_TOKEN` /
-`EXT_API_TOKEN` at all (Wave 1, 2026-07-21) — it runs its own Supabase session via a
-hand-rolled PKCE flow (`chrome-extension/src/auth.ts`), so no bearer secret ships in the
-bundle and it's safe to distribute broadly.
+the browser) and `VITE_API_BASE_URL`. Neither bundle carries an API bearer: the SPA dropped
+`VITE_API_TOKEN` on 2026-10-13 (every request sends the session JWT; `api/dependencies.py`
+`_bearer`), the **extension** (`EXT_API_BASE_URL` / `EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY`
+repo secrets → the same `VITE_*` names at build) dropped `EXT_API_TOKEN` on 2026-07-21 (Wave 1)
+and runs its own Supabase session via a hand-rolled PKCE flow (`chrome-extension/src/auth.ts`).
+`API_TOKEN` is now held only by machines — but every bundle shipped before 2026-10-13 (and a
+service-worker asset cache, ≤ 14 days) still carries the old value, which `require_token` still
+accepts: ROTATE it (design-doc Part B; any ClickUp/CI holder gets the new value) to retire those copies.
 
