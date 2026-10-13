@@ -560,15 +560,14 @@ rules. Identify which one a task belongs to before you start.
   routes, and **Settings**. The `Timeline` component dispatches on `step.kind` so it
   renders today's deterministic traces and the agent's longer traces without rework.
   Extend this SPA; do not fork a separate frontend tree.
-- **Credentials it holds:** the publishable (`anon`) Supabase key, the signed-in user's
-  Supabase session JWT, and `VITE_API_TOKEN` (`frontend/src/lib/api.ts`, baked in at build
-  by `frontend/Dockerfile`). Never embed a backend secret — the service-role key, the
-  `SUPABASE_DB_URL`, an LLM / maps / R2 key — in browser-shipped code. `VITE_API_TOKEN` is a
-  secret in name only: Caddy serves the bundle to anyone, before sign-in, so the token
-  proves "loaded the SPA" and nothing more. A `require_token` route may therefore never
-  return identity, admin or account-scoped data; those sit behind `verify_jwt` /
-  `require_admin` / `tenant_conn` and are called with `jwt: true` (see "Two auth shapes"
-  below). At least these still break it, running service-role behind `require_token`
+- **Credentials it holds:** the publishable (`anon`) Supabase key and the signed-in user's
+  Supabase session JWT — nothing else. Never embed a backend secret — the service-role key, the
+  `SUPABASE_DB_URL`, an LLM / maps / R2 key — in browser-shipped code; since 2026-10-13 the bundle
+  carries no API bearer at all (`VITE_API_TOKEN` is gone: Caddy serves the bundle to anyone before
+  sign-in, so whatever it held proved only "loaded the SPA"). Every API call sends the session JWT
+  (see "One credential" below); a `require_token` route still returns no identity, admin or
+  account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
+  At least these still break it, running service-role behind `require_token`
   alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
   migration 291) and `POST /notifications/dispatches/{id}/estimate` (returns any account's
   dispatch and starts a run for it) — owed as `roadmap/public-release-track.md` item 11, an
@@ -748,21 +747,15 @@ rules. Identify which one a task belongs to before you start.
   FastAPI service, not direct Postgres — by convention: `authenticated` holds RLS-scoped
   table write grants (migrations 290/292/294) the SPA never uses. The toolkit's
   write-allowed exceptions (see Toolkit rule #5) are reachable only via the API.
-- **Two auth shapes to the FastAPI service** (`frontend/src/lib/api.ts`), matching the
-  backend gate each route actually uses. `require_admin`/`verify_jwt`/`tenant_conn` routes
-  (Settings, Outreach, broker-review, skill-refinements, Collections
-  list, Pipeline, Watchdog subscriptions, `/estimations` create/read) get `jwt: true` on
-  their `request()` call and receive the caller's real Supabase session `access_token`
-  (`supabase.auth.getSession()`) — `api/dependencies.py:verify_jwt` no longer accepts
-  anything else there (the legacy static-token branch that used to grant a synthetic
-  `is_admin: True` identity was removed 2026-08-04; see
-  `docs/design/api-token-rotation-and-spa-jwt-migration.md`). Routes still gated by the
-  simpler `require_token` (a shared-secret check, no identity) keep sending the static
-  `VITE_API_TOKEN` — readable by anyone from the bundle Caddy serves before sign-in, so
-  that gate proves only "loaded the SPA," never an identity, admin or per-account claim.
-  Adding a new
-  `require_admin`/`verify_jwt` route means adding `jwt: true` to its frontend call in the
-  same change, or it 401s.
+- **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
+  the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
+  route uses — `api/dependencies.py` `_bearer` (2026-10-13) accepts a verified JWT on `require_token`
+  routes and requires one on `verify_jwt` / `require_admin` / `tenant_conn` routes, so a route moves
+  between gates with no frontend change. The per-call `jwt: true` choice and its static-token
+  fallback were the deploy-skew class behind the 2026-10-13 "Invalid token" preset incident (a tab
+  open across #1775's deploy kept choosing the static token). No session → no header; the server's
+  401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
+  History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - **`Mapy.cz`-powered location search.** The Region/Browse pages call `GET /maps/suggest`
   and `POST /maps/resolve` on the FastAPI service for autocomplete + admin-unit
   resolution. The `MAPY_CZ_API_KEY` is server-side only — never inlined into the browser

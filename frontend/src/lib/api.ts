@@ -1,23 +1,19 @@
 /* Fetch wrapper for the Railway FastAPI service.
  *
- * Two auth shapes, matching the backend gate each route actually uses:
- *  - `jwt: true` (require_admin / verify_jwt routes — Settings, labeling,
- *    property merge mechanics, Outreach, broker-review, skill-refinements,
- *    Collections list, Pipeline, Watchdog subscriptions, /estimations (incl.
- *    trace payload + feedback since 2026-10-02), the property download zip,
- *    and every `/brokers/*` read since 2026-08-12) sends
- *    the caller's real Supabase session access_token. The backend no longer
- *    accepts anything else here (api/dependencies.py:verify_jwt) — admin
- *    status rides in the JWT's app_metadata.is_admin claim, never a shared
- *    secret.
- *  - default (require_token routes) sends VITE_API_TOKEN, a static bearer
- *    inlined into the JS bundle at build time; Caddy serves the bundle before
- *    any sign-in, so anyone can read it. It proves only "loaded the SPA": a
- *    require_token route must never return identity, admin or per-account
- *    data. Server-side enforcement is api/dependencies.py:require_token.
- *    See frontend/README.md.
+ * One credential: every request carries the caller's Supabase session JWT
+ * (`supabase.auth.getSession()`), whichever gate the route uses —
+ * api/dependencies.py `_bearer` accepts a verified JWT on `require_token`
+ * routes and requires one on `verify_jwt` / `require_admin` / `tenant_conn`
+ * routes, with admin status riding in the JWT's app_metadata.is_admin claim.
+ * The SPA holds no API secret: the bundle Caddy serves before sign-in contains
+ * nothing a server would accept, and a route can move between gates with no
+ * change here (the 2026-10-13 "Invalid token" preset incident was a stale
+ * bundle still choosing a credential per call). No session → no header; the
+ * server answers 401 and says why (RFC 6750), and RequireAuth already keeps a
+ * signed-out tab off every page.
  */
 
+import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   BuildingAttachment,
   BuildingListResponse,
@@ -101,14 +97,11 @@ export const classifyUrlHost = (url: string): SourceKind => {
 };
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
-const TOKEN = import.meta.env.VITE_API_TOKEN ?? '';
 
 export const isApiConfigured = (): boolean => Boolean(BASE_URL);
 
 if (!BASE_URL) {
-  console.warn(
-    'API env vars missing. Set VITE_API_BASE_URL (and VITE_API_TOKEN for prod).',
-  );
+  console.warn('API env var missing. Set VITE_API_BASE_URL.');
 }
 
 /* One transport deadline for every API call. Sized just above the server's own
@@ -162,22 +155,22 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   /* Multipart body (file uploads). Mutually exclusive with `json`; no
    * Content-Type is set so the browser writes the multipart boundary. */
   form?: FormData;
-  /* True for require_admin / verify_jwt-gated routes — see the file-header
-   * comment. Sends the caller's real Supabase JWT instead of VITE_API_TOKEN. */
-  jwt?: boolean;
 }
 
-/* Resolves to the caller's real Supabase JWT for `jwt: true` requests, falling
- * back to the static token when logged out (shouldn't happen behind
- * RequireAuth/RequireAdmin in normal operation, but a request made during
- * that brief window must not silently claim a capability it doesn't have). */
-async function authHeader(useJwt: boolean | undefined): Promise<Record<string, string>> {
-  if (useJwt) {
-    const { data } = await supabase.auth.getSession();
-    const accessToken = data.session?.access_token;
-    if (accessToken) return { Authorization: `Bearer ${accessToken}` };
+/* The one credential. A session the client could not refresh is an ApiError
+ * like any other failed read: a transport failure retries once under the one
+ * retry rule; a revoked refresh token has already signed the tab out, and the
+ * RequireAuth redirect follows. */
+async function authHeader(): Promise<Record<string, string>> {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) {
+    throw new ApiError(
+      error.message, error.status ?? 0, null,
+      isAuthRetryableFetchError(error) ? 'network' : 'http',
+    );
   }
-  return TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 /* FastAPI answers a 422 with `detail` as a LIST of {loc, msg, type} objects.
@@ -247,7 +240,7 @@ async function send(
     );
   }
 
-  const { query, json, form, headers, jwt, signal, ...rest } = opts;
+  const { query, json, form, headers, signal, ...rest } = opts;
   const url = new URL(BASE_URL + path);
   if (query) {
     for (const [k, v] of Object.entries(query)) {
@@ -268,7 +261,7 @@ async function send(
   const finalHeaders: Record<string, string> = {
     Accept: 'application/json',
     ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    ...(await authHeader(jwt)),
+    ...(await authHeader()),
     ...((headers as Record<string, string> | undefined) ?? {}),
   };
 
@@ -341,22 +334,18 @@ async function requestBlob(path: string, opts: RequestOptions = {}): Promise<Blo
 }
 
 /* Generic verbs used by lib/maps.ts (and any other future module that
- * needs raw GET/POST without going through a feature-specific wrapper).
- * `jwt` defaults to false — pass true for a require_admin/verify_jwt route
- * (see the file-header comment). */
+ * needs raw GET/POST without going through a feature-specific wrapper). */
 export const apiGet = <T>(
   path: string,
   params?: Record<string, QueryValue>,
   signal?: AbortSignal,
-  jwt?: boolean,
-): Promise<T> => request<T>(path, { query: params, signal, jwt });
+): Promise<T> => request<T>(path, { query: params, signal });
 
 export const apiPost = <T>(
   path: string,
   body: unknown,
   signal?: AbortSignal,
-  jwt?: boolean,
-): Promise<T> => request<T>(path, { method: 'POST', json: body, signal, jwt });
+): Promise<T> => request<T>(path, { method: 'POST', json: body, signal });
 
 /* ----- estimations ------------------------------------------------------- */
 
@@ -377,10 +366,10 @@ export const previewListingUrl = (
 export const createEstimation = (
   input: CreateEstimationIn,
 ): Promise<EstimationRun> =>
-  request<EstimationRun>('/estimations', { method: 'POST', json: input, jwt: true });
+  request<EstimationRun>('/estimations', { method: 'POST', json: input });
 
 export const getEstimation = (id: number): Promise<EstimationRun> =>
-  request<EstimationRun>(`/estimations/${id}`, { jwt: true });
+  request<EstimationRun>(`/estimations/${id}`);
 
 /* PATCH /estimations/:id/scenario — shared yield-scenario state.
  * Used by YieldBlock and the Chrome extension. All three fields are
@@ -400,7 +389,6 @@ export const patchEstimationScenario = (
   request<EstimationRun>(`/estimations/${id}/scenario`, {
     method: 'PATCH',
     json: body,
-    jwt: true,
   });
 
 export interface TracePayload {
@@ -413,7 +401,7 @@ export const getTracePayload = (
   runId: number,
   stepN: number,
 ): Promise<TracePayload> =>
-  request<TracePayload>(`/estimations/${runId}/trace/${stepN}/payload`, { jwt: true });
+  request<TracePayload>(`/estimations/${runId}/trace/${stepN}/payload`);
 
 /* Phase AI slice B — feedback capture. POST inserts a new
  * `estimation_feedback` row and (default) fires the slice C
@@ -434,8 +422,7 @@ export const listEstimationFeedback = (
   runId: number,
 ): Promise<{ data: EstimationFeedback[] }> =>
   request<{ data: EstimationFeedback[] }>(
-    `/estimations/${runId}/feedback`,
-    { jwt: true },
+    `/estimations/${runId}/feedback`
   );
 
 export const submitEstimationFeedback = (
@@ -445,7 +432,6 @@ export const submitEstimationFeedback = (
   request<FeedbackResponse>(`/estimations/${runId}/feedback`, {
     method: 'POST',
     json: input,
-    jwt: true,
   });
 
 export const decideRefinement = (
@@ -455,7 +441,6 @@ export const decideRefinement = (
   request<SkillRefinement>(`/skill-refinements/${refinementId}/decision`, {
     method: 'POST',
     json: { decision },
-    jwt: true,
   });
 
 export const listEstimations = (
@@ -465,7 +450,6 @@ export const listEstimations = (
     query: params as Record<string, QueryValue>,
     /* Account-scoped read (deps.account_scope): the static token is not an
      * identity, so it would narrow the operator to SYSTEM-owned runs only. */
-    jwt: true,
   });
 
 /* GET /estimations/latest-by-listing — latest rent estimate per listing id,
@@ -479,7 +463,7 @@ export const latestEstimationsByListing = (
     ? Promise.resolve({})
     : request<{ estimates: Record<number, ListingEstimate> }>(
         '/estimations/latest-by-listing',
-        { query: { sreality_ids: ids.join(',') }, signal, jwt: true },
+        { query: { sreality_ids: ids.join(',') }, signal },
       ).then((r) => r.estimates);
 
 /* POST /listings/summaries — batch wrapper around the
@@ -691,14 +675,13 @@ export const fetchBuildingAttachmentBlob = (
  * photos, zipped by the API — R2 sends no CORS header, so the SPA cannot read the
  * bytes behind /images/{key} and zip them itself. */
 export const fetchPropertyDownload = (propertyId: number): Promise<Blob> =>
-  requestBlob(`/properties/${propertyId}/download.zip`, { jwt: true });
+  requestBlob(`/properties/${propertyId}/download.zip`);
 
 /* ----- admin / Settings page --------------------------------------------
  *
- * The /admin/* prefix is bearer-gated like every other write surface per
- * CLAUDE.md rule #8. These calls go through `request()`, which already
- * attaches `Authorization: Bearer <VITE_API_TOKEN>`, so no extra wiring is
- * needed here.
+ * The /admin/* prefix is `require_admin`, gated on the session JWT's
+ * app_metadata.is_admin claim; `request()` attaches that JWT like everywhere
+ * else, so no extra wiring is needed here.
  */
 
 export interface AgentTool {
@@ -747,11 +730,10 @@ export const listSkills = (
 ): Promise<{ data: Skill[] }> =>
   request<{ data: Skill[] }>('/admin/skills', {
     query: { include_archived: options.includeArchived ?? false },
-    jwt: true,
   });
 
 export const getSkill = (name: string): Promise<Skill> =>
-  request<Skill>(`/admin/skills/${encodeURIComponent(name)}`, { jwt: true });
+  request<Skill>(`/admin/skills/${encodeURIComponent(name)}`);
 
 export const updateSkill = (
   name: string,
@@ -760,11 +742,10 @@ export const updateSkill = (
   request<Skill>(`/admin/skills/${encodeURIComponent(name)}`, {
     method: 'PUT',
     json: patch,
-    jwt: true,
   });
 
 export const listAppSettings = (): Promise<{ data: AppSetting[] }> =>
-  request<{ data: AppSetting[] }>('/admin/app_settings', { jwt: true });
+  request<{ data: AppSetting[] }>('/admin/app_settings');
 
 export const updateAppSetting = (
   key: string,
@@ -773,7 +754,6 @@ export const updateAppSetting = (
   request<AppSetting>(`/admin/app_settings/${encodeURIComponent(key)}`, {
     method: 'PUT',
     json: { value },
-    jwt: true,
   });
 
 export interface NewDedupSetting {
@@ -791,7 +771,7 @@ export interface NewDedupSetting {
 }
 
 export const listNewDedupSettings = (): Promise<{ data: NewDedupSetting[] }> =>
-  request<{ data: NewDedupSetting[] }>('/new-dedup/settings', { jwt: true });
+  request<{ data: NewDedupSetting[] }>('/new-dedup/settings');
 
 export const updateNewDedupSetting = (
   key: string,
@@ -800,13 +780,11 @@ export const updateNewDedupSetting = (
   request<NewDedupSetting>(`/new-dedup/settings/${encodeURIComponent(key)}`, {
     method: 'PUT',
     json: { value },
-    jwt: true,
   });
 
 export const resetNewDedupSetting = (key: string): Promise<NewDedupSetting> =>
   request<NewDedupSetting>(`/new-dedup/settings/${encodeURIComponent(key)}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 /* NEW DEDUP Level 0 · candidate audit (api/routes/new_dedup_candidates.py;
@@ -985,7 +963,6 @@ export const getNewDedupCandidateOverview = (
 ): Promise<{ data: NewDedupCandidateOverview }> =>
   request<{ data: NewDedupCandidateOverview }>('/new-dedup/candidates/overview', {
     query: { generation_id: generationId ?? null },
-    jwt: true,
   });
 
 /* THE DRILL-DOWN behind a figure on the Candidates page. `bucket` is a KEY the
@@ -1044,15 +1021,13 @@ export const getNewDedupCandidateListings = (q: {
       after_id: q.after_id ?? null,
       limit: q.limit ?? null,
     },
-    jwt: true,
   });
 
 export const listNewDedupCandidateGenerations = (): Promise<{
   data: NewDedupCandidateRecentGeneration[];
 }> =>
   request<{ data: NewDedupCandidateRecentGeneration[] }>(
-    '/new-dedup/candidates/generations',
-    { jwt: true },
+    '/new-dedup/candidates/generations'
   );
 
 // Tag annotation matrix (docs/design/tag-annotation-matrix.md) — the
@@ -1158,7 +1133,7 @@ export interface NewDedupLabelingOverview {
   tags: NewDedupTag[];
 }
 export const getNewDedupLabelingOverview = (): Promise<{ data: NewDedupLabelingOverview }> =>
-  request<{ data: NewDedupLabelingOverview }>('/new-dedup/labeling/overview', { jwt: true });
+  request<{ data: NewDedupLabelingOverview }>('/new-dedup/labeling/overview');
 
 export const addNewDedupTag = (
   label: string,
@@ -1167,7 +1142,6 @@ export const addNewDedupTag = (
   request<{ data: NewDedupTag }>('/new-dedup/labeling/taxonomy', {
     method: 'POST',
     json: { label, family: family ?? null },
-    jwt: true,
   });
 
 /* The rename/add/flags routes return tag_annotations._tag_dict — identity and
@@ -1187,7 +1161,6 @@ export const renameNewDedupTag = (
   request<{ data: NewDedupTagIdentity }>(`/new-dedup/labeling/taxonomy/${tagId}`, {
     method: 'PUT',
     json: { label },
-    jwt: true,
   });
 
 export const removeNewDedupTag = (
@@ -1195,7 +1168,7 @@ export const removeNewDedupTag = (
 ): Promise<{ data: { label: string; deleted_annotations: number } }> =>
   request<{ data: { label: string; deleted_annotations: number } }>(
     `/new-dedup/labeling/taxonomy/${tagId}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 /* Sets one or both operator flags — only the fields actually passed, so
@@ -1207,7 +1180,6 @@ export const setNewDedupTagFlags = (
   request<{ data: NewDedupTag }>(`/new-dedup/labeling/taxonomy/${tagId}/flags`, {
     method: 'PATCH',
     json: flags,
-    jwt: true,
   });
 
 export const ROUTING_CATEGORIES = ['byt', 'dum', 'komercni', 'pozemek', 'ostatni'] as const;
@@ -1217,7 +1189,7 @@ export const setNewDedupTagRouting = (
   tagId: number, categories: string[],
 ): Promise<{ data: NewDedupTag }> =>
   request<{ data: NewDedupTag }>(`/new-dedup/labeling/taxonomy/${tagId}/routing`, {
-    method: 'PATCH', json: { categories }, jwt: true,
+    method: 'PATCH', json: { categories },
   });
 
 export const growNewDedupSample = (
@@ -1227,7 +1199,6 @@ export const growNewDedupSample = (
   request<{ data: { added: number } }>('/new-dedup/labeling/sample/grow', {
     method: 'POST',
     json: { count, category_main: categoryMain ?? null },
-    jwt: true,
   });
 
 export interface NewDedupLabelProposal {
@@ -1260,13 +1231,12 @@ export const listNewDedupProposals = (params: {
 }): Promise<{ data: NewDedupLabelProposal[] }> =>
   request<{ data: NewDedupLabelProposal[] }>('/new-dedup/labeling/proposals', {
     query: params,
-    jwt: true,
   });
 
 /* The production CLIP tagger's fixed fine-tag vocabulary (data/clip_taxonomy.json's
  * prompt anchors) — the option list for the "Original tag" view's own tag filter. */
 export const listNewDedupOriginalTags = (): Promise<{ data: string[] }> =>
-  request<{ data: string[] }>('/new-dedup/labeling/original-tags', { jwt: true });
+  request<{ data: string[] }>('/new-dedup/labeling/original-tags');
 
 /* Echoes back what actually landed: `label` is the tag it was decided
  * against (the corrected one if any), `proposed_label` what the model
@@ -1303,7 +1273,6 @@ export const setNewDedupProposalState = (
       label: label ?? null,
       excluded_reason: excludedReason ?? null,
     },
-    jwt: true,
   });
 
 export const bulkSetNewDedupProposalState = (
@@ -1323,7 +1292,6 @@ export const bulkSetNewDedupProposalState = (
   request('/new-dedup/labeling/proposals/bulk-state', {
     method: 'POST',
     json: { model, image_ids: imageIds, state, excluded_reason: excludedReason ?? null },
-    jwt: true,
   });
 
 export interface NewDedupImageTag {
@@ -1341,9 +1309,7 @@ export interface NewDedupImageTag {
 export const listNewDedupImageTags = (
   imageId: number,
 ): Promise<{ data: NewDedupImageTag[] }> =>
-  request<{ data: NewDedupImageTag[] }>(`/new-dedup/labeling/images/${imageId}/tags`, {
-    jwt: true,
-  });
+  request<{ data: NewDedupImageTag[] }>(`/new-dedup/labeling/images/${imageId}/tags`);
 
 /* Sets many tags on ONE image to the same state at once — the detail
  * panel's "set selected" action (the mirror of bulkSetNewDedupTagAnnotation,
@@ -1365,7 +1331,6 @@ export const bulkSetNewDedupImageTags = (
   request(`/new-dedup/labeling/images/${imageId}/tags/bulk`, {
     method: 'POST',
     json: { tag_ids: tagIds, state, excluded_reason: excludedReason ?? null },
-    jwt: true,
   });
 
 export interface NewDedupPositiveTag {
@@ -1383,7 +1348,6 @@ export const listNewDedupPositiveTagsForImages = (
   request<{ data: NewDedupPositiveTag[] }>('/new-dedup/labeling/images/tags/batch', {
     method: 'POST',
     json: { image_ids: imageIds },
-    jwt: true,
   });
 
 /* Which band of a tag's ranked pool drew a candidate (migration 450).
@@ -1459,7 +1423,7 @@ export const getNewDedupTagCandidates = (
   tagId: number,
 ): Promise<{ data: NewDedupCandidateSummary }> =>
   request<{ data: NewDedupCandidateSummary }>(
-    `/new-dedup/labeling/tags/${tagId}/candidates`, { jwt: true },
+    `/new-dedup/labeling/tags/${tagId}/candidates`
   );
 
 /* `categoryMain` null = the full category mix (the skew-correcting default);
@@ -1471,7 +1435,7 @@ export const drawNewDedupTagCandidates = (
 ): Promise<{ data: NewDedupCandidateDrawResult }> =>
   request<{ data: NewDedupCandidateDrawResult }>(
     `/new-dedup/labeling/tags/${tagId}/candidates`,
-    { method: 'POST', json: { count, category_main: categoryMain ?? null }, jwt: true },
+    { method: 'POST', json: { count, category_main: categoryMain ?? null } },
   );
 
 export interface NewDedupTagImage {
@@ -1507,20 +1471,18 @@ export const listTagLabelNotes = (
   tagId: number, params: { include_absorbed?: boolean; limit?: number } = {},
 ): Promise<{ data: TagLabelNote[] }> =>
   request<{ data: TagLabelNote[] }>(`/new-dedup/labeling/tags/${tagId}/notes`, {
-    query: params, jwt: true,
+    query: params,
   });
 
 export const getOpenNoteCounts = (): Promise<{ data: Record<string, number> }> =>
-  request<{ data: Record<string, number> }>('/new-dedup/labeling/notes/open-counts', {
-    jwt: true,
-  });
+  request<{ data: Record<string, number> }>('/new-dedup/labeling/notes/open-counts');
 
 export const absorbTagLabelNotes = (
   tagId: number, body: { definition_id: number; note_ids: number[] },
 ): Promise<{ data: { tag_id: number; absorbed: number[]; requested: number } }> =>
   request<{ data: { tag_id: number; absorbed: number[]; requested: number } }>(
     `/new-dedup/labeling/tags/${tagId}/notes/absorb`,
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
 
 /* Reviewing the TRAINING SET: what the model built, per head, with the
@@ -1573,13 +1535,11 @@ export const setTrainingMembership = (
 ): Promise<{ data: { tag_id: number; in_training: boolean; moved: number[]; requested: number } }> =>
   request<{ data: { tag_id: number; in_training: boolean; moved: number[]; requested: number } }>(
     `/new-dedup/labeling/tags/${tagId}/training-membership`,
-    { method: 'POST', json: { image_ids: imageIds, in_training: inTraining }, jwt: true },
+    { method: 'POST', json: { image_ids: imageIds, in_training: inTraining } },
   );
 
 export const listTrainingSetHeads = (): Promise<{ data: TrainingSetHead[] }> =>
-  request<{ data: TrainingSetHead[] }>('/new-dedup/labeling/training-set/heads', {
-    jwt: true,
-  });
+  request<{ data: TrainingSetHead[] }>('/new-dedup/labeling/training-set/heads');
 
 /* Where one image sits in a head's trays — so a link can name a head and a photo
  * and the page can land on it. The server resolves it against the SAME order and
@@ -1591,7 +1551,7 @@ export const drawTrainingSet = (
   tagId: number, opts: { state?: TagState; size?: number } = {},
 ): Promise<{ data: { tag_id: number; state: string; drawn: number } }> =>
   request(`/new-dedup/labeling/tags/${tagId}/draw`, {
-    method: 'POST', json: opts, jwt: true,
+    method: 'POST', json: opts,
   });
 
 export const locateTrainingImage = (
@@ -1603,7 +1563,7 @@ export const locateTrainingImage = (
   in_training: boolean; rank: number;
 } }> =>
   request('/new-dedup/labeling/training-set/locate', {
-    query: { tag_id: tagId, image_id: imageId }, jwt: true,
+    query: { tag_id: tagId, image_id: imageId },
   });
 
 export const listTrainingSet = (params: {
@@ -1627,7 +1587,7 @@ export const listTrainingSet = (params: {
       limit: number;
       offset: number;
     };
-  }>('/new-dedup/labeling/training-set', { query: params, jwt: true });
+  }>('/new-dedup/labeling/training-set', { query: params });
 
 /* Change or drop a note. Only an OPEN note: an absorbed one already shaped a
  * definition version, and the server answers 404 rather than rewriting it. */
@@ -1635,14 +1595,14 @@ export const editTagLabelNote = (
   noteId: number, note: string,
 ): Promise<{ data: TagLabelNote }> =>
   request<{ data: TagLabelNote }>(`/new-dedup/labeling/notes/${noteId}`, {
-    method: 'PATCH', json: { note }, jwt: true,
+    method: 'PATCH', json: { note },
   });
 
 export const deleteTagLabelNote = (
   noteId: number,
 ): Promise<{ data: { id: number; image_id: number; tag_id: number } }> =>
   request<{ data: { id: number; image_id: number; tag_id: number } }>(
-    `/new-dedup/labeling/notes/${noteId}`, { method: 'DELETE', jwt: true },
+    `/new-dedup/labeling/notes/${noteId}`, { method: 'DELETE' },
   );
 
 /* Tag-centric browse: this tag's candidate queue (migration 450) plus every
@@ -1656,7 +1616,6 @@ export const listNewDedupTagImages = (
 ): Promise<{ data: NewDedupTagImage[] }> =>
   request<{ data: NewDedupTagImage[] }>(`/new-dedup/labeling/tags/${tagId}/images`, {
     query: params,
-    jwt: true,
   });
 
 export const setNewDedupTagAnnotation = (
@@ -1686,7 +1645,6 @@ export const setNewDedupTagAnnotation = (
   request(`/new-dedup/labeling/tags/${tagId}/annotations`, {
     method: 'POST',
     json: { image_id: imageId, state, excluded_reason: excludedReason ?? null, ...(note ? { note: note.text, from_state: note.from_state } : {}) },
-    jwt: true,
   });
 
 export const bulkSetNewDedupTagAnnotation = (
@@ -1706,7 +1664,6 @@ export const bulkSetNewDedupTagAnnotation = (
   request(`/new-dedup/labeling/tags/${tagId}/annotations/bulk`, {
     method: 'POST',
     json: { image_ids: imageIds, state, excluded_reason: excludedReason ?? null },
-    jwt: true,
   });
 
 export const clearNewDedupTagAnnotation = (
@@ -1715,7 +1672,7 @@ export const clearNewDedupTagAnnotation = (
 ): Promise<{ data: { image_id: number; tag_id: number; deleted: boolean } }> =>
   request<{ data: { image_id: number; tag_id: number; deleted: boolean } }>(
     `/new-dedup/labeling/tags/${tagId}/annotations/${imageId}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 /* Tag definitions (migration 446) — the versioned written meaning of a
@@ -1840,7 +1797,7 @@ export interface SaveTagDefinitionIn {
 }
 
 export const listTagDefinitionStatus = (): Promise<{ data: TagDefinitionStatus[] }> =>
-  request<{ data: TagDefinitionStatus[] }>('/new-dedup/labeling/definitions', { jwt: true });
+  request<{ data: TagDefinitionStatus[] }>('/new-dedup/labeling/definitions');
 
 /* Null body when the tag exists but has no definition yet; a 404 (ApiError) when
  * the tag itself is unknown. */
@@ -1848,8 +1805,7 @@ export const getTagDefinition = (
   tagId: number,
 ): Promise<{ data: TagDefinition | null }> =>
   request<{ data: TagDefinition | null }>(
-    `/new-dedup/labeling/tags/${tagId}/definition`,
-    { jwt: true },
+    `/new-dedup/labeling/tags/${tagId}/definition`
   );
 
 /* The definition as a PERSON reads it while labeling. Every string is rendered by
@@ -1869,8 +1825,7 @@ export const getTagDefinitionCard = (
   tagId: number,
 ): Promise<{ data: { card: TagHandbookCard; prompt: string; definition_id: number; version: number } | null }> =>
   request<{ data: { card: TagHandbookCard; prompt: string; definition_id: number; version: number } | null }>(
-    `/new-dedup/labeling/tags/${tagId}/definition/card`,
-    { jwt: true },
+    `/new-dedup/labeling/tags/${tagId}/definition/card`
   );
 
 /* Renders an UNSAVED draft. Writes nothing.
@@ -1885,7 +1840,7 @@ export const previewTagDefinitionCard = (
 ): Promise<{ data: { card: TagHandbookCard } }> =>
   request<{ data: { card: TagHandbookCard } }>(
     `/new-dedup/labeling/tags/${tagId}/definition/card/preview`,
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
 
 /* --- the sealed exam (migrations 458 + 459) ------------------------------- */
@@ -1931,16 +1886,15 @@ export interface ExamCohortRow {
 
 export const getExamSets = (): Promise<{ data: Array<{ name: string; tag_count: number }> }> =>
   request<{ data: Array<{ name: string; tag_count: number }> }>(
-    '/new-dedup/labeling/exam-sets', { jwt: true },
+    '/new-dedup/labeling/exam-sets'
   );
 
 export const getExamCohorts = (): Promise<{ data: ExamCohortRow[] }> =>
-  request<{ data: ExamCohortRow[] }>('/new-dedup/labeling/exam-cohorts', { jwt: true });
+  request<{ data: ExamCohortRow[] }>('/new-dedup/labeling/exam-cohorts');
 
 export const getExamState = (cohort: string, set?: string): Promise<{ data: ExamState }> =>
   request<{ data: ExamState }>(
-    `/new-dedup/labeling/exam/${cohort}${set ? `?set=${encodeURIComponent(set)}` : ''}`,
-    { jwt: true },
+    `/new-dedup/labeling/exam/${cohort}${set ? `?set=${encodeURIComponent(set)}` : ''}`
   );
 
 export type MachineVerdict = 'yes' | 'no' | 'skip';
@@ -1978,8 +1932,7 @@ export const getExamAnswers = (
   cohort: string, set?: string,
 ): Promise<{ data: { set: string; tags: ExamTag[]; rows: ExamAnswerRow[] } }> =>
   request<{ data: { set: string; tags: ExamTag[]; rows: ExamAnswerRow[] } }>(
-    `/new-dedup/labeling/exam/${cohort}/answers${set ? `?set=${encodeURIComponent(set)}` : ''}`,
-    { jwt: true },
+    `/new-dedup/labeling/exam/${cohort}/answers${set ? `?set=${encodeURIComponent(set)}` : ''}`
   );
 
 /* Every routing tag in NEITHER list becomes a NEGATIVE — that is what lets one
@@ -1995,7 +1948,7 @@ export const answerExamQuestion = (
 ): Promise<{ data: { image_id: number; cells_written: number } }> =>
   request<{ data: { image_id: number; cells_written: number } }>(
     `/new-dedup/labeling/exam/${cohort}/answer`,
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
 
 /* "Keep mine" on one machine proposal. Accepting one is NOT a separate call:
@@ -2005,7 +1958,7 @@ export const dismissExamMachineProposal = (
 ): Promise<{ data: { image_id: number; dismissed_tag_ids: number[] } }> =>
   request<{ data: { image_id: number; dismissed_tag_ids: number[] } }>(
     `/new-dedup/labeling/exam/${cohort}/machine-review/dismiss`,
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
 
 /* Writes a NEW version and retires the previous one. There is no draft state
@@ -2017,15 +1970,13 @@ export const saveTagDefinition = (
   request<{ data: TagDefinition }>(`/new-dedup/labeling/tags/${tagId}/definition`, {
     method: 'PUT',
     json: body,
-    jwt: true,
   });
 
 export const listTagDefinitionVersions = (
   tagId: number,
 ): Promise<{ data: TagDefinitionVersion[] }> =>
   request<{ data: TagDefinitionVersion[] }>(
-    `/new-dedup/labeling/tags/${tagId}/definition/versions`,
-    { jwt: true },
+    `/new-dedup/labeling/tags/${tagId}/definition/versions`
   );
 
 export const getTagDefinitionVersion = (
@@ -2033,8 +1984,7 @@ export const getTagDefinitionVersion = (
   version: number,
 ): Promise<{ data: TagDefinition }> =>
   request<{ data: TagDefinition }>(
-    `/new-dedup/labeling/tags/${tagId}/definition/versions/${version}`,
-    { jwt: true },
+    `/new-dedup/labeling/tags/${tagId}/definition/versions/${version}`
   );
 
 /* What the tag ACTUALLY contains — every image currently positive on it. Not
@@ -2047,7 +1997,7 @@ export const listTagPositiveImages = (
 ): Promise<TagPositiveImagesResponse> =>
   request<TagPositiveImagesResponse>(
     `/new-dedup/labeling/tags/${tagId}/positive-images`,
-    { query: { limit, order }, jwt: true },
+    { query: { limit, order } },
   );
 
 /* Empty — never an error — when the tag has fewer than 5 positives carrying a
@@ -2058,7 +2008,6 @@ export const listTagNeighbours = (
 ): Promise<{ data: TagNeighbour[] }> =>
   request<{ data: TagNeighbour[] }>(`/new-dedup/labeling/tags/${tagId}/neighbours`, {
     query: { limit },
-    jwt: true,
   });
 
 /* ----- the tagging bake-off (api/new_dedup_bakeoff.py) --------------------
@@ -2202,7 +2151,7 @@ export const listBakeoffRuns = (
   limit = 25,
 ): Promise<{ data: BakeoffRun[] }> =>
   request<{ data: BakeoffRun[] }>('/new-dedup/tagging-bakeoff/runs', {
-    query: { limit }, jwt: true,
+    query: { limit },
   });
 
 /* The whole arm x mode x head table in one payload — small by construction, so
@@ -2211,7 +2160,7 @@ export const getBakeoffMetrics = (
   runId: number,
 ): Promise<{ data: BakeoffMetric[] }> =>
   request<{ data: BakeoffMetric[] }>(
-    `/new-dedup/tagging-bakeoff/runs/${runId}/metrics`, { jwt: true },
+    `/new-dedup/tagging-bakeoff/runs/${runId}/metrics`
   );
 
 /* VIEW A. `arms` is a COMMA-JOINED string here, not a repeated param — the
@@ -2231,7 +2180,7 @@ export const getBakeoffImages = (
   } = {},
 ): Promise<{ data: { images: BakeoffImage[]; next_after_image_id: number | null } }> =>
   request<{ data: { images: BakeoffImage[]; next_after_image_id: number | null } }>(
-    `/new-dedup/tagging-bakeoff/runs/${runId}/images`, { query: params, jwt: true },
+    `/new-dedup/tagging-bakeoff/runs/${runId}/images`, { query: params },
   );
 
 /* VIEW B. One head under one arm and mode. Each bucket pages INDEPENDENTLY on
@@ -2248,7 +2197,7 @@ export const getBakeoffBuckets = (
   },
 ): Promise<{ data: BakeoffBuckets }> =>
   request<{ data: BakeoffBuckets }>(
-    `/new-dedup/tagging-bakeoff/runs/${runId}/buckets`, { query: params, jwt: true },
+    `/new-dedup/tagging-bakeoff/runs/${runId}/buckets`, { query: params },
   );
 
 export interface BakeoffScoreRow {
@@ -2292,7 +2241,7 @@ export const getBakeoffScores = (
   },
 ): Promise<{ data: BakeoffScores }> =>
   request<{ data: BakeoffScores }>(
-    `/new-dedup/tagging-bakeoff/runs/${runId}/scores`, { query: params, jwt: true },
+    `/new-dedup/tagging-bakeoff/runs/${runId}/scores`, { query: params },
   );
 
 export interface BakeoffImageDetailScore {
@@ -2327,7 +2276,7 @@ export const getBakeoffImageDetail = (
   imageId: number,
 ): Promise<{ data: BakeoffImageDetail }> =>
   request<{ data: BakeoffImageDetail }>(
-    `/new-dedup/tagging-bakeoff/runs/${runId}/images/${imageId}`, { jwt: true },
+    `/new-dedup/tagging-bakeoff/runs/${runId}/images/${imageId}`
   );
 
 // "Border case" flag (migration 310): even a human isn't confident about this
@@ -2343,7 +2292,6 @@ export const setBorderCase = (
   request<{ data: BorderCase }>('/labeling/border-case', {
     method: 'POST',
     json: { image_id },
-    jwt: true,
   });
 export const deleteBorderCase = (
   image_id: number,
@@ -2351,11 +2299,10 @@ export const deleteBorderCase = (
   request<{ data: { deleted: boolean } }>('/labeling/border-case', {
     method: 'DELETE',
     query: { image_id },
-    jwt: true,
   });
 
 export const listAgentTools = (): Promise<{ data: AgentTool[] }> =>
-  request<{ data: AgentTool[] }>('/admin/tools', { jwt: true });
+  request<{ data: AgentTool[] }>('/admin/tools');
 
 /* ----- per-portal operational limits (Scrapers dashboard, migration 114) ---
  * Each portal's limits resolve as CLI override > per-portal DB > global
@@ -2388,7 +2335,7 @@ export interface PortalAdminRow {
 }
 
 export const listPortals = (): Promise<{ data: PortalAdminRow[] }> =>
-  request<{ data: PortalAdminRow[] }>('/admin/portals', { jwt: true });
+  request<{ data: PortalAdminRow[] }>('/admin/portals');
 
 export const updatePortalLimits = (
   source: string,
@@ -2397,7 +2344,6 @@ export const updatePortalLimits = (
   request(`/admin/portals/${encodeURIComponent(source)}/limits`, {
     method: 'PUT',
     json: patch,
-    jwt: true,
   });
 
 /* ----- rent map: MF Cenová mapa nájemného (migration 132) ------------------
@@ -2424,20 +2370,19 @@ export interface RentMapIngestResult {
 }
 
 export const getRentMapStatus = (): Promise<{ current: RentMapRevision | null }> =>
-  request<{ current: RentMapRevision | null }>('/admin/rent-map', { jwt: true });
+  request<{ current: RentMapRevision | null }>('/admin/rent-map');
 
 export const listRentMapRevisions = (): Promise<{ data: RentMapRevision[] }> =>
-  request<{ data: RentMapRevision[] }>('/admin/rent-map/revisions', { jwt: true });
+  request<{ data: RentMapRevision[] }>('/admin/rent-map/revisions');
 
 export const triggerRentMapFetch = (): Promise<RentMapIngestResult> =>
-  request<RentMapIngestResult>('/admin/rent-map/fetch', { method: 'POST', jwt: true });
+  request<RentMapIngestResult>('/admin/rent-map/fetch', { method: 'POST' });
 
 export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
   const form = new FormData();
   form.append('file', file);
   return request<RentMapIngestResult>('/admin/rent-map/revisions', {
     method: 'POST',
-    jwt: true,
     form,
   });
 }
@@ -2465,8 +2410,7 @@ export const getConditionScoringRegions = (): Promise<{
   data: ConditionScoringRegionsPayload;
 }> =>
   request<{ data: ConditionScoringRegionsPayload }>(
-    '/admin/condition-scoring/regions',
-    { jwt: true },
+    '/admin/condition-scoring/regions'
   );
 
 export const updateConditionScoringRegions = (
@@ -2474,7 +2418,7 @@ export const updateConditionScoringRegions = (
 ): Promise<{ data: ConditionScoringRegionsPayload }> =>
   request<{ data: ConditionScoringRegionsPayload }>(
     '/admin/condition-scoring/regions',
-    { method: 'PUT', json: { enabled_region_ids: enabledRegionIds }, jwt: true },
+    { method: 'PUT', json: { enabled_region_ids: enabledRegionIds } },
   );
 
 /* Per-kraj CLIP-tagging drain priority. GET every kraj with its priority flag +
@@ -2495,14 +2439,14 @@ export interface ClipTaggingRegionsPayload {
 export const getClipTaggingRegions = (): Promise<{
   data: ClipTaggingRegionsPayload;
 }> =>
-  request<{ data: ClipTaggingRegionsPayload }>('/admin/clip-tagging/regions', { jwt: true });
+  request<{ data: ClipTaggingRegionsPayload }>('/admin/clip-tagging/regions');
 
 export const updateClipTaggingRegions = (
   priorityRegionIds: number[],
 ): Promise<{ data: ClipTaggingRegionsPayload }> =>
   request<{ data: ClipTaggingRegionsPayload }>(
     '/admin/clip-tagging/regions',
-    { method: 'PUT', json: { priority_region_ids: priorityRegionIds }, jwt: true },
+    { method: 'PUT', json: { priority_region_ids: priorityRegionIds } },
   );
 
 /* ----- filter registry + visibility (PR 1 / migration 059) ----------------
@@ -2539,10 +2483,10 @@ export interface FilterVisibilityRow {
 }
 
 export const getFilterSchema = (): Promise<FilterSchemaPayload> =>
-  request<FilterSchemaPayload>('/admin/filter-schema', { jwt: true });
+  request<FilterSchemaPayload>('/admin/filter-schema');
 
 export const getFilterVisibility = (): Promise<{ data: FilterVisibilityRow[] }> =>
-  request<{ data: FilterVisibilityRow[] }>('/admin/filter-visibility', { jwt: true });
+  request<{ data: FilterVisibilityRow[] }>('/admin/filter-visibility');
 
 export const setFilterVisibility = (
   agenda: Agenda,
@@ -2551,7 +2495,7 @@ export const setFilterVisibility = (
 ): Promise<FilterVisibilityRow> =>
   request<FilterVisibilityRow>(
     `/admin/filter-visibility/${encodeURIComponent(agenda)}/${encodeURIComponent(filterId)}`,
-    { method: 'PUT', json: { enabled }, jwt: true },
+    { method: 'PUT', json: { enabled } },
   );
 
 /* ----- curation (U2.6) ---------------------------------------------------
@@ -2564,19 +2508,17 @@ export const setFilterVisibility = (
  * create, update, delete, attach, detach) goes through the FastAPI endpoints
  * wrapped below.
  *
- * EVERY wrapper here passes `jwt: true`. The routes run on the tenant pool
- * (verify_jwt + RLS-scoped connection), which rejects the static API_TOKEN
- * outright — it is not an identity, it ships inside this bundle. Dropping the
- * flag does not degrade to "unscoped but working"; it 401s.
+ * The routes run on the tenant pool (verify_jwt + RLS-scoped connection): the
+ * session JWT every request carries is the identity that scopes them.
  */
 
 /* Collections */
 
 export const listCollections = (): Promise<{ data: Collection[]; total: number }> =>
-  request<{ data: Collection[]; total: number }>('/collections', { jwt: true });
+  request<{ data: Collection[]; total: number }>('/collections');
 
 export const getCollection = (id: number): Promise<CollectionWithProperties> =>
-  request<CollectionWithProperties>(`/collections/${id}`, { jwt: true });
+  request<CollectionWithProperties>(`/collections/${id}`);
 
 export const createCollection = (input: {
   name: string;
@@ -2584,7 +2526,7 @@ export const createCollection = (input: {
   monitoring_enabled?: boolean;
   notify_channels?: string[];
 }): Promise<Collection> =>
-  request<Collection>('/collections', { method: 'POST', json: input, jwt: true });
+  request<Collection>('/collections', { method: 'POST', json: input });
 
 export const updateCollection = (
   id: number,
@@ -2598,11 +2540,10 @@ export const updateCollection = (
   request<Collection>(`/collections/${id}`, {
     method: 'PATCH',
     json: input,
-    jwt: true,
   });
 
 export const deleteCollection = (id: number): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(`/collections/${id}`, { method: 'DELETE', jwt: true });
+  request<{ deleted: true }>(`/collections/${id}`, { method: 'DELETE' });
 
 export const addPropertiesToCollection = (
   id: number,
@@ -2611,7 +2552,6 @@ export const addPropertiesToCollection = (
   request<{ added: number; skipped: number }>(`/collections/${id}/properties`, {
     method: 'POST',
     json: { property_ids },
-    jwt: true,
   });
 
 export const removePropertyFromCollection = (
@@ -2620,25 +2560,25 @@ export const removePropertyFromCollection = (
 ): Promise<{ removed: boolean }> =>
   request<{ removed: boolean }>(
     `/collections/${id}/properties/${property_id}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 /* Tags */
 
 export const listTags = (): Promise<{ data: Tag[] }> =>
-  request<{ data: Tag[] }>('/tags', { jwt: true });
+  request<{ data: Tag[] }>('/tags');
 
 export const createTag = (input: { name: string; color: TagColor }): Promise<Tag> =>
-  request<Tag>('/tags', { method: 'POST', json: input, jwt: true });
+  request<Tag>('/tags', { method: 'POST', json: input });
 
 export const updateTag = (
   id: number,
   patch: { name?: string | null; color?: TagColor | null },
 ): Promise<Tag> =>
-  request<Tag>(`/tags/${id}`, { method: 'PATCH', json: patch, jwt: true });
+  request<Tag>(`/tags/${id}`, { method: 'PATCH', json: patch });
 
 export const deleteTag = (id: number): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(`/tags/${id}`, { method: 'DELETE', jwt: true });
+  request<{ deleted: true }>(`/tags/${id}`, { method: 'DELETE' });
 
 export const attachTag = (
   property_id: number,
@@ -2647,7 +2587,6 @@ export const attachTag = (
   request<{ attached: boolean }>(`/properties/${property_id}/tags`, {
     method: 'POST',
     json: { tag_id },
-    jwt: true,
   });
 
 export const detachTag = (
@@ -2656,7 +2595,7 @@ export const detachTag = (
 ): Promise<{ detached: boolean }> =>
   request<{ detached: boolean }>(
     `/properties/${property_id}/tags/${tag_id}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 /* Notes (per-property journal) */
@@ -2664,7 +2603,7 @@ export const detachTag = (
 export const listPropertyNotes = (
   property_id: number,
 ): Promise<{ data: Note[] }> =>
-  request<{ data: Note[] }>(`/properties/${property_id}/notes`, { jwt: true });
+  request<{ data: Note[] }>(`/properties/${property_id}/notes`);
 
 export const createPropertyNote = (
   property_id: number,
@@ -2683,7 +2622,6 @@ export const createPropertyNote = (
       ...(origin_listing_id != null ? { origin_listing_id } : {}),
       ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
     },
-    jwt: true,
   });
 
 export const updatePropertyNote = (
@@ -2694,7 +2632,6 @@ export const updatePropertyNote = (
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
     json: { body },
-    jwt: true,
   });
 
 export const deletePropertyNote = (
@@ -2703,7 +2640,6 @@ export const deletePropertyNote = (
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 /* A note's files (migration 592): one file per request; the bytes come back through the API
@@ -2718,7 +2654,6 @@ export const uploadNoteAttachment = (
   return request<NoteAttachment>(`/properties/${property_id}/notes/${note_id}/attachments`, {
     method: 'POST',
     form,
-    jwt: true,
   });
 };
 
@@ -2727,9 +2662,7 @@ export const fetchNoteAttachmentBlob = (
   note_id: number,
   attachment_id: number,
 ): Promise<Blob> =>
-  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`, {
-    jwt: true,
-  });
+  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`);
 
 export const deleteNoteAttachment = (
   property_id: number,
@@ -2738,7 +2671,7 @@ export const deleteNoteAttachment = (
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(
     `/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 /* Dismissals (migration 536) — "never show me this property again", and its
@@ -2750,7 +2683,6 @@ export const dismissProperty = (
   request<{ property_id: number; added: boolean }>('/dismissals', {
     method: 'POST',
     json: { property_id },
-    jwt: true,
   });
 
 export const undismissProperty = (
@@ -2758,7 +2690,6 @@ export const undismissProperty = (
 ): Promise<{ property_id: number; removed: boolean }> =>
   request<{ property_id: number; removed: boolean }>(`/dismissals/${property_id}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 /* Deal pipeline (migration 205) — bookmark a property into the pipeline
@@ -2769,7 +2700,7 @@ export const addPipelineCard = (
 ): Promise<{ property_id: number; stage_key: string; added: boolean }> =>
   request<{ property_id: number; stage_key: string; added: boolean }>(
     '/pipeline/cards',
-    { method: 'POST', json: { property_id }, jwt: true },
+    { method: 'POST', json: { property_id } },
   );
 
 export const removePipelineCard = (
@@ -2777,7 +2708,6 @@ export const removePipelineCard = (
 ): Promise<{ removed: boolean }> =>
   request<{ removed: boolean }>(`/pipeline/cards/${property_id}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 export const movePipelineCard = (
@@ -2790,7 +2720,6 @@ export const movePipelineCard = (
     {
       method: 'PATCH',
       json: board_position != null ? { stage_id, board_position } : { stage_id },
-      jwt: true,
     },
   );
 
@@ -2804,7 +2733,7 @@ export const createPipelineStage = (input: {
   /* Short funnel badge (migration 377); omit to fall back to the ordinal. */
   code?: string | null;
 }): Promise<PipelineStage> =>
-  request<PipelineStage>('/pipeline/stages', { method: 'POST', json: input, jwt: true });
+  request<PipelineStage>('/pipeline/stages', { method: 'POST', json: input });
 
 export const updatePipelineStage = (
   stage_id: number,
@@ -2820,7 +2749,6 @@ export const updatePipelineStage = (
   request<PipelineStage>(`/pipeline/stages/${stage_id}`, {
     method: 'PATCH',
     json: patch,
-    jwt: true,
   });
 
 export const reorderPipelineStages = (
@@ -2829,7 +2757,6 @@ export const reorderPipelineStages = (
   request<{ data: PipelineStage[] }>('/pipeline/stages/reorder', {
     method: 'POST',
     json: { ordered_ids },
-    jwt: true,
   });
 
 export const archivePipelineStage = (
@@ -2837,7 +2764,7 @@ export const archivePipelineStage = (
 ): Promise<{ archived: boolean; stage_id: number }> =>
   request<{ archived: boolean; stage_id: number }>(
     `/pipeline/stages/${stage_id}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 /* Manual rental estimates (Phase U-ME): shared reference data every account
@@ -2857,7 +2784,7 @@ export const createManualEstimate = (
 ): Promise<ManualRentalEstimate> =>
   request<ManualRentalEstimate>(
     `/listings/${sreality_id}/manual_estimates`,
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
 
 export const updateManualEstimate = (
@@ -2866,7 +2793,7 @@ export const updateManualEstimate = (
 ): Promise<ManualRentalEstimate> =>
   request<ManualRentalEstimate>(
     `/manual_estimates/${estimate_id}`,
-    { method: 'PATCH', json: body, jwt: true },
+    { method: 'PATCH', json: body },
   );
 
 export const deleteManualEstimate = (
@@ -2874,7 +2801,6 @@ export const deleteManualEstimate = (
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/manual_estimates/${estimate_id}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */
@@ -2896,15 +2822,14 @@ export const listWatchdogSubscriptions = (
 ): Promise<{ data: WatchdogSubscription[]; total: number }> =>
   request<{ data: WatchdogSubscription[]; total: number }>(
     '/notifications/subscriptions',
-    { query: { include_inactive: options.includeInactive ?? true }, jwt: true },
+    { query: { include_inactive: options.includeInactive ?? true } },
   );
 
 export const getWatchdogSubscription = (
   id: string,
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
-    `/notifications/subscriptions/${encodeURIComponent(id)}`,
-    { jwt: true },
+    `/notifications/subscriptions/${encodeURIComponent(id)}`
   );
 
 export const createWatchdogSubscription = (input: {
@@ -2916,7 +2841,6 @@ export const createWatchdogSubscription = (input: {
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
     json: input,
-    jwt: true,
   });
 
 export const updateWatchdogSubscription = (
@@ -2930,7 +2854,7 @@ export const updateWatchdogSubscription = (
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
     `/notifications/subscriptions/${encodeURIComponent(id)}`,
-    { method: 'PUT', json: patch, jwt: true },
+    { method: 'PUT', json: patch },
   );
 
 export const deleteWatchdogSubscription = (
@@ -2938,7 +2862,7 @@ export const deleteWatchdogSubscription = (
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(
     `/notifications/subscriptions/${encodeURIComponent(id)}`,
-    { method: 'DELETE', jwt: true },
+    { method: 'DELETE' },
   );
 
 export const listWatchdogDispatches = (
@@ -2946,7 +2870,6 @@ export const listWatchdogDispatches = (
 ): Promise<WatchdogDispatchesResponse> =>
   request<WatchdogDispatchesResponse>('/notifications/dispatches', {
     query: params as Record<string, QueryValue>,
-    jwt: true,
   });
 
 export const markWatchdogDispatchSeen = (
@@ -2954,7 +2877,7 @@ export const markWatchdogDispatchSeen = (
 ): Promise<WatchdogDispatch> =>
   request<WatchdogDispatch>(
     `/notifications/dispatches/${encodeURIComponent(dispatchId)}/mark-seen`,
-    { method: 'POST', jwt: true },
+    { method: 'POST' },
   );
 
 export const kickoffWatchdogDispatchEstimate = (
@@ -2999,7 +2922,6 @@ export const listNotifications = (
 ): Promise<WatchdogDispatchesResponse> =>
   request<WatchdogDispatchesResponse>('/notifications/dispatches', {
     query: params as Record<string, QueryValue>,
-    jwt: true,
   });
 
 export const getNotificationUnreadCount = (
@@ -3007,7 +2929,6 @@ export const getNotificationUnreadCount = (
 ): Promise<NotificationUnreadCount> =>
   request<NotificationUnreadCount>('/notifications/unread-count', {
     query: { source_kind },
-    jwt: true,
   });
 
 export const markAllNotificationsSeen = (
@@ -3016,20 +2937,17 @@ export const markAllNotificationsSeen = (
   request<{ updated: number }>('/notifications/mark-all-seen', {
     method: 'POST',
     query: { source_kind },
-    jwt: true,
   });
 
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's
- * JWT and RLS, so each call sends `jwt: true`. */
+ * JWT and RLS. */
 
 export const listFilterPresets = (): Promise<{
   data: FilterPreset[];
   total: number;
 }> =>
-  request<{ data: FilterPreset[]; total: number }>('/filter-presets', {
-    jwt: true,
-  });
+  request<{ data: FilterPreset[]; total: number }>('/filter-presets');
 
 export const createFilterPreset = (input: {
   name: string;
@@ -3039,7 +2957,6 @@ export const createFilterPreset = (input: {
   request<FilterPreset>('/filter-presets', {
     method: 'POST',
     json: input,
-    jwt: true,
   });
 
 export const updateFilterPreset = (
@@ -3049,13 +2966,11 @@ export const updateFilterPreset = (
   request<FilterPreset>(`/filter-presets/${encodeURIComponent(id)}`, {
     method: 'PUT',
     json: patch,
-    jwt: true,
   });
 
 export const deleteFilterPreset = (id: string): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/filter-presets/${encodeURIComponent(id)}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 /* Persist a new display order (full ordered id-list, 0 = first). Returns the
@@ -3066,13 +2981,12 @@ export const reorderFilterPresets = (
   request<{ data: FilterPreset[]; total: number }>('/filter-presets/reorder', {
     method: 'PUT',
     json: { ids },
-    jwt: true,
   });
 
 /* ----- Operator merge mechanics (multi-portal) ----------------------------
  * Mounted under `/properties/*` since the NEW DEDUP cutoff (docs/design/
  * new-dedup/CUTOFF.md §2/S5) — the mechanics that survived the decision-layer
- * removal. Every route is `require_admin`, so each call sends `jwt: true`. */
+ * removal. Every route is `require_admin`. */
 
 /* What a merge moved of the acting account's own (MS15): notes counted, the
  * pipeline stage, collections and tags by name. A folded item did not move;
@@ -3107,7 +3021,6 @@ export const mergePropertySet = (
   request<MergeResult>('/properties/merge', {
     method: 'POST',
     json: { property_ids: propertyIds },
-    jwt: true,
   });
 
 /* How many "Různé" rulings a merge of these properties would take back (MS12),
@@ -3120,7 +3033,6 @@ export interface MergePreview {
 export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePreview> =>
   request<MergePreview>('/properties/merge', {
     query: { properties: propertyIds.join(',') },
-    jwt: true,
   });
 
 /* The split by letters (MS18), `GET`/`POST /properties/{id}/split`: every ad of
@@ -3251,13 +3163,12 @@ export const getSplitPreview = (
   letters: string,
   choices?: string,
 ): Promise<SplitPreview> =>
-  request<SplitPreview>(`/properties/${propertyId}/split`, { query: { letters, choices }, jwt: true });
+  request<SplitPreview>(`/properties/${propertyId}/split`, { query: { letters, choices } });
 
 export const splitProperty = (propertyId: number, statement: SplitStatement): Promise<SplitResult> =>
   request<SplitResult>(`/properties/${propertyId}/split`, {
     method: 'POST',
     json: statement,
-    jwt: true,
   });
 
 /* Where each advert came from — the merge ledger is admin-only, hence a route and
@@ -3274,8 +3185,7 @@ export const fetchPropertyOrigins = (
   propertyId: number,
 ): Promise<{ property_id: number; adverts: AdvertOrigin[] }> =>
   request<{ property_id: number; adverts: AdvertOrigin[] }>(
-    `/properties/${propertyId}/origins`,
-    { jwt: true },
+    `/properties/${propertyId}/origins`
   );
 
 /* Decision 9: engine splits are PROPOSE-ONLY. One live multi-advert property as a
@@ -3327,7 +3237,7 @@ export const getProposedSplits = (
     withheld?: string | null;
   }>
 > =>
-  request('/autodedup/proposed-splits', { query: f as Record<string, QueryValue>, jwt: true });
+  request('/autodedup/proposed-splits', { query: f as Record<string, QueryValue> });
 
 /* E937: the category review. The named live properties whose ads carry categories
  * rule 15 never joins, as SIDES — the ads its gate passes together (one
@@ -3371,7 +3281,7 @@ export interface CategorySplit {
 export const getCategorySplits = (
   propertyIds: readonly number[],
 ): Promise<AutodedupEnvelope<{ items: CategorySplit[]; missing: number[] }>> =>
-  request('/autodedup/category-splits', { query: { properties: propertyIds.join(',') }, jwt: true });
+  request('/autodedup/category-splits', { query: { properties: propertyIds.join(',') } });
 
 /* ----- the rulings page (E920) ------------------------------------------------
  *
@@ -3529,7 +3439,7 @@ export function getAutodedupRulings(
 export function getAutodedupRulings(
   f: RulingFilters,
 ): Promise<AutodedupEnvelope<RulingsPage<RulingPairRow | RulingGroupRow>>> {
-  return request('/autodedup/rulings', { query: blankToNull(f), jwt: true });
+  return request('/autodedup/rulings', { query: blankToNull(f) });
 }
 
 /* ----- price-stats datasets ---------------------------------------------- */
@@ -3555,23 +3465,23 @@ export interface PriceStatDatasetInput {
 export const createPriceStatDataset = (
   input: PriceStatDatasetInput,
 ): Promise<import('./priceStats').PriceStatDataset> =>
-  apiPost('/price-stats/datasets', input, undefined, true);
+  apiPost('/price-stats/datasets', input);
 
 export const deletePriceStatDataset = (
   id: number,
 ): Promise<{ id: number; is_active: boolean }> =>
-  request(`/price-stats/datasets/${id}`, { method: 'DELETE', jwt: true });
+  request(`/price-stats/datasets/${id}`, { method: 'DELETE' });
 
 export const updatePriceStatDataset = (
   id: number,
   patch: Partial<PriceStatDatasetInput> & { is_active?: boolean },
 ): Promise<import('./priceStats').PriceStatDataset> =>
-  request(`/price-stats/datasets/${id}`, { method: 'PATCH', json: patch, jwt: true });
+  request(`/price-stats/datasets/${id}`, { method: 'PATCH', json: patch });
 
 export const runPriceStatDataset = (
   id: number,
 ): Promise<{ dispatched: boolean; run_url?: string; detail?: string }> =>
-  apiPost(`/price-stats/datasets/${id}/run`, {}, undefined, true);
+  apiPost(`/price-stats/datasets/${id}/run`, {});
 
 /* ----- broker outreach CRM (Phase 4) ------------------------------------- *
  *
@@ -3648,10 +3558,10 @@ export interface OutreachSuppression {
 }
 
 export const listOutreachCampaigns = (): Promise<{ campaigns: OutreachCampaign[] }> =>
-  request<{ campaigns: OutreachCampaign[] }>('/outreach/campaigns', { jwt: true });
+  request<{ campaigns: OutreachCampaign[] }>('/outreach/campaigns');
 
 export const getOutreachCampaign = (id: number): Promise<OutreachCampaign> =>
-  request<OutreachCampaign>(`/outreach/campaigns/${id}`, { jwt: true });
+  request<OutreachCampaign>(`/outreach/campaigns/${id}`);
 
 export const createOutreachCampaign = (input: {
   name: string;
@@ -3659,7 +3569,7 @@ export const createOutreachCampaign = (input: {
   guidance?: string | null;
   target?: OutreachTargetSpec | null;
 }): Promise<OutreachCampaign> =>
-  request<OutreachCampaign>('/outreach/campaigns', { method: 'POST', json: input, jwt: true });
+  request<OutreachCampaign>('/outreach/campaigns', { method: 'POST', json: input });
 
 export const updateOutreachCampaign = (
   id: number,
@@ -3671,7 +3581,7 @@ export const updateOutreachCampaign = (
     target?: OutreachTargetSpec;
   },
 ): Promise<OutreachCampaign> =>
-  request<OutreachCampaign>(`/outreach/campaigns/${id}`, { method: 'PATCH', json: patch, jwt: true });
+  request<OutreachCampaign>(`/outreach/campaigns/${id}`, { method: 'PATCH', json: patch });
 
 export const previewOutreachTargets = (
   id: number,
@@ -3679,7 +3589,7 @@ export const previewOutreachTargets = (
 ): Promise<{ targets: OutreachTarget[]; count: number }> =>
   request<{ targets: OutreachTarget[]; count: number }>(
     `/outreach/campaigns/${id}/targets`,
-    { query: { limit }, jwt: true },
+    { query: { limit } },
   );
 
 export const generateOutreachDrafts = (
@@ -3688,7 +3598,7 @@ export const generateOutreachDrafts = (
 ): Promise<{ generated: number; targets: number }> =>
   request<{ generated: number; targets: number }>(
     `/outreach/campaigns/${id}/generate`,
-    { method: 'POST', query: { limit }, jwt: true },
+    { method: 'POST', query: { limit } },
   );
 
 export const listOutreachMessages = (
@@ -3697,7 +3607,7 @@ export const listOutreachMessages = (
 ): Promise<{ messages: OutreachMessage[] }> =>
   request<{ messages: OutreachMessage[] }>(
     `/outreach/campaigns/${id}/messages`,
-    { query: status ? { status } : undefined, jwt: true },
+    { query: status ? { status } : undefined },
   );
 
 export const updateOutreachMessage = (
@@ -3707,7 +3617,6 @@ export const updateOutreachMessage = (
   request<OutreachMessage>(`/outreach/messages/${messageId}`, {
     method: 'PATCH',
     json: patch,
-    jwt: true,
   });
 
 export const regenerateOutreachMessage = (
@@ -3715,11 +3624,10 @@ export const regenerateOutreachMessage = (
 ): Promise<OutreachMessage> =>
   request<OutreachMessage>(`/outreach/messages/${messageId}/regenerate`, {
     method: 'POST',
-    jwt: true,
   });
 
 export const listOutreachSuppressions = (): Promise<{ suppressions: OutreachSuppression[] }> =>
-  request<{ suppressions: OutreachSuppression[] }>('/outreach/suppressions', { jwt: true });
+  request<{ suppressions: OutreachSuppression[] }>('/outreach/suppressions');
 
 export const addOutreachSuppression = (
   broker_id: number,
@@ -3728,7 +3636,6 @@ export const addOutreachSuppression = (
   request<OutreachSuppression>('/outreach/suppressions', {
     method: 'POST',
     json: { broker_id, reason },
-    jwt: true,
   });
 
 export const removeOutreachSuppression = (
@@ -3736,7 +3643,6 @@ export const removeOutreachSuppression = (
 ): Promise<{ removed: number }> =>
   request<{ removed: number }>(`/outreach/suppressions/${broker_id}`, {
     method: 'DELETE',
-    jwt: true,
   });
 
 /* ----- broker merge review (Phase 5) ------------------------------------- *
@@ -3811,7 +3717,7 @@ export const listBrokerMergeCandidates = (
 ): Promise<BrokerMergeCandidatePage> =>
   request<BrokerMergeCandidatePage>(
     '/broker-review/candidates',
-    { query: { limit, offset, ...(reason ? { reason } : {}) }, jwt: true },
+    { query: { limit, offset, ...(reason ? { reason } : {}) } },
   );
 
 export const mergeBrokerCandidate = (
@@ -3821,25 +3727,23 @@ export const mergeBrokerCandidate = (
   request('/broker-review/candidates/' + candidateId + '/merge', {
     method: 'POST',
     json: { broker_ids: brokerIds ?? null },
-    jwt: true,
   });
 
 export const dismissBrokerCandidate = (
   candidateId: number,
 ): Promise<{ id: number; status: string }> =>
-  request('/broker-review/candidates/' + candidateId + '/dismiss', { method: 'POST', jwt: true });
+  request('/broker-review/candidates/' + candidateId + '/dismiss', { method: 'POST' });
 
 export const listBrokerMerges = (
   limit = 50,
 ): Promise<{ merges: BrokerMergeRecord[] }> =>
-  request<{ merges: BrokerMergeRecord[] }>('/broker-review/merges', { query: { limit }, jwt: true });
+  request<{ merges: BrokerMergeRecord[] }>('/broker-review/merges', { query: { limit } });
 
 export const unmergeBrokers = (
   mergeGroupId: string,
 ): Promise<{ merge_group_id: string; survivor_broker_id: number; restored_broker_ids: number[] }> =>
   request('/broker-review/merges/' + encodeURIComponent(mergeGroupId) + '/unmerge', {
     method: 'POST',
-    jwt: true,
   });
 
 /* ----- billing: tiers + agenda visibility (admin) ------------------------- */
@@ -3863,26 +3767,26 @@ export type EntitlementRow = {
 };
 
 export const adminListPlans = (): Promise<{ data: Plan[] }> =>
-  request('/admin/plans', { jwt: true });
+  request('/admin/plans');
 
 export const adminCreatePlan = (body: {
   key: string;
   name: string;
   position?: number;
   agendas?: Record<string, boolean>;
-}): Promise<Plan> => request('/admin/plans', { method: 'POST', json: body, jwt: true });
+}): Promise<Plan> => request('/admin/plans', { method: 'POST', json: body });
 
 export const adminUpdatePlan = (
   key: string,
   body: Partial<Pick<Plan, 'name' | 'position' | 'agendas' | 'is_default'>>,
 ): Promise<Plan> =>
-  request(`/admin/plans/${encodeURIComponent(key)}`, { method: 'PATCH', json: body, jwt: true });
+  request(`/admin/plans/${encodeURIComponent(key)}`, { method: 'PATCH', json: body });
 
 export const adminDeletePlan = (key: string): Promise<{ deleted: boolean }> =>
-  request(`/admin/plans/${encodeURIComponent(key)}`, { method: 'DELETE', jwt: true });
+  request(`/admin/plans/${encodeURIComponent(key)}`, { method: 'DELETE' });
 
 export const adminListEntitlements = (): Promise<{ data: EntitlementRow[] }> =>
-  request('/admin/entitlements', { jwt: true });
+  request('/admin/entitlements');
 
 export const adminSetEntitlement = (
   accountId: string,
@@ -3891,7 +3795,6 @@ export const adminSetEntitlement = (
   request(`/admin/entitlements/${encodeURIComponent(accountId)}`, {
     method: 'PUT',
     json: body,
-    jwt: true,
   });
 
 /* ------------------------------------------------------------- AUTODEDUP */
@@ -4026,16 +3929,13 @@ export const getAutodedupIterations = (q?: {
 }): Promise<AutodedupIterationPage> =>
   request<AutodedupIterationPage>('/autodedup/iterations', {
     query: { limit: q?.limit ?? null, after: q?.after ?? null },
-    jwt: true,
   });
 
 export const getAutodedupStats = (): Promise<{
   store_ready: boolean;
   data: AutodedupStats | null;
 }> =>
-  request<{ store_ready: boolean; data: AutodedupStats | null }>('/autodedup/stats', {
-    jwt: true,
-  });
+  request<{ store_ready: boolean; data: AutodedupStats | null }>('/autodedup/stats');
 
 /* ---------------------------------------------------------------------------
  * AUTODEDUP · validation UI (PROGRAM.md §12, W5)
@@ -4681,8 +4581,7 @@ export const getAutodedupGenerations = async (): Promise<
   AutodedupEnvelope<{ items: AutodedupGenerationRollup[]; latest: string | null }>
 > =>
   request<AutodedupEnvelope<{ items: AutodedupGenerationRollup[]; latest: string | null }>>(
-    '/autodedup/generations',
-    { jwt: true },
+    '/autodedup/generations'
   );
 
 /* The BLOCK filter's vocabulary. It replaces a free-text field for a numeric
@@ -4693,7 +4592,7 @@ export const getAutodedupBlocks = async (
 ): Promise<AutodedupEnvelope<{ items: AutodedupBlock[]; generation: string }>> =>
   request<AutodedupEnvelope<{ items: AutodedupBlock[]; generation: string }>>(
     '/autodedup/blocks',
-    { query: { generation: generation ?? null }, jwt: true },
+    { query: { generation: generation ?? null } },
   );
 
 /* Each read normalizes ONCE, here, so every page downstream sees one shape.
@@ -4704,7 +4603,7 @@ export const getAutodedupGroups = async (
 ): Promise<AutodedupEnvelope<AutodedupKeysetPage<AutodedupGroup>>> => {
   const res = await request<AutodedupEnvelope<AutodedupKeysetPage<WireGroupItem>>>(
     '/autodedup/groups',
-    { query: { ...f } as Record<string, QueryValue>, jwt: true },
+    { query: { ...f } as Record<string, QueryValue> },
   );
   if (!res.data) return { store_ready: res.store_ready, data: null };
   return {
@@ -4721,7 +4620,6 @@ export const getAutodedupGroup = async (
     AutodedupEnvelope<Omit<AutodedupGroupDetail, 'cluster'> & WireGroupItem>
   >(`/autodedup/groups/${encodeURIComponent(String(clusterKey))}`, {
     query: { generation: generation ?? null },
-    jwt: true,
   });
   if (!res.data) return { store_ready: res.store_ready, data: null };
   return {
@@ -4743,7 +4641,7 @@ export const getAutodedupResidual = async (
 ): Promise<AutodedupEnvelope<AutodedupKeysetPage<AutodedupResidualRow>>> => {
   const res = await request<AutodedupEnvelope<AutodedupKeysetPage<WireResidualRow>>>(
     '/autodedup/residual',
-    { query: { ...f } as Record<string, QueryValue>, jwt: true },
+    { query: { ...f } as Record<string, QueryValue> },
   );
   if (!res.data) return { store_ready: res.store_ready, data: null };
   return {
@@ -4759,7 +4657,7 @@ export const getAutodedupPair = async (
 ): Promise<AutodedupEnvelope<AutodedupPairDetail>> => {
   const res = await request<AutodedupEnvelope<WirePairDetail>>(
     `/autodedup/pair/${encodeURIComponent(String(lo))}/${encodeURIComponent(String(hi))}`,
-    { query: { generation: generation ?? null }, jwt: true },
+    { query: { generation: generation ?? null } },
   );
   if (!res.data) return { store_ready: res.store_ready, data: null };
   return { store_ready: res.store_ready, data: normalizePairDetail(res.data) };
@@ -4814,7 +4712,7 @@ export const postAutodedupVerdict = async (
 > => {
   const res = await request<AutodedupEnvelope<AutodedupVerdictResult>>(
     '/autodedup/verdict',
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
   return {
     store_ready: res.store_ready,
@@ -4870,7 +4768,6 @@ export const postAutodedupSplitVerdict = (
   request<AutodedupEnvelope<AutodedupSplitResult>>('/autodedup/verdict/split', {
     method: 'POST',
     json: body,
-    jwt: true,
   });
 
 /* ---------------------------------------------------------------------------
@@ -4980,7 +4877,7 @@ export const getAutodedupCandidates = async (
 ): Promise<AutodedupEnvelope<AutodedupKeysetPage<AutodedupCandidate>>> =>
   request<AutodedupEnvelope<AutodedupKeysetPage<AutodedupCandidate>>>(
     '/autodedup/candidates',
-    { query: { ...f } as Record<string, QueryValue>, jwt: true },
+    { query: { ...f } as Record<string, QueryValue> },
   );
 
 export const getAutodedupCandidate = async (
@@ -4989,7 +4886,7 @@ export const getAutodedupCandidate = async (
 ): Promise<AutodedupEnvelope<AutodedupCandidateDetail>> =>
   request<AutodedupEnvelope<AutodedupCandidateDetail>>(
     `/autodedup/candidates/${encodeURIComponent(candidateKey)}`,
-    { query: { generation: generation ?? null }, jwt: true },
+    { query: { generation: generation ?? null } },
   );
 
 /* THE CANDIDATE SPLIT. The cluster split's body minus the cluster: the same unit
@@ -5020,7 +4917,7 @@ export const postAutodedupCandidateSplitVerdict = (
 ): Promise<AutodedupEnvelope<AutodedupCandidateSplitResult>> =>
   request<AutodedupEnvelope<AutodedupCandidateSplitResult>>(
     '/autodedup/verdict/candidate-split',
-    { method: 'POST', json: body, jwt: true },
+    { method: 'POST', json: body },
   );
 
 /* HOW FAR THROUGH THE VALIDATION SESSION (D6). Two counts at one grain: the
@@ -5066,7 +4963,6 @@ export const getAutodedupValidationProgress = (q: {
       seed: q.seed ?? null,
       min_score: q.min_score ?? null,
     },
-    jwt: true,
   });
 
 /* THE JUDGE PAGE (`GET /autodedup/judgements`). One row per pair the judge
@@ -5130,4 +5026,4 @@ export interface JudgementFilters {
 export const getAutodedupJudgements = (
   f: JudgementFilters,
 ): Promise<AutodedupEnvelope<JudgementsPage>> =>
-  request('/autodedup/judgements', { query: blankToNull(f), jwt: true });
+  request('/autodedup/judgements', { query: blankToNull(f) });

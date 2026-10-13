@@ -20,11 +20,13 @@ The "treat the SPA as operator-only" interim posture stays in force until that a
 **2026-10-13 update:** Part A step 2 is closed by construction, not by audit. `require_token` now
 accepts a verified JWT too — `api/dependencies.py` `_bearer` is the one reader of the `Authorization`
 header (static token → a machine with no identity, JWT → claims) — so every route the SPA calls
-accepts its session JWT and the SPA sends ONE credential everywhere (the follow-up PR drops
-`jwt: true` and `VITE_API_TOKEN` from the bundle). Trigger: the 2026-10-13 "Invalid token" preset
-incident — a desktop tab open across #1775's deploy kept sending the static token to a route that
-had just moved to `verify_jwt`. With no per-call choice left, that skew class is gone. After the SPA
-PR, Part B has no SPA holder to inventory: `API_TOKEN` is a machine-only secret with no public copy.
+accepts its session JWT and the SPA sends ONE credential everywhere (done the same day: `jwt: true`
+and `VITE_API_TOKEN` are deleted from the bundle; `frontend/src/lib/api.ts` `authHeader`). Trigger:
+the 2026-10-13 "Invalid token" preset incident — a desktop tab open across #1775's deploy kept
+sending the static token to a route that had just moved to `verify_jwt`. With no per-call choice
+left, that skew class is gone. Part B now has no SPA holder to inventory: `API_TOKEN` is a
+machine-only secret with no public copy. Operator step: delete `VITE_API_TOKEN` from the Railway
+`vite` service's variables (unused by the build now).
 
 ## What `API_TOKEN` is
 
