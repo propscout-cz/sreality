@@ -233,20 +233,23 @@ export const sortToParam = (s: SortSpec): string =>
   `${s.direction === 'desc' ? '-' : ''}${s.field}`;
 
 /* -------------------------------------------------------------------------- */
-/* THE PORTAL RULE (MS19, migration 590): portal and broker filters select    */
-/* ADS; rows are always properties.                                           */
+/* THE PORTAL RULE (MS19, migration 590; two-sided since 597): portal and     */
+/* broker filters select ADS; rows are always properties.                     */
 /* -------------------------------------------------------------------------- */
 /* A property matches portal set P when any of its ads is on P, active or not
  * (`all_sources`); the status switch is judged on those ads: active = an active
  * ad on P (`active_sources`), inactive = ads on P and none of them active. With
- * no portal the status is the property's own. One rule in four renderings,
- * pinned to each other by tests/fixtures/portal_rule.json: this one (list,
- * cards, count, map points), `public.portal_status_matches` (Stats, map cells,
- * the broker lookup) and the Watchdog's compiled clause.
+ * no portal the status is the property's own. AND it has no ad on an excluded
+ * portal — any ad, or only active ones under `portalsExcludedActiveOnly`. One
+ * rule in three renderings, pinned to each other by tests/fixtures/
+ * portal_rule.json: this one (list, cards, count, map points),
+ * `public.portal_status_matches` (Stats, map cells, the broker lookup) and the
+ * Watchdog's compiled clauses.
  *
- * A broker filter moves the rule onto the broker's own ads: the server judges
- * portal and status over them (fetchBrokerPropertyIds), so one ad satisfies
- * both and the property-level rule steps aside here. */
+ * A broker filter moves the include side onto the broker's own ads: the server
+ * judges portal and status over them (fetchBrokerPropertyIds), so one ad
+ * satisfies both and that side steps aside here. The exclusion is a statement
+ * about the PROPERTY, so neither a broker nor the status switch moves it. */
 export const adScope = (f: ListingFilters): { portals: string[]; status: ListingStatus } =>
   f.brokerId != null ? { portals: [], status: 'any' } : { portals: f.portals, status: f.status };
 
@@ -268,12 +271,23 @@ export const applyPortalRule = <T>(q: T, f: ListingFilters): T => {
     r = r.overlaps('all_sources', portals);
     if (status === 'inactive') r = r.not('active_sources', 'ov', `{${portals.join(',')}}`);
   }
+  if (f.portalsExcluded.length) {
+    const ads = f.portalsExcludedActiveOnly ? 'active_sources' : 'all_sources';
+    r = r.not(ads, 'ov', `{${f.portalsExcluded.join(',')}}`);
+  }
   /* Redundant by the stored invariant (listed <=> dated): narrows nothing, lets the
    * portal's partial index serve every sort AND the count, so list, cards and count
    * keep ONE filter chain. */
-  if (f.portals.length === 1) r = r.not(`newest_ad_at_${f.portals[0]}`, 'is', null);
+  const sole = solePortal(f);
+  if (sole) r = r.not(`newest_ad_at_${sole}`, 'is', null);
   return r as unknown as T;
 };
+
+/* The one INCLUDED portal, when exactly one is: it names the newest-ad column the
+ * one-portal order sorts by and the conjunct above narrows on, so the two cannot
+ * disagree (keyset.ts treats that column as NOT NULL on every paged row). */
+const solePortal = (f: ListingFilters): string | null =>
+  f.portals.length === 1 ? f.portals[0] : null;
 
 /* Relation names, in one place so a fetcher cannot read one relation and count
  * another. */
@@ -324,7 +338,7 @@ const mapSource = (f: ListingFilters, columns: string) =>
  * changes neither rule. Only the order changes — every filter keeps its meaning
  * and rows keep the property's own dates. Never in SORTABLE_FIELDS or a URL. */
 export const orderPortal = (f: ListingFilters, sort: SortSpec): string | null =>
-  f.portals.length === 1 && sort.field === 'first_seen_at' ? f.portals[0] : null;
+  sort.field === 'first_seen_at' ? solePortal(f) : null;
 
 export const effectiveSort = (f: ListingFilters, sort: SortSpec): SortSpec => {
   const p = orderPortal(f, sort);
@@ -1256,7 +1270,7 @@ export interface BrowseStatsResolvedFilters {
  *
  * ONE builder, because there are now TWO callers: fetchBrowseStats and
  * fetchListingsForMap's `browse_map_cells` read (migration 439), which takes the
- * SAME named parameters plus two of its own. Built inline in each caller, this
+ * SAME named parameters plus its own `point_budget`. Built inline in each caller, this
  * object is the single richest opportunity for the Stats cohort and the map
  * cohort to silently disagree — a new filter wired into one literal and not the
  * other produces a map and a Stats tab describing different sets of properties,
@@ -1378,6 +1392,9 @@ export const buildBrowseStatsArgs = (
     apartment_condition_level_min: f.apartmentConditionLevelMin,
     apartment_condition_level_max: f.apartmentConditionLevelMax,
     portal_filter:           scope.portals.length ? scope.portals : null,
+    /* Migration 597 — the property-level side: under a broker too. */
+    portal_excluded_filter:      f.portalsExcluded.length ? f.portalsExcluded : null,
+    portal_excluded_active_only: f.portalsExcludedActiveOnly,
     /* Migration 162 — market-growth obec allowlist (price-stats datasets).
      * Migration 378 — generic property-id allowlist; carries the deal-pipeline
      * scope (rule #22) today, and is the seam any future property-grain

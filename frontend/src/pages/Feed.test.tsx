@@ -172,6 +172,19 @@ describe('<Feed>', () => {
     await waitFor(() => expect(lastFilters().portals).toEqual(['bazos']));
   });
 
+  it('a second tap excludes the portal; then only its active ads can count', async () => {
+    renderFeed();
+    const portals = await screen.findByRole('group', { name: 'Portály' });
+    await userEvent.click(within(portals).getByRole('button', { name: 'Sreality' }));
+    await userEvent.click(within(portals).getByRole('button', { name: 'Sreality' }));
+    await waitFor(() => expect(lastFilters().portalsExcluded).toEqual(['sreality']));
+    expect(lastFilters().portals).toEqual([]);
+    expect(within(portals).getByRole('button', { name: 'Sreality (vyloučeno)' }).textContent)
+      .toBe('−Sreality');
+    await userEvent.click(within(portals).getByRole('button', { name: 'jen aktivní' }));
+    await waitFor(() => expect(lastFilters().portalsExcludedActiveOnly).toBe(true));
+  });
+
   it('switches to the hidden properties only with Skryté', async () => {
     renderFeed();
     await screen.findByText('Místo 1', { exact: false });

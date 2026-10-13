@@ -7,6 +7,18 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Negative portal filters (2026-10-13, migration 597)
+- **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal
+  cycles off → on it → not on it (Browse sidebar, Watchdog editor, phone Feed); once something is
+  excluded, the user picks whether any ad or only active ads count (default: any ad). The rule
+  (`portal_status_matches`, `applyPortalRule`, the Watchdog hook) and its table
+  (`tests/fixtures/portal_rule.json`) carry both sides; the exclusion ignores the status switch and
+  a broker. Paid for by deleting the five RPC parameters nothing sent, the map's
+  `listing_ids_filter`, the retired near-city filter state and dead filter plumbing (#1788).
+- **Next (not started):** its precision tracks merging — outside the AUTODEDUP apply scope about
+  half to three quarters of a "not on sreality" cohort have an unmerged sreality twin (measured
+  2026-10-13); widening the scope (the Prague plan) is the fix, not a UI caveat (operator ruling).
+
 ### Phone app (W1 merged 2026-10-12, closes on the install walk; W2–W4 next — map [#1759](https://github.com/waiff/sreality/issues/1759))
 - The platform on the operator's iPhone home screen: the same SPA at the same address, a
   phone shell by screen width. Waves W0 prototype → W1 feed → W2 property page → W3 pipeline
@@ -887,8 +899,7 @@ unmonitored for watchdogs.
 - Also surfaced, untouched: the agent tool schema advertises 10 comparables
   filters `_FCR_OVERRIDE_FIELDS` drops; `api/main.py:_build_comparables_inputs`
   drops `tom_days_*`/`*_seen_*_days` that `estimation_runs._build_filters` passes;
-  5 registry ids falsely claim `Agenda.WATCHDOG`; the portal filter is
-  mode-dependent (single portal → listing grain, else representative-only).
+  5 registry ids falsely claim `Agenda.WATCHDOG`.
 
 ### Phase U3: Toolkit-backed views (later)
 Surfacing `describe_neighborhood`, `find_distribution_outliers`, and

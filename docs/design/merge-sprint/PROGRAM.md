@@ -254,6 +254,11 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   included, keeps its meaning on every surface. Rows keep the property's own dates; a header chip
   names the order, and a row whose date on P differs from its first seen shows both *(default)*. The
   per-ad Browse lane is deleted.
+  **Amendment, operator ruling 2026-10-13 (migration 597): the rule is two-sided.** A property must
+  also have no ad on any EXCLUDED portal: any ad, active or ended, by default; only active ones when
+  the user picks so per filter. The exclusion is about the property, so the status switch and a
+  broker filter do not move it. One three-state chip per portal (off → on it → not on it) on Browse,
+  the Watchdog editor and the phone Feed; no caveat about unmerged duplicates in the UI.
 - **MS20 — Estimation subject = the property**, through one lookup. Recorded, not built here (§9).
 
 ### Housekeeping
@@ -395,7 +400,7 @@ rule-18 sentence. W5 adds the portal rule to rule 16; the one-portal
 | Status log | the stored on/off-market log, replaced by MS9 | `property_status_events`, its view, trigger and function |
 | Asset links | "same building" links, never used | `assets`, `asset_membership_events`, `properties.asset_id` (W5's 590 already took it out of `browse_projection`, `properties_public` and the `browse_list` cache, re-created views and a rebuilt cache column, no data) |
 | Pipeline note field | a field nothing can write | `property_pipeline.note` |
-| Per-ad Browse lane | the "one portal's own page" machinery, replaced by MS19's one-portal "Newest first" | `listing_feed_visible()`, then `listing_feed_public`; the `listing_ids_filter` parameter of `browse_map_cells` (the function re-created with its grants); `listings_portal_feed_idx` (136 MB, dropped concurrently, outside the transaction); `listing_detail_queue.discovery_seq` with its default and `listings.discovery_seq`, then the sequence `listing_discovery_seq` |
+| Per-ad Browse lane | the "one portal's own page" machinery, replaced by MS19's one-portal "Newest first" | `listing_feed_visible()`, then `listing_feed_public`; ~~the `listing_ids_filter` parameter of `browse_map_cells`~~ (dropped by migration 597, the portal exclusion; W6's 593 section 5 goes); `listings_portal_feed_idx` (136 MB, dropped concurrently, outside the transaction); `listing_detail_queue.discovery_seq` with its default and `listings.discovery_seq`, then the sequence `listing_discovery_seq` |
 | Write-only columns | no longer written since W2a, read by nothing; W5's one restatement of `properties_public` (590) left `distinct_site_count` out | `properties.price_per_m2_source_listing_id` and its function; `properties.distinct_site_count` |
 | Never-used indexes | built for an old Browse path | `properties_cat_last_seen_keyset_idx`, `properties_last_seen_keyset_idx` (1.15 GB) |
 

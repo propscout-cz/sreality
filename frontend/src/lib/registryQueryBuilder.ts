@@ -47,6 +47,8 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // property's ads (all_sources / active_sources), queries.ts:applyPortalRule.
   'status',
   'portals',
+  'portals_excluded',
+  'portals_excluded_active_only',
   // Days-ago integers → ISO timestamp predicates on first/last seen.
   'last_seen_min_days',
   'last_seen_max_days',
@@ -100,9 +102,8 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // (districtCodes.districtsFilterClause), the map box is a lat/lng band and
   // center+radius is an ST_DWithin prefilter. Three predicates, no one column.
   'location',
-  // Retired (W5): the rules are resolved SERVER-side to an obec allowlist
-  // (curated_cities_matching -> obec_ids_filter) before the query is built, so
-  // queries.ts sends `city_index_rules: null` deliberately.
+  // Resolved SERVER-side to an obec allowlist (curated_cities_matching ->
+  // obec_ids_filter) before the query is built; the RPC parameter went in 597.
   'city_index_rules',
 ]);
 

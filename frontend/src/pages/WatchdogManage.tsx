@@ -14,6 +14,7 @@ import {
 import { watchdogKeys } from '@/lib/queries';
 import { fmtAbsolute, fmtCount, fmtRelative } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
+import { portalScopeLabel } from '@/lib/portals';
 import type { WatchdogFilterSpec, WatchdogSubscription } from '@/lib/types';
 import { Th } from '@/components/table';
 
@@ -286,6 +287,10 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
   if (spec.dispositions && spec.dispositions.length) {
     bits.push(spec.dispositions.join(', '));
   }
+  const portalScope = portalScopeLabel(
+    spec.portals ?? [], spec.portals_excluded ?? [], spec.portals_excluded_active_only,
+  );
+  if (portalScope) bits.push(portalScope);
   if (spec.districts && spec.districts.length) {
     const head = spec.districts
       .slice(0, 3)

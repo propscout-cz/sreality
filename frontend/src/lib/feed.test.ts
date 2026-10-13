@@ -13,6 +13,7 @@ import {
   pragueDayKey,
   withPortals,
 } from './feed';
+import { NO_PORTALS } from './portals';
 import type { CardRow } from './queries';
 import type { FilterPreset } from './types';
 
@@ -70,11 +71,12 @@ describe('scope → filters', () => {
     expect(f.categoryMain).toEqual(['dum']);
   });
 
-  it("lets the portal chips replace the scope's own portals, and only when set", () => {
-    const f = { ...FEED_ALL_FILTERS, portals: ['bazos'] };
-    expect(withPortals(f, null).portals).toEqual(['bazos']);
-    expect(withPortals(f, ['sreality', 'idnes']).portals).toEqual(['sreality', 'idnes']);
-    expect(withPortals(f, []).portals).toEqual([]);
+  it("lets the portal chips replace the scope's own portal filter, both sides, only when set", () => {
+    const f = { ...FEED_ALL_FILTERS, portals: ['bazos'], portalsExcluded: ['sreality'] };
+    expect(withPortals(f, null)).toEqual(f);
+    const chosen = { portals: ['idnes'], portalsExcluded: [], portalsExcludedActiveOnly: false };
+    expect(withPortals(f, chosen)).toEqual({ ...f, ...chosen });
+    expect(withPortals(f, NO_PORTALS)).toEqual({ ...f, ...NO_PORTALS });
   });
 });
 

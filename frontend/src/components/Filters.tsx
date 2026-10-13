@@ -25,6 +25,7 @@ import { listCollections } from '@/lib/api';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { browseKeys } from '@/lib/browseKeys';
 import { FilterForm } from '@/components/FilterForm';
+import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
 import MarketGrowthFilter from '@/components/MarketGrowthFilter';
@@ -97,7 +98,7 @@ const CURATION_KEYS = [
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
 
 const OTHER_KEYS = [
-  'portals', 'locationMode', 'centerRadius',
+  'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
   'firstSeenMinDays', 'firstSeenMaxDays',
   'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
@@ -710,13 +711,9 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
           active={bandActive(filters, OTHER_KEYS)}
         >
           <ControlGroup title="Source portal" bordered={false}>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['portals']}
-              labels={{ portals: 'Portal' }}
-              flat
+            <PortalFilterControl
+              value={filters}
+              onChange={(next) => onChange({ ...filters, ...next })}
             />
           </ControlGroup>
 

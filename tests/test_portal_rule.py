@@ -1,4 +1,4 @@
-"""THE portal rule (MS19, migration 590), executed and pinned to the shared fixture.
+"""THE portal rule (MS19, migration 590; two-sided since 597), executed and pinned to the shared fixture.
 
 `tests/fixtures/portal_rule.json` is read by both languages. Here: every case through
 `public.portal_status_matches`, through both aggregate RPCs (Stats over `browse_list`, the
@@ -48,17 +48,22 @@ def _ids(cases: list[dict[str, Any]]) -> list[str]:
 
 
 def test_the_table_covers_every_arm_both_ways() -> None:
-    seen = {(min(len(c["portals"]), 2), c["status"], c["expected"]) for c in CASES}
-    for width, status, expected in itertools.product((0, 1, 2), _STATUS_ARGS, (True, False)):
-        if (width, status) == (0, "any") and not expected:
-            continue  # no portal and no status is no constraint
-        assert (width, status, expected) in seen, (width, status, expected)
+    seen = {(min(len(c["portals"]), 2), min(len(c["excluded"]), 1), c["status"], c["expected"])
+            for c in CASES}
+    for key in itertools.product((0, 1, 2), (0, 1), _STATUS_ARGS, (True, False)):
+        if key == (0, 0, "any", False):
+            continue  # no portal, no exclusion and no status is no constraint
+        assert key in seen, key
+    either_way = {(c["excluded_active_only"], c["expected"]) for c in CASES if c["excluded"]}
+    assert either_way == set(itertools.product((True, False), (True, False)))
 
 
 def test_every_case_names_known_portals_and_consistent_lists() -> None:
     for c in [*CASES, *BROKER_CASES]:
         assert set(c["portals"]) <= set(_PORTALS), c["name"]
     for c in CASES:
+        assert set(c["excluded"]) <= set(_PORTALS), c["name"]
+        assert c["excluded"] or not c["excluded_active_only"], c["name"]
         assert set(c["active_sources"]) <= set(c["all_sources"]), c["name"]
         assert c["is_active"] == bool(c["active_sources"]) or not c["all_sources"], c["name"]
 
@@ -85,19 +90,22 @@ def conn():
 def test_the_function_answers_the_table(conn, case: dict[str, Any]) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            "select public.portal_status_matches(%s, %s::text[], %s::text[], %s::text[], %s)",
+            "select public.portal_status_matches(%s, %s::text[], %s::text[], %s::text[], %s, "
+            "%s::text[], %s)",
             (case["is_active"], case["all_sources"], case["active_sources"],
-             case["portals"], case["status"]))
+             case["portals"], case["status"], case["excluded"], case["excluded_active_only"]))
         assert cur.fetchone()[0] is case["expected"]
 
 
 @live
 @pytest.mark.parametrize("case", [c for c in CASES if c["status"] == "any"],
                          ids=_ids([c for c in CASES if c["status"] == "any"]))
-def test_the_watchdogs_clause_is_the_any_arm(conn, case: dict[str, Any]) -> None:
+def test_the_watchdogs_clauses_are_the_any_arm(conn, case: dict[str, Any]) -> None:
     from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
 
-    where, params = compile_filter_where({"portals": case["portals"]}, PROPERTIES_GRAIN)
+    where, params = compile_filter_where(
+        {"portals": case["portals"], "portals_excluded": case["excluded"],
+         "portals_excluded_active_only": case["excluded_active_only"]}, PROPERTIES_GRAIN)
     with conn.cursor() as cur:
         cur.execute(
             "select count(*) from (values (%(all)s::text[], %(active)s::text[])) "
@@ -109,7 +117,8 @@ def test_the_watchdogs_clause_is_the_any_arm(conn, case: dict[str, Any]) -> None
 def _rpc_args(case: dict[str, Any]) -> dict[str, Any]:
     active_only, inactive_only = _STATUS_ARGS[case["status"]]
     return {"portal": case["portals"] or None, "active_only": active_only,
-            "inactive_only": inactive_only}
+            "inactive_only": inactive_only, "excluded": case["excluded"] or None,
+            "excluded_active_only": case["excluded_active_only"]}
 
 
 @live
@@ -123,7 +132,9 @@ def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
             (next(_IDS), case["is_active"], case["all_sources"], case["active_sources"]))
         cur.execute(
             "select public.browse_stats_properties(portal_filter => %(portal)s::text[], "
-            "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s)",
+            "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
+            "portal_excluded_filter => %(excluded)s::text[], "
+            "portal_excluded_active_only => %(excluded_active_only)s)",
             _rpc_args(case))
         assert cur.fetchone()[0]["total"] == int(case["expected"])
 
@@ -143,7 +154,8 @@ def test_the_map_cells_count_the_table(conn, case: dict[str, Any]) -> None:
         cur.execute(
             "select public.browse_map_cells(portal_filter => %(portal)s::text[], "
             "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
-            "point_budget => 2000)",
+            "portal_excluded_filter => %(excluded)s::text[], "
+            "portal_excluded_active_only => %(excluded_active_only)s, point_budget => 2000)",
             _rpc_args(case))
         assert cur.fetchone()[0]["total"] == int(case["expected"])
 
