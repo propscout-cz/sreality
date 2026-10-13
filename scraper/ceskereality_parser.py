@@ -247,15 +247,18 @@ def index_heading(html: str) -> str | None:
 
 
 def heading_names_kraj(html: str, kraj: str) -> bool:
-    """Does this page's H1 name the kraj we asked for?
+    """Does this page's H1 name the kraj (or okres) we asked for?
 
     The ONLY discriminator between a genuinely empty slice and a degraded 200.
     An empty slice serves HTTP 200, a correct H1 naming the category AND the
     region, zero cards, and NO "Máme tady N" phrase at all — so `_parse_total`
     reads None and the arithmetic alone cannot tell it from a throttled page.
-    Every non-"kraj" token of the slug must appear in the diacritics-stripped
-    H1: `stredocesky-kraj` -> "Prodej bytů Středočeský kraj"; `kraj-vysocina` ->
-    "Prodej bytů Kraj Vysočina"; `praha` -> "Prodej bytů v okrese Praha".
+    Every non-"kraj" token of the slug must appear as a WHOLE WORD of the
+    diacritics-stripped H1 (a substring would let okres `zlin` pass on "Zlínský
+    kraj" and `most` on "samostatné"): `stredocesky-kraj` -> "Prodej bytů
+    Středočeský kraj"; `kraj-vysocina` -> "Prodej bytů Kraj Vysočina"; `praha` ->
+    "Prodej bytů v okrese Praha"; an okres slug in the kraj slot ->
+    `zdar-nad-sazavou` -> "Rodinné domy na prodej v okrese Žďár nad Sázavou".
     The subtype is NOT checked — the H1 spells it in prose ("Ostatní domy na
     prodej Středočeský kraj"), not as the slug.
 
@@ -266,9 +269,9 @@ def heading_names_kraj(html: str, kraj: str) -> bool:
     heading = index_heading(html)
     if not heading:
         return False
-    hay = _strip_diacritics(heading).lower()
+    words = set(re.split(r"[^a-z0-9]+", _strip_diacritics(heading).lower()))
     tokens = [t for t in _strip_diacritics(kraj).lower().split("-") if t != "kraj"]
-    return bool(tokens) and all(t in hay for t in tokens)
+    return bool(tokens) and all(t in words for t in tokens)
 
 
 def _jsonld_product(html: str) -> dict[str, Any]:

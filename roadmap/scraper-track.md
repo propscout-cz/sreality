@@ -21,8 +21,24 @@ Independent of the analytical, UI, and map tracks.
   self-check and the `DESCENT no subtype axis` last resort are unchanged. Tests: the Praha descent,
   the unmapped fallback, a real-page fixture (`portal_html/ceskereality_index_praha_byty.html`) and a
   rail that byty / rodinne-domy / pozemky keep a declared map.
-- **Next:** (i) rodinne-domy stredocesky-kraj `subtype=rodinne-domy` is at 1,922 of 1,980 (97 pages):
-  it needs a third axis before it crosses, or prodej/rodinne-domy parks the same way; (ii) a health
+- **Done (2026-10-13, the okres axis):** prodej/rodinne-domy `subtype=rodinne-domy` in
+  stredocesky-kraj stood at 1,922 of 1,980 (97 pages); past the ceiling it would have parked all
+  11,487 rows of prodej/rodinne-domy. The descent is now an ordered list of axes
+  (`ceskereality_main._DESCENT_AXES`: subtype, then okres): only a subtype child that is itself
+  `ceiling` re-walks per okres, the okres slug in the kraj's URL slot
+  (`/prodej/rodinne-domy/rodinne-domy/praha-vychod/` → "… v okrese Praha-východ"), grandchildren
+  self-verify against the child, keep `kraj` = the parent (one ledger row per kraj) and the empty-page
+  H1 proof checks the okres. `OKRES_SLUGS` declares the 76 RÚIAN okresy of 13 kraje (the page's
+  facet block lists ~10 of stredocesky's 12). Measured live the same day, 116 GETs, all 200, no
+  redirect, every H1 "v okrese …": each kraj's rodinne-domy child = its okres sum EXACTLY —
+  stredocesky 1,918, jihomoravsky 839, jihocesky 947, ustecky 714, plzensky 654, moravskoslezsky 559,
+  kralovehradecky 456, pardubicky 445, olomoucky 423, liberecky 396, vysocina 382, zlinsky 329,
+  karlovarsky 307 (8,369 in all); no slug needed correcting.
+- **Next:** (i) Praha's okres axis (owed, not urgent): `praha` has no `OKRES_SLUGS` entry because
+  praha-1..10 summed to 2,148 of prodej/byty 2,161 (13 short) — not a partition — and the largest
+  Praha subtype is byty-2-kk at 638 (32 pages). Find where the 13 live before mapping; until then an
+  over-ceiling Praha subtype logs `DESCENT no okres axis … owed=OKRES_SLUGS['praha']` and parks its
+  category exactly as byt/prodej did; (ii) a health
   signal for "category has not reached the portal's end for N consecutive walks" — the WARNING sat
   unread for 27 days — that also covers a MAPPED category's `DESCENT residue` (a new or renamed
   subtype), which `index_completeness` cannot see: the children still collect ~99% of the total;

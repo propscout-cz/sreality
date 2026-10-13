@@ -277,7 +277,15 @@ reported `no slice ledger` every cycle, forever. Its walk was already kraj-slice
 so wiring it was one call — but with one non-obvious rule.
 
 **ONE LEDGER ROW PER KRAJ, not per subtype.** A kraj past the 99-page ceiling is
-re-walked per subtype and comes back as several `SliceResult`s sharing one kraj.
+re-walked per subtype (and a subtype child itself past it, per okres —
+`_DESCENT_AXES`: the okres axis is a declared map, the subtype axis is declared
+where measured, else the kraj page's links; each level checked against its
+parent's declared total) and comes back as several `SliceResult`s sharing one
+kraj; an okres grandchild keeps its parent kraj in `kraj` and rides the okres in
+`okres`. Every descent logs `DESCENT cm=… axis=subtype|okres declared=… slugs=…`
+(INFO); `grep 'DESCENT.*axis=okres'` is how to see the okres level fire. A
+residue or deadline marker declares only its unwalked part, so the kraj row's
+`declared_total` stays the kraj's own total.
 Recording those individually would poison the ledger the first time a kraj stopped
 needing the descent: the `kraj/subtype-*` rows from the old shape would linger,
 never be re-walked, and age forever — and the gate reads "every slice of this

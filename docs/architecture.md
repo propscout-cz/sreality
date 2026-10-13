@@ -394,7 +394,11 @@ ceiling per subtype: on a **declared** axis for the three categories measured at
 else on the kraj page's own two-segment `/{sale}/{cat}/{subtype}/{kraj}/` links (subtype
 precedes kraj in the site's URLs; one-segment links are okresy, not subtypes). Either way the
 children's declared sum must add back up to the parent's, or the category stays un-nominated
-(an unmapped byty held byt/prodej un-nominated for 89 walks, 2026-09-16 → 10-13). A 200 carrying
+(an unmapped byty held byt/prodej un-nominated for 89 walks, 2026-09-16 → 10-13). A subtype child
+itself past the ceiling descends once more, onto its kraj's **declared** okresy (`OKRES_SLUGS`, the
+RÚIAN districts of 13 kraje, each measured an exact partition on prodej/rodinne-domy on 2026-10-13 —
+any other category relies on the per-level self-verify; the okres slug takes the kraj's URL slot) and self-verifies the same way; Praha's okres axis is owed (praha-1..10 are not a
+partition), so an over-ceiling Praha subtype stays `ceiling` and logs `DESCENT no okres axis`. A 200 carrying
 zero cards is the portal's real degraded response and is only ever read as a finished slice when
 the page's H1 proves it is the empty slice we asked for. ceskereality is a STRUCTURED HTML portal
 like idnes: each detail page carries a `schema.org` `individualProduct` JSON-LD block (clean price +
