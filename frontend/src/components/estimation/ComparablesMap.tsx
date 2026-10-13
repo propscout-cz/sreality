@@ -301,7 +301,7 @@ export default function ComparablesMap({
   }, [pinHover]);
 
   const previewUrls = useMemo(
-    () => (pinHover ? (imagesById.get(pinHover.listing_id) ?? []).map(imageSrc) : []),
+    () => (pinHover ? (imagesById.get(pinHover.listing_id) ?? []).map((im) => imageSrc(im)) : []),
     [pinHover, imagesById],
   );
 

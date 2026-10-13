@@ -82,10 +82,8 @@ def _bucket(route: APIRoute) -> str:
         return "tenant"
     if deps.require_token in calls:
         return "token"
-    # account_scope is an EITHER gate: it accepts the static token OR a real
-    # Supabase JWT on the one Authorization header, and resolves the caller's
-    # read scope. It is strictly stronger than require_token (same secret, same
-    # timing-safe compare, plus an account predicate), so it buckets with it.
+    # account_scope is require_token's reader (`_bearer`: the static token OR a
+    # verified JWT) plus a read scope, so it buckets with it.
     if deps.account_scope in calls:
         return "token"
     return "public"
@@ -235,6 +233,14 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "DELETE /tags/{tag_id}": "DELETE by id — migration 290 USING clause",
     "DELETE /properties/{property_id}/tags/{tag_id}": (
         "DELETE by id on a child-grain table — migration 292 USING clause"
+    ),
+    "GET /filter-presets": "RLS-only read (migration 290 policy on `filter_presets`)",
+    "GET /filter-presets/{preset_id}": "RLS-only read (migration 290)",
+    "PUT /filter-presets/{preset_id}": "UPDATE by id — migration 290 USING clause",
+    "DELETE /filter-presets/{preset_id}": "DELETE by id — migration 290 USING clause",
+    "PUT /filter-presets/reorder": (
+        "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
+        "account's id matches nothing"
     ),
     "GET /notifications/subscriptions": (
         "RLS-only read (migration 290 on `notification_subscriptions`)"

@@ -853,11 +853,13 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     expect(rpcArgs[0].property_ids_filter).toEqual([3]);
   });
 
-  it('sends the RPC own tag / estimate predicates OFF — one resolution path', async () => {
+  it('never sends the parameters the RPCs ignore — tags and estimates resolve to ids', async () => {
     const { rpcArgs } = stubReads({ collection_properties_public: MEMBERS });
     await fetchBrowseStats({ ...DEFAULT_FILTERS, tags: [5], withEstimates: true });
-    expect(rpcArgs[0].tag_ids).toBeNull();
-    expect(rpcArgs[0].with_estimates).toBe(false);
+    for (const key of ['tag_ids', 'with_estimates', 'city_index_rules', 'city_proximity',
+      'districts_context_filter']) {
+      expect(rpcArgs[0]).not.toHaveProperty(key);
+    }
   });
 
   it('carries the broker in property_ids_filter; the server judged its portal and status', async () => {

@@ -7,9 +7,11 @@ import { AuthProvider } from './lib/auth';
 import { isTransientApiError } from './lib/api';
 import { createMutationCache } from './lib/mutationCache';
 import { applyTheme, readStoredTheme } from './lib/theme';
+import { registerServiceWorker } from './lib/serviceWorker';
 import './styles/globals.css';
 
 applyTheme(readStoredTheme());
+registerServiceWorker();
 
 /* The global "a write failed" toast — see lib/mutationCache. */
 const mutationCache = createMutationCache();

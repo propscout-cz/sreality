@@ -54,7 +54,7 @@ from autodedup import harness
 from autodedup.incremental_store import CohortFacts, Schedule
 from autodedup.export import encode_clip
 from autodedup.settings import Settings
-from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg
 from tests.autodedup.test_incremental import _dataset, _settings, _state, arrival_order, invariant_state
 from tests.autodedup.lane_world import GENERATION, seed_lane, true_population
 from tests.autodedup.lane_world import world as lane_world
@@ -508,7 +508,7 @@ def test_a_re_cut_is_what_closes_the_gap(world, tmp_path) -> None:
 
 def test_the_sql_store_writes_and_reads_the_evidence_counts_and_the_first_stamp() -> None:
     db = FakePg()
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     row = FpRow(GuardRow(5, "byt", "prodej", 60.0, "2+kk", 3), "digest", "o1", "byt", True,
                 Evidence(4, 0, 0, 0))
     store.put_listing(5, row, [("attr_area", "a")])
@@ -516,12 +516,12 @@ def test_the_sql_store_writes_and_reads_the_evidence_counts_and_the_first_stamp(
     first = db.rt_fp[("rt", 5)]["first_decided_at"]
     assert db.rt_fp[("rt", 5)]["ev_complete"] is False
 
-    read = SqlStore(db, "rt").rows([5])[5]
+    read = SqlStore(db, "rt", **LEDGER_KEY).rows([5])[5]
     assert read.evidence == Evidence(4, 0, 0, 0) and not read.evidence.complete
     assert read.first_decided_at == pytest.approx(first.timestamp())
 
     # A refresh replaces the counts and KEEPS the stamp (E92, migration 540).
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     store.put_listing(5, replace(row, evidence=Evidence(4, 4, 4, 4)), [("attr_area", "a")])
     store.flush()
     assert db.rt_fp[("rt", 5)]["ev_complete"] is True

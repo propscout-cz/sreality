@@ -34,12 +34,18 @@ describe('role="dialog" census', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('sees the two sanctioned bespoke sites (so a silent regex miss cannot pass)', () => {
+  it('sees the three sanctioned bespoke sites (so a silent regex miss cannot pass)', () => {
     const root = join(process.cwd(), 'src');
     const sites = sources(root)
       .map((f) => relative(root, f))
       .filter((rel) => rel !== 'components/Dialog.tsx' && BESPOKE_SITE.test(readFileSync(join(root, rel), 'utf8')))
       .sort();
-    expect(sites).toEqual(['components/ImageLightbox.tsx', 'components/estimation/RunPanel.tsx']);
+    /* The phone shell's bottom sheet (#1766) is the third: the stage, collection
+     * and account menus open in it. */
+    expect(sites).toEqual([
+      'components/ImageLightbox.tsx',
+      'components/estimation/RunPanel.tsx',
+      'components/phone/BottomSheet.tsx',
+    ]);
   });
 });

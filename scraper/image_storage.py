@@ -108,6 +108,17 @@ def image_key(listing_id: int, sequence: int | None) -> str:
     return f"{listing_id}/{seq:04d}.jpg"
 
 
+# The phone-size copies `GET /images/{key}?w=` makes on first request (#1765), kept here
+# because the API and the re-master lane (which must delete a copy when it overwrites the
+# photo it was made from) both need the key, and the scraper runtime carries no fastapi.
+COPY_WIDTHS: tuple[int, ...] = (1080,)
+
+
+def copy_key(key: str, width: int) -> str:
+    """`thumb/w<width>/<id>/<seq>.webp` for a validated `<id>/<seq>.jpg` photo key."""
+    return f"thumb/w{width}/{key.removesuffix('.jpg')}.webp"
+
+
 # sreality's v1 rebuild serves bare image URLs; the CDN 401s a bare URL and
 # only returns bytes when the render-transform query is present. Their CDN is an
 # exact-template ALLOWLIST, not a transform language: this chain is their
@@ -329,6 +340,10 @@ class R2Client:
             ContentType=content_type,
             CacheControl="public, max-age=2592000",
         )
+
+    def delete_object(self, key: str) -> None:
+        """Idempotent: S3/R2 answer a delete of a missing key with success."""
+        self._client.delete_object(Bucket=self.bucket, Key=key)
 
     def download_bytes(self, key: str) -> bytes:
         response = self._client.get_object(Bucket=self.bucket, Key=key)

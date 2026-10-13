@@ -17,6 +17,19 @@ single-collection CRUD, tags, buildings, manual estimates, filter-presets, and (
 brokers still authenticate via the shared static token and are not yet per-account scoped.
 The "treat the SPA as operator-only" interim posture stays in force until that audit lands.
 
+**2026-10-13 update:** Part A step 2 is closed by construction, not by audit. `require_token` now
+accepts a verified JWT too — `api/dependencies.py` `_bearer` is the one reader of the `Authorization`
+header (static token → a machine with no identity, JWT → claims) — so every route the SPA calls
+accepts its session JWT and the SPA sends ONE credential everywhere (done the same day: `jwt: true`
+and `VITE_API_TOKEN` are deleted from the bundle; `frontend/src/lib/api.ts` `authHeader`). Trigger:
+the 2026-10-13 "Invalid token" preset incident — a desktop tab open across #1775's deploy kept
+sending the static token to a route that had just moved to `verify_jwt`. With no per-call choice
+left, that skew class is gone. Part B now has no SPA holder to inventory — but every bundle shipped
+before 2026-10-13 (and a service-worker asset cache, ≤ 14 days) still carries the current value, and
+`require_token` still accepts it. Operator steps: ROTATE `API_TOKEN` (Part B steps 3–6; any ClickUp/CI
+holder gets the new value) and delete `VITE_API_TOKEN` from the Railway `vite` service's variables
+(unused by the build now). Only after the rotation is the token a secret with no public copy.
+
 ## What `API_TOKEN` is
 
 `API_TOKEN` is a **single shared static bearer token** — one secret string, the same for
@@ -84,7 +97,7 @@ The extension already does exactly this; the SPA was the last static-token clien
    this up, `verify_jwt`'s legacy branch is now fully removed (not just de-privileged) — see
    the status note at the top of this doc — so a `require_admin`/`verify_jwt` route rejects
    the static token outright regardless of what the frontend sends.
-2. **STILL OPEN — route audit: every route the SPA calls must accept a JWT, not only the
+2. **CLOSED 2026-10-13 by `_bearer` (see the update above); the audit as written: every route the SPA calls must accept a JWT, not only the
    static token.** Routes still on `require_token` that the SPA calls (`POST /collections`,
    `GET/PATCH/DELETE /collections/{id}`, tags, buildings, manual estimates, filter-presets,
    and pre-#940 brokers) still authenticate via the shared static token and are not yet

@@ -407,7 +407,7 @@ def test_the_store_keeps_exactly_what_the_batch_lane_keeps() -> None:
     from autodedup.incremental import PairRow
 
     conn = FakePg()
-    store = SqlStore(conn, GEN, store_floor=0.02)
+    store = SqlStore(conn, GEN, store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
 
     def _row(lo: int, hi: int, zone: str, score: float) -> PairRow:
         return PairRow(lo=lo, hi=hi, probes=["img"], from_lo=True, from_hi=False,
@@ -432,7 +432,7 @@ def test_a_pair_that_falls_below_the_floor_on_a_re_score_is_deleted() -> None:
     from autodedup.incremental import PairRow
 
     conn = FakePg()
-    store = SqlStore(conn, GEN, store_floor=0.02)
+    store = SqlStore(conn, GEN, store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
     kept = PairRow(lo=1, hi=2, probes=["img"], from_lo=True, from_hi=True, zone="band",
                    score=0.4, families=["IMG"], certificate=None, veto="", reason="r",
                    evidence={}, context={"block": "o1"}, fp_lo="a", fp_hi="b")

@@ -7,11 +7,11 @@ Three responsibilities:
    blob whose field names are filter-registry ids (`toolkit/filter_registry.py`).
 
 2. The background matcher. A FastAPI lifespan-spawned asyncio task
-   wakes every `notifications_matcher_interval_seconds`, walks listings
-   whose `first_seen_at > watermark` against every active subscription,
-   and writes one `notification_dispatches` row per (subscription,
-   listing) match. The UNIQUE constraint on `(subscription_id,
-   sreality_id)` means re-runs over the same window are idempotent.
+   wakes every `notifications_matcher_interval_seconds`, walks the
+   properties (`properties_public`) whose `first_seen_at` is past each
+   active subscription's cursor, and writes one `notification_dispatches`
+   row per (subscription, property) match. Its UNIQUE `dedupe_key`
+   (`wd:{sub}:new:{property_id}`) makes a re-run over the same window idempotent.
 
 3. Operator-triggered "Run estimation" kickoff. Each dispatch row
    gets a button that POSTs here; we INSERT a `pending`

@@ -32,7 +32,7 @@ from autodedup.incremental_lane import (
 )
 from autodedup.incremental_scope import Scope, ScopeBlock
 from autodedup.incremental_sql import RT_SCOPE_BLOCK_SQL
-from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg
 from tests.autodedup.lane_world import seed
 
 GEN = "rt"
@@ -267,7 +267,7 @@ def test_a_retired_listing_leaves_the_snapshot_in_the_same_pass() -> None:
     db.scope_ids[(GEN, "obec:563510", 10)] = {"resolved_at": None, "refreshed_at": db.now}
     db.scope_ids[(GEN, "obec:563510", 11)] = {"resolved_at": None, "refreshed_at": db.now}
     db.rt_fp[(GEN, 10)] = _fp_row()
-    SqlStore(db, GEN).drop_listing(10)
+    SqlStore(db, GEN, **LEDGER_KEY).drop_listing(10)
     assert (GEN, 10) not in db.rt_fp
     assert (GEN, "obec:563510", 10) not in db.scope_ids
     assert (GEN, "obec:563510", 11) in db.scope_ids

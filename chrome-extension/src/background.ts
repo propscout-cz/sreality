@@ -24,7 +24,7 @@ import {
   updateNote,
 } from './api';
 import { getAuthState, refreshIfSignedIn, signInWithGoogle, signOut } from './auth';
-import { PORTALS } from './portals';
+import { PORTALS } from '../../frontend/src/lib/portalIds';
 import type { ApiMessage, ApiResult, RouteMessage } from './types';
 
 /* MV3 service-worker eviction kills any in-memory auto-refresh timer, so the

@@ -22,6 +22,12 @@
  * which Caddy serves `max-age=0, must-revalidate` — so the probe sees the
  * current deploy, not a cached copy.
  *
+ * THE PROBE MUST STAY A SCRIPT FETCH. The service worker (public/sw.js) answers
+ * navigations, with a cached shell as a fallback, but never a script's fetch of
+ * /index.html: it passes straight to the network. Turning this probe into a
+ * navigation (an iframe, a hidden window) or teaching the worker to answer it
+ * would make every probe agree with whatever shell the worker holds.
+ *
  * In dev there is no hashed entry (`/src/main.tsx` is served as-is), so the two
  * ids always agree and the check is inert.
  *

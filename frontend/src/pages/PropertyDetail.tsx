@@ -13,7 +13,7 @@
  * Every advert address ever handed out (`/listing/{source}/{native}`,
  * `/listing/{sreality_id}`, `/listing?property=`) is an alias: `AdvertRedirect`
  * resolves the advert's property and lands here with its row open. */
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useMemo } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import {
@@ -23,7 +23,7 @@ import {
 import { useExploreAreaModal } from '@/components/ExploreAreaModal';
 import { listingTypeLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   fetchAdvertProperty,
   fetchListingsForListingIds,
@@ -38,21 +38,9 @@ import { propertyBrokers } from '@/lib/brokers';
 import { useListingBrokers } from '@/lib/hydration';
 import BrokerContactCard from '@/components/BrokerContactCard';
 import { portalLabel } from '@/lib/portals';
-import {
-  ApiError,
-  fetchPropertyOrigins,
-  verifyListingFreshness,
-  type FreshnessOutcome,
-  type VerifyFreshnessResult,
-} from '@/lib/api';
+import { fetchPropertyOrigins } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import {
-  fmtCzk,
-  fmtPct,
-  fmtRelative,
-  fmtAbsolute,
-  fmtShortDate,
-} from '@/lib/format';
+import { fmtCzk } from '@/lib/format';
 import type {
   ImagePublic,
   ListingPublic,
@@ -60,14 +48,7 @@ import type {
   ListingFreshnessCheckPublic,
   PropertySource,
 } from '@/lib/types';
-import {
-  buildPriceSeries,
-  lowestActivePrice,
-  priceChangeEvents,
-  type PriceAdvert,
-} from '@/lib/priceHistory';
-import { timeLabelFull } from '@/lib/chartAxis';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { lowestActivePrice, type PriceAdvert } from '@/lib/priceHistory';
 import Skeleton from '@/components/Skeleton';
 import { ListingOverview } from '@/components/listing-detail/ListingOverview';
 import PipelineToggle from '@/components/listing-detail/PipelineToggle';
@@ -78,11 +59,16 @@ import DownloadPropertyButton from '@/components/listing-detail/DownloadProperty
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
+import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
+import FreshnessBlock from '@/components/listing-detail/FreshnessBlock';
+import PhonePropertySkeleton from '@/components/phone/PhonePropertySkeleton';
 import { mergedAdvertsKeys, parseLetters, propertyKeys } from '@/lib/mergedAdverts';
+import { usePhoneShell } from '@/lib/phoneShell';
+import type { PastedLinkState } from '@/pages/Link';
 
-const PriceLineChart = lazyChunk(
-  () => import('@/components/listing-detail/PriceLineChart'),
-);
+/* The freshness block moved to its own file (shared with the phone layout);
+ * re-exported so older imports keep resolving. */
+export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
 );
@@ -95,6 +81,10 @@ const SoldCompsBlock = lazyChunk(
 const EstimationsBlock = lazyChunk(
   () => import('@/components/listing-detail/EstimationsBlock'),
 );
+
+/* The phone layout is its own chunk: the desktop never downloads it, and the
+ * first visit stays inside scripts/bundle-budget.mjs. */
+const PhoneProperty = lazyChunk(() => import('@/components/phone/PhoneProperty'));
 
 const NO_SNAPSHOTS: ListingSnapshotPublic[] = [];
 
@@ -218,6 +208,10 @@ export default function PropertyDetail() {
       : null,
   );
 
+  // The phone frame's own layout (#1767): reading + curation, no maps, no
+  // estimation runs. Read above the early returns (#310); the reads stay here.
+  const phone = usePhoneShell();
+
   if (propertyId == null) return <NotFoundState id={idParam ?? null} />;
   if (propertyQ.isLoading) return <LoadingState />;
   if (propertyQ.error) return <FailedState error={propertyQ.error} />;
@@ -225,6 +219,28 @@ export default function PropertyDetail() {
 
   const images = imagesQ.data ?? [];
   const advertIds = sources.length > 0 ? sources.map((s) => s.id) : [property.id];
+
+  if (phone) {
+    return (
+      <Suspense fallback={<PhonePropertySkeleton />}>
+      <PhoneProperty
+        property={property}
+        sources={sources}
+        sourcesFailed={sourcesFailed}
+        onRetrySources={() => void sourcesQ.refetch()}
+        adDetails={detailsQ.data}
+        images={images}
+        imagesLoading={imagesQ.isLoading}
+        chartAdverts={chartAdverts}
+        snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
+        checks={checksQ.data ?? []}
+        priceNote={priceNote}
+        advertIds={advertIds}
+        openedAdvertId={advertParam}
+      />
+      </Suspense>
+    );
+  }
 
   return (
     <Page>
@@ -398,7 +414,62 @@ export function AdvertRedirect() {
   }
   if (q.isLoading) return <LoadingState />;
   if (q.error) return <FailedState error={q.error} />;
+  if (source && nativeId) {
+    return (
+      <AdvertNotFound
+        source={source}
+        nativeId={nativeId}
+        pastedUrl={(location.state as Partial<PastedLinkState> | null)?.pastedUrl ?? null}
+      />
+    );
+  }
   return <NotFoundState id={legacyParam ?? nativeId ?? propertyParam} />;
+}
+
+/* A portal advert we hold no row for — most often a link pasted on the phone
+   (#1767) to an ad the scrapers have not reached yet. On the phone it says so
+   in Czech and, when the paste carried the URL, offers the portal's own page
+   (same window: an installed iOS app opens it in its in-app Safari sheet). The
+   desktop keeps the generic not-found. */
+function AdvertNotFound({
+  source,
+  nativeId,
+  pastedUrl,
+}: {
+  source: string;
+  nativeId: string;
+  pastedUrl: string | null;
+}) {
+  const phone = usePhoneShell();
+  if (!phone) return <NotFoundState id={nativeId} />;
+  return (
+    <div className="px-4 py-8">
+      <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
+        Nenalezeno
+      </p>
+      <h2 className="mt-2 font-display text-[22px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)]">
+        Tento inzerát v databázi nemáme
+      </h2>
+      <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-[var(--color-ink-2)]">
+        <span className="inline-flex h-5 items-center rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 text-[11px]">
+          {portalLabel(source) ?? source}
+        </span>
+        <span className="break-all font-mono text-[12px] tabular-nums">{nativeId}</span>
+      </p>
+      <p className="mt-3 text-[13px] leading-relaxed text-[var(--color-ink-3)]">
+        Buď je nový a k nám ještě nedorazil, nebo ho portál stáhl dřív, než jsme ho přečetli.
+      </p>
+      {pastedUrl && (
+        <a
+          href={pastedUrl}
+          className="mt-4 inline-flex h-11 items-center gap-1 text-[15px] font-medium text-[var(--color-copper)]"
+        >
+          Otevřít na portálu {portalLabel(source) ?? source}
+          <span aria-hidden>↗</span>
+        </a>
+      )}
+    </div>
+  );
 }
 
 /* A merged-away property is not in properties_public (active rows only). The
@@ -612,322 +683,13 @@ function MapPinGlyph() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Price history (every advert's own series · the property's span)            */
-/* -------------------------------------------------------------------------- */
-
-/* One rule per field (decision 18): the span (first / last seen, days on market)
-   is the property's, any advert active; the price-change tiles are the canonical
-   advert's lineage (MS10: its same-portal predecessors, one step per handover),
-   the same `price_change_count` / `total_price_change_pct` Browse filters on. The
-   chart and the dated moves are every advert's own (MS9, MS10); a step drawn
-   there never spans two adverts. */
-function PriceHistoryBlock({
-  property,
-  adverts,
-  snapshots,
-}: {
-  property: PropertyPublic;
-  adverts: PriceAdvert[];
-  snapshots: ListingSnapshotPublic[];
-}) {
-  // Date.now() is captured once at mount (not per render) and threaded into the
-  // pure helpers so they stay deterministic. A per-render `now` gave `series` a
-  // new reference on every staggered query resolution, re-rendering
-  // PriceLineChart mid-measure and tripping recharts' #310 crash.
-  const [now] = useState(() => Date.now());
-  const series = useMemo(
-    () => buildPriceSeries(adverts, snapshots, now),
-    [adverts, snapshots, now],
-  );
-  // Dated price moves, from the same series the chart draws: the exact day and
-  // size of each step (readable even if the chart itself fails to render).
-  const changes = useMemo(() => priceChangeEvents(series), [series]);
-
-  return (
-    <div>
-      <SectionLabel>Price history</SectionLabel>
-
-      <div className="mt-4 grid grid-cols-2 sm:grid-cols-5 gap-4">
-        <Stat
-          label="First seen"
-          value={fmtShortDate(property.first_seen_at)}
-          title={fmtAbsolute(property.first_seen_at)}
-        />
-        <Stat
-          label="Last seen"
-          value={property.is_active ? 'now' : fmtShortDate(property.last_seen_at)}
-          title={fmtAbsolute(property.last_seen_at)}
-        />
-        <Stat label="Days on market" value={String(property.tom_days ?? '—')} mono />
-        <Stat
-          label="Price changes"
-          value={String(property.price_change_count ?? 0)}
-          title="Změny ceny hlavního inzerátu a jeho předchůdců na stejném portálu, včetně kroku při každém novém vložení; seznam pod grafem ukazuje změny všech inzerátů"
-          mono
-        />
-        <Stat
-          label="Price change"
-          value={fmtPct(property.total_price_change_pct, { signed: true })}
-          mono
-          pct={property.total_price_change_pct}
-        />
-      </div>
-
-      {series.length > 0 && (
-        <div className="mt-6">
-          <ErrorBoundary
-            label="price-chart"
-            fallback={
-              <div className="flex h-[230px] items-center justify-center rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule)] text-sm text-[var(--color-ink-3)]">
-                Price chart unavailable
-              </div>
-            }
-          >
-            <Suspense
-              fallback={
-                <div className="h-[230px] rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]" />
-              }
-            >
-              <PriceLineChart series={series} />
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-      )}
-
-      {changes.length > 0 && (
-        <ul aria-label="Price moves" className="mt-4 flex flex-wrap gap-x-5 gap-y-1.5">
-          {changes.map((c) => (
-            <li
-              key={`${c.seriesId}-${c.t}`}
-              className="flex items-center gap-2 text-[0.78rem] tabular-nums"
-            >
-              <span className="text-[var(--color-ink-2)]">{c.label}</span>
-              <span className="font-mono text-[var(--color-ink-3)]">
-                {timeLabelFull(c.t, 'day')}
-              </span>
-              <span className="font-mono text-[var(--color-ink-3)]">{fmtCzk(c.from)}</span>
-              <span className="text-[var(--color-ink-4)]">→</span>
-              <span className="font-mono text-[var(--color-ink)]">{fmtCzk(c.to)}</span>
-              <span
-                className="font-mono"
-                style={{ color: c.pct > 0 ? 'var(--color-brick)' : 'var(--color-sage)' }}
-              >
-                {fmtPct(c.pct, { signed: true })}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  title,
-  mono,
-  pct,
-}: {
-  label: string;
-  value: string;
-  title?: string;
-  mono?: boolean;
-  pct?: number | null;
-}) {
-  const color =
-    pct == null || pct === 0
-      ? undefined
-      : pct > 0
-        ? 'var(--color-brick)'
-        : 'var(--color-sage)';
-  return (
-    <div>
-      <p className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </p>
-      <p
-        className={['mt-1 text-sm text-[var(--color-ink)]', mono ? 'font-mono tabular-nums' : ''].join(' ')}
-        title={title}
-        style={color ? { color } : undefined}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Freshness checks                                                           */
-/* -------------------------------------------------------------------------- */
-
-export function FreshnessBlock({
-  sreality_id,
-  checks,
-}: {
-  sreality_id: number;
-  checks: ListingFreshnessCheckPublic[];
-}) {
-  const qc = useQueryClient();
-  const count = checks.length;
-
-  const verify = useMutation<VerifyFreshnessResult, Error>({
-    mutationFn: () => verifyListingFreshness(sreality_id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['freshness', sreality_id] });
-      // Bare prefixes: the page's keys are the property id and the advert's
-      // surrogate id, neither of which this component knows.
-      qc.invalidateQueries({ queryKey: ['property'] });
-      qc.invalidateQueries({ queryKey: ['snapshots'] });
-    },
-  });
-
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-4">
-        <SectionLabel>
-          <span>Freshness checks</span>
-          <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
-            ({count})
-          </span>
-        </SectionLabel>
-        <button
-          type="button"
-          onClick={() => verify.mutate()}
-          disabled={verify.isPending}
-          className="px-3 py-1 text-[0.78rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {verify.isPending ? 'Ověřuji…' : 'Ověřit aktuálnost'}
-        </button>
-      </div>
-
-      <VerifyResult mutation={verify} />
-
-      {count === 0 ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">
-          No on-demand freshness checks recorded.
-        </p>
-      ) : (
-        <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] bg-[var(--color-paper-2)]">
-                <th className="px-3 py-2 font-medium">Checked</th>
-                <th className="px-3 py-2 font-medium">Outcome</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...checks]
-                .sort((a, b) => new Date(b.checked_at).getTime() - new Date(a.checked_at).getTime())
-                .map((c) => (
-                  <tr key={c.id} className="border-t border-[var(--color-rule-soft)]">
-                    <td className="px-3 py-2 text-[var(--color-ink-2)] cursor-help" title={fmtAbsolute(c.checked_at)}>
-                      {fmtRelative(c.checked_at)}
-                    </td>
-                    <td className="px-3 py-2">
-                      <OutcomeChip outcome={c.outcome} />
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VerifyResult({
-  mutation,
-}: {
-  mutation: ReturnType<
-    typeof useMutation<VerifyFreshnessResult, Error>
-  >;
-}) {
-  if (mutation.isPending) {
-    return (
-      <p className="mt-3 text-sm text-[var(--color-ink-3)]">
-        Re-fetching the listing from the source…
-      </p>
-    );
-  }
-  if (mutation.isError) {
-    const err = mutation.error;
-    const msg = err instanceof ApiError ? err.message : err.message;
-    return (
-      <p className="mt-3 text-sm text-[var(--color-brick)]">
-        Verification failed: {msg}
-      </p>
-    );
-  }
-  if (mutation.isSuccess) {
-    const { outcome, what_changed } = mutation.data.data;
-    return (
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-[var(--color-ink-2)]">
-        <OutcomeChip outcome={outcome} />
-        <span>{freshnessOutcomeMessage(outcome, what_changed)}</span>
-      </div>
-    );
-  }
-  return null;
-}
-
-function freshnessOutcomeMessage(
-  outcome: FreshnessOutcome,
-  whatChanged: string[],
-): string {
-  switch (outcome) {
-    case 'unchanged':
-      return 'Still listed — nothing changed since the last snapshot.';
-    case 'updated':
-      return whatChanged.length > 0
-        ? `Still listed — updated: ${whatChanged.join(', ')}.`
-        : 'Still listed — the listing was updated; a new snapshot was recorded.';
-    case 'gone':
-      return 'No longer listed — marked inactive.';
-    case 'cached':
-      return 'Recently verified — still considered fresh, no re-fetch needed.';
-    case 'fetch_error':
-      return 'Could not reach the source listing; nothing was changed.';
-    default:
-      return '';
-  }
-}
-
-function OutcomeChip({ outcome }: { outcome: string }) {
-  const lower = outcome.toLowerCase();
-  let bg = 'var(--color-rule-soft)';
-  let fg = 'var(--color-ink-2)';
-  if (lower === 'unchanged') {
-    bg = 'var(--color-sage-soft)';
-    fg = 'var(--color-sage)';
-  } else if (lower === 'updated' || lower === 'changed') {
-    bg = 'var(--color-copper-soft)';
-    fg = 'var(--color-copper)';
-  } else if (
-    lower === 'gone' ||
-    lower === 'inactive' ||
-    lower === 'error' ||
-    lower === 'fetch_error'
-  ) {
-    bg = 'var(--color-brick-soft)';
-    fg = 'var(--color-brick)';
-  }
-  return (
-    <span
-      className="inline-block px-2 py-0.5 text-[0.65rem] tracking-[0.14em] uppercase rounded-[var(--radius-xs)]"
-      style={{ background: bg, color: fg }}
-    >
-      {outcome}
-    </span>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Loading / failed / 404 states                                              */
 /* -------------------------------------------------------------------------- */
 
+/* The phone frame draws its own back affordance, so its states drop the crumb. */
 function LoadingState() {
+  const phone = usePhoneShell();
+  if (phone) return <PhonePropertySkeleton />;
   return (
     <Page>
       <Crumb />
@@ -937,6 +699,14 @@ function LoadingState() {
 }
 
 function FailedState({ error }: { error: Error }) {
+  const phone = usePhoneShell();
+  if (phone) {
+    return (
+      <div className="px-4 py-8 text-[14px] text-[var(--color-brick)]">
+        Nepodařilo se načíst: {error.message}
+      </div>
+    );
+  }
   return (
     <Page>
       <Crumb />
@@ -946,6 +716,22 @@ function FailedState({ error }: { error: Error }) {
 }
 
 function NotFoundState({ id }: { id: string | null }) {
+  const phone = usePhoneShell();
+  if (phone) {
+    return (
+      <div className="px-4 py-8">
+        <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
+          Nenalezeno
+        </p>
+        <h2 className="mt-2 font-display text-[22px] font-medium leading-tight text-[var(--color-ink)]">
+          {id == null ? 'Nic nevybráno' : 'Tuto nemovitost nemáme'}
+        </h2>
+        {id != null && (
+          <p className="mt-2 break-all font-mono text-[12px] tabular-nums text-[var(--color-ink-2)]">{id}</p>
+        )}
+      </div>
+    );
+  }
   return (
     <Page>
       <Crumb />

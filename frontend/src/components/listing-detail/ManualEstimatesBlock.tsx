@@ -34,8 +34,10 @@ const RENT_MAX = 1_000_000;
 
 export default function ManualEstimatesBlock({
   sreality_id,
+  label = 'Manual rental estimates',
 }: {
   sreality_id: number;
+  label?: string;
 }) {
   const qc = useQueryClient();
   const { isAdmin } = useAuth();
@@ -58,7 +60,7 @@ export default function ManualEstimatesBlock({
     <div>
       <div className="flex items-baseline justify-between gap-4">
         <SectionLabel>
-          <span>Manual rental estimates</span>
+          <span>{label}</span>
           <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
             ({estimates.length})
           </span>

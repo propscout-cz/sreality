@@ -4,17 +4,19 @@ import { resolve } from 'node:path';
 // Shared product brand — the SAME source the SPA + content script use, so the
 // chrome://extensions display name stays linked to the one definition.
 import { EXTENSION_NAME } from '../frontend/src/lib/brand';
-// The portal registry is the single source of truth for "which hosts we run
-// on" — content_scripts.matches is computed from it below instead of hand-
-// duplicating the host list in manifest.json.
-import { PORTALS } from './src/portals';
+// The portal-id rules (shared with the SPA's paste-a-link) are the single source
+// of truth for "which hosts we run on" — content_scripts.matches is computed from
+// them below; manifest.json's checked-in list is a template that
+// frontend/src/lib/portalIds.test.ts keeps equal to them.
+import { PORTALS } from '../frontend/src/lib/portalIds';
 
 /* ONE ENTRY PER PASS — `npm run build` runs vite twice, content then background.
  *
  * A manifest-declared content script is a CLASSIC script: MV3 has no module mode
  * for `content_scripts[].js`, so content.js may not contain a static import.
- * Rollup hoists any module shared BETWEEN entries into a chunk, and `portals.ts`
- * is imported by content.ts AND background.ts (since #942, 2026-08-04), so the
+ * Rollup hoists any module shared BETWEEN entries into a chunk, and the portal
+ * rules (`portals.ts` then, `frontend/src/lib/portalIds.ts` now) are imported by
+ * content.ts AND background.ts (since #942, 2026-08-04), so the
  * old single two-entry build emitted `import ... from "./chunks/portals-*.js"` as
  * content.js line 1. Chrome refused the whole script — "Cannot use import
  * statement outside a module" — and the panel silently never mounted on any

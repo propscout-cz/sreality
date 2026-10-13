@@ -36,7 +36,7 @@ import {
   type BadgeView,
 } from './index_cards';
 import { mountDock, onVeilChange, readVeil, writeVeil, type DockHandle } from './index_dock';
-import { detailRef, portalForHost, type Portal, type PortalRef } from './portals';
+import { detailRef, portalForHost, type Portal, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type { ApiMessage, ApiResult, AuthState, PortalListing } from './types';
 
 type Caller = <T>(m: ApiMessage) => Promise<ApiResult<T>>;

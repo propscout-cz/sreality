@@ -317,8 +317,8 @@ app.include_router(outreach_router)
 # /broker-review/* (operator merge-review queue: merge/dismiss/unmerge brokers the
 # auto-merge guard left apart) — mutating operator actions, admin-gated (require_admin).
 app.include_router(broker_review_router)
-# /filter-presets/* (named Browse filter presets: CRUD) — operator content,
-# standard bearer gate. Decoupled from /notifications (a preset never fires).
+# /filter-presets/* (named Browse filter presets: CRUD) — per-account content on
+# the JWT + tenant pool (RLS). Decoupled from /notifications (a preset never fires).
 app.include_router(filter_presets_router)
 # /images/* redirects a listing-photo key to a presigned R2 URL. Public (like
 # /health) — an <img> tag can't send a bearer header and these are public

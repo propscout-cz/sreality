@@ -92,6 +92,32 @@ export default function CurationBlock({
   );
 }
 
+/* The phone property page's tags + notes (#1767): the same rows, Czech labels,
+ * the notes composer always open. Collections sit in the page's curation row
+ * there (the collection sheet), so they are not repeated. */
+export function PhoneTagsAndNotes({
+  property_id,
+  sreality_id,
+  listing_id,
+}: {
+  property_id: number;
+  sreality_id: number | null;
+  listing_id: number;
+}) {
+  return (
+    <div className="space-y-7">
+      <TagsRow property_id={property_id} label="Štítky" />
+      <NotesRow
+        property_id={property_id}
+        sreality_id={sreality_id}
+        listing_id={listing_id}
+        label="Poznámky"
+        alwaysOpen
+      />
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Collections                                                                */
 /* -------------------------------------------------------------------------- */
@@ -222,7 +248,7 @@ function CollectionToggle({
 /* Tags                                                                       */
 /* -------------------------------------------------------------------------- */
 
-function TagsRow({ property_id }: { property_id: number }) {
+function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?: string }) {
   const qc = useQueryClient();
 
   const allQ = useQuery({
@@ -270,7 +296,7 @@ function TagsRow({ property_id }: { property_id: number }) {
   if (readFailed(allQ) || readFailed(membershipQ)) {
     return (
       <div>
-        <SectionLabel>Tags</SectionLabel>
+        <SectionLabel>{label}</SectionLabel>
         <ErrorBanner
           title="Štítky"
           message="se nepodařilo načíst."
@@ -285,7 +311,7 @@ function TagsRow({ property_id }: { property_id: number }) {
 
   return (
     <div>
-      <SectionLabel>Tags</SectionLabel>
+      <SectionLabel>{label}</SectionLabel>
 
       {memberTags.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-1.5">
@@ -533,12 +559,17 @@ function NotesRow({
   property_id,
   sreality_id,
   listing_id,
+  label = 'Notes',
+  alwaysOpen = false,
 }: {
   property_id: number;
   // NULL for a non-sreality listing; createPropertyNote already omits the field
   // when absent and the server COALESCEs provenance from listing_id.
   sreality_id: number | null;
   listing_id: number;
+  label?: string;
+  /* The phone keeps the composer in view: its curation row's "Poznámka" scrolls here. */
+  alwaysOpen?: boolean;
 }) {
   const qc = useQueryClient();
   const [body, setBody] = useState('');
@@ -606,12 +637,12 @@ function NotesRow({
   return (
     <details
       className="group"
-      open={failed || notes.length > 0 || staged.length > 0 || problems.length > 0 || composerDrop.over}
+      open={alwaysOpen || failed || notes.length > 0 || staged.length > 0 || problems.length > 0 || composerDrop.over}
       {...composerDrop.handlers}
     >
       <summary className="cursor-pointer list-none flex items-baseline justify-between gap-4">
         <SectionLabel>
-          <span id={notesLabelId}>Notes</span>
+          <span id={notesLabelId}>{label}</span>
           <span className="ml-2 font-mono tabular-nums text-[var(--color-ink-4)] tracking-normal">
             {failed ? '(—)' : `(${notes.length})`}
           </span>
