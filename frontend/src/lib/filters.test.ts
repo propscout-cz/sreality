@@ -115,6 +115,22 @@ describe('URL round-trip', () => {
     expect(fromSearchParams(dirty).portals).toEqual(['idnes']);
   });
 
+  it('round-trips the excluded portals and their active-ads switch', () => {
+    const f: ListingFilters = {
+      ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality', 'bazos'],
+      portalsExcludedActiveOnly: true,
+    };
+    const sp = toSearchParams(f);
+    expect(sp.get('portal_excl')).toBe('sreality,bazos');
+    expect(sp.get('portal_excl_active')).toBe('1');
+    const back = fromSearchParams(sp);
+    expect(back.portalsExcluded).toEqual(['sreality', 'bazos']);
+    expect(back.portalsExcludedActiveOnly).toBe(true);
+    expect(toSearchParams(DEFAULT_FILTERS).has('portal_excl')).toBe(false);
+    expect(fromSearchParams(new URLSearchParams('portal_excl=sreality,bogus')).portalsExcluded)
+      .toEqual(['sreality']);
+  });
+
   it('round-trips the condition-level bounds and price-change filters', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
@@ -366,6 +382,15 @@ describe('nullable deal type', () => {
     const line = summarise({ ...DEFAULT_FILTERS, categoryType: null }, 12);
     expect(line).not.toMatch(/null|undefined/);
     expect(line).toMatch(/12/);
+  });
+
+  it('names both sides of the portal filter, so an exclusion is never invisible', () => {
+    expect(summarise(DEFAULT_FILTERS, 1)).not.toMatch(/Sreality|iDNES/);
+    expect(summarise({ ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality'] }, 1))
+      .toMatch(/on iDNES −Sreality$/);
+    expect(summarise({
+      ...DEFAULT_FILTERS, portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
+    }, 1)).toMatch(/−Sreality \(active ads\)$/);
   });
 });
 
@@ -636,8 +661,20 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.dispositions).toBeNull();
     expect(spec.districts).toBeNull();
     expect(spec.portals).toBeNull();
+    expect(spec.portals_excluded).toBeNull();
     expect(spec.condition_match).toBeNull();
     expect(spec.city_index_rules).toBeNull();
+  });
+
+  it('carries both sides of the portal rule to the Watchdog', () => {
+    const { spec, unsupported } = filtersToWatchdogSpec({
+      ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality'],
+      portalsExcludedActiveOnly: true,
+    });
+    expect(spec.portals).toEqual(['idnes']);
+    expect(spec.portals_excluded).toEqual(['sreality']);
+    expect(spec.portals_excluded_active_only).toBe(true);
+    expect(unsupported).toEqual([]);
   });
 
   it('reports the broker scope as unmonitored instead of silently dropping it', () => {

@@ -13,6 +13,7 @@ import { fmtArea } from './format';
 /* Value import, but not a runtime cycle: districtCodes imports only TYPES from
  * this file, and "what a valid RÚIAN code is" must have ONE definition. */
 import { isValidCode } from './districtCodes';
+import { portalScopeLabel } from './portals';
 
 export type TriState = 'any' | 'yes' | 'no';
 export type ListingStatus = 'active' | 'inactive' | 'any';
@@ -215,7 +216,12 @@ export interface ListingFilters {
    * UNKNOWN_FILTER_VALUE and queries.ts:applyFilters). Empty = no constraint. */
   furnished: string[];
   ownership: string[];
+  /* The portal rule's two sides (MS19 + migration 597, queries.ts applyPortalRule):
+   * an ad on one of `portals`, and none on `portalsExcluded` — any ad, or only
+   * active ones when `portalsExcludedActiveOnly`. */
   portals: string[];
+  portalsExcluded: string[];
+  portalsExcludedActiveOnly: boolean;
   conditionMatch: string[];
   categorySubCb: number | null;
   /* Portal-agnostic property sub-type (multi-select). Only surfaced for
@@ -343,6 +349,8 @@ export const DEFAULT_FILTERS: ListingFilters = {
   furnished: [],
   ownership: [],
   portals: [],
+  portalsExcluded: [],
+  portalsExcludedActiveOnly: false,
   conditionMatch: [],
   categorySubCb: null,
   subtype: [],
@@ -615,6 +623,8 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     furnished: splitCsv(sp.get('furnished')).filter((v) => FURNISHED_VALUES.includes(v)),
     ownership: splitCsv(sp.get('ownership')).filter((v) => OWNERSHIP_VALUES.includes(v)),
     portals: splitCsv(sp.get('portal')).filter((v) => PORTAL_VALUES.includes(v)),
+    portalsExcluded: splitCsv(sp.get('portal_excl')).filter((v) => PORTAL_VALUES.includes(v)),
+    portalsExcludedActiveOnly: sp.get('portal_excl_active') === '1',
     conditionMatch: splitCsv(sp.get('condition')).filter(
       (c) => CONDITION_VALUES.includes(c),
     ),
@@ -849,6 +859,8 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.furnished.length) sp.set('furnished', f.furnished.join(','));
   if (f.ownership.length) sp.set('ownership', f.ownership.join(','));
   if (f.portals.length) sp.set('portal', f.portals.join(','));
+  if (f.portalsExcluded.length) sp.set('portal_excl', f.portalsExcluded.join(','));
+  if (f.portalsExcludedActiveOnly) sp.set('portal_excl_active', '1');
   if (f.conditionMatch.length) sp.set('condition', f.conditionMatch.join(','));
   if (f.categorySubCb != null) sp.set('subcat', String(f.categorySubCb));
   if (f.subtype.length) sp.set('subtype', f.subtype.join(','));
@@ -1016,6 +1028,8 @@ export const summarise = (
   if (f.dispositions.length) {
     bits.push(`(${f.dispositions.slice(0, 4).join(', ')}${f.dispositions.length > 4 ? '…' : ''})`);
   }
+  const portalScope = portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
+  if (portalScope) bits.push(portalScope);
   const seenLabel = fmtDaysRange(f.lastSeenMinDays, f.lastSeenMaxDays);
   if (seenLabel) bits.push(`last seen ${seenLabel}`);
   if (f.recentlyAddedDays != null) bits.push(`added ≤ ${f.recentlyAddedDays} d`);
@@ -1054,6 +1068,8 @@ export const watchdogNameSuggestion = (f: ListingFilters): string => {
       + (f.districts.length > 3 ? '…' : ''),
     );
   }
+  const portalScope = portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
+  if (portalScope) parts.push(portalScope);
   return parts.join(' · ');
 };
 
@@ -1311,6 +1327,8 @@ export const REGISTRY_KEY_MAP = {
   furnished: 'furnished',
   ownership: 'ownership',
   portals: 'portals',
+  portals_excluded: 'portalsExcluded',
+  portals_excluded_active_only: 'portalsExcludedActiveOnly',
   condition_match: 'conditionMatch',
   building_material: 'buildingMaterial',
   min_parking_lots: 'parkingLotsMin',
@@ -1430,8 +1448,8 @@ export function applyRegistryUpdates(
  *
  * Honoured (mapped): category, disposition, district chips, price / price-per-m²
  * / MF-yield / area / usable / estate / garden bounds, building material,
- * tri-state amenities, furnished, ownership, portals (any of the property's
- * ads, MS19), condition_match, parking-lots min, condition-level bounds, the
+ * tri-state amenities, furnished, ownership, both sides of the portal rule
+ * (MS19 + migration 597), condition_match, parking-lots min, condition-level bounds, the
  * price-history pair (price-change count in a window, total price change %),
  * and the city-quality predicates (index rules, population min/max, the near-*
  * minimums).
@@ -1528,6 +1546,8 @@ export function filtersToWatchdogSpec(
     furnished: arr(f.furnished),
     ownership: arr(f.ownership),
     portals: arr(f.portals),
+    portals_excluded: arr(f.portalsExcluded),
+    portals_excluded_active_only: f.portalsExcludedActiveOnly,
     condition_match: arr(f.conditionMatch),
     min_parking_lots: f.parkingLotsMin,
     building_condition_level_min: f.buildingConditionLevelMin,

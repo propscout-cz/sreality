@@ -5,6 +5,10 @@
  * Filters.tsx but in a registry-driven shape: takes an option list
  * with value + label and emits a list of selected values.
  *
+ * Given `excluded`, a chip has a third state: off → in → out (brick, "−") → off —
+ * the include/exclude polarity a location chip carries, for a closed list. One
+ * chip holds one state, so a value can never be both included and excluded.
+ *
  * The chips USED to be a fixed N-column grid (`repeat(cols, minmax(0,1fr))`),
  * which sizes a column from the container and not from its contents: any
  * caller narrower than N × the longest label got that label CLIPPED by the
@@ -25,29 +29,40 @@ export function MultiselectChips<T extends string | number>({
   value,
   options,
   onChange,
+  excluded,
 }: {
   value: ReadonlyArray<T>;
   options: ReadonlyArray<EnumOptionLite<T>>;
-  onChange: (next: T[]) => void;
+  onChange: (next: T[], nextExcluded: T[]) => void;
+  excluded?: ReadonlyArray<T>;
 }) {
   const selected = new Set(value);
-  const toggle = (v: T) => {
-    if (selected.has(v)) onChange(value.filter((x) => x !== v));
-    else onChange([...value, v]);
+  const out = new Set(excluded ?? []);
+  const without = (xs: ReadonlyArray<T>, v: T) => xs.filter((x) => x !== v);
+  const cycle = (v: T) => {
+    const ex = excluded ?? [];
+    if (selected.has(v)) onChange(without(value, v), excluded ? [...ex, v] : []);
+    else if (out.has(v)) onChange([...value], without(ex, v));
+    else onChange([...value, v], [...ex]);
   };
   return (
     <div className="flex flex-wrap gap-1">
-      {options.map((opt) => (
-        <PickButton
-          key={String(opt.value)}
-          on={selected.has(opt.value)}
-          onClick={() => toggle(opt.value)}
-          variant="solid"
-          className="min-w-16"
-        >
-          {opt.label}
-        </PickButton>
-      ))}
+      {options.map((opt) => {
+        const isOut = out.has(opt.value);
+        return (
+          <PickButton
+            key={String(opt.value)}
+            on={selected.has(opt.value) || isOut}
+            negative={isOut}
+            onClick={() => cycle(opt.value)}
+            variant="solid"
+            className="min-w-16"
+            ariaLabel={isOut ? `${opt.label} (excluded)` : undefined}
+          >
+            {isOut ? `− ${opt.label}` : opt.label}
+          </PickButton>
+        );
+      })}
     </div>
   );
 }

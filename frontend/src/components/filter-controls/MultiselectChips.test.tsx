@@ -5,7 +5,8 @@
  *   - clicking an unselected option adds it; clicking a selected one
  *     removes it
  *   - selected options carry aria-pressed=true
- *   - the onChange emits the full next array, not a delta
+ *   - the onChange emits the full next arrays, not a delta
+ *   - given `excluded`, a click cycles off → in → out ("−", brick) → off
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -57,7 +58,7 @@ describe('<MultiselectChips>', () => {
       />,
     );
     fireEvent.click(screen.getByText('2+1'));
-    expect(onChange).toHaveBeenCalledWith(['2+1']);
+    expect(onChange).toHaveBeenCalledWith(['2+1'], []);
   });
 
   it('removes an option on click when already selected', () => {
@@ -70,6 +71,24 @@ describe('<MultiselectChips>', () => {
       />,
     );
     fireEvent.click(screen.getByText('2+1'));
-    expect(onChange).toHaveBeenCalledWith(['2+kk', '3+kk']);
+    expect(onChange).toHaveBeenCalledWith(['2+kk', '3+kk'], []);
+  });
+
+  it('with `excluded`, cycles a chip off → in → out → off', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <MultiselectChips value={[]} excluded={[]} options={OPTIONS} onChange={onChange} />,
+    );
+    fireEvent.click(screen.getByText('2+1'));
+    expect(onChange).toHaveBeenLastCalledWith(['2+1'], []);
+    rerender(<MultiselectChips value={['2+1']} excluded={[]} options={OPTIONS} onChange={onChange} />);
+    fireEvent.click(screen.getByText('2+1'));
+    expect(onChange).toHaveBeenLastCalledWith([], ['2+1']);
+    rerender(<MultiselectChips value={[]} excluded={['2+1']} options={OPTIONS} onChange={onChange} />);
+    const out = screen.getByRole('button', { name: '2+1 (excluded)' });
+    expect(out).toHaveTextContent('− 2+1');
+    expect(out).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(out);
+    expect(onChange).toHaveBeenLastCalledWith([], []);
   });
 });

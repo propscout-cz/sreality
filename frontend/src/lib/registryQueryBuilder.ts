@@ -47,6 +47,8 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // property's ads (all_sources / active_sources), queries.ts:applyPortalRule.
   'status',
   'portals',
+  'portals_excluded',
+  'portals_excluded_active_only',
   // Days-ago integers → ISO timestamp predicates on first/last seen.
   'last_seen_min_days',
   'last_seen_max_days',

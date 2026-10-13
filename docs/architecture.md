@@ -1823,21 +1823,34 @@ renumber.** Navigate by area:
     `_shared_filter_where` admits an advert only as its property's canonical advert and drops
     every advert of the subject's property (`exclude_listing_ids`, the one exclusion; decision
     13), so comparables, velocity and the corridor count each property once.
-    **PORTALS AND BROKERS are one rule too (MS19, migration 590): a filter selects ADS, the
-    rows stay properties.** A property matches portal set P when any of its ads is on P,
-    active or not (`properties.all_sources`); the status switch is judged on those ads (active =
-    an active ad on P, `active_sources`; inactive = ads on P and none active); several portals =
-    any of them; with no portal the status is the property's own. A broker filter is the same
-    rule over that broker's ads only, so broker + portal means one ad satisfies both. ONE SQL
-    function, `public.portal_status_matches`, is read by both aggregate RPCs and the broker
-    lookup (`toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`); the
-    Watchdog compiles its `any` arm (`PROPERTIES_GRAIN.clauses`: `l.all_sources && …`, it has
-    no status filter); the SPA renders it on PostgREST (`queries.ts applyPortalRule`: `ov` /
-    `not.ov` on the two lists, a property-id allowlist under a broker). All four are pinned to
-    one table, `tests/fixtures/portal_rule.json` (`tests/test_portal_rule.py` in CI's
-    migrations lane, `queries.test.ts`). The named exception: estimation cohorts keep each
-    ad's own portal (`LISTINGS_GRAIN`, `l.source = ANY`) until the estimation subject is a
-    property (MS20, PROGRAM.md §9). The badge on a Browse card lists the portals with an
+    **PORTALS AND BROKERS are one rule too (MS19, migration 590; two-sided since 597): a filter
+    selects ADS, the rows stay properties.** A property matches portal set P when any of its ads
+    is on P, active or not (`properties.all_sources`); the status switch is judged on those ads
+    (active = an active ad on P, `active_sources`; inactive = ads on P and none active); several
+    portals = any of them; with no portal the status is the property's own. **And it has no ad
+    on an EXCLUDED portal** (`portals_excluded`): any ad, active or ended (`all_sources`), or only
+    active ones under `portals_excluded_active_only` (`active_sources`, the operator's choice per
+    filter, ruled 2026-10-13); several excluded = none of them; both sides combine ("on idnes, not
+    on sreality"). The exclusion is a statement about the PROPERTY, so neither the status switch
+    nor a broker moves it (no broker is linked to a bazos, bezrealitky or maxima ad: a
+    broker-scoped exclusion would exclude nothing). It is only as true as merging: an unmerged
+    twin on the excluded portal leaves its property in, and the operator ruled no caveat in the
+    UI because it sharpens as the AUTODEDUP scope grows (measured 2026-10-13: outside the apply
+    scope about half to three quarters of a "not on sreality" cohort have an unmerged sreality
+    twin). A broker filter is the include side over that broker's ads only, so broker + portal
+    means one ad satisfies both. ONE SQL function, `public.portal_status_matches` (seven
+    arguments since 597, the two exclusion ones defaulted), is read by both aggregate RPCs and
+    the broker lookup (`toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`,
+    which passes no exclusion); the Watchdog compiles its `any` arm and the exclusion
+    (`PROPERTIES_GRAIN.clauses` + the `portals_excluded` hook; it has no status filter); the SPA
+    renders it on PostgREST (`queries.ts applyPortalRule`: `ov` / `not.ov` on the two lists, a
+    property-id allowlist under a broker). All three renderings are pinned to one table,
+    `tests/fixtures/portal_rule.json` (`tests/test_portal_rule.py` in CI's migrations lane,
+    `queries.test.ts`). The named exception: estimation cohorts keep the canonical ad's own
+    portal (`LISTINGS_GRAIN`, `l.source = ANY`) until the estimation subject is a property
+    (MS20, PROGRAM.md §9); the exclusion is Browse + Watchdog only. One control edits both
+    sides on Browse, the Watchdog editor and the phone Feed: a portal chip cycles off → on it →
+    not on it ("−", brick on the desktop, ink on the phone). The badge on a Browse card lists the portals with an
     active ad, or every portal marked inactive. A second badge, "N inzeráty", reads
     `source_count` off the card's `browse_list` row (every ad, active or not: the rollup's
     count, projected since 590), from two ads up.
@@ -1846,7 +1859,8 @@ renumber.** Navigate by area:
     on P was first seen, active or not; nine `properties` columns written by the rollup since
     588, copied into `browse_list` with one partial index each by 590), `property_id` breaking
     ties, so a property advertised on P again rises to the top. No portal, several portals or
-    any other sort: unchanged; a broker filter changes neither rule. Only the order changes:
+    any other sort: unchanged; a broker filter changes neither rule, and an excluded portal is
+    never "the one portal" (`solePortal` reads the included side only). Only the order changes:
     every filter, "added in the last N days" included, keeps its meaning, rows keep the
     property's own dates, a header chip names the order and a card whose day on P differs
     from its first seen shows both (`effectiveSort`, never in a URL). A redundant

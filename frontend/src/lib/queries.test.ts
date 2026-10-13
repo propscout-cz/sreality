@@ -46,6 +46,7 @@ import {
   type DistrictMatchRow,
 } from './queries';
 import { fetchBrokerPropertyIds } from './brokers';
+import { filterById } from './filterRegistry.generated';
 import type { DistrictChip, ListingFilters } from './filters';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -352,6 +353,8 @@ interface RuleCase {
   active_sources: string[];
   portals: string[];
   status: 'any' | 'active' | 'inactive';
+  excluded: string[];
+  excluded_active_only: boolean;
   expected: boolean;
 }
 interface BrokerCase {
@@ -367,6 +370,7 @@ interface BrokerCase {
 const PORTAL_RULE = JSON.parse(
   readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'portal_rule.json'), 'utf-8'),
 ) as { cases: RuleCase[]; broker_cases: BrokerCase[] };
+const PORTALS = (filterById('portals')?.enum_values ?? []).map((o) => String(o.value));
 
 class RuleRecorder {
   preds: Array<(row: RuleRow) => boolean> = [];
@@ -398,8 +402,7 @@ class RuleRecorder {
 /* A browse_list row as the rollup stores it: listed <=> dated, per portal. */
 const ruleRow = (c: Pick<RuleCase, 'is_active' | 'all_sources' | 'active_sources'>): RuleRow => {
   const row: RuleRow = { ...c };
-  for (const p of ['sreality', 'bazos', 'idnes', 'maxima', 'ceskereality', 'bezrealitky',
-    'mmreality', 'remax', 'realitymix']) {
+  for (const p of PORTALS) {
     row[`newest_ad_at_${p}`] = c.all_sources.includes(p) ? '2026-09-01T00:00:00+00:00' : null;
   }
   return row;
@@ -409,8 +412,9 @@ const ruleMatches = (f: ListingFilters, row: RuleRow): boolean =>
   applyPortalRule(new RuleRecorder(), f).preds.every((p) => p(row));
 
 describe('the portal rule (MS19)', () => {
-  const filtersFor = (c: { portals: string[]; status: RuleCase['status'] }): ListingFilters => ({
+  const filtersFor = (c: Partial<RuleCase> & Pick<RuleCase, 'portals' | 'status'>): ListingFilters => ({
     ...DEFAULT_FILTERS, portals: c.portals, status: c.status,
+    portalsExcluded: c.excluded ?? [], portalsExcludedActiveOnly: c.excluded_active_only ?? false,
   });
 
   for (const c of PORTAL_RULE.cases) {
@@ -438,6 +442,20 @@ describe('the portal rule (MS19)', () => {
     const f = { ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes', 'remax'], status: 'inactive' as const };
     expect(adScope(f)).toEqual({ portals: [], status: 'any' });
     expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual([]);
+  });
+
+  it('keeps the exclusion under a broker: it is a statement about the property', () => {
+    const f = { ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], portalsExcluded: ['sreality'] };
+    expect(applyPortalRule(new RuleRecorder(), f).ops)
+      .toEqual(['all_sources.not.ov', 'newest_ad_at_idnes.not.is']);
+    const live = { ...f, portalsExcludedActiveOnly: true };
+    expect(applyPortalRule(new RuleRecorder(), live).ops[0]).toBe('active_sources.not.ov');
+  });
+
+  it('an excluded portal is never the one portal: no conjunct, no order', () => {
+    const f = { ...DEFAULT_FILTERS, portalsExcluded: ['sreality'] };
+    expect(applyPortalRule(new RuleRecorder(), f).ops).toEqual(['all_sources.not.ov']);
+    expect(orderPortal(f, DEFAULT_SORT)).toBeNull();
   });
 
   it('keeps the one-portal conjunct under a broker, so the order stays indexable', () => {
@@ -866,11 +884,15 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     const { rpcArgs } = stubReads();
     await fetchBrowseStats({
       ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], status: 'active',
+      portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
     });
     expect(fetchBrokerPropertyIds).toHaveBeenCalledWith(527, 'active', ['idnes']);
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].portal_filter).toBeNull();
     expect(rpcArgs[0].active_only_filter).toBe(false);
+    /* The exclusion is about the property, so it reaches the RPC under a broker too. */
+    expect(rpcArgs[0].portal_excluded_filter).toEqual(['sreality']);
+    expect(rpcArgs[0].portal_excluded_active_only).toBe(true);
   });
 
   it('sends the portal rule\'s two inputs without a broker', () => {

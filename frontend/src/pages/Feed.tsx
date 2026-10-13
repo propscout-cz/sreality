@@ -39,7 +39,10 @@ import {
   pragueClock,
   pragueDayKey,
   readFeedScope,
+  cyclePortal,
+  NO_PORTALS,
   withPortals,
+  type PortalChoice,
   writeFeedScope,
 } from '@/lib/feed';
 import { filterById } from '@/lib/filterRegistry.generated';
@@ -79,7 +82,7 @@ export default function Feed() {
   const navType = useNavigationType();
   const coverTag = useCardCoverTag().value;
   const [scope, setScope] = useState(readFeedScope);
-  const [portals, setPortals] = useState<string[] | null>(null);
+  const [portals, setPortals] = useState<PortalChoice | null>(null);
   const [hidden, setHidden] = useState(false);
 
   const presetsQ = useQuery({ queryKey: filterPresetKeys.all, queryFn: listFilterPresets });
@@ -162,7 +165,9 @@ export default function Feed() {
   );
 
   /* Scroll memory, per roll. */
-  const scrollKey = hidden ? 'hidden' : `${activeScope}|${filters.portals.join(',')}`;
+  const scrollKey = hidden
+    ? 'hidden'
+    : `${activeScope}|${filters.portals.join(',')}|${filters.portalsExcluded.join(',')}`;
   const restored = useRef(false);
   const ready = rows.length > 0;
   useEffect(() => {
@@ -182,13 +187,17 @@ export default function Feed() {
     setHidden(false);
     window.scrollTo(0, 0);
   };
-  const togglePortal = (p: string) => {
-    const on = !hidden && filters.portals.includes(p);
-    const base = hidden ? [] : filters.portals;
-    setPortals(on ? base.filter((x) => x !== p) : [...base, p]);
+  const choosePortals = (next: PortalChoice) => {
+    setPortals(next);
     setHidden(false);
     window.scrollTo(0, 0);
   };
+  const shown: PortalChoice = hidden ? NO_PORTALS : {
+    portals: filters.portals,
+    portalsExcluded: filters.portalsExcluded,
+    portalsExcludedActiveOnly: filters.portalsExcludedActiveOnly,
+  };
+  const portalsOn = shown.portals.length > 0 || shown.portalsExcluded.length > 0;
   const toggleHidden = () => {
     if (!hidden) void qc.invalidateQueries({ queryKey: hiddenKey, exact: true });
     setHidden((h) => !h);
@@ -233,19 +242,34 @@ export default function Feed() {
       </div>
       <div className={`${CHIP_ROW} mt-2`} role="group" aria-label="Portály">
         {PORTALS.map((p) => {
-          const on = !hidden && filters.portals.includes(p);
+          /* Off → on it → not on it ("−"); pressed either way, never colour (chips.ts). */
+          const out = shown.portalsExcluded.includes(p);
+          const on = out || shown.portals.includes(p);
           return (
             <button
               key={p}
               type="button"
               aria-pressed={on}
-              onClick={() => togglePortal(p)}
+              aria-label={out ? `${portalShort(p)} (vyloučeno)` : undefined}
+              onClick={() => choosePortals(cyclePortal(shown, p))}
               className={`${CHIP} ${CHIP_SM} ${chipState(on)}`}
             >
-              {portalShort(p)}
+              {out ? `−${portalShort(p)}` : portalShort(p)}
             </button>
           );
         })}
+        {shown.portalsExcluded.length > 0 && (
+          <button
+            type="button"
+            aria-pressed={shown.portalsExcludedActiveOnly}
+            onClick={() =>
+              choosePortals({ ...shown, portalsExcludedActiveOnly: !shown.portalsExcludedActiveOnly })
+            }
+            className={`${CHIP} ${CHIP_SM} ${chipState(shown.portalsExcludedActiveOnly)}`}
+          >
+            jen aktivní
+          </button>
+        )}
         <span aria-hidden className={CHIP_DIVIDER} />
         <button
           type="button"
@@ -277,8 +301,8 @@ export default function Feed() {
           clock={pragueClock(updatedAt)}
           refresh={refresh}
           coverTag={coverTag}
-          portalsOn={!hidden && filters.portals.length > 0}
-          onClearPortals={() => setPortals([])}
+          portalsOn={portalsOn}
+          onClearPortals={() => setPortals(NO_PORTALS)}
         />
         {rows.length > 0 && (
           <InfiniteSentinel

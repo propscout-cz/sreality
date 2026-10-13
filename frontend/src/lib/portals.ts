@@ -28,6 +28,20 @@ export function portalShort(source: string): string {
   return PORTAL_SHORT_LABEL[source] ?? portalLabel(source) ?? source;
 }
 
+/* Both sides of the portal filter in words (MS19 + migration 597) — "on iDNES
+ * −Sreality" — for every summary that names a cohort, so an exclusion that hides
+ * most of the market is never invisible. Null when the filter is off. */
+export function portalScopeLabel(
+  included: ReadonlyArray<string>,
+  excluded: ReadonlyArray<string>,
+  excludedActiveOnly: boolean,
+): string | null {
+  const parts = excluded.map((p) => `−${portalShort(p)}`);
+  if (included.length) parts.unshift(`on ${included.map(portalShort).join(', ')}`);
+  if (!parts.length) return null;
+  return parts.join(' ') + (excluded.length && excludedActiveOnly ? ' (active ads)' : '');
+}
+
 /* A listing's URL on its portal is `source_url` on the row — a fact the portal's
  * own parser stored at ingest (sreality included). Nothing here builds one:
  * sreality's sub-category slugs are its own closed vocabulary (37 "Rodinný dům"

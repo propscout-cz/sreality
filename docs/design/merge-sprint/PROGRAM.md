@@ -254,6 +254,11 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   included, keeps its meaning on every surface. Rows keep the property's own dates; a header chip
   names the order, and a row whose date on P differs from its first seen shows both *(default)*. The
   per-ad Browse lane is deleted.
+  **Amendment, operator ruling 2026-10-13 (migration 597): the rule is two-sided.** A property must
+  also have no ad on any EXCLUDED portal: any ad, active or ended, by default; only active ones when
+  the user picks so per filter. The exclusion is about the property, so the status switch and a
+  broker filter do not move it. One three-state chip per portal (off → on it → not on it) on Browse,
+  the Watchdog editor and the phone Feed; no caveat about unmerged duplicates in the UI.
 - **MS20 — Estimation subject = the property**, through one lookup. Recorded, not built here (§9).
 
 ### Housekeeping
