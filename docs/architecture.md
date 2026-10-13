@@ -2132,9 +2132,9 @@ renumber.** Navigate by area:
     `property_tags` (whose BEFORE triggers copy `account_id` off the parent, migration 292) their
     INSERTs must stamp `account_id` explicitly or fail the WITH CHECK closed — `create_collection`
     / `create_tag` / `create_note` all take it as a parameter, resolved route-side by
-    `tenant_pool.resolve_account_id`; and (b) the frontend wrappers for these routes must pass
-    `jwt: true` (`frontend/src/lib/api.ts`), because `verify_jwt` no longer accepts the static
-    token as a synthetic identity. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
+    `tenant_pool.resolve_account_id`; and (b) every frontend request carries the session JWT
+    (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
+    accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
@@ -2672,7 +2672,7 @@ renumber.** Navigate by area:
     2026-08-12 and were dark the whole time:** Phase 0's A6 revoked `listing_broker_public` +
     `brokers_public` from `anon` AND `authenticated`, so every read returned SQLSTATE `42501` and
     every card degraded to "no broker shown". `frontend/src/lib/brokers.ts` is now repointed wholesale
-    onto the identity-gated API (every call `jwt: true`; the routes reject the static bundle token),
+    onto the identity-gated API (on the session JWT every request carries; the routes reject the static token),
     so a logged-in caller gets HTTP 200 with either the values or `has_email`/`has_phone` — there is
     no longer an *expected* failure, and the 42501 special case is gone. The read stays isolated
     from the board (broker data is an enrichment; a failure must not take stages/cards/images down)

@@ -24,9 +24,11 @@ accepts its session JWT and the SPA sends ONE credential everywhere (done the sa
 and `VITE_API_TOKEN` are deleted from the bundle; `frontend/src/lib/api.ts` `authHeader`). Trigger:
 the 2026-10-13 "Invalid token" preset incident — a desktop tab open across #1775's deploy kept
 sending the static token to a route that had just moved to `verify_jwt`. With no per-call choice
-left, that skew class is gone. Part B now has no SPA holder to inventory: `API_TOKEN` is a
-machine-only secret with no public copy. Operator step: delete `VITE_API_TOKEN` from the Railway
-`vite` service's variables (unused by the build now).
+left, that skew class is gone. Part B now has no SPA holder to inventory — but every bundle shipped
+before 2026-10-13 (and a service-worker asset cache, ≤ 14 days) still carries the current value, and
+`require_token` still accepts it. Operator steps: ROTATE `API_TOKEN` (Part B steps 3–6; any ClickUp/CI
+holder gets the new value) and delete `VITE_API_TOKEN` from the Railway `vite` service's variables
+(unused by the build now). Only after the rotation is the token a secret with no public copy.
 
 ## What `API_TOKEN` is
 

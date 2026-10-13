@@ -102,7 +102,7 @@ describe('estimation trace payload + feedback', () => {
   /* Tenant-scoped since 2026-10-02 (api/main.py: the tenant pool): the static
    * bundle token is a 401 there — it used to read any account's trace payloads
    * and spend refiner LLM credit on any run. */
-  it('sends the caller JWT on all three routes, never the bundle token', async () => {
+  it('sends the caller JWT on all three routes', async () => {
     vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
       data: { session: { access_token: 'USER-JWT' } },
       error: null,
@@ -423,9 +423,28 @@ describe('the one credential (authHeader)', () => {
       data: { session: null },
       error: new AuthRetryableFetchError('refresh failed: network', 0),
     } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
-    captureFetch();
+    const { urls } = captureFetch();
     const { apiGet, isTransientApiError } = await loadApi();
     const err = await apiGet('/maps/suggest', { query: 'Brno' }).catch((e: unknown) => e);
     expect(isTransientApiError(err)).toBe(true);
+    expect(urls).toHaveLength(0);
+  });
+
+  it("a session that is gone for good is a 401, not the sign-in server's status", async () => {
+    /* supabase-js answers a revoked refresh token with an AuthApiError 400 and
+     * has already signed the tab out; the request that was in flight must read
+     * as unauthenticated, not as a bad request on whatever route it hit. */
+    const { AuthApiError } = await import('@supabase/supabase-js');
+    vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
+      data: { session: null },
+      error: new AuthApiError('Invalid Refresh Token: Already Used', 400, 'refresh_token_already_used'),
+    } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
+    const { urls } = captureFetch();
+    const { ApiError, apiGet, isTransientApiError } = await loadApi();
+    const err = await apiGet('/maps/suggest', { query: 'Brno' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as InstanceType<typeof ApiError>).status).toBe(401);
+    expect(isTransientApiError(err)).toBe(false);
+    expect(urls).toHaveLength(0);
   });
 });

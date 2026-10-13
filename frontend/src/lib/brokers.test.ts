@@ -88,7 +88,7 @@ describe('contactState', () => {
 });
 
 describe('auth mode', () => {
-  it('sends the session JWT on every repointed read, never the bundle token', async () => {
+  it('sends the session JWT on every repointed read', async () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const b = await loadBrokers();
     await b.fetchBrokerLeaderboard({

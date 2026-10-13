@@ -145,7 +145,7 @@ it (`api/`). They do not apply to the scraper.
    `tests/api/test_broker_routes.py` holds two standing gates: no `/brokers` route may
    ride `require_token`, and every non-admin one must stamp `pii_masked` — a new route
    must be added to that table. The SPA is the main consumer since 2026-08-12
-   (`frontend/src/lib/brokers.ts`, every call `jwt: true`); it previously read the
+   (`frontend/src/lib/brokers.ts`, on the session JWT); it previously read the
    underlying views straight off PostgREST and had been dark since migration 299 revoked
    them. Migration 395 revoked the last one A6 missed (`firms_public`, default-ACL drift).
    Because the cap is a 422 on the WHOLE batch, `fetchListingBrokersByIds` chunks
@@ -493,5 +493,7 @@ the browser) and `VITE_API_BASE_URL`. Neither bundle carries an API bearer: the 
 `_bearer`), the **extension** (`EXT_API_BASE_URL` / `EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY`
 repo secrets → the same `VITE_*` names at build) dropped `EXT_API_TOKEN` on 2026-07-21 (Wave 1)
 and runs its own Supabase session via a hand-rolled PKCE flow (`chrome-extension/src/auth.ts`).
-`API_TOKEN` is therefore a machine-only secret with no public copy — rotate it freely.
+`API_TOKEN` is now held only by machines — but every bundle shipped before 2026-10-13 (and a
+service-worker asset cache, ≤ 14 days) still carries the old value, which `require_token` still
+accepts: ROTATE it (design-doc Part B; any ClickUp/CI holder gets the new value) to retire those copies.
 

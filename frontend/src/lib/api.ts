@@ -159,15 +159,15 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
 
 /* The one credential. A session the client could not refresh is an ApiError
  * like any other failed read: a transport failure retries once under the one
- * retry rule; a revoked refresh token has already signed the tab out, and the
- * RequireAuth redirect follows. */
+ * retry rule; anything else means the session is gone (supabase-js has already
+ * signed the tab out and the RequireAuth redirect follows), so the request is
+ * unauthenticated — a 401, never the sign-in server's own status, which a page
+ * would misread as its route's 400. */
 async function authHeader(): Promise<Record<string, string>> {
   const { data, error } = await supabase.auth.getSession();
   if (error) {
-    throw new ApiError(
-      error.message, error.status ?? 0, null,
-      isAuthRetryableFetchError(error) ? 'network' : 'http',
-    );
+    const transient = isAuthRetryableFetchError(error);
+    throw new ApiError(error.message, transient ? 0 : 401, null, transient ? 'network' : 'http');
   }
   const token = data.session?.access_token;
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -448,8 +448,6 @@ export const listEstimations = (
 ): Promise<EstimationListResponse> =>
   request<EstimationListResponse>('/estimations', {
     query: params as Record<string, QueryValue>,
-    /* Account-scoped read (deps.account_scope): the static token is not an
-     * identity, so it would narrow the operator to SYSTEM-owned runs only. */
   });
 
 /* GET /estimations/latest-by-listing — latest rent estimate per listing id,
