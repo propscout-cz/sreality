@@ -185,6 +185,10 @@ _SPECIAL: dict[str, list[tuple[dict[str, Any], str | None]]] = {
     "first_seen_max_days": [({"first_seen_max_days": 20}, "bare")],
     "first_seen_min_days": [({"first_seen_min_days": 20}, "bare")],
     "include_no_price": [({"include_no_price": True}, None)],
+    "portals_excluded": [({"portals_excluded": v}, None)
+                         for v in (["sreality"], ["sreality", "bazos"], [])]
+    + [({"portals_excluded": ["sreality"], "portals_excluded_active_only": True}, None)],
+    "portals_excluded_active_only": [({"portals_excluded_active_only": True}, None)],
     "price_change_window_days": [({"price_change_window_days": 30}, None)],
     "price_change_count_min": [
         ({"price_change_count_min": 1, "price_change_window_days": w}, None)

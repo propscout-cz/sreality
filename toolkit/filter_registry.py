@@ -1043,13 +1043,45 @@ def _build_registry() -> dict[str, FilterDef]:
                 "remax, realitymix. A property matches when any of its ads is "
                 "on a listed portal, active or not; several = any of them; "
                 "with a status filter the status is judged on those ads; "
-                "estimation cohorts read each ad's own portal (§9). Empty "
+                "estimation cohorts read the canonical ad's own portal. Empty "
                 "list / null = all portals."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
             agendas=_ALL_AGENDAS,
             enum_values=PORTAL_OPTIONS,
+        ),
+        FilterDef(
+            id="portals_excluded",
+            type=FilterType.STRING_LIST,
+            pg_column=None,  # the portal rule's second side, not a column predicate
+            default=None,
+            description=(
+                "The other side of `portals`: drop every property that has an ad "
+                "on any listed portal (live or ended; only live ones with "
+                "`portals_excluded_active_only`), whatever the status filter or "
+                "broker says. Combines with `portals` ('on idnes, not on "
+                "sreality'). Empty list / null = no exclusion. BROWSE + WATCHDOG "
+                "only."
+            ),
+            category=CATEGORY_PROPERTY,
+            ui_control=UiControl.MULTISELECT,
+            agendas=_UI_AGENDAS,
+            enum_values=PORTAL_OPTIONS,
+        ),
+        FilterDef(
+            id="portals_excluded_active_only",
+            type=FilterType.BOOL,
+            pg_column=None,  # modifier on `portals_excluded`, not a column predicate
+            default=False,
+            description=(
+                "When true, `portals_excluded` drops only properties with an "
+                "ACTIVE ad on an excluded portal, so a property whose ad there "
+                "ended stays in. A no-op without `portals_excluded`."
+            ),
+            category=CATEGORY_PROPERTY,
+            ui_control=UiControl.BOOLEAN,
+            agendas=_UI_AGENDAS,
         ),
         FilterDef(
             id="condition_match",

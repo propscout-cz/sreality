@@ -1097,7 +1097,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "source",
       "default": null,
-      "description": "Restrict the cohort to one or more source portals: sreality, bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, remax, realitymix. A property matches when any of its ads is on a listed portal, active or not; several = any of them; with a status filter the status is judged on those ads; estimation cohorts read each ad's own portal (§9). Empty list / null = all portals.",
+      "description": "Restrict the cohort to one or more source portals: sreality, bazos, idnes, maxima, ceskereality, bezrealitky, mmreality, remax, realitymix. A property matches when any of its ads is on a listed portal, active or not; several = any of them; with a status filter the status is judged on those ads; estimation cohorts read the canonical ad's own portal. Empty list / null = all portals.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -1162,6 +1162,92 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "aliases": [],
       "nullable": false,
       "sql_kind": "any"
+    },
+    {
+      "id": "portals_excluded",
+      "type": "string_list",
+      "pg_column": null,
+      "default": null,
+      "description": "The other side of `portals`: drop every property that has an ad on any listed portal (live or ended; only live ones with `portals_excluded_active_only`), whatever the status filter or broker says. Combines with `portals` ('on idnes, not on sreality'). Empty list / null = no exclusion. BROWSE + WATCHDOG only.",
+      "category": "Property",
+      "ui_control": "multiselect",
+      "agendas": [
+        "browse",
+        "watchdog"
+      ],
+      "constraints": null,
+      "unit": null,
+      "basis": null,
+      "enum_values": [
+        {
+          "value": "sreality",
+          "label_cs": "Sreality",
+          "label_en": "Sreality"
+        },
+        {
+          "value": "bazos",
+          "label_cs": "Bazoš",
+          "label_en": "Bazoš"
+        },
+        {
+          "value": "idnes",
+          "label_cs": "iDNES Reality",
+          "label_en": "iDNES Reality"
+        },
+        {
+          "value": "maxima",
+          "label_cs": "Maxima Reality",
+          "label_en": "Maxima Reality"
+        },
+        {
+          "value": "ceskereality",
+          "label_cs": "Českéreality",
+          "label_en": "Českéreality"
+        },
+        {
+          "value": "bezrealitky",
+          "label_cs": "Bezrealitky",
+          "label_en": "Bezrealitky"
+        },
+        {
+          "value": "mmreality",
+          "label_cs": "M&M Reality",
+          "label_en": "M&M Reality"
+        },
+        {
+          "value": "remax",
+          "label_cs": "RE/MAX",
+          "label_en": "RE/MAX"
+        },
+        {
+          "value": "realitymix",
+          "label_cs": "RealityMix",
+          "label_en": "RealityMix"
+        }
+      ],
+      "aliases": [],
+      "nullable": false,
+      "sql_kind": null
+    },
+    {
+      "id": "portals_excluded_active_only",
+      "type": "bool",
+      "pg_column": null,
+      "default": false,
+      "description": "When true, `portals_excluded` drops only properties with an ACTIVE ad on an excluded portal, so a property whose ad there ended stays in. A no-op without `portals_excluded`.",
+      "category": "Property",
+      "ui_control": "boolean",
+      "agendas": [
+        "browse",
+        "watchdog"
+      ],
+      "constraints": null,
+      "unit": null,
+      "basis": null,
+      "enum_values": null,
+      "aliases": [],
+      "nullable": false,
+      "sql_kind": null
     },
     {
       "id": "condition_match",

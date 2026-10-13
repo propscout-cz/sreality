@@ -29,8 +29,7 @@ through the one filter compiler (`toolkit/filter_compiler.compile_filter_where`)
 that also renders every estimation cohort, so the matcher and the cohort
 tools cannot disagree on what a filter means. One named exception: a portal
 matches when ANY of the property's ads is on it here (MS19, `all_sources`),
-and the ad's own portal on the cohorts (per ad until the estimation subject
-is a property, §9).
+and the canonical ad's own portal on the cohorts.
 """
 
 from __future__ import annotations
@@ -172,7 +171,10 @@ class WatchdogFilterSpec(BaseModel):
     # the `__unknown__` sentinel (NULL or a non-canonical value).
     furnished: list[str] | None = None
     ownership: list[str] | None = None
+    # The portal rule's two sides (MS19 + migration 597), compiled by toolkit/filter_compiler.
     portals: list[str] | None = None
+    portals_excluded: list[str] | None = None
+    portals_excluded_active_only: bool = False
     condition_match: list[str] | None = None
 
     # Parking lots minimum.
