@@ -286,9 +286,8 @@ def test_tools_endpoint_delegates_to_toolkit(client, store, monkeypatch) -> None
 
 @pytest.fixture()
 def gated_client(client, store, monkeypatch):
-    """The real require_admin gate (no override), the JWKS verifier, a set API_TOKEN."""
+    """The real require_admin gate (no override) and the JWKS verifier."""
     api_main.app.dependency_overrides.pop(deps.require_admin, None)
-    monkeypatch.setenv("API_TOKEN", "secret-xyz")
     store["rows"][1] = {
         "id": 1, "sreality_id": 12345, "rent_czk": 30000, "author": "op",
         "source_kind": "broker", "notes": None,

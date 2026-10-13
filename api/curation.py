@@ -13,7 +13,7 @@ resolves it once via tenant_pool.require_account_id, or 400s.
 
 The stragglers still on Depends(get_db_conn) + Depends(require_token) — collection
 CRUD and every /tags route — were moved here in one pass: that pair is service-role
-(RLS off) behind a static token that ships inside the public SPA bundle, and the
+(RLS off) behind a static token that shipped inside the public SPA bundle, and the
 statements below carry no account predicate of their own, so any holder of the
 token could read or delete another account's curation. Nothing in this module may
 go back to the service-role pair; a new route joins the tenant path or it does not

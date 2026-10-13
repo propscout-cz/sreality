@@ -82,8 +82,8 @@ def _bucket(route: APIRoute) -> str:
         return "tenant"
     if deps.require_token in calls:
         return "token"
-    # account_scope is require_token's reader (`_bearer`: the static token OR a
-    # verified JWT) plus a read scope, so it buckets with it.
+    # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
+    # read scope, so it buckets with it.
     if deps.account_scope in calls:
         return "token"
     return "public"

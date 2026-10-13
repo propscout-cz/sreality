@@ -34,14 +34,11 @@ def test_expired_token_401_names_the_reason():
     assert 'error="invalid_token"' in ei.value.headers["WWW-Authenticate"]
 
 
-def test_legacy_static_token_no_longer_authenticates(monkeypatch):
-    """The static API_TOKEN — extractable from the shipped SPA bundle via
-    devtools — used to resolve to a synthetic {"is_admin": True, "legacy":
-    True} identity here. That branch is gone: presenting it is now just an
-    invalid JWT, same as any other garbage bearer value."""
-    monkeypatch.setenv("API_TOKEN", "legacy-secret")
+def test_non_jwt_bearer_is_malformed():
+    """Any bearer that is not a JWT — the retired static key included — is just a
+    malformed token here."""
     with pytest.raises(HTTPException) as ei:
-        deps.verify_jwt(authorization="Bearer legacy-secret")
+        deps.verify_jwt(authorization="Bearer some-static-string")
     assert ei.value.status_code == 401
     assert ei.value.detail == "Invalid token: malformed"
 
@@ -49,7 +46,6 @@ def test_legacy_static_token_no_longer_authenticates(monkeypatch):
 def test_unconfigured_fails_closed(monkeypatch):
     """No SUPABASE_URL → no verifier → 503, never a pass. There is no second
     verification path to fall back to."""
-    monkeypatch.delenv("API_TOKEN", raising=False)
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "a-secret-nothing-reads")
     with pytest.raises(HTTPException) as ei:
@@ -82,10 +78,9 @@ def test_unknown_kid_401_never_echoes_the_token(monkeypatch):
     )
 
 
-def test_valid_supabase_jwt(monkeypatch):
+def test_valid_supabase_jwt():
     """The project's real path: ES256 verified against the public signing key
     (JWKS fetch stubbed; the actual jwt.decode crypto is exercised)."""
-    monkeypatch.delenv("API_TOKEN", raising=False)
     claims = deps.verify_jwt(authorization=f"Bearer {mint({'sub': 'abc'})}")
     assert claims["sub"] == "abc"
 

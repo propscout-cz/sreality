@@ -2,8 +2,7 @@
 
 Routes under the `/admin/*` prefix. Admin-gated — the router carries
 `Depends(require_admin)`, so each call needs a Supabase JWT whose claims
-carry `is_admin` (top-level or `app_metadata`). The static `API_TOKEN`
-bearer is NOT accepted (that dual-auth window is closed); fails closed
+carry `is_admin` (top-level or `app_metadata`); no other credential exists. Fails closed
 (401/503) when auth is unconfigured. Writes go through a service-role
 psycopg connection; the frontend never touches Postgres directly for
 these tables.

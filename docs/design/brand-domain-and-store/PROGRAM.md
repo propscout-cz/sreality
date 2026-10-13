@@ -53,13 +53,13 @@ extension links into the app, and reviewers see the brand. Anything hostname-sha
 the store in the first version becomes a permission prompt later: Chrome disables an updated
 extension until each user re-approves a new host.
 
-**Public is gated by the static-token cutover.** A public extension needs open sign-up (extension
+**The static-token cutover is DONE (2026-10-13).** A public extension needs open sign-up (extension
 sign-in is Supabase Google sign-in). Every extension user then also gets the full web app: the
 default plan grants all agendas and the login guard checks only for a session. The web app's
-bundle no longer contains the static API token (`VITE_API_TOKEN` deleted 2026-10-13; every request
-sends the session JWT), but bundles shipped before that still do and `require_token` still accepts
-it until `API_TOKEN` is rotated. That token opens the `require_token` routes with no account,
-including routes that spend money on LLM calls and routes whose data is not scoped per account.
+bundle no longer contains a static API token (`VITE_API_TOKEN` deleted; every request sends the
+session JWT) and the API's static key `API_TOKEN` was deleted the same day, so a bundle shipped
+before that holds a dead string. Until then that token opened the `require_token` routes with no
+account, including routes that spend money on LLM calls and routes whose data is not scoped per account.
 This posture is already documented in `docs/design/api-token-rotation-and-spa-jwt-migration.md`
 and `docs/design/waves-1-4-public-features.md`; a brand domain and a store listing only end the
 obscurity it relied on. The route-level census is kept out of this public file (§ 12).
