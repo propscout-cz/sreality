@@ -16,7 +16,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import DayRule from '@/components/phone/DayRule';
-import { CardRoll, RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
+import { CardRoll } from '@/components/phone/CardRoll';
+import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { browseKeys } from '@/lib/browseKeys';
 import {
   contactState,

@@ -1,21 +1,13 @@
 /* The pieces every photo roll on the phone shares (#1762): the loading
- * skeleton, the dashed empty/error block, and the plain undivided roll of
- * FeedCards that a collection's members and a broker's ads are drawn as. The
- * feed keeps its own day-cut roll (pages/Feed.tsx) but paints its loading and
- * empty states from here, so the four screens wait and fail in one voice. */
+ * skeleton, the dashed empty/error block and the Suspense boundary. The feed
+ * keeps its own day-cut roll (pages/Feed.tsx) and the collection and broker
+ * screens draw CardRoll (./CardRoll), but all paint their loading and empty
+ * states from here, so the four screens wait and fail in one voice.
+ *
+ * Kept free of FeedCard on purpose: four desktop pages import PhoneSuspense
+ * eagerly, and anything this file imports lands in every first visit. */
 
-import { Suspense, useMemo, type ReactNode } from 'react';
-
-import InfiniteSentinel from '@/components/InfiniteSentinel';
-import { useCardCoverTag } from '@/lib/browseLayout';
-import { CardHydrationProvider } from '@/lib/hydration';
-import type { CardRow } from '@/lib/queries';
-
-import FeedCard from './FeedCard';
-
-/* Every photo the Browse carousel would hold, so the cover choice is the same and
- * the hydration cache is shared with Browse (BrowseExperience's perId). */
-export const PHOTOS_PER_CARD = 50;
+import { Suspense, type ReactNode } from 'react';
 
 /* Two card-shaped placeholders: the photo frame and two text lines. */
 export function RollSkeleton({ count = 2 }: { count?: number }) {
@@ -79,66 +71,5 @@ export function RollEmpty({
         </button>
       )}
     </div>
-  );
-}
-
-export interface CardRollList {
-  rows: CardRow[];
-  isLoading: boolean;
-  isError: boolean;
-  hasNextPage: boolean;
-  isFetchingNextPage: boolean;
-  fetchNextPage: () => void;
-  refetch: () => void;
-}
-
-/* A roll of FeedCards over one keyset-paged Browse read, undivided: the
- * collection's members, the broker's ads. `rows` may be a filtered view of
- * `list.rows` (a member removed a moment ago); paging follows the list. */
-export function CardRoll({
-  list,
-  rows = list.rows,
-  errorTitle,
-  empty,
-  endLabel,
-}: {
-  list: CardRollList;
-  rows?: CardRow[];
-  errorTitle: string;
-  empty: ReactNode;
-  endLabel: string;
-}) {
-  const coverTag = useCardCoverTag().value;
-  const listingIds = useMemo(() => rows.map((r) => r.listing_id), [rows]);
-
-  if (list.isLoading) return <RollSkeleton />;
-  if (list.isError) {
-    return (
-      <RollEmpty
-        title={errorTitle}
-        detail="Spojení nebo databáze teď neodpověděly. Zkuste to znovu."
-        action={{ label: 'Zkusit znovu', onClick: list.refetch }}
-      />
-    );
-  }
-  if (rows.length === 0 && !list.hasNextPage) return <>{empty}</>;
-
-  return (
-    <CardHydrationProvider listingIds={listingIds} renders={{ photos: PHOTOS_PER_CARD }}>
-      <div>
-        {rows.map((r) => (
-          <FeedCard key={r.property_id} r={r} coverTag={coverTag} />
-        ))}
-      </div>
-      <InfiniteSentinel
-        onReach={list.fetchNextPage}
-        hasNextPage={list.hasNextPage}
-        isFetchingNextPage={list.isFetchingNextPage}
-        loadedCount={rows.length}
-        total={null}
-        loadingLabel="Načítám…"
-        endLabel={endLabel}
-      />
-    </CardHydrationProvider>
   );
 }
