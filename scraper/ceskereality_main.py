@@ -45,7 +45,7 @@ from scraper.ceskereality_parser import (
     CATEGORY_MAIN,
     SALE_TYPE,
     category_from_url,
-    extract_facet_slugs,
+    extract_subtype_slugs,
     heading_names_kraj,
     index_price,
     parse_detail,
@@ -431,10 +431,10 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         fresh_keys: set[str] | None = None, deadline: float | None = None,
     ) -> list[SliceResult]:
         """The second axis, depth EXACTLY one: a kraj past the 99-page ceiling is
-        re-walked per subtype. Declared slugs where we measured them (subtype is a
-        true partition within a kraj: the 10 rodinne-domy slugs summed to 2,312 in
-        stredocesky — the kraj total exactly); the rendered facets otherwise, and
-        either way this SELF-VERIFIES the children's declared sum against the
+        re-walked per subtype. Declared slugs where we measured them (`SUBTYPE_SLUGS`:
+        each a true partition within a kraj, its declared counts summing to the kraj
+        total exactly); otherwise the kraj page's own `/{sale}/{cat}/{subtype}/{kraj}/`
+        links. Either way this SELF-VERIFIES the children's declared sum against the
         parent's, so a missing subtype reads incomplete instead of silently
         dropping the residue."""
         kraj = parent.kraj
@@ -442,12 +442,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         if not subtypes:
             try:
                 html, _ = client.fetch_search(search_url(sale_type, cat, kraj=kraj))
-                subtypes = tuple(
-                    s for s in extract_facet_slugs(html, sale_type, cat)
-                    if s.startswith(f"{cat}-")
-                )
+                subtypes = tuple(extract_subtype_slugs(html, sale_type, cat, kraj))
             except Exception as exc:        # noqa: BLE001
-                LOG.warning("DESCENT facet probe failed kraj=%s: %s", kraj, exc)
+                LOG.warning("DESCENT subtype probe failed kraj=%s: %s", kraj, exc)
                 subtypes = ()
         if not subtypes:
             LOG.warning("DESCENT no subtype axis cm=%s ct=%s kraj=%s declared=%s",

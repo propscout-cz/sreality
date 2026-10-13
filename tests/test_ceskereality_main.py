@@ -22,6 +22,8 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
+import pytest
+
 from scraper import ceskereality_main as m
 from scraper import portal as m_portal
 from scraper.ceskereality_client import (
@@ -441,6 +443,64 @@ def test_a_category_whose_slices_all_failed_to_start_never_reaches_the_end(monke
 # --- the subtype descent (a kraj past the site's 99-page ceiling) ------------
 
 
+class _CeilingClient:
+    """One kraj of `cat` past the 99-page ceiling, the other 13 at 40 rows, and a
+    subtype slice of that kraj serving `per_sub[subtype]`. Path shape:
+    /{sale}/{cat}[/{subtype}]/{kraj}/ — the segment BETWEEN the category and the
+    kraj is the subtype (and only that segment). `kraj_links` is extra markup on
+    the over-ceiling kraj's own page, for the unmapped-category fallback."""
+
+    def __init__(
+        self, cat: str, kraj: str, per_sub: dict[str, int], kraj_links: str = "",
+    ) -> None:
+        self.urls: list[str] = []
+        self._cat, self._kraj, self._per_sub = cat, kraj, per_sub
+        self._subs = list(per_sub)
+        self._links = kraj_links
+        self.declared = sum(per_sub.values())
+
+    def _parts(self, url: str) -> tuple[str | None, str | None]:
+        segs = url.split("?")[0].split(f"/prodej/{self._cat}/")[1].strip("/")
+        segs = segs.split("/") if segs else []
+        return (segs[-2] if len(segs) == 2 else None), (segs[-1] if segs else None)
+
+    def fetch_search(self, url: str) -> tuple[str, int]:
+        self.urls.append(url)
+        sub, kraj = self._parts(url)
+        pg = _page_num(url)
+        if kraj != self._kraj:
+            total = 4 if sub else 40
+        else:
+            total = self._per_sub[sub] if sub else self.declared
+        first = (pg - 1) * 20
+        n = max(0, min(20, total - first))
+        base = 3_000_000 + 100_000 * (self._subs.index(sub) if sub else 99)
+        ids = [str(base + 1_000 * KRAJ_SLUGS.index(kraj) + first + k)
+               for k in range(n)]
+        last = max(1, -(-total // 20))
+        html = _page_html(total, ids, next_page=pg + 1 if pg < last else None,
+                          heading=f"Nabídka {kraj}")
+        if kraj == self._kraj and sub is None:
+            html = html.replace("</body>", f"{self._links}</body>")
+        return html, 200
+
+    def fetch_index(
+        self, sale_type: str, cat: str, page: int | None,
+    ) -> tuple[str, int]:
+        return _page_html(self.declared + 13 * 40, []), 200
+
+
+def _walk_ceiling(
+    monkeypatch: pytest.MonkeyPatch, fake: _CeilingClient, cat: str,
+) -> tuple[set[str], dict[str, int], int | None, int, bool]:
+    monkeypatch.setattr(m, "CeskerealityClient", lambda **k: fake)
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    return portal.walk_category(
+        {"sale_type": "prodej", "category": cat},
+        conn=None, dry_run=True, limiter=None,
+    )
+
+
 def test_a_slice_over_the_page_ceiling_descends_onto_subtypes(monkeypatch):
     """/prodej/rodinne-domy/stredocesky-kraj/ is 2,312 rows = 116 pages, and a
     FILTERED url 404s at ?strana=100 — so 332 rows are unreachable on the kraj
@@ -449,47 +509,9 @@ def test_a_slice_over_the_page_ceiling_descends_onto_subtypes(monkeypatch):
     subs = SUBTYPE_SLUGS["rodinne-domy"]
     per_sub = {s: 240 for s in subs}
     per_sub[subs[0]] = 2312 - 240 * (len(subs) - 1)
+    fake = _CeilingClient("rodinne-domy", "stredocesky-kraj", per_sub)
 
-    class _CeilingClient:
-        """Path shape: /{sale}/{cat}[/{subtype}]/{kraj}/ — the segment BETWEEN the
-        category and the kraj is the subtype (and only that segment)."""
-
-        def __init__(self) -> None:
-            self.urls: list[str] = []
-
-        @staticmethod
-        def _parts(url):  # noqa: ANN001
-            segs = url.split("?")[0].split("/prodej/rodinne-domy/")[1].strip("/")
-            segs = segs.split("/") if segs else []
-            return (segs[-2] if len(segs) == 2 else None), (segs[-1] if segs else None)
-
-        def fetch_search(self, url):  # noqa: ANN001
-            self.urls.append(url)
-            sub, kraj = self._parts(url)
-            pg = _page_num(url)
-            if kraj != "stredocesky-kraj":
-                total = 4 if sub else 40
-            else:
-                total = per_sub[sub] if sub else 2312
-            first = (pg - 1) * 20
-            n = max(0, min(20, total - first))
-            base = 3_000_000 + 100_000 * (subs.index(sub) if sub else 99)
-            ids = [str(base + 1_000 * KRAJ_SLUGS.index(kraj) + first + k)
-                   for k in range(n)]
-            last = max(1, -(-total // 20))
-            return _page_html(total, ids, next_page=pg + 1 if pg < last else None,
-                              heading=f"Domy {kraj}"), 200
-
-        def fetch_index(self, sale_type, cat, page):  # noqa: ANN001
-            return _page_html(2312 + 13 * 40, []), 200
-
-    fake = _CeilingClient()
-    monkeypatch.setattr(m, "CeskerealityClient", lambda **k: fake)
-    portal = m.CeskerealityPortal(default_config("ceskereality"))
-    seen, _c, _t, _p, complete = portal.walk_category(
-        {"sale_type": "prodej", "category": "rodinne-domy"},
-        conn=None, dry_run=True, limiter=None,
-    )
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
 
     # the over-ceiling kraj bailed at page 1 and was re-walked per subtype...
     stredo = [u for u in fake.urls if _kraj_of(u) == "stredocesky-kraj"]
@@ -498,6 +520,89 @@ def test_a_slice_over_the_page_ceiling_descends_onto_subtypes(monkeypatch):
         assert any(f"/{slug}/stredocesky-kraj/" in u for u in fake.urls), slug
     assert len(seen) == 2312 + 13 * 40
     assert complete is True
+
+
+# 2026-10-13, measured on the live site: prodej/byty/praha by subtype. Its sum is
+# the 2,161 the kraj page declared at that moment; the walk that parked the
+# category read 2,171, so the extra ten (the count is live) sit on byty-2-kk.
+_PRAHA_BYTY_PRODEJ = {
+    "byty-1-kk": 339, "byty-1-1": 55, "byty-2-kk": 638 + 10, "byty-2-1": 172,
+    "byty-3-kk": 439, "byty-3-1": 226, "byty-4-kk": 181, "byty-4-1": 50,
+    "byty-5-kk": 29, "byty-5-1-vetsi": 19, "atypicke-byty": 9, "pokoj": 4,
+}
+
+
+def test_praha_byty_over_the_ceiling_descends_onto_all_twelve_subtypes(monkeypatch):
+    """The production defect: Praha byt/prodej crossed 1,980 rows on 2026-09-16,
+    byty had no declared subtypes, the page-scraped fallback found none, and
+    `DESCENT no subtype axis` left the kraj at `ceiling` — so byt/prodej, the
+    whole category, nominated nothing for 89 walks. It now descends onto the
+    twelve declared slugs, two of which (`atypicke-byty`, `pokoj`) a `byty-*`
+    prefix would have dropped."""
+    assert set(SUBTYPE_SLUGS["byty"]) == set(_PRAHA_BYTY_PRODEJ)
+    fake = _CeilingClient("byty", "praha", dict(_PRAHA_BYTY_PRODEJ))
+    assert fake.declared == 2171
+
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    for slug in SUBTYPE_SLUGS["byty"]:
+        assert any(f"/prodej/byty/{slug}/praha/" in u for u in fake.urls), slug
+    assert len(seen) == 2171 + 13 * 40
+    assert complete is True
+
+
+def test_an_unmapped_category_descends_on_the_kraj_pages_own_subtype_links(
+    monkeypatch,
+):
+    """No declared map: the kraj page's two-segment `/{sale}/{cat}/{subtype}/{kraj}/`
+    links ARE the axis (subtype precedes kraj in this site's URLs). The page's
+    other links — okresy, části, kraj-first filters, other kraje — are not, and
+    the children's declared sum still has to add back up to the parent's."""
+    monkeypatch.setattr(m, "SUBTYPE_SLUGS", {})
+    per_sub = {"atypicke-byty": 900, "byty-2-kk": 900, "pokoj": 371}
+    links = "".join(
+        f'<a href="/prodej/byty/{s}/praha/">x</a>' for s in per_sub
+    ) + (
+        '<a href="/prodej/byty/praha-4/">okres</a>'
+        '<a href="/prodej/byty/cast-praha-zizkov/">cast</a>'
+        '<a href="/prodej/byty/praha/soukromy/">filter</a>'
+        '<a href="/prodej/byty/byty-3-1/stredocesky-kraj/">other kraj</a>'
+    )
+    fake = _CeilingClient("byty", "praha", per_sub, kraj_links=links)
+
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    walked = {fake._parts(u)[0] for u in fake.urls if _kraj_of(u) == "praha"}
+    assert walked - {None} == set(per_sub)
+    assert len(seen) == 2171 + 13 * 40
+    assert complete is True
+
+
+def test_an_unmapped_kraj_page_without_subtype_links_stays_incomplete(monkeypatch):
+    """The last resort, unchanged: no declared map and no two-segment link on the
+    page leaves the kraj at `ceiling`, and the category cannot nominate."""
+    monkeypatch.setattr(m, "SUBTYPE_SLUGS", {})
+    fake = _CeilingClient(
+        "byty", "praha", {"byty-2-kk": 2171},
+        kraj_links='<a href="/prodej/byty/praha-4/">okres</a>'
+                   '<a href="/prodej/byty/praha/soukromy/">filter</a>')
+
+    _seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    assert not any("/byty-2-kk/" in u for u in fake.urls)
+    assert complete is False
+
+
+def test_every_category_measured_at_the_ceiling_has_a_declared_subtype_map():
+    """A rail: these three were measured at or over the 1,980-row ceiling in one
+    kraj (byty praha 2,171; rodinne-domy stredocesky 2,312; pozemky stredocesky
+    1,978). Without a map each depends on whatever the kraj page happens to link."""
+    walked = {c["category"] for c in default_config("ceskereality").categories}
+    for cat in ("byty", "rodinne-domy", "pozemky"):
+        assert cat in walked
+        slugs = SUBTYPE_SLUGS.get(cat)
+        assert slugs, f"{cat} lost its declared subtype axis"
+        assert len(set(slugs)) == len(slugs)
 
 
 def test_a_descent_that_loses_the_residue_reports_incomplete(monkeypatch):
