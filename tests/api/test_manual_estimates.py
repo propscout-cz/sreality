@@ -332,11 +332,13 @@ def test_writes_accept_admin_jwt(gated_client, store) -> None:
     assert 1 not in store["rows"] and 2 in store["rows"]
 
 
-def test_read_stays_on_static_token(gated_client, store) -> None:
+def test_read_accepts_any_signed_in_user(gated_client, store, monkeypatch) -> None:
+    """The read stays on require_token (any verified JWT), never the admin gate."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     api_main.app.dependency_overrides.pop(deps.require_token, None)
     r = gated_client.get(
         "/listings/12345/manual_estimates",
-        headers={"Authorization": "Bearer secret-xyz"},
+        headers={"Authorization": f"Bearer {_jwt(False)}"},
     )
     assert r.status_code == 200, r.text
     assert len(r.json()["data"]) == 1

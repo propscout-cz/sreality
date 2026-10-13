@@ -61,8 +61,8 @@ def apply_pii_policy(envelope: dict[str, Any], *, include_pii: bool) -> dict[str
     """Keep or mask broker contact PII, always stamping metadata.pii_masked.
 
     D1/D2 (2026-08-12 broker E2E review): these reads moved off the static shared
-    secret — which ships inside the SPA bundle — onto real user identity, so an
-    ordinary logged-in caller must not receive 2000 brokers' email + phone.
+    secret — which shipped inside the SPA bundle until 2026-10-13 — onto real user
+    identity, so an ordinary logged-in caller must not receive 2000 brokers' email + phone.
     """
     masked = envelope if include_pii else {**envelope, "data": _mask(envelope.get("data"))}
     return {**masked,

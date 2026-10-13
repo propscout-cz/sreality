@@ -234,8 +234,8 @@ def _jwks_client(jwks_url: str) -> Any:
 
 
 def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
-    """Verify a Supabase user JWT and return its claims — the human half of `_bearer`
-    and the gate of every identity route.
+    """Verify a Supabase user JWT and return its claims — the credential check behind
+    `_bearer` and the gate of every identity route.
 
     One verification path: the project's asymmetric signing keys (ES256/RS256)
     against its public JWKS, built from SUPABASE_URL — no shared secret anywhere

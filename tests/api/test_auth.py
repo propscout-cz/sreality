@@ -301,8 +301,8 @@ def _gated_calls(client) -> list:
 
 def _jwt_gated_calls() -> list:
     """Routes on verify_jwt / tenant_pool.tenant_conn (Phase 1): fail CLOSED
-    when auth is unconfigured, unlike require_token's open-when-unset
-    behavior. The Wave 1 W1-1 batch (/estimations create/read/scenario,
+    even under the local-dev opt-out (API_AUTH_OPTIONAL=1 opens require_token
+    routes only). The Wave 1 W1-1 batch (/estimations create/read/scenario,
     /collections list + /properties writes, /properties/{id}/notes) moved
     here from _gated_calls in lockstep with api/main.py.
 
@@ -489,8 +489,24 @@ def test_jwt_routes_accept_real_jwt(client, monkeypatch):
         assert res.status_code == 200, f"{path} should pass with a real JWT"
 
 
+def test_a_configured_legacy_key_is_not_a_credential(client, monkeypatch):
+    """The deleted static key must stay deleted: with API_TOKEN set in the
+    environment (old bundles still carry such a string), presenting it is a 401 on
+    every gate and never widens account_scope — a re-added static branch fails here."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    monkeypatch.setenv("API_TOKEN", "legacy-static-key")
+    headers = {"Authorization": "Bearer legacy-static-key"}
+
+    for method, path, body in [*_gated_calls(client), *_jwt_gated_calls()]:
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 401, f"{path} accepted the retired static key"
+    with pytest.raises(fastapi.HTTPException) as exc:
+        deps.account_scope(authorization="Bearer legacy-static-key", conn=object())
+    assert exc.value.status_code == 401
+
+
 # ----------------------------------------------------------------------
-# deps.account_scope — the EITHER gate behind the account-scoped estimation
+# deps.account_scope — the read-scope gate behind the account-scoped estimation
 # reads (GET /estimations, GET /estimations/latest-by-listing).
 #
 # These routes serve every signed-in caller (the SPA, the extension, a machine

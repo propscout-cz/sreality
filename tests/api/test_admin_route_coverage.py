@@ -373,7 +373,7 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
         calls = _reachable_calls(routes[key].dependant)
         assert deps.verify_jwt in calls, f"{key} no longer verifies a real JWT"
         assert deps.require_token not in calls, (
-            f"{key} accepts the static bundle token again — it proves only 'loaded the SPA'"
+            f"{key} is back on require_token — the claims it discards are what scopes this read"
         )
     for key in _ESTIMATION_CHILD_READS:
         calls = _reachable_calls(routes[key].dependant)

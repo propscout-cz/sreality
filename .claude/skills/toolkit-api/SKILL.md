@@ -161,12 +161,10 @@ it (`api/`). They do not apply to the scraper.
    the client treats 404 as an answer only when the body carries this module's own
    `broker not found` detail — any other 404 (edge, stale base URL, renamed route) must
    surface as an error, not as "no broker". One per-ad read: `POST /brokers/by-listings`.
-   **The old coexistence window is gone for `require_admin`/`verify_jwt`**: the static
-   `API_TOKEN`, extractable from the shipped SPA bundle via devtools, used to also satisfy
-   `verify_jwt` as a synthetic `is_admin: True` identity — a live CRITICAL finding closed
-   2026-08-04 (`docs/design/api-token-rotation-and-spa-jwt-migration.md`). It never
-   authenticates through `verify_jwt` now; `require_token`-only routes are unaffected (a
-   fully separate, simpler check that was never the vulnerable path).
+   **The static key is gone (2026-10-13)**: `API_TOKEN`, extractable from the shipped SPA bundle via
+   devtools, once also satisfied `verify_jwt` as a synthetic `is_admin: True` identity (a live CRITICAL
+   finding closed 2026-08-04) and then only `require_token`; today `require_token` delegates to
+   `verify_jwt` and nothing reads the variable (`docs/design/api-token-rotation-and-spa-jwt-migration.md`).
    See "Identity, login, and admin gating" for the JWT mechanics.
 9. **Trace format on `estimation_runs.trace` is versioned.** `TRACE_SCHEMA_VERSION` lives in
    `api/estimation_runs.py`; every row's `trace.version` matches that constant at write time.
@@ -267,8 +265,8 @@ Six auth primitives coexist — four in `api/dependencies.py` over ONE header re
 - `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Every client sends its
   session JWT to every route, so a route moves between gates without a client change (the deploy-skew
   class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
-- `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the static token
-  resolves to `[SYSTEM]` (no identity), a verified JWT to `[that account, SYSTEM]` — mirroring
+- `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
+  opt-out or a JWT with no resolvable account → `[SYSTEM]`, a verified JWT → `[that account, SYSTEM]` — mirroring
   `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
   /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings` +
   `parsed_url_cache` (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.

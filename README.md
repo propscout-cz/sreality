@@ -31,8 +31,8 @@ tests/              pytest suite
   so listings retain their photos after sreality's CDN expires them.
 - Analytical toolkit (`find_comparables`, `analyze_distribution`,
   `verify_listing_freshness`, `compare_snapshots`) exposed as a FastAPI
-  service with a composite `/estimate_yield` endpoint. Bearer-token
-  gated via `API_TOKEN`.
+  service with a composite `/estimate_yield` endpoint, gated by the
+  caller's Supabase JWT (one credential; `API_AUTH_OPTIONAL=1` for local dev only).
 - Browser UI (`frontend/`) reads directly from the `*_public` views with
   the Supabase anon key. Four pages: Browse (filters + map / table /
   stats), Listing detail (with snapshot timeline), Region (Mapy.cz-powered
@@ -52,7 +52,7 @@ tests/              pytest suite
 - [x] Toolkit + FastAPI service deployed to Railway
 - [x] Freshness layer (`verify_listing_freshness`, `compare_snapshots`,
       `listing_freshness_checks` audit table)
-- [x] API auth (`API_TOKEN` bearer-token gate)
+- [x] API auth (Supabase JWT; the static `API_TOKEN` gate was deleted 2026-10-13)
 - [x] `describe_neighborhood` (dispositional/price/condition profile with trend)
 - [x] `find_distribution_outliers` (outlier detection with cross-referenced reasons)
 - [x] `compute_market_velocity` (TOM stats and trend for a filtered cohort)

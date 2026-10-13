@@ -749,8 +749,8 @@ rules. Identify which one a task belongs to before you start.
   write-allowed exceptions (see Toolkit rule #5) are reachable only via the API.
 - **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
   the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
-  route uses — `api/dependencies.py` `_bearer` (2026-10-13) accepts a verified JWT on `require_token`
-  routes and requires one on `verify_jwt` / `require_admin` / `tenant_conn` routes, so a route moves
+  route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
+  (`require_token` discards the claims; `verify_jwt` / `require_admin` / `tenant_conn` use them), so a route moves
   between gates with no frontend change. The per-call `jwt: true` choice and its static-token
   fallback were the deploy-skew class behind the 2026-10-13 "Invalid token" preset incident (a tab
   open across #1775's deploy kept choosing the static token). No session → no header; the server's
@@ -2137,7 +2137,7 @@ renumber.** Navigate by area:
     exceptions** (hydration sprint W-1c). Until then the collection CRUD (`POST /collections`,
     `GET`/`PATCH`/`DELETE /collections/{id}`) and every `/tags` route were still on the
     `get_db_conn` + `require_token` pair the rest of the module had already left: that pair is
-    service-role (RLS off) behind the static `API_TOKEN` that ships inside the public SPA bundle,
+    service-role (RLS off) behind the static `API_TOKEN` that shipped inside the public SPA bundle,
     and `api/curation.py`'s statements carry no account predicate of their own — they lean
     entirely on RLS — so any holder of the token could read, rename or delete another account's
     collections and tags (live data at the time: five collections across five distinct accounts).

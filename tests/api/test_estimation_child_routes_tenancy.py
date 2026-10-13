@@ -2,7 +2,7 @@
 
 The 2026-10-01 review found `GET /estimations/{id}/trace/{n}/payload` and
 `GET`/`POST /estimations/{id}/feedback` on the service-role connection behind
-`require_token` alone. That token ships in the SPA bundle, so any holder could read
+`require_token` alone. That token shipped in the SPA bundle, so any holder could read
 any account's trace payloads and spend refiner LLM credit on any run.
 
 The fakes below model the two connections. `_TenantConn` stands in for the RLS-scoped

@@ -53,7 +53,7 @@ extension links into the app, and reviewers see the brand. Anything hostname-sha
 the store in the first version becomes a permission prompt later: Chrome disables an updated
 extension until each user re-approves a new host.
 
-**The static-token cutover is DONE (2026-10-13).** A public extension needs open sign-up (extension
+**The static token is gone (2026-10-13); the cutover's metering + rate limits are still owed.** A public extension needs open sign-up (extension
 sign-in is Supabase Google sign-in). Every extension user then also gets the full web app: the
 default plan grants all agendas and the login guard checks only for a session. The web app's
 bundle no longer contains a static API token (`VITE_API_TOKEN` deleted; every request sends the

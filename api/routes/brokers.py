@@ -1,10 +1,10 @@
 """FastAPI routes for broker intelligence reads.
 
-Mounted under `/brokers/*` on real Supabase-Auth identity (`verify_jwt`), NOT the
-static shared secret: that token is inlined into the SPA bundle and extractable
-from it by design, so `require_token` here meant anyone holding the public bundle
-could pull 2000 brokers' unmasked email + phone off the leaderboard (D1/D2 of the
-2026-08-12 broker E2E review). Any logged-in user now reads the broker graph with
+Mounted under `/brokers/*` on real Supabase-Auth identity (`verify_jwt`), never
+`require_token`: that gate discards the claims `apply_pii_policy` needs for the admin
+unmask — and until 2026-10-13 it also admitted a static key inlined into the SPA
+bundle, so anyone holding the public bundle could pull 2000 brokers' unmasked email +
+phone off the leaderboard (D1/D2 of the 2026-08-12 broker E2E review). Any logged-in user now reads the broker graph with
 contact PII replaced by has_email / has_phone flags — `apply_pii_policy`, applied
 to every envelope so a widened view can't leak through an un-guarded route — and
 only an admin gets the values. The dedicated contacts endpoint is `require_admin`.
