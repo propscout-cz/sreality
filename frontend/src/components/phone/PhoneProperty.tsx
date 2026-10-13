@@ -4,11 +4,12 @@
  * affordance and the property's number; the canonical ad's photos as a swiper
  * with the stage wash when filed; the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
- * curation row; then hairline-separated sections.
+ * curation row; then hairline-separated sections, Poloha first (a streamed Mapy
+ * static image through the API, never a WebGL map on the phone).
  *
  * PropertyDetail owns every read and hands them down, so the phone and the
  * desktop page are two drawings of ONE set of queries. Out on the phone: the
- * header map, Explore area, the comparables map (RunPanel skips it under the
+ * header map (Poloha's static image stands in), Explore area, the comparables map (RunPanel skips it under the
  * phone shell) and the new-estimation / re-run buttons. */
 
 import { Suspense, useMemo, useState } from 'react';
@@ -46,6 +47,7 @@ import {
   BrokersSection,
   DescriptionSection,
   FactsSection,
+  LocationSection,
   SoldSection,
 } from './PropertySections';
 
@@ -206,6 +208,7 @@ export default function PhoneProperty({
       <CurationRow subject={{ property_id: propertyId, text: line2, figure: priceText }} onNote={toNotes} />
 
       <div className="divide-y divide-[var(--color-rule)] border-t border-[var(--color-rule)]">
+        <LocationSection propertyId={propertyId} />
         <FactsSection property={property} />
         <DescriptionSection text={property.description} />
         <AdsSection

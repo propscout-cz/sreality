@@ -3,7 +3,8 @@
  * Kč/m²/měs — and a row whose basis is missing or mixed shows no figure at all,
  * never a bare number. Plus the card's other promises: the 1080 px photo copy,
  * the stage wash on a filed property, the funnel's two meanings, and the photo
- * strip (a swipe turns the photos, a tap opens the property). */
+ * strip (a swipe turns the photos, a tap opens the property), and the map-pin
+ * mark that opens Poloha. */
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -35,6 +36,8 @@ vi.mock('@/lib/queries', async (importOriginal) => {
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   addPipelineCard: vi.fn(),
+  apiGet: vi.fn(),
+  apiGetBlob: vi.fn(),
 }));
 vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
@@ -160,6 +163,8 @@ beforeEach(() => {
   vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
   vi.mocked(queries.fetchIsDismissed).mockResolvedValue(false);
   vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
+  vi.mocked(api.apiGet).mockReset();
+  vi.mocked(api.apiGetBlob).mockReset();
 });
 
 describe('<FeedCard> — the per-m² figure carries its basis (rule 23)', () => {
@@ -357,5 +362,60 @@ describe('<FeedCard> — the photo strip', () => {
       expect(within(slide).getByText('P1')).toBeInTheDocument();
       expect(within(slide).getByText('Prohlídka')).toBeInTheDocument();
     }
+  });
+});
+
+describe('<FeedCard> — Poloha', () => {
+  it('carries the map-pin mark on every card, under the eye', () => {
+    for (const r of [base, rent]) {
+      const { unmount } = renderCard(r);
+      const pin = screen.getByRole('button', { name: 'Poloha' });
+      expect(pin).toHaveAttribute('aria-haspopup', 'dialog');
+      /* A tick between, then the eye. */
+      expect(pin.previousElementSibling?.previousElementSibling).toHaveAttribute(
+        'aria-label',
+        'Skrýt nemovitost',
+      );
+      unmount();
+    }
+    /* Nothing is read until the sheet opens. */
+    expect(api.apiGet).not.toHaveBeenCalled();
+    expect(api.apiGetBlob).not.toHaveBeenCalled();
+  });
+
+  it('opens the Poloha sheet with the map, the place and the three map apps', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:map');
+    URL.revokeObjectURL = vi.fn();
+    vi.mocked(api.apiGet).mockResolvedValue({
+      lat: 50.105,
+      lon: 14.5,
+      granularity: 'street',
+      granularity_rank: 60,
+      label: 'Freyova, Praha 9 – Vysočany',
+      zoom: 16,
+      note: null,
+    });
+    vi.mocked(api.apiGetBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    renderCard(base);
+    await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Poloha' });
+    expect(api.apiGet).toHaveBeenCalledWith('/properties/304388/location', undefined, expect.anything());
+    expect(await within(sheet).findByRole('img')).toHaveAttribute('src', 'blob:map');
+    expect(within(sheet).getAllByRole('link').map((a) => a.textContent)).toEqual([
+      'Apple Maps',
+      'Google Maps',
+      'Mapy.cz',
+    ]);
+  });
+
+  it('says "Bez polohy" when the property has no point', async () => {
+    const none = new api.ApiError('no_location', 404, { detail: { reason: 'no_location' } });
+    vi.mocked(api.apiGet).mockRejectedValue(none);
+    vi.mocked(api.apiGetBlob).mockRejectedValue(none);
+    renderCard(base);
+    await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Poloha' });
+    expect(await within(sheet).findByText('Bez polohy')).toBeInTheDocument();
+    expect(within(sheet).queryByRole('link')).toBeNull();
   });
 });

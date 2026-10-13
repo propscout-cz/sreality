@@ -1,6 +1,7 @@
 /* The phone property page's own sections (#1767, the prototype's "Nemovitost"):
- * each a hairline-separated block under a micro label. Facts, description, the
- * ads with their portal links, the brokers and the registered sales near the
+ * each a hairline-separated block under a micro label. Where it is (Poloha: a
+ * streamed Mapy static image, never a WebGL map), facts, description, the ads
+ * with their portal links, the brokers and the registered sales near the
  * property — the desktop page's reads and rules, drawn at phone width. The
  * sections the phone reuses whole (price history, estimates, manual estimates,
  * freshness, tags + notes) are mounted by PhoneProperty. */
@@ -36,6 +37,7 @@ import { COVERED_CATEGORIES, RADII_M, summarizeSold } from '@/lib/soldComps';
 import { pushToast } from '@/lib/toast';
 import type { ListingPublic, PropertySource, SoldComparable, SoldCoverage } from '@/lib/types';
 
+import LocationBody from './LocationBody';
 import { ExternalIcon } from './phoneIcons';
 
 /* -------------------------------------------------------------------------- */
@@ -69,6 +71,19 @@ export function PhoneSection({
 
 const CHIP =
   'inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 text-[11px] text-[var(--color-ink-2)]';
+
+/* -------------------------------------------------------------------------- */
+/* Poloha                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/* The feed sheet's body, inline: the map plate, the place, the note, the map apps. */
+export function LocationSection({ propertyId }: { propertyId: number }) {
+  return (
+    <PhoneSection label="Poloha">
+      <LocationBody propertyId={propertyId} />
+    </PhoneSection>
+  );
+}
 
 /* -------------------------------------------------------------------------- */
 /* Fakta                                                                       */

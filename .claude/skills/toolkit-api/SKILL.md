@@ -119,7 +119,7 @@ it (`api/`). They do not apply to the scraper.
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   the manual-estimate read, estimation preview). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   the manual-estimate read, estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -413,14 +413,15 @@ LLM + maps (FastAPI service + scoring jobs):
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
   explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is the
   on-demand URL parse and `scripts/seed_curated_cities.py`. Display-only Mapy use
-  (`/maps/suggest`, tiles) is NOT gated — the prohibition is on persistence, not display.
+  (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
-- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings and powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream).
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. `scraper.geocoding` and the
-  `/maps/suggest` proxy fail over to it automatically **only** when the primary is rejected
-  (401/403) or rate-limited (429); a Mapy outage (5xx) does not trigger failover. Set it in
-  the two places that still geocode — the GitHub Actions secret (`seed_curated_cities.yml`) and
-  the **Railway API service env var** (`/maps/suggest` + URL-parse geocoding). Unset → no-op.
+- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. `scraper.geocoding`, the `/maps/suggest` proxy and the
+  static map fail over to it **only** when the primary is rejected (401/403) or rate-limited (429), never on a 5xx.
+  Set it as the GitHub Actions secret (`seed_curated_cities.yml`) and the **Railway API env var**. Unset → no-op.
+- `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
+  `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
+  `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
 - `LLM_DAILY_COST_WARN_USD` (optional, default `5.0`) — soft cross-provider warning
   threshold; `LLMClient` logs one WARNING per day when the `llm_calls.cost_usd` sum first
   crosses it. Each provider's own console spend cap is the hard guard.

@@ -51,6 +51,13 @@ export function googleMapsPointUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps/search/?api=1&query=${coord(lat)},${coord(lng)}`;
 }
 
+/* Apple's Map Links: `ll` is lat,lon and drops a pin there; with `ll` set, `q` LABELS the pin
+ * rather than searching for it; `z` is the zoom. An iPhone opens it in Apple Maps. */
+export function appleMapsPointUrl(lat: number, lng: number, label: string | null, zoom = 17): string {
+  const q = encodeURIComponent(label?.trim() || 'Poloha');
+  return `https://maps.apple.com/?ll=${coord(lat)},${coord(lng)}&q=${q}&z=${zoom}`;
+}
+
 /* iKatastr keeps its whole view in the hash: `kde` is lat,lon,zoom (the map
  * view), `vrstvy=parcelybudovy` turns on the parcel + building layers, and
  * `info` at the same point opens the cadastre info panel for it — which is the

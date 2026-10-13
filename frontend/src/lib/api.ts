@@ -347,6 +347,13 @@ export const apiPost = <T>(
   signal?: AbortSignal,
 ): Promise<T> => request<T>(path, { method: 'POST', json: body, signal });
 
+/* GET for bytes (an image an <img> cannot fetch itself, since it sends no JWT). */
+export const apiGetBlob = (
+  path: string,
+  params?: Record<string, QueryValue>,
+  signal?: AbortSignal,
+): Promise<Blob> => requestBlob(path, { query: params, signal });
+
 /* ----- estimations ------------------------------------------------------- */
 
 /* POST /estimations/preview — generic URL parser (sreality fast path
