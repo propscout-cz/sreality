@@ -24,17 +24,14 @@ from api import main as api_main
 from api import manual_estimates as me
 from api import schemas as s
 from api import tenant_pool
+from tests.api._jwt import mint
 
-_JWT_SECRET = "test-hs256-secret"
 _ADMIN_CLAIMS = {"sub": "op-uuid", "email": "op@example.com",
                  "app_metadata": {"is_admin": True}}
 
 
 def _jwt(is_admin: bool) -> str:
-    return jwt.encode(
-        {"aud": "authenticated", "sub": "u", "app_metadata": {"is_admin": is_admin}},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    return mint({"sub": "u", "app_metadata": {"is_admin": is_admin}})
 
 
 @pytest.fixture()
@@ -289,11 +286,9 @@ def test_tools_endpoint_delegates_to_toolkit(client, store, monkeypatch) -> None
 
 @pytest.fixture()
 def gated_client(client, store, monkeypatch):
-    """The real require_admin gate (no override), HS256 verification, a set API_TOKEN."""
+    """The real require_admin gate (no override), the JWKS verifier, a set API_TOKEN."""
     api_main.app.dependency_overrides.pop(deps.require_admin, None)
     monkeypatch.setenv("API_TOKEN", "secret-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     store["rows"][1] = {
         "id": 1, "sreality_id": 12345, "rent_czk": 30000, "author": "op",
         "source_kind": "broker", "notes": None,

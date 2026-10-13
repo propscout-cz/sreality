@@ -213,11 +213,11 @@ def _bearer(authorization: str | None) -> dict | None:
     if hmac.compare_digest(token.encode("utf-8", "ignore"), expected.encode("utf-8")):
         return None
     # Not the shared secret, so it must be a JWT — where this deployment can verify
-    # one. Where it cannot (API_TOKEN only, no Supabase auth env: a machine-only
+    # one. Where it cannot (API_TOKEN only, no SUPABASE_URL: a machine-only
     # deployment, local dev, CI) the static token is the only credential there is,
     # so this is a bad credential (401), not a server fault; verify_jwt's 503 is for
     # routes that NEED a JWT.
-    if not (os.environ.get("SUPABASE_URL") or os.environ.get("SUPABASE_JWT_SECRET")):
+    if not os.environ.get("SUPABASE_URL"):
         raise _unauthorized("Invalid token", reason="unknown credential")
     return verify_jwt(authorization)
 
@@ -261,38 +261,29 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
     """Verify a Supabase user JWT and return its claims — the human half of `_bearer`
     and the gate of every identity route.
 
-    Preferred path (this project): asymmetric signing keys (ES256/RS256) verified
-    against the project's public JWKS — no shared secret needed. Set SUPABASE_URL.
-    Falls back to a legacy shared HS256 secret (SUPABASE_JWT_SECRET) if that is all
-    that is configured. The static API_TOKEN is NOT accepted here (retired
-    2026-08-04: that branch made every require_admin route only as protected as a
-    token embedded in the shipped SPA bundle). Fails closed when nothing is configured.
+    One verification path: the project's asymmetric signing keys (ES256/RS256)
+    against its public JWKS, built from SUPABASE_URL — no shared secret anywhere
+    (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13; production has
+    signed ES256 since the JWKS cutover). The static API_TOKEN is NOT accepted here
+    (retired 2026-08-04: that branch made every require_admin route only as protected
+    as a token embedded in the shipped SPA bundle). Fails closed (503) with
+    SUPABASE_URL unset: an unconfigured auth backend must never authenticate anyone.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise _unauthorized("Missing bearer token")
     token = authorization[len("Bearer "):]
+    base = os.environ.get("SUPABASE_URL")
+    if not base:
+        raise HTTPException(status_code=503, detail="Auth is not configured")
 
     import jwt  # PyJWT (api extra); imported lazily to keep boot light
 
-    base = os.environ.get("SUPABASE_URL")
-    if base:
-        jwks_url = base.rstrip("/") + "/auth/v1/.well-known/jwks.json"
-        try:
-            signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
-            return jwt.decode(
-                token, signing_key.key,
-                algorithms=["ES256", "RS256"], audience="authenticated",
-            )
-        except jwt.PyJWTError as exc:
-            raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc
-
-    secret = os.environ.get("SUPABASE_JWT_SECRET")
-    if not secret:
-        # Fail closed: an unconfigured auth backend must never authenticate anyone.
-        raise HTTPException(status_code=503, detail="Auth is not configured")
+    jwks_url = base.rstrip("/") + "/auth/v1/.well-known/jwks.json"
     try:
+        signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
         return jwt.decode(
-            token, secret, algorithms=["HS256"], audience="authenticated"
+            token, signing_key.key,
+            algorithms=["ES256", "RS256"], audience="authenticated",
         )
     except jwt.PyJWTError as exc:
         raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc

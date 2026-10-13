@@ -263,7 +263,7 @@ the deadline by value; its overlay keeps `LOOKUP_TIMEOUT_MS` for MV3 port loss n
 Six auth primitives coexist — four in `api/dependencies.py` over ONE header reader, two in
 `api/tenant_pool.py` (`tenant_conn` after this list). `_bearer` (2026-10-13): the static `API_TOKEN` → a
 machine with no identity, a JWS-shaped bearer → `verify_jwt`, anything else → 401; unset `API_TOKEN` →
-`503` unless `API_AUTH_OPTIONAL=1`. Tests mint a human with the `sign_jwt` fixture (`tests/api/conftest.py`).
+`503` unless `API_AUTH_OPTIONAL=1`. Tests mint a human with `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
 - `require_token` — any known caller, nothing returned (rule #8's baseline). It accepts a verified JWT so
   the SPA sends its session JWT to every route and a route moves between gates without a client change
   (the deploy-skew class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
@@ -274,10 +274,10 @@ machine with no identity, a JWS-shaped bearer → `verify_jwt`, anything else �
   `parsed_url_cache` (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
   `account_ids` is a REQUIRED kwarg on those read helpers — omitting it is a `TypeError`, never a silent
   unscoped read.
-- `verify_jwt` — verifies a Supabase user JWT and returns its claims: asymmetric JWKS (`SUPABASE_URL` →
-  `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`, no shared secret), falling back
-  to a shared HS256 secret (`SUPABASE_JWT_SECRET`) if that's all that's configured; `503` when neither is
-  (an unconfigured auth backend must never authenticate anyone). The static `API_TOKEN` is NOT accepted
+- `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
+  (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
+  secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
+  unset (an unconfigured auth backend must never authenticate anyone). The static `API_TOKEN` is NOT accepted
   here — the 2026-08-04 removal of the synthetic `is_admin: True` branch that made it a god-credential;
   incident + fix: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
@@ -362,9 +362,8 @@ Database:
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
   Railway API service, `SUPABASE_URL` is now load-bearing**, not just forward-compatible:
-  `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs.
-- `SUPABASE_JWT_SECRET` (Railway API, optional) — HS256 fallback for `verify_jwt` when
-  JWKS/`SUPABASE_URL` isn't set. Prefer JWKS; this exists for environments without it.
+  `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs (its only verifier;
+  `SUPABASE_JWT_SECRET` is read by nothing since 2026-10-13 and can be deleted from Railway).
 - `TENANT_POOL_DB_URL` (Railway API only) — connection string for the `tenant_pool` role
   (migration 293), used by `api/tenant_pool.py`'s `tenant_conn` for RLS-scoped per-account
   writes. Distinct from `SUPABASE_DB_URL` (service-role, unscoped, bypasses RLS).
