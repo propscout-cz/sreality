@@ -21,6 +21,7 @@ jwt = pytest.importorskip("jwt")  # PyJWT (api extra)
 
 from api import curation as api_curation
 from api import dependencies as deps
+from tests.api._jwt import mint
 from api import feedback as api_feedback
 from api import main as api_main
 from api import maps as api_maps
@@ -423,21 +424,21 @@ def test_malformed_authorization_header_rejected(client, monkeypatch):
     assert res.status_code == 401
 
 
-def test_token_routes_accept_real_jwt(client, sign_jwt, monkeypatch):
+def test_token_routes_accept_real_jwt(client, monkeypatch):
     """One caller, one credential: a human's session JWT passes the require_token
     routes in `_gated_calls` too, so the SPA sends it everywhere and a route moves
     between gates with no client change (the deploy-skew class behind the 2026-10-13
     "Invalid token" preset incident: a stale bundle met a route that had just moved
     to verify_jwt)."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    headers = {"Authorization": f"Bearer {sign_jwt({'sub': _ACCT})}"}
+    headers = {"Authorization": f"Bearer {mint({'sub': _ACCT})}"}
 
     for method, path, body in _gated_calls(client):
         res = _call(client, method, path, body, headers=headers)
         assert res.status_code == 200, f"{path} should accept a verified JWT"
 
 
-def test_token_routes_reject_forged_jwt(client, sign_jwt, monkeypatch):
+def test_token_routes_reject_forged_jwt(client, monkeypatch):
     """A JWS-shaped bearer that fails verification is a 401 that names the reason
     (RFC 6750 challenge) — never a pass, never a 503. The forgery is a structurally
     valid ES256 token signed by a key the JWKS does not serve, so the failure is the
@@ -446,7 +447,6 @@ def test_token_routes_reject_forged_jwt(client, sign_jwt, monkeypatch):
     from cryptography.hazmat.primitives.asymmetric import ec
 
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    sign_jwt({"sub": _ACCT})  # installs the JWKS stub serving the fixture's key
     forged = jwt.encode(
         {"aud": "authenticated", "sub": _ACCT},
         ec.generate_private_key(ec.SECP256R1()), algorithm="ES256",
@@ -473,7 +473,7 @@ def test_bearer_jwt_shaped_token_is_401_where_no_verifier_is_configured(monkeypa
         assert exc.value.status_code == 401, bearer
 
 
-def test_bearer_non_ascii_header_is_401_with_a_verifier(sign_jwt, monkeypatch):
+def test_bearer_non_ascii_header_is_401_with_a_verifier(monkeypatch):
     """Starlette decodes headers as latin-1; a non-ASCII bearer must stay a clean 401
     on both branches of `_bearer` (the bytes compare, then verify_jwt's decode)."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
@@ -486,8 +486,6 @@ def test_bearer_non_ascii_header_is_401_with_a_verifier(sign_jwt, monkeypatch):
 
 # --- verify_jwt-gated routes (Phase 1 tenant pool) --------------------------
 
-_JWT_SECRET = "test-hs256-secret"
-
 
 def test_jwt_routes_fail_closed_without_token(client, monkeypatch):
     monkeypatch.delenv("API_TOKEN", raising=False)
@@ -499,8 +497,6 @@ def test_jwt_routes_fail_closed_without_token(client, monkeypatch):
 
 def test_jwt_routes_reject_wrong_token(client, monkeypatch):
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     headers = {"Authorization": "Bearer wrong-token"}
 
     for method, path, body in _jwt_gated_calls():
@@ -513,8 +509,6 @@ def test_jwt_routes_reject_legacy_static_token(client, monkeypatch):
     special-cased by verify_jwt, so it's rejected here exactly like any other
     string that isn't a valid Supabase JWT."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     headers = {"Authorization": "Bearer secret-token-xyz"}
 
     for method, path, body in _jwt_gated_calls():
@@ -526,13 +520,7 @@ def test_jwt_routes_accept_real_jwt(client, monkeypatch):
     """A real Supabase-signed JWT (no admin claim needed — these routes gate on
     identity via verify_jwt/tenant_conn, not require_admin) passes."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
-    tok = jwt.encode(
-        {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-        _JWT_SECRET, algorithm="HS256",
-    )
-    headers = {"Authorization": f"Bearer {tok}"}
+    headers = {"Authorization": f"Bearer {mint({'sub': '11111111-1111-1111-1111-111111111111'})}"}
 
     for method, path, body in _jwt_gated_calls():
         res = _call(client, method, path, body, headers=headers)
@@ -567,15 +555,10 @@ def test_account_scope_jwt_adds_own_account_and_keeps_system(monkeypatch):
     estimation_runs_tenant_read policy (migration 291). Dropping it would hide
     the operator's own watchdog-produced runs, which carry the SYSTEM default."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     monkeypatch.setattr(
         tenant_pool, "resolve_account_id", lambda conn, claims: _ACCT,
     )
-    tok = jwt.encode(
-        {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    tok = mint({"sub": "11111111-1111-1111-1111-111111111111"})
     assert deps.account_scope(
         authorization=f"Bearer {tok}", conn=object(),
     ) == [_ACCT, deps.SYSTEM_ACCOUNT_ID]
@@ -583,15 +566,10 @@ def test_account_scope_jwt_adds_own_account_and_keeps_system(monkeypatch):
 
 def test_account_scope_unresolvable_jwt_falls_back_to_system_only(monkeypatch):
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     monkeypatch.setattr(
         tenant_pool, "resolve_account_id", lambda conn, claims: None,
     )
-    tok = jwt.encode(
-        {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    tok = mint({"sub": "11111111-1111-1111-1111-111111111111"})
     assert deps.account_scope(
         authorization=f"Bearer {tok}", conn=object(),
     ) == [deps.SYSTEM_ACCOUNT_ID]
@@ -601,16 +579,11 @@ def test_account_scope_never_returns_an_empty_scope(monkeypatch):
     """An empty list would reach `ANY('{}')` and match nothing — a silent blank
     page. Every branch must return at least SYSTEM or raise."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     for resolved in (None, _ACCT):
         monkeypatch.setattr(
             tenant_pool, "resolve_account_id", lambda conn, claims, r=resolved: r,
         )
-        tok = jwt.encode(
-            {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-            _JWT_SECRET, algorithm="HS256",
-        )
+        tok = mint({"sub": "11111111-1111-1111-1111-111111111111"})
         assert deps.account_scope(authorization=f"Bearer {tok}", conn=object())
 
 
