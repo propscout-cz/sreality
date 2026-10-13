@@ -25,6 +25,7 @@ import socket
 import sys
 import threading
 import weakref
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -128,7 +129,9 @@ def _stub_engine(monkeypatch: pytest.MonkeyPatch, result: Any) -> dict[str, Any]
 def _summary(**over: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "counts": {"claimed": 12, "pairs_scored": 40, "clusters_written": 3, "held": 1,
-                   "retired": 0, "wanted_pairs": 52, "attempts": 1, "wanted_by_attempt": [52]},
+                   "retired": 0, "wanted_pairs": 52, "attempts": 1, "wanted_by_attempt": [52],
+                   "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
+                   "ledger_skipped": 31, "ledger_written": 6},
         "aborted": "",
         "latency_s": {"n": 12, "p50": 310.2, "p95": 355.0},
         "claim_bound": {"bound_by": "count", "limit": 100},
@@ -301,6 +304,10 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         "rss_at_start_mb": 290.0, "rss_after_trim_mb": 301.5,
         # E952: the claims the pass made, each one's wanted pair set and the last's, no refusal
         "attempts": 1, "wanted_pairs": 52, "wanted_by_attempt": [52], "aborted": None,
+        # E943: what the budget counted (the last claim's and each claim's), the wanted pairs
+        # the reject ledger answered, and the rejects the pass ledgered
+        "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
+        "ledger_skipped": 31, "ledger_written": 6,
     }
     for gone in ("AUTODEDUP_PASS_DEADLINE_SECONDS", "AUTODEDUP_PASS_BUDGET_SECONDS",
                  "_AUTODEDUP_BACKOFF", "_DeadlineConnection", "_AutodedupDeadline"):
@@ -326,7 +333,7 @@ def test_an_absent_store_skips_every_tick_with_one_warning(
     assert first["errors"] == 0 and first["ran"] is False
     assert second["reason"] == "store_absent"
     assert conn.closed
-    assert sum("store (migrations 539/540) is absent" in r.message
+    assert sum("store (migrations 539/540/596) is absent" in r.message
                for r in caplog.records) == 1
 
 
@@ -530,20 +537,24 @@ def test_a_pass_the_build_s_pair_budget_refuses_reports_its_attempts(world, tmp_
     each claim's wanted set; a committed pass reports one attempt and no refusal."""
     seed_lane(world, tmp_path)
     _worker_on(monkeypatch, world)
-    budget = incremental_lane.BOOTSTRAP_PAIR_BUDGET
-    monkeypatch.setattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET", -1)
+    budget = incremental_lane.PASS_LIMITS
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", replace(budget, max_pairs=-1))
 
     refused = rw._autodedup_sync()
 
     assert (refused["ran"], refused["errors"], refused["aborted"]) == (True, 1, "pair_budget")
     assert (refused["attempts"], refused["wanted_pairs"]) == (4, 0)
     assert len(refused["wanted_by_attempt"]) == 4 and refused["wanted_by_attempt"][-1] == 0
-    monkeypatch.setattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET", budget)
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", budget)
 
     ran = rw._autodedup_sync()
 
     assert (ran["errors"], ran["aborted"], ran["attempts"]) == (0, None, 1)
     assert ran["wanted_pairs"] > 0 and ran["wanted_by_attempt"] == [ran["wanted_pairs"]]
+    assert ran["pairs_to_decide_by_attempt"] == [ran["pairs_to_decide"]]
+    assert len(refused["pairs_to_decide_by_attempt"]) == 4
+    # E943: the ledger's two counters ride every committed pass's heartbeat.
+    assert (ran["ledger_skipped"], ran["ledger_written"]) == (0, len(world.reject_ledger))
 
 
 def test_a_worker_pass_inside_a_seed_is_a_green_skip(world, tmp_path, monkeypatch) -> None:
