@@ -39,7 +39,7 @@ import {
   stageBadge,
 } from './glyphs';
 import { PHOTO_MARK_HOST_CLASS, createPhotoMark } from './index_photo_mark';
-import { detailRef, type PortalRef } from './portals';
+import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type {
   ApiMessage,
   ApiResult,

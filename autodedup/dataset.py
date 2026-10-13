@@ -260,6 +260,10 @@ class Image:
     pop: int | None = None
     clip: str | None = None
     tags: list[tuple[str, float | None]] = field(default_factory=list)
+    # The CLIP job's own stamp (`images.clip_tagged_at`), written after the tags and the vector.
+    # The real-time lane reads it into the reject ledger's decision digest (E943); no artifact
+    # carries it.
+    clip_tagged_at: str | None = None
     _clip_vector: "array[float] | None" = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -280,6 +284,7 @@ class Image:
             pop=_int(raw.get("pop")),
             clip=_str(raw.get("clip")),
             tags=tags,
+            clip_tagged_at=_str(raw.get("clip_tagged_at")),
         )
 
     def clip_vector(self) -> "array[float] | None":

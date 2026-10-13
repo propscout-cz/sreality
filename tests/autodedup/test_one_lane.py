@@ -31,7 +31,7 @@ from autodedup.incremental_store import MemoryStore
 from autodedup.indistinguishable import FEATURE_SLOTS
 from autodedup.incremental_store import CohortFacts, Schedule
 from autodedup.settings import Settings
-from tests.autodedup.fake_pg import FakePg, _Cursor
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg, _Cursor
 from tests.autodedup.test_apply import FakeDb, _pair_group
 from tests.autodedup.test_incremental import _listing
 
@@ -90,12 +90,12 @@ def test_the_lane_reclusters_with_the_d43_relation_the_batch_reads() -> None:
 
 def test_the_sql_store_reads_back_the_three_slots_the_relation_reads() -> None:
     db = FakePg()
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     feats = {name: (1.0, True) for name in FEATURE_SLOTS}
     feats["clip_mean_top3_cos"] = (0.9, True)
     feats["floorplan_conflict"] = (0.0, False)
     store.upsert_pairs([_pair(A, B, "merge", 0.99, feats=feats)])
-    (row,) = SqlStore(db, "rt").pairs_within([A, B])
+    (row,) = SqlStore(db, "rt", **LEDGER_KEY).pairs_within([A, B])
     assert row.slots == {"tag_room_clip_min2": (1.0, True),
                          "phash_tight_matches": (1.0, True)}, (
         "the three slots only, and an absent one reads as no slot — which D43 reads as absent")
@@ -108,7 +108,7 @@ def test_the_sql_store_clusters_like_the_twin() -> None:
     _recluster_all(twin, ds, D43_ON)
 
     db = FakePg()
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     _edges(store)
     _recluster_all(store, ds, D43_ON)
     stored = {}
@@ -121,7 +121,7 @@ def test_a_designator_veto_row_is_kept_so_it_still_binds_the_clustering() -> Non
     """E61 names the two units on the row and scores 0. The SQL store evicted it as a reject
     below the floor, so the lane forgot the veto the batch pass unions into must-not-link."""
     db = FakePg()
-    store = SqlStore(db, "rt", store_floor=0.02)
+    store = SqlStore(db, "rt", store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
     veto = replace(_pair(A, C, "veto", 0.0), veto="unit_designator", reason="guard:x",
                    evidence={"unit_lo": "12", "unit_hi": "14"})
     store.upsert_pairs([veto, _pair(A, B, "reject", 0.001)])
@@ -322,7 +322,7 @@ def test_the_sql_store_files_the_record_once_as_its_twin_does() -> None:
     ds = _sale_and_rent()
     db = FakePg()
     db.ml = set(SAME)
-    sql, twin = SqlStore(db, "rt"), MemoryStore()
+    sql, twin = SqlStore(db, "rt", **LEDGER_KEY), MemoryStore()
     twin.ml = set(SAME)
     for store in (sql, twin):
         _known(store, A, B, C, D)
@@ -367,7 +367,7 @@ def test_a_closure_that_changes_and_changes_back_is_filed_again() -> None:
     blamed the rental. It is filed unless the NEWEST record sharing an advert is identical."""
     ds = _mnl_then_rental()
     db = FakePg()
-    sql, twin = SqlStore(db, "rt"), MemoryStore()
+    sql, twin = SqlStore(db, "rt", **LEDGER_KEY), MemoryStore()
     chain = {(A, B), (B, C)}
     for store, rulings in ((sql, db), (twin, twin)):
         _known(store, A, B, C, D)
@@ -400,7 +400,7 @@ def test_the_sql_store_reads_the_newest_pair_ruling_only() -> None:
     assert "distinct on" in RT_MUST_LINK_SQL and "v.verdict = 'same'" in RT_MUST_LINK_SQL
     db = FakePg()
     db.ml = {(A, C)}
-    assert SqlStore(db, "rt").must_link() == {(A, C)}
+    assert SqlStore(db, "rt", **LEDGER_KEY).must_link() == {(A, C)}
 
 
 def test_a_withdrawn_same_re_clusters_its_component_on_the_next_pass() -> None:
@@ -456,7 +456,7 @@ def test_the_sql_store_reads_the_rulings_changed_since_the_previous_pass() -> No
     db = FakePg()
     start = db.now
     db.rulings.append((start - timedelta(days=3), [A, C]))
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     assert store.rulings_changed() == set(), "the first pass starts at the present"
     store.flush()
     assert db.cursors[CURSOR_RULINGS]["watermark"] == start
@@ -465,7 +465,7 @@ def test_the_sql_store_reads_the_rulings_changed_since_the_previous_pass() -> No
     db.rulings.append((db.now, [A, B]))
     assert store.rulings_changed() == {A, B}
     # A pass that rolls back never flushes, so the next pass reads the same change.
-    assert SqlStore(db, "rt").rulings_changed() == {A, B}
+    assert SqlStore(db, "rt", **LEDGER_KEY).rulings_changed() == {A, B}
     # A ruling whose transaction began before the previous pass started and committed after it
     # read is inside the overlap; one older than the overlap was read by that pass.
     db.rulings.append((start - timedelta(seconds=RULINGS_OVERLAP_S / 2), [C]))
@@ -1227,6 +1227,274 @@ def test_a_pass_that_measured_itself_overwrites_the_half(tmp_path) -> None:
     out = run_incremental(lambda: conn)
     assert out["claim_bound"]["bound_by"] == "time"
     assert conn.settings[key] > 0.0001 / 2 and conn.settings_by[key].endswith(":rate")
+
+
+# ------------------------------------------- E951: a pass with room doubles; a build's budget
+
+
+BUILD_BUDGET_S = 787.5
+LIVE_RATE = 0.031918        # rt_pass_rate_per_s:rt at 2026-10-12 05:50Z, before a pass halved it
+
+
+def _bound(by: str, limit: int, budget: float = BUILD_BUDGET_S) -> dict:
+    return {"bound_by": by, "limit": limit, "pass_budget_s": budget}
+
+
+def test_a_pass_the_clock_cut_that_had_room_doubles_the_rate() -> None:
+    """While each pass the clock cut fills its claim and ends inside half the deadline, the
+    stored rate doubles: 0.018, 0.036, 0.072, 0.144."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.018
+    for expected in (0.036, 0.072, 0.144):
+        limit = int(BUILD_BUDGET_S * rate)
+        rate, doubled = _measure_rate(limit, 300.0, rate, _bound("time", limit))
+        assert (rate, doubled) == (expected, True)
+
+
+def test_the_live_build_doubles_twice_then_blends() -> None:
+    """2026-10-12: the build ran at ~0.032/s, 16 adverts in 494.6 s under the 525 s budget, ~490 s
+    of it fixed. Under the build's budget, at ~0.6 s an advert, 25 and 50 adverts end inside
+    525 s and double; 100 end at 550 s, and the blend carries the claim on from there."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = LIVE_RATE
+    for claimed, expected in ((25, 0.063836), (50, 0.127672)):
+        assert int(BUILD_BUDGET_S * rate) == claimed
+        rate, doubled = _measure_rate(claimed, 490.0 + 0.6 * claimed, rate,
+                                      _bound("time", claimed))
+        assert (rate, doubled) == (expected, True)
+    assert int(BUILD_BUDGET_S * rate) == 100
+    assert _measure_rate(100, 550.0, rate, _bound("time", 100)) == (
+        round(0.5 * 100 / 550.0 + 0.5 * rate, 6), False)
+
+
+def test_half_the_deadline_not_half_the_budget_is_the_room() -> None:
+    """The live pass spends ~490 s on its fixed cost, past half the build's budget (393.75 s):
+    judged against the budget it could never double. Half the deadline bounds a doubled pass by
+    2T only while its next adverts cost no more each, its fixed part has not grown and the
+    database is no slower; at 524 s that leaves 2 s, and E71's saturating neighbourhood is the
+    margin (a doubling cost x1.14-1.19 on 2026-10-10)."""
+    from autodedup.incremental_lane import _measure_rate
+
+    assert _measure_rate(25, 524.0, LIVE_RATE, _bound("time", 25)) == (0.063836, True)
+    assert _measure_rate(25, 526.0, LIVE_RATE, _bound("time", 25)) == (
+        round(0.5 * 25 / 526.0 + 0.5 * LIVE_RATE, 6), False)
+
+
+def test_a_blend_that_beats_the_doubling_is_stored_and_not_called_a_doubling() -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    assert _measure_rate(25, 10.0, LIVE_RATE, _bound("time", 25)) == (
+        round(0.5 * 25 / 10.0 + 0.5 * LIVE_RATE, 6), False)
+
+
+@pytest.mark.parametrize("claimed, bound", [
+    (500, _bound("count", 500, 525.0)),     # the count bound it: the clock had room to spare
+    (250, _bound("cap", 250, 525.0)),       # E948's cap bound it: memory, not time
+    (60, _bound("time", 100)),              # the clock cut it, but the feeds held less
+])
+def test_only_a_claim_the_clock_cut_and_filled_doubles(claimed: int, bound: dict) -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound)
+    assert (rate, doubled) == (round(0.5 * claimed / 200.0 + 0.5 * 2.0, 6), False)
+    assert rate < 4.0
+
+
+class _LaneClock:
+    """The lane's `time`, its pass `elapsed_s` seconds long: the first `perf_counter` (the
+    pass's start) is real, every later one that start plus `elapsed_s`."""
+
+    def __init__(self, elapsed_s: float) -> None:
+        self.started: float | None = None
+        self.elapsed_s = elapsed_s
+
+    def perf_counter(self) -> float:
+        if self.started is None:
+            self.started = time.perf_counter()
+            return self.started
+        return self.started + self.elapsed_s
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+def _timed_pass(monkeypatch, conn, elapsed_s: float) -> dict:
+    from autodedup import incremental_lane
+
+    monkeypatch.setattr(incremental_lane, "time", _LaneClock(elapsed_s))
+    return incremental_lane.run_incremental(lambda: conn)
+
+
+def test_a_build_pass_with_room_doubles_the_stored_rate(tmp_path, monkeypatch) -> None:
+    from autodedup.incremental_lane import pass_rate_key
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    for expected in (0.0036, 0.0072):
+        out = _timed_pass(monkeypatch, conn, 524.0)
+        bound = out["claim_bound"]
+        assert bound["bound_by"] == "time" and out["counts"]["claimed"] >= bound["limit"]
+        assert out["rate_doubled"] is True and out["bootstrap"]["active"] is True
+        assert conn.settings[key] == expected and conn.settings_by[key].endswith(":rate")
+
+
+def test_a_live_pass_with_room_doubles_the_stored_rate(tmp_path, monkeypatch) -> None:
+    """(a) holds after the build too: the live budget (525 s) is the threshold, a live limit is
+    shared out a fifth a feed so a pass rarely fills it, and the reconcile runs after the commit."""
+    from autodedup.incremental import bootstrap_key
+    from autodedup.incremental_lane import PASS_BUDGET_S, pass_rate_key
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    conn.settings[bootstrap_key()] = False
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    out = _timed_pass(monkeypatch, conn, 524.0)
+    bound = out["claim_bound"]
+    assert out["bootstrap"]["active"] is False and bound["pass_budget_s"] == PASS_BUDGET_S
+    assert bound["bound_by"] == "time" and out["counts"]["claimed"] >= bound["limit"]
+    assert out["rate_doubled"] is True and conn.settings[key] == 0.0036
+
+
+def test_a_build_pass_past_half_the_deadline_blends_the_stored_rate(tmp_path,
+                                                                     monkeypatch) -> None:
+    from autodedup.incremental_lane import pass_rate_key
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    out = _timed_pass(monkeypatch, conn, 526.0)
+    claimed = out["counts"]["claimed"]
+    assert out["claim_bound"]["bound_by"] == "time" and claimed >= out["claim_bound"]["limit"]
+    assert out["rate_doubled"] is False
+    assert conn.settings[key] == round(0.5 * claimed / 526.0 + 0.5 * 0.0018, 6)
+
+
+def test_a_pass_past_its_deadline_still_halves_and_never_doubles(tmp_path) -> None:
+    from autodedup.incremental_lane import pass_rate_key, run_incremental
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.0018
+    out = run_incremental(lambda: conn, deadline_s=0.0)
+    assert out["aborted"] == "deadline" and out["rate_doubled"] is False
+    assert conn.settings[key] == 0.0009 and conn.settings_by[key].endswith(":halved")
+
+
+def test_a_build_s_budget_is_three_quarters_of_the_deadline(tmp_path) -> None:
+    """A build's pass need not finish fast for latency, and its fixed cost is spread over more
+    adverts; the deadline, the lease and the lane's timeout stay as they are."""
+    from autodedup.incremental import bootstrap_key
+    from autodedup.incremental_lane import (BOOTSTRAP_BUDGET_FRACTION, PASS_BUDGET_S,
+                                            PASS_DEADLINE_S, run_incremental)
+    from tests.autodedup import lane_world
+
+    assert BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S == BUILD_BUDGET_S
+    assert (PASS_DEADLINE_S, PASS_BUDGET_S) == (1050.0, 525.0)
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    building = run_incremental(lambda: conn)
+    assert building["bootstrap"]["active"] is True
+    assert building["claim_bound"]["pass_budget_s"] == BUILD_BUDGET_S
+    assert building["deadline_s"] == PASS_DEADLINE_S
+
+    conn.settings[bootstrap_key()] = False
+    built = run_incremental(lambda: conn)
+    assert built["bootstrap"]["active"] is False
+    assert built["claim_bound"]["pass_budget_s"] == PASS_BUDGET_S
+
+
+# ------------------- E952/E943: one pair budget, build and live; the pass reports its attempts
+
+
+def test_one_pair_budget_of_150k_holds_for_build_and_live(tmp_path, monkeypatch) -> None:
+    """E943 restated E952: the budget counts the pairs a pass will DECIDE, after the reject
+    ledger, so a build needs no budget of its own. One `PASS_LIMITS` the lane hands the pass,
+    beside the claim bound in the summary, in the build and after it."""
+    from autodedup import incremental_lane
+    from autodedup.incremental import bootstrap_key
+    from tests.autodedup import lane_world
+
+    handed: list[Limits] = []
+    real = incremental_lane.run_pass_bounded
+
+    def spy(*args, **kwargs):
+        handed.append(kwargs["limits"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", spy)
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    building = incremental_lane.run_incremental(lambda: conn)
+    conn.settings[bootstrap_key()] = False
+    built = incremental_lane.run_incremental(lambda: conn)
+
+    assert not hasattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET")
+    assert incremental_lane.PASS_LIMITS == Limits(max_listings=500, max_pairs=150_000,
+                                                  max_component=400)
+    assert handed == [incremental_lane.PASS_LIMITS] * 2
+    assert building["bootstrap"]["active"] is True and not building["aborted"]
+    assert building["claim_bound"]["max_pairs"] == 150_000
+    assert built["bootstrap"]["active"] is False and not built["aborted"]
+    assert built["claim_bound"]["max_pairs"] == 150_000
+
+
+def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
+                                                                  monkeypatch) -> None:
+    """A budget nothing fits refuses all four claims of the ladder: the clock's 78, then a
+    quarter of each claim MADE (19, 4, 1; a quarter of `max_listings` would re-claim the same
+    78 twice). The summary says so — `counts.attempts` 4, each claim's wanted set, the last
+    one's `wanted_pairs` and `pairs_to_decide`, `aborted` "pair_budget" — and nothing is
+    written, the reject ledger included. With the budget back the next pass commits."""
+    from autodedup import incremental_lane
+    from autodedup.incremental import bootstrap_key
+    from tests.autodedup import lane_world
+
+    made: list[int] = []
+    real_claim = incremental_lane.SqlWork.claim
+
+    def claim(self, limit: int):
+        items = real_claim(self, limit)
+        made.append(self.claim_bound["limit"])
+        return items
+
+    monkeypatch.setattr(incremental_lane.SqlWork, "claim", claim)
+    budget = incremental_lane.PASS_LIMITS
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", replace(budget, max_pairs=-1))
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    cursors = {key: dict(value) for key, value in conn.cursors.items()}
+    pairs = dict(conn.pairs)
+    refused = incremental_lane.run_incremental(lambda: conn)
+    assert refused["aborted"] == "pair_budget"
+    # The last claim, one advert against a store holding none, wants no pair: -1 refuses it.
+    assert made == [78, 19, 4, 1]
+    assert (refused["counts"]["attempts"], refused["counts"]["wanted_pairs"]) == (4, 0)
+    assert refused["counts"]["pairs_to_decide"] == 0
+    by_attempt = refused["counts"]["pairs_to_decide_by_attempt"]
+    assert len(by_attempt) == 4 and by_attempt[-1] == 0
+    assert len(refused["counts"]["wanted_by_attempt"]) == 4
+    assert refused["counts"]["wanted_by_attempt"][-1] == 0
+    # What production read as "count" (2026-10-12): the ladder's last claim, not the clock's.
+    assert refused["claim_bound"]["max_pairs"] == -1
+    assert (refused["claim_bound"]["max_listings"], refused["claim_bound"]["bound_by"]) == (
+        1, "count")
+    assert conn.cursors == cursors and conn.pairs == pairs and not conn.reject_ledger
+
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", budget)
+    again = incremental_lane.run_incremental(lambda: conn)
+    assert again["aborted"] == "" and again["counts"]["attempts"] == 1
+    assert again["claim_bound"]["max_pairs"] == 150_000
 
 
 def test_the_fact_reads_are_sliced_by_whole_listings(tmp_path, monkeypatch) -> None:

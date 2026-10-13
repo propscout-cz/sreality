@@ -34,6 +34,12 @@ export type LeaderMetric =
   | 'listing_count'
   | 'active_listing_count';
 
+/* The two orderings the leaderboard offers, desktop and phone alike. */
+export const LEADER_METRIC_OPTIONS: ReadonlyArray<{ value: LeaderMetric; label: string }> = [
+  { value: 'active_property_count', label: 'Nemovitosti' },
+  { value: 'listing_count', label: 'Inzeráty' },
+];
+
 /* The masked pair. `primary_*` is present only for an admin session; a non-admin
  * gets `has_*` in its place. Both are optional because which one arrives is a
  * property of the CALLER, not of the row. */

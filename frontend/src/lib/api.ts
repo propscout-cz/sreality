@@ -3019,20 +3019,28 @@ export const markAllNotificationsSeen = (
     jwt: true,
   });
 
-/* ----- Saved Browse filter presets (migration 151) ---------------------- */
+/* ----- Saved Browse filter presets (migration 151) ----------------------
+ * Per account (migration 595, ticket #1761): every route rides the user's
+ * JWT and RLS, so each call sends `jwt: true`. */
 
 export const listFilterPresets = (): Promise<{
   data: FilterPreset[];
   total: number;
 }> =>
-  request<{ data: FilterPreset[]; total: number }>('/filter-presets');
+  request<{ data: FilterPreset[]; total: number }>('/filter-presets', {
+    jwt: true,
+  });
 
 export const createFilterPreset = (input: {
   name: string;
   filter_spec: PresetSpec;
   color?: TagColor | null;
 }): Promise<FilterPreset> =>
-  request<FilterPreset>('/filter-presets', { method: 'POST', json: input });
+  request<FilterPreset>('/filter-presets', {
+    method: 'POST',
+    json: input,
+    jwt: true,
+  });
 
 export const updateFilterPreset = (
   id: string,
@@ -3041,11 +3049,13 @@ export const updateFilterPreset = (
   request<FilterPreset>(`/filter-presets/${encodeURIComponent(id)}`, {
     method: 'PUT',
     json: patch,
+    jwt: true,
   });
 
 export const deleteFilterPreset = (id: string): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/filter-presets/${encodeURIComponent(id)}`, {
     method: 'DELETE',
+    jwt: true,
   });
 
 /* Persist a new display order (full ordered id-list, 0 = first). Returns the
@@ -3056,6 +3066,7 @@ export const reorderFilterPresets = (
   request<{ data: FilterPreset[]; total: number }>('/filter-presets/reorder', {
     method: 'PUT',
     json: { ids },
+    jwt: true,
   });
 
 /* ----- Operator merge mechanics (multi-portal) ----------------------------

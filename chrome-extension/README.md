@@ -276,7 +276,8 @@ The output lands in `chrome-extension/dist/`.
 — and that is not a style choice. A manifest-declared content script is a
 *classic* script (MV3 has no module mode for `content_scripts[].js`), so
 `content.js` may not contain a static `import`. Rollup hoists any module shared
-between entries into a chunk, and `portals.ts` is imported by both entries, so a
+between entries into a chunk, and the portal-id rules (`src/portals.ts` then,
+`frontend/src/lib/portalIds.ts` now) are imported by both entries, so a
 single two-entry build emitted `import … from "./chunks/portals-*.js"` as line 1
 of `content.js`; Chrome refused the script outright and the panel silently never
 mounted (2026-08-04 → 2026-09-18). Separate passes keep each entry
@@ -458,9 +459,16 @@ Odhlásit" line then appears at the top of the panel on every listing; click
 
 ### Supported portals
 
-sreality, bazos, bezrealitky, idnes, maxima, remax — plus mmreality and
-ceskereality (URL→id extractors there are best-effort until those portals
-have data; a miss just shows no badge, never a wrong one).
+sreality, bazos, bezrealitky (.cz and the English .com), idnes, maxima, remax,
+mmreality, ceskereality and realitymix (a missed id just shows no badge, never a
+wrong one).
+
+The host list and the URL→id rules live in ONE module the SPA shares,
+`frontend/src/lib/portalIds.ts` (imported cross-tree like `lib/brand.ts`; the
+SPA's paste-a-link uses the same rules). The build writes
+`content_scripts.matches` from it; the checked-in `manifest.json` list is a
+template that `frontend/src/lib/portalIds.test.ts` keeps equal to it, so a new
+host goes in both.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the

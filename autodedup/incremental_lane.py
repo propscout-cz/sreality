@@ -95,6 +95,7 @@ from autodedup.incremental import (
     WorkItem,
     _in_time,
     bootstrap_key,
+    engine_digest,
     key_token,
     run_pass_bounded,
     seed_current,
@@ -141,6 +142,7 @@ from autodedup.incremental_sql import (
     RT_FRESH_FP_KEY_SQL,
     RT_FRESH_LEASE_SQL,
     RT_FRESH_PAIRS_SQL,
+    RT_FRESH_REJECT_LEDGER_SQL,
     RT_FRESH_RETIRE_EVENT_SQL,
     RT_FRESH_RT_FP_SQL,
     RT_FRESH_SCOPE_IDS_SQL,
@@ -170,6 +172,9 @@ from autodedup.incremental_sql import (
     RT_PAIR_UPSERT_SQL,
     RT_PAIRS_TOUCHING_SQL,
     RT_PAIRS_WITHIN_SQL,
+    RT_REJECT_LEDGER_DELETE_SQL,
+    RT_REJECT_LEDGER_LOOKUP_SQL,
+    RT_REJECT_LEDGER_UPSERT_SQL,
     RT_REVIVED_SQL,
     RT_ROW_CENSUS_SQL,
     RT_ROW_ESTIMATE_SQL,
@@ -341,11 +346,12 @@ BOOTSTRAP_MIN_CLAIM: int = 1
 # The claim is bounded by SECONDS as well as by counts: every pass measures its OWN rate (claimed
 # listings per second of pass wall time, reconcile included) into
 # `rt_pass_rate_per_s:<generation>`, and the next pass claims at most `budget x rate`. The
-# budget is half the deadline, so a pass may run twice as slow as its measured rate before the
-# deadline stops it. The default rate is the one measurement taken before any was recorded — a
-# conservative start the second pass corrects. The row is halved BEFORE every pass, put back as
-# soon as the pass commits and then overwritten by its measurement (E941), so a pass the system
-# kills mid-way has already halved the next claim.
+# budget is half the deadline (a build's three quarters, E951), so a pass may run twice (a
+# build's 4/3) as slow as its measured rate before the deadline stops it. The default rate is
+# the one measurement taken before any was recorded — a conservative start the second pass
+# corrects. The row is halved BEFORE every pass, put back as soon as the pass commits and then
+# overwritten by its measurement (E941), so a pass the system kills mid-way has already halved
+# the next claim.
 PASS_BUDGET_S: float = PASS_DEADLINE_S / 2
 PASS_RATE_PER_S: float = 0.1
 # A rate is only recorded when the pass actually claimed enough for the quotient to mean
@@ -354,6 +360,17 @@ PASS_RATE_MIN_CLAIM: int = 20
 # How much of the new measurement the stored rate takes. A build ramps from the conservative
 # default to the real rate in two passes at 0.5 and cannot be knocked out of it by one slow pass.
 PASS_RATE_ALPHA: float = 0.5
+# E951: a pass the clock cut that claimed all of it and committed inside this share of the
+# DEADLINE doubles the stored rate instead of blending it: at a small claim the pass's fixed
+# cost holds claimed/elapsed down, so the blend cannot climb. A doubled pass of T < 525 s stays
+# under 2T only if its next adverts cost no more each, its fixed part has not grown and the
+# database is no slower (2 s to spare at the threshold); the margin is E71's neighbourhood
+# saturating (2026-10-10: 62/125/250 adverts in 331/395/450 s, x1.14-1.19 a doubling).
+RAMP_HEADROOM: float = 0.5
+# E951: a build's pass budget as a share of the deadline: a build's pass need not finish fast
+# for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
+# deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
+BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # --- the claim cap (E948) --------------------------------------------------------------------
 #
 # The rate bounds a pass's TIME, never its MEMORY, and the neighbourhood a pass re-reads grows
@@ -422,18 +439,20 @@ MAX_RETIRE_FRACTION: float = 0.05
 # So the seed's second check (E941) projects 464 + 60 - 129 + 668 = ~1,063 MB (~1,190 MB were
 # none of the reset's space reused), and 1,500 leaves ~310-440 MB: about three months of the
 # widened scope's arrivals (~95-135 MB a month: E939's Prague rate scaled to 38,000 adverts, or
-# E79's ~20 % of the store a month at 18 KiB), not a second widening. The whole town is
-# E946's (5,000 MB, once the operator has read the database's disk, D907). 800 rested on
-# E916's trial measurements; a DELETE never shrinks a file, so the schema's size is a
-# high-water mark that pruned generations leave behind.
+# E79's ~20 % of the store a month at 18 KiB), not a second widening. E943's reject ledger
+# adds ~2 KiB an advert (20 KiB): ~1,137 MB projected, ~360 MB left, about two and a half
+# months. The whole town is E946's (5,000 MB, once the operator has read the database's disk,
+# D907). 800 rested on E916's trial measurements; a DELETE never shrinks a file, so the
+# schema's size is a high-water mark that pruned generations leave behind.
 MAX_SCHEMA_MB: float = 1500.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
 # 25,609 pairs 100.8 MB, 14.1 KiB an advert: 3.5 pairs an advert at ~4.1 kB each on disk with
 # their indexes, TOAST and reused dead space apportioned; fp_key 2.8 KiB). E916's ~12 kB was
-# the trial build's row cost (2.76 pairs an advert at 2,869 B).
-BUILD_BYTES_PER_LISTING: int = 18 * 1024
+# the trial build's row cost (2.76 pairs an advert at 2,869 B). Plus E943's reject ledger:
+# ~10-12 below-floor rejects an advert at the end of a build, ~182 B each with its key, ~2 KiB.
+BUILD_BYTES_PER_LISTING: int = 20 * 1024
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000
@@ -444,6 +463,9 @@ POP_CHUNK: int = 5_000
 # STATEMENT_TIMEOUT_MS. Every cohort statement is a plain `= any(ids)` filter ordered within a
 # listing, so slices of whole listings read exactly what the whole array would.
 FACT_CHUNK: int = 500
+# How many pairs one reject-ledger statement carries (E943): a lookup or a write of a full
+# 150k-pair pass is eight statements of ~1 MB of bound arrays each, not one that grows with it.
+LEDGER_CHUNK: int = 20_000
 STATEMENT_TIMEOUT_MS: int = 120_000
 LOCK_TIMEOUT_MS: int = 5_000
 # Above the pass's own deadline (PASS_DEADLINE_S) and under the lease (LEASE_TTL_S): the scoring
@@ -503,9 +525,9 @@ class SqlStore:
     unchanged corpus costs **4**, where the per-listing spelling cost ~17,700 for a 166-listing
     claim."""
 
-    def __init__(self, conn: Any, generation: str = GENERATION,
-                 store_floor: float = 0.02, model_version: str | None = None,
-                 calibration_digest: str | None = None) -> None:
+    def __init__(self, conn: Any, generation: str = GENERATION, *, calibration_digest: str,
+                 engine_digest: str, store_floor: float = 0.02,
+                 model_version: str | None = None) -> None:
         self.conn = conn
         self.generation = generation
         # WHICH SCORER TOOK THE DECISION, stamped on every row this store writes (E90a). The
@@ -516,6 +538,10 @@ class SqlStore:
         # are held here rather than fished out of a per-pair evidence bag.
         self.model_version = model_version
         self.calibration_digest = calibration_digest
+        # E943: the reject ledger's key besides the two decision digests is the store's ALONE —
+        # this calibration digest, this engine digest and `FEATURE_VERSION` — read by the
+        # lookup and written by the write, so the two can never disagree about a row.
+        self.engine_digest = engine_digest
         # The batch lane's own retention floor, carried here so the two stores keep the same
         # rows. It comes from the pass's settings, never from a constant of this module.
         self.store_floor = float(store_floor)
@@ -714,7 +740,7 @@ class SqlStore:
             out.setdefault(int(row[0]), set()).add(int(row[1]))
         return out
 
-    def upsert_pairs(self, rows: Sequence[PairRow]) -> None:
+    def upsert_pairs(self, rows: Sequence[PairRow]) -> int:
         # RETENTION (E79), and it is the batch lane's rule rather than a new one:
         # `score_lane.persist` writes only `storable(row, store_floor)` — the whole merge and
         # band zones whatever they scored, plus the reject tail at or above `store_floor`
@@ -722,19 +748,19 @@ class SqlStore:
         # on the scoped cohort: 13,043 of 44,724 decisions are storable (the live `pairs` table
         # says the same of the batch generations: 15,811 of 48,908 over the whole cohort), so
         # this is a 3.4x saving and not a rounding. A pair that falls BELOW the floor is
-        # deleted, not left behind, and being re-decided next pass costs CPU rather than bytes.
+        # deleted, not left behind, and ledgered (E943) so the next pass does not re-decide it.
         keep: list[PairRow] = []
-        evicted: list[tuple[int, int]] = []
+        evicted: list[PairRow] = []
         for row in rows:
             if storable({"zone": row.zone, "score": row.score, "evidence": row.evidence},
                         self.store_floor):
                 keep.append(row)
             else:
-                evicted.append((row.lo, row.hi))
+                evicted.append(row)
         self.pairs_retained += len(keep)
         self.pairs_evicted += len(evicted)
         if evicted:
-            self.delete_pairs(evicted)
+            self.delete_pairs([(row.lo, row.hi) for row in evicted])
         self._run_many(RT_PAIR_UPSERT_SQL, [{
             "generation": self.generation,
             "listing_lo": row.lo, "listing_hi": row.hi, "probes": list(row.probes),
@@ -756,6 +782,39 @@ class SqlStore:
             "feature_version": FEATURE_VERSION,
             "model_version": row.evidence.get("_model") or self.model_version,
         } for row in keep])
+        self._ledger(evicted, keep)
+        return len(evicted)
+
+    def _ledger(self, evicted: Sequence[PairRow], kept: Sequence[PairRow]) -> None:
+        """E943: every pair deleted for its score goes into the reject ledger under the store's
+        key, and every pair stored leaves it — inside the pass's transaction, so a pass that
+        rolls back ledgers nothing."""
+        for start in range(0, len(evicted), LEDGER_CHUNK):
+            chunk = evicted[start:start + LEDGER_CHUNK]
+            self._run(RT_REJECT_LEDGER_UPSERT_SQL, {
+                "generation": self.generation,
+                "los": [row.lo for row in chunk], "his": [row.hi for row in chunk],
+                "dd_los": [row.dd_lo for row in chunk], "dd_his": [row.dd_hi for row in chunk],
+                "calibration_digest": self.calibration_digest,
+                "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest})
+        for start in range(0, len(kept), LEDGER_CHUNK):
+            chunk = kept[start:start + LEDGER_CHUNK]
+            self._run(RT_REJECT_LEDGER_DELETE_SQL, {
+                "generation": self.generation,
+                "los": [row.lo for row in chunk], "his": [row.hi for row in chunk]})
+
+    def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
+        out: set[tuple[int, int]] = set()
+        for start in range(0, len(keys), LEDGER_CHUNK):
+            chunk = keys[start:start + LEDGER_CHUNK]
+            out.update((int(row[0]), int(row[1])) for row in self._query(
+                RT_REJECT_LEDGER_LOOKUP_SQL, {
+                    "generation": self.generation,
+                    "los": [key[0] for key in chunk], "his": [key[1] for key in chunk],
+                    "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk],
+                    "calibration_digest": self.calibration_digest,
+                    "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest}))
+        return out
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         self._run_many(RT_PAIR_DELETE_SQL, [
@@ -1125,7 +1184,10 @@ class SqlFacts:
             record = build_image_record(row, clip=clips.get(image_id),
                                         tags=tag_pairs(tags.get(image_id, [])),
                                         pop=population)
-            out.setdefault(int(row["listing_id"]), []).append(Image.from_json(record))
+            # E943: the CLIP job's stamp, for the decision digest only; the export's record
+            # (and so every artifact) does not carry it.
+            out.setdefault(int(row["listing_id"]), []).append(Image.from_json(
+                {**record, "clip_tagged_at": _iso(row.get("clip_tagged_at"))}))
         return out
 
 
@@ -1972,6 +2034,7 @@ RESET_TABLES: tuple[tuple[str, str], ...] = (
     ("rt_scope_ids", RT_FRESH_SCOPE_IDS_SQL),
     ("rt_scope_scan", RT_FRESH_SCOPE_SCAN_SQL),
     ("rt_retire_event", RT_FRESH_RETIRE_EVENT_SQL),
+    ("rt_reject_ledger", RT_FRESH_REJECT_LEDGER_SQL),
 )
 
 
@@ -2162,20 +2225,19 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
 
 
 def _measure_rate(claimed: int, elapsed_s: float, previous: float,
-                  bound: Mapping[str, Any]) -> float | None:
-    """This pass's claimed-listings-per-second, blended with what the generation had (E98).
-
-    Recorded only when the quotient means something: the pass claimed `PASS_RATE_MIN_CLAIM`
-    listings, or it claimed everything the time budget allowed it (a claim the budget cut is a
-    measurement at any size — without that, a rate halved to a one-listing claim would never be
-    measured again)."""
+                  bound: Mapping[str, Any]) -> tuple[float | None, bool]:
+    """The rate a pass stores (E98's blend, E951's doubling) and whether the doubling won."""
+    # A claim the clock cut is a measurement at any size: without that, a rate halved to a
+    # one-listing claim would never be measured again.
     limit = int(bound.get("limit") or 0)
     saturated = bound.get("bound_by") == "time" and limit > 0 and claimed >= limit
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
-        return None
-    blended = (PASS_RATE_ALPHA * (claimed / float(elapsed_s))
-               + (1.0 - PASS_RATE_ALPHA) * max(1e-6, previous))
-    return round(blended, 6)
+        return None, False
+    start = max(1e-6, previous)
+    blended = PASS_RATE_ALPHA * (claimed / float(elapsed_s)) + (1.0 - PASS_RATE_ALPHA) * start
+    if saturated and elapsed_s < RAMP_HEADROOM * PASS_DEADLINE_S and 2.0 * start > blended:
+        return round(2.0 * start, 6), True
+    return round(blended, 6), False
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
@@ -2364,9 +2426,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     before the pass's transaction opens, so a pass the system kills — a deploy, a restart, the
     kernel's OOM killer — has already slowed the next claim; a pass that committed puts the
     previous rate back before its reconcile and overwrites it with its measurement after it
-    (an idle pass, too small to measure, leaves the previous rate), and a refused one puts the
-    previous rate back too. A pass past its deadline rolls back and
-    keeps the halving (E913); so does a pass that RAISED, which writes it again through
+    (doubled when it had room, E951; an idle pass, too small to measure, leaves the previous
+    rate), and a refused one puts the previous rate back too. A pass past its deadline rolls
+    back and keeps the halving (E913); so does a pass that RAISED, which writes it again through
     `fresh_conn` — a factory for a NEW connection, since its own may be dead — or on its own
     connection when the caller gives none (E930).
 
@@ -2417,7 +2479,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
@@ -2473,13 +2535,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         calibration = Calibration.from_json(
             payload if isinstance(payload, dict) else json.loads(payload or "{}"))
         settings, model = pass_config(rows[0][5], rows[0][6], generation)
-        store = SqlStore(conn, generation, store_floor=settings.store_floor,
-                         model_version=model.version,
-                         calibration_digest=calibration.digest())
+        store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
+                         engine_digest=engine_digest(settings, model),
+                         store_floor=settings.store_floor, model_version=model.version)
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
-                       pass_budget_s=PASS_BUDGET_S, rate_per_s=rate_per_s,
-                       claim_cap=int(cap["cap"]))
+                       pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
+                                      else PASS_BUDGET_S),
+                       rate_per_s=rate_per_s, claim_cap=int(cap["cap"]))
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2611,13 +2674,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         def owns_the_lane() -> bool:
             return not lost and not shutting_down()
 
+        doubled = False
         if not stopped and result is not None and owns_the_lane():
             # The pass's measurement, reconcile included, blended with the rate it started
-            # from, replaces the rate put back above; a pass that claimed too little to measure
-            # itself (an idle one) leaves that rate. Not once the lane is not its own: the next
-            # holder's rows are not its to write.
-            measured = _measure_rate(len(result.claimed), elapsed, rate_per_s,
-                                     work.claim_bound)
+            # from (or doubled, E951), replaces the rate put back above; a pass that claimed
+            # too little to measure itself (an idle one) leaves that rate. Not once the lane is
+            # not its own: the next holder's rows are not its to write.
+            measured, doubled = _measure_rate(len(result.claimed), elapsed, rate_per_s,
+                                              work.claim_bound)
             if measured is not None:
                 _write_rate(conn, generation, measured, "rate")
         coverage = (None if not facts.images_with_phash else round(
@@ -2658,7 +2722,10 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         summary["scope"] = scope.as_json()
         summary["windows"] = dict(work.windows)
         summary["enter_scan"] = dict(work.enter_scan)
-        summary["claim_bound"] = dict(work.claim_bound)
+        # E952: the pair budget beside the clock's and the cap's: a refusal (`aborted`
+        # "pair_budget", `counts.attempts`) is read against it.
+        summary["claim_bound"] = {**work.claim_bound, "max_pairs": PASS_LIMITS.max_pairs}
+        summary["rate_doubled"] = doubled
         summary["bootstrap"] = {
             "active": bool(bootstrap),
             "backlog": work.bootstrap_backlog,
@@ -2672,6 +2739,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         }
         summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(rows[0][7]),
                                   "built_age_days": age_days(rows[0][7])}
+        # E943: the reject ledger's engine key; a pass after it moved decides every reject anew.
+        summary["engine_digest"] = store.engine_digest
         summary["retention"] = {"store_floor": settings.store_floor,
                                 "pairs_retained": store.pairs_retained,
                                 "pairs_evicted": store.pairs_evicted}
@@ -2758,7 +2827,7 @@ def run_rt_seed(
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
         if existing and not fresh:
             raise SystemExit(
