@@ -6,11 +6,11 @@ import Shell from './components/Shell';
 import Skeleton from './components/Skeleton';
 import { RequireAdmin, RequireAuth } from './components/guards';
 import HomeRedirect from './components/phone/HomeRedirect';
+import { PhoneSuspense } from './components/phone/RollParts';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
-import Feed from './pages/Feed';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
 import BuildingDetail from './pages/BuildingDetail';
 import EstimationDetail from './pages/EstimationDetail';
@@ -54,8 +54,11 @@ const AutodedupProposedSplits = lazyChunk(() => import('./pages/AutodedupPropose
 const AutodedupCategorySplits = lazyChunk(() => import('./pages/AutodedupCategorySplits'));
 const AutodedupRulings = lazyChunk(() => import('./pages/AutodedupRulings'));
 const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
-// The Phone app's Odkaz tab (#1767): phone-only, so outside the first visit.
+// The Phone app's Odkaz tab (#1767) and its start screen, Nové (#1766): phone-
+// only, so outside the first visit. The installed app's service worker caches
+// the feed's chunk after its first launch (`/assets/*` cache-first).
 const LinkPage = lazyChunk(() => import('./pages/Link'));
+const Feed = lazyChunk(() => import('./pages/Feed'));
 // TODO(estimation-5 Part C1): remove DevConfidencePreview + its route
 // once design is approved and the indicator is in real use.
 const DevConfidencePreview = lazyChunk(() => import('./pages/DevConfidencePreview'));
@@ -93,7 +96,15 @@ export const routes: RouteObject[] = [
       // and refine it at runtime with usePageTitle — see lib/pageTitle.tsx.
       { index: true, element: <HomeRedirect /> },
       { path: ROUTES.browse.childPath, element: <Browse />, handle: { title: 'Browse' } },
-      { path: ROUTES.feed.childPath, element: <Feed />, handle: { title: 'Nové' } },
+      {
+        path: ROUTES.feed.childPath,
+        element: (
+          <PhoneSuspense>
+            <Feed />
+          </PhoneSuspense>
+        ),
+        handle: { title: 'Nové' },
+      },
       {
         path: ROUTES.link.childPath,
         element: (

@@ -1,7 +1,8 @@
 /* The feed card's margin (#1762's signature): a 44 px translucent paper strip
  * over the photo's right edge holding the extension's three actions — funnel,
  * bookmark, eye — like ticks in a notebook margin, with the photo count at its
- * foot.
+ * foot. Only the marks take a touch: the column's bare paper passes it through,
+ * so a swipe that starts there still turns the card's photos (CardPhotoStrip).
  *
  * Every write is the SPA's own, unchanged (rule 22): the funnel is
  * `usePipelineCard` (out → a tap adds at the entry stage; in → the stage menu,
@@ -31,7 +32,7 @@ import { usePipelineCard } from '@/lib/usePipelineCard';
 import { CollectionSheet, StageSheet, type SheetSubject } from './FeedSheets';
 
 const MARK =
-  'flex h-12 w-full flex-col items-center justify-center gap-0.5 transition-colors aria-disabled:opacity-60';
+  'pointer-events-auto flex h-12 w-full flex-col items-center justify-center gap-0.5 transition-colors aria-disabled:opacity-60';
 const IDLE = 'text-[var(--color-ink-3)] active:text-[var(--color-ink)]';
 const PRESSED = 'text-[var(--color-ink)]';
 
@@ -107,7 +108,7 @@ export default function MarginMarks({ subject, photoCount }: MarginMarksProps) {
   const eyeBlocked = liveDeal || dismissed == null || dismissPending;
 
   return (
-    <div className="absolute inset-y-0 right-0 z-[var(--z-card-action)] flex w-11 flex-col items-center border-l border-[var(--color-rule-strong)] bg-[var(--color-paper-2)]/88 pt-1">
+    <div className="pointer-events-none absolute inset-y-0 right-0 z-[var(--z-card-action)] flex w-11 flex-col items-center border-l border-[var(--color-rule-strong)] bg-[var(--color-paper-2)]/88 pt-1">
       {readFailed(membersQ) ? (
         <RetryMark what="Pipeline" onRetry={() => void membersQ.refetch()} />
       ) : (
