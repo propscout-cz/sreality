@@ -386,11 +386,9 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
     or:  (q: string) => typeof r;
   };
   r = applyPortalRule(r, f);
-  /* Days-ago ranges. min = most recent allowed (so last_seen >= now()
-   * minus min); max = oldest allowed (so last_seen <= now() minus max).
-   * Wait — that's inverted. min_days = 3 means "seen at least 3 days
-   * ago", which is `last_seen <= now() - 3d`. max_days = 10 means
-   * "seen at most 10 days ago", which is `last_seen >= now() - 10d`. */
+  /* Days-ago ranges: min_days = 3 means "seen at least 3 days ago"
+   * (`last_seen <= now() - 3d`); max_days = 10 means "seen at most 10 days
+   * ago" (`last_seen >= now() - 10d`). */
   if (f.lastSeenMaxDays != null) r = r.gte('last_seen_at', isoNDaysAgo(f.lastSeenMaxDays));
   if (f.lastSeenMinDays != null) r = r.lte('last_seen_at', isoNDaysAgo(f.lastSeenMinDays));
   if (f.firstSeenMaxDays != null) r = r.gte('first_seen_at', isoNDaysAgo(f.firstSeenMaxDays));
@@ -580,8 +578,7 @@ async function resolveCollectionPrefilter(
 /* min/max city population and the near_* proximity filters are NOT here:
  * since migration 142 they're precomputed columns on properties_public, so
  * they dispatch directly via applyRegistryFilters (no prefilter RPC, no anon
- * 3s timeout). Only the flexible any-index rule list + the legacy centroid
- * near_city_proximity still need the spatial RPC. */
+ * 3s timeout). Only the flexible any-index rule list needs a prefilter. */
 const hasCityQualityFilter = (f: ListingFilters): boolean =>
   f.cityIndexRules.length > 0;
 
@@ -810,19 +807,6 @@ export const fetchNoPriceCount = async (
   return count ?? 0;
 };
 
-/* Browse cohort fetchers (Map / Table / Cards) AND fetchBrowseStats read the
- * property grain (properties_public / browse_stats_properties), so Browse is
- * one-dot-per-property. `sreality_id` on properties_public is the
- * representative child, so detail links, image / snapshot / tag lookups, and
- * the sreality_id-keyed prefilters all carry over unchanged. Today every
- * property is a singleton, so the surface is visually identical to
- * listings_public; multi-source collapsing arrives with the portal scrapers.
- *
- * The Stats RPC was repointed in Slice 2a once migration 095 denormalised the
- * filter columns onto `properties` — that drops the listings join from the
- * function's plan, making browse_stats_properties perf-equivalent to the
- * listing-grain browse_stats. Migration 173 carries the merged price-change
- * predicates, the condition-level bounds, and the with-estimates flag. */
 /* Above this many MAPPABLE rows the map asks the server to aggregate; at or
  * below it, today's per-point read is already correct and is what runs. Measured
  * 2026-08-26 on the live default cohort: a 2,000-row point read is 153 blocks and
@@ -1005,10 +989,11 @@ export interface CohortCount {
 }
 
 /* The ONE cohort total — header, tab badge, and the infinite-scroll progress
- * labels. EXACT FIRST on the compact browse_list read model: on the snapshot,
- * a market-wide exact count is an index-only scan (measured 201 ms fully cold
- * for the broadest single cohort — 68k rows, zero heap fetches), so precision
- * is the norm, not the exception. The pre-read-model planner-estimate-first
+ * labels. EXACT FIRST on the compact browse_list read model: a one-category
+ * exact count is an index-only scan (measured 201 ms fully cold for the
+ * broadest single cohort — 68k rows, zero heap fetches); a cohort with no
+ * category is a sequential scan (~2.4 s cold, 2026-10-13), so precision is the
+ * norm, not the exception. The pre-read-model planner-estimate-first
  * hybrid existed because an exact count on the churned live table could not
  * finish under the anon 3s budget; that constraint is gone. `count=planned`
  * stays as the graceful FALLBACK when the exact count exceeds the abort budget
@@ -1267,7 +1252,7 @@ export interface BrowseStatsResolvedFilters {
   property_ids_filter: number[] | null;
 }
 
-/* The ~74-key argument object `browse_stats_properties` takes.
+/* The argument object `browse_stats_properties` takes.
  *
  * ONE builder, because there are now TWO callers: fetchBrowseStats and
  * fetchListingsForMap's `browse_map_cells` read (migration 439), which takes the
@@ -1296,9 +1281,6 @@ export const buildBrowseStatsArgs = (
     category_main_filter:    f.categoryMain.length ? f.categoryMain : null,
     category_type_filter:    f.categoryType,
     districts_filter:        f.districts.length ? f.districts.map((d) => d.name) : null,
-    districts_context_filter: f.districts.length
-      ? f.districts.map((d) => d.context ?? '')
-      : null,
     /* Parallel exclude flags (migration 146) — full-length array so the RPC's
      * unnest stays aligned with names; absent excluded => include. */
     districts_excluded_filter: f.districts.length
@@ -1308,7 +1290,7 @@ export const buildBrowseStatsArgs = (
      * two RPCs compile (migration 504, lib/districtCodes). A NULL entry is a
      * chip with no code, which matches NOTHING there exactly as it does here;
      * `districts_filter` (the names) is now only the array that drives the
-     * unnest, and `districts_context_filter` is inert. */
+     * unnest. */
     districts_levels: f.districts.length
       ? f.districts.map((d) => d.level ?? null)
       : null,
@@ -1366,20 +1348,8 @@ export const buildBrowseStatsArgs = (
     bbox_south:              effBbox?.south ?? null,
     bbox_east:               effBbox?.east  ?? null,
     bbox_north:              effBbox?.north ?? null,
-    /* Phase QUAL. The rules never travel as rules any more: W5 resolved them
-     * to an obec allowlist (curated_cities_matching -> obec_ids_filter) and W3
-     * S4 deleted the `?cityQualityLegacy=1` hatch that was the only caller
-     * still sending them here. The parameter stays in the signature because
-     * dropping it needs a DROP FUNCTION and would break every deployed bundle
-     * mid-rollout; it is inert. */
-    city_index_rules:        null,
-    /* Off for a different reason: both resolve to property-id allowlists
-     * client-side (resolveBrowsePrefilters), so there is one resolution path. */
-    tag_ids:                 null,
-    with_estimates:          false,
     city_pop_min:            f.minCityPopulation,
     city_pop_max:            f.maxCityPopulation,
-    city_proximity:          null,   // retired (W5); the RPC raises on a non-null value
     /* Migration 142/143 — fast polygon-edge proximity precomputed columns. */
     near_pop_5km_min:        f.nearPop5kmMin,
     near_pop_15km_min:       f.nearPop15kmMin,
