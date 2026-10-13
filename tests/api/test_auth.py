@@ -439,12 +439,19 @@ def test_token_routes_accept_real_jwt(client, sign_jwt, monkeypatch):
 
 def test_token_routes_reject_forged_jwt(client, sign_jwt, monkeypatch):
     """A JWS-shaped bearer that fails verification is a 401 that names the reason
-    (RFC 6750 challenge) — never a pass, never a 503. Tampering the last bytes of an
-    ES256 signature always fails the SIGNATURE (the segment stays decodable), so the
-    reason is pinned."""
+    (RFC 6750 challenge) — never a pass, never a 503. The forgery is a structurally
+    valid ES256 token signed by a key the JWKS does not serve, so the failure is the
+    SIGNATURE on every PyJWT version (byte-tampering the signature segment is
+    classified `malformed` on some, `bad signature` on others)."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    tok = sign_jwt({"sub": _ACCT})
-    headers = {"Authorization": f"Bearer {tok[:-6]}tamper"}
+    sign_jwt({"sub": _ACCT})  # installs the JWKS stub serving the fixture's key
+    forged = jwt.encode(
+        {"aud": "authenticated", "sub": _ACCT},
+        ec.generate_private_key(ec.SECP256R1()), algorithm="ES256",
+    )
+    headers = {"Authorization": f"Bearer {forged}"}
 
     for method, path, body in _gated_calls(client):
         res = _call(client, method, path, body, headers=headers)
