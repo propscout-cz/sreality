@@ -162,12 +162,31 @@ def get_channel_client(conn: Any = Depends(get_db_conn)) -> Any:
 def _unauthorized(detail: str, *, reason: str | None = None) -> HTTPException:
     """Every 401 this module raises, RFC 6750-shaped: the `WWW-Authenticate: Bearer`
     challenge names the scheme, and `error="invalid_token"` + its description say WHY
-    (expired, wrong signature, not a token at all) instead of a bare "Invalid token"."""
+    (expired, bad signature, not a token at all) instead of a bare "Invalid token".
+    `reason` is always one of this module's fixed words — see `_jwt_reason`."""
     challenge = "Bearer"
     if reason is not None:
         detail = f"{detail}: {reason}"
-        challenge += f' error="invalid_token", error_description="{reason.replace(chr(34), chr(39))}"'
+        challenge += f' error="invalid_token", error_description="{reason}"'
     return HTTPException(status_code=401, detail=detail, headers={"WWW-Authenticate": challenge})
+
+
+def _jwt_reason(exc: Exception) -> str:
+    """A fixed, printable reason per PyJWT failure class — never the exception text,
+    which echoes unverified token content (the header's `kid`): a non-latin-1 or
+    CR/LF value there broke the response header, a 500 any unauthenticated caller
+    could trigger."""
+    import jwt
+
+    for cls, reason in (
+        (jwt.ExpiredSignatureError, "expired"),
+        (jwt.InvalidSignatureError, "bad signature"),
+        (jwt.InvalidAudienceError, "wrong audience"),
+        (jwt.PyJWKClientError, "unknown signing key"),
+    ):
+        if isinstance(exc, cls):
+            return reason
+    return "malformed"
 
 
 def _bearer(authorization: str | None) -> dict | None:
@@ -193,12 +212,13 @@ def _bearer(authorization: str | None) -> dict | None:
     token = authorization[len("Bearer "):]
     if hmac.compare_digest(token.encode("utf-8", "ignore"), expected.encode("utf-8")):
         return None
-    # Not the shared secret, so it must be a JWT. Require the JWS shape before
-    # verifying: otherwise a merely WRONG static token would surface as verify_jwt's
-    # 503 ("auth is not configured") on a deployment with no Supabase auth env,
-    # masking a bad credential as a server fault.
-    if token.count(".") != 2:
-        raise _unauthorized("Invalid token", reason="malformed")
+    # Not the shared secret, so it must be a JWT — where this deployment can verify
+    # one. Where it cannot (API_TOKEN only, no Supabase auth env: a machine-only
+    # deployment, local dev, CI) the static token is the only credential there is,
+    # so this is a bad credential (401), not a server fault; verify_jwt's 503 is for
+    # routes that NEED a JWT.
+    if not (os.environ.get("SUPABASE_URL") or os.environ.get("SUPABASE_JWT_SECRET")):
+        raise _unauthorized("Invalid token", reason="unknown credential")
     return verify_jwt(authorization)
 
 
@@ -264,7 +284,7 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
                 algorithms=["ES256", "RS256"], audience="authenticated",
             )
         except jwt.PyJWTError as exc:
-            raise _unauthorized("Invalid token", reason=str(exc)) from exc
+            raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc
 
     secret = os.environ.get("SUPABASE_JWT_SECRET")
     if not secret:
@@ -275,7 +295,7 @@ def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
             token, secret, algorithms=["HS256"], audience="authenticated"
         )
     except jwt.PyJWTError as exc:
-        raise _unauthorized("Invalid token", reason=str(exc)) from exc
+        raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc
 
 
 def account_scope(

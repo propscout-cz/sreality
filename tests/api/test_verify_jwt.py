@@ -60,6 +60,33 @@ def test_no_secret_fails_closed(monkeypatch):
     assert ei.value.status_code == 503
 
 
+def test_unknown_kid_401_never_echoes_the_token(monkeypatch):
+    """The reason is a fixed word per failure class, never PyJWT's text: that text
+    echoes the token's unverified `kid`, and a non-latin-1 or CR/LF value there broke
+    the response header — a 500 any unauthenticated caller could trigger (W1 review).
+    Runs the real PyJWKClient key lookup against a stubbed JWKS fetch."""
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    served = ec.generate_private_key(ec.SECP256R1()).public_key()
+    jwks = {"keys": [{**jwt.algorithms.ECAlgorithm.to_jwk(served, as_dict=True), "kid": "served-key"}]}
+    client = jwt.PyJWKClient("https://example.supabase.co/auth/v1/.well-known/jwks.json")
+    monkeypatch.setattr(client, "fetch_data", lambda: jwks)
+    monkeypatch.setattr(deps, "_jwks_client", lambda _url: client)
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    hostile = jwt.encode(
+        {"aud": "authenticated"}, "any", algorithm="HS256",
+        headers={"kid": '☃"\r\nX-Injected: 1'},
+    )
+    with pytest.raises(HTTPException) as ei:
+        deps.verify_jwt(authorization=f"Bearer {hostile}")
+    assert ei.value.status_code == 401
+    assert ei.value.detail == "Invalid token: unknown signing key"
+    assert ei.value.headers["WWW-Authenticate"] == (
+        'Bearer error="invalid_token", error_description="unknown signing key"'
+    )
+
+
 def test_asymmetric_es256_via_jwks(sign_jwt, monkeypatch):
     """The project's real path: ES256 verified against the public signing key
     (JWKS fetch stubbed by the fixture; the actual jwt.decode crypto is exercised)."""
