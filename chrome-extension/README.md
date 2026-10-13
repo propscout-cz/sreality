@@ -70,6 +70,14 @@ maxima, remax, mmreality, ceskereality).
     removes the property. The list is re-read each time the checklist opens.
   - **Eye** (hide, migration 536): one click hides the property, one click
     restores it. Absent while the property is a LIVE deal, like everywhere else.
+  - **Stage mark** (`src/index_stage.ts`): a card in the pipeline has its
+    photo toned in the stage colour (the operator's, copper when none) with
+    the stage badge set large on it and the stage name beneath, so a deal
+    reads from across the grid; hovering the card lifts the tone to show the
+    photo. The photo is found by geometry (the largest image the card shows,
+    cut to whatever clips it, corners matched), not by portal markup. A hidden
+    card drawn barely visible gets no mark, and neither does a card guess that
+    holds several listings (it could tone another listing's photo).
   - All three write through the same routes as the panel and the app, are
     optimistic (a failure puts the state back and says why in the corner), and
     are property-grain: a write repaints every card of that property on the
@@ -265,7 +273,8 @@ The output lands in `chrome-extension/dist/`.
 — and that is not a style choice. A manifest-declared content script is a
 *classic* script (MV3 has no module mode for `content_scripts[].js`), so
 `content.js` may not contain a static `import`. Rollup hoists any module shared
-between entries into a chunk, and `portals.ts` is imported by both entries, so a
+between entries into a chunk, and the portal-id rules (`src/portals.ts` then,
+`frontend/src/lib/portalIds.ts` now) are imported by both entries, so a
 single two-entry build emitted `import … from "./chunks/portals-*.js"` as line 1
 of `content.js`; Chrome refused the script outright and the panel silently never
 mounted (2026-08-04 → 2026-09-18). Separate passes keep each entry
@@ -427,7 +436,9 @@ Odhlásit" line then appears at the top of the panel on every listing; click
    corner — the same three as a Browse card in the app: the **funnel** (add to
    the pipeline; once added, click again to change the stage), the **bookmark**
    (tick the collections the property belongs in) and the **eye** (hide the
-   property / show it again).
+   property / show it again). A property in the pipeline also has its photo
+   tinted in the stage's colour with the stage number in large type over it;
+   point at the card to see the photo through.
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
@@ -444,9 +455,16 @@ Odhlásit" line then appears at the top of the panel on every listing; click
 
 ### Supported portals
 
-sreality, bazos, bezrealitky, idnes, maxima, remax — plus mmreality and
-ceskereality (URL→id extractors there are best-effort until those portals
-have data; a miss just shows no badge, never a wrong one).
+sreality, bazos, bezrealitky (.cz and the English .com), idnes, maxima, remax,
+mmreality, ceskereality and realitymix (a missed id just shows no badge, never a
+wrong one).
+
+The host list and the URL→id rules live in ONE module the SPA shares,
+`frontend/src/lib/portalIds.ts` (imported cross-tree like `lib/brand.ts`; the
+SPA's paste-a-link uses the same rules). The build writes
+`content_scripts.matches` from it; the checked-in `manifest.json` list is a
+template that `frontend/src/lib/portalIds.test.ts` keeps equal to it, so a new
+host goes in both.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the

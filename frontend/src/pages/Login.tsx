@@ -32,11 +32,14 @@ export default function Login() {
   // entirely in the query string and a run deep-link lives in the hash
   // (#estimations) — reading only `pathname` silently landed the user on a
   // filterless /browse with no error. Kept as a `To` object rather than a
-  // concatenated string so react-router owns the joining.
+  // concatenated string so react-router owns the joining. With nothing stashed
+  // the app's root: its index route starts each shell where it starts — the
+  // feed on a phone, Browse on a desktop (HomeRedirect, #1767). Only this
+  // in-app target; Google's redirectTo (lib/auth.tsx) is allowlisted in Supabase.
   const stashed = (location.state as { from?: Partial<Location> } | null)?.from;
   const from: To = stashed?.pathname
     ? { pathname: stashed.pathname, search: stashed.search ?? '', hash: stashed.hash ?? '' }
-    : ROUTES.browse.build();
+    : '/';
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();

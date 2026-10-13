@@ -63,10 +63,40 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   `verify_pipeline`'s heartbeat check.
 - **E948 (2026-10-10, a worker that died holding the lease):** its restart in place (same hostname
   and pid) releases that lease before its take and halves the claim cap in the same commit (floor
-  25; only a seed raises it again); at the floor the lease waits out its TTL as before, so a death
-  no claim can cure never loops the worker. The heartbeat adds `claim_cap`, `predecessor_released`
-  / `predecessor_kept`, `rss_mb` and the cgroup `memory_limit_mb` (E941's owed reading). Still
-  owed (E941): the revive cap, since the revived feed ignores the claim's limit, and the `verify_pipeline` heartbeat check.
+  25; only a seed or, E948b, a bigger container raises it); at the floor the lease waits out its
+  TTL as before, so a death no claim can cure never loops the worker. The heartbeat adds
+  `claim_cap`, `predecessor_released` / `predecessor_kept`, `rss_mb` and the cgroup
+  `memory_limit_mb` (E941's owed reading). Still owed (E941): the revive cap, since the revived
+  feed ignores the claim's limit, and the `verify_pipeline` heartbeat check.
+  **E948b:** the cap row records the memory limit its deaths happened under (`limit_mb`, read
+  each pass), and a container limit grown ≥ 25 % resets the cap to 500 before the next pass,
+  without a seed; a boot that also finds a dead predecessor releases its lease without halving
+  (it died under the smaller limit). Today's row, which records none, grows from the 8 GB limit
+  (`E948_LIMIT_MB`), so the deploy and the 24 GB move may come in either order.
+- **E949 (2026-10-10, the worker carried memory from pass to pass):** seven deaths in the widened build,
+  each process on about its sixth pass whatever it claimed. Freed heap now goes back to the kernel as
+  every pass begins and ends (`gc.collect` + glibc `malloc_trim(0)`; `rss_at_start_mb`,
+  `rss_after_trim_mb`), a raised pass's when the next pass begins; the worker runs on two malloc
+  arenas (`env MALLOC_ARENA_MAX=2`); the engine counts and empties its body and token memos after
+  every pass (`memo_entries`; the shingle memo keyed on the body itself); and the CLIP top-up is
+  encoded a slice at a time. Decisions are a fresh process's and `SEED_VERSION` is unchanged; the
+  claim cap stays at 25 until a seed or, E948b, a bigger container. Next: Part 2, chunked scoring,
+  so the pair budget bounds a pass's memory.
+- **E951 (2026-10-12, a build stuck at small passes):** in a build a pass's time budget is three
+  quarters of the 1,050 s deadline (787.5 s, was 525 s), and a pass the clock cut that claimed its
+  whole share and finished inside half the deadline (525 s) stores at least twice its starting rate
+  instead of the blend; the heartbeat adds `pass_budget_s` and `rate_doubled`. At the live ~0.032/s
+  and ~490 s of fixed cost a pass claimed 16 adverts and the old budget capped it near 58; simulated,
+  the remaining ~11.4k adverts take ≈ 7.0 h (≈ 7.4 h by the bigger budget alone, 36–110 h before).
+  Owed: `wanted_pairs` and `attempts` in the heartbeat before full claims meet the `max_pairs` 150k
+  wall (the review's estimate: ~134k pairs at 500 adverts on a 38.5k store).
+- **E952 (2026-10-12, the build held near 30 adverts by the pair budget):** a build's pass may want
+  300,000 pairs (`BOOTSTRAP_PAIR_BUDGET`; live stays 150,000), since a 30-advert claim on the 27k
+  store already wanted more; a refusal now re-claims a quarter of the claim actually made, not of
+  `max_listings`, and no longer reads the claim's CLIP vectors; the heartbeat carries `attempts`,
+  `wanted_pairs`, `wanted_by_attempt` and `aborted`. Owed: before `rt_bootstrap` flips, read
+  `wanted_pairs` over the last build passes and decide whether live passes fit 150k (hold the phase
+  or raise the live budget until E943's ledger of rejected pairs bounds the wanted set).
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

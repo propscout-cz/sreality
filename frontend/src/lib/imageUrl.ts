@@ -16,7 +16,7 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
 // Cache-bust token appended to every API image URL. The /images route keys only on
-// the path, so the query is ignored server-side — but changing this value makes the
+// the path (and `w`), so `v` is ignored server-side — but changing this value makes the
 // browser/edge treat it as a fresh URL, flushing any redirect cached against the old
 // URL. BUMP THIS after a serve-path change (e.g. an R2 credential rotation) to clear
 // cover images that browsers cached while the path was broken. It CANNOT flush image
@@ -62,9 +62,17 @@ export interface ImageRef {
   storage_path: string | null;
 }
 
-export const imageSrc = (img: ImageRef): string => {
+export interface ImageSrcOptions {
+  /* The phone-size copy (`api/routes/images.py`, the one width it accepts): a WebP
+   * 1080 px wide, made on its first request, several times smaller than the full-size
+   * photo. For grid tiles and thumbnails; a full view keeps the full-size photo. */
+  w?: 1080;
+}
+
+export const imageSrc = (img: ImageRef, opts: ImageSrcOptions = {}): string => {
   if (API_BASE && img.storage_path) {
-    return `${API_BASE}/images/${img.storage_path}?v=${IMG_CACHE_BUST}`;
+    const width = opts.w ? `&w=${opts.w}` : '';
+    return `${API_BASE}/images/${img.storage_path}?v=${IMG_CACHE_BUST}${width}`;
   }
   // No R2 copy yet → fall back to the original CDN. sreality needs the render-transform
   // normalised onto the URL (a bare sdn.cz URL 401s, and a stored legacy chain would

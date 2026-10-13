@@ -236,6 +236,14 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "DELETE /properties/{property_id}/tags/{tag_id}": (
         "DELETE by id on a child-grain table — migration 292 USING clause"
     ),
+    "GET /filter-presets": "RLS-only read (migration 290 policy on `filter_presets`)",
+    "GET /filter-presets/{preset_id}": "RLS-only read (migration 290)",
+    "PUT /filter-presets/{preset_id}": "UPDATE by id — migration 290 USING clause",
+    "DELETE /filter-presets/{preset_id}": "DELETE by id — migration 290 USING clause",
+    "PUT /filter-presets/reorder": (
+        "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
+        "account's id matches nothing"
+    ),
     "GET /notifications/subscriptions": (
         "RLS-only read (migration 290 on `notification_subscriptions`)"
     ),

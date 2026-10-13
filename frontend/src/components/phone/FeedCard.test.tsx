@@ -1,0 +1,250 @@
+/* The feed card (#1766) against rule 23: the per-m² figure is the server's
+ * measure under the server's basis label — a sale in Kč/m², a rent in
+ * Kč/m²/měs — and a row whose basis is missing or mixed shows no figure at all,
+ * never a bare number. Plus the card's other promises: the 1080 px photo copy,
+ * the stage wash on a filed property, the funnel's two meanings. */
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import * as api from '@/lib/api';
+import { CardHydrationProvider } from '@/lib/hydration';
+import * as queries from '@/lib/queries';
+import type { CardRow, PipelineMembers } from '@/lib/queries';
+import type { ImagePublic, PipelineStage } from '@/lib/types';
+
+import FeedCard, { feedDelta, feedPricePerM2, portalsWord } from './FeedCard';
+
+/* Czech formatting uses no-break spaces; compare as the eye reads it. */
+const plain = (s: string | null) => s?.replace(/\u00a0/g, ' ') ?? null;
+
+vi.mock('@/lib/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/queries')>();
+  return {
+    ...actual,
+    fetchPipelineMembers: vi.fn(),
+    fetchPipelineStages: vi.fn(),
+    fetchPropertyCollectionMemberSet: vi.fn(),
+    fetchIsDismissed: vi.fn(),
+    fetchImagesForListingIds: vi.fn(),
+  };
+});
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  addPipelineCard: vi.fn(),
+}));
+vi.mock('@/lib/imageUrl', () => ({
+  imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
+    `/images/${img.storage_path}${opts.w ? `?w=${opts.w}` : ''}`,
+}));
+
+const STAGES: PipelineStage[] = [
+  { id: 1, key: 'zajem', label: 'Zájem', position: 1, color: 'copper', is_terminal: false, is_entry: true, code: 'Z' },
+  { id: 2, key: 'prohlidka', label: 'Prohlídka', position: 2, color: 'ochre', is_terminal: false, is_entry: false, code: 'P1' },
+];
+
+const base: CardRow = {
+  property_id: 304388,
+  listing_id: 9001,
+  sreality_id: 123,
+  display_label: 'Freyova, Praha 9 – Vysočany',
+  disposition: '2+kk',
+  subtype: null,
+  area_m2: 54,
+  price_czk: 7_490_000,
+  price_per_m2: 138_704,
+  price_per_m2_basis: 'sale_capital_czk_m2',
+  first_seen_at: '2026-10-12T06:00:00Z',
+  last_seen_at: '2026-10-12T10:00:00Z',
+  is_active: true,
+  tom_days: 12,
+  category_main: 'byt',
+  category_type: 'prodej',
+  source: 'sreality',
+  source_id_native: '123',
+  mf_gross_yield_pct: 4.1,
+  total_price_change_pct: -5.1,
+  price_change_count: 1,
+  all_sources: ['sreality', 'idnes', 'bazos'],
+  active_sources: ['sreality', 'idnes', 'bazos'],
+  source_count: 3,
+};
+
+const rent: CardRow = {
+  ...base,
+  property_id: 5,
+  listing_id: 5005,
+  disposition: '2+1',
+  area_m2: 60,
+  price_czk: 22_500,
+  price_per_m2: 375,
+  price_per_m2_basis: 'rent_monthly_czk_m2',
+  category_type: 'pronajem',
+  mf_gross_yield_pct: null,
+  total_price_change_pct: null,
+  tom_days: 0,
+  all_sources: ['bezrealitky'],
+  active_sources: ['bezrealitky'],
+  source_count: 1,
+};
+
+const photo = (seq: number): ImagePublic => ({
+  id: seq,
+  sreality_id: 123,
+  sequence: seq,
+  sreality_url: `https://cdn.example/${seq}.jpg`,
+  storage_path: `9001/000${seq}.jpg`,
+  clip_fine_tag: null,
+  clip_logical_tag: null,
+  clip_confidence: null,
+  clip_render_score: null,
+  phash: null,
+});
+
+function renderCard(r: CardRow) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <CardHydrationProvider listingIds={[r.listing_id]} renders={{ photos: 50 }}>
+          <FeedCard r={r} coverTag="default" />
+        </CardHydrationProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+beforeEach(() => {
+  vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(new Map() as PipelineMembers);
+  vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
+  vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  vi.mocked(queries.fetchIsDismissed).mockResolvedValue(false);
+  vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
+});
+
+describe('<FeedCard> — the per-m² figure carries its basis (rule 23)', () => {
+  it('prints a sale in Kč/m² beside a capital price', () => {
+    renderCard(base);
+    expect(screen.getByText('7 490 000 Kč')).toBeInTheDocument();
+    expect(screen.getByText('138 704 Kč/m²')).toBeInTheDocument();
+    expect(screen.queryByText('/měs')).toBeNull();
+  });
+
+  it('prints a rent in Kč/m²/měs beside a monthly price', () => {
+    renderCard(rent);
+    expect(screen.getByText('22 500 Kč')).toBeInTheDocument();
+    expect(screen.getByText('/měs')).toBeInTheDocument();
+    expect(screen.getByText('375 Kč/m²/měs')).toBeInTheDocument();
+  });
+
+  it('shows no per-m² figure when the basis is missing or mixed — never a bare number', () => {
+    const { container, unmount } = renderCard({ ...base, price_per_m2_basis: null });
+    expect(container.textContent).not.toMatch(/Kč\/m²/);
+    expect(container.textContent).not.toMatch(/138\s704/);
+    unmount();
+    expect(feedPricePerM2({ price_per_m2: 138_704, price_per_m2_basis: 'mixed' })).toBeNull();
+    expect(feedPricePerM2({ price_per_m2: null, price_per_m2_basis: 'sale_capital_czk_m2' })).toBeNull();
+    expect(plain(feedPricePerM2({ price_per_m2: 2450, price_per_m2_basis: 'land_capital_czk_m2' }))).toBe(
+      '2 450 Kč/m² pozemku',
+    );
+  });
+});
+
+describe('<FeedCard> — the lines', () => {
+  it('reads layout · area · place, then the portals, days, move and MF yield', () => {
+    renderCard(base);
+    expect(screen.getByText('2+kk · 54 m² · Freyova, Praha 9 – Vysočany')).toBeInTheDocument();
+    expect(screen.getByText('Sreality')).toBeInTheDocument();
+    expect(screen.getByText('iDNES')).toBeInTheDocument();
+    expect(screen.getByText('Bazoš')).toBeInTheDocument();
+    expect(screen.getByText('3 portály')).toBeInTheDocument();
+    expect(screen.getByText('12 dní')).toBeInTheDocument();
+    expect(screen.getByText('−5 %')).toBeInTheDocument();
+    expect(screen.getByText('MF 4,1 %')).toBeInTheDocument();
+  });
+
+  it('keeps the MF badge to sale flats and says "dnes" for a fresh ad', () => {
+    renderCard(rent);
+    expect(screen.queryByText(/^MF /)).toBeNull();
+    expect(screen.getByText('dnes')).toBeInTheDocument();
+    expect(screen.getByText('1 portál')).toBeInTheDocument();
+  });
+
+  it('formats the price move and the portal count in Czech', () => {
+    expect(plain(feedDelta(-5.1))).toBe('−5 %');
+    expect(plain(feedDelta(3))).toBe('+3 %');
+    expect(plain(feedDelta(-0.4))).toBe('−0,4 %');
+    expect(feedDelta(0)).toBeNull();
+    expect(feedDelta(null)).toBeNull();
+    expect(plain(portalsWord(5))).toBe('5 portálů');
+  });
+
+  it('opens the property page from the price link stretched over the card', () => {
+    renderCard(base);
+    const link = screen.getByRole('link', { name: /7\s490\s000\sKč, 2\+kk/ });
+    expect(link).toHaveAttribute('href', expect.stringContaining('/property/304388'));
+    expect(link).toHaveClass('stretched-link');
+  });
+});
+
+describe('<FeedCard> — photo, wash, funnel', () => {
+  it('loads the 1080 px copy of the cover, lazily, and counts the photos', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(
+      new Map([[9001, [photo(1), photo(2), photo(3)]]]),
+    );
+    const { container } = renderCard(base);
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    const img = container.querySelector('img')!;
+    expect(img).toHaveAttribute('src', '/images/9001/0001.jpg?w=1080');
+    expect(img).toHaveAttribute('loading', 'lazy');
+    expect(screen.getByText(/fot\./).textContent).toMatch(/3/);
+  });
+
+  it('adds an unfiled property at the entry stage with one tap', async () => {
+    vi.mocked(api.addPipelineCard).mockResolvedValue(undefined as never);
+    renderCard(base);
+    await userEvent.click(await screen.findByRole('button', { name: 'Přidat do pipeline' }));
+    expect(api.addPipelineCard).toHaveBeenCalledWith(304388);
+  });
+
+  it('washes a filed photo in its stage and opens the stage sheet, never removing', async () => {
+    vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(
+      new Map([
+        [
+          304388,
+          {
+            property_id: 304388,
+            stage_id: 2,
+            stage_label: 'Prohlídka',
+            stage_color: 'ochre',
+            stage_code: 'P1',
+            stage_position: 2,
+            is_terminal: false,
+          },
+        ],
+      ]) as PipelineMembers,
+    );
+    const { container } = renderCard(base);
+    const funnel = await screen.findByRole('button', { name: 'Fáze Prohlídka, změnit' });
+    /* The wash: the stage's code set large and its name, over the photo. */
+    const wash = container.querySelector('[aria-hidden="true"].pointer-events-none') as HTMLElement;
+    expect(within(wash).getByText('P1')).toBeInTheDocument();
+    expect(within(wash).getByText('Prohlídka')).toBeInTheDocument();
+    /* A live deal cannot be hidden. */
+    expect(screen.getByRole('button', { name: 'Rozpracovaný obchod nelze skrýt' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await userEvent.click(funnel);
+    const sheet = await screen.findByRole('dialog', { name: 'Přesunout do fáze' });
+    expect(within(sheet).getByRole('menuitemradio', { name: /Prohlídka/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    /* The remove is two-step, as everywhere (rule 22). */
+    await userEvent.click(within(sheet).getByRole('menuitem', { name: 'Odebrat z pipeline' }));
+    expect(within(sheet).getByText('Odebrat z pipeline?')).toBeInTheDocument();
+  });
+});

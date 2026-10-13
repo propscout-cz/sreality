@@ -1,9 +1,11 @@
 """Tests for the /filter-presets endpoints (Browse saved filter presets).
 
-Hermetic — overrides get_db_conn so no real DB is hit, and patches the
-api.filter_presets.* persistence helpers with in-memory fakes. Pydantic
-validation (blank name, missing filter_spec) runs unmodified through the
-route layer.
+Hermetic — overrides the tenant connection + JWT (the routes are per account
+since ticket #1761) so no real DB is hit, and patches the api.filter_presets.*
+persistence helpers with in-memory fakes. Pydantic validation (blank name,
+missing filter_spec) runs unmodified through the route layer. The account
+resolver is stubbed to a distinctive sentinel, never to None (tenancy.md's
+#917 rule), and the tests assert the sentinel ARRIVES at the insert.
 """
 
 from __future__ import annotations
@@ -15,14 +17,24 @@ import pytest
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
+from fastapi.routing import APIRoute
+
 from api import dependencies as deps
 from api import filter_presets as fp
 from api import main as api_main
+from api import tenant_pool
+
+_SUB = "11111111-1111-1111-1111-111111111111"
+_ACCT = "33333333-3333-3333-3333-333333333333"
 
 
 @pytest.fixture()
-def client():
-    api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
+def client(monkeypatch):
+    api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
+    api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
+    monkeypatch.setattr(
+        tenant_pool, "resolve_account_id", lambda conn, claims: _ACCT,
+    )
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
 
@@ -30,14 +42,15 @@ def client():
 @pytest.fixture()
 def store(monkeypatch):
     """In-memory replacement for the filter_presets.* persistence functions."""
-    state: dict[str, Any] = {"presets": {}, "next_id": 1}
+    state: dict[str, Any] = {"presets": {}, "owners": {}, "next_id": 1}
 
     def _to_dict(pid: str) -> dict[str, Any]:
         return dict(state["presets"][pid])
 
-    def fake_create_preset(conn, *, name, filter_spec, color=None):
+    def fake_create_preset(conn, *, name, filter_spec, color=None, account_id):
         pid = str(state["next_id"])
         state["next_id"] += 1
+        state["owners"][pid] = account_id
         state["presets"][pid] = {
             "id": pid,
             "name": name,
@@ -224,3 +237,115 @@ def test_delete_preset(client, store):
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
     assert client.delete("/filter-presets/1").json() == {"deleted": True}
     assert client.delete("/filter-presets/1").status_code == 404
+
+
+# --- per account (ticket #1761) ---------------------------------------------
+
+
+def test_create_preset_stamps_the_resolved_account(client, store):
+    """The one insert names its owner: the account require_account_id resolved."""
+    body = client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC}).json()
+    assert store["owners"][body["id"]] == _ACCT
+    # The response shape is unchanged: the owner is not echoed back.
+    assert "account_id" not in body
+
+
+def test_create_preset_without_an_account_is_400(client, store, monkeypatch):
+    monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda conn, claims: None)
+    res = client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
+    assert res.status_code == 400
+    assert res.json()["detail"] == "no account for caller"
+    assert store["presets"] == {}
+
+
+def _preset_routes() -> list[APIRoute]:
+    routes = [
+        r
+        for r in api_main.app.routes
+        if isinstance(r, APIRoute) and r.path.startswith("/filter-presets")
+    ]
+    if not routes:  # FastAPI >= 0.13x wraps an included router
+        for r in api_main.app.routes:
+            nested = getattr(getattr(r, "original_router", None), "routes", None) or []
+            routes += [
+                n for n in nested
+                if isinstance(n, APIRoute) and n.path.startswith("/filter-presets")
+            ]
+    return routes
+
+
+def _calls(route: APIRoute) -> set:
+    out, stack = set(), list(route.dependant.dependencies)
+    while stack:
+        d = stack.pop()
+        if d.call is not None:
+            out.add(d.call)
+        stack.extend(d.dependencies)
+    return out
+
+
+def test_every_preset_route_rides_the_tenant_connection():
+    """No preset route accepts the static bundle token or the service-role
+    connection: it proves only 'loaded the SPA', and RLS is the boundary."""
+    routes = _preset_routes()
+    assert len(routes) == 6, [f"{sorted(r.methods)} {r.path}" for r in routes]
+    for r in routes:
+        calls = _calls(r)
+        label = f"{sorted(r.methods)} {r.path}"
+        assert tenant_pool.tenant_conn in calls, f"{label} left the tenant connection"
+        assert deps.require_token not in calls, f"{label} accepts the bundle token again"
+        assert deps.get_db_conn not in calls, f"{label} reads on the service role again"
+
+
+class _Cursor:
+    def __init__(self, log: list) -> None:
+        self.log = log
+        self.rowcount = 1
+
+    def __enter__(self) -> "_Cursor":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self.log.append((sql, params))
+
+    def fetchone(self) -> tuple:
+        return ("p-1",)
+
+
+class _Conn:
+    def __init__(self) -> None:
+        self.log: list = []
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self.log)
+
+
+def test_create_preset_sql_binds_the_account(monkeypatch):
+    """The persistence layer writes the owner into the row, and takes it as a
+    REQUIRED keyword (no default: a dropped argument is a TypeError, not a NULL)."""
+    import inspect
+
+    param = inspect.signature(fp.create_preset).parameters["account_id"]
+    assert param.default is inspect.Parameter.empty
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+    monkeypatch.setattr(fp, "get_preset", lambda conn, pid: {"id": pid})
+    conn = _Conn()
+    fp.create_preset(conn, name="p", filter_spec=SPEC, color=None, account_id=_ACCT)
+    sql, params = conn.log[0]
+    assert "account_id" in sql.split("VALUES")[0]
+    assert params[-1] == _ACCT
+
+
+def test_reads_and_writes_by_id_carry_no_account_predicate():
+    """Doctrine shape 1: on the tenant connection RLS alone scopes a read and an
+    UPDATE/DELETE by id; an explicit account predicate would be a second
+    definition of the caller (the #917 bug), not a gate."""
+    import inspect
+
+    for fn in (fp.list_presets, fp.get_preset, fp.update_preset, fp.delete_preset,
+               fp.reorder_presets):
+        assert "account_id" not in inspect.getsource(fn), fn.__name__

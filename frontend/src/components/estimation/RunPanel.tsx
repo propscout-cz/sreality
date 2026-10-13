@@ -18,6 +18,7 @@ import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { usePhoneShell } from '@/lib/phoneShell';
 import {
   keepPreviousData,
   useMutation,
@@ -106,7 +107,9 @@ export function RunBody({
 }: {
   run: EstimationRun;
   subject: ListingPublic | null;
-  onRerun: (overrides?: RerunOverrides) => void;
+  /* Absent = read-only (the phone, #1767): no re-run controls, the detail
+   * popup still opens. */
+  onRerun?: (overrides?: RerunOverrides) => void;
   rerunPending: boolean;
   rerunError: ApiError | null;
   embedded?: boolean;
@@ -140,13 +143,17 @@ export function RunBody({
         <div className="mt-4">
           <Timeline trace={run.trace} runId={run.id} />
         </div>
-        <Hairline />
-        <RerunBlock
-          run={run}
-          onRerun={onRerun}
-          pending={rerunPending}
-          error={rerunError}
-        />
+        {onRerun && (
+          <>
+            <Hairline />
+            <RerunBlock
+              run={run}
+              onRerun={onRerun}
+              pending={rerunPending}
+              error={rerunError}
+            />
+          </>
+        )}
       </>
     );
   }
@@ -166,13 +173,17 @@ export function RunBody({
       )}
 
       <Hairline />
-      <RerunBlock
-        run={run}
-        onRerun={onRerun}
-        pending={rerunPending}
-        error={rerunError}
-        onShowDetail={() => setDetailOpen(true)}
-      />
+      {onRerun ? (
+        <RerunBlock
+          run={run}
+          onRerun={onRerun}
+          pending={rerunPending}
+          error={rerunError}
+          onShowDetail={() => setDetailOpen(true)}
+        />
+      ) : (
+        <ShowDetailButton onClick={() => setDetailOpen(true)} />
+      )}
 
       {detailOpen && (
         <RunDetailModal run={run} onClose={() => setDetailOpen(false)} />
@@ -1087,6 +1098,8 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
   const [activeId, setActiveId] = useState<number | null>(null);
   /* Shared hover id — drives the bidirectional table↔map highlight. */
   const [hoveredId, setHoveredId] = useState<number | null>(null);
+  /* The phone frame draws no maps (#1760 Q10): the table alone carries the comparables. */
+  const phone = usePhoneShell();
 
   const listingsQ = useQuery<Map<number, ListingPublic>, Error>({
     queryKey: ['estimation-comparables', 'listings', cids.join(',')],
@@ -1176,7 +1189,7 @@ function ComparablesSection({ run }: { run: EstimationRun }) {
         </p>
       </div>
 
-      {subjectLat != null && subjectLng != null && mapPoints.length > 0 && (
+      {!phone && subjectLat != null && subjectLng != null && mapPoints.length > 0 && (
         <div className="mt-4">
           <Suspense
             fallback={
@@ -1426,6 +1439,18 @@ function adjustStateFromRun(run: EstimationRun): AdjustState {
   };
 }
 
+function ShowDetailButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+    >
+      Show estimation detail
+    </button>
+  );
+}
+
 function RerunBlock({
   run,
   onRerun,
@@ -1472,15 +1497,7 @@ function RerunBlock({
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        {onShowDetail && (
-          <button
-            type="button"
-            onClick={onShowDetail}
-            className="px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-          >
-            Show estimation detail
-          </button>
-        )}
+        {onShowDetail && <ShowDetailButton onClick={onShowDetail} />}
         <button
           type="button"
           disabled={!rerunnable || pending}

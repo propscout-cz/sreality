@@ -1,0 +1,16 @@
+{
+  // public/sw.js is plain JavaScript (public/ is copied into dist/, never
+  // compiled); this checks it against the service worker's own globals, not the
+  // DOM's. Part of `npm run typecheck`.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "skipLibCheck": true
+  },
+  "files": ["public/sw.js"]
+}

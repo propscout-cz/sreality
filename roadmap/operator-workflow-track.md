@@ -559,6 +559,12 @@ yield badge).
   per slide — a card is now the outermost `li`/`article` still holding one
   listing; and the controls' stacking level dropped from the maximum to 900 so
   they no longer show through cookie walls and filter drawers.
+- **Stage mark on the photo (2026-10-11):** the funnel's small badge was too
+  quiet to scan a grid by — a card in the pipeline now has its photo toned in
+  the stage colour with the badge set large on it and the stage name beneath
+  (`chrome-extension/src/index_stage.ts`); hovering the card lifts the tone.
+  The photo is found by geometry, not markup; a veiled card, or a card guess
+  holding several listings, gets no mark.
 - **Next (not built):** tags from the card (Browse cards have no tag control
   either — tags are edited on the listing page); verifying the card placement
   on sreality itself (its consent wall blocks an unattended check — idnes and

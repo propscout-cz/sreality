@@ -492,6 +492,99 @@ def test_a_generous_budget_is_never_refused() -> None:
     assert all(not p.aborted and p.attempts == 1 for p in passes)
 
 
+# ------------------------------------------------- E952: the pass reports its attempts
+
+
+def _wanted(ds, settings, calibration, order, claim: int) -> int:
+    """The wanted pair set of one claim of `claim` arrivals against an empty store."""
+    return run_pass(SqlStore(FakePg(), GEN), CohortFacts(ds), Schedule(list(order)), settings,
+                    hand_initialised(), calibration,
+                    limits=Limits(max_listings=claim, max_pairs=10 ** 9),
+                    generation=GEN).wanted_pairs
+
+
+def test_a_pass_refused_once_reports_two_attempts_and_the_accepted_wanted_set() -> None:
+    """`attempts` counts the claims the pass made, `wanted_pairs` is the set of the attempt that
+    committed (not the refused one's) and `aborted` is empty: the pass was not refused."""
+    ds = _dataset(16)
+    settings = _settings()
+    calibration = _calibration(ds, settings)
+    order = arrival_order(ds)
+    whole, quarter = (_wanted(ds, settings, calibration, order, claim) for claim in (16, 4))
+    assert quarter < whole, "the world must need the shrink"
+    work = _RecordingWork(order)
+    result = run_pass_bounded(SqlStore(FakePg(), GEN), CohortFacts(ds), work, settings,
+                              hand_initialised(), calibration,
+                              limits=Limits(max_listings=16, max_pairs=quarter), generation=GEN)
+    assert work.asked == [16, 4]
+    assert (result.attempts, result.wanted_pairs, result.aborted) == (2, quarter, "")
+    counts = result.to_json()["counts"]
+    assert (counts["attempts"], counts["wanted_pairs"]) == (2, quarter)
+    assert counts["wanted_by_attempt"] == [whole, quarter], "the refused claim's set first"
+    assert work.cursor == 4
+
+
+def test_a_pass_refused_on_every_attempt_reports_five_and_the_reason() -> None:
+    """The last arrival's neighbourhood alone is over the budget, so all five claims of the
+    ladder (500, 125, 31, 7, 1) are refused: five attempts, the last claim's wanted set,
+    `aborted` "pair_budget", and nothing written."""
+    ds = _dataset(16)
+    settings = _settings()
+    calibration = _calibration(ds, settings)
+    order = arrival_order(ds)
+    conn, store, _passes = _sql_drain(ds, settings, calibration, order[:-1])
+    pairs = dict(conn.pairs)
+    alone = run_pass(SqlStore(conn, GEN, store_floor=0.0), CohortFacts(ds),
+                     Schedule(order[-1:]), settings, hand_initialised(), calibration,
+                     limits=Limits(max_listings=1, max_pairs=0), generation=GEN).wanted_pairs
+    work = _RecordingWork(order[-1:])
+    result = run_pass_bounded(store, CohortFacts(ds), work, settings, hand_initialised(),
+                              calibration, limits=Limits(max_listings=500, max_pairs=0),
+                              generation=GEN)
+    assert alone > 0 and work.asked == [500, 125, 31, 7, 1]
+    assert (result.attempts, result.wanted_pairs, result.aborted) == (5, alone, "pair_budget")
+    assert result.to_json()["counts"]["attempts"] == 5
+    assert result.wanted_by_attempt == [alone] * 5
+    assert conn.pairs == pairs and work.cursor == 0
+
+
+class _ClockedWork(_RecordingWork):
+    """A source whose clock cuts every claim to `clock` listings and says so in `claim_bound`,
+    as `SqlWork` does."""
+
+    def __init__(self, order, clock: int) -> None:
+        super().__init__(order)
+        self.clock = clock
+        self.made: list[int] = []
+        self.claim_bound: dict[str, int] = {}
+
+    def claim(self, limit: int):
+        made = min(limit, self.clock)
+        self.asked.append(limit)
+        self.made.append(made)
+        self.claim_bound = {"limit": made}
+        return Schedule.claim(self, made)
+
+
+def test_a_refused_claim_the_clock_cut_is_re_claimed_at_a_quarter_of_what_it_made() -> None:
+    """E952: the retry asks for a quarter of the claim the source MADE. A quarter of
+    `max_listings` (125) is still above the clock's 8, which would re-claim the same eight
+    arrivals and be refused again for the same pair set."""
+    ds = _dataset(16)
+    settings = _settings()
+    calibration = _calibration(ds, settings)
+    order = arrival_order(ds)
+    eight, two = (_wanted(ds, settings, calibration, order, claim) for claim in (8, 2))
+    assert two < eight, "the world must need the shrink"
+    work = _ClockedWork(order, clock=8)
+    result = run_pass_bounded(SqlStore(FakePg(), GEN), CohortFacts(ds), work, settings,
+                              hand_initialised(), calibration,
+                              limits=Limits(max_listings=500, max_pairs=two), generation=GEN)
+    assert work.made == [8, 2] and work.asked == [500, 2]
+    assert (result.attempts, result.wanted_by_attempt, result.aborted) == (2, [eight, two], "")
+    assert work.cursor == 2
+
+
 # ------------------------------------------------------- F8: a late must-not-link row
 
 
