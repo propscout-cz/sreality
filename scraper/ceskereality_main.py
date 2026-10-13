@@ -36,6 +36,7 @@ from typing import Any, Literal
 from scraper import db, portal_runner
 from scraper.ceskereality_client import (
     KRAJ_SLUGS,
+    OKRES_SLUGS,
     SUBTYPE_SLUGS,
     CeskerealityClient,
     detail_url,
@@ -86,9 +87,10 @@ SOURCE = "ceskereality"
 # pages / 1,980 rows (measured 2026-08-27 on /prodej/rodinne-domy/stredocesky-kraj/:
 # ?strana=99 serves 20 cards, ?strana=100 is a 404; the national pagination widget
 # maxes at 99 too). So 99 is the site's ceiling on a kraj slice, and a slice whose
-# declared total needs more than that descends onto the subtype axis rather than
-# quietly losing its tail. _PROBE_MAX_PAGES is the OTHER cap: --probe reads the
-# unfiltered /nejnovejsi/ URL, which is exactly the shape that really does 404 at 13.
+# declared total needs more than that descends onto the next axis in _DESCENT_AXES
+# rather than quietly losing its tail. _PROBE_MAX_PAGES is the OTHER cap: --probe
+# reads the unfiltered /nejnovejsi/ URL, which is exactly the shape that really
+# does 404 at 13.
 _MAX_SLICE_PAGES = 99
 _PROBE_MAX_PAGES = 12
 _PER_PAGE = 20
@@ -103,10 +105,20 @@ _PROBE_SUB_SLUG = "nejnovejsi"
 
 SliceOutcome = Literal["exhausted", "deadline", "ceiling", "error", "degraded"]
 
+# The axes a slice past the 99-page ceiling descends onto, in order, one level per
+# axis: a kraj splits by subtype, and only a subtype child that is ITSELF past the
+# ceiling splits again by okres (prodej/rodinne-domy/rodinne-domy/stredocesky-kraj
+# declared 1,922 = 97 pages on 2026-10-13). Each name is a SliceResult field; the
+# okres axis is a declared map (OKRES_SLUGS), the subtype axis is declared where
+# measured (SUBTYPE_SLUGS), else the kraj page's links; and every level checks its
+# children's declared sum against its parent's.
+DescentAxis = Literal["subtype", "okres"]
+_DESCENT_AXES: tuple[DescentAxis, ...] = ("subtype", "okres")
+
 
 @dataclass(frozen=True)
 class SliceResult:
-    """One (kraj[, subtype]) slice, carrying BOTH verdicts.
+    """One (kraj[, subtype[, okres]]) slice, carrying BOTH verdicts.
 
     `outcome` is the arithmetic one and is unchanged — it is what the slice
     ledger stores and what scripts/coverage_gate.py counts as `exhausted`.
@@ -114,6 +126,10 @@ class SliceResult:
     whether the category may nominate (rule #3), so a slice that paged to the
     portal's end one row short of its own declared count reads `degraded` in the
     ledger and `reached_end` at the gate.
+
+    `kraj` stays the PARENT kraj on an okres grandchild (the okres slug rides in
+    `okres` and takes the kraj's slot in the URL), so the ledger keeps one row
+    per kraj however deep the descent went.
     """
 
     kraj: str
@@ -123,6 +139,11 @@ class SliceResult:
     pages: int
     outcome: SliceOutcome
     stop: StopReason
+    okres: str | None = None
+
+    @property
+    def where(self) -> str:
+        return _where(self.kraj, self.subtype, self.okres)
 
     @property
     def positive(self) -> bool:
@@ -131,6 +152,11 @@ class SliceResult:
     @property
     def reached_end(self) -> bool:
         return stop_is_portal_end(self.stop)
+
+
+def _where(kraj: str, subtype: str | None, okres: str | None) -> str:
+    """The slice coordinates every SLICE / DEADLINE / DESCENT log line carries."""
+    return f"kraj={kraj} subtype={subtype or 'all'} okres={okres or 'all'}"
 
 
 class CeskerealityPortal(portal_runner.PortalDefaults):
@@ -202,7 +228,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 LOG.warning("INDEX archive failed url=%s: %s", url, exc)
 
     def _confirm_slice_is_empty(
-        self, client: CeskerealityClient, url: str, kraj: str,
+        self, client: CeskerealityClient, url: str, where: str,
     ) -> bool:
         """Re-read the SAME url that looked empty; True only if it is empty again.
 
@@ -215,18 +241,19 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         try:
             html, _status = client.fetch_search(url)
         except Exception as exc:  # noqa: BLE001 - an unreadable re-read proves nothing
-            LOG.warning("SLICE empty re-read failed kraj=%s: %s", kraj, exc)
+            LOG.warning("SLICE empty re-read failed %s: %s", where, exc)
             return False
         reread = parse_index(html)
         return not reread.items and reread.total in (None, 0)
 
     def _walk_slice(
         self, client: CeskerealityClient, sale_type: str, cat: str, kraj: str, *,
-        subtype: str | None = None, conn: Any = None,
+        subtype: str | None = None, okres: str | None = None, conn: Any = None,
         archive_week: str | None = None, fresh_keys: set[str] | None = None,
         deadline: float | None = None,
     ) -> SliceResult:
-        """Walk ONE (kraj[, subtype]) slice until ceskereality says there is no more.
+        """Walk ONE (kraj[, subtype[, okres]]) slice until ceskereality says there is
+        no more. An `okres` takes the kraj's slot in the URL and in the H1 proof.
 
         Two verdicts come back (see SliceResult): `stop`, the structural one that
         gates nomination, and `outcome`, the arithmetic one the ledger keeps. The
@@ -242,6 +269,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         live_last: int | None = None
         page = 1
         page_cap = self._max_pages or _MAX_SLICE_PAGES
+        place = okres or kraj
+        where = _where(kraj, subtype, okres)
 
         def out(
             stop: StopReason, pages: int, *, outcome: SliceOutcome | None = None,
@@ -256,7 +285,8 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     else "degraded"
                 )
             return SliceResult(
-                kraj, subtype, rows, declared_total, max(pages, 0), outcome, stop)
+                kraj, subtype, rows, declared_total, max(pages, 0), outcome, stop,
+                okres)
 
         stop: StopReason
         while True:
@@ -266,13 +296,12 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
             # slice as a deadline stop — the rows already collected still count.
             if deadline_reached(deadline):
                 LOG.info(
-                    "DEADLINE index walk stopped cm=%s ct=%s kraj=%s subtype=%s "
-                    "after page=%d collected=%d",
-                    cat, sale_type, kraj, subtype or "all", page - 1, len(rows),
+                    "DEADLINE index walk stopped cm=%s ct=%s %s after page=%d "
+                    "collected=%d", cat, sale_type, where, page - 1, len(rows),
                 )
                 return out("deadline", page - 1, outcome="deadline")
             url = search_url(
-                sale_type, cat, kraj=kraj, subtype=subtype,
+                sale_type, cat, kraj=place, subtype=subtype,
                 page=page if page > 1 else None,
             )
             try:
@@ -280,14 +309,16 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
             except Exception as exc:  # noqa: BLE001 - one slice must not kill the walk
                 # NOT a clean finish: a fetch that failed is missing evidence, and
                 # ListingGoneError here is a 404 we did not expect to exist.
-                LOG.warning("SLICE error kraj=%s subtype=%s page=%d: %s",
-                            kraj, subtype or "all", page, exc)
+                LOG.warning("SLICE error %s page=%d: %s", where, page, exc)
                 return out("error", page - 1, outcome="error")
             if conn is not None and archive_week is not None:
                 # v2/ prefix: portal_raw_pages is UNIQUE(source, source_id_native,
                 # page_kind), and without it the dead v1 subdomain/facet keys and
                 # these kraj keys would interleave in one table indistinguishably.
-                key = f"v2/{sale_type}/{cat}/{kraj}/{subtype or 'all'}/{page}/{archive_week}"
+                # An okres grandchild adds its own segment, so its pages never
+                # collide with the subtype child's under one key.
+                narrow = f"{subtype or 'all'}/{okres}" if okres else (subtype or "all")
+                key = f"v2/{sale_type}/{cat}/{kraj}/{narrow}/{page}/{archive_week}"
                 # W2a-0: the instrument's denominator is FETCHES, never archive
                 # writes — recorded ahead of the client-side freshness skip, the
                 # same shape as sreality's and remax's archivers.
@@ -299,7 +330,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     # No "Máme tady N" at all. A genuinely empty slice looks EXACTLY
                     # like this and there is no count to fail closed on, so the H1
                     # has to carry the proof; anything else is a stop of ours.
-                    if not parsed.items and heading_names_kraj(html, kraj):
+                    if not parsed.items and heading_names_kraj(html, place):
                         # CONFIRM THE ZERO BY READING IT TWICE.
                         #
                         # The site publishes no "no results" string — an empty
@@ -317,23 +348,24 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                         # long. It is the barren rule (scraper.portal.StopReason):
                         # an items-less 200 is ours until it is corroborated, and
                         # this is the only corroboration this site offers.
-                        if not self._confirm_slice_is_empty(client, url, kraj):
+                        if not self._confirm_slice_is_empty(client, url, where):
                             LOG.warning(
-                                "SLICE cm=%s ct=%s kraj=%s subtype=%s looked empty "
-                                "but did not confirm on re-read; treating as barren",
-                                cat, sale_type, kraj, subtype or "all",
+                                "SLICE cm=%s ct=%s %s looked empty but did not "
+                                "confirm on re-read; treating as barren",
+                                cat, sale_type, where,
                             )
                             return out("barren", 1, outcome="degraded")
                         declared_total = 0
                         LOG.info(
-                            "SLICE cm=%s ct=%s kraj=%s subtype=%s declared=0 "
-                            "collected=0 pages=1 outcome=exhausted (empty-confirmed x2)",
-                            cat, sale_type, kraj, subtype or "all",
+                            "SLICE cm=%s ct=%s %s declared=0 collected=0 pages=1 "
+                            "outcome=exhausted (empty-confirmed x2)",
+                            cat, sale_type, where,
                         )
                         return out("empty_confirmed", 1, outcome="exhausted")
                     if not parsed.items:
                         # Zero cards, no count, and an H1 that does not name the
-                        # kraj we asked for: an items-less 200 nobody corroborated.
+                        # kraj (or okres) we asked for: an items-less 200 nobody
+                        # corroborated.
                         return out("barren", 1, outcome="degraded")
                     # Cards but no count. The count renders from the same query as
                     # the cards, so a page that kept one and lost the other is a
@@ -363,7 +395,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 # blank page mid-slice stays a stop of ours.
                 if (
                     last_page is not None and page > last_page
-                    and self._confirm_slice_is_empty(client, url, kraj)
+                    and self._confirm_slice_is_empty(client, url, where)
                 ):
                     return out("empty_confirmed", page - 1)
                 return out("barren", page, outcome="degraded")
@@ -392,9 +424,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     # end would turn any partially rendered page that still carries a
                     # card into a category-wide nomination.
                     LOG.warning(
-                        "SLICE cm=%s ct=%s kraj=%s subtype=%s page=%d of %d rendered "
-                        "no pagination block; that is not an end-of-results",
-                        cat, sale_type, kraj, subtype or "all", page, stop_at,
+                        "SLICE cm=%s ct=%s %s page=%d of %d rendered no pagination "
+                        "block; that is not an end-of-results",
+                        cat, sale_type, where, page, stop_at,
                     )
                     return out("barren", page, outcome="degraded")
                 # The pager ended BEFORE the declared tail. That is still the
@@ -404,9 +436,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 # decide. Reading it as a failure is what kept a 20,964-row
                 # category silent.
                 LOG.warning(
-                    "SLICE cm=%s ct=%s kraj=%s subtype=%s pager ended at page=%d "
-                    "of %d: collected=%d declared=%s",
-                    cat, sale_type, kraj, subtype or "all", page, stop_at,
+                    "SLICE cm=%s ct=%s %s pager ended at page=%d of %d: "
+                    "collected=%d declared=%s",
+                    cat, sale_type, where, page, stop_at,
                     len({r[0] for r in rows}), declared_total,
                 )
                 stop = "pager_end"
@@ -425,48 +457,94 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         except Exception:                   # noqa: BLE001
             return None
 
+    def _axis_slugs(
+        self, client: CeskerealityClient, sale_type: str, cat: str,
+        axis: DescentAxis, kraj: str,
+    ) -> tuple[str, ...]:
+        """One descent axis's slugs for this (category, kraj): the declared map,
+        or for an unmapped subtype axis the kraj page's own
+        `/{sale}/{cat}/{subtype}/{kraj}/` links. Okresy are never scraped (the
+        page lists only the ~10 most popular)."""
+        if axis == "okres":
+            return OKRES_SLUGS.get(kraj, ())
+        declared = SUBTYPE_SLUGS.get(cat, ())
+        if declared:
+            return declared
+        try:
+            html, _ = client.fetch_search(search_url(sale_type, cat, kraj=kraj))
+            return tuple(extract_subtype_slugs(html, sale_type, cat, kraj))
+        except Exception as exc:        # noqa: BLE001
+            LOG.warning("DESCENT subtype probe failed kraj=%s: %s", kraj, exc)
+            return ()
+
     def _descend_slice(
         self, client: CeskerealityClient, sale_type: str, cat: str,
         parent: SliceResult, *, conn: Any = None, archive_week: str | None = None,
         fresh_keys: set[str] | None = None, deadline: float | None = None,
     ) -> list[SliceResult]:
-        """The second axis, depth EXACTLY one: a kraj past the 99-page ceiling is
-        re-walked per subtype. Declared slugs where we measured them (`SUBTYPE_SLUGS`:
-        each a true partition within a kraj, its declared counts summing to the kraj
-        total exactly); otherwise the kraj page's own `/{sale}/{cat}/{subtype}/{kraj}/`
-        links. Either way this SELF-VERIFIES the children's declared sum against the
-        parent's, so a missing subtype reads incomplete instead of silently
-        dropping the residue."""
-        kraj = parent.kraj
-        subtypes: tuple[str, ...] = SUBTYPE_SLUGS.get(cat, ())
-        if not subtypes:
-            try:
-                html, _ = client.fetch_search(search_url(sale_type, cat, kraj=kraj))
-                subtypes = tuple(extract_subtype_slugs(html, sale_type, cat, kraj))
-            except Exception as exc:        # noqa: BLE001
-                LOG.warning("DESCENT subtype probe failed kraj=%s: %s", kraj, exc)
-                subtypes = ()
-        if not subtypes:
-            LOG.warning("DESCENT no subtype axis cm=%s ct=%s kraj=%s declared=%s",
-                        cat, sale_type, kraj, parent.declared_total)
+        """A slice past the 99-page ceiling, re-walked on the next axis of
+        `_DESCENT_AXES` it is not yet narrowed on — a kraj per subtype, then a
+        subtype child that is ITSELF past the ceiling per okres. Declared slugs
+        (`SUBTYPE_SLUGS` where measured; `OKRES_SLUGS`, an exact partition
+        measured on prodej/rodinne-domy/rodinne-domy 2026-10-13); for an unmapped
+        category, the kraj page's own subtype links. Every level SELF-VERIFIES its
+        children's declared sum against its parent's, so a missing subtype or
+        okres reads incomplete instead of silently dropping the residue. A
+        residue or deadline marker declares only the part it stands for (parent
+        minus the children's declared sum), so the ledger's per-kraj sum stays the
+        kraj's own total however many markers a deep descent leaves."""
+        axis = next((a for a in _DESCENT_AXES if getattr(parent, a) is None), None)
+        if axis is None:
+            LOG.warning("DESCENT no axis left cm=%s ct=%s %s declared=%s",
+                        cat, sale_type, parent.where, parent.declared_total)
             return [parent]                 # still 'ceiling' -> category incomplete
-        children: list[SliceResult] = []
-        for slug in subtypes:
+        slugs = self._axis_slugs(client, sale_type, cat, axis, parent.kraj)
+        if not slugs:
+            owed = (f"SUBTYPE_SLUGS[{cat!r}]" if axis == "subtype"
+                    else f"OKRES_SLUGS[{parent.kraj!r}]")
+            LOG.warning("DESCENT no %s axis cm=%s ct=%s %s declared=%s owed=%s",
+                        axis, cat, sale_type, parent.where, parent.declared_total, owed)
+            return [parent]                 # still 'ceiling' -> category incomplete
+        LOG.info("DESCENT cm=%s ct=%s %s axis=%s declared=%s slugs=%d",
+                 cat, sale_type, parent.where, axis, parent.declared_total, len(slugs))
+        results: list[SliceResult] = []
+        children_declared = 0
+
+        def unwalked() -> int:
+            return max((parent.declared_total or 0) - children_declared, 0)
+
+        for slug in slugs:
+            # A deadline stop is a stop of OURS at any depth: the marker carries
+            # stop='deadline', so the category cannot read as reaching the end.
             if deadline_reached(deadline):
-                children.append(replace(parent, outcome="deadline", stop="deadline"))
-                return children
-            children.append(self._walk_slice(
-                client, sale_type, cat, kraj, subtype=slug, conn=conn,
-                archive_week=archive_week, fresh_keys=fresh_keys, deadline=deadline,
-            ))
-        child_declared = sum(c.declared_total or 0 for c in children)
-        if not walk_is_complete(child_declared, parent.declared_total):
-            LOG.warning(
-                "DESCENT residue cm=%s ct=%s kraj=%s children_declared=%d parent=%s",
-                cat, sale_type, kraj, child_declared, parent.declared_total,
+                results.append(replace(
+                    parent, outcome="deadline", stop="deadline",
+                    declared_total=unwalked()))
+                return results
+            child = self._walk_slice(
+                client, sale_type, cat, parent.kraj,
+                subtype=slug if axis == "subtype" else parent.subtype,
+                okres=slug if axis == "okres" else parent.okres,
+                conn=conn, archive_week=archive_week, fresh_keys=fresh_keys,
+                deadline=deadline,
             )
-            children.append(replace(parent, rows=[], pages=0, outcome="ceiling"))
-        return children
+            children_declared += child.declared_total or 0
+            if child.outcome == "ceiling":
+                results.extend(self._descend_slice(
+                    client, sale_type, cat, child, conn=conn,
+                    archive_week=archive_week, fresh_keys=fresh_keys, deadline=deadline,
+                ))
+            else:
+                results.append(child)
+        if not walk_is_complete(children_declared, parent.declared_total):
+            LOG.warning(
+                "DESCENT residue cm=%s ct=%s %s axis=%s children_declared=%d parent=%s",
+                cat, sale_type, parent.where, axis, children_declared,
+                parent.declared_total,
+            )
+            results.append(replace(
+                parent, rows=[], pages=0, outcome="ceiling", declared_total=unwalked()))
+        return results
 
     def _record_slices(
         self, conn: Any, category: dict[str, Any], kraje: tuple[str, ...] | list[str],
@@ -475,9 +553,10 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         """Write this category's coverage to the slice ledger, ONE ROW PER KRAJ.
 
         The aggregation is the whole point. A kraj past the page ceiling is
-        re-walked per subtype, so it comes back as several SliceResults sharing
-        one kraj — and recording those individually would poison the ledger the
-        first time a kraj stopped needing the descent: the `kraj/subtype-*` rows
+        re-walked per subtype (and an over-ceiling subtype per okres), so it comes
+        back as several SliceResults sharing one kraj — and recording those
+        individually would poison the ledger the first time a kraj stopped
+        needing the descent: the `kraj/subtype-*` rows
         from the old shape would linger, never be re-walked, and age forever.
         The gate reads "every slice of this category exhausted inside the
         window", so one permanently stale row is enough to hold the portal parked
@@ -558,9 +637,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
 
         for r in results:
             LOG.info(
-                "SLICE cm=%s ct=%s kraj=%s subtype=%s declared=%s collected=%d "
-                "pages=%d outcome=%s stop=%s",
-                cat, sale_type, r.kraj, r.subtype or "all", r.declared_total,
+                "SLICE cm=%s ct=%s %s declared=%s collected=%d pages=%d "
+                "outcome=%s stop=%s",
+                cat, sale_type, r.where, r.declared_total,
                 len({x[0] for x in r.rows}), r.pages, r.outcome, r.stop,
             )
             for nid, ref, price in r.rows:
