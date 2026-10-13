@@ -61,6 +61,29 @@ Independent of the analytical, UI, and map tracks.
   one-off VERIFY-priority enqueue (precedent `scripts/renominate_false_gone_crawler_rows.py`) plus a
   rule that nominates NULL-category rows per source.
 
+### ceskereality byt/prodej unnominated for 89 walks — the `walk_end_streak` alarm (2026-10-13, done)
+- **Found:** ceskereality byt/prodej did not reach the portal's end for 89 consecutive index walks
+  (2026-09-16 11:51 → 10-13): a kraj slice over the site's 99-page ceiling with no subtype axis held
+  rule #3's structural gate shut, nothing was nominated, and 13,373 active rows piled up against 9,771
+  on the portal. Every walk logged `VERIFY skipped` at WARNING and nobody read it; Health's
+  `index_completeness` failed but is a dashboard matview, not an alert producer; and
+  `verify_pipeline`'s `walk_coverage` averages collected vs declared per PORTAL (one category's 22%
+  read ~4.6%, under its 5% warn) and reports `categories_nominating` without letting it move the status.
+- **Done:** `verify_pipeline` `walk_end_streak` — per (source, category_main, category_type), over 14 d
+  of finished `scrape_runs` index rows, the walks in a row in which the category was walked and
+  `by_category.walk_reached_end` was false; a run that never started the category is skipped, not
+  counted, and a category its portal has not walked in its last 6 walks warns instead (starved, or
+  dropped from the config — capped at warn so a retired one cannot hold the bell red).
+  Warn ≥ 3 walks (~1 day at the real 6–9 h cron cadence for a category walked every run), fail ≥ 6;
+  each offender names its last reached end, or "at least N walks (not reached in 14 d)". A window
+  with no verdict is an unmeasured warn (value None), never ok. It also catches a mapped category's
+  `DESCENT residue` (the residue slice stays `ceiling`, so the walk reads `reached_end=false`), which
+  `index_completeness` cannot see. 6 h lane + in-app bell; not in `llm_health.yml`'s hourly `--only`
+  list.
+- **Next:** soak, then promote into the hourly `--only` list (the emailing lane); have
+  `portal_runner` mark a deliberately capped walk (`--max-pages` / `--limit` / bazos region) in each
+  `by_category` entry so the check skips it — today each such dispatch counts as a miss.
+
 ### Delisting hysteresis — portals blink (2026-10-09, shipped)
 - **Found:** a gone verdict flipped an ad on one 404; sreality takes ads down (index AND detail)
   for hours around its nightly expiry/renewal and brings them back under the same id — 35% of
