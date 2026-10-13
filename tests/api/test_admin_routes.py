@@ -21,15 +21,11 @@ jwt = pytest.importorskip("jwt")  # PyJWT (api extra)
 
 from api import dependencies as deps
 from api import main as api_main
-
-_JWT_SECRET = "test-hs256-secret"
+from tests.api._jwt import mint
 
 
 def _admin_jwt() -> str:
-    return jwt.encode(
-        {"aud": "authenticated", "sub": "op", "app_metadata": {"is_admin": True}},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    return mint({"sub": "op", "app_metadata": {"is_admin": True}})
 
 
 class _InMemorySkill:
@@ -276,9 +272,6 @@ def test_admin_routes_require_admin(client, monkeypatch):
     monkeypatch.delenv("API_TOKEN", raising=False)
     assert client.get("/admin/skills").status_code == 401
     monkeypatch.setenv("API_TOKEN", "secret-xyz")
-    # HS256 secret set (and JWKS unset) so a garbage token deterministically 401s.
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     assert client.get("/admin/skills").status_code == 401
     assert client.get("/admin/tools").status_code == 401
     assert client.get(
@@ -358,8 +351,6 @@ def test_put_filter_visibility_rejects_undeclared_pairing(client):
 def test_filter_schema_requires_admin(client, monkeypatch):
     api_main.app.dependency_overrides.pop(deps.require_admin, None)
     monkeypatch.setenv("API_TOKEN", "secret-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     assert client.get("/admin/filter-schema").status_code == 401
     assert client.get(
         "/admin/filter-schema", headers={"Authorization": "Bearer wrong"}

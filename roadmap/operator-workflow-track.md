@@ -559,6 +559,13 @@ yield badge).
   per slide — a card is now the outermost `li`/`article` still holding one
   listing; and the controls' stacking level dropped from the maximum to 900 so
   they no longer show through cookie walls and filter drawers.
+- **Photo mark (2026-10-11, collections 2026-10-12):** the cluster's small
+  glyphs were too quiet to scan a grid by — a card in the pipeline now has its
+  photo toned in the stage colour with the stage badge and name over it
+  (hovering lifts the tone), and a card in a collection gets a copper rim and
+  a tag naming the collection (`chrome-extension/src/index_photo_mark.ts`).
+  The photo is found by geometry, not markup; a veiled card, or a card guess
+  holding several listings, gets no mark.
 - **Next (not built):** tags from the card (Browse cards have no tag control
   either — tags are edited on the listing page); verifying the card placement
   on sreality itself (its consent wall blocks an unattended check — idnes and

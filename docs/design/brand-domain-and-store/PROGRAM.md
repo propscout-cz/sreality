@@ -56,8 +56,9 @@ extension until each user re-approves a new host.
 **Public is gated by the static-token cutover.** A public extension needs open sign-up (extension
 sign-in is Supabase Google sign-in). Every extension user then also gets the full web app: the
 default plan grants all agendas and the login guard checks only for a session. The web app's
-bundle, served before login, still contains the static API token (`VITE_API_TOKEN`; re-confirmed
-in the live bundle on 2026-10-03). That token opens the `require_token` routes with no account,
+bundle no longer contains the static API token (`VITE_API_TOKEN` deleted 2026-10-13; every request
+sends the session JWT), but bundles shipped before that still do and `require_token` still accepts
+it until `API_TOKEN` is rotated. That token opens the `require_token` routes with no account,
 including routes that spend money on LLM calls and routes whose data is not scoped per account.
 This posture is already documented in `docs/design/api-token-rotation-and-spa-jwt-migration.md`
 and `docs/design/waves-1-4-public-features.md`; a brand domain and a store listing only end the

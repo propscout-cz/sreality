@@ -47,7 +47,8 @@ export type PhotosByListingId = ReadonlyMap<number, ImagePublic[]>;
 /* One cover image per listing, from listing_cover_public (W4) — a server-side
  * DISTINCT ON that returns exactly one row per listing instead of every
  * photo for the client to discard down to one. The board shows a single 48px
- * thumbnail per card, so the row count now equals what actually renders. */
+ * thumbnail per card, so the row count now equals what actually renders.
+ * Only the pipeline board renders covers, so they take the phone-size copy. */
 export function useListingCovers(listingIds: readonly number[]): {
   covers: CoverByListingId;
   isPending: boolean;
@@ -62,7 +63,7 @@ export function useListingCovers(listingIds: readonly number[]): {
       const byListing = await fetchListingCovers(ids, { signal });
       const out = new Map<number, string>();
       for (const [listingId, image] of byListing) {
-        out.set(listingId, imageSrc(image));
+        out.set(listingId, imageSrc(image, { w: 1080 }));
       }
       return out as CoverByListingId;
     },

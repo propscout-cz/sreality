@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { listBrokerMergeCandidates } from '../lib/api';
@@ -8,6 +8,7 @@ import {
   chipsToGeoArrays,
   contactState,
   fetchBrokerLeaderboard,
+  LEADER_METRIC_OPTIONS,
   prettyPhone,
   searchBrokerFirms,
   searchBrokersByName,
@@ -23,6 +24,12 @@ import { BufferedNumberInput } from '../components/FilterForm';
 import { SUBTYPE_LABELS_BY_MAIN } from '@/lib/enums';
 import { ROUTES } from '@/lib/routes';
 import { fmtCount } from '../lib/format';
+import { usePhoneShell } from '@/lib/phoneShell';
+import { useDebouncedTerm } from '@/lib/useDebouncedTerm';
+import { PhoneSuspense } from '@/components/phone/RollParts';
+import { lazyChunk } from '@/lib/lazyChunk';
+
+const PhoneBrokers = lazyChunk(() => import('./phone/PhoneBrokers'));
 
 const CATEGORY_OPTIONS: ReadonlyArray<{ value: string | null; label: string }> = [
   { value: 'byt', label: 'Byty' },
@@ -36,10 +43,6 @@ const OFFER_OPTIONS: ReadonlyArray<{ value: string | null; label: string }> = [
   { value: 'pronajem', label: 'Pronájem' },
   { value: null, label: 'Vše' },
 ];
-const METRIC_OPTIONS: ReadonlyArray<{ value: LeaderMetric; label: string }> = [
-  { value: 'active_property_count', label: 'Nemovitosti' },
-  { value: 'listing_count', label: 'Inzeráty' },
-];
 const LIMIT_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 50, label: '50' },
   { value: 100, label: '100' },
@@ -47,7 +50,17 @@ const LIMIT_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 2000, label: 'Vše' },
 ];
 
+/* Under the phone shell the leaderboard is the reduced phone screen (#1760 Q12:
+ * place, category/type, metric, name search); everything else stays here. */
 export default function Brokers() {
+  return usePhoneShell() ? (
+    <PhoneSuspense>
+      <PhoneBrokers />
+    </PhoneSuspense>
+  ) : <BrokersDesktop />;
+}
+
+function BrokersDesktop() {
   const [districts, setDistricts] = useState<DistrictChip[]>([]);
   const [firmIds, setFirmIds] = useState<number[]>([]);
   const [categoryMain, setCategoryMain] = useState<string | null>('byt');
@@ -231,7 +244,7 @@ export default function Brokers() {
             )}
           </Field>
           <Field label="Řadit dle">
-            <Segmented options={METRIC_OPTIONS} value={metric} onChange={setMetric} />
+            <Segmented options={LEADER_METRIC_OPTIONS} value={metric} onChange={setMetric} />
           </Field>
           <Field label="Počet">
             <Segmented options={LIMIT_OPTIONS} value={limit} onChange={setLimit} />
@@ -325,18 +338,6 @@ export default function Brokers() {
       </div>
     </div>
   );
-}
-
-// Shared by NameSearch and CompanyFilter — both debounce a free-text query
-// the same way, only the dropdown/pick behavior after it differs.
-function useDebouncedTerm(delayMs = 200): [string, string, (next: string) => void] {
-  const [q, setQ] = useState('');
-  const [debounced, setDebounced] = useState('');
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), delayMs);
-    return () => clearTimeout(t);
-  }, [q, delayMs]);
-  return [q, debounced, setQ];
 }
 
 function NameSearch() {

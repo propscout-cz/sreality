@@ -28,8 +28,8 @@ from api import dependencies as deps  # noqa: E402
 from api import main as api_main  # noqa: E402
 from api import refiner as api_refiner  # noqa: E402
 from api import tenant_pool  # noqa: E402
+from tests.api._jwt import mint  # noqa: E402
 
-_JWT_SECRET = "test-hs256-secret"
 _STATIC = "static-bundle-token"
 _OWN_RUN = 7
 _FOREIGN_RUN = 8
@@ -110,8 +110,6 @@ class _ServiceConn(_FakeConn):
 @pytest.fixture()
 def conns(monkeypatch):
     monkeypatch.setenv("API_TOKEN", _STATIC)
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     tenant, service, llm = _TenantConn(), _ServiceConn(), object()
 
     # The stub keeps verify_jwt as its own dependency, exactly like production's
@@ -177,8 +175,7 @@ def _jwt(*, admin: bool = False) -> dict[str, str]:
     }
     if admin:
         claims["app_metadata"] = {"is_admin": True}
-    tok = jwt.encode(claims, _JWT_SECRET, algorithm="HS256")
-    return {"Authorization": f"Bearer {tok}"}
+    return {"Authorization": f"Bearer {mint(claims)}"}
 
 
 def _call(client, method: str, path: str, headers: dict[str, str]):

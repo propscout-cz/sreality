@@ -560,22 +560,21 @@ rules. Identify which one a task belongs to before you start.
   routes, and **Settings**. The `Timeline` component dispatches on `step.kind` so it
   renders today's deterministic traces and the agent's longer traces without rework.
   Extend this SPA; do not fork a separate frontend tree.
-- **Credentials it holds:** the publishable (`anon`) Supabase key, the signed-in user's
-  Supabase session JWT, and `VITE_API_TOKEN` (`frontend/src/lib/api.ts`, baked in at build
-  by `frontend/Dockerfile`). Never embed a backend secret — the service-role key, the
-  `SUPABASE_DB_URL`, an LLM / maps / R2 key — in browser-shipped code. `VITE_API_TOKEN` is a
-  secret in name only: Caddy serves the bundle to anyone, before sign-in, so the token
-  proves "loaded the SPA" and nothing more. A `require_token` route may therefore never
-  return identity, admin or account-scoped data; those sit behind `verify_jwt` /
-  `require_admin` / `tenant_conn` and are called with `jwt: true` (see "Two auth shapes"
-  below). At least these still break it, running service-role behind `require_token`
-  alone with no account predicate: `/filter-presets*` (`filter_presets` is account-scoped
-  since migration 290), `/buildings*` (`building_runs` has tenant RLS since migration 291),
-  and `POST /notifications/dispatches/{id}/estimate` (returns any account's dispatch and
-  starts a run for it) — owed as `roadmap/public-release-track.md` item 11, an open list.
-  The estimation trace payload and both `/feedback` routes moved onto the tenant pool
-  2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
-  `references/tenancy.md`, named exception).
+- **Credentials it holds:** the publishable (`anon`) Supabase key and the signed-in user's
+  Supabase session JWT — nothing else. Never embed a backend secret — the service-role key, the
+  `SUPABASE_DB_URL`, an LLM / maps / R2 key — in browser-shipped code; since 2026-10-13 the bundle
+  carries no API bearer at all (`VITE_API_TOKEN` is gone: Caddy serves the bundle to anyone before
+  sign-in, so whatever it held proved only "loaded the SPA"). Every API call sends the session JWT
+  (see "One credential" below); a `require_token` route still returns no identity, admin or
+  account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
+  At least these still break it, running service-role behind `require_token`
+  alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
+  migration 291) and `POST /notifications/dispatches/{id}/estimate` (returns any account's
+  dispatch and starts a run for it) — owed as `roadmap/public-release-track.md` item 11, an
+  open list. The estimation trace payload and both `/feedback` routes moved onto the tenant
+  pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
+  `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
+  account, migration 595).
 - Every PostgREST read runs as `authenticated`; `anon` is granted nothing (Phase 0,
   migrations 299/331). The SPA reads the `*_public` views; the Browse/map read models
   `browse_list` (an UNLOGGED table rebuilt blue-green) and `properties_map_mv` — plain
@@ -690,6 +689,55 @@ rules. Identify which one a task belongs to before you start.
   invisibly by `lazyChunk`. Every uncertainty — failed probe, non-OK response, unhashed dev
   entry — reads as "no news", because a false positive here is a toast telling the operator
   to reload a tab that is already current.
+- **The SPA is installable, and its service worker never decides which build runs**
+  (`frontend/public/manifest.webmanifest`, `public/sw.js`, `src/lib/serviceWorker.ts`; the
+  Phone app map #1759, design #1764). The manifest uses root-relative URLs only, so a host
+  move costs a reinstall and nothing else. The worker is hand-written and caches by URL,
+  never by build, so it does not change when the app deploys: page navigations go to the
+  network first (navigation preload; the last good `index.html` only after 3 s, offline or
+  on a 5xx; the URL never rewritten) and same-origin `/assets/*` is cache-first (200s only,
+  newest 200, 14 days). Nothing else is answered — not the API or its `/images` redirects,
+  not Supabase, not buildSkew's `/index.html` probe. Each kind of staleness has one owner:
+  the running document is buildSkew's (unchanged, plus one probe 10 s after mount when a
+  worker controls the page, since that page may have booted from the cached shell); the
+  cached shell is the navigation handler's (refreshed on every online navigation); the
+  worker script is the browser's plus an hourly `registration.update()` on resume (a
+  resumed iPhone app is not a navigation). No worker code reloads a page; "offered, never
+  imposed" holds (#1771), and a chunk 404 still goes to `lazyChunk`, whose reload lands on
+  the network-first `index.html`. Retiring it is a deploy, never a deletion: a deleted
+  `sw.js` leaves the installed worker running, so the file is replaced by the
+  self-unregistering version in its header and registration flips to unregister.
+- **One SPA, two frames: the phone shell is chosen by screen width, and the routes do not
+  change** (`frontend/src/lib/phoneShell.ts`, `components/phone/`; the Phone app map #1759, W1
+  #1766). `usePhoneShell()` is `matchMedia('(max-width: 767px)')` AND no per-device "desktop view"
+  override (`localStorage` `sreality.phone.desktopView`, set from the phone's account sheet and
+  cleared from the desktop account menu's "Mobilní verze"; flipping it reloads). When it is on,
+  `Shell` renders the same `<Outlet>` inside a phone frame — an `h-14` header (the 3.5 rem that
+  `top-14` / `calc(100dvh-3.5rem)` in Filters, BrowseExperience and Pipeline depend on), a
+  bottom tab bar for the W1 areas, toasts above it — instead of the TopBar and footer; every
+  route outside those areas renders its desktop page inside it, cramped but reachable, and the
+  desktop frame is untouched. `/` redirects to `/feed` on the phone frame, `/browse` otherwise.
+  The feed (`pages/Feed.tsx`) adds no query path: it is Browse's `fetchListingsForCards` under
+  Browse's query key (so dismissal, merge and pipeline sweeps reach it), presets applied the way
+  Browse loads them, and a phone menu is the desktop menu's body in a bottom sheet
+  (`PipelineStageMenuBody`, `CollectionSaveList`) over `lib/useDialog`. The one new read is the
+  "Skryté" roll (`fetchDismissedCards`): Browse has no hidden-only lens, and the dismissed set
+  may not ride in a URL, so it reads one page of the caller's dismissals at a time and those
+  properties' card rows from the plain `browse_list`.
+  `/pipeline` on the phone frame is `components/phone/PhonePipeline.tsx`, one swiped page per
+  stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
+  not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
+  stage management on the phone (#1768).
+  The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
+  broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
+  lists and the dossier are the desktop pages' own API calls, and each page component picks
+  its lazily loaded phone layout by `usePhoneShell()`, so `routes.tsx` does not change.
+  The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
+  query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
+  `pages/Link` is, so the first-visit budget never pays for them; no maps, no estimation start —
+  RunPanel skips `ComparablesMap` under the shell), and the fifth tab `/link`
+  resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
+  `/listing/:source/:nativeId` alias.
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical
@@ -699,21 +747,15 @@ rules. Identify which one a task belongs to before you start.
   FastAPI service, not direct Postgres — by convention: `authenticated` holds RLS-scoped
   table write grants (migrations 290/292/294) the SPA never uses. The toolkit's
   write-allowed exceptions (see Toolkit rule #5) are reachable only via the API.
-- **Two auth shapes to the FastAPI service** (`frontend/src/lib/api.ts`), matching the
-  backend gate each route actually uses. `require_admin`/`verify_jwt`/`tenant_conn` routes
-  (Settings, Outreach, broker-review, skill-refinements, Collections
-  list, Pipeline, Watchdog subscriptions, `/estimations` create/read) get `jwt: true` on
-  their `request()` call and receive the caller's real Supabase session `access_token`
-  (`supabase.auth.getSession()`) — `api/dependencies.py:verify_jwt` no longer accepts
-  anything else there (the legacy static-token branch that used to grant a synthetic
-  `is_admin: True` identity was removed 2026-08-04; see
-  `docs/design/api-token-rotation-and-spa-jwt-migration.md`). Routes still gated by the
-  simpler `require_token` (a shared-secret check, no identity) keep sending the static
-  `VITE_API_TOKEN` — readable by anyone from the bundle Caddy serves before sign-in, so
-  that gate proves only "loaded the SPA," never an identity, admin or per-account claim.
-  Adding a new
-  `require_admin`/`verify_jwt` route means adding `jwt: true` to its frontend call in the
-  same change, or it 401s.
+- **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
+  the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
+  route uses — `api/dependencies.py` `_bearer` (2026-10-13) accepts a verified JWT on `require_token`
+  routes and requires one on `verify_jwt` / `require_admin` / `tenant_conn` routes, so a route moves
+  between gates with no frontend change. The per-call `jwt: true` choice and its static-token
+  fallback were the deploy-skew class behind the 2026-10-13 "Invalid token" preset incident (a tab
+  open across #1775's deploy kept choosing the static token). No session → no header; the server's
+  401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
+  History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - **`Mapy.cz`-powered location search.** The Region/Browse pages call `GET /maps/suggest`
   and `POST /maps/resolve` on the FastAPI service for autocomplete + admin-unit
   resolution. The `MAPY_CZ_API_KEY` is server-side only — never inlined into the browser
@@ -732,12 +774,16 @@ rules. Identify which one a task belongs to before you start.
 **Chrome-extension territory** (`chrome-extension/`):
 - Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
   listing pages. The content script matches **every scraped portal's host** (sreality,
-  bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix). `src/portals.ts`
-  (host→portal + detail-URL→native-id) is the single source of truth for the host list —
+  bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
+  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) is the single source of
+  truth for the host list, shared with the SPA's paste-a-link (`parsePortalUrl` →
+  `/listing/:source/:nativeId`) and imported cross-tree exactly like `lib/brand.ts` (it lives under
+  `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
-  used there for `name` + `host_permissions`), so onboarding a new portal only means adding it
-  to `src/portals.ts` — no second hand-maintained match list to keep in sync. `host_permissions`
+  used there for `name` + `host_permissions`), and `portalIds.test.ts` fails when the template
+  and the rules name different hosts, so onboarding a new portal means adding it to
+  `portalIds.ts` plus its line in the template. `host_permissions`
   is narrowed at build time to just the two live API/auth origins the background worker fetches
   (`VITE_API_BASE_URL` + `VITE_SUPABASE_URL`), not a broad wildcard. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
@@ -813,8 +859,8 @@ rules. Identify which one a task belongs to before you start.
   lookup is out per generation (a sign-in or the retry starts a new one, older answers are
   dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late
   `ok` still badges;
-  `stop()` removes the notice on route change. `src/portals.ts` is the single source of truth for
-  host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
+  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
+  truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
@@ -1133,10 +1179,17 @@ renumber.** Navigate by area:
    trusting a cross-era comparison. (b) *Stored objects get several times larger and there is no
    thumbnail rendition yet*, so every surface (Browse cards, lightbox, comparables, the extension)
    serves a master into a thumbnail-sized `<img>`: more R2 egress and page weight, the accepted
-   price of not having lost the photo's edges. A derived small rendition is sequenced on the scraper
-   track. Downstream, the image phase's bound is wall-clock (`--image-max-seconds`), not the count
-   cap — per-image cost moved, and a count cap calibrated against the old rate overruns the CI job
-   timeout into a SIGKILL that skips finalize.
+   price of not having lost the photo's edges. **Since 2026-10-12 (#1765) the API makes one small copy
+   ON REQUEST:** `GET /images/{key}?w=1080` (any other `w` is a 404) redirects to
+   `thumb/w1080/{id}/{seq}.webp` (WebP q75, EXIF rotation applied, ≤ 1080 px wide), which the route
+   builds from the master on its first request (≤ 4 at once, `api/routes/images.py`) and, on any
+   failure, swaps for a 5-minute redirect to the master; only the pipeline board's thumbnails and the
+   property page's grid tiles ask for it. **A re-master deletes the copy** right after it overwrites
+   the master (best-effort, `image_storage.copy_key`), so the next request makes it from the new
+   bytes. Writing copies at download (two widths) waits on the operator's cost hold. Downstream, the
+   image phase's bound is wall-clock (`--image-max-seconds`), not the count cap — per-image cost
+   moved, and a count cap calibrated against the old rate overruns the CI job timeout into a SIGKILL
+   that skips finalize.
 7. **No new dependencies without justification.** Each entry in `pyproject.toml` should
    have a clear reason. Prefer the stdlib.
 8. **Latest-wins data model with snapshot history.** The `listings` table always reflects
@@ -2079,9 +2132,9 @@ renumber.** Navigate by area:
     `property_tags` (whose BEFORE triggers copy `account_id` off the parent, migration 292) their
     INSERTs must stamp `account_id` explicitly or fail the WITH CHECK closed — `create_collection`
     / `create_tag` / `create_note` all take it as a parameter, resolved route-side by
-    `tenant_pool.resolve_account_id`; and (b) the frontend wrappers for these routes must pass
-    `jwt: true` (`frontend/src/lib/api.ts`), because `verify_jwt` no longer accepts the static
-    token as a synthetic identity. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
+    `tenant_pool.resolve_account_id`; and (b) every frontend request carries the session JWT
+    (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
+    accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
@@ -2450,7 +2503,8 @@ renumber.** Navigate by area:
     confirm (`components/pipeline/BoardCard.tsx`). The Chrome-extension panel reproduces the glyph
     by value in vanilla TS (separate territory, no React import) and also hand-copies
     `stageBadge` / `stageAccent` into `content.ts` — pure TS it could import from
-    `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand` and `lib/mfReference`.
+    `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand`, `lib/mfReference` and
+    `lib/portalIds`.
     The kanban's shape is sanctioned (its writes already go through `usePipelineCard`); its grey
     `stageColor` and the extension's copies are owed (`roadmap/operator-workflow-track.md` § Rule #22).
     **TENANCY NOTE — stated here once, for rule #18 as well.** Pipeline MEMBERSHIP has exactly ONE
@@ -2618,7 +2672,7 @@ renumber.** Navigate by area:
     2026-08-12 and were dark the whole time:** Phase 0's A6 revoked `listing_broker_public` +
     `brokers_public` from `anon` AND `authenticated`, so every read returned SQLSTATE `42501` and
     every card degraded to "no broker shown". `frontend/src/lib/brokers.ts` is now repointed wholesale
-    onto the identity-gated API (every call `jwt: true`; the routes reject the static bundle token),
+    onto the identity-gated API (on the session JWT every request carries; the routes reject the static token),
     so a logged-in caller gets HTTP 200 with either the values or `has_email`/`has_phone` — there is
     no longer an *expected* failure, and the 42501 special case is gone. The read stays isolated
     from the board (broker data is an enrichment; a failure must not take stages/cards/images down)

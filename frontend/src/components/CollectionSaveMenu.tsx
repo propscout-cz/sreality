@@ -15,6 +15,9 @@
  * so both surfaces issue the same call and revalidate through the one helper —
  * which is what keeps a save made in the header visible on the card grid (and
  * in the block below it) without a reload.
+ *
+ * The phone feed (#1766) opens the same list in a bottom sheet
+ * (`CollectionSaveList size="sheet"`): one set of writes, two containers.
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -53,6 +56,56 @@ export default function CollectionSaveMenu({
   /* The surrounding cohort is scoped to collections — see revalidateCollections. */
   cohortScoped?: boolean;
 }) {
+  return (
+    <AnchoredPopover
+      id={id}
+      anchorRef={anchorRef}
+      onClose={onClose}
+      ariaLabel={COLLECTION_SAVE_LABEL}
+      className="w-56 p-1.5"
+    >
+      <CollectionSaveList property_id={property_id} memberIds={memberIds} cohortScoped={cohortScoped} />
+    </AnchoredPopover>
+  );
+}
+
+/* Class sets per container: `popover` is the desktop panel, unchanged; `sheet`
+ * the phone's thumb-sized rows, in the phone's own words (Sbírky). */
+const SIZES = {
+  popover: {
+    note: 'px-1.5 py-1.5 text-[0.78rem] text-[var(--color-ink-3)]',
+    create: 'block px-1.5 py-1.5 text-[0.78rem] text-[var(--color-copper)] hover:underline',
+    list: 'max-h-60 overflow-y-auto',
+    row: 'w-full flex items-center gap-2 px-1.5 py-1.5 text-left text-[0.82rem] rounded-[var(--radius-xs)] hover:bg-[var(--color-copper-soft)] disabled:opacity-60',
+    box: 'inline-flex items-center justify-center w-4 h-4 shrink-0 rounded-[3px] border text-[0.6rem] leading-none',
+  },
+  sheet: {
+    note: 'px-4 py-3 text-[14px] text-[var(--color-ink-3)]',
+    create: 'flex h-12 items-center px-4 text-[15px] text-[var(--color-copper)]',
+    list: '',
+    row: 'flex h-12 w-full items-center gap-3 px-4 text-left text-[15px] active:bg-[var(--color-paper-2)] disabled:opacity-60',
+    box: 'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border text-[0.7rem] leading-none',
+  },
+} as const;
+
+const WORDS = {
+  popover: { heading: 'Save to collection', loading: 'Loading…', create: 'Create a collection →' },
+  sheet: { heading: null, loading: 'Načítám…', create: 'Založit sbírku →' },
+} as const;
+
+export function CollectionSaveList({
+  property_id,
+  memberIds,
+  cohortScoped = false,
+  size = 'popover',
+}: {
+  property_id: number;
+  memberIds: Set<number>;
+  cohortScoped?: boolean;
+  size?: keyof typeof SIZES;
+}) {
+  const cls = SIZES[size];
+  const words = WORDS[size];
   const qc = useQueryClient();
   const collectionsQ = useQuery({
     queryKey: curationKeys.collections,
@@ -80,25 +133,19 @@ export default function CollectionSaveMenu({
   );
 
   return (
-    <AnchoredPopover
-      id={id}
-      anchorRef={anchorRef}
-      onClose={onClose}
-      ariaLabel={COLLECTION_SAVE_LABEL}
-      className="w-56 p-1.5"
-    >
-      <p className="px-1.5 py-1 text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
-        Save to collection
-      </p>
-      {collectionsQ.isLoading ? (
-        <p className="px-1.5 py-1.5 text-[0.78rem] text-[var(--color-ink-3)]">
-          Loading…
+    <>
+      {words.heading && (
+        <p className="px-1.5 py-1 text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
+          {words.heading}
         </p>
+      )}
+      {collectionsQ.isLoading ? (
+        <p className={cls.note}>{words.loading}</p>
       ) : collectionsQ.isError ? (
         /* A failed read is NOT an empty one: the old panel answered both with
          * "Create a collection →", which tells an operator whose collections
          * exist that they have none. */
-        <p className="px-1.5 py-1.5 text-[0.78rem] text-[var(--color-ink-3)]">
+        <p className={cls.note}>
           Kolekce se nepodařilo načíst
           <button
             type="button"
@@ -109,14 +156,11 @@ export default function CollectionSaveMenu({
           </button>
         </p>
       ) : sorted.length === 0 ? (
-        <Link
-          to={ROUTES.collections.build()}
-          className="block px-1.5 py-1.5 text-[0.78rem] text-[var(--color-copper)] hover:underline"
-        >
-          Create a collection →
+        <Link to={ROUTES.collections.build()} className={cls.create}>
+          {words.create}
         </Link>
       ) : (
-        <ul className="max-h-60 overflow-y-auto">
+        <ul className={cls.list}>
           {sorted.map((c) => {
             const member = memberIds.has(c.id);
             return (
@@ -124,13 +168,14 @@ export default function CollectionSaveMenu({
                 <button
                   type="button"
                   disabled={pending}
+                  aria-pressed={size === 'sheet' ? member : undefined}
                   onClick={() => (member ? remove : add).mutate(c.id)}
-                  className="w-full flex items-center gap-2 px-1.5 py-1.5 text-left text-[0.82rem] rounded-[var(--radius-xs)] hover:bg-[var(--color-copper-soft)] disabled:opacity-60"
+                  className={cls.row}
                 >
                   <span
                     aria-hidden
                     className={[
-                      'inline-flex items-center justify-center w-4 h-4 shrink-0 rounded-[3px] border text-[0.6rem] leading-none',
+                      cls.box,
                       member
                         ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-white'
                         : 'border-[var(--color-rule-strong)] text-transparent',
@@ -153,7 +198,7 @@ export default function CollectionSaveMenu({
           })}
         </ul>
       )}
-    </AnchoredPopover>
+    </>
   );
 }
 

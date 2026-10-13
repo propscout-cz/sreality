@@ -348,6 +348,17 @@ def _dead_outcome(row: _ImageRow, host: str, note: str) -> _Outcome:
     )
 
 
+def _delete_copies(r2: Any, key: str) -> None:
+    """Drop the phone-size copies made from the bytes just overwritten, so the API makes
+    them again from the new photo. Best-effort: the re-master already succeeded."""
+    for width in image_storage.COPY_WIDTHS:
+        copy = image_storage.copy_key(key, width)
+        try:
+            r2.delete_object(copy)
+        except Exception as exc:  # noqa: BLE001 - a stale copy never fails the re-master
+            LOG.warning("REMASTER copy_delete_failed key=%s: %r", copy, exc)
+
+
 def remaster_one(
     row: _ImageRow,
     r2: Any,
@@ -412,6 +423,7 @@ def remaster_one(
         r2.upload_bytes(row.storage_path, data, "image/jpeg")
     except Exception as exc:  # noqa: BLE001 - R2 trouble is transient, retry next tick
         return _Outcome(row=row, kind="deferred", transient=True, host=host, note=str(exc))
+    _delete_copies(r2, row.storage_path)
     return _Outcome(
         row=row,
         kind="remastered",

@@ -45,6 +45,9 @@ export default function EstimationsBlock({
   listing,
   listingIds,
   prefill,
+  readOnly = false,
+  bare = false,
+  label = 'Estimates',
 }: {
   /* The property as its header shows it, MF included: one result per
    * property, the same row Browse, the kanban and the extension read. */
@@ -56,6 +59,12 @@ export default function EstimationsBlock({
    * param, which the API read as "no filter" and answered with the whole table. */
   listingIds: number[];
   prefill?: NewEstimationPrefill;
+  /* The phone (#1760 Q10): the runs are read, never started — no "Run an
+   * estimation", no re-run; the detail popup still opens. */
+  readOnly?: boolean;
+  /* No leading hairline: the phone layout separates its sections itself. */
+  bare?: boolean;
+  label?: string;
 }) {
   const ids = useMemo(
     () => [...new Set(listingIds)].sort((a, b) => a - b),
@@ -141,10 +150,10 @@ export default function EstimationsBlock({
 
   return (
     <>
-      <Hairline />
+      {!bare && <Hairline />}
       <section id="estimations" ref={sectionRef} className="scroll-mt-6">
         <div className="flex items-baseline justify-between">
-          <SectionLabel>Estimates</SectionLabel>
+          <SectionLabel>{label}</SectionLabel>
           <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
             {runs.length === 0
               ? ''
@@ -162,7 +171,7 @@ export default function EstimationsBlock({
           {selected ? (
             <RunSummaryCard run={selected} />
           ) : (
-            <NoRunsCard prefill={prefill} loading={runsQ.isLoading} />
+            <NoRunsCard prefill={prefill} loading={runsQ.isLoading} readOnly={readOnly} />
           )}
         </div>
 
@@ -174,8 +183,10 @@ export default function EstimationsBlock({
               subject={listing}
               embedded
               initialDetailOpen={openedViaFeedbackHash}
-              onRerun={(overrides) =>
-                rerunMut.mutate({ run: selected, overrides })
+              onRerun={
+                readOnly
+                  ? undefined
+                  : (overrides) => rerunMut.mutate({ run: selected, overrides })
               }
               rerunPending={rerunMut.isPending}
               rerunError={rerunMut.error}
@@ -261,9 +272,11 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
 function NoRunsCard({
   prefill,
   loading,
+  readOnly,
 }: {
   prefill?: NewEstimationPrefill;
   loading: boolean;
+  readOnly: boolean;
 }) {
   const { open } = useNewEstimationModal();
   return (
@@ -278,6 +291,7 @@ function NoRunsCard({
           <p className="text-sm text-[var(--color-ink-3)]">
             No estimation runs for this property yet.
           </p>
+          {!readOnly && (
           <button
             type="button"
             onClick={() => open(prefill)}
@@ -285,6 +299,7 @@ function NoRunsCard({
           >
             Run an estimation →
           </button>
+          )}
         </>
       )}
     </div>

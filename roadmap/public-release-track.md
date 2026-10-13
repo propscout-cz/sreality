@@ -641,14 +641,19 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     /manual_estimates/{id}` take `require_admin` (migration 290: every account reads, only
     platform admins write) and stamp the admin into `updated_by` (+ `account_id` on insert); the
     SPA sends `jwt: true` and shows the controls only to admins; the `GET` read is unchanged.
-    Behaviour: `tests/api/test_manual_estimates.py`. **Still owed, same shape:**
-    `/filter-presets*` (`api/routes/filter_presets.py` → `api/filter_presets.py` `list_presets`
-    selects every row; `filter_presets` is account-scoped with RLS since migration 290),
+    Behaviour: `tests/api/test_manual_estimates.py`. **DONE 2026-10-12 — `/filter-presets*`**
+    (ticket #1761, Phone app W1): every route rides `verify_jwt` + `tenant_conn`, so migration
+    290's policy scopes the reads, the reorder and UPDATE/DELETE by id; `POST` stamps the
+    account from `require_account_id`; migration 595 backfills ownerless rows to the operator's
+    account and sets `account_id` NOT NULL; the SPA's preset calls send `jwt: true`. Behaviour:
+    `tests/api/test_filter_presets.py`. **Still owed, same shape:**
     `/buildings*` (`api/main.py` `get_buildings` → `list_building_runs`, no account filter;
     `building_runs` tenant RLS since migration 291) and `POST /notifications/dispatches/{id}/estimate`
     (`api/routes/notifications.py` `post_kickoff_estimate` returns any account's dispatch row and
-    starts a run for it). Then sweep the remaining `require_token` routes the SPA calls for the
-    same shape (CLAUDE.md § Territories: the static bearer may gate only "loaded the SPA").
+    starts a run for it). The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
+    `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of
+    `Authorization`), so the SPA sends its session JWT everywhere and `VITE_API_TOKEN` is deleted
+    from the bundle (same day); the account-SCOPING of the two routes above stays owed.
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").

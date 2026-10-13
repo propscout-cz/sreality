@@ -18,8 +18,23 @@ import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import { fmtCount, fmtRelative, fmtAbsolute } from '@/lib/format';
 import type { Collection } from '@/lib/types';
+import { usePhoneShell } from '@/lib/phoneShell';
+import { PhoneSuspense } from '@/components/phone/RollParts';
+import { lazyChunk } from '@/lib/lazyChunk';
 
+const PhoneCollections = lazyChunk(() => import('./phone/PhoneCollections'));
+
+/* Under the phone shell: the list and "Nová sbírka" only (#1760 Q11); rename,
+ * delete and monitoring stay on this desktop page. */
 export default function Collections() {
+  return usePhoneShell() ? (
+    <PhoneSuspense>
+      <PhoneCollections />
+    </PhoneSuspense>
+  ) : <CollectionsDesktop />;
+}
+
+function CollectionsDesktop() {
   const qc = useQueryClient();
 
   const listQ = useQuery<{ data: Collection[]; total: number }, Error>({

@@ -476,9 +476,10 @@ def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:
 
 
 def test_no_broker_route_rides_the_static_token() -> None:
-    """Standing gate on the whole point of this wave: VITE_API_TOKEN is extractable
-    from the shipped bundle, so a broker read re-gated on require_token would be a
-    silent regression to unauthenticated PII access."""
+    """Standing gate on the whole point of this wave: the static `API_TOKEN` sat in
+    every bundle shipped before 2026-10-13 (and old bundles still hold it), so a
+    broker read re-gated on require_token would be a silent regression to
+    unauthenticated PII access."""
     from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
 
     offenders = sorted(

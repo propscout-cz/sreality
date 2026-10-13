@@ -16,11 +16,16 @@
  * Operator state is PROPERTY-grain: a write repaints every card of that
  * property on the page, and the panel when it shows the same property.
  *
+ * A card in the pipeline or a collection also gets that drawn over its photo
+ * (index_photo_mark.ts): the photo toned in the stage colour under the stage
+ * badge; a copper rim and a tag naming the collection.
+ *
  * The cluster lives in a closed shadow root per card, so the portal's CSS
  * can't reach it; the two menus share one page-level shadow host, positioned
  * against the button that opened them (a card's own overflow would clip a
  * menu drawn inside it). The only things written into the portal's DOM are
- * the host element and two attributes on the card. */
+ * the two host elements (the cluster's, the photo mark's) and two attributes
+ * on the card. */
 
 import tokens from './tokens.css?inline';
 import {
@@ -33,7 +38,8 @@ import {
   stageAccent,
   stageBadge,
 } from './glyphs';
-import { detailRef, type PortalRef } from './portals';
+import { PHOTO_MARK_HOST_CLASS, createPhotoMark } from './index_photo_mark';
+import { detailRef, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type {
   ApiMessage,
   ApiResult,
@@ -652,6 +658,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     const badge = button('badge');
     bar.append(funnel, save, hide, badge);
     shadow.append(style, bar);
+    const mark = createPhotoMark(card, PROCESSED_ATTR);
 
     const current = (): { listing: PortalListing; propertyId: number } | null => {
       const listing = cache.get(sourceId);
@@ -704,13 +711,17 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const p = pid != null ? l.pipeline : null;
       const inPipe = p?.in_pipeline ?? false;
       const code = inPipe ? stageBadge(p?.stage_code, p?.stage_id, stages) : null;
-      const saved = pid != null ? (l.collection_ids ?? []).length : 0;
+      const savedIds = pid != null ? l.collection_ids ?? [] : [];
+      const saved = savedIds.length;
+      const savedNames = sortCollections(collections ?? [])
+        .filter((c) => savedIds.includes(c.id))
+        .map((c) => c.name);
       const dismissed = pid != null && l.dismissed === true;
       const canHide = pid != null && l.dismissed != null && !isLive(l);
       const veiled = dismissed && deps.veilOn();
       const view = deps.badgeFor(l, href);
       const state = JSON.stringify([
-        pid, inPipe, p?.stage_label, p?.stage_color, code, saved, dismissed, canHide,
+        pid, inPipe, p?.stage_label, p?.stage_color, code, saved, savedNames, dismissed, canHide,
         veiled, view, busy.has(`p:${pid}`), busy.has(`d:${pid}`),
         menu?.anchor === funnel, menu?.anchor === save,
       ]);
@@ -768,8 +779,20 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       }
 
       host.toggleAttribute('data-veiled', veiled);
-      if (dismissed && holdsOneListing(card, sourceId)) card.setAttribute(DISMISSED_ATTR, '');
+      // A card guess that holds several results would mark another one's photo.
+      const single = (dismissed || inPipe || saved > 0) && holdsOneListing(card, sourceId);
+      if (dismissed && single) card.setAttribute(DISMISSED_ATTR, '');
       else card.removeAttribute(DISMISSED_ATTR);
+      mark.show((inPipe || saved > 0) && !veiled && single
+        ? {
+          stage: inPipe
+            ? { color: p?.stage_color ?? null, badge: code, label: p?.stage_label ?? null }
+            : null,
+          collections: saved > 0 ? savedNames : null,
+        }
+        : null);
+      // The collection list names the tag.
+      if (saved > 0 && !collectionsFailed) void loadCollections(false);
     }
 
     handles.set(card, {
@@ -777,6 +800,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       paint,
       destroy(): void {
         if (menu?.anchorHost === host) closeMenu(false);
+        mark.destroy();
         host.remove();
       },
     });
@@ -792,6 +816,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     handle?.destroy();
     // A host left by an overlay run that has since stopped has no handle here.
     card.querySelector(`:scope > .${HOST_CLASS}`)?.remove();
+    card.querySelector(`:scope > .${PHOTO_MARK_HOST_CLASS}`)?.remove();
     card.removeAttribute(PROCESSED_ATTR);
     card.removeAttribute(DISMISSED_ATTR);
   }

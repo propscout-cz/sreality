@@ -89,6 +89,9 @@ def _populated(db: FakePg) -> FakePg:
                                "scanned_at": db.now, "rows_found": 1, "elapsed_ms": 1.0})
         db.retire_events.append({"generation": generation, "retired_at": db.now,
                                  "n_retired": 1, "store_rows": 2})
+        db.reject_ledger[(generation, 11, 13)] = {
+            "dd_lo": "a", "dd_hi": "b", "calibration_digest": "d", "feature_version": 1,
+            "decided_at": db.now}
         db.calibration[generation] = {"digest": "d", "n_listings": 2, "payload": {},
                                       "artifact_url": None, "settings": {},
                                       "model_version": "w6_gold"}
@@ -112,9 +115,10 @@ def test_the_reset_empties_this_generation_and_nothing_else() -> None:
     assert deleted == {"pairs": 1, "cluster_members": 2, "cluster_conflicts": 1,
                        "clusters": 1, "rt_fp": 2, "fp_key": 1, "rt_block_cell": 1,
                        "rt_scope_ids": 1, "rt_scope_scan": 1, "rt_retire_event": 1,
-                       "scan_cursor": len(RESET_CURSORS), "rt_lease": 1}
+                       "rt_reject_ledger": 1, "scan_cursor": len(RESET_CURSORS), "rt_lease": 1}
     assert not [key for key in db.pairs if key[0] == GEN]
     assert not [key for key in db.rt_fp if key[0] == GEN]
+    assert not [key for key in db.reject_ledger if key[0] == GEN], "E943: a seed empties it"
     assert not db.cursors and not db.lease
 
 
@@ -136,6 +140,7 @@ def test_another_generations_rows_survive_the_reset() -> None:
     assert [key for key in db.scope_ids if key[0] == OTHER]
     assert [row for row in db.scope_scans if row["generation"] == OTHER]
     assert [row for row in db.retire_events if row["generation"] == OTHER]
+    assert [key for key in db.reject_ledger if key[0] == OTHER] == [(OTHER, 11, 13)]
 
 
 def test_the_generation_free_tables_survive_the_reset() -> None:
@@ -360,23 +365,24 @@ def test_a_fresh_seeds_second_check_keeps_the_resets_projection(tmp_path) -> Non
     assert db.statements.count(S.RT_GENERATION_BYTES_SQL) == 1, "measured once, before the reset"
 
 
-def test_the_budget_holds_the_widened_scope_with_three_months_to_spare() -> None:
+def test_the_budget_holds_the_widened_scope_with_two_months_to_spare() -> None:
     """E941, the arithmetic the constants' comments state, on the reads of 2026-10-09: the
-    build costs what the live store measures an advert, and the widened scope (the trial,
-    Nusle, Libeň and six towns) fits the budget at the seed — with the fresh reset's space
-    reused and without it — and leaves about three months of its arrivals. The whole corpus
-    stays a separate decision."""
+    build costs what the live store measures an advert plus E943's reject ledger, and the
+    widened scope (the trial, Nusle, Libeň and six towns) fits the budget at the seed — with
+    the fresh reset's space reused and without it — and leaves about two and a half months of
+    its arrivals (three before the ledger). The whole corpus stays a separate decision."""
     from autodedup.incremental_scope import CORPUS_PROJECTION_MB
 
     schema, rt_held, rt_adverts, walk_and_cut = 464.3, 129.2, 7_298, 60.0   # MB, adverts
     adverts, arriving_a_month = 38_000, 0.20                               # S1 widened; E79
-    measured = rt_held * _MB / rt_adverts                    # bytes an advert in the live store
+    ledger = 11 * 182                       # E943: ~10-12 ledgered rejects an advert, ~182 B
+    measured = rt_held * _MB / rt_adverts + ledger           # bytes an advert in the live store
     assert abs(BUILD_BYTES_PER_LISTING - measured) / measured < 0.02
     build = adverts * BUILD_BYTES_PER_LISTING / _MB
     projected = schema + walk_and_cut - rt_held + build      # the second check, fresh seed
     a_month = adverts * arriving_a_month * BUILD_BYTES_PER_LISTING / _MB
     assert schema + walk_and_cut + build < MAX_SCHEMA_MB, "fits even with nothing reused"
-    assert MAX_SCHEMA_MB - projected >= 3 * a_month, "about three months of arrivals"
+    assert MAX_SCHEMA_MB - projected >= 2.4 * a_month, "about two and a half months"
     assert MAX_SCHEMA_MB < CORPUS_PROJECTION_MB
 
 

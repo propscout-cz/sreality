@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import Spinner from '@/components/Spinner';
 
 /* The scroll-trigger + status footer for every infinite list. Render it as
@@ -22,6 +22,9 @@ export interface InfiniteSentinelProps {
   /* How early to pre-load, in px before the sentinel enters the root. */
   rootMargin?: string;
   loadingLabel?: string;
+  /* Replaces the "End — N total" line once the list is exhausted (the phone
+   * feed's own sentence). */
+  endLabel?: ReactNode;
 }
 
 export default function InfiniteSentinel({
@@ -33,6 +36,7 @@ export default function InfiniteSentinel({
   rootRef,
   rootMargin = '700px',
   loadingLabel = 'Loading…',
+  endLabel,
 }: InfiniteSentinelProps) {
   const ref = useRef<HTMLDivElement>(null);
   const onReachRef = useRef(onReach);
@@ -85,7 +89,9 @@ export default function InfiniteSentinel({
         </span>
       ) : atEnd ? (
         <span className="text-[var(--color-ink-4)]">
-          {total != null
+          {endLabel !== undefined
+            ? endLabel
+            : total != null
             ? `End — ${total.toLocaleString('cs-CZ')} total`
             : 'End of results'}
         </span>

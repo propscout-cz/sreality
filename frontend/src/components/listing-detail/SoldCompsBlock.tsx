@@ -51,7 +51,7 @@ import {
   fmtPct,
   fmtShortDate,
 } from '@/lib/format';
-import { ppm2BasisFromToken, type Ppm2Basis } from '@/lib/measure';
+import { ppm2BasisFromToken } from '@/lib/measure';
 import {
   fetchPipelineMembers,
   fetchSoldComparables,
@@ -61,27 +61,14 @@ import {
   type PipelineMembers,
 } from '@/lib/queries';
 import type { SoldComparable, SoldCoverage } from '@/lib/types';
-
-/* 5 km is also W2's cell margin — the obec envelope is expanded by exactly this
- * much before it is fetched, so the largest radius the operator can ask for is
- * fully covered by construction rather than by luck. */
-const RADII_M = [1000, 3000, 5000] as const;
-type RadiusM = (typeof RADII_M)[number];
-
-/* reas.cz's sold catalogue is byty + domy only — measured, and the reason the
- * parser refuses any other `type` (docs/architecture.md § Data sources). */
-const COVERED_CATEGORIES = new Set(['byt', 'dum']);
-
-/* A median over four sales is a number pretending to be a statistic. */
-const SUMMARY_MIN_ROWS = 5;
-
-/* Sales under this area are held OUT of the median (never out of the table:
- * each row is an honest fact). Their Kč/m² is a denominator defect, not a
- * market fact — a small transfer routinely bundles a cellar or a parking share,
- * or states the unit's own floor area rather than the area transferred. It is
- * measured, not assumed: Prague flats 0–30 m² median 239,600 Kč/m² against
- * 144,506 in the 60–80 m² band (design/verify-reas-field-mapping.md). */
-const SMALL_UNIT_M2 = 30;
+import {
+  COVERED_CATEGORIES,
+  RADII_M,
+  SMALL_UNIT_M2,
+  summarizeSold,
+  type RadiusM,
+  type SoldSummary,
+} from '@/lib/soldComps';
 
 /* The registry's ids prettify to "Category main in" / "Min area m2". */
 const FILTER_LABELS: Record<string, string> = {
@@ -235,7 +222,7 @@ function SoldComps({
   const page = rowsQ.data ?? [];
   const truncated = page.length > SOLD_COMPS_LIMIT;
   const rows = truncated ? page.slice(0, SOLD_COMPS_LIMIT) : page;
-  const summary = rowsQ.isSuccess ? summarize(rows) : null;
+  const summary = rowsQ.isSuccess ? summarizeSold(rows) : null;
 
   /* The CHROME is what gets gated: a radius control, a filter panel and "no
    * registered sale matches these filters" are three ways of saying we looked.
@@ -692,54 +679,11 @@ function daysListed(row: SoldComparable): number | null {
   return Math.round(ms / 86_400_000);
 }
 
-type Summary = {
-  /* The sales the median is OF — not the cohort's size. */
-  n: number;
-  /* Held out for being under SMALL_UNIT_M2, and said out loud. */
-  heldOut: number;
-  medianPpm2: number | null;
-  basis: Ppm2Basis | null;
-  /* Flats and houses sell at different Kč/m² (measured: 114,519 against
-   * 50,000), so one median over both is not a statistic about either. */
-  mixedKinds: boolean;
-};
-
-/* The cohort's per-m² basis is READ from the rows' published basis token, never
- * re-derived: one token means that basis, more than one means 'mixed', which
- * `fmtMeasuredPricePerM2` refuses to put a unit on. */
-function summarize(rows: readonly SoldComparable[]): Summary | null {
-  const kept = rows.filter((r) => r.area_m2 == null || r.area_m2 >= SMALL_UNIT_M2);
-  if (kept.length < SUMMARY_MIN_ROWS) return null;
-  const tokens = new Set(kept.map((r) => r.price_per_m2_basis));
-  const basis =
-    tokens.size === 1
-      ? ppm2BasisFromToken([...tokens][0])
-      : ('mixed' as Ppm2Basis);
-  const shape = {
-    n: kept.length,
-    heldOut: rows.length - kept.length,
-    basis,
-    mixedKinds: new Set(rows.map((r) => r.category_main)).size > 1,
-  };
-  const values = kept
-    .map((r) => r.price_per_m2)
-    .filter((v): v is number => v != null)
-    .sort((a, b) => a - b);
-  if (values.length === 0) return { ...shape, medianPpm2: null };
-  const mid = Math.floor(values.length / 2);
-  return {
-    ...shape,
-    n: values.length,
-    medianPpm2:
-      values.length % 2 === 1 ? values[mid] : (values[mid - 1] + values[mid]) / 2,
-  };
-}
-
 function SummaryLine({
   summary,
   truncated,
 }: {
-  summary: Summary;
+  summary: SoldSummary;
   truncated: boolean;
 }) {
   if (summary.mixedKinds) {

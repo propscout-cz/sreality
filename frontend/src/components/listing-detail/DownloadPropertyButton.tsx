@@ -8,10 +8,13 @@ import type { ImagePublic } from '@/lib/types';
 export default function DownloadPropertyButton({
   propertyId,
   images,
+  variant = 'header',
 }: {
   propertyId: number;
   /* The canonical ad's photos (the gallery's) — only to say which are left out. */
   images: ImagePublic[];
+  /* `phone`: the last line of the phone property page (#1767), a plain link-weight row. */
+  variant?: 'header' | 'phone';
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +46,28 @@ export default function DownloadPropertyButton({
     stored < images.length
       ? `PDF inzerátu a ${stored} z ${images.length} fotek v jednom .zip — ostatní fotky zatím nejsou uložené`
       : 'PDF inzerátu a jeho fotky v jednom .zip';
+
+  if (variant === 'phone') {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => void download()}
+          disabled={busy}
+          title={title}
+          className="inline-flex h-11 items-center gap-2 text-[15px] font-medium text-[var(--color-copper)] disabled:opacity-60"
+        >
+          <DownloadGlyph />
+          <span>{busy ? 'Připravuji…' : 'Stáhnout (PDF + fotky)'}</span>
+        </button>
+        {error && (
+          <p className="text-[13px] text-[var(--color-brick)]" role="alert">
+            Stažení selhalo: {error}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <span className="inline-flex items-center gap-2">

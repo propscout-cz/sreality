@@ -12,6 +12,9 @@
  *     search-page notice's (chrome-extension/src/index_overlay.ts)
  *   - the extension's chrome://extensions name (manifest, built from
  *     EXTENSION_NAME by chrome-extension/vite.config.ts)
+ * and is COPIED, by hand, into the installed app's name and home-screen label
+ * (`public/manifest.webmanifest` is JSON, so it can't import this file;
+ * lib/manifest.test.ts fails when the copy drifts).
  *
  * Location note: it lives under `frontend/` because the SPA's production Docker
  * build context is `frontend/` only — a repo-root shared file would build in CI

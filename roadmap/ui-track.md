@@ -7,6 +7,60 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Phone app (W1 merged 2026-10-12, closes on the install walk; W2–W4 next — map [#1759](https://github.com/waiff/sreality/issues/1759))
+- The platform on the operator's iPhone home screen: the same SPA at the same address, a
+  phone shell by screen width. Waves W0 prototype → W1 feed → W2 property page → W3 pipeline
+  → W4 collections + brokers; a wave closes on the operator's install walk, not the merge.
+- **W1 slice: the installable shell** ([#1777](https://github.com/waiff/sreality/pull/1777)):
+  self-hosted fonts, `manifest.webmanifest` + icons (`frontend/scripts/make-icons.py`), the iOS
+  meta tags, and a version-agnostic `public/sw.js` (navigations network-first, `/assets/*`
+  cache-first; buildSkew stays the update signal). Decided in #1763 and #1764. No phone layout yet.
+- **W1 slices: per-account presets** ([#1775](https://github.com/waiff/sreality/pull/1775)) and **the
+  1080 px photo copy on first request** ([#1776](https://github.com/waiff/sreality/pull/1776)).
+- **W1 slice: the phone shell and the feed** (#1766): under 768 px `Shell.tsx` renders the routes in
+  a phone frame (`components/phone/`, `lib/phoneShell.ts`) — an `h-14` header with the page title,
+  a back affordance and the account sheet (theme, "Desktopová verze" = a per-device override, sign
+  out); a four-tab bar (Nové, Pipeline, Sbírky, Makléři) hidden while typing. Every other route
+  keeps its desktop page inside it. `/feed` ("Nové", the manifest's `start_url`, `/` on the phone)
+  is Browse's read newest first (`fetchListingsForCards`, keyset, `CARD_COLS`, Browse's query key)
+  with "Vše" + the account's presets (remembered per device), portal chips (one portal = that
+  portal's newest-ad order) and "Skryté" (the hidden properties only, a page of dismissals at a
+  time); Prague day rules with refresh; the prototype's card: the 1080 px cover, the margin of
+  marks (`usePipelineCard`, the collection list, `useDismissal` — the stage and collection menus
+  are the desktop bodies in a bottom sheet), the extension's stage wash, per-m² through
+  `lib/measure` (rule 23).
+  Follow-up: a photo strip per card (up to eight, cover first, the wash on each; `/feed` a lazy chunk), PR [#1785](https://github.com/waiff/sreality/pull/1785).
+- Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
+  `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
+  reading + curation and the paste box (the fifth tab, Odkaz).
+- **W2 groundwork: one set of portal-id rules** (#1767): the extension's URL→`(source, native id)`
+  rules moved to `frontend/src/lib/portalIds.ts`, imported by the extension cross-tree like
+  `lib/brand.ts`; `parsePortalUrl` is what the paste-a-link box calls to land on
+  `/listing/:source/:nativeId`. Also fixed: bezrealitky's English site (`www.bezrealitky.com`,
+  `/properties-flats-houses/`), which no rule matched before. Next in W2: the paste box itself.
+- **W2: the property page on the phone and Odkaz** (#1767, [#1782](https://github.com/waiff/sreality/pull/1782)): under the phone shell
+  the property page is the prototype's "Nemovitost" — photo swiper with the stage wash, price + basis,
+  the curation row, then every non-map section as reading + curation (estimations read-only; no maps,
+  no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
+  property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
+  portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
+  install walk.
+- **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
+  `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
+  (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per
+  stage, each scrolling on its own; cards are a stage-washed 104 px thumbnail, price, layout, place,
+  days in the stage and MF; the stage badge opens the stage sheet (move, two-step remove through
+  `usePipelineCard`). Same reads as the board (`lib/pipelineReads`); no drag, no stage management.
+- **W4: collections and brokers on the phone** (#1769): `/collections` is a hairline list with
+  "Nová sbírka" (a name in a bottom sheet, `createCollection`, monitoring off) and `/collection/:id`
+  the members as feed cards (`fetchListingsForCards`, the collection as prefilter; the card's
+  collection sheet is the removal; a member with no served location stays as a plain line);
+  `/brokers` a reduced leaderboard (name search in place, place in a sheet, byty/domy,
+  prodej/pronájem, metric) and `/brokers/:id` the dossier without the map (masked contact,
+  "Kopírovat", kraje and per-type counts as numbers, firms, the live ads as feed cards by
+  `brokerId`). Rename, delete, monitoring and the broker map stay on the desktop (#1760 Q11/Q12).
+  Closes on the install walk.
+
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first
   photo) or a CLIP logical tag (fasáda, kuchyně, obývací pokoj, ložnice, koupelna, WC,

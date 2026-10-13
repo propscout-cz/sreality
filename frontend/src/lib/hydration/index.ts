@@ -15,6 +15,8 @@
  *   - `useListingPhotos` (images_public, keyed on the surrogate listing_id) is
  *     THE multi-image read. Browse cards, the comparables modal and its map
  *     preview, and the listing-detail gallery all reach images through it.
+ *     The phone card's strip (`useCardPhotos`, cardPhotos.ts) is a projection
+ *     of this read — cover first, at most eight — never a read of its own.
  *   - `useListingCovers` (listing_cover_public, W4) stays separate because it is
  *     a different QUERY, not a different caller: a server-side DISTINCT ON that
  *     returns one row per listing. The board renders one 48px thumbnail, and
@@ -36,6 +38,8 @@ export {
   taggedImageUrls,
   NO_PHOTOS,
 } from './useCardHydration';
+export { CARD_STRIP_CAP, cardPhotos, useCardPhotos } from './cardPhotos';
+export type { CardPhotos } from './cardPhotos';
 export type {
   CoverByListingId,
   BrokerByListingId,

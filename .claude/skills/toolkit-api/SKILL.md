@@ -102,24 +102,24 @@ it (`api/`). They do not apply to the scraper.
    `ST_DWithin(ll.geom::geography, target, radius_m)`. Never compute distance in Python.
 7. **psycopg directly, not supabase-py.** Same reasoning as the scraper.
    `prepare_threshold=None` for pgbouncer-mode pooler.
-8. **Two auth gates coexist by design: `require_token` (shared secret) and
-   `require_admin`/`verify_jwt` (real identity, JWT-only since 2026-08-04).** Baseline:
-   a `require_token` route needs `Authorization: Bearer <API_TOKEN>` and fails CLOSED (`503`
-   when `API_TOKEN` is unset, unless `API_AUTH_OPTIONAL=1` for local dev); `/health` stays open for Railway
-   healthchecks. `/admin/*` (Settings-page surface: skills, `app_settings`, agent tool
-   inventory) is bearer-gated like every other write surface — it was historically exempt
-   on the theory that the private Railway URL was the perimeter, but that URL ships
-   inside the public SPA bundle, so the exemption gave no real protection.
+8. **One caller, one credential — the gate decides, the client never chooses per request.** A human
+   (SPA, extension) presents the Supabase session JWT, a machine (ClickUp, a script) the static
+   `API_TOKEN`; `api/dependencies.py` `_bearer` is the ONE reader of `Authorization` (2026-10-13), so
+   `require_token` = any known caller (static token OR verified JWT, no identity; fails CLOSED — `503`
+   when `API_TOKEN` is unset unless `API_AUTH_OPTIONAL=1` for local dev), `verify_jwt` = a JWT's claims,
+   `account_scope` = a read scope; every 401 is RFC 6750 (`WWW-Authenticate: Bearer error="invalid_token"`
+   + the reason). `/health` stays open for Railway healthchecks. `/admin/*` (Settings-page surface) is
+   gated like every write surface — the private Railway URL was never a perimeter, it ships in the SPA bundle.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
    of the token: `/admin/*`, `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*`, dataset-write/dispatch routes on price-stats, and the manual-estimate writes (shared
    reference data, mig 290; stamp the admin into `updated_by`, + `account_id` on insert) use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*`, `/collections`, `/tags`, `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
+   `/pipeline/*`, `/collections`, `/tags`, `/filter-presets` (per account, mig 595), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
-   most other routes are still `require_token`-only (a shared secret, no identity — buildings,
-   the manual-estimate read, filter-presets, estimation preview). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   most other routes are `require_token` (any known caller, no identity — buildings,
+   the manual-estimate read, estimation preview). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -145,7 +145,7 @@ it (`api/`). They do not apply to the scraper.
    `tests/api/test_broker_routes.py` holds two standing gates: no `/brokers` route may
    ride `require_token`, and every non-admin one must stamp `pii_masked` — a new route
    must be added to that table. The SPA is the main consumer since 2026-08-12
-   (`frontend/src/lib/brokers.ts`, every call `jwt: true`); it previously read the
+   (`frontend/src/lib/brokers.ts`, on the session JWT); it previously read the
    underlying views straight off PostgREST and had been dark since migration 299 revoked
    them. Migration 395 revoked the last one A6 missed (`firms_public`, default-ACL drift).
    Because the cap is a 422 on the WHOLE batch, `fetchListingBrokersByIds` chunks
@@ -260,27 +260,26 @@ the deadline by value; its overlay keeps `LOOKUP_TIMEOUT_MS` for MV3 port loss n
 
 ## Identity, login, and admin gating (Phase 1, `api/dependencies.py`)
 
-Six auth primitives coexist — four in `api/dependencies.py`, two in `api/tenant_pool.py` (`tenant_conn` after this list):
-- `require_token` — the original bearer-token gate (rule #8's baseline), now fail-closed (`503` when `API_TOKEN` unset).
-- `account_scope` — an EITHER gate returning a READ SCOPE (the tenancy doctrine's FOURTH shape),
-  for routes serving a browser session AND a non-browser caller over the one `Authorization`
-  header: the static token resolves to `[SYSTEM]` (it ships in the SPA bundle, so it is no
-  identity), a verified JWT to `[that account, SYSTEM]` — mirroring `estimation_runs_tenant_read`
-  (291), never a second tenancy definition. Unset/wrong-credential contract matches
-  `require_token` (503 / 401). Used by `GET /estimations{,/latest-by-listing}`, deliberately
-  SERVICE-ROLE: their LEFT JOIN onto `listings` + `parsed_url_cache` (RLS-on, zero policies) would
-  silently NULL `locality_display` on a tenant conn. `account_ids` is a REQUIRED kwarg on those
-  read helpers — omitting it is a `TypeError`, never a silent unscoped read.
-- `verify_jwt` — verifies a Supabase user JWT and returns its claims. Preferred path:
-  asymmetric JWKS (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached
-  via `PyJWKClient`, no shared secret). Falls back to a shared HS256 secret
-  (`SUPABASE_JWT_SECRET`) if that's all that's configured. Fails closed with `503` if
-  neither JWKS nor the HS256 secret is configured (an unconfigured auth backend must
-  never authenticate anyone). **The legacy dual-auth branch is gone (removed 2026-08-04):** it
-  checked the static `API_TOKEN` bearer FIRST and returned a synthetic `is_admin: True` claims
-  dict, so every `verify_jwt`/`require_admin` route accepted the SPA-bundle-embedded token as a
-  god-credential; it now 401s like any garbage bearer. Incident + fix:
-  `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
+Six auth primitives coexist — four in `api/dependencies.py` over ONE header reader, two in
+`api/tenant_pool.py` (`tenant_conn` after this list). `_bearer` (2026-10-13): the static `API_TOKEN` → a
+machine with no identity, a JWS-shaped bearer → `verify_jwt`, anything else → 401; unset `API_TOKEN` →
+`503` unless `API_AUTH_OPTIONAL=1`. Tests mint a human with `tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
+- `require_token` — any known caller, nothing returned (rule #8's baseline). It accepts a verified JWT so
+  the SPA sends its session JWT to every route and a route moves between gates without a client change
+  (the deploy-skew class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
+- `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the static token
+  resolves to `[SYSTEM]` (no identity), a verified JWT to `[that account, SYSTEM]` — mirroring
+  `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
+  /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings` +
+  `parsed_url_cache` (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
+  `account_ids` is a REQUIRED kwarg on those read helpers — omitting it is a `TypeError`, never a silent
+  unscoped read.
+- `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
+  (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
+  secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
+  unset (an unconfigured auth backend must never authenticate anyone). The static `API_TOKEN` is NOT accepted
+  here — the 2026-08-04 removal of the synthetic `is_admin: True` branch that made it a god-credential;
+  incident + fix: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
   `claims["app_metadata"]["is_admin"]`; `403` otherwise. Only reachable via a real Supabase JWT
   whose `app_metadata.is_admin` was stamped `true` (the `admins` table is the provisioning
@@ -363,9 +362,8 @@ Database:
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
   Railway API service, `SUPABASE_URL` is now load-bearing**, not just forward-compatible:
-  `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs.
-- `SUPABASE_JWT_SECRET` (Railway API, optional) — HS256 fallback for `verify_jwt` when
-  JWKS/`SUPABASE_URL` isn't set. Prefer JWKS; this exists for environments without it.
+  `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs (its only verifier;
+  `SUPABASE_JWT_SECRET` is read by nothing since 2026-10-13 and can be deleted from Railway).
 - `TENANT_POOL_DB_URL` (Railway API only) — connection string for the `tenant_pool` role
   (migration 293), used by `api/tenant_pool.py`'s `tenant_conn` for RLS-scoped per-account
   writes. Distinct from `SUPABASE_DB_URL` (service-role, unscoped, bypasses RLS).
@@ -392,15 +390,15 @@ Image storage (Cloudflare R2, S3-compatible):
   (JWT) zips them with a PDF of the ad — the bucket sends no CORS header. If the **API** lacks them,
   every listing photo 503s and the UI looks imageless though the DB reports the bytes "stored"
   — the API logs a boot WARNING and `GET /health` reports `image_storage: "unconfigured"`.
-- `IMAGE_PRESIGN_ANCHOR_SECONDS` (optional, API service, default `86400`) — the width of the
-  bucket `GET /images/{key}` pins its SigV4 signing time to, so the same key presigns to a
-  byte-identical URL all day. The browser's HTTP cache keys on the whole URL including the
-  signature; without this the hourly redirect re-mint handed back a fresh signature and
-  every photo re-downloaded hourly despite R2's own 30-day `max-age`. Read per request, so
-  it takes effect without a redeploy: set it to `0` to fall back to per-request signing
-  (the kill switch if R2 ever rejects a backdated signature). Values are capped at half the
-  7-day presign TTL — the last URL minted in a bucket was signed at the bucket's *start*,
-  so anchor and TTL meeting would serve an already-expired URL.
+- `IMAGE_PRESIGN_ANCHOR_SECONDS` (optional, API service, default `86400`) — the width of the bucket
+  `GET /images/{key}` pins its SigV4 signing time to, so a key presigns to a byte-identical URL all
+  day (the browser caches on the whole URL; a fresh signature per hourly re-mint re-downloaded every
+  photo despite R2's 30-day `max-age`). Read per request: `0` = per-request signing (the kill switch
+  if R2 rejects a backdated signature). Capped at half the 7-day presign TTL, or the last URL minted
+  in a bucket would already be expired.
+- **Phone copy** (#1765): `GET /images/{key}?v=2&w=1080` (any other `w` → 404) redirects to
+  `thumb/w1080/{id}/{seq}.webp` (WebP q75), made from the master on first request (≤ 4 at once);
+  any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`.
 
 LLM + maps (FastAPI service + scoring jobs):
 - `ANTHROPIC_API_KEY` — required for the URL parser, summarize/vision tools, condition
@@ -489,12 +487,12 @@ NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in
-the browser), and `VITE_API_BASE_URL` / `VITE_API_TOKEN` for the SPA (Path 1 posture: the
-static token is embedded in a build shipped only to trusted operators, until the
-platform-wide rotation cutover). The **extension** (`EXT_API_BASE_URL` /
-`EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY` repo secrets → `VITE_API_BASE_URL` /
-`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` at build) no longer carries `VITE_API_TOKEN` /
-`EXT_API_TOKEN` at all (Wave 1, 2026-07-21) — it runs its own Supabase session via a
-hand-rolled PKCE flow (`chrome-extension/src/auth.ts`), so no bearer secret ships in the
-bundle and it's safe to distribute broadly.
+the browser) and `VITE_API_BASE_URL`. Neither bundle carries an API bearer: the SPA dropped
+`VITE_API_TOKEN` on 2026-10-13 (every request sends the session JWT; `api/dependencies.py`
+`_bearer`), the **extension** (`EXT_API_BASE_URL` / `EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY`
+repo secrets → the same `VITE_*` names at build) dropped `EXT_API_TOKEN` on 2026-07-21 (Wave 1)
+and runs its own Supabase session via a hand-rolled PKCE flow (`chrome-extension/src/auth.ts`).
+`API_TOKEN` is now held only by machines — but every bundle shipped before 2026-10-13 (and a
+service-worker asset cache, ≤ 14 days) still carries the old value, which `require_token` still
+accepts: ROTATE it (design-doc Part B; any ClickUp/CI holder gets the new value) to retire those copies.
 

@@ -63,8 +63,9 @@ function Thumbnail({
         <BrokenPlaceholder />
       ) : (
         <>
+          {/* The tile takes the phone-size copy; the lightbox keeps the full size. */}
           <img
-            src={imageSrc(image)}
+            src={imageSrc(image, { w: 1080 })}
             alt=""
             loading="lazy"
             decoding="async"
