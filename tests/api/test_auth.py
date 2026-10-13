@@ -423,6 +423,67 @@ def test_malformed_authorization_header_rejected(client, monkeypatch):
     assert res.status_code == 401
 
 
+def test_token_routes_accept_real_jwt(client, sign_jwt, monkeypatch):
+    """One caller, one credential: a human's session JWT passes the require_token
+    routes in `_gated_calls` too, so the SPA sends it everywhere and a route moves
+    between gates with no client change (the deploy-skew class behind the 2026-10-13
+    "Invalid token" preset incident: a stale bundle met a route that had just moved
+    to verify_jwt)."""
+    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    headers = {"Authorization": f"Bearer {sign_jwt({'sub': _ACCT})}"}
+
+    for method, path, body in _gated_calls(client):
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 200, f"{path} should accept a verified JWT"
+
+
+def test_token_routes_reject_forged_jwt(client, sign_jwt, monkeypatch):
+    """A JWS-shaped bearer that fails verification is a 401 that names the reason
+    (RFC 6750 challenge) — never a pass, never a 503. The forgery is a structurally
+    valid ES256 token signed by a key the JWKS does not serve, so the failure is the
+    SIGNATURE on every PyJWT version (byte-tampering the signature segment is
+    classified `malformed` on some, `bad signature` on others)."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    sign_jwt({"sub": _ACCT})  # installs the JWKS stub serving the fixture's key
+    forged = jwt.encode(
+        {"aud": "authenticated", "sub": _ACCT},
+        ec.generate_private_key(ec.SECP256R1()), algorithm="ES256",
+    )
+    headers = {"Authorization": f"Bearer {forged}"}
+
+    for method, path, body in _gated_calls(client):
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 401, f"{path} should reject a forged JWT"
+        assert res.json()["detail"] == "Invalid token: bad signature"
+        assert 'error="invalid_token"' in res.headers["WWW-Authenticate"]
+
+
+def test_bearer_jwt_shaped_token_is_401_where_no_verifier_is_configured(monkeypatch):
+    """API_TOKEN set, no Supabase auth env (a machine-only deployment, local dev, CI):
+    the static token is the only credential there is, so a JWT-shaped bearer is a bad
+    credential (401, as on the old require_token) — never verify_jwt's 503."""
+    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
+    for bearer in ("Bearer a.b.c", "Bearer wrong-token", "Bearer sécret", "Bearer é.é.é"):
+        with pytest.raises(fastapi.HTTPException) as exc:
+            deps.require_token(authorization=bearer)
+        assert exc.value.status_code == 401, bearer
+
+
+def test_bearer_non_ascii_header_is_401_with_a_verifier(sign_jwt, monkeypatch):
+    """Starlette decodes headers as latin-1; a non-ASCII bearer must stay a clean 401
+    on both branches of `_bearer` (the bytes compare, then verify_jwt's decode)."""
+    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    for bearer in ("Bearer sécret", "Bearer é.é.é"):
+        with pytest.raises(fastapi.HTTPException) as exc:
+            deps.require_token(authorization=bearer)
+        assert exc.value.status_code == 401, bearer
+        assert exc.value.headers["WWW-Authenticate"].isascii()
+
+
 # --- verify_jwt-gated routes (Phase 1 tenant pool) --------------------------
 
 _JWT_SECRET = "test-hs256-secret"
@@ -554,19 +615,17 @@ def test_account_scope_never_returns_an_empty_scope(monkeypatch):
 
 
 def test_account_scope_non_jwt_wrong_token_is_401_not_503(monkeypatch):
-    """A wrong token that is not even JWS-shaped must not surface as verify_jwt's
-    503 ('auth is not configured') on a deployment with no Supabase auth env —
-    that would report a bad credential as a server fault.
-
-    Scope note: a JWT-SHAPED credential still reaches verify_jwt, so with no
-    Supabase env configured it correctly yields 503 — at that point the auth
-    backend genuinely is unconfigured. Production always sets SUPABASE_URL."""
+    """A wrong token must not surface as verify_jwt's 503 ('auth is not configured')
+    on a deployment with no Supabase auth env — that would report a bad credential
+    as a server fault. JWT-shaped or not: where nothing can verify a JWT, the static
+    token is the only credential, and anything else is simply wrong."""
     monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
-    with pytest.raises(fastapi.HTTPException) as exc:
-        deps.account_scope(authorization="Bearer wrong-token", conn=object())
-    assert exc.value.status_code == 401
+    for bearer in ("Bearer wrong-token", "Bearer a.b.c"):
+        with pytest.raises(fastapi.HTTPException) as exc:
+            deps.account_scope(authorization=bearer, conn=object())
+        assert exc.value.status_code == 401, bearer
 
 
 def test_account_scope_fails_closed_when_gate_unconfigured(monkeypatch):
