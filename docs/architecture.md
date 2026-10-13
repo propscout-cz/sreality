@@ -1037,7 +1037,10 @@ renumber.** Navigate by area:
    replace the veto are the runner's `COVERAGE` warning (logged whenever a walk nominates with
    `walk_coverage != "complete"`), the two facts now recorded per category in
    `scrape_runs.by_category` (`walk_reached_end` + `walk_coverage` — JSONB, no migration), and
-   `scripts/verify_pipeline.py`'s coverage check. Those must not be silenced.
+   `scripts/verify_pipeline.py`'s two checks on them — `walk_coverage` on the count and
+   `walk_end_streak` (2026-10-13) on the walks in a row a category did NOT reach the end, i.e.
+   nominated nothing (ceskereality byt/prodej went 89 walks that way while the portal-wide gap
+   read 4.6%). Those must not be silenced.
 
    The numeric verdict is unchanged and still runs every walk — it just no longer gates. It
    drives ceskereality's descent trigger, idnes's resample trigger, sreality's national-fallback

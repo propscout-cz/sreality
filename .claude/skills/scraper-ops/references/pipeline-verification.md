@@ -632,3 +632,65 @@ percent; `details.per_source` carries flips / active_again / share / scored. Reg
 in the 6-hourly lane with the in-app bell; promotion into `llm_health.yml`'s hourly
 `--only` list is a post-soak step. The remedy when it reds: read the flipped rows' pages
 (`detail_queue_completions` → `listings.source_url`) before touching the dwell.
+
+## `walk_end_streak` — how many walks in a row has a category nominated nothing? (2026-10-13)
+
+Rule #3 nominates a category's unseen rows only from a walk that REACHED THE PORTAL'S END;
+a walk that stops short (a slice over a page ceiling, a deadline, an error, a barren page)
+nominates nothing, and that is correct for one walk. Repeated, it is a category whose gone
+ads can never close. ceskereality byt/prodej did exactly that for 89 consecutive walks
+(2026-09-16 11:51 → 10-13): one kraj sat over the site's 99-page ceiling with no subtype
+axis, and 13,373 active rows accumulated against 9,771 on the portal. Each walk logged
+`VERIFY skipped` at WARNING; Health's `index_completeness` failed but is a dashboard matview,
+not an alert producer; and `walk_coverage` sums collected vs declared over the whole PORTAL,
+so the category's 22% gap read ~4.6%, under its 5% warn — and its `categories_nominating`
+count is reported but never moves the status.
+
+The check reads `scrape_runs` through `_fetchall` (so the per-check `statement_timeout`
+applies): one scan of finished `run_type='index'` rows started in the last 14 days
+(`make_interval(days => %(days)s)`, bound from `_WALK_END_WINDOW_DAYS`), unnesting
+`by_category` into one row per (run, source, category_main, category_type) with
+`bool_and(walk_reached_end)`. Python counts the streak per category, newest walk first
+(ties broken on the run id): each walked run that did not reach the end adds one, the first
+that did closes it; a NULL verdict (a row older than the key) is neither. Warn at 3 walks,
+fail at 6 — counted in walks because the gate is per walk, and GitHub fires the index crons
+every ~6–9 h whatever the cron line says, so that is ~1 and ~2 days for a category walked
+every run; idnes's rotated categories (~5 of 10 per run) take about twice as long.
+
+A run that OMITTED the category (deadline-truncated, or a rotation) has no row, so the
+streak skips it. Instead each cell carries `runs_since_walked` — its portal's finished walks
+newer than the cell's last walk — and a cell its portal has not walked in its last 6 walks
+reads **warn whatever its streak** ("<source> <cm>/<ct> not walked since <ts> (N <source>
+walks since)"). That one rule covers two cases: a category starved by a deadline that never
+reaches it (silence is not recovery — it must not read ok), and a category dropped from the
+portal's config, which would otherwise hold the bell red for 14 days on a stale streak;
+warn is dashboard-only, so neither rings. `walk_coverage`'s truncation arm does NOT cover a
+never-started category: it compares the latest run's category count with the 7-day best,
+only warns, and goes quiet once the truncation outlasts 7 days or a rotation keeps the
+count stable.
+
+`value` is the worst streak among categories still being walked; `details.per_category`
+carries streak / walks / `runs_since_walked` / `last_walked_at` / `last_reached_end_at` /
+`status` per cell (worst first). Offenders read "<source> <cm>/<ct> not at the portal's end
+for N walks (last reached <ts>)", or "for at least N walks (not reached in 14 d)" when no
+walk in the window reached it — the window cuts the count, so it is a floor. A window with
+no verdict at all (no finished walk anywhere, or `walk_reached_end` gone from
+`by_category`) is `warn` with value None, "measured nothing" — never `ok`, value 0. No
+alerting check here judges index-walk liveness, so read `scrape_runs` when it says that.
+
+Blind spots, known: (1) two descriptors behind one label (bazos pozemek+zahrada,
+dum+chata, the komercni sections, garaz+ostatni) count as reached when every one the run
+WALKED reached the end, so a run that stops between them resets the label's streak;
+(2) a category out of the window entirely (unwalked 14 days) drops out and reads ok;
+(3) a dispatched `--max-pages` / `--limit` run, or a bazos `--locality/--radius-km` run,
+finalizes as an index walk with `walk_reached_end=false` on every category it walked, so
+each one counts as a miss — three between two crons turn the row amber — and a bazos
+dispatch narrowed to one scope counts as a portal walk for `runs_since_walked` of every
+other category; `scrape_runs` records no run arguments, so the check cannot tell them
+apart; (4) the bell keys on `check_key`, so while one category holds the check red a
+SECOND that parks opens no new incident and is named only by the next re-escalation note
+(6 h / 24 h / 72 h, then weekly) — read the Health row's `details.offenders`, not the
+bell, for the full list. Registered in the 6-hourly lane
+beside `walk_coverage` with the in-app bell; promotion into `llm_health.yml`'s hourly
+`--only` list is a post-soak step. When it rings: the category's `VERIFY skipped` line names
+our stop, and the portal's own `SLICE` / `DESCENT` lines name the slice.

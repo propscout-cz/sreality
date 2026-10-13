@@ -7,6 +7,7 @@ isolation of run_checks.
 
 from __future__ import annotations
 
+import datetime as _dt
 import io
 import json
 import pytest
@@ -23,6 +24,7 @@ from scripts.verify_pipeline import (
     check_migration_drift,
     check_worker_lane_stall,
     check_walk_coverage,
+    check_walk_end_streak,
     _status_for_cron,
     _status_for_burn,
     _status_for_llm_errors,
@@ -1739,6 +1741,9 @@ class _RowsConn:
     def cursor(self) -> "_RowsConn":
         return self
 
+    def transaction(self) -> "_RowsConn":
+        return self
+
     def __enter__(self) -> "_RowsConn":
         return self
 
@@ -1853,6 +1858,178 @@ def test_walk_coverage_never_certifies_a_self_reported_total() -> None:
     for source in ("remax", "maxima", "mmreality"):
         assert out["details"]["per_source"][source]["verifiable"] is False
         assert out["details"]["per_source"][source]["gap_pct"] is None
+
+
+# --- walk_end_streak: walks in a row a category stopped short of the portal's end ---
+
+
+_T0 = _dt.datetime(2026, 10, 13, 6, 0, tzinfo=_dt.timezone.utc)
+
+
+def _walks(source: str, cm: str | None, ct: str, verdicts: list[bool | None], *,
+           every_hours: float = 7.0, skip_newest: int = 0) -> list[tuple[Any, ...]]:
+    """One (run id, source, started_at, cm, ct, reached_end) row per walk, NEWEST FIRST:
+    the first verdict is the latest run. Run i has id 10_000 - i, so rows built for two
+    categories of one source share their runs; `skip_newest` leaves the category out of
+    that many newest runs (they exist only if another category's rows carry them)."""
+    return [(10_000 - i, source, _T0 - _dt.timedelta(hours=every_hours * i), cm, ct, v)
+            for i, v in enumerate(verdicts, start=skip_newest)]
+
+
+def test_walk_end_streak_counts_back_to_the_last_walk_that_reached_the_end() -> None:
+    conn = _RowsConn(_walks("bazos", "byt", "prodej", [False, False, True, False, False]))
+    out = check_walk_end_streak(conn, T)
+    cell = out["details"]["per_category"][0]
+    assert cell["streak"] == 2  # the two older misses sit behind a reached end
+    assert cell["walks"] == 5 and cell["runs_since_walked"] == 0
+    assert cell["last_reached_end_at"] == "2026-10-12 16:00 UTC"
+    assert cell["last_walked_at"] == "2026-10-13 06:00 UTC"
+    assert out["status"] == "ok" and out["value"] == 2
+
+
+def test_walk_end_streak_resets_on_the_latest_walk_reaching_the_end() -> None:
+    conn = _RowsConn(_walks("sreality", "dum", "prodej", [True] + [False] * 9))
+    out = check_walk_end_streak(conn, T)
+    assert out["value"] == 0 and out["status"] == "ok"
+    assert out["details"]["offenders"] == []
+
+
+def test_walk_end_streak_skips_runs_that_never_walked_the_category() -> None:
+    """idnes walks 5 of its 10 categories per run: a run that omitted this one has no
+    row, so the streak runs straight through it."""
+    full = _walks("idnes", "byt", "prodej", [False] * 6)
+    sparse = [r for i, r in enumerate(_walks("idnes", "dum", "prodej", [False] * 6))
+              if i % 2 == 0]  # walked in 3 of the 6 runs
+    out = check_walk_end_streak(_RowsConn(full + sparse), T)
+    streaks = {c["category_main"]: c["streak"] for c in out["details"]["per_category"]}
+    assert streaks == {"byt": 6, "dum": 3}
+
+
+@pytest.mark.parametrize(("unwalked", "status"), [(5, "fail"), (6, "warn"), (12, "warn")])
+def test_walk_end_streak_caps_a_category_its_portal_stopped_walking_at_warn(
+        unwalked: int, status: str) -> None:
+    """A category dropped from the config (or starved by a deadline) keeps its last
+    streak in the window. Once its portal has walked `fail` times without it, it reads
+    amber and names when it was last walked, so a retired category cannot hold the bell
+    red for 14 days and a starved one does not read ok."""
+    rows = (_walks("mmreality", "byt", "prodej", [True] * (unwalked + 8))
+            + _walks("mmreality", "old", "prodej", [False] * 8, skip_newest=unwalked))
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == status
+    cell = next(c for c in out["details"]["per_category"] if c["category_main"] == "old")
+    assert cell["runs_since_walked"] == unwalked and cell["status"] == status
+    if status == "warn":
+        assert out["value"] == 0  # a category nobody walks any more is not the worst streak
+        last = _T0 - _dt.timedelta(hours=7.0 * unwalked)
+        assert out["details"]["offenders"] == [
+            f"mmreality old/prodej not walked since {last:%Y-%m-%d %H:%M} UTC "
+            f"({unwalked} mmreality walks since)"
+        ]
+        assert "left the portal's config" in out["message"]
+
+
+def test_walk_end_streak_does_not_read_a_starved_category_as_ok() -> None:
+    """A category that last reached the end and was then never walked again has a
+    streak of 0; silence is not recovery, so it still warns."""
+    rows = (_walks("realitymix", "byt", "prodej", [True] * 10)
+            + _walks("realitymix", "dum", "prodej", [True, True], skip_newest=8))
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == "warn" and out["value"] == 0
+    assert out["details"]["offenders"][0].startswith("realitymix dum/prodej not walked since ")
+
+
+def test_walk_end_streak_ignores_a_verdict_the_run_did_not_record() -> None:
+    """A row from before the key existed reads NULL: neither a miss nor a reached end."""
+    conn = _RowsConn(_walks("remax", "byt", "prodej", [False, None, False, False, True]))
+    cell = check_walk_end_streak(conn, T)["details"]["per_category"][0]
+    assert cell["streak"] == 3 and cell["walks"] == 4
+
+
+def test_walk_end_streak_does_not_trust_the_row_order() -> None:
+    rows = list(reversed(_walks("maxima", "byt", "pronajem", [False, False, False, True])))
+    assert check_walk_end_streak(_RowsConn(rows), T)["value"] == 3
+
+
+def test_walk_end_streak_breaks_a_started_at_tie_on_the_run_id() -> None:
+    newer = (2, "bazos", _T0, "byt", "prodej", False)
+    older = (1, "bazos", _T0, "byt", "prodej", True)
+    for rows in ([newer, older], [older, newer]):
+        assert check_walk_end_streak(_RowsConn(rows), T)["value"] == 1
+
+
+@pytest.mark.parametrize(("misses", "status"), [(2, "ok"), (3, "warn"), (5, "warn"),
+                                                 (6, "fail"), (40, "fail")])
+def test_walk_end_streak_warns_at_three_walks_and_fails_at_six(misses: int, status: str) -> None:
+    conn = _RowsConn(_walks("realitymix", "pozemek", "prodej", [False] * misses + [True]))
+    out = check_walk_end_streak(conn, T)
+    assert out["status"] == status
+    assert out["value"] == misses
+    assert bool(out["details"]["offenders"]) is (status != "ok")
+
+
+def test_walk_end_streak_fails_on_the_ceskereality_byty_signature() -> None:
+    """2026-09-16 -> 10-13: byt/prodej never reached the end, every other category
+    did. Per portal that was a ~4.6% gap under walk_coverage's 5% warn."""
+    rows = (_walks("ceskereality", "byt", "prodej", [False] * 48)
+            + _walks("ceskereality", "dum", "prodej", [True] * 48)
+            + _walks("bazos", "byt", "prodej", [False, False, False, True]))
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == "fail" and out["value"] == 48
+    first = out["details"]["offenders"][0]
+    # the window cuts the streak, so the count is a floor, not an exact figure
+    assert first == ("ceskereality byt/prodej not at the portal's end for at least 48 "
+                     "walks (not reached in 14 d)")
+    assert out["message"].index("ceskereality byt/prodej") < out["message"].index("bazos")
+    assert "rule #3" in out["message"] and "VERIFY skipped" in out["message"]
+    assert "left the portal's config" not in out["message"]
+    assert len(out["details"]["offenders"]) == 2  # dum/prodej is not one
+
+
+def test_walk_end_streak_names_a_null_label_rather_than_crashing() -> None:
+    conn = _RowsConn(_walks("bezrealitky", None, "pronajem", [False] * 3))
+    out = check_walk_end_streak(conn, T)
+    assert out["details"]["offenders"][0].startswith("bezrealitky */pronajem ")
+
+
+def test_walk_end_streak_with_no_finished_walk_measured_nothing() -> None:
+    """No rows is not a clean bill of health: value None and an amber row, never a 0."""
+    out = check_walk_end_streak(_RowsConn([]), T)
+    assert out["status"] == "warn" and out["value"] is None
+    assert out["details"]["per_category"] == [] and out["details"]["offenders"] == []
+    assert "measured nothing" in out["message"]
+
+
+def test_walk_end_streak_with_no_recorded_verdict_measured_nothing() -> None:
+    """by_category losing its walk_reached_end key reads NULL on every row: the check
+    read categories but scored none, so it must not certify them."""
+    rows = [r for cm in ("byt", "dum", "pozemek")
+            for r in _walks("sreality", cm, "prodej", [None] * 24)]
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == "warn" and out["value"] is None
+    assert "measured nothing" in out["message"] and "3 categories read" in out["message"]
+
+
+def test_walk_end_streak_reads_finished_index_walks_in_the_window_only() -> None:
+    from scripts.verify_pipeline import _WALK_END_WINDOW_DAYS
+
+    conn = _RowsConn([])
+    check_walk_end_streak(conn, T)
+    assert conn.executed[0][0].startswith("SET LOCAL statement_timeout")
+    sql, params = conn.executed[1]
+    assert params == {"days": _WALK_END_WINDOW_DAYS}
+    assert "make_interval(days => %(days)s)" in sql
+    assert "run_type = 'index'" in sql and "ended_at is not null" in sql
+    # a non-array by_category must yield no rows, not a jsonb_array_elements error
+    assert "jsonb_typeof(r.by_category) = 'array'" in sql
+    assert "bool_and" in sql  # two descriptors behind one label: both must reach the end
+
+
+def test_walk_end_streak_is_registered_beside_walk_coverage() -> None:
+    from scripts.verify_pipeline import _CHECKS
+
+    keys = [k for k, _ in _CHECKS]
+    assert ("walk_end_streak", check_walk_end_streak) in _CHECKS
+    assert keys.index("walk_end_streak") == keys.index("walk_coverage") + 1
 
 
 # --- migration_drift: merged is not applied --------------------------------

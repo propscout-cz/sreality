@@ -459,6 +459,24 @@ entry now carries `walk_reached_end` (bool — did it nominate?) and
 old gate refused. `scripts/verify_pipeline.py`'s `walk_coverage` check reads the
 same rows and is now the standing rail on the count.
 
+The other half of that record is a rail too. **`walk_end_streak`** (2026-10-13)
+counts, per (source, category_main, category_type), the finished index walks in a
+row in which the category was walked and `walk_reached_end` was false — walks that
+nominated nothing. Warn at 3 (~1 day at the real 6-9 h cron cadence for a
+category walked every run; idnes's rotated ones take ~twice as long), fail at 6
+(~2 days). A run that never started the category is skipped, not counted; a
+category its portal has not walked in its last 6 walks warns instead (starved, or
+dropped from the config) — `walk_coverage`'s truncation arm only compares category
+counts against a 7-day best and only warns, so it does not cover that case. The
+window is 14 days, so a streak with no reached end in it reads "at least N". It
+exists because ceskereality byt/prodej missed
+the end for 89 walks (2026-09-16 -> 10-13): nothing was nominated, 13,373 active
+rows piled up against 9,771 on the portal, each walk logged `VERIFY skipped`,
+and `walk_coverage` read ~4.6% because it averages the gap over the whole portal
+and lets `categories_nominating` move nothing. When it rings, the category's
+`VERIFY skipped` line names the stop and the portal's SLICE / DESCENT lines name
+the slice.
+
 ## The four layers, in order (as rebuilt 2026-09-07, regated 2026-09-08)
 
 1. **Coverage** — the sliced walk reaches everything (or records that it didn't).
