@@ -11,10 +11,9 @@ import {
   groupByDay,
   pragueClock,
   pragueDayKey,
-  cyclePortal,
-  NO_PORTALS,
   withPortals,
 } from './feed';
+import { NO_PORTALS } from './portals';
 import type { CardRow } from './queries';
 import type { FilterPreset } from './types';
 
@@ -78,15 +77,6 @@ describe('scope → filters', () => {
     const chosen = { portals: ['idnes'], portalsExcluded: [], portalsExcludedActiveOnly: false };
     expect(withPortals(f, chosen)).toEqual({ ...f, ...chosen });
     expect(withPortals(f, NO_PORTALS)).toEqual({ ...f, ...NO_PORTALS });
-  });
-
-  it('cycles a portal chip off → on it → not on it → off', () => {
-    const on = cyclePortal(NO_PORTALS, 'sreality');
-    expect(on).toEqual({ ...NO_PORTALS, portals: ['sreality'] });
-    const out = cyclePortal({ ...on, portalsExcludedActiveOnly: false }, 'sreality');
-    expect(out).toEqual({ ...NO_PORTALS, portalsExcluded: ['sreality'] });
-    /* The last exclusion going takes its active-ads switch with it. */
-    expect(cyclePortal({ ...out, portalsExcludedActiveOnly: true }, 'sreality')).toEqual(NO_PORTALS);
   });
 });
 

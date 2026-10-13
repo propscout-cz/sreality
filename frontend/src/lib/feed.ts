@@ -10,6 +10,7 @@
 
 import { DEFAULT_FILTERS, filtersForPreset, readPresetSpec, type ListingFilters } from './filters';
 import type { CardRow } from './queries';
+import type { PortalChoice } from './portals';
 import type { FilterPreset } from './types';
 
 export const FEED_SCOPE_KEY = 'sreality.feed.scope';
@@ -31,33 +32,8 @@ export function feedFiltersForPreset(preset: FilterPreset | null | undefined): L
 
 /* The portal chips REPLACE the scope's own portal filter, both sides (a preset may
  * carry one); null = keep the scope's. */
-export type PortalChoice = Pick<
-  ListingFilters, 'portals' | 'portalsExcluded' | 'portalsExcludedActiveOnly'
->;
-
-export const NO_PORTALS: PortalChoice = {
-  portals: [], portalsExcluded: [], portalsExcludedActiveOnly: false,
-};
-
 export function withPortals(f: ListingFilters, choice: PortalChoice | null): ListingFilters {
   return choice == null ? f : { ...f, ...choice };
-}
-
-/* One tap moves a portal chip one step: off → on it → not on it → off. */
-export function cyclePortal(c: PortalChoice, p: string): PortalChoice {
-  const without = (xs: string[]) => xs.filter((x) => x !== p);
-  if (c.portals.includes(p)) {
-    return { ...c, portals: without(c.portals), portalsExcluded: [...c.portalsExcluded, p] };
-  }
-  if (c.portalsExcluded.includes(p)) {
-    const portalsExcluded = without(c.portalsExcluded);
-    return {
-      portals: c.portals,
-      portalsExcluded,
-      portalsExcludedActiveOnly: portalsExcluded.length > 0 && c.portalsExcludedActiveOnly,
-    };
-  }
-  return { ...c, portals: [...c.portals, p] };
 }
 
 export function readFeedScope(): string {

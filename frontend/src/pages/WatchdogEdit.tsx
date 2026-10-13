@@ -183,15 +183,15 @@ export default function WatchdogEdit() {
               <PortalFilterControl
                 value={{
                   portals: spec.portals ?? [],
-                  excluded: spec.portals_excluded ?? [],
-                  excludedActiveOnly: spec.portals_excluded_active_only ?? false,
+                  portalsExcluded: spec.portals_excluded ?? [],
+                  portalsExcludedActiveOnly: spec.portals_excluded_active_only ?? false,
                 }}
                 onChange={(next) =>
                   setSpec((prev) => ({
                     ...prev,
                     portals: next.portals.length ? next.portals : null,
-                    portals_excluded: next.excluded.length ? next.excluded : null,
-                    portals_excluded_active_only: next.excludedActiveOnly,
+                    portals_excluded: next.portalsExcluded.length ? next.portalsExcluded : null,
+                    portals_excluded_active_only: next.portalsExcludedActiveOnly,
                   }))
                 }
               />

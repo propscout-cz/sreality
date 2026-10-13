@@ -2007,9 +2007,9 @@ renumber.** Navigate by area:
     the other leaves a function that compiles and fails on its first call. What it does NOT delete is the obec-keyed pair this pattern was
     modelled on: `home_obec_pop` and the eight `near_*` columns (migration 142) stay, because
     they are population/proximity FACTS about the obec, not a membership cache.
-    The one exception is `near_city_proximity` (an operator-chosen radius search, not curated-city
-    membership) — not precomputable the same way, and confirmed dead in the SPA UI today (no
-    widget wires it), so left as a live, unoptimized, unexercised code path.
+    The one exception was `near_city_proximity` (an operator-chosen radius search, not curated-city
+    membership): retired in W5 (migration 436); the SPA state and the RPCs' `city_proximity`
+    parameter went in 597, and only the compiler's retired-loudly guard remains for stored specs.
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections` +
     `collection_properties(collection_id, property_id)`, `tags` + `property_tags(property_id,
     tag_id)`, `property_notes(property_id, body, origin_listing_id)`, migration 202 — was
@@ -2189,7 +2189,7 @@ renumber.** Navigate by area:
     `property_dismissals_public`); functions rather than views because `browse_list` and
     `properties_map_mv` are blue-green rebuilt (a view or policy on them would block the DROP or
     vanish with it), and they return `browse_projection`'s row type, never the rebuilt
-    relation's. `browse_stats_properties` / `browse_map_cells` take one trailing
+    relation's. `browse_stats_properties` / `browse_map_cells` take a
     `hide_dismissed` flag (default false). The SPA's `queries.ts:readSource` is the one seam:
     every cohort read starts from the twin unless `?dismissed=show` reveals them — a lens outside
     preset identity, like the pipeline scope — and the sidebar says how many the cohort hides

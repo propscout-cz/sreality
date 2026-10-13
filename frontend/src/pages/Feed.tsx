@@ -39,17 +39,14 @@ import {
   pragueClock,
   pragueDayKey,
   readFeedScope,
-  cyclePortal,
-  NO_PORTALS,
   withPortals,
-  type PortalChoice,
   writeFeedScope,
 } from '@/lib/feed';
 import { filterById } from '@/lib/filterRegistry.generated';
 import { czPlural } from '@/lib/format';
 import { CardHydrationProvider } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
-import { portalShort } from '@/lib/portals';
+import { cyclePortal, NO_PORTALS, portalShort, type PortalChoice } from '@/lib/portals';
 import {
   CARD_PAGE_SIZE,
   DEFAULT_SORT,
@@ -167,7 +164,7 @@ export default function Feed() {
   /* Scroll memory, per roll. */
   const scrollKey = hidden
     ? 'hidden'
-    : `${activeScope}|${filters.portals.join(',')}|${filters.portalsExcluded.join(',')}`;
+    : [activeScope, filters.portals, filters.portalsExcluded, filters.portalsExcludedActiveOnly].join('|');
   const restored = useRef(false);
   const ready = rows.length > 0;
   useEffect(() => {

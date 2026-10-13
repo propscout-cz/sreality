@@ -276,7 +276,7 @@ A metric card doesn't have to look like a plan card doesn't have to look like a 
 
 Native `<select>` and `<input type="date">` render OS-native elements that cannot be styled. Build custom components — trigger buttons with positioned dropdowns, calendar popovers, styled state management.
 
-**Include / exclude (this repo): one chip, one polarity.** A filter member that can be required OR subtracted is ONE chip with a third state, never a second row: copper = include, brick + a leading "−" = exclude (`PickButton negative`, `MultiselectChips excluded`; a location chip's −/+ toggle is the same idea). On the phone, where colour means the stage, the exclude state is the "−" alone in the pressed ink style (`components/phone/chips.ts`). One chip holds one state, so a member can never be both.
+**Include / exclude (this repo): one chip, one polarity.** A filter member that can be required OR subtracted is ONE chip with a third state, never a second row: copper = include, brick + a leading "−" = exclude (`PickButton negative`; a location chip's −/+ toggle is the same idea). The portal filter's chips (Browse, the Watchdog editor, the phone Feed) all move through ONE transition, `lib/portals.cyclePortal` (off → on it → not on it → off). On the phone, where colour means the stage, the exclude state is the "−" alone in the pressed ink style (`components/phone/chips.ts`). One chip holds one state, so a member can never be both.
 
 ## Iconography
 

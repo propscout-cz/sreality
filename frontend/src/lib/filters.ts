@@ -575,6 +575,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
   const [lastMin, lastMax] = parseRange(sp.get('seen'));
   const [firstMin, firstMax] = parseRange(sp.get('first'));
   const [tomMin, tomMax] = parseRange(sp.get('tom'));
+  const portalsExcluded = splitCsv(sp.get('portal_excl')).filter((v) => PORTAL_VALUES.includes(v));
   return {
     /* Absent `cat` = the default cohort (['byt']); an empty `cat=` token =
      * the deliberate "all categories" ([]). Otherwise CSV, filtered to the
@@ -623,8 +624,9 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     furnished: splitCsv(sp.get('furnished')).filter((v) => FURNISHED_VALUES.includes(v)),
     ownership: splitCsv(sp.get('ownership')).filter((v) => OWNERSHIP_VALUES.includes(v)),
     portals: splitCsv(sp.get('portal')).filter((v) => PORTAL_VALUES.includes(v)),
-    portalsExcluded: splitCsv(sp.get('portal_excl')).filter((v) => PORTAL_VALUES.includes(v)),
-    portalsExcludedActiveOnly: sp.get('portal_excl_active') === '1',
+    portalsExcluded,
+    /* Meaningful only beside an exclusion (cyclePortal drops it with the last one). */
+    portalsExcludedActiveOnly: portalsExcluded.length > 0 && sp.get('portal_excl_active') === '1',
     conditionMatch: splitCsv(sp.get('condition')).filter(
       (c) => CONDITION_VALUES.includes(c),
     ),
@@ -860,7 +862,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.ownership.length) sp.set('ownership', f.ownership.join(','));
   if (f.portals.length) sp.set('portal', f.portals.join(','));
   if (f.portalsExcluded.length) sp.set('portal_excl', f.portalsExcluded.join(','));
-  if (f.portalsExcludedActiveOnly) sp.set('portal_excl_active', '1');
+  if (f.portalsExcluded.length && f.portalsExcludedActiveOnly) sp.set('portal_excl_active', '1');
   if (f.conditionMatch.length) sp.set('condition', f.conditionMatch.join(','));
   if (f.categorySubCb != null) sp.set('subcat', String(f.categorySubCb));
   if (f.subtype.length) sp.set('subtype', f.subtype.join(','));

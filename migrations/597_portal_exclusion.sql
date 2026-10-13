@@ -33,6 +33,9 @@
 --   (2) this file is applied (apply_migration.yml, --ref the feature branch);
 --   (3) the feature PR merges; its SPA sends the two new keys.
 -- Between (2) and (3) the deployed SPA sends neither new key; both are defaulted, so nothing breaks.
+-- The apply receipt and verify_pipeline's migration_drift probe a function by NAME, and all three
+-- names already exist: they cannot tell whether this file ran. Its proof is the $post$ block below
+-- and one Stats call with `portal_excluded_filter` before (3).
 --
 -- W6 (draft #1732, migration 593, NOT applied) md5-gates browse_map_cells on 590's body and drops
 -- listing_ids_filter: after this file it refuses at apply (safe) and must be rebased; its section 5

@@ -178,7 +178,9 @@ so it matches the repo filename sometimes (`444_listings_discovered_at`) and not
 (441 is recorded as `stamp_derived_artifact`, unnumbered), and it carries ad-hoc migrations
 with no repo file at all. The catalog cannot lie; the ledger can. Migrations that only drop,
 grant or update data declare nothing probeable and are reported in an explicit
-`unverifiable` list rather than counted as passing.
+`unverifiable` list rather than counted as passing. A function is probed by NAME only, so a
+re-signed or rewritten function (590, 597) reads present before it is applied: prove those with
+their own `$post$` block and a call with the new arguments.
 
 **Billing (migration 298, PR #769 — Phase 1 increment 5)** extends the same RLS pattern:
 `plans` (operator-curated tiers, `agendas jsonb` visibility map, one row `is_default`,

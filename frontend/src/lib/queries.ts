@@ -1270,7 +1270,7 @@ export interface BrowseStatsResolvedFilters {
  *
  * ONE builder, because there are now TWO callers: fetchBrowseStats and
  * fetchListingsForMap's `browse_map_cells` read (migration 439), which takes the
- * SAME named parameters plus two of its own. Built inline in each caller, this
+ * SAME named parameters plus its own `point_budget`. Built inline in each caller, this
  * object is the single richest opportunity for the Stats cohort and the map
  * cohort to silently disagree — a new filter wired into one literal and not the
  * other produces a map and a Stats tab describing different sets of properties,

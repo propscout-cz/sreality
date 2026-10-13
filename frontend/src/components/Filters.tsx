@@ -712,19 +712,8 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         >
           <ControlGroup title="Source portal" bordered={false}>
             <PortalFilterControl
-              value={{
-                portals: filters.portals,
-                excluded: filters.portalsExcluded,
-                excludedActiveOnly: filters.portalsExcludedActiveOnly,
-              }}
-              onChange={(next) =>
-                onChange({
-                  ...filters,
-                  portals: next.portals,
-                  portalsExcluded: next.excluded,
-                  portalsExcludedActiveOnly: next.excludedActiveOnly,
-                })
-              }
+              value={filters}
+              onChange={(next) => onChange({ ...filters, ...next })}
             />
           </ControlGroup>
 
