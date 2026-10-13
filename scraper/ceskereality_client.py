@@ -58,16 +58,35 @@ KRAJ_SLUGS: tuple[str, ...] = CZ_KRAJ_SLUGS
 # The second axis, used ONLY when a kraj slice would exceed the 99-page cap.
 # Declared per category, never scraped: a kraj page's facet block OMITS
 # zero-count subtypes (`ostatni-rd` is absent from stredocesky), so walking the
-# rendered list would silently drop a subtype the moment it emptied. Measured
-# 2026-08-27: these 10 slugs sum to 2,312 in stredocesky-kraj — EXACTLY the
-# kraj total, so subtype is a true partition within a kraj. Categories absent
-# from this map fall back to the page's rendered facets, and the descent
-# self-verifies its children's declared sum against the parent either way.
+# rendered list would silently drop a subtype the moment it emptied. Every entry
+# is a measured TRUE partition of a kraj (the slugs' declared counts sum to the
+# kraj total exactly). Categories absent from this map fall back to the kraj
+# page's own `/{sale}/{cat}/{subtype}/{kraj}/` links
+# (`ceskereality_parser.extract_subtype_slugs`), and the descent self-verifies its
+# children's declared sum against the parent either way.
 SUBTYPE_SLUGS: dict[str, tuple[str, ...]] = {
+    # 2026-08-27: these 10 sum to 2,312 in stredocesky-kraj, the kraj total.
     "rodinne-domy": (
         "rodinne-domy", "chaty", "chalupy", "cinzovni-domy",
         "zemedelske-usedlosti", "vily", "na-klic", "dvougeneracni-domy",
         "historicke-objekty", "ostatni-rd",
+    ),
+    # 2026-10-13: prodej/praha 2,161 and pronajem/praha 1,229, each = the sum of
+    # these 12 (diff 0). Praha prodej crossed 1,980 on 2026-09-16 and, unmapped,
+    # held byt/prodej un-nominated for 89 walks. TRAP: `atypicke-byty` and `pokoj`
+    # do not start with `byty-`. TRAP: `pokoj` 301s to `pokoje`
+    # (/prodej/byty/pokoje/praha-hlavni-mesto/, 2026-10-13); the page links the
+    # alias, so keep it in step with `extract_subtype_slugs`.
+    "byty": (
+        "byty-1-kk", "byty-1-1", "byty-2-kk", "byty-2-1", "byty-3-kk",
+        "byty-3-1", "byty-4-kk", "byty-4-1", "byty-5-kk", "byty-5-1-vetsi",
+        "atypicke-byty", "pokoj",
+    ),
+    # 2026-10-13: prodej/stredocesky-kraj 1,976 = the sum of these 8 (diff 0) —
+    # four rows under the 1,980 ceiling, mapped before it crosses.
+    "pozemky": (
+        "stavebni-parcely", "orna-puda", "ostatni-pozemky", "komercni",
+        "zahrady", "louky", "lesy", "vodni-plochy",
     ),
 }
 

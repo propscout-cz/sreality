@@ -388,10 +388,15 @@ independent of the `portals` row's `kind`.
 category on the **14 declared kraj slugs** (`KRAJ_SLUGS`, a proven row-level partition —
 never the rendered facet block, which is a top-10-by-popularity list), pages each slice to
 its own declared tail (a *filtered* search URL caps at 99 pages / 1,980 rows; the famous
-12-page cap belongs only to UNFILTERED category URLs), and descends onto a declared subtype
-axis for the one kraj slice that exceeds that ceiling. A 200 carrying zero cards is the
-portal's real degraded response and is only ever read as a finished slice when the page's
-H1 proves it is the empty slice we asked for. ceskereality is a STRUCTURED HTML portal
+12-page cap belongs only to UNFILTERED category URLs), and re-walks any kraj slice past that
+ceiling per subtype: on a **declared** axis for the three categories measured at it
+(`SUBTYPE_SLUGS`: byty, rodinne-domy, pozemky — each a measured true partition of a kraj),
+else on the kraj page's own two-segment `/{sale}/{cat}/{subtype}/{kraj}/` links (subtype
+precedes kraj in the site's URLs; one-segment links are okresy, not subtypes). Either way the
+children's declared sum must add back up to the parent's, or the category stays un-nominated
+(an unmapped byty held byt/prodej un-nominated for 89 walks, 2026-09-16 → 10-13). A 200 carrying
+zero cards is the portal's real degraded response and is only ever read as a finished slice when
+the page's H1 proves it is the empty slice we asked for. ceskereality is a STRUCTURED HTML portal
 like idnes: each detail page carries a `schema.org` `individualProduct` JSON-LD block (clean price +
 broker), an `i-info` spec list, **precise per-listing coordinates** in `data-coord-lat/lng` (and a
 Google-Maps `?q=` link) so there is **no geocoding step**, and an `img.ceskereality.cz/foto/` gallery.

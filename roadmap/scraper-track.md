@@ -5,6 +5,46 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### ceskereality byt/prodej parked over the 99-page ceiling — byty + pozemky subtype maps (2026-10-13, done)
+- **Found:** Praha byt/prodej crossed 1,980 rows (a filtered URL's 99 pages × 20) on 2026-09-16.
+  `byty` had no `SUBTYPE_SLUGS` entry, and the fallback read the kraj page's ONE-segment links
+  (okresy, části, obce) kept by a `byty-*` prefix — never a subtype — so the walk logged
+  `DESCENT no subtype axis`, the kraj stayed `ceiling`, and the structural gate (rule #3) held all
+  of byt/prodej un-nominated for 89 consecutive walks (09-16 11:51 → 10-13). By then production held
+  13,373 active ceskereality byt/prodej rows vs 9,771 on the portal (5,394 unseen 2+ d, 4,156 14+ d);
+  Health: ceskereality `stale_active` 4,829 FAIL, `index_completeness` 22.3% FAIL.
+- **Done:** `SUBTYPE_SLUGS` declares `byty` (12 slugs; prodej/praha 2,161 and pronajem/praha 1,229,
+  each = the slugs' sum, diff 0; `atypicke-byty` + `pokoj` are not `byty-*`) and `pozemky` (8 slugs;
+  prodej/stredocesky-kraj 1,976 = sum, four rows under the ceiling). An unmapped category now reads
+  the kraj page's TWO-segment `/{sale}/{cat}/{subtype}/{kraj}/` links
+  (`ceskereality_parser.extract_subtype_slugs`, replacing `extract_facet_slugs`); the children-sum
+  self-check and the `DESCENT no subtype axis` last resort are unchanged. Tests: the Praha descent,
+  the unmapped fallback, a real-page fixture (`portal_html/ceskereality_index_praha_byty.html`) and a
+  rail that byty / rodinne-domy / pozemky keep a declared map.
+- **Next:** (i) rodinne-domy stredocesky-kraj `subtype=rodinne-domy` is at 1,922 of 1,980 (97 pages):
+  it needs a third axis before it crosses, or prodej/rodinne-domy parks the same way; (ii) a health
+  signal for "category has not reached the portal's end for N consecutive walks" — the WARNING sat
+  unread for 27 days — that also covers a MAPPED category's `DESCENT residue` (a new or renamed
+  subtype), which `index_completeness` cannot see: the children still collect ~99% of the total;
+  (iii) after deploy, confirm a walk logs the twelve praha subtype slices (`byty-*`, `atypicke-byty`,
+  `pokoj`) and a `VERIFY cm=byt ct=prodej` with candidates, and that no `subtype=pokoj` /
+  `atypicke-byty` slice reads `stop=barren` (a zero-count subtype page is accepted as empty only when
+  its H1 names the kraj — proven for stredocesky-kraj, never yet for a Praha subtype page). Expected
+  Health, not new incidents: `index_completeness` green at the first walk (W1); `stale_active` ~4.8k
+  → ~2.9k at W1 → ~80 (WARN, see (v)) about 2 days later — first gone verdicts across W1–W3, each flip
+  ≥ 24 h after its first verdict (`presence_candidates` skips rows completed in the last 24 h, so the
+  second verdict outlasts `GONE_DWELL`'s 12 h); ceskereality `delisting_latency` FAIL for ~7 days
+  after the flips (their `last_seen_at` is 2–4 weeks old; fail is p90 > 72 h) and `delisting_spike`
+  up to WARN while the ~3.6k surplus drains under `delist_flip_cap`; (iv) a self-repairing descent:
+  `SUBTYPE_SLUGS` hides the page-link fallback, so a stale map parks the category exactly as this
+  incident did — on a residue, read `extract_subtype_slugs` from the kraj page, walk the slugs the
+  map lacks (accepting the `praha-hlavni-mesto` kraj spelling too), then repeat the sum check (a
+  spurious link fails closed: it pushes the children's sum past the parent's); (v) 81 active
+  ceskereality rows with `category_type` NULL, unseen > 7 d, sit outside every nomination scope
+  (`db.presence_candidates` filters `category_type = %s`), so `stale_active` rests at WARN: a
+  one-off VERIFY-priority enqueue (precedent `scripts/renominate_false_gone_crawler_rows.py`) plus a
+  rule that nominates NULL-category rows per source.
+
 ### Delisting hysteresis — portals blink (2026-10-09, shipped)
 - **Found:** a gone verdict flipped an ad on one 404; sreality takes ads down (index AND detail)
   for hours around its nightly expiry/renewal and brings them back under the same id — 35% of

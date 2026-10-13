@@ -7,8 +7,11 @@ img.ceskereality.cz/foto gallery.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from scraper.ceskereality_client import SUBTYPE_SLUGS
 from scraper.ceskereality_parser import (
-    extract_facet_slugs,
+    extract_subtype_slugs,
     heading_names_kraj,
     index_heading,
     category_from_url,
@@ -458,32 +461,62 @@ def test_index_heading_reads_the_h1_text():
     assert index_heading("<html><body></body></html>") is None
 
 
-def test_extract_facet_slugs_drops_pure_filters():
-    # KEPT but DEMOTED: this is no longer the walk's partition (it is a
-    # top-10-by-popularity list that omits whole okresy AND every zero-count
-    # facet) — it is only the fallback input to the over-99-page subtype descent,
-    # which verifies the children's declared sum against the parent's.
+_PRAHA_BYTY = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures" / "portal_html" / "ceskereality_index_praha_byty.html"
+)
+
+
+def test_the_real_praha_byty_page_links_all_twelve_subtypes():
+    """2026-10-13: Praha byt/prodej declared 2,161 (> the 1,980-row ceiling) and had
+    no subtype map, so the descent fell back to this page — and found nothing: it
+    read one-segment links (okresy, části, obce) and kept only `byty-*`. The page
+    links its subtypes as `/prodej/byty/{subtype}/praha/`, two of them not named
+    `byty-*`; that shape is the axis, and it yields exactly the declared twelve."""
+    html = _PRAHA_BYTY.read_text("utf-8")
+    page = parse_index(html)
+    assert (page.total, page.next_offset) == (2161, 2)
+    # A card's /{subtype}/praha/<slug>-<id>.html and the pager's ?strana=N must not leak.
+    slugs = extract_subtype_slugs(html, "prodej", "byty", "praha")
+    assert slugs == [
+        "byty-2-kk", "byty-3-kk", "byty-1-kk", "byty-3-1", "byty-2-1", "byty-4-kk",
+        "byty-1-1", "byty-4-1", "byty-5-kk", "byty-5-1-vetsi", "atypicke-byty", "pokoj",
+    ]
+    assert set(slugs) == set(SUBTYPE_SLUGS["byty"])       # the page agrees with the map
+    for not_a_subtype in (
+        "praha-4", "praha-10", "cast-praha-zizkov", "cast-praha-smichov",
+        "obec-praha", "praha-hlavni-mesto", "pouze-rk", "bez-realitky",
+        "soukromy", "nejlevnejsi",
+    ):
+        assert not_a_subtype not in slugs
+
+
+def test_extract_subtype_slugs_reads_only_this_kraj_and_this_search():
     html = (
-        '<a href="/prodej/byty/byty-3-1/">x</a>'
-        '<a href="/prodej/byty/kladno/">x</a>'
-        '<a href="/prodej/byty/pouze-rk/">x</a>'      # pure filter -> dropped
-        '<a href="/prodej/byty/bez-realitky/">x</a>'  # pure filter -> dropped
-        '<a href="/prodej/byty/kladno/">dup</a>'      # de-duped
-        '<a href="/prodej/rodinne-domy/vily/">x</a>'  # other category -> ignored
+        '<a href="/prodej/byty/byty-3-1/praha/">x</a>'
+        '<a href= "/prodej/byty/pokoj/praha/ ">x</a>'          # the site's own spacing
+        '<a href="/prodej/byty/byty-3-1/praha/">dup</a>'       # de-duped
+        '<a href="/prodej/byty/bez-realitky/praha/">x</a>'     # pure filter -> dropped
+        '<a href="/prodej/byty/praha/soukromy/">x</a>'         # kraj FIRST -> a filter
+        '<a href="/prodej/byty/praha-4/">x</a>'                # one segment -> okres
+        '<a href="/prodej/byty/byty-2-kk/stredocesky-kraj/">x</a>'  # another kraj
+        '<a href="/pronajem/byty/byty-1-kk/praha/">x</a>'      # another search
+        '<a href="/prodej/byty/byty-2-kk/praha/prodej-bytu-2-kk-3920487.html">x</a>'
     )
-    assert extract_facet_slugs(html, "prodej", "byty") == ["byty-3-1", "kladno"]
+    assert extract_subtype_slugs(html, "prodej", "byty", "praha") == [
+        "byty-3-1", "pokoj"]
 
 
-def test_the_walk_no_longer_reaches_the_facet_scraper():
-    # The defect was walking this list as if it were a partition. Nothing in the
-    # index walk may call it except the descent.
+def test_the_walk_reads_subtype_links_only_in_the_descent():
+    # Walking a page's rendered links as if they were a partition was the original
+    # defect. Nothing in the index walk may call it except the descent.
     import inspect
 
     from scraper import ceskereality_main
 
     src = inspect.getsource(ceskereality_main.CeskerealityPortal.walk_category)
-    assert "extract_facet_slugs" not in src
-    assert "extract_facet_slugs" in inspect.getsource(
+    assert "extract_subtype_slugs" not in src
+    assert "extract_subtype_slugs" in inspect.getsource(
         ceskereality_main.CeskerealityPortal._descend_slice)
 
 

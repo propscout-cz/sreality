@@ -210,31 +210,27 @@ def _detail_params(tree: HTMLParser) -> dict[str, str]:
     return rows
 
 
-# Pure search filters that don't PARTITION the inventory by an attribute (so the
-# split must skip them). Everything else `/{sale}/{category}/{slug}/` link on a
-# search page is a real narrowing facet — a district (okres), disposition, or type.
-_FACET_EXCLUDE: frozenset[str] = frozenset({"pouze-rk", "bez-realitky"})
+# Pure search filters that don't PARTITION the inventory. Defensive: the site links them
+# kraj-FIRST (`/praha/bez-realitky/`), which the pattern already rejects; this drops a
+# subtype-shaped spelling of one should the site ever emit it.
+_PURE_FILTERS: frozenset[str] = frozenset({"pouze-rk", "bez-realitky"})
 
 
-def extract_facet_slugs(html: str, sale_type: str, category: str) -> list[str]:
-    """The distinct `/{sale}/{category}/{slug}/` narrowing-facet slugs a search page
-    links to, in page order, minus pure filters.
-
-    NOT A PARTITION, and never treated as one: the rendered block is a
-    top-10-by-popularity list (whole okresy — Třebíč, Blansko, Kroměříž — never
-    appear) and it OMITS zero-count facets. The index walk partitions on the
-    declared `KRAJ_SLUGS` instead; this survives only as the fallback input to the
-    over-99-page subtype descent, which verifies its children's declared sum
-    against the parent's before believing any of it."""
+# A kraj page links its subtypes as `/{sale}/{cat}/{subtype}/{kraj}/` — subtype BEFORE
+# kraj, the order `search_url` builds — so that shape IS the subtype axis whatever a
+# slug is called (`atypicke-byty` and `pokoj` don't start with `byty-`). One-segment
+# links are okresy / části / obce and kraj-FIRST ones (`/praha/soukromy/`) are filters,
+# so neither matches. The page omits zero-count subtypes, so this is never trusted as a
+# partition: the over-99-page descent checks its children's sum against the parent's.
+def extract_subtype_slugs(html: str, sale_type: str, category: str, kraj: str) -> list[str]:
+    """Distinct `/{sale}/{category}/{slug}/{kraj}/` slugs a kraj page links, in page order."""
     pat = re.compile(
-        rf'href="/{re.escape(sale_type)}/{re.escape(category)}/([a-z][a-z0-9-]+)/"')
+        rf'href=\s*"/{re.escape(sale_type)}/{re.escape(category)}/'
+        rf'([a-z][a-z0-9-]*)/{re.escape(kraj)}/\s*"')
     out: list[str] = []
-    seen: set[str] = set()
     for slug in pat.findall(html):
-        if slug in _FACET_EXCLUDE or slug in seen:
-            continue
-        seen.add(slug)
-        out.append(slug)
+        if slug not in _PURE_FILTERS and slug not in out:
+            out.append(slug)
     return out
 
 
