@@ -86,8 +86,8 @@ def test_negative_id_key_allowed(client):
     assert res.status_code == 302
 
 
-def test_public_even_when_token_set(client, monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+def test_public_even_when_auth_is_strict(client, monkeypatch):
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     res = client.get("/images/2872083276/0001.jpg", follow_redirects=False)
     assert res.status_code == 302
 

@@ -24,11 +24,14 @@ accepts its session JWT and the SPA sends ONE credential everywhere (done the sa
 and `VITE_API_TOKEN` are deleted from the bundle; `frontend/src/lib/api.ts` `authHeader`). Trigger:
 the 2026-10-13 "Invalid token" preset incident — a desktop tab open across #1775's deploy kept
 sending the static token to a route that had just moved to `verify_jwt`. With no per-call choice
-left, that skew class is gone. Part B now has no SPA holder to inventory — but every bundle shipped
-before 2026-10-13 (and a service-worker asset cache, ≤ 14 days) still carries the current value, and
-`require_token` still accepts it. Operator steps: ROTATE `API_TOKEN` (Part B steps 3–6; any ClickUp/CI
-holder gets the new value) and delete `VITE_API_TOKEN` from the Railway `vite` service's variables
-(unused by the build now). Only after the rotation is the token a secret with no public copy.
+left, that skew class is gone.
+
+**2026-10-13, W4 — the static key is deleted.** `API_TOKEN` is read by nothing: `_bearer` accepts only a
+verified Supabase JWT (local dev: `API_AUTH_OPTIONAL=1`), so an old bundle holds a dead string and Part B
+(rotation) is moot. A machine that needs the API (ClickUp, a script) signs in as its own Supabase user
+and sends that JWT — per-caller identity, scope and revocation instead of one shared string. Operator
+steps: delete `API_TOKEN` and `SUPABASE_JWT_SECRET` from the Railway API service's variables and
+`VITE_API_TOKEN` from the `vite` service's; never set `API_AUTH_OPTIONAL` there.
 
 ## What `API_TOKEN` is
 

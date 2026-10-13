@@ -653,7 +653,9 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     starts a run for it). The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
     `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of
     `Authorization`), so the SPA sends its session JWT everywhere and `VITE_API_TOKEN` is deleted
-    from the bundle (same day); the account-SCOPING of the two routes above stays owed.
+    from the bundle (same day); W4 (same day) deleted the static key itself — the API accepts only a
+    Supabase JWT, a machine signs in as its own Supabase user. The account-SCOPING of the two routes
+    above stays owed.
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").

@@ -2,9 +2,9 @@
  *
  * One credential: every request carries the caller's Supabase session JWT
  * (`supabase.auth.getSession()`), whichever gate the route uses —
- * api/dependencies.py `_bearer` accepts a verified JWT on `require_token`
- * routes and requires one on `verify_jwt` / `require_admin` / `tenant_conn`
- * routes, with admin status riding in the JWT's app_metadata.is_admin claim.
+ * api/dependencies.py `_bearer` requires a verified JWT on every route
+ * (`require_token` discards the claims; `verify_jwt` / `require_admin` /
+ * `tenant_conn` use them), with admin status riding in app_metadata.is_admin.
  * The SPA holds no API secret: the bundle Caddy serves before sign-in contains
  * nothing a server would accept, and a route can move between gates with no
  * change here (the 2026-10-13 "Invalid token" preset incident was a stale

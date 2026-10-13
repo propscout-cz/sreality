@@ -2,7 +2,7 @@
 
 The 2026-10-01 review found `GET /estimations/{id}/trace/{n}/payload` and
 `GET`/`POST /estimations/{id}/feedback` on the service-role connection behind
-`require_token` alone. That token ships in the SPA bundle, so any holder could read
+`require_token` alone. That token shipped in the SPA bundle, so any holder could read
 any account's trace payloads and spend refiner LLM credit on any run.
 
 The fakes below model the two connections. `_TenantConn` stands in for the RLS-scoped
@@ -30,7 +30,7 @@ from api import refiner as api_refiner  # noqa: E402
 from api import tenant_pool  # noqa: E402
 from tests.api._jwt import mint  # noqa: E402
 
-_STATIC = "static-bundle-token"
+_NOT_A_JWT = "not-a-jwt"
 _OWN_RUN = 7
 _FOREIGN_RUN = 8
 _SYSTEM_RUN = 9
@@ -109,11 +109,10 @@ class _ServiceConn(_FakeConn):
 
 @pytest.fixture()
 def conns(monkeypatch):
-    monkeypatch.setenv("API_TOKEN", _STATIC)
     tenant, service, llm = _TenantConn(), _ServiceConn(), object()
 
     # The stub keeps verify_jwt as its own dependency, exactly like production's
-    # tenant_conn, so the static-token refusal below is the real gate.
+    # tenant_conn, so the refusal of a non-JWT bearer below is the real gate.
     def _stub_tenant_conn(claims: dict = fastapi.Depends(deps.verify_jwt)) -> _TenantConn:
         return tenant
 
@@ -200,10 +199,10 @@ _ROUTES = (
 
 
 @pytest.mark.parametrize(("method", "path"), _ROUTES)
-def test_static_bundle_token_alone_is_refused(conns, method: str, path: str) -> None:
+def test_non_jwt_bearer_alone_is_refused(conns, method: str, path: str) -> None:
     res = _call(
         conns["client"], method, path.format(run=_OWN_RUN),
-        {"Authorization": f"Bearer {_STATIC}"},
+        {"Authorization": f"Bearer {_NOT_A_JWT}"},
     )
     assert res.status_code == 401
     assert conns["tenant"].executed == [] and conns["tenant"].opened == 0
