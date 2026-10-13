@@ -1,14 +1,16 @@
 /* The property page on the phone (#1767): the same route and reads as the
  * desktop page, drawn as the prototype's "Nemovitost" — and rule 23 holds on it:
  * the per-m² figure is the server's measure under the server's basis label, a
- * sale in Kč/m² and a rent in Kč/m²/měs. No map is mounted on the phone and no
- * estimation can be started from it (#1760 Q10). */
+ * sale in Kč/m² and a rent in Kč/m²/měs. No WebGL map is mounted on the phone (Poloha
+ * is the API's streamed static image) and no estimation can be started from it
+ * (#1760 Q10). */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
@@ -30,6 +32,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
     listManualEstimates: vi.fn(empty),
+    /* Poloha: the location JSON and the static map's bytes. */
+    apiGet: vi.fn(async (path: string) =>
+      path.endsWith('/location')
+        ? { lat: 50.105, lon: 14.5, granularity: 'street', granularity_rank: 60,
+            label: 'Freyova, Praha 9 – Vysočany', zoom: 16, note: null }
+        : null,
+    ),
+    apiGetBlob: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
   };
 });
 vi.mock('@/lib/queries', async (importOriginal) => {
@@ -206,6 +216,8 @@ function renderAt(path: string | { pathname: string; state?: unknown }) {
 }
 
 beforeEach(() => {
+  URL.createObjectURL = vi.fn(() => 'blob:map');
+  URL.revokeObjectURL = vi.fn();
   localStorage.clear();
   setNarrow(true);
   vi.mocked(auth.useAuth).mockReturnValue({ isAdmin: false } as ReturnType<typeof auth.useAuth>);
@@ -284,6 +296,28 @@ describe('the phone property page', () => {
     /* The whole page with its lazy chunks: slower than one card on a loaded runner. */
   }, 15_000);
 
+  it('puts Poloha first after the curation row: the map plate, the place and the map apps', async () => {
+    renderAt('/property/304388');
+    const section = await screen.findByRole('region', { name: 'Poloha' }, LOADED);
+    /* The first of the hairline-separated sections, straight under the curation row. */
+    expect(section.parentElement?.firstElementChild).toBe(section);
+    const img = await within(section).findByRole('img', {}, LOADED);
+    expect(img).toHaveAttribute('src', 'blob:map');
+    expect(img).toHaveAttribute('width', '1080');
+    expect(within(section).getByText('Freyova, Praha 9 – Vysočany')).toBeInTheDocument();
+    expect(within(section).getAllByRole('link').map((a) => a.textContent)).toEqual([
+      'Apple Maps',
+      'Google Maps',
+      'Mapy.cz',
+    ]);
+    expect(api.apiGetBlob).toHaveBeenCalledWith(
+      '/properties/304388/static-map.png',
+      { w: 1080 },
+      expect.anything(),
+    );
+    noMaps();
+  });
+
   it('draws a rent: the monthly price and per-m² in Kč/m²/měs, no MF badge', async () => {
     vi.mocked(queries.fetchProperty).mockResolvedValue(RENT);
     vi.mocked(queries.fetchPropertySources).mockResolvedValue([
@@ -344,5 +378,6 @@ describe('the phone property page', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
     expect(screen.queryByRole('article', { name: 'Nemovitost' })).toBeNull();
     expect(await screen.findByTestId('detail-map')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Poloha' })).toBeNull();
   });
 });
