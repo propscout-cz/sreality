@@ -650,8 +650,10 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     `/buildings*` (`api/main.py` `get_buildings` → `list_building_runs`, no account filter;
     `building_runs` tenant RLS since migration 291) and `POST /notifications/dispatches/{id}/estimate`
     (`api/routes/notifications.py` `post_kickoff_estimate` returns any account's dispatch row and
-    starts a run for it). Then sweep the remaining `require_token` routes the SPA calls for the
-    same shape (CLAUDE.md § Territories: the static bearer may gate only "loaded the SPA").
+    starts a run for it). The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
+    `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of
+    `Authorization`), so the SPA sends its session JWT everywhere and drops `VITE_API_TOKEN` (the
+    follow-up PR); the account-SCOPING of the two routes above stays owed.
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").

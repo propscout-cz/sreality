@@ -21,6 +21,21 @@ def test_missing_header_401():
     with pytest.raises(HTTPException) as ei:
         deps.verify_jwt(authorization=None)
     assert ei.value.status_code == 401
+    # RFC 6750 §3.1: a request with no credential gets the bare challenge, no error code.
+    assert ei.value.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_expired_token_401_names_the_reason(sign_jwt):
+    """RFC 6750: the 401 says WHY, in the body and in the WWW-Authenticate challenge.
+    A bare "Invalid token" told the 2026-10-13 preset incident nothing."""
+    import time
+
+    tok = sign_jwt({"sub": "abc", "exp": int(time.time()) - 60})
+    with pytest.raises(HTTPException) as ei:
+        deps.verify_jwt(authorization=f"Bearer {tok}")
+    assert ei.value.status_code == 401
+    assert "expired" in ei.value.detail.lower()
+    assert 'error="invalid_token"' in ei.value.headers["WWW-Authenticate"]
 
 
 def test_legacy_static_token_no_longer_authenticates(monkeypatch):
@@ -45,26 +60,11 @@ def test_no_secret_fails_closed(monkeypatch):
     assert ei.value.status_code == 503
 
 
-def test_asymmetric_es256_via_jwks(monkeypatch):
+def test_asymmetric_es256_via_jwks(sign_jwt, monkeypatch):
     """The project's real path: ES256 verified against the public signing key
-    (JWKS fetch stubbed; the actual jwt.decode crypto is exercised)."""
-    pytest.importorskip("cryptography")
-    from cryptography.hazmat.primitives.asymmetric import ec
-
-    priv = ec.generate_private_key(ec.SECP256R1())
-    tok = jwt.encode({"aud": "authenticated", "sub": "abc"}, priv, algorithm="ES256")
-
-    class _SigningKey:
-        key = priv.public_key()
-
-    class _Client:
-        def get_signing_key_from_jwt(self, _token):
-            return _SigningKey()
-
+    (JWKS fetch stubbed by the fixture; the actual jwt.decode crypto is exercised)."""
     monkeypatch.delenv("API_TOKEN", raising=False)
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setattr(deps, "_jwks_client", lambda _url: _Client())
-    claims = deps.verify_jwt(authorization=f"Bearer {tok}")
+    claims = deps.verify_jwt(authorization=f"Bearer {sign_jwt({'sub': 'abc'})}")
     assert claims["sub"] == "abc"
 
 

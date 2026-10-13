@@ -423,6 +423,32 @@ def test_malformed_authorization_header_rejected(client, monkeypatch):
     assert res.status_code == 401
 
 
+def test_token_routes_accept_real_jwt(client, sign_jwt, monkeypatch):
+    """One caller, one credential: a human's session JWT passes every require_token
+    route too, so the SPA sends it everywhere and a route moves between gates with
+    no client change (the deploy-skew class behind the 2026-10-13 "Invalid token"
+    preset incident: a stale bundle met a route that had just moved to verify_jwt)."""
+    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    headers = {"Authorization": f"Bearer {sign_jwt({'sub': _ACCT})}"}
+
+    for method, path, body in _gated_calls(client):
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 200, f"{path} should accept a verified JWT"
+
+
+def test_token_routes_reject_forged_jwt(client, sign_jwt, monkeypatch):
+    """A JWS-shaped bearer that fails verification is a 401 that names the reason
+    (RFC 6750 challenge) — never a pass, never a 503."""
+    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    tok = sign_jwt({"sub": _ACCT})
+    headers = {"Authorization": f"Bearer {tok[:-6]}tamper"}
+
+    for method, path, body in _gated_calls(client):
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 401, f"{path} should reject a forged JWT"
+        assert 'error="invalid_token"' in res.headers["WWW-Authenticate"]
+
+
 # --- verify_jwt-gated routes (Phase 1 tenant pool) --------------------------
 
 _JWT_SECRET = "test-hs256-secret"
