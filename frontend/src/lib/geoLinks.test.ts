@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appleMapsPointUrl,
   externalMapLinks,
   googleMapsPointUrl,
   iKatastrPointUrl,
@@ -149,5 +150,16 @@ describe('link groups', () => {
       ['katastr', 'place'],
       ['reas', 'price'],
     ]);
+  });
+});
+
+describe('appleMapsPointUrl', () => {
+  it('drops a labelled pin at ll as lat,lon, at the given zoom', () => {
+    expect(appleMapsPointUrl(LAT, LNG, 'Freyova 534/2, Praha', 16)).toBe(
+      'https://maps.apple.com/?ll=50.081234,14.428765&q=Freyova%20534%2F2%2C%20Praha&z=16',
+    );
+  });
+  it('labels an unnamed point "Poloha"', () => {
+    expect(appleMapsPointUrl(LAT, LNG, null)).toContain('&q=Poloha&z=17');
   });
 });
