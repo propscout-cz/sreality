@@ -1,7 +1,8 @@
 /* One card of the feed's roll, drawn as the W0 prototype draws it (#1762): a
- * full-width 4:3 photo — the 1080 px copy (#1765) of the cover the Browse card
- * would open on — with the margin of marks over its right edge and the stage
- * wash when the property is filed; under it three lines. Line 1 the price in
+ * full-width 4:3 photo strip — the 1080 px copies (#1765), opening on the cover
+ * the Browse card would open on, up to eight photos a swipe apart
+ * (CardPhotoStrip) — with the margin of marks over its right edge and the stage
+ * wash on every photo when the property is filed; under it three lines. Line 1 the price in
  * Fraunces and the price per m² in mono WITH ITS BASIS (rule 23: the server's
  * measure and label, through lib/measure + fmtMeasuredPricePerM2, never price ÷
  * area; no figure at all on a missing or mixed basis). Line 2 layout · area ·
@@ -9,35 +10,29 @@
  * market, the price move, the MF yield on sale flats.
  *
  * Colour means one thing here, the stage: the delta and the MF badge are ink.
- * The whole card opens the property page through the price link stretched over
- * it; the margin's controls sit above that link (`--z-card-action`). */
+ * The text opens the property page through the price link stretched over it;
+ * the photos open it slide by slide, since a link stretched over the strip
+ * would swallow the swipe. The margin's controls sit beside both. */
 
-import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { czPlural, fmtArea, fmtCzk, fmtMeasuredPricePerM2, fmtTomDays } from '@/lib/format';
 import { listingTypeLabel } from '@/lib/enums';
-import { useCardHydration } from '@/lib/hydration';
-import { coverIndex, type CoverTag } from '@/lib/imageTags';
-import { imageSrc } from '@/lib/imageUrl';
+import { useCardPhotos } from '@/lib/hydration';
+import type { CoverTag } from '@/lib/imageTags';
 import { propertyPath } from '@/lib/listingUrl';
 import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
 import { portalShort } from '@/lib/portals';
 import type { CardRow } from '@/lib/queries';
 
+import CardPhotoStrip from './CardPhotoStrip';
 import MarginMarks, { usePipelineLook } from './MarginMarks';
-import StageWash from './StageWash';
 
 const NBSP = ' ';
 const MINUS = '−';
 
 /* The margin column's width; the wash keeps its badge clear of it. */
 const MARGIN_PX = 44;
-
-/* A dark room for the photo after dusk, as the prototype dims it (26 %); the
- * pipeline's thumbnails and the property page's gallery take the same. */
-export const PHOTO_DARK =
-  '[:root[data-theme=dark]_&]:brightness-[0.74] [@media(prefers-color-scheme:dark)]:[:root:not([data-theme=light])_&]:brightness-[0.74]';
 
 /* The price as line 1 prints it; `perMonth` adds the muted "/měs" of a rent. */
 export function feedPrice(r: Pick<CardRow, 'price_czk' | 'category_type'>): {
@@ -105,12 +100,9 @@ export const feedDays = (tomDays: number | null): string | null =>
   tomDays == null || tomDays < 0 ? null : tomDays === 0 ? 'dnes' : fmtTomDays(tomDays);
 
 export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverTag }) {
-  const hydration = useCardHydration();
-  const photos = hydration.photosFor(r.listing_id);
-  const cover = useMemo(() => photos[coverIndex(photos, coverTag)] ?? null, [photos, coverTag]);
-  const [broken, setBroken] = useState<string | null>(null);
-  const src = cover ? imageSrc(cover, { w: 1080 }) : null;
+  const strip = useCardPhotos(r.listing_id, coverTag);
   const { member, badge, accent } = usePipelineLook(r.property_id);
+  const to = propertyPath(r.property_id, r.listing_id);
 
   const price = feedPrice(r);
   const ppm2 = feedPricePerM2(r);
@@ -124,36 +116,24 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
   return (
     <article className="relative border-t border-[var(--color-rule)] last-of-type:border-b">
       <div className="relative">
-        <div className="relative isolate aspect-[4/3] overflow-hidden bg-[var(--color-inset)]">
-          {src && broken !== src ? (
-            <img
-              src={src}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              onError={() => setBroken(src)}
-              className={`block h-full w-full object-cover ${PHOTO_DARK}`}
-            />
-          ) : (
-            !hydration.photosPending && (
-              <span className="absolute inset-0 flex items-center justify-center pr-11 text-[12px] text-[var(--color-ink-4)]">
-                Bez fotky
-              </span>
-            )
-          )}
-          {member && (
-            <StageWash color={accent.fg} badge={badge} label={member.stage_label} insetRight={MARGIN_PX} />
-          )}
-        </div>
+        <CardPhotoStrip
+          to={to}
+          photos={strip.photos}
+          total={strip.total}
+          pending={strip.pending}
+          wash={member ? { color: accent.fg, badge, label: member.stage_label } : null}
+          insetRight={MARGIN_PX}
+        />
         <MarginMarks
           subject={{ property_id: r.property_id, text: line2, figure: price.text ? priceLabel : null }}
-          photoCount={hydration.photosPending && photos.length === 0 ? null : photos.length}
+          photoCount={strip.pending ? null : strip.total}
         />
       </div>
-      <div className="flex flex-col gap-1 px-4 pb-4 pt-3">
+      {/* `relative`: the price link's stretched hit area covers this text, not the strip. */}
+      <div className="relative flex flex-col gap-1 px-4 pb-4 pt-3">
         <div className="flex items-baseline justify-between gap-3">
           <Link
-            to={propertyPath(r.property_id, r.listing_id)}
+            to={to}
             aria-label={`${priceLabel}, ${line2}`}
             className="stretched-link whitespace-nowrap font-display text-[22px] font-medium leading-[1.15] tracking-[-0.01em] text-[var(--color-ink)] [font-variant-numeric:lining-nums_tabular-nums]"
           >

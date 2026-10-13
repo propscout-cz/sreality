@@ -12,7 +12,7 @@ import { imageSrc } from '@/lib/imageUrl';
 import { lazyChunk } from '@/lib/lazyChunk';
 import type { ImagePublic } from '@/lib/types';
 
-import { PHOTO_DARK } from './FeedCard';
+import { PHOTO_DARK } from './CardPhotoStrip';
 import { usePipelineLook } from './MarginMarks';
 import StageWash from './StageWash';
 

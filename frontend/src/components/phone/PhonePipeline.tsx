@@ -48,7 +48,8 @@ import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
-import { PHOTO_DARK, feedDelta, feedLayout, feedMfYield, feedPrice } from './FeedCard';
+import { PHOTO_DARK } from './CardPhotoStrip';
+import { feedDelta, feedLayout, feedMfYield, feedPrice } from './FeedCard';
 import { StageSheet, type SheetSubject } from './FeedSheets';
 import PhonePipelineSkeleton from './PhonePipelineSkeleton';
 import { usePhoneHeaderAside } from './PhoneShell';
