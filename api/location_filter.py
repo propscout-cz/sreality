@@ -76,8 +76,6 @@ NO_MATCH_CODE = -1
 # one line in it that recorded a DECISION rather than an intention.
 FILTER_DEFAULT_SEMANTICS = "include_and_badge"
 
-CHIP_LEVELS: frozenset[str] = frozenset(LEVEL_COLUMN) | frozenset(LEVEL_ALIASES)
-
 
 class DistrictChip(BaseModel):
     """One entry in a location filter. Mirrors the frontend's `DistrictChip`
@@ -262,46 +260,3 @@ def upgrade_district_chips(
             "they match nothing (NO_MATCH_CODE)", origin, len(dropped), dropped,
         )
     return out
-
-
-# --------------------------------------------------------------------------
-# The wire format.
-# --------------------------------------------------------------------------
-
-
-def parse_district_chips_csv(
-    names_raw: str | None,
-    ctx_raw: str | None = None,
-    excl_raw: str | None = None,
-    lvl_raw: str | None = None,
-    id_raw: str | None = None,
-) -> list[DistrictChip] | None:
-    """Parse the parallel `districts` / `districts_ctx` / `districts_excl` /
-    `districts_lvl` / `districts_id` CSV query params into `DistrictChip`s —
-    the exact wire format `frontend/src/lib/filters.ts` (`parseDistrictChips` /
-    `districtChipsToCsvParams`) emits for every location-filterable GET
-    endpoint (Browse's URL, the Watchdog routes).
-    Returns `None` when `names_raw` is absent/empty, matching "no filter"."""
-    if not names_raw:
-        return None
-    names = names_raw.split(",")
-    ctxs = ctx_raw.split(",") if ctx_raw else []
-    excls = excl_raw.split(",") if excl_raw else []
-    lvls = lvl_raw.split(",") if lvl_raw else []
-    ids = id_raw.split(",") if id_raw else []
-    chips: list[DistrictChip] = []
-    for i, name in enumerate(names):
-        ctx = ctxs[i] if i < len(ctxs) else None
-        chip = DistrictChip(name=name, context=(ctx or None))
-        if i < len(excls) and excls[i] == "1":
-            chip.excluded = True
-        lvl = lvls[i] if i < len(lvls) else None
-        if lvl in CHIP_LEVELS:
-            chip.level = lvl
-            raw_id = ids[i] if i < len(ids) else None
-            code = int(raw_id) if raw_id and raw_id.lstrip("-").isdigit() else None
-            # A non-positive id is not a RÚIAN code — a URL must not be able to
-            # hand the predicate the no-match sentinel dressed as a real pick.
-            chip.id = code if valid_code(code) else None
-        chips.append(chip)
-    return chips

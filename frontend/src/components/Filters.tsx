@@ -91,7 +91,6 @@ const FEATURES_KEYS = [
 const CURATION_KEYS = [
   'pipeline', 'tags', 'collections', 'withEstimates', 'showDismissed',
   'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
-  'nearCityProximity',
   'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
   'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
   'priceGrowthRules',

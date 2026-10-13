@@ -545,20 +545,12 @@ describe('applyRegistryUpdate', () => {
     expect(f.tags).toEqual([5, 7]);
   });
 
-  it('accepts DistrictChip[] for districts and lifts legacy string[] callers', () => {
+  it('accepts DistrictChip[] for districts; null clears the list', () => {
     let f = { ...DEFAULT_FILTERS };
     f = applyRegistryUpdate(f, 'districts', [
       { name: 'Edvarda Beneše', context: 'Plzeň' },
     ]);
     expect(f.districts).toEqual([{ name: 'Edvarda Beneše', context: 'Plzeň' }]);
-
-    // Legacy callers (e.g. a registry-driven test fixture) that still
-    // pass plain strings get lifted to context-null chips so the
-    // shape stays consistent at the boundary.
-    f = applyRegistryUpdate(DEFAULT_FILTERS, 'districts', ['okres Jihlava']);
-    expect(f.districts).toEqual([
-      { name: 'okres Jihlava', context: null },
-    ]);
 
     f = applyRegistryUpdate(f, 'districts', null);
     expect(f.districts).toEqual([]);
@@ -668,11 +660,6 @@ describe('filtersToWatchdogSpec', () => {
       minCityPopulation: 50_000,
       maxCityPopulation: 200_000,
       cityIndexRules: [{ index_name: 'safety', op: '>=', value: 7 }],
-      nearCityProximity: {
-        index_rules: [{ index_name: 'safety', op: '>=', value: 8 }],
-        population_min: 100_000,
-        radius_km: 15,
-      },
     };
     const { spec } = filtersToWatchdogSpec(f);
     expect(spec.min_price_czk).toBe(1_000_000);
@@ -684,7 +671,6 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.min_city_population).toBe(50_000);
     expect(spec.max_city_population).toBe(200_000);
     expect(spec.city_index_rules).toEqual([{ index_name: 'safety', op: '>=', value: 7 }]);
-    expect(spec.near_city_proximity?.radius_km).toBe(15);
   });
 
   it('center+radius location maps to lat/lng/radius_m; viewport does not', () => {

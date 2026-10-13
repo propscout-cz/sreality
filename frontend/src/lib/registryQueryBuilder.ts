@@ -17,10 +17,10 @@
  *   - id starts with `max_` OR ends with `_max`          → `.lte(col, value)`
  *   - plain `string` / `int` / `float` / `bool`          → `.eq(col, value)`
  *
- * Irregular filter shapes (status enum → boolean column predicate,
- * days-ago → ISO timestamp, building_material → many-buckets-to-many
- * building_type expansion, districts → admin-id + place-text predicate, tags →
- * not yet wired in PostgREST) stay hand-coded in `queries.ts` and
+ * Irregular filter shapes (status + portals → the portal rule, days-ago → ISO
+ * timestamp, building_material → many-buckets-to-many building_type expansion,
+ * districts → RÚIAN code equality per level, tags → a property-id prefilter)
+ * stay hand-coded in `queries.ts` and
  * are listed in HAND_CODED_BROWSE_FILTERS so the dispatcher skips
  * them. The drift test (`registryQueryBuilder.test.ts`) asserts
  * every BROWSE-eligible registry filter is either in that set or
@@ -64,7 +64,7 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // predicate the plain `.in` auto-path can't express.
   'furnished',
   'ownership',
-  // Operator tags — not yet translated to PostgREST (no public-view column).
+  // Operator tags — a property-id prefilter (queries.ts resolveBrowsePrefilters).
   'tags',
   // Merged price-history pair (migration 173): the window picks which
   // precomputed count column the threshold reads, and the signed

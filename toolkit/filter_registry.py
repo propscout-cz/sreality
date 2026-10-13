@@ -88,7 +88,7 @@ class FilterType(StrEnum):
     STRING_LIST = "string_list"
     INT_LIST = "int_list"
     LOCATION = "location"            # composite — only used with UiControl.LOCATION
-    DISTRICT_CHIP_LIST = "district_chip_list"  # list of {name, context|null} — Browse/Watchdog districts
+    DISTRICT_CHIP_LIST = "district_chip_list"  # location chips (api/location_filter.DistrictChip) — Browse/Watchdog
     CITY_INDEX_RULE_LIST = "city_index_rule_list"  # list of {index_name, op, value} — Browse/Watchdog city quality
     PIPELINE_SCOPE = "pipeline_scope"             # composite {stage_ids} — deal-pipeline membership
 
@@ -462,13 +462,6 @@ RECENCY_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption(30, "Poslední měsíc", "Last month"),
 )
 
-# Source portals — mirrors the scraper-kind rows of the `portals` registry
-# table (migration 100 onward). Values match `listings.source`; labels match
-# the portal display labels. Extend this when a new ingesting portal lands
-# (and regenerate the frontend registry). The on-demand URL-parser source
-# `idnes_reality` never produces `listings` rows, so it is not offered as a
-# filter option. (`remax` IS offered: as of migration 135 it is a scraper that
-# ingests `listings` rows, distinct from its same-named on-demand URL parser.)
 # Time windows for the merged `price_change_count_min` filter. Values are
 # day counts matching the precomputed `properties` columns
 # (price_change_count_30d / _90d / _365d, migration 173); the empty (unset)
@@ -479,6 +472,8 @@ PRICE_CHANGE_WINDOW_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption(365, "Poslední rok", "Last year"),
 )
 
+# Source portals: one per ingesting portal, values = `listings.source` (pinned to
+# PORTAL_CLASSES by tests/toolkit/test_filter_registry.py).
 PORTAL_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("sreality", "Sreality", "Sreality"),
     EnumOption("bazos", "Bazoš", "Bazoš"),
@@ -2151,9 +2146,6 @@ _JSON_TYPE_MAP: dict[FilterType, str] = {
     FilterType.BOOL: "boolean",
     FilterType.STRING: "string",
     FilterType.STRING_LIST: "array",
-    FilterType.INT_LIST: "array",
-    FilterType.LOCATION: "object",
-    FilterType.DISTRICT_CHIP_LIST: "array",
 }
 
 
@@ -2175,18 +2167,6 @@ def to_jsonschema_property(f: FilterDef) -> dict[str, Any]:
         if f.enum_values:
             items["enum"] = [o.value for o in f.enum_values]
         prop["items"] = items
-    elif f.type == FilterType.INT_LIST:
-        prop["items"] = {"type": "integer"}
-    elif f.type == FilterType.DISTRICT_CHIP_LIST:
-        prop["items"] = {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "context": {"type": ["string", "null"]},
-            },
-            "required": ["name"],
-            "additionalProperties": False,
-        }
     return prop
 
 
@@ -2194,23 +2174,9 @@ def to_jsonschema_properties(
     agenda: Agenda,
     *,
     conn: "psycopg.Connection | None" = None,
-    exclude: frozenset[str] = frozenset(),
 ) -> dict[str, dict[str, Any]]:
-    """Render every (visible) filter for `agenda` as a `properties` dict.
-
-    `exclude` skips named filters — useful for composite filters
-    (LOCATION) and host-specific knobs that the tool resolves
-    server-side (e.g. `target` lat/lng).
-    """
-    out: dict[str, dict[str, Any]] = {}
-    for f in effective_for(agenda, conn):
-        if f.id in exclude:
-            continue
-        if f.type == FilterType.LOCATION:
-            # Composite — agents don't pass it directly.
-            continue
-        out[f.id] = to_jsonschema_property(f)
-    return out
+    """Render every (visible) filter of an agent agenda as a `properties` dict."""
+    return {f.id: to_jsonschema_property(f) for f in effective_for(agenda, conn)}
 
 
 __all__ = [
