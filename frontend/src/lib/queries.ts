@@ -2163,9 +2163,8 @@ export const fetchCuratedCityPolygons = async (
 ): Promise<CityPolygon[]> => {
   /* One simplified municipality boundary per curated city (205 rows).
    * `geojson` is the raw ST_AsGeoJSON string the map JSON.parses into a
-   * Feature geometry — the same contract as rent_map_choropleth_public.
-   * Fetched once and cached (staleTime: Infinity), and only when the map tab
-   * is active. */
+   * Feature geometry. Fetched once and cached (staleTime: Infinity), and only
+   * when the map tab is active. */
   return await fetchAllRows<CityPolygon>({
     relation: 'curated_city_polygons_public',
     build: () =>
@@ -2175,44 +2174,6 @@ export const fetchCuratedCityPolygons = async (
     orderBy: [{ column: 'city_id' }],
     key: ['city_id'],
     expectMax: 25_000,
-    signal,
-  });
-};
-
-/* -------------------------------------------------------------------------- */
-/* MF rent-price choropleth ("Cenová mapa nájemného"). One polygon per Czech  */
-/* obec / katastrální území, coloured by reference rent (Kč/m²) per size      */
-/* category VK1..VK4. An operator-static reference dataset — fetch once,      */
-/* cache forever (staleTime: Infinity in the Browse useQuery). `geojson` is   */
-/* the raw ST_AsGeoJSON string; the map layer JSON.parses it into a geometry. */
-/* -------------------------------------------------------------------------- */
-
-export interface RentMapPolygon {
-  ruian_code: number;
-  level: 'ku' | 'obec';
-  name: string;
-  kraj: string | null;
-  geojson: string;
-  vk1_per_m2: number | null;
-  vk2_per_m2: number | null;
-  vk3_per_m2: number | null;
-  vk4_per_m2: number | null;
-}
-
-export const fetchRentMapChoropleth = async (
-  { signal }: PgReadOptions = {},
-): Promise<RentMapPolygon[]> => {
-  /* ~7,630 rows (one per obec / katastrální území) — the OTHER read that
-   * shipped the db-max-rows truncation bug (see fetchAllRows' header).
-   * Fetched once and cached (staleTime: Infinity), so the handful of pages
-   * only happens when the operator first enables the layer. */
-  return await fetchAllRows<RentMapPolygon>({
-    relation: 'rent_map_choropleth_public',
-    build: () =>
-      supabase.from('rent_map_choropleth_public').select('*', { count: 'exact' }),
-    orderBy: [{ column: 'ruian_code' }],
-    key: ['ruian_code'],
-    expectMax: 100_000,
     signal,
   });
 };

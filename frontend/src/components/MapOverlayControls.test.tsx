@@ -9,6 +9,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 
 import MapOverlayControls from './MapOverlayControls';
 import type { MapOverlayRegistry, OverlaySection } from '@/lib/mapOverlays';
+import { PPM2_UNIT } from '@/lib/measure';
 
 const base = {
   attribution: 'zdroj',
@@ -86,10 +87,18 @@ const RENT: OverlaySection = {
       label: 'Velikost bytu',
       sort: 1,
       legend: [],
-      scale: { prop: 'vk1', stops: [[150, '#eaf0f6'], [600, '#1a1a5e']], null_color: '#cccccc', unit: null },
+      scale: {
+        prop: 'vk1',
+        stops: [[150, '#eaf0f6'], [250, '#9ec3e6'], [350, '#5a7fd6'], [450, '#3b4fb5'], [550, '#2a2a8a'], [600, '#1a1a5e']],
+        null_color: 'rgba(140, 140, 140, 0.35)',
+        unit: 'rent_per_m2',
+        opacity: 0.62,
+      },
       variants: [
         { key: 'vk1', label: '1+kk, 1+1', prop: 'vk1' },
         { key: 'vk2', label: '2+kk, 2+1', prop: 'vk2' },
+        { key: 'vk3', label: '3+kk, 3+1', prop: 'vk3' },
+        { key: 'vk4', label: '4+kk, 4+1', prop: 'vk4' },
       ],
       feature_count: 7630,
     },
@@ -179,6 +188,12 @@ describe('<MapOverlayControls> variants and legend', () => {
   it('offers the variants as radios, the first one shown by default', () => {
     const onChange = renderControls('rent_map');
     const group = screen.getByRole('radiogroup', { name: 'Velikost bytu' });
+    expect(within(group).getAllByRole('radio').map((radio) => radio.closest('label')?.textContent)).toEqual([
+      '1+kk, 1+1',
+      '2+kk, 2+1',
+      '3+kk, 3+1',
+      '4+kk, 4+1',
+    ]);
     expect(within(group).getByRole('radio', { name: '1+kk, 1+1' })).toBeChecked();
     fireEvent.click(within(group).getByRole('radio', { name: '2+kk, 2+1' }));
     expect(onChange).toHaveBeenCalledWith('rent_map:vk2');
@@ -191,11 +206,22 @@ describe('<MapOverlayControls> variants and legend', () => {
     expect(onChange).toHaveBeenCalledWith('rent_map');
   });
 
-  it('keys a scale by its range and its no-data colour', () => {
+  /* The legend the rent map has always had: what is measured, the ramp, its ends. */
+  it('keys the rent scale by its caption and range, as the rent map always has', () => {
     renderControls('rent_map');
+    expect(screen.getByText(`Nájemné (${PPM2_UNIT.rent})`)).toBeInTheDocument();
     expect(screen.getByText('150')).toBeInTheDocument();
     expect(screen.getByText('600')).toBeInTheDocument();
-    expect(screen.getByText('bez dat')).toBeInTheDocument();
+    expect(screen.queryByText('bez dat')).toBeNull();
+  });
+
+  it('captions any other scale with its own unit token', () => {
+    const plain: OverlaySection = {
+      ...RENT,
+      layers: [{ ...RENT.layers[0], scale: { ...RENT.layers[0].scale!, unit: 'dB' } }],
+    };
+    renderControls('rent_map', { registry: { sections: [plain] } });
+    expect(screen.getByText('dB')).toBeInTheDocument();
   });
 
   it('lists every class of a one-layer section in its legend', () => {

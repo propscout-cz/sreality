@@ -151,15 +151,21 @@ describe('browseUrlFromState ↔ fromSearchParams round-trip', () => {
     expect(parsed.bounds!.north).toBeCloseTo(filters.bounds!.north, 4);
   });
 
-  it('encodes a non-default overlay (rent map + VK) into the URL', () => {
+  /* The rent map is a registry layer now, its size category the variant: the
+   * modal's link spells it in `layers`, and the old `rentmap=1&rentvk=N` link
+   * still reads as the very same selection. */
+  it('encodes the rent map + VK as a `layers` token that an old rentmap/rentvk link reads as too', () => {
     const url = browseUrlFromState({
       filters: DEFAULT_FILTERS,
       sort: DEFAULT_SORT,
       tab: 'map',
-      overlay: { ...DEFAULT_OVERLAY, showRentMap: true, rentVk: 3 },
+      overlay: { ...DEFAULT_OVERLAY, layers: 'rent_map:vk3' },
     });
-    expect(url).toContain('rentmap=1');
-    expect(url).toContain('rentvk=3');
+    const sp = new URLSearchParams(url.split('?')[1]);
+    expect(sp.get('layers')).toBe('rent_map:vk3');
+    expect(sp.has('rentmap')).toBe(false);
+    expect(sp.has('rentvk')).toBe(false);
+    expect(layersFromSearchParams(new URLSearchParams('rentmap=1&rentvk=3'))).toBe('rent_map:vk3');
   });
 });
 
@@ -199,7 +205,8 @@ describe('priceMetric on the map overlay', () => {
 
 /* The reference-overlay selection (`layers`): a view knob like `pm`, written to
  * the URL and to this browser's remembered selection on every change, with the
- * old rent-panel checkbox `kraje=1` still read as the kraje layer. */
+ * old rent-panel checkbox `kraje=1` still read as the kraje layer and the old
+ * rent-map knobs `rentmap=1&rentvk=N` as `rent_map:vkN`. */
 describe('layers on the map overlay', () => {
   const REMEMBERED = 'map.layers';
   beforeEach(() => localStorage.clear());
@@ -231,8 +238,28 @@ describe('layers on the map overlay', () => {
   });
 
   it('reads the legacy `kraje=1` as the kraje layer, and an explicit `layers` over it', () => {
-    expect(urlState('/browse?rentmap=1&kraje=1').result.current.view.overlay.layers).toBe('kraje');
+    expect(urlState('/browse?kraje=1').result.current.view.overlay.layers).toBe('kraje');
     expect(urlState('/browse?kraje=1&layers=metro').result.current.view.overlay.layers).toBe('metro');
+  });
+
+  it('reads an old rent-map link as the rent_map layer, beside whatever else the URL selects', () => {
+    const layersOf = (url: string) => urlState(url).result.current.view.overlay.layers;
+    expect(layersOf('/browse?rentmap=1&rentvk=2')).toBe('rent_map:vk2');
+    expect(layersOf('/browse?rentmap=1')).toBe('rent_map');
+    expect(layersOf('/browse?rentmap=1&kraje=1')).toBe('kraje,rent_map');
+    expect(layersOf('/browse?layers=metro&rentmap=1&rentvk=4')).toBe('metro,rent_map:vk4');
+    expect(layersOf('/browse?layers=&rentmap=1')).toBe('rent_map');
+  });
+
+  it('writes a change over an old rent-map link as `layers`, retiring `rentmap` and `rentvk`', () => {
+    const { result } = urlState('/browse?cat=byt&rentmap=1&rentvk=2');
+    act(() => result.current.view.setOverlay({ layers: 'metro,rent_map:vk2' }));
+    const sp = new URLSearchParams(result.current.search);
+    expect(sp.get('layers')).toBe('metro,rent_map:vk2');
+    expect(sp.has('rentmap')).toBe(false);
+    expect(sp.has('rentvk')).toBe(false);
+    expect(sp.get('cat')).toBe('byt');
+    expect(localStorage.getItem(REMEMBERED)).toBe('metro,rent_map:vk2');
   });
 
   it('falls back to the remembered selection only when the URL has no `layers` key', () => {
@@ -260,10 +287,10 @@ describe('layers on the map overlay', () => {
     expect(localStorage.getItem(REMEMBERED)).toBe('');
   });
 
-  it('carries `layers` and a legacy `kraje` through a filter change', () => {
-    const { result } = urlState('/browse?kraje=1');
+  it('carries `layers` and the legacy keys through a filter change', () => {
+    const { result } = urlState('/browse?kraje=1&rentmap=1&rentvk=3');
     act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 5_000_000 }));
-    expect(result.current.view.overlay.layers).toBe('kraje');
+    expect(result.current.view.overlay.layers).toBe('kraje,rent_map:vk3');
     act(() => result.current.view.setOverlay({ layers: 'metro' }));
     act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
     expect(new URLSearchParams(result.current.search).get('layers')).toBe('metro');
