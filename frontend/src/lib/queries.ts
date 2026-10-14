@@ -2434,8 +2434,7 @@ export const curationKeys = {
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,
-  propertyArtifactLink: (property_id: number) =>
-    ['curation', 'property-artifact-link', property_id] as const,
+  artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
   manualEstimates: (sreality_id: number) =>
     ['curation', 'manual-estimates', sreality_id] as const,

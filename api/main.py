@@ -1595,12 +1595,11 @@ def delete_property_note(
     return curation.delete_note(conn, property_id, note_id)
 
 
-@app.get("/properties/{property_id}/artifact-link")
-def get_property_artifact_link(
-    property_id: int,
+@app.get("/artifact-links")
+def get_artifact_links(
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
-    return curation.get_artifact_link(conn, property_id)
+    return curation.list_artifact_links(conn)
 
 
 @app.put("/properties/{property_id}/artifact-link")

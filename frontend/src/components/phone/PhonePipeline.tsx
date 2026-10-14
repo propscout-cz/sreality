@@ -47,6 +47,7 @@ import { TAB_BAR_SPACE } from '@/lib/phoneShell';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { useCardTags } from '@/lib/useCardTags';
 import TagChip from '@/components/curation/TagChip';
+import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
@@ -487,6 +488,10 @@ function PipelinePhoneCard({
           {!card.is_active && <span>neaktivní</span>}
         </p>
         <PhoneCardTags property_id={card.property_id} onOpen={() => onTags(card, sheetSubject)} />
+        <ArtifactLinkButton
+          property_id={card.property_id}
+          className="card-action mt-1 h-7 self-start px-2 text-[12px]"
+        />
       </div>
       <button
         type="button"

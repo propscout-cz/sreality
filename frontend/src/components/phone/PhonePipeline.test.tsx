@@ -31,6 +31,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   movePipelineCard: vi.fn(),
   removePipelineCard: vi.fn(),
   listTags: vi.fn(),
+  fetchArtifactLinks: vi.fn(),
 }));
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
@@ -159,6 +160,9 @@ beforeEach(() => {
     data: [{ id: 5, name: 'k prohlídce', color: 'copper', created_at: '2026-05-01T00:00:00Z', listing_count: 1 }],
   });
   vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
+  vi.mocked(api.fetchArtifactLinks).mockResolvedValue(
+    new Map([[42, { property_id: 42, url: 'https://claude.ai/artifact/abc123', created_at: '2026-10-14T00:00:00Z', updated_at: '2026-10-14T00:00:00Z' }]]),
+  );
 });
 
 afterEach(() => {
@@ -314,5 +318,12 @@ describe('phone pipeline', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Štítky' });
     expect(within(sheet).getByRole('textbox', { name: 'Najít nebo vytvořit štítek' })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: /k prohlídce/, pressed: true })).toBeInTheDocument();
+  });
+
+  it('shows a card\'s artifact link as a small button, in a new tab', async () => {
+    renderPipeline();
+    const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
+    expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
+    expect(button).toHaveAttribute('target', '_blank');
   });
 });

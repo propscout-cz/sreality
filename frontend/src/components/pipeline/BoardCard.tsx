@@ -8,7 +8,7 @@
  *
  * Reading order on the card:
  *   street (the card's link)  →  town  →  price + how it moved  →
- *   disposition/area + yield  →  tags  →  broker  →  the municipality's civic indexes
+ *   disposition/area + yield  →  tags  →  artifact link  →  broker  →  the municipality's civic indexes
  * The street leads and carries the link because it NAMES the property, the way
  * a Browse card's title does; the price describes it. The town is ALWAYS the
  * second row, on a line of its own: folded into the street's single truncating
@@ -31,6 +31,7 @@ import PriceDelta from '@/components/PriceDelta';
 import CityIndexStrip from '@/components/CityIndexStrip';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import TagChip from '@/components/curation/TagChip';
+import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
 import { TAG_ASSIGN_LABEL, TagAssignMenu } from '@/components/curation/TagAssignList';
 import type { CityQualityByObec } from '@/lib/useCityQuality';
 import { useCardHydration } from '@/lib/hydration';
@@ -260,6 +261,10 @@ export function CardFace({
             )}
           </div>
           <CardTags property_id={card.property_id} />
+          <ArtifactLinkButton
+            property_id={card.property_id}
+            className="mt-1 px-1.5 py-0.5 text-[0.68rem] leading-[1.2]"
+          />
           {/* The broker line streams in behind the card. Its height is
               reserved while the read is in flight so the column does not
               reflow when it lands; once resolved, a card with no attributed

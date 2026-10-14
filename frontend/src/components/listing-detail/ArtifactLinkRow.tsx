@@ -3,15 +3,12 @@
  * so it follows a merge. A failed read is said out loud, never drawn as an empty field. */
 
 import { useId, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  ApiError,
-  deletePropertyArtifactLink,
-  getPropertyArtifactLink,
-  setPropertyArtifactLink,
-} from '@/lib/api';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ApiError, deletePropertyArtifactLink, setPropertyArtifactLink } from '@/lib/api';
 import { artifactLinkLabel, safeHttpUrl } from '@/lib/artifactLink';
 import { curationKeys } from '@/lib/queries';
+import { useArtifactLinks } from '@/lib/useArtifactLinks';
+import type { ArtifactLink } from '@/lib/types';
 import { fmtAbsolute } from '@/lib/format';
 import ErrorBanner from '@/components/ErrorBanner';
 import { readFailed } from '@/components/ReadFailedMark';
@@ -30,24 +27,28 @@ export default function ArtifactLinkRow({
 }) {
   const qc = useQueryClient();
   const labelId = useId();
-  const key = curationKeys.propertyArtifactLink(property_id);
+  const key = curationKeys.artifactLinks;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const linkQ = useQuery({
-    queryKey: key,
-    queryFn: () => getPropertyArtifactLink(property_id),
-    staleTime: 30_000,
-  });
-  const link = linkQ.data?.data ?? null;
+  /* The one whole-set read every surface shares; this row patches it in place. */
+  const linkQ = useArtifactLinks();
+  const link = linkQ.data?.get(property_id) ?? null;
   const failed = readFailed(linkQ);
+  const patch = (next: ArtifactLink | null) =>
+    qc.setQueryData<Map<number, ArtifactLink>>(key, (prev) => {
+      const map = new Map(prev);
+      if (next) map.set(property_id, next);
+      else map.delete(property_id);
+      return map;
+    });
 
   const save = useMutation({
     mutationFn: (url: string) => setPropertyArtifactLink(property_id, url),
     onSuccess: (saved) => {
-      qc.setQueryData(key, { data: saved });
+      patch(saved);
       setEditing(false);
       setError(null);
     },
@@ -57,7 +58,7 @@ export default function ArtifactLinkRow({
   const remove = useMutation({
     mutationFn: () => deletePropertyArtifactLink(property_id),
     onSuccess: () => {
-      qc.setQueryData(key, { data: null });
+      patch(null);
       setConfirmingRemove(false);
       setDraft('');
       setError(null);
@@ -213,7 +214,7 @@ export default function ArtifactLinkRow({
 
 /* A stored value that is not http(s) cannot occur (CHECK, migration 599), but is still never made a
  * clickable href: it is shown as text. */
-function ArtifactAnchor({ url }: { url: string }) {
+export function ArtifactAnchor({ url }: { url: string }) {
   const href = safeHttpUrl(url);
   if (!href) {
     return <p className="text-sm text-[var(--color-ink)] break-all">{url}</p>;

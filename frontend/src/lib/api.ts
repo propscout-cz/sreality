@@ -2648,12 +2648,15 @@ export const deletePropertyNote = (
     method: 'DELETE',
   });
 
-/* Artifact link (migration 599): one http(s) URL per property; PUT sets or replaces it. */
+/* Artifact link (migration 599): one http(s) URL per property; PUT sets or replaces it.
+ * The read is the account's whole set in ONE call (a map by property_id, the shape every
+ * curation fact is read in — tags, collections, note counts), so a board of cards costs one
+ * request, not one per card, and the property page reads the same entry. */
 
-export const getPropertyArtifactLink = (
-  property_id: number,
-): Promise<{ data: ArtifactLink | null }> =>
-  request<{ data: ArtifactLink | null }>(`/properties/${property_id}/artifact-link`);
+export const fetchArtifactLinks = async (): Promise<Map<number, ArtifactLink>> => {
+  const { data } = await request<{ data: ArtifactLink[] }>('/artifact-links');
+  return new Map(data.map((l) => [l.property_id, l]));
+};
 
 export const setPropertyArtifactLink = (
   property_id: number,
