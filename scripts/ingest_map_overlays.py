@@ -4,6 +4,8 @@ One registry, SOURCES, maps each section to its layers and each layer to its rea
 section: the datum control point, every layer fetched under the completeness and shrink
 guards, then ONE transaction that replaces the features, upserts the registry rows and runs
 map_overlay_render_section. --dry-run fetches and checks everything and writes nothing.
+render_sql_section is the same flow for one SQL-sourced section, from the database alone: the
+rent-map ingest (api/rent_map.py) re-renders `rent_map` with it inside its own transaction.
 
     python -m scripts.ingest_map_overlays [--sections metro,flood] [--dry-run] [--accept-shrink]
 """
@@ -29,6 +31,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from scraper.db import connect, stamp_derived_artifact
+from toolkit.rent_map import MF_INFOGRAPHIC_URL
 
 LOG = logging.getLogger("ingest_map_overlays")
 
@@ -162,6 +165,30 @@ select b.id::text as source_id,
 """
 
 KRAJE_REVISED_SQL = "select max(ingested_at)::date from admin_boundaries where level = 'kraj'"
+
+# The MF rent choropleth: migration 132's rent_map_choropleth without its GeoJSON column. One
+# feature per priced obec / KÚ with the latest revision's reference rent per size category;
+# a category the MF leaves unpriced is absent from props and paints as the scale's null_color.
+RENT_MAP_SQL = """
+select b.id::text as source_id,
+       jsonb_strip_nulls(jsonb_build_object(
+           'name', b.name, 'kraj', min(v.kraj), 'level', b.level,
+           'vk1', max(v.ref_rent_per_m2) filter (where v.vk = 1),
+           'vk2', max(v.ref_rent_per_m2) filter (where v.vk = 2),
+           'vk3', max(v.ref_rent_per_m2) filter (where v.vk = 3),
+           'vk4', max(v.ref_rent_per_m2) filter (where v.vk = 4))) as props,
+       st_transform(b.geom::geometry, 3857) as geom
+  from rent_map_values v
+  join admin_boundaries b on b.id = v.ruian_code and b.level = v.level
+ where v.source_revision = (select max(source_revision) from rent_map_revisions)
+ group by b.id
+"""
+
+# The source date of the revision RENT_MAP_SQL draws (the latest), not the newest date on
+# file: a re-uploaded older file becomes the latest revision with its own, older date.
+RENT_MAP_REVISED_SQL = (
+    "select source_date from rent_map_revisions order by source_revision desc limit 1"
+)
 
 
 class Refused(RuntimeError):
@@ -583,6 +610,38 @@ SOURCES: dict[str, Section] = {
                   (SqlSource(KRAJE_SQL),)),
         ),
     ),
+    # The choropleth the Browse map drew from rent_map_choropleth_public until migration 601:
+    # the same ramp, null colour, opacity and size categories. Drawn from z5 like kraje, so
+    # the whole-country view keeps it (a z5/z6 tile of all 7.6k territories is ~1 MB).
+    # The MF states no licence for the data; its site is "© Ministerstvo financí ČR".
+    "rent_map": Section(
+        label="Cenová mapa nájemného", sort=4, minzoom=5, maxzoom=12,
+        attribution="Ministerstvo financí ČR – Cenová mapa nájemného",
+        licence="Licence neuvedena (© Ministerstvo financí ČR)", source_url=MF_INFOGRAPHIC_URL,
+        note="Měsíční nájemné referenčního bytu za m² podle Ministerstva financí ČR, zvlášť "
+             "pro každou velikostní kategorii bytu.",
+        revised_at=sql_revised_at(RENT_MAP_REVISED_SQL),
+        layers=(
+            Layer(
+                "rent_map", "Cenová mapa nájemného", 1, legend=(),
+                readers=(SqlSource(RENT_MAP_SQL),),
+                scale={
+                    "prop": "vk1",
+                    "stops": [[150, "#eaf0f6"], [250, "#9ec3e6"], [350, "#5a7fd6"],
+                              [450, "#3b4fb5"], [550, "#2a2a8a"], [600, "#1a1a5e"]],
+                    "null_color": "rgba(140, 140, 140, 0.35)",
+                    "unit": "rent_per_m2",
+                    "opacity": 0.62,
+                },
+                variants=(
+                    {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1"},
+                    {"key": "vk2", "label": "2+kk, 2+1", "prop": "vk2"},
+                    {"key": "vk3", "label": "3+kk, 3+1", "prop": "vk3"},
+                    {"key": "vk4", "label": "4+kk, 4+1", "prop": "vk4"},
+                ),
+            ),
+        ),
+    ),
 }
 
 
@@ -724,6 +783,23 @@ def _revised_at(key: str, section: Section, ctx: Context) -> date | None:
     except (requests.RequestException, ET.ParseError, ValueError, psycopg.Error) as exc:
         LOG.warning("REVISED unknown section=%s: %r", key, exc)
         return None
+
+
+class _NoNetwork:
+    """The session of a database-only render: a fetch fails at once and is never retried."""
+
+    def get(self, url: str, *args: Any, **kwargs: Any) -> Any:
+        raise requests.RequestException(f"a database-only render reached for the network: {url}")
+
+
+def render_sql_section(conn: psycopg.Connection, key: str) -> int:
+    """Replace one SQL-sourced section without the network, under a run's guards and in its one
+    write transaction (a savepoint inside a caller's); returns the tiles stored."""
+    section = SOURCES[key]
+    if not all(isinstance(r, SqlSource) for layer in section.layers for r in layer.readers):
+        raise ValueError(f"section {key!r} is not SQL-sourced")
+    http = Http(_NoNetwork())
+    return run_section(conn, http, ArcGis(http), key, section, dry_run=False, accept_shrink=False)
 
 
 def select_sections(text: str) -> list[str]:

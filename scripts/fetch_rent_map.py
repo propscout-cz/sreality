@@ -18,9 +18,14 @@ import os
 import sys
 from pathlib import Path
 
-from api.rent_map import MF_INFOGRAPHIC_URL, fetch_latest_xlsx, ingest_bytes
+from api.rent_map import fetch_latest_xlsx, ingest_bytes
 from scraper.db import connect
-from toolkit.rent_map import parse_rent_map_xlsx, sha256_bytes, source_date_from_filename
+from toolkit.rent_map import (
+    MF_INFOGRAPHIC_URL,
+    parse_rent_map_xlsx,
+    sha256_bytes,
+    source_date_from_filename,
+)
 
 LOG = logging.getLogger("fetch_rent_map")
 
