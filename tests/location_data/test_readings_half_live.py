@@ -163,3 +163,18 @@ def test_a_contract_bump_re_mines_the_current_reading_and_settles_a_delisted_unr
     _listing(conn, A, listing)                           # relisted as A: mined at @11
     assert _mine(conn)["readings_mined"] == 1
     assert _stamps(conn, listing) == {older: None, current: "bazos@11"}
+
+
+def test_a_scoped_pass_mines_only_the_listings_the_text_lane_just_read(conn):
+    """W4: the worker mines a text pass's own listings, under a batch of its own lane; the
+    hourly selector still finds the rest."""
+    read, waiting = _listing(conn, A), _listing(conn, A)
+    for listing in (read, waiting):
+        _reading(conn, listing, "m1", town=TOWN, street="Husova")
+    stats = ci.mine_readings(conn, [read], max_seconds=30, statement_timeout=20)
+    assert (stats["readings_mined"], stats["claims_inserted"]) == (1, 2)
+    assert _claims(conn, read, "street_name") == {"Husova"} and not _claims(conn, waiting)
+    assert conn.execute("SELECT outcome FROM location_claim_batches WHERE lane = %s ORDER BY id"
+                        " DESC LIMIT 1", (ci.READINGS_FAST_LANE,)).fetchone() == ("ok",)
+    assert _mine(conn)["readings_mined"] == 1
+    assert _claims(conn, waiting, "street_name") == {"Husova"}

@@ -66,6 +66,9 @@ _NAMESPACE_OF: dict[str, str] = {
     # the fast schedule must not read the hourly one's cursor. Registered here so the
     # second string is protected by the same uniqueness gate as the first.
     "FAST_LANE": "lane",
+    # W4: the readings half scoped to a text-lane pass, whose batch rows a cursor read of either
+    # schedule must never mistake for its own.
+    "READINGS_FAST_LANE": "lane",
     "JOB_NAME": "job_name",
     "CONCURRENCY_GROUP": "concurrency_group",
     "INTAKE_VERSION": "extractor_version",

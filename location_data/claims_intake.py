@@ -75,8 +75,8 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from typing import Any, NamedTuple, TypeVar
 
@@ -151,6 +151,10 @@ WAVE = "W1"
 # own cursor — re-reads that id within the hour. Mining a listing twice is free: claim
 # fingerprints are ON CONFLICT DO NOTHING and the enqueue is a bump (W2-a2).
 FAST_LANE = "location_claims_intake_fast"
+# W4: the readings half SCOPED to what the text lane just read, on the worker after each pass.
+# Its own lane string, because `_BODIES_RESUME_SQL` reads the newest finished row of a lane —
+# a readings batch under FAST_LANE would hand the bodies cursor a NULL.
+READINGS_FAST_LANE = "location_readings_fast"
 DEFAULT_SNAPSHOT_LAG_MINUTES = 15.0
 
 MIN_BATCH_SIZE = 10_000
@@ -966,12 +970,19 @@ _CLAIM_WRITE_SQL = (_CLAIM_INSERT_CTES + _ENQUEUE_CTE.format(changed="ins") + ""
 _READING = "e.extracted ? 'location' AND e.extracted -> 'error' IS NULL"
 _PREFERRED = ("(e.extractor_version IS NOT DISTINCT FROM %(version)s::text) DESC, "
               "e.created_at DESC, e.id DESC")
-_UNMINED_READINGS_SQL = f"""
+
+
+def _unmined_readings_sql(scoped: bool) -> str:
+    """The selector, hourly or SCOPED to `%(ids)s` (W4) — scoped on BOTH reads, or the CTE
+    still aggregates the whole table before the join drops it."""
+    inner, outer = (("AND e.listing_id = ANY(%(ids)s::bigint[])",
+                     "AND l.id = ANY(%(ids)s::bigint[])") if scoped else ("", ""))
+    return f"""
     WITH unsettled AS (
         SELECT e.listing_id,
                (array_agg(e.mined_contract_version ORDER BY {_PREFERRED}))[1] AS checked
           FROM listing_description_enrichments e
-         WHERE {_READING}
+         WHERE {_READING} {inner}
          GROUP BY e.listing_id
         HAVING count(DISTINCT e.text_hash) > 1
             OR NOT coalesce((array_agg(e.mined_contract_version ORDER BY {_PREFERRED}))[1]
@@ -990,12 +1001,16 @@ _UNMINED_READINGS_SQL = f"""
            AND e.text_hash = {text_lane._HASH_EXPR}
          ORDER BY {_PREFERRED}
          LIMIT 1) r ON true
-     WHERE (l.is_active OR rtrim(u.checked, '~') IS DISTINCT FROM s.stamp)
+     WHERE (l.is_active OR rtrim(u.checked, '~') IS DISTINCT FROM s.stamp) {outer}
        AND CASE WHEN r.id IS NULL THEN u.checked IS DISTINCT FROM s.stamp || '~'
                 ELSE (r.mined_contract_version, rtrim(u.checked, '~'))
                      IS DISTINCT FROM (s.stamp, s.stamp) END
      LIMIT %(cap)s
 """
+
+
+_UNMINED_READINGS_SQL = _unmined_readings_sql(scoped=False)
+_SCOPED_READINGS_SQL = _unmined_readings_sql(scoped=True)
 
 # ONE STATEMENT per batch, each reading's four acts in it: insert its claims; DELETE the
 # listing's other same-source, non-operator claims of the reading entries' types (SUPERSESSION,
@@ -1821,10 +1836,11 @@ def drain_readings(
     conn: psycopg.Connection, *, source: str | None, entries_by_source: dict[str, list[Entry]],
     statement_timeout: int, budget: _Budget, batch_id: int | None, dry_run: bool,
     stats: dict[str, Any], refusals: dict[str, int], schedule: Schedule = HOURLY,
-    max_value_bytes: int | None = None,
+    max_value_bytes: int | None = None, listing_ids: Sequence[int] | None = None,
 ) -> None:
     """The READINGS half (W3), in the bodies' budget share. Scope is data: the portals whose
-    ACTIVE contract has an entry on the reading substrate (rule 21)."""
+    ACTIVE contract has an entry on the reading substrate (rule 21). `listing_ids` (W4) scopes
+    the selector to the listings the text lane just read."""
     scope = {s: found for s in sorted(entries_by_source) if source in (None, s)
              if (found := reading_entries(entries_by_source[s]))}
     if not scope:
@@ -1839,13 +1855,16 @@ def drain_readings(
     model = text_lane.resolve_model(conn)
     params = {"sources": list(scope), "stamps": stamps, "cap": READINGS_PER_BATCH,
               "version": text_lane.extractor_version(model) if model else None}
+    selector = _UNMINED_READINGS_SQL
+    if listing_ids is not None:
+        selector, params["ids"] = _SCOPED_READINGS_SQL, list(listing_ids)
     last_seconds = 0.0
 
     def reading_batch(phase: _Phase) -> int:
         result = IntakeResult()
         mined: list[dict[str, Any]] = []
         with guarded(conn, statement_timeout) as cur:
-            cur.execute(_UNMINED_READINGS_SQL, params)
+            cur.execute(selector, params)
             records = cur.fetchall()
             for listing_id, src, native, seen, reading_id, stamp, payload, text in records:
                 row = ListingRow(int(listing_id), src, str(native or listing_id), {}, seen)
@@ -1880,6 +1899,47 @@ def drain_readings(
                  selected, stats["readings_mined"], stats["claims_superseded"], last_seconds)
         if selected < READINGS_PER_BATCH or dry_run:  # a dry run stamps nothing: same rows
             break
+
+
+# The scoped pass's schedule: the whole budget is the readings' (there are no bodies to share it).
+READINGS_FAST = Schedule(lane=READINGS_FAST_LANE, bodies_budget_share=1.0, backlog_readout=False)
+
+
+def mine_readings(
+    conn: psycopg.Connection, listing_ids: Sequence[int], *, max_seconds: float,
+    statement_timeout: int,
+) -> dict[str, Any]:
+    """The readings half for the listings the text lane just read (W4, on the worker after each
+    pass): one scoped selector, the unchanged write, under a batch row of its own lane. The
+    hourly run stays the backstop (retries, the delisted-once rows, a pass this one missed)."""
+    stats: dict[str, Any] = dict.fromkeys(
+        ("readings_mined", "claims", "claims_inserted", "enqueued", "claims_superseded",
+         "refusals", "lock_retries"), 0)
+    with guarded(conn, statement_timeout) as cur:
+        cur.execute(_BATCH_INSERT_SQL, {
+            "lane": READINGS_FAST_LANE, "source": None, "extractor_version": INTAKE_VERSION,
+            "contract_id": None, "wave": WAVE, "job_run_id": None,
+            "note": f"readings of {len(listing_ids)} listings", "scan_mode": None,
+            "resumable": False})
+        batch_id = int(cur.fetchone()[0])
+    finish = {"batch_id": batch_id, "cursor_after_id": None, "bodies_cursor_after_id": None,
+              "bodies_cursor_versions": None}
+    try:
+        drain_readings(conn, source=None, entries_by_source=load_entries(conn),
+                       statement_timeout=statement_timeout, budget=_Budget(max_seconds),
+                       batch_id=batch_id, dry_run=False, stats=stats, refusals={},
+                       schedule=READINGS_FAST, listing_ids=list(listing_ids))
+    except Exception as exc:
+        with suppress(Exception):  # never mask the exception being reported
+            with guarded(conn, _FAILURE_STAMP_TIMEOUT_S) as cur:
+                cur.execute(_BATCH_FINISH_SQL, {
+                    **finish, "outcome": "failed", "row_count": stats["claims_inserted"],
+                    "note": f"{type(exc).__name__}: {exc}"[:500]})
+        raise
+    with guarded(conn, statement_timeout) as cur:
+        cur.execute(_BATCH_FINISH_SQL, {**finish, "outcome": "ok",
+                                        "row_count": stats["claims_inserted"], "note": None})
+    return stats
 
 
 def run(
