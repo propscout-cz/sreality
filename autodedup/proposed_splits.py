@@ -119,6 +119,8 @@ def proposed_splits(
         if c["listing_lo"] is not None and (c["detail"] or {}).get("generation") in (None, generation):
             edge = (c["listing_lo"], c["listing_hi"])
             reasons[edge] = ("conflict", f"{c['kind']}: {c['invariant'] or 'no invariant named'}")
+            # The pair rides with the row whose reason is shown, never with another row's.
+            refused_on.pop(edge, None)
             pair = (c["detail"] or {}).get("pair")
             if pair and tuple(sorted(pair)) != edge:
                 refused_on[edge] = (min(pair), max(pair))

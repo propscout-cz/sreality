@@ -627,6 +627,21 @@ def test_a_refused_bridge_keeps_both_cluster_keys() -> None:
     assert detail["generation"] == "gtest" and detail["right_members"] == [9, 10]
 
 
+def test_E957_a_refused_union_carries_the_pair_its_fact_parts_in_both_lanes() -> None:
+    """The batch lane writes `detail.pair` exactly as the rt lane does, or the split page names
+    the refusing pair for one lane's generations only."""
+    from autodedup.incremental_lane import _conflict_params
+
+    conflict = {"lo": 3, "hi": 2, "score": 0.98, "certificate": None, "families": ["LOC"],
+                "invariant": "d43_distinguishable", "members": [1, 2, 3], "pair": [1, 3]}
+    [row] = score_lane.conflict_params({"conflicts": [conflict]}, {}, "gtest")
+    assert json.loads(row["detail"])["pair"] == [1, 3]
+    assert json.loads(_conflict_params(conflict, "rt")["detail"])["pair"] == [1, 3]
+    unnamed = {key: value for key, value in conflict.items() if key != "pair"}
+    [row] = score_lane.conflict_params({"conflicts": [unnamed]}, {}, "gtest")
+    assert "pair" not in json.loads(row["detail"])
+
+
 def test_a_pair_carries_its_cluster_key_only_when_both_sides_landed_in_it(
     lane, tmp_path: Path
 ) -> None:
