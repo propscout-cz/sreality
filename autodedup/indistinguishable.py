@@ -124,6 +124,7 @@ from autodedup.text_facts import (
     priced_letting_plan,
     printed_house_numbers,
     printed_house_numbers_meet,
+    printed_storey_counts,
     accessory_areas,
     accessory_designators,
     body_localities,
@@ -900,7 +901,7 @@ def _printed_areas_prevail(a: Listing, b: Listing) -> bool:
 
 
 def _price_sequential_path(
-    a: Listing, b: Listing, feats: Feats | None, settings: Settings
+    a: Listing, b: Listing, feats: Feats | None, settings: Settings, lenient: bool = False
 ) -> bool:
     """E185: a price MOVE between two postings that were never on sale together.
 
@@ -944,6 +945,21 @@ def _price_sequential_path(
     if (gap is not None and gap > 0.0 and not _column_rounding(a, b, settings)
             and not (settings.d43_printed_area_prevails and _printed_areas_prevail(a, b))):
         return False
+    if lenient and gap is not None and not any(
+            listing.category_main == "komercni" and listing.category_type == "pronajem"
+            for listing in (a, b)):
+        # E955: in the gate and the cluster, two postings never on sale together that state one
+        # area, and no two dispositions or storeys (a side silent on either is not read against
+        # it), are one unit at two moments — the standing ruling
+        # that a re-list is a duplicate, and D43's line that a price of one moment says nothing
+        # about another. The photo or body identity below stays PROMOTION's alone: a re-list
+        # rewrites its text and re-shoots its photographs (Liberecká 3 000 m² at 27,750,000 then
+        # 25,700,000; Čtvrť Emila Kolbena 1+kk at 19,990 then 18,990, one text inside project
+        # vocabulary), and a merge the engine already certified needs no second identity.
+        # Never for a COMMERCIAL LETTING: one building lets desks, membership tiers and offices
+        # under one area, and a tier is not a unit (the operator's Regus 85261 split, 2026-10-13;
+        # Spaces Pankrác, a 4,890 dedicated desk against a `již od` 6,690 membership, 10 m² both).
+        return True
     if gap is None:
         # E192: a side that states no area has demonstrated no area — unless the two adverts
         # carry the seller's own order code for ONE object, or one body essentially IS the
@@ -2409,6 +2425,21 @@ def total_floors_agreeing_unit(a: Listing, b: Listing, cfg: Settings) -> bool:
             or price_paths_agree(a, b, cfg.d43_price_path_tol))
 
 
+def printed_storeys_prevail(a: Listing, b: Listing) -> bool:
+    """E954: the building's storey count a body PRINTS stands in for its own `total_floors` box.
+
+    The operator's ruling (2026-10-13, convention 1): a portal form field against the
+    descriptions — the descriptions' figure counts. Each side reads as the counts its body
+    prints, or its column where the body prints none, and the two are one building when they
+    name a common count. Read only where the columns already disagree, so it removes a fact
+    and never adds one."""
+    left = printed_storey_counts(a.description) or (
+        frozenset({a.total_floors}) if a.total_floors is not None else frozenset())
+    right = printed_storey_counts(b.description) or (
+        frozenset({b.total_floors}) if b.total_floors is not None else frozenset())
+    return bool(left & right)
+
+
 def _floor_fact(a: Listing, b: Listing, cfg: Settings) -> bool:
     """The `floor` fact of `distinguishing_facts`, read once so E185 can ask the same question.
 
@@ -2682,9 +2713,11 @@ def distinguishing_facts(
         # ambiguity again — the same slack `floor` already carries across every portal pair.
         ambiguous = (lenient and cfg.d43_gate_total_floors_slack and delta_total == 1
                      and convention_ambiguous(cfg.floor_camps, a.source, b.source))
-        # E301 (one camp shift, both numbers) and E302 (prepared: the unit agrees).
+        # E301 (one camp shift, both numbers), E302 (prepared: the unit agrees) and E954 (the
+        # count a body prints stands in for its own box).
         excused = (floor_total_camp_shift(a, b, cfg)
-                   or total_floors_agreeing_unit(a, b, cfg))
+                   or total_floors_agreeing_unit(a, b, cfg)
+                   or printed_storeys_prevail(a, b))
         if delta_total and not joint and not camped and not ambiguous and not excused:
             add("total_floors", a.total_floors, b.total_floors)
 
@@ -2716,7 +2749,7 @@ def distinguishing_facts(
                              and price_gap > PRICE_CROSS_TOL
                              and _co_live(a, b, cfg.d43_price_colive_min_overlap_days))
             # E185: a move between two postings that were never on sale together is one path.
-            moved = _price_sequential_path(a, b, feats, cfg)
+            moved = _price_sequential_path(a, b, feats, cfg, lenient)
             if ((over and not agree) or contradiction) and not moved:
                 add("price", a.price, b.price)
         elif over:

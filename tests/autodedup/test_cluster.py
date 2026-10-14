@@ -284,3 +284,44 @@ def test_a_bridge_that_a_previous_bridge_made_redundant_is_recorded_as_such() ->
     assert result.stats["n_bridges_applied"] == 1
     assert [bridge["invariant"] for bridge in result.bridges
             if not bridge["applied"]] == ["redundant"]
+
+
+def test_E957_a_refused_union_names_the_two_adverts_a_fact_parts() -> None:
+    """The edge 2-3 is refused because 1 and 3 face two ways; 2 and 3 themselves agree, so the
+    conflict row names 1 x 3 beside the edge it is keyed on."""
+    from autodedup.d43 import ClusterRelation
+
+    listings, fps = _world(_listing(1, description="Byt orientovaný na jih."), _listing(2),
+                           _listing(3, description="Byt orientovaný na sever."))
+    relation = ClusterRelation(listings, None, SETTINGS)
+    result = cluster_pairs([_edge(1, 2, 0.99), _edge(2, 3, 0.98)], listings, fps, SETTINGS,
+                           relation=relation)
+    assert result.clusters == {1: [1, 2]}
+    [conflict] = result.conflicts
+    assert (conflict["lo"], conflict["hi"]) == (2, 3)
+    assert conflict["invariant"] == "d43_distinguishable"
+    assert conflict["pair"] == [1, 3]
+
+
+def test_E957_only_the_stated_fact_limb_names_a_pair() -> None:
+    listings, fps = _world(_listing(1, area_m2=60.0), _listing(2, area_m2=62.5),
+                           _listing(3, area_m2=65.5))
+    result = cluster_pairs([_edge(1, 2, 0.99), _edge(2, 3, 0.98)], listings, fps, SETTINGS)
+    assert result.conflicts and all("pair" not in c for c in result.conflicts)
+
+
+def test_E957_the_repartition_path_names_the_pair_too() -> None:
+    """w31 clusters through `repartition`, the path the union-find test above does not reach."""
+    from dataclasses import replace
+
+    from autodedup.d43 import ClusterRelation
+
+    cut = replace(SETTINGS, repartition=True)
+    listings, fps = _world(_listing(1, description="Byt orientovaný na jih."), _listing(2),
+                           _listing(3, description="Byt orientovaný na sever."))
+    result = cluster_pairs([_edge(1, 2, 0.99), _edge(2, 3, 0.98)], listings, fps, cut,
+                           relation=ClusterRelation(listings, None, cut))
+    assert result.clusters == {1: [1, 2]}
+    [conflict] = result.conflicts
+    assert (conflict["lo"], conflict["hi"], conflict["invariant"]) == (2, 3, "d43_distinguishable")
+    assert conflict["pair"] == [1, 3]
