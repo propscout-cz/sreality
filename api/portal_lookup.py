@@ -21,7 +21,9 @@ rule #18) so the panel's save-to-collection control knows which collections the
 property is already in, writing through the existing bearer-gated
 `POST/DELETE /collections/{id}/properties`. And whether the caller
 has **dismissed** the property (`dismissed`, migration 536), for the panel's
-hide toggle, which writes through `POST/DELETE /dismissals`.
+hide toggle, which writes through `POST/DELETE /dismissals`. And the
+property's **tags** (`tag_ids`, rule #18), which the search-page cards print
+over the photo (names and colours from `GET /tags`).
 
 Rows come back keyed by column name (dict_row) — no positional index math, so
 projecting one more column is a one-line change that can't silently misalign.
@@ -130,6 +132,9 @@ SELECT
     (SELECT coalesce(array_agg(cp.collection_id ORDER BY cp.collection_id), array[]::bigint[])
        FROM collection_properties cp
       WHERE cp.property_id = tgt.property_id) AS collection_ids,
+    (SELECT coalesce(array_agg(pt.tag_id ORDER BY pt.tag_id), array[]::bigint[])
+       FROM property_tags pt
+      WHERE pt.property_id = tgt.property_id) AS tag_ids,
     EXISTS (SELECT 1 FROM property_dismissals_public pd
              WHERE pd.property_id = tgt.property_id) AS dismissed
 FROM tgt
@@ -293,6 +298,9 @@ def lookup_portal_listings(
         entry["collection_ids"] = (
             list(acct.get("collection_ids") or []) if row["property_id"] is not None else None
         )
+        entry["tag_ids"] = (
+            list(acct.get("tag_ids") or []) if row["property_id"] is not None else None
+        )
         # Dismissal (migration 536) is property-grain too: the panel's hide toggle.
         entry["dismissed"] = (
             bool(acct.get("dismissed")) if row["property_id"] is not None else None
@@ -302,7 +310,7 @@ def lookup_portal_listings(
     fallback = lambda it: {  # noqa: E731 — tiny shape for the (rare) missing row
         "source": it.source, "source_id": it.source_id, "found": False,
         "latest_estimation": None, "pipeline": None, "collection_ids": None,
-        "dismissed": None,
+        "tag_ids": None, "dismissed": None,
         "fond_per_m2_czk_default": DEFAULT_FOND_CZK_PER_M2,
     }
     return {"data": [by_key.get((it.source, it.source_id), fallback(it)) for it in items]}

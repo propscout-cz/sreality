@@ -16,9 +16,9 @@
  * Operator state is PROPERTY-grain: a write repaints every card of that
  * property on the page, and the panel when it shows the same property.
  *
- * A card in the pipeline or a collection also gets that drawn over its photo
- * (index_photo_mark.ts): the photo toned in the stage colour under the stage
- * badge; a copper rim and a tag naming the collection.
+ * A card in the pipeline, a collection or tagged also gets that drawn over its
+ * photo (index_photo_mark.ts): the photo toned in the stage colour under the
+ * stage badge; a copper rim and a label naming the collection; the tag chips.
  *
  * The cluster lives in a closed shadow root per card, so the portal's CSS
  * can't reach it; the two menus share one page-level shadow host, positioned
@@ -46,6 +46,7 @@ import type {
   CollectionWriteResult,
   DismissalWriteResult,
   ExtCollection,
+  ExtTag,
   PipelineCardResult,
   PipelineMembership,
   PipelineStage,
@@ -370,6 +371,10 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   let collections: ExtCollection[] | null = null;
   let collectionsLoading = false;
   let collectionsFailed = false;
+  /* Read once a card on the page carries a tag; tags are edited in the app. */
+  let tags: ExtTag[] | null = null;
+  let tagsLoading = false;
+  let tagsFailed = false;
 
   let menu: Menu | null = null;
   let menuDom: MenuDom | null = null;
@@ -434,6 +439,18 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     stagesLoading = false;
     if (data == null) stagesFailed = true;
     else stages = data;
+    refresh();
+  }
+
+  async function loadTags(): Promise<void> {
+    if (tags != null || tagsLoading || tagsFailed) return;
+    tagsLoading = true;
+    const asked = epoch;
+    const data = await readList<ExtTag[]>({ type: 'list_tags' }, asked);
+    if (asked !== epoch) return;
+    tagsLoading = false;
+    if (data == null) tagsFailed = true;
+    else tags = data;
     refresh();
   }
 
@@ -716,12 +733,17 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const savedNames = sortCollections(collections ?? [])
         .filter((c) => savedIds.includes(c.id))
         .map((c) => c.name);
+      const tagIds = pid != null ? l.tag_ids ?? [] : [];
+      const tagged = (tags ?? [])
+        .filter((t) => tagIds.includes(t.id))
+        .map((t) => ({ name: t.name, color: t.color }));
       const dismissed = pid != null && l.dismissed === true;
       const canHide = pid != null && l.dismissed != null && !isLive(l);
       const veiled = dismissed && deps.veilOn();
       const view = deps.badgeFor(l, href);
       const state = JSON.stringify([
-        pid, inPipe, p?.stage_label, p?.stage_color, code, saved, savedNames, dismissed, canHide,
+        pid, inPipe, p?.stage_label, p?.stage_color, code, saved, savedNames, tagged, dismissed,
+        canHide,
         veiled, view, busy.has(`p:${pid}`), busy.has(`d:${pid}`),
         menu?.anchor === funnel, menu?.anchor === save,
       ]);
@@ -780,19 +802,22 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
 
       host.toggleAttribute('data-veiled', veiled);
       // A card guess that holds several results would mark another one's photo.
-      const single = (dismissed || inPipe || saved > 0) && holdsOneListing(card, sourceId);
+      const marked = inPipe || saved > 0 || tagged.length > 0;
+      const single = (dismissed || marked) && holdsOneListing(card, sourceId);
       if (dismissed && single) card.setAttribute(DISMISSED_ATTR, '');
       else card.removeAttribute(DISMISSED_ATTR);
-      mark.show((inPipe || saved > 0) && !veiled && single
+      mark.show(marked && !veiled && single
         ? {
           stage: inPipe
             ? { color: p?.stage_color ?? null, badge: code, label: p?.stage_label ?? null }
             : null,
           collections: saved > 0 ? savedNames : null,
+          tags: tagged,
         }
         : null);
-      // The collection list names the tag.
+      // The lists name the collection label and the tag chips.
       if (saved > 0 && !collectionsFailed) void loadCollections(false);
+      if (tagIds.length > 0) void loadTags();
     }
 
     handles.set(card, {
@@ -853,6 +878,9 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     collections = null;
     collectionsLoading = false;
     collectionsFailed = false;
+    tags = null;
+    tagsLoading = false;
+    tagsFailed = false;
   }
 
   // ---- the menus ------------------------------------------------------------

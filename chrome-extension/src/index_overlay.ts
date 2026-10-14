@@ -493,9 +493,9 @@ export async function runIndexOverlay(
   };
 
   /* What makes a property's operator state on a card: the three things the
-   * card controls and the panel both write. */
+   * card controls and the panel both write, and the tags the panel assigns. */
   const curation = (l: PortalListing): string =>
-    JSON.stringify([l.pipeline, l.collection_ids, l.dismissed]);
+    JSON.stringify([l.pipeline, l.collection_ids, l.dismissed, l.tag_ids]);
 
   function sync(listing: PortalListing): void {
     if (stopped || !listing.found || listing.property_id == null) return;
@@ -506,6 +506,7 @@ export async function runIndexOverlay(
         ...l,
         pipeline: listing.pipeline,
         collection_ids: listing.collection_ids,
+        tag_ids: listing.tag_ids,
         dismissed: listing.dismissed,
       });
       changed = true;
