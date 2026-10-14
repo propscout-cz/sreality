@@ -5,23 +5,23 @@ EXECUTE; the three concurrent index drops are top-level statements, the feed's b
 it reads and the keyset pair last; each section refuses before its first drop, including what a
 column's removal would take unasked (an index, a constraint over a column that stays) and a
 function that reads the note; section 0's production half, which the replay never reaches, names
-what the worker and the sweep name; the map function is 590's less exactly `listing_ids_filter`
-and its predicate, its ACL re-issued for the shorter signature; the board view is 590's verbatim
-and the card view 377's less the note; the receipt probes the three restated objects only. The
-live md5 pins (section 0, section 8) are checked where a server formats them: CI's replay applies
-this file (migrations.yml), and production refuses at apply time
+what the worker and the sweep name; the map function is not this file's (migration 597 took
+`listing_ids_filter` out, so section 5 is gone) and only section 8's smoke call names it; the board
+view is 590's verbatim and the card view 377's less the note; the receipt probes the two restated
+views only. The live md5 pins (section 0, section 8) are checked where a server formats them: CI's
+replay applies this file (migrations.yml), and production refuses at apply time
 (docs/design/merge-sprint/W6_RUNBOOK.md).
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
 import pytest
 
 from scripts.migration_objects import _strip_noise, parse_objects
+from tests.migration_defs import latest_definition
 from tests.test_migration_rls_grants import _dynamic_ddl
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
@@ -39,9 +39,11 @@ def _block(tag: str) -> str:
     return CODE[at: CODE.index(f"${tag}$;", at)]
 
 
-def _map(text: str) -> str:
+def _map_params(text: str) -> list[str]:
+    """browse_map_cells' parameter names in a migration that creates it, in order."""
     at = text.index("create or replace function public.browse_map_cells(")
-    return text[at: text.index("$function$;", at) + len("$function$;")]
+    args = re.sub(r"--[^\n]*", "", text[text.index("(", at) + 1: text.index(")\nreturns", at)])
+    return re.findall(r"(?:^|,)\s*([a-z][a-z0-9_]*)\s+[a-z]", args)
 
 
 def _flat(text: str) -> str:
@@ -62,7 +64,6 @@ def test_the_section_6_objects_go_and_nothing_else_nothing_cascades() -> None:
         "drop column if exists asset_id", "drop column if exists discovery_seq",
         "drop column if exists discovery_seq", "drop column if exists distinct_site_count",
         "drop column if exists price_per_m2_source_listing_id", "drop column note",
-        "drop function if exists public.browse_map_cells",
         "drop function if exists public.listing_feed_visible",
         "drop function if exists public.log_property_status_event",
         "drop function if exists public.price_per_m2_source_id",
@@ -86,7 +87,7 @@ def test_the_concurrent_drops_are_top_level_the_feeds_first_the_keysets_last() -
     assert at("$pre$;") < at(FEED_DIC) < at("do $status_assets$") < at("do $feed$")
     assert at("$note$;") < at(KEYSET_DICS[0]) < at(KEYSET_DICS[1]) < at("do $post$")
     inside = [m.group(0) for m in re.finditer(r"do \$(\w+)\$.*?\$\1\$;", CODE, re.S)]
-    inside.append(CODE[at("begin;"): at("commit;")])
+    inside += re.findall(r"^begin;$.*?^commit;$", CODE, re.M | re.S)
     for statement in (FEED_DIC, *KEYSET_DICS):
         assert re.search(rf"^{re.escape(statement)}$", CODE, re.M)
         assert not [block for block in inside if statement in block], statement
@@ -156,43 +157,49 @@ def test_section_0s_production_half_names_what_its_owners_name() -> None:
     assert _new_holder("full").startswith("full:")
 
 
-def test_the_map_is_recreated_in_one_transaction_behind_its_guard() -> None:
-    tx = CODE[CODE.index("begin;"): CODE.index("commit;")]
-    on = tx.index
-    assert (on("do $map_guard$") < on("drop function if exists public.browse_map_cells(")
-            < on("create or replace function public.browse_map_cells(")
-            < on("revoke execute on function public.browse_map_cells(")
-            < on("grant execute on function public.browse_map_cells("))
+def test_the_two_restated_views_are_pinned_before_the_production_gate() -> None:
+    """Section 6 restates the board and the card from text written on 2026-10-08. Section 0
+    refuses any other live body before its production gate, so CI's replay checks the pins too,
+    and section 8 checks what section 6 wrote.
+
+    RED by: moving the pin below `if not v_populated` (the replay would stop checking it), or
+    dropping either view's pin from section 0 or section 8.
+    """
+    pre = _flat(_block("pre"))
+    pin = pre.index("if md5(pg_get_viewdef('public.pipeline_board_public'::regclass)) <> "
+                    "'06c950df3e18e0f58c4be6b06973600e' or md5(pg_get_viewdef("
+                    "'public.property_pipeline_public'::regclass)) not in "
+                    "('54671707e2d2c12d1a47971325e9a784', '88093f6916bb54a0a9e4333fbf0cd544') "
+                    "then raise exception '593 refused")
+    assert pin < pre.index("if not v_populated then")
+    post = _flat(_block("post"))
+    for view, md5 in (("property_pipeline_public", "88093f6916bb54a0a9e4333fbf0cd544"),
+                      ("pipeline_board_public", "06c950df3e18e0f58c4be6b06973600e")):
+        assert (f"md5(pg_get_viewdef('public.{view}'::regclass)) is distinct from '{md5}'"
+                in post), view
 
 
-def test_the_map_is_590s_less_exactly_the_parameter_and_its_predicate() -> None:
-    old, new = _map(S590), _map(SQL)
-    param = re.search(r"\n  -- The two parameters browse_stats_properties does not have\.\n.*?"
-                      r"  listing_ids_filter bigint\[\] default null::bigint\[\],\n", old, re.S)
-    predicate = re.search(r"\n      -- The third id space .*?and \(listing_ids_filter is null "
-                          r"or l\.listing_id = any\(listing_ids_filter\)\)", old, re.S)
-    assert new == old.replace(param.group(0), "\n  -- The one parameter browse_stats_properties "
-                              "does not have.\n").replace(predicate.group(0), "")
-    body = new[new.index("as $function$") + len("as $function$"): new.rindex("$function$;")]
-    assert hashlib.md5(body.encode()).hexdigest() == "d60bf1ec13b86d3a7afeb0dee0695c26"
-    assert "d60bf1ec13b86d3a7afeb0dee0695c26" in _block("post")
+def test_the_map_function_is_597s_and_this_file_only_calls_it() -> None:
+    """Migration 597 (portal exclusion, applied 2026-10-13) re-created browse_map_cells without
+    `listing_ids_filter`, so 593 no longer drops, creates, grants or pins it.
 
-
-def test_the_acl_is_reissued_for_the_shorter_signature() -> None:
-    def types(pattern: str) -> list[str]:
-        return [_flat(t) for t in re.search(pattern, CODE, re.S).group(1).split(",")]
-
-    dropped = types(r"drop function if exists public\.browse_map_cells\((.*?)\);")
-    granted = types(r"grant execute on function public\.browse_map_cells\((.*?)\)\s+to "
-                    r"authenticated, service_role;")
-    assert types(r"revoke execute on function public\.browse_map_cells\((.*?)\)\s+from "
-                 r"public, anon;") == granted
-    header = _map(CODE)
-    args = header[header.index("(") + 1: header.index(")\nreturns")]
-    declared = [_flat(re.match(r"\s*\w+\s+(.*?)\s+default\b", a, re.S).group(1))
-                for a in args.split(",\n")]
-    assert dropped[-4:] == ["bigint[]", "bigint[]", "integer", "boolean"]
-    assert granted == declared == dropped[:-3] + dropped[-2:]
+    RED by: restating the map here again. Production applies 593 after 597, so a restatement would
+    undo 597's portal exclusion; the CI replay runs 593 first, so 597's md5 precondition would
+    refuse. The one call left (section 8's smoke read) names only arguments that 590's signature
+    (the replay) and the latest one (production) both take.
+    """
+    assert "listing_ids_filter" not in CODE
+    assert len(re.findall(r"browse_map_cells", CODE)) == 1
+    call = re.search(r"perform public\.browse_map_cells\((.*?)\);", _block("post"), re.S)
+    named = re.findall(r"(\w+)\s*=>", call.group(1))
+    assert named == ["category_main_filter", "category_type_filter", "bbox_west", "bbox_south",
+                     "bbox_east", "bbox_north", "point_budget"]
+    latest = latest_definition("browse_map_cells")
+    assert int(latest.name.split("_", 1)[0]) >= 597
+    for text in (S590, latest.read_text(encoding="utf-8")):
+        params = _map_params(text)
+        assert len(params) > 60 and not set(named) - set(params)
+    assert "listing_ids_filter" not in _map_params(latest.read_text(encoding="utf-8"))
 
 
 def test_the_board_is_590s_verbatim_and_the_card_is_377s_less_the_note() -> None:
@@ -214,7 +221,6 @@ def test_the_board_is_590s_verbatim_and_the_card_is_377s_less_the_note() -> None
             < on("alter table public.property_pipeline drop column note;"))
 
 
-def test_the_receipt_probes_the_three_restated_objects_only() -> None:
+def test_the_receipt_probes_the_two_restated_views_only() -> None:
     assert [str(o) for o in parse_objects(SQL)] == [
-        "relation:property_pipeline_public", "relation:pipeline_board_public",
-        "function:public.browse_map_cells"]
+        "relation:property_pipeline_public", "relation:pipeline_board_public"]

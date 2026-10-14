@@ -4,13 +4,17 @@ The order for the day the operator names (PROGRAM.md §5's W6 gate, §6's list, 
 `migrations/593_merge_sprint_w6_drops.sql` on branch `feature/merge-sprint-w6`. Every SQL read below
 goes through MCP `execute_sql` and starts with `SET statement_timeout='30s';`. `execute_sql` returns only
 the last result set and collapses columns that share a name, so run each SELECT of C2, C4's second
-block, C6, C8, C10 and step 14 as its own call, each starting with that SET, or fold a check into one
+block, C6, C10 and step 14 as its own call, each starting with that SET, or fold a check into one
 SELECT of scalar subqueries. The only production writes are the brake (steps 5 and 13), which the
 operator sets and releases on /settings, because a Claude session's write of that setting has
 been refused by the permission check before; the apply (step 10), which runs only after the operator's
 "yes, apply it" (step 7); at most one PostgREST reload (step 16); and the sampler-table drop (step 21).
 The reload and the drop need the operator's OK too. Baselines were read on 2026-10-08 between 03:51 and 06:29 UTC,
-except those dated 2026-10-10.
+except those dated 2026-10-10 or later.
+
+593 does not touch `browse_map_cells`. Migration 597 (portal exclusion, applied 2026-10-13) already
+re-created it without `listing_ids_filter`, so 593's section 5 is gone and 597 owns the function's
+body and ACL; no check below pins it, and only the smoke reads call it.
 
 ```bash
 TARGETS="property_status_events assets asset_membership_events properties:id,asset_id,price_per_m2_source_listing_id,distinct_site_count listings:id,discovery_seq listing_detail_queue:native_id,source,discovery_seq property_pipeline:property_id,account_id,note"
@@ -22,7 +26,7 @@ TARGETS="property_status_events assets asset_membership_events properties:id,ass
 2. **Plan and connectivity:**
    `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=593_merge_sprint_w6_drops.sql -f dry_run=true`,
    then `gh run list --workflow apply_migration.yml --limit 1 --json databaseId` and `gh run watch <id> --exit-status`.
-   Expect `593_merge_sprint_w6_drops.sql: 136 statement(s), 3 probeable object(s)` and one connectivity row.
+   Expect `593_merge_sprint_w6_drops.sql: 112 statement(s), 2 probeable object(s)` and one connectivity row.
    Then run C1 and C2 once: each answers, and C1's `interval_s` reads 60 until the brake (null: a wrong key).
 3. **Backup rehearsal.** The column-CSV path has never run in production.
    `gh workflow run backup_before_drop.yml --ref main -f label=merge-sprint-w6-rehearsal -f targets="$TARGETS"`,
@@ -92,7 +96,7 @@ first.
    Expect `live_lease` null, `bootstrap` false (true on a morning under step 3b's override), and the same
    `passes` and `last_pass_at` in both reads with `in_flight_s` null. If `bootstrap` is true without that
    override, move the window a day (the dedup session's rule). Section 0 refuses unless the brake is 0,
-   and until a held lease expires (593:114-116). A pass ends by itself within 17.5 minutes; a lease from
+   and until a held lease expires (593:105-107). A pass ends by itself within 17.5 minutes; a lease from
    a pass that died lasts up to 40 minutes, and a `dispatch:` or seed holder up to 5 hours. If a lease
    will outlast the dispatch, re-time the dispatch to 05:31:30–05:36:30, between the 05:30 rebuilds and
    the 05:37 map rebuild, or move the day.
@@ -149,7 +153,7 @@ first.
         or (a.attrelid in ('public.listings'::regclass, 'public.listing_detail_queue'::regclass) and a.attname = 'discovery_seq')
         or (a.attrelid = 'public.property_pipeline'::regclass and a.attname = 'note')
     union all select p.oid::regprocedure::text, 'pg_proc'::regclass::oid, p.oid, 0 from pg_proc p
-     where p.pronamespace = 'public'::regnamespace and p.proname in ('listing_feed_visible', 'browse_map_cells', 'price_per_m2_source_id', 'log_property_status_event', 'browse_list_mf'))
+     where p.pronamespace = 'public'::regnamespace and p.proname in ('listing_feed_visible', 'price_per_m2_source_id', 'log_property_status_event', 'browse_list_mf'))
   select left(t.label, 60) label, string_agg(distinct pg_describe_object(d.classid, d.objid, d.objsubid), ' | ') dependants
     from t left join pg_depend d on d.refclassid = t.classid and d.refobjid = t.objid
                                  and (t.objsubid = 0 or d.refobjsubid = t.objsubid) and (d.deptype = 'n' or t.objsubid <> 0)
@@ -161,16 +165,15 @@ first.
   views, and `note_readers` and `wider_constraints` null:
   - `listing_feed_public` in `listing_feed_visible`.
   - `property_status_events` in `log_property_status_event`.
-  - `listing_ids_filter` and `browse_map_cells` in `browse_map_cells` only.
   ```sql
   select k.kw, string_agg(distinct p.proname, ', ') fns from (values ('discovery_seq'), ('listing_feed_public'), ('listing_feed_visible'),
     ('price_per_m2_source'), ('property_status_events'), ('asset_membership_events'), ('asset_id'), ('distinct_site_count'),
-    ('listing_ids_filter'), ('browse_map_cells'), ('property_pipeline_public'), ('pipeline_board_public')) k(kw)
+    ('property_pipeline_public'), ('pipeline_board_public')) k(kw)
     left join pg_proc p on p.prosrc ilike '%' || k.kw || '%' and p.pronamespace not in ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
    group by 1 order by 1;
   select string_agg(c.oid::regclass::text, ', ') from pg_class c
    where c.relkind in ('v', 'm') and c.relnamespace not in ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
-     and pg_get_viewdef(c.oid) ~* '(property_status_events|asset_membership_events|\massets\M|price_per_m2_source|distinct_site_count|listing_feed|discovery_seq|listing_ids_filter)';
+     and pg_get_viewdef(c.oid) ~* '(property_status_events|asset_membership_events|\massets\M|price_per_m2_source|distinct_site_count|listing_feed|discovery_seq)';
   select (select string_agg(p.oid::regprocedure::text, ', ') from pg_proc p
            where p.pronamespace not in ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) and p.prosrc ~* '\mnote\M'
              and (p.prosrc ~* '\mproperty_pipeline\M' or p.oid in (select tgfoid from pg_trigger where tgrelid = 'public.property_pipeline'::regclass))) note_readers,
@@ -211,23 +214,22 @@ first.
          (select reltuples::bigint from pg_class where oid = 'public.listings'::regclass) listings_est,
          (select null_frac from pg_stats where schemaname = 'public' and tablename = 'listings' and attname = 'discovery_seq') seq_null_frac;
   ```
-- **C8, the pinned bodies.** Section 0 checks these too.
-  Expect `def_md5` `044d7fb46125b5d68dd3cf19dca31812`, `src_md5` `0a1cf3a94fce99941adca7cbe1f375b9`,
-  `acl` `{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}`, then
-  `board_md5` `06c950df3e18e0f58c4be6b06973600e` and `card_md5` `54671707e2d2c12d1a47971325e9a784`.
-  Any other value means another session restated a body: regenerate section 5 or 6 from the live text.
-  One MCP call per SELECT:
+- **C8, the pinned bodies.** Section 0 checks these too. Expect `board_md5`
+  `06c950df3e18e0f58c4be6b06973600e` and `card_md5` `54671707e2d2c12d1a47971325e9a784` (both unchanged
+  on 2026-10-14). Any other value means another session restated a body: regenerate section 6 from
+  the live text. The map function is not pinned: 597 owns it.
   ```sql
-  select md5(pg_get_functiondef(oid)) def_md5, md5(prosrc) src_md5, proacl::text acl from pg_proc where pronamespace = 'public'::regnamespace and proname = 'browse_map_cells';
   select md5(pg_get_viewdef('public.pipeline_board_public'::regclass)) board_md5, md5(pg_get_viewdef('public.property_pipeline_public'::regclass)) card_md5;
   ```
-  Then run `git fetch origin` and the two commands below. On main the grep may show only
-  `.github/workflows/migrations.yml:504` (a comment), `frontend/src/lib/measure.ts:12`, `queries.test.ts:883,886`,
-  `toolkit/filter_registry.py:1899` and `property_carriers.py`'s three NOT_CARRIED entries, which this PR
+  Then run `git fetch origin` and the two commands below. On main (read 2026-10-14) the grep may show only
+  `.github/workflows/migrations.yml:504` (a comment), `frontend/src/lib/measure.ts:12`,
+  `toolkit/filter_registry.py:1926` and `property_carriers.py`'s three NOT_CARRIED entries, which this PR
   removes. Any other hit is a new reader, but read a bare `asset_id` hit (such as `photo_asset_id`) before
-  it stops the window. The `ls-tree` must show only `migrations/594_gone_ledger_hysteresis.sql`.
+  it stops the window. The `ls-tree` must show only `migrations/594_gone_ledger_hysteresis.sql`,
+  `migrations/595_filter_presets_per_account.sql`, `migrations/596_autodedup_reject_ledger.sql` and
+  `migrations/597_portal_exclusion.sql`.
   ```bash
-  git grep -n -E -e 'property_status_events|asset_membership_events|asset_id|listing_feed_(public|visible)|discovery_seq|price_per_m2_source|distinct_site_count|listing_ids_filter|last_seen_keyset|portal_feed_idx' -e 'pp\.note\b|property_pipeline[a-z_]*.{0,80}\bnote\b' -e '(from|join|into|update)\s+(public\.)?assets\b' origin/main -- api toolkit scraper scripts autodedup location_data frontend/src chrome-extension .github/workflows 'migrations/59[5-9]_*'
+  git grep -n -E -e 'property_status_events|asset_membership_events|asset_id|listing_feed_(public|visible)|discovery_seq|price_per_m2_source|distinct_site_count|last_seen_keyset|portal_feed_idx' -e 'pp\.note\b|property_pipeline[a-z_]*.{0,80}\bnote\b' -e '(from|join|into|update)\s+(public\.)?assets\b' origin/main -- api toolkit scraper scripts autodedup location_data frontend/src chrome-extension .github/workflows 'migrations/59[5-9]_*'
   git ls-tree --name-only origin/main migrations/ | grep -E '/59[3-9]_'
   ```
 - **C9, the size baseline.** On 2026-10-10 18:03 these were 137,149,631,635, 3,171,336,192 and 12,058,083,328 bytes.
@@ -266,8 +268,8 @@ first.
     `593: landed` among them, print only after psql exits. Write down the `headSha` of the run that prints
     `593: landed` (`gh run view <id> --json headSha --jq .headSha`).
     - **What the log shows.** On success: `593: landed`, `applied migrations/593_merge_sprint_w6_drops.sql`,
-      then the receipt `receipt OK: 3 object(s) present`. The receipt proves nothing about the drops,
-      because those three objects existed before: the proof is `593: landed` plus step 11's P1.
+      then the receipt `receipt OK: 2 object(s) present`. The receipt proves nothing about the drops,
+      because those two views existed before: the proof is `593: landed` plus step 11's P1.
     - **`canceling statement due to lock timeout`.** This is the retry working (30 tries, 20 s apart). A
       concurrent index drop that times out leaves its index invalid until the next try.
     - **`593 refused: …`, or any other error** (`deadlock detected` is not retried). Its section and
@@ -275,8 +277,8 @@ first.
       and dispatch again: the file is idempotent.
     - **`property_pipeline.note KEPT`.** Section 6 skipped because a card holds a note. A later migration drops the note.
 11. **The receipt, by hand (P1).** Expect every relation, function and trigger null or 0, and `cols_left` null
-    (`property_pipeline.note` if section 6 skipped). Expect `map_defs` 1, `map_md5` `d60bf1ec13b86d3a7afeb0dee0695c26`
-    and `pp_md5` `88093f6916bb54a0a9e4333fbf0cd544` (`54671707…` if section 6 skipped).
+    (`property_pipeline.note` if section 6 skipped), and `pp_md5` `88093f6916bb54a0a9e4333fbf0cd544`
+    (`54671707…` if section 6 skipped). The map function is not 593's to check: 597 owns it.
     ```sql
     select to_regclass('public.property_status_events') pse, to_regclass('public.property_status_events_public') psev, to_regclass('public.assets') a,
            to_regclass('public.asset_membership_events') ame, to_regclass('public.listing_feed_public') feed, to_regclass('public.listing_discovery_seq') seq,
@@ -288,8 +290,6 @@ first.
              and ((table_name = 'properties' and column_name in ('asset_id', 'price_per_m2_source_listing_id', 'distinct_site_count'))
                or (table_name in ('listings', 'listing_detail_queue') and column_name = 'discovery_seq')
                or (table_name = 'property_pipeline' and column_name = 'note'))) cols_left,
-           (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'browse_map_cells') map_defs,
-           (select md5(prosrc) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'browse_map_cells') map_md5,
            md5(pg_get_viewdef('public.property_pipeline_public'::regclass)) pp_md5;
     ```
 
@@ -331,9 +331,11 @@ first.
       move after 05:30, and `dirty_properties` drains.
     - The Postgres logs since 05:20 (MCP `query_logs`, source `postgres_logs`) show no `does not exist` naming a dropped object.
 16. **PostgREST has reloaded.** The file ends with `pg_notify('pgrst', 'reload schema')`, and the DDL
-    event triggers reload too. A fresh tab's map read answers with no PGRST202. If PostgREST still names
-    `listing_ids_filter` or a dropped relation, send `select pg_notify('pgrst', 'reload schema');` once,
-    with the OK. Tabs opened before W5 fail until they are reloaded; that is accepted (PROGRAM.md §10).
+    event triggers reload too. 593 changes no surviving function's parameter list (597 changed the
+    map's on 2026-10-13), so the reload is about the dropped relations, columns and functions and the
+    two re-created pipeline views: a fresh tab's `/pipeline` and property page answer. If PostgREST
+    still names a dropped object, send `select pg_notify('pgrst', 'reload schema');` once, with the OK.
+    Tabs opened before W5 fail until they are reloaded; that is accepted (PROGRAM.md §10).
 17. **Browser smoke on the production SPA, read-only.**
     - Browse: the default view, and one portal (maxima) with "Newest first".
     - The map in cells and in points, and the Stats tab.

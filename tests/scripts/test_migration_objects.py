@@ -141,7 +141,7 @@ def test_a_later_drop_retires_the_earlier_declaration(tmp_path):
 
 
 def test_a_file_that_drops_and_recreates_keeps_declaring(tmp_path):
-    """593's map function and two views, 590's views: dropped and created in one file."""
+    """593's pipeline views, 597's map function, 590's views: dropped and created in one file."""
     (tmp_path / "001_a.sql").write_text("create view v as select 1;")
     (tmp_path / "002_b.sql").write_text("drop view if exists v; create view v as select 2;")
     assert _declared(tmp_path) == [[], ["relation:v"]]
