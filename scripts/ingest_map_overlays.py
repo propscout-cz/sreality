@@ -575,7 +575,7 @@ SOURCES: dict[str, Section] = {
         ),
     ),
     "kraje": Section(
-        label="Kraje", sort=3, minzoom=5, maxzoom=9,
+        label="Kraje", sort=3, minzoom=3, maxzoom=9,
         attribution="© ČÚZK (RÚIAN)", licence="CC BY 4.0", source_url=RUIAN_ATOM, note=None,
         revised_at=sql_revised_at(KRAJE_REVISED_SQL),
         layers=(

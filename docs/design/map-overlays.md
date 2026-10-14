@@ -194,7 +194,7 @@ Registry values:
 | --- | --- | --- | --- | --- |
 | metro | Metro | 9–12 | metro (1) | A #00A562, B #FCC400, C #CF003D, D #1F77D0 dash ("Metro D – návrh"), reserve #8C9196 dash ("Územní rezerva"), station #1F77D0 ("Plánovaná stanice") |
 | flood | Záplavová území | 10–12 | flood_q5 (1) #1D4F91, flood_q20 (2) #3B7DD8, flood_q100 (3) #7FB3E6, flood_q500 (4) #C6DCF2, flood_az (5) line #B3261E dash | one class per layer: q5 "Q5 – pětiletá voda", q20, q100 "Q100 – stoletá voda", q500 "Q500 – mapováno jen místy", az "Aktivní zóna" |
-| kraje | Kraje | 5–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
+| kraje | Kraje | 3–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
 
 Notes (Czech, shown in the chip): metro — "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026):
 stav, návrh a územní rezervy. Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E)
@@ -357,4 +357,8 @@ refresh call in `api/rent_map.py`.
   flood clicks in Prague); the remembered selection is ONE live store (`useSyncExternalStore`) read
   by every map and by Browse's fallback, so two maps on one page agree and a navigation to a bare
   `/browse` keeps the page's own last choice.
+- **Zoom floors (review of the cleanup, 2026-10-15):** Browse's nationwide fit lands at z≈4.8–5.1 on
+  1280–1440 px screens (map column 42 % beside the 320 px sidebar, 56 px fit padding), and MapLibre
+  loads no tile below a source's minzoom. The old Kraje overlay drew at every zoom, so `kraje` is
+  tiled from z3 (one tile covers Czechia at z3 and z4; the two extra tiles are tiny lines).
 

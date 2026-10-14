@@ -48,7 +48,7 @@ def test_the_registry_holds_the_three_sections_in_order() -> None:
     assert {key: (s.label, s.sort, s.minzoom, s.maxzoom) for key, s in mod.SOURCES.items()} == {
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
-        "kraje": ("Kraje", 3, 5, 9),
+        "kraje": ("Kraje", 3, 3, 9),
     }
     assert list(mod.SOURCES) == ["metro", "flood", "kraje"]
 
