@@ -286,7 +286,7 @@ def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -
     cur.execute("SELECT label, minzoom, maxzoom, attribution, licence, source_url, note, "
                 "source_revised_at, fetched_at IS NOT NULL FROM map_overlay_sections "
                 "WHERE key = 'rent_map'")
-    assert cur.fetchone() == (section.label, 5, 12, section.attribution, section.licence,
+    assert cur.fetchone() == (section.label, 3, 12, section.attribution, section.licence,
                               section.source_url, section.note, date(2026, 8, 15), True)
     cur.execute("SELECT legend, scale, variants, feature_count FROM map_overlay_layers "
                 "WHERE key = 'rent_map'")
