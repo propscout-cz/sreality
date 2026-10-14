@@ -1,4 +1,4 @@
-"""bazos@8 — the slim contract, driven through the shipped readers over real bodies.
+"""bazos@9 — the slim contract, driven through the shipped readers over real bodies.
 
 Every assertion runs `contracts.load_all()`'s own entries (never a test-built one) against
 bodies this repo already holds: the genuine capture
@@ -113,7 +113,7 @@ def claim_of(entry_id: str, doc: ScopedDocument | None = None) -> Any:
 # ------------------------------------------------------------------ the contract shape
 
 def test_the_contract_is_bazos_at_version_8():
-    assert (CONTRACT.source, CONTRACT.version) == ("bazos", 8)
+    assert (CONTRACT.source, CONTRACT.version) == ("bazos", 9)
 
 
 def test_the_entry_ids_are_exactly_the_eight_this_version_ships():

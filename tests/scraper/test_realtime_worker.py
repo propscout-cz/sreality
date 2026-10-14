@@ -2019,6 +2019,66 @@ def test_text_extract_is_free_while_its_scope_is_empty(
     assert rw._text_extract_sync() == {"claimed": 0, "reason": "empty_scope"}
 
 
+def _text_pass_that_read(monkeypatch: pytest.MonkeyPatch, ids: list[int]) -> list[Any]:
+    """A text pass that stored readings for `ids`; -> the ids each readings pass was handed."""
+    from location_data import claims_intake
+    from toolkit import description_extraction
+
+    handed: list[Any] = []
+    monkeypatch.setattr(rw.db, "connect", lambda: _FakeConn())
+    monkeypatch.setattr(description_extraction, "run_pass", lambda conn: {
+        "claimed": len(ids), "extracted": len(ids), "listing_ids": list(ids)})
+
+    def mine(conn: Any, listing_ids: list[int], **kwargs: Any) -> dict[str, Any]:
+        handed.append((list(listing_ids), kwargs))
+        return {"readings_mined": len(listing_ids), "claims_inserted": 3,
+                "claims_superseded": 1}
+
+    monkeypatch.setattr(claims_intake, "mine_readings", mine)
+    return handed
+
+
+def test_a_text_pass_that_read_listings_mines_those_readings_at_once(
+        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """W4: the readings half for exactly the listings the pass read, within its budget and
+    statement timeout — and the heartbeat carries counts, never the id list."""
+    handed = _text_pass_that_read(monkeypatch, [11, 12])
+    with caplog.at_level(logging.INFO, logger=rw.LOG.name):
+        last = rw._text_extract_sync()
+    assert handed == [([11, 12], {"max_seconds": rw.LOCATION_READINGS_FAST_BUDGET_S,
+                                  "statement_timeout": 60})]
+    assert "listing_ids" not in last
+    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["superseded"] == 1
+    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 superseded=1")
+               for r in caplog.records)
+
+
+def test_the_readings_pass_has_a_kill_switch_and_skips_a_pass_that_read_nothing(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    handed = _text_pass_that_read(monkeypatch, [11])
+    monkeypatch.setenv(rw.LOCATION_READINGS_FAST_ENABLED_ENV, "0")
+    assert "readings_fast" not in rw._text_extract_sync()
+    monkeypatch.delenv(rw.LOCATION_READINGS_FAST_ENABLED_ENV)
+    handed_none = _text_pass_that_read(monkeypatch, [])
+    assert "readings_fast" not in rw._text_extract_sync()
+    assert handed == handed_none == []
+
+
+def test_a_failed_readings_pass_never_fails_the_text_pass_it_follows(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The readings are stored and paid for; the hourly run mines what this pass could not."""
+    from location_data import claims_intake
+
+    _text_pass_that_read(monkeypatch, [11])
+
+    def broken(conn: Any, listing_ids: list[int], **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(claims_intake, "mine_readings", broken)
+    last = rw._text_extract_sync()
+    assert last["extracted"] == 1 and "statement timeout" in last["readings_fast"]["error"]
+
+
 _PROVIDER_STOPPED = {
     "claimed": 500, "extracted": 0, "written": 0, "errors": 8, "spent_usd": 0.0,
     "aborted": True, "model": "gpt-5-mini",

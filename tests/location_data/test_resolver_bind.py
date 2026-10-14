@@ -14,9 +14,13 @@ rows were served an arbitrary id-ordered winner while the row was labelled `ambi
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core, normalize
-from location_data.resolver.types import AddressPoint
+from location_data.resolver.types import AddressPoint, Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -221,10 +225,17 @@ def _bazos(town: str, psc: str, pin: tuple[float, float]):
 
 def test_a_village_the_register_holds_as_a_part_or_ku_binds_the_town_its_psc_serves():
     """As a část obce / KÚ, Černotín and Hory climb to Dnešice and Oloví, whose PSČ the advert
-    carries: those bind from the name, and the PSČ that discriminated is an agreeing field."""
-    for town, psc, obec_kod in (("Černotín", "33443", 557668), ("Hory", "35707", 560588)):
-        binding = _bind(_bazos(town, psc, (49.61, 13.27)), mirror=_town_mirror())
-        assert (binding.obec_kod, binding.rung, "psc" in binding.agreed) == (obec_kod, "R4", True)
+    carries: those bind from the name, the PSČ that discriminated is an agreeing field, and
+    since v5.7 the village itself is the part (1a)."""
+    for town, psc, obec_kod, part in (("Černotín", "33443", 557668, 61),
+                                      ("Hory", "35707", 560588, 65)):
+        claims = _bazos(town, psc, (49.61, 13.27))
+        binding = _bind(claims, mirror=_town_mirror())
+        assert (binding.obec_kod, binding.rung, binding.admin_unit_id) == (obec_kod, "R4", part)
+        assert "climbed_from_town_name" in binding.relaxations
+        towns = step_bind.constraining_towns(step_bind.collect_constraints(
+            claims, normalize.normalize_all(claims)), _town_mirror(), pin_is_precise=False)
+        assert (towns.units[0].code, "psc" in towns.applied) == (obec_kod, True)
 
 
 def test_18841980_heals_through_the_ku_and_its_composite_anchor_is_refused():
@@ -368,12 +379,298 @@ def test_a_town_still_outranks_the_region_that_contains_it():
     assert resolution.granularity == "obec"
 
 
-# ------------------------------------------------------------------- the deleted rung
+# ------------------------------------------- v5.7: the operator's W4 verdicts (2026-10-14)
+#
+# Every row below is a production listing the operator judged, on `mm.w4_mirror()` — the
+# register rows behind it, read 2026-10-14. The two regression rows of 1a and the "stored
+# correctly" rows of 1c are the ones W4 must not move.
+
+_APPROXIMATE = {"declared_precision_label": "approximate_location", "blur_evidence": "declared"}
 
 
-def test_the_parcel_rung_is_gone():
-    """R5 was unreachable — no portal states a cadastral parcel in a form that joins — and it
-    was the only reader of `ruian_parcels`. A KÚ is a LOOKUP LEVEL of the town rule (v5.5); it
-    binds no entity of its own."""
-    assert "R5" not in step_bind._RUNG_BASE_SCORE
-    assert not hasattr(mm.default_mirror(), "parcels")
+def _w4(listing: int, *claimed: tuple[str, str], pin: tuple[float, float] | None = None):
+    """A bazos row as production holds it: its claims, and the post-office pin it is blurred to."""
+    claims = [mm.claim(i, t, value_text=v, source="bazos", listing_id=listing)
+              for i, (t, v) in enumerate(claimed, start=1)]
+    if pin:
+        claims += [mm.claim(90, "coordinate", lat=pin[0], lon=pin[1], source="bazos",
+                            listing_id=listing),
+                   mm.claim(91, "precision_declaration", value_text="approximate_location",
+                            source="bazos", listing_id=listing, **_APPROXIMATE)]
+    return _resolve(claims, mm.w4_mirror())
+
+
+@pytest.mark.parametrize("row", mm.W4_VILLAGES, ids=lambda row: str(row[0]))
+def test_1a_the_village_a_town_name_climbed_from_is_the_part(row):
+    """Fifteen "stored incompletely" rows named a village that is a část of the town their PSČ
+    serves; it is the part now — through the KÚ's base name where only a KÚ matched (Podolí u
+    Mohelnice). 13824760 and 18827725 name the town's OWN KÚ: its eponymous část is no part."""
+    listing, town, psc, (_, obec_kod, _), _, namesake, part = row
+    resolution = _w4(listing, ("obec_name", town), ("psc", psc))
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (obec_kod, part)
+    assert resolution.granularity == ("cast_obce_or_quarter" if part else "obec")
+    assert namesake is None or resolution.obec_kod != namesake[1]
+
+
+def test_1a_a_climbed_part_inherits_how_its_town_was_chosen_and_is_one_claim():
+    """Review: the obec Hracholusky AND Úlice (whose část Hracholusky is) carry the PSČ. With
+    nothing to break the tie it stays a tie — no part, no number bound inside a guessed part;
+    an approximate pin breaks it at `low`, as before. And one town claim is ONE agreement: a
+    village named alone grades as its town did (medium), not `high`."""
+    mirror = mm.w4_mirror()
+    mirror.points += [AddressPoint(kod_adm=77000001, obec_unit_id=2819, obec_kod=550221,
+                                   psc="33033", lat=None, lon=None),
+                      AddressPoint(kod_adm=77000002, obec_unit_id=3466, obec_kod=559555,
+                                   psc="33033", lat=None, lon=None, cislo_domovni=12,
+                                   cast_obce_unit_id=18894, cast_obce_kod=174173)]
+    mirror.units[:] = [replace(u, psc_set=("99999", "33033")) if u.unit_id == 2819 else u
+                       for u in mirror.units]
+    claims = [mm.claim(1, "obec_name", value_text="Hracholusky", source="bazos"),
+              mm.claim(2, "psc", value_text="33033", source="bazos")]
+    tie = _resolve([*claims, mm.claim(3, "house_number_cp", value_text="12", source="bazos")],
+                   mirror)
+    assert (tie.obec_kod, tie.cast_obce_kod, tie.ruian_adm_kod, tie.match_confidence) == (
+        550221, None, None, "low")
+    mirror.obec_polygons.update({559555: (49.05, 13.90, 4000.0), 550221: (49.00, 14.00, 3000.0)})
+    mirror.units[:] = [replace(u, lat=49.05, lon=13.90) if u.unit_id == 3466 else
+                       replace(u, lat=49.00, lon=14.00) if u.unit_id == 2819 else u
+                       for u in mirror.units]
+    pinned = _resolve([*claims, mm.claim(90, "coordinate", lat=49.051, lon=13.901,
+                                         source="bazos")], mirror)
+    assert (pinned.obec_kod, pinned.cast_obce_kod, pinned.match_confidence) == (
+        559555, 174173, "low")
+    for town, psc in (("Kadaňská Jeseň", "43201"), ("Frýdek", "73801"),
+                      ("Podolí u Mohelnice", "78985"), ("Milokošť", "69801")):
+        alone = _w4(1, ("obec_name", town), ("psc", psc))
+        assert (alone.granularity, alone.match_confidence) == ("cast_obce_or_quarter", "medium")
+
+
+def test_parts_named_by_two_sources_are_one_candidate():
+    """Review: a claimed part that the town name or a street line also names is ONE answer —
+    not two R4 candidates at the top, which read as a tie and graded `low`."""
+    for claimed in ((("obec_name", "Bělá u Jevíčka"), ("cast_obce_name", "Smolná"),
+                     ("street_name", "Smolná"), ("psc", "56943")),
+                    (("obec_name", "Harrachov"), ("cast_obce_name", "Nový Svět"),
+                     ("street_name", "Nový Svět"), ("psc", "51246")),
+                    (("obec_name", "Hracholusky"), ("cast_obce_name", "Hracholusky"),
+                     ("psc", "33033"))):
+        resolution = _w4(1, *claimed)
+        assert (resolution.granularity, resolution.match_confidence) == (
+            "cast_obce_or_quarter", "high"), claimed
+
+
+def test_a_claimed_part_of_another_level_stands_against_a_climbed_one():
+    """Review: a claimed MOMC ("Brno-Židenice") and the část a town name climbed from
+    ("Židenice") are not comparable; the claim stands, as in v5.6. Two parts of one level that
+    differ still publish none (19009248)."""
+    mirror = mm.statutory_city_mirror()
+    mirror.units += [mm._unit(108, "cast_obce", 411833, "Židenice", "zidenice",
+                              "k116.o3702.b582786.c411833", parent=103),
+                     mm._unit(109, "momc", 551082, "Brno-Židenice", "brno zidenice",
+                              "k116.o3702.b582786.m551082", parent=103)]
+    mirror.points.append(AddressPoint(kod_adm=1, obec_unit_id=103, obec_kod=582786,
+                                      psc="61500", lat=None, lon=None))
+    resolution = _resolve([mm.claim(1, "obec_name", value_text="Židenice"),
+                           mm.claim(2, "cast_obce_name", value_text="Brno-Židenice"),
+                           mm.claim(3, "psc", value_text="61500")], mirror)
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (582786, 551082)
+
+
+def test_1a_a_climbed_village_against_a_claimed_part_publishes_no_part():
+    """Fail closed, as two streets do: the advert's town names one part and its part claim
+    another."""
+    resolution = _w4(18772969, ("obec_name", "Hracholusky"), ("cast_obce_name", "Úlice"),
+                     ("psc", "33033"))
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (559555, None)
+
+
+def test_1b_boudy_u_jesenice_is_boudy_in_the_jesenice_its_qualifier_names():
+    """19009300: no register unit is called "Boudy u Jesenice". Stripped, "Boudy" climbs to
+    three obce and one of them IS Jesenice; the PSČ agrees and Boudy is its část. The pin is
+    the post office's, in Sedlčany, so CHECK says so — the names are the advert's."""
+    pin = (49.641845, 14.417496)
+    resolution = _w4(19009300, ("obec_name", "Boudy u Jesenice"), ("psc", "26401"), pin=pin)
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (540391, 403407)
+    assert resolution.disputed == "pin_outside_obec"
+    alone = _w4(19009300, ("obec_name", "Boudy u Jesenice"))
+    assert (alone.obec_kod, alone.cast_obce_kod) == (540391, 403407)
+    towns = step_bind.constraining_towns(
+        step_bind.collect_constraints(*_claims_of("Boudy u Jesenice")), mm.w4_mirror(),
+        pin_is_precise=False)
+    assert "qualifier_stripped" in towns.applied
+    # "nad", "pod", "v" belong to real names and are never stripped: the PSČ decides.
+    other = _w4(19009300, ("obec_name", "Boudy nad Jesenice"), ("psc", "26401"), pin=pin)
+    assert (other.obec_kod, other.cast_obce_kod) == (541281, None)
+
+
+def test_1b_a_register_name_the_town_rule_refused_is_not_loosened():
+    """Review: "Chrášťany u Hulína" and "Vranovice u Břas" are KÚ names; without the PSČ that
+    places them they bind no town, as in v5.6 — never the obec "Chrášťany" of another okres."""
+    for town in ("Chrášťany u Hulína", "Vranovice u Břas", "Doksy u Kladna"):
+        assert _w4(1, ("obec_name", town)).obec_kod is None, town
+    assert _w4(1, ("obec_name", "Chrášťany u Hulína"), ("psc", "76824")).cast_obce_kod == 189766
+
+
+def _claims_of(town: str):
+    claims = [mm.claim(1, "obec_name", value_text=town, source="bazos")]
+    return claims, normalize.normalize_all(claims)
+
+
+def test_1c_a_street_line_naming_a_part_of_the_town_is_that_part():
+    """18798279: "Nový Svět" is no street of Harrachov but its část, and č.p. 701 is unique in
+    it (D7). 19009248: "Dlouhé" is a část of Nový Hrádek and the advert's part claim says Rzy —
+    the operator ruled Rzy wrong, so neither is published."""
+    harrachov = _w4(18798279, ("obec_name", "Harrachov"), ("street_name", "Nový Svět"),
+                    ("house_number_cp", "701"), ("psc", "51246"), pin=(50.772076, 15.436134))
+    assert (harrachov.granularity, harrachov.ruian_adm_kod) == ("address_point", 81547374)
+    assert (harrachov.cast_obce_kod, harrachov.house_number_cp, harrachov.street_name) == (
+        410845, "701", None)
+    conflict = _w4(19009248, ("obec_name", "Nový Hrádek"), ("cast_obce_name", "Rzy"),
+                   ("street_name", "Dlouhé"), ("psc", "54901"), pin=(50.354114, 16.149216))
+    assert (conflict.obec_kod, conflict.cast_obce_kod, conflict.granularity) == (
+        574287, None, "obec")
+
+
+def test_1c_leaves_the_rows_the_operator_judged_correct_where_they_were():
+    """19083768's street line IS its claimed part (Smolná 28, an address point); 17936637's
+    "Janová" is a village of another obec, so Polanka nad Odrou stays its part."""
+    smolna = _w4(19083768, ("obec_name", "Bělá u Jevíčka"), ("cast_obce_name", "Smolná"),
+                 ("street_name", "Smolná"), ("house_number_cp", "28"), ("psc", "56943"))
+    assert (smolna.ruian_adm_kod, smolna.cast_obce_kod) == (81000028, 1813)
+    janova = _w4(17936637, ("obec_name", "Ostrava"), ("cast_obce_name", "Polanka nad Odrou"),
+                 ("street_name", "Janová"), ("psc", "72525"))
+    assert (janova.obec_kod, janova.cast_obce_kod, janova.street_name) == (
+        554821, 414557, None)
+
+
+def test_1d_hanusova_binds_through_its_part_and_a_spelling_only_with_diacritics():
+    """18625515 bound no street because `name_norm` is accent-free: Praha's Hanusova (Michle)
+    and Hanušova (Kbely) share the key `hanusova` — the census's "1 row with several". The part
+    breaks the tie first; with no part bound, only a claim WITH diacritics names its twin by
+    spelling — bazos writes "Hanusova" for both — never pooled across two street claims, and
+    never against the part: "Hanušova" in Michle, where only Hanusova has doors, is no street
+    (review)."""
+    hanusova = _w4(18625515, ("obec_name", "Praha"), ("cast_obce_name", "Michle"),
+                   ("street_name", "Hanusova"), ("psc", "14000"), pin=(50.041266, 14.442902))
+    assert (hanusova.ulice_kod, hanusova.cast_obce_kod, hanusova.granularity) == (
+        447340, 490130, "street")
+    praha = ("obec_name", "Praha")
+    for claimed, code in (((("cast_obce_name", "Kbely"), ("street_name", "Hanusova")), 447358),
+                          ((("cast_obce_name", "Michle"), ("street_name", "Hanušova")), None),
+                          ((("cast_obce_name", "Kbely"), ("street_name", "Hanušova")), 447358),
+                          ((("cast_obce_name", "Hloubětín"), ("street_name", "Hanušova")), None),
+                          ((("street_name", "Hanušova"),), 447358),
+                          ((("street_name", "Hanusova"),), None),
+                          ((("street_name", "Hanusova"), ("street_name", "Liskova")), None),
+                          ((("street_name", "Hanušova"), ("street_name", "Liskova")), None),
+                          ((("street_name", "Liskova"),), None)):
+        assert _w4(1, praha, *claimed).ulice_kod == code, claimed
+    claims = [mm.claim(1, "obec_name", value_text="Praha"),
+              mm.claim(2, "cast_obce_name", value_text="Hloubětín"),
+              mm.claim(3, "street_name", value_text="Liskova")]
+    tied = step_bind.bind(claims, normalize.normalize_all(claims), mm.context(mm.w4_mirror()))[0]
+    assert (tied.ulice_kod, tied.relaxations) == (485926, ("street_part_tiebreak",))
+
+
+def test_1e_csa_is_the_registers_cs_armady():
+    """19013478: the advert writes "ČSA"; Moravská Třebová's street is "Čs. armády"."""
+    resolution = _w4(19013478, ("obec_name", "Moravská Třebová"), ("street_name", "ČSA"),
+                     ("psc", "57101"), pin=(49.757538, 16.676216))
+    assert (resolution.ulice_kod, resolution.street_name) == (561517, "Čs. armády")
+
+
+def test_1f_a_shared_psc_yields_to_the_one_town_holding_the_street():
+    """19120281: PSČ 68601 serves five obce and the post-office pin sits in Staré Město; "Na
+    Splávku" is a street of Uherské Hradiště only (Prostějov's is outside the PSČ). The pin
+    still disagrees, and CHECK says so; without a street the pin decides, as before."""
+    pin = (49.076565, 17.427063)
+    resolution = _w4(19120281, ("street_name", "Na Splávku"), ("psc", "68601"), pin=pin)
+    assert (resolution.obec_kod, resolution.ulice_kod) == (592005, 611034)
+    assert resolution.disputed == "pin_outside_obec"
+    claims = [mm.claim(1, "street_name", value_text="Na Splávku"),
+              mm.claim(2, "psc", value_text="68601")]
+    towns = step_bind.constraining_towns(step_bind.collect_constraints(
+        claims, normalize.normalize_all(claims)), mm.w4_mirror(), pin_is_precise=False)
+    assert ([t.code for t in towns.units], towns.applied) == ([592005], ["psc", "street_in_town"])
+    asked: list[str] = []
+    mirror = mm.w4_mirror()
+    lookup = mirror.admin_units_by_name
+    mirror.admin_units_by_name = lambda key, **kw: asked.append(key) or lookup(key, **kw)
+    claims.append(mm.claim(3, "street_name", value_text="Neexistující"))
+    step_bind.constraining_towns(step_bind.collect_constraints(
+        claims, normalize.normalize_all(claims)), mirror, pin_is_precise=False)
+    assert "na splavku" in asked and "neexistujici" not in asked   # places: held lines only
+    assert _w4(19120281, ("psc", "68601"), pin=pin).obec_kod == 550752
+
+
+def test_1f_a_street_line_that_is_also_a_place_of_one_of_the_towns_settles_nothing():
+    """Review: "Mařatice" is a část of Uherské Hradiště AND a street of Staré Město. It does
+    not move the row off the pin's town to the street's; it is the part it names (1c)."""
+    mirror = mm.w4_mirror()
+    mirror.units.append(mm._unit(99001, "cast_obce", 412600, "Mařatice", "maratice",
+                                 "b592005.c412600", parent=6279))
+    mirror.streets.append(Street(code=777001, name="Mařatice", name_norm="maratice",
+                                 obec_kod=550752, id=88001))
+    mirror.points.append(AddressPoint(
+        kod_adm=88001001, obec_unit_id=2872, obec_kod=550752, psc="68603", lat=49.0750,
+        lon=17.4300, ulice_kod=777001, street_name_norm="maratice", street_name="Mařatice",
+        cislo_domovni=5))
+    claims = [mm.claim(1, "street_name", value_text="Mařatice", source="bazos"),
+              mm.claim(2, "psc", value_text="68601", source="bazos"),
+              mm.claim(90, "coordinate", lat=49.0690, lon=17.4600, source="bazos")]
+    resolution = _resolve(claims, mirror)
+    assert (resolution.obec_kod, resolution.cast_obce_kod, resolution.ulice_kod) == (
+        592005, 412600, None)
+    # The pin chose the town (undeclared, so imprecise): the part it names inherits that.
+    assert resolution.match_confidence == "low"
+
+
+def _from_reading(listing: int, payload, text: str, *page: tuple[str, str],
+                  pin: tuple[float, float]):
+    """The reading through bazos' reading entries (V1–V4), then the resolver with the page."""
+    from tests.location_data.test_text_reading import _claims
+
+    read = sorted(_claims(payload, text).items())
+    return read, _w4(listing, *read, *page, pin=pin)
+
+
+def test_2a_2b_2c_the_reader_rows_resolve_where_the_operator_put_them():
+    """19009239: the town's quote "v městyse Koloveč" is not verbatim, its VALUE is (2a).
+    18714030: "Č.B." carries České Budějovice's initials (2b). 18907132: a not_property advert
+    keeps its town and nothing else (2c). 18726990 is 2d: a bar to take over is an offer once
+    the corpus is re-read; until then its town alone."""
+    from scraper.bazos_parser import ad_haystack
+    from tests.location_data.test_text_reading import _payload
+
+    read, kolovec = _from_reading(19009239, _payload(
+        "offer", town=("Koloveč", "v městyse Koloveč"), street=("Růžová", "Růžová, Koloveč")),
+        ad_haystack("Prodej rodinného domu 186 m2 Růžová, Koloveč",
+                    "V klidné části městyse Koloveč, přibližně 10 km od Staňkova."),
+        ("psc", "34543"), pin=(49.469463, 13.104286))
+    assert dict(read)["obec_name"] == "Koloveč"
+    assert (kolovec.obec_kod, kolovec.ulice_kod) == (553816, 100005)
+    read, budejovice = _from_reading(18714030, _payload(
+        "offer", town=("České Budějovice", "Č.B."),
+        street=("Pabláskova", "ulice Pabláskova pod nemocnicí Č.B.")),
+        ad_haystack("Pronájem 2+1 u nemocnice v Č.B.",
+                    "Byt 2+1 v bytovém domě, ulice Pabláskova pod nemocnicí Č.B."),
+        ("psc", "37001"), pin=(48.951930, 14.441528))
+    assert dict(read)["obec_name"] == "České Budějovice"
+    assert (budejovice.obec_kod, budejovice.ulice_kod) == (544256, 75817)
+    read, sadova = _from_reading(18907132, _payload(
+        "not_property", town=("Sadová", "503 15 Sadová"),
+        street=("Sadová", "adresa: Sadová 130, 503 15 Sadová"),
+        house_number_cp=("130", "Sadová 130")),
+        ad_haystack("ABI Phoenix 30 Dny otevřených dveří: 21 MOBILNÍCH DOMŮ n",
+                    "* adresa: Sadová 130, 503 15 Sadová"),
+        ("psc", "50315"), pin=(50.256644, 15.637665))
+    assert read == [("obec_name", "Sadová")]
+    assert (sadova.obec_kod, sadova.ulice_kod) == (573191, None)
+    bar = ad_haystack("Přenechání kompletně vybaveného baru – Masarykovo náměstí",
+                      "Bar přímo v centru Hradce Králové, na Masarykově náměstí.")
+    cells = {"town": ("Hradec Králové", "přímo v centru Hradce Králové"),
+             "street": ("Masarykovo náměstí", "na Masarykově náměstí")}
+    for kind, street in (("not_property", None), ("offer", 128899)):
+        _, resolution = _from_reading(18726990, _payload(kind, **cells), bar,
+                                      ("psc", "50002"), pin=(50.196572, 15.806580))
+        assert (resolution.obec_kod, resolution.ulice_kod) == (569810, street), kind

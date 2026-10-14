@@ -1126,6 +1126,10 @@ component is slimmed twice — each wave rewrites one component and slims its st
   ≈ 150). The operator accepted +494 as the cost of a new capability and its safeguards; R3 fuzzy
   street matching is kept for reading claims (40 of 42 pilot streets exact, the one near-miss
   right); the `percent` decoder deletion stands.
+  **W4 (#1806, 2026-10-14):** the 40 verdicts' follow-ups — resolver v5.7, the reader's fixes + a full bazos
+  re-read (≈ $25), bazos@9, readings mined within a text pass; 1g left open (its row's town carries the PSČ).
+  Rule 25: **+1,199 waived by the operator (2026-10-14** — production +379, the rest tests, register
+  fixtures and the @9 golden) and the re-read cost accepted; two adversarial review rounds, 12 findings fixed.
 - **Claim fields 498 dropped, deleted from Python** (2026-10-01): `Claim` loses the ten fields no
   column stores and no fingerprint hashes (`snapshot_id/_anchor`, `history_completeness`,
   `legacy_write_path_unknown`, `payload_id/_sha256`, `evidence_quote`, `span_start/_end`,

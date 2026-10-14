@@ -591,3 +591,51 @@ def test_the_registry_is_one_and_matches_the_contract_record_exactly():
     assert claims_intake.READERS["text_reading"].substrate == claims_intake.SUBSTRATE_READING
     assert not hasattr(claims_intake, "ARCHIVE_ONLY_READERS")
     assert not hasattr(claims_intake, "LLM_ONLY_READERS")
+
+
+# ------------------------------------------- W4: the readings half, scoped to a text pass
+
+def test_the_scoped_readings_selector_filters_both_reads_and_the_hourly_one_neither():
+    """Scoped on BOTH reads: on the outer select alone, `unsettled` would still aggregate the
+    whole enrichments table (the 8.2 s cold read W3 kept off the worker)."""
+    scoped = " ".join(claims_intake._SCOPED_READINGS_SQL.split())
+    hourly = " ".join(claims_intake._UNMINED_READINGS_SQL.split())
+    unsettled, outer = scoped.split(" ) SELECT l.id", 1)
+    assert "AND e.listing_id = ANY(%(ids)s::bigint[]) GROUP BY e.listing_id" in unsettled
+    assert "AND l.id = ANY(%(ids)s::bigint[])" in outer
+    assert "%(ids)s" not in hourly
+    assert scoped.replace(" AND e.listing_id = ANY(%(ids)s::bigint[])", "").replace(
+        " AND l.id = ANY(%(ids)s::bigint[])", "") == hourly
+
+
+def test_mine_readings_scopes_the_drain_to_the_ids_under_a_batch_of_its_own_lane(monkeypatch):
+    conn, seen = _Conn(), {}
+    monkeypatch.setattr(claims_intake, "load_entries", lambda c: {"bazos": []})
+
+    def drain(c, **kwargs):
+        seen.update(kwargs)
+        kwargs["stats"].update(readings_mined=2, claims_inserted=5)
+
+    monkeypatch.setattr(claims_intake, "drain_readings", drain)
+    stats = claims_intake.mine_readings(conn, [7, 3], max_seconds=30, statement_timeout=60)
+    assert (seen["listing_ids"], seen["batch_id"], seen["dry_run"]) == ([7, 3], 1, False)
+    assert seen["schedule"].bodies_budget_share == 1.0 and seen["budget"].max_seconds == 30
+    assert stats["readings_mined"] == 2
+    opened = next(p for s, p in conn.executed if "INSERT INTO location_claim_batches" in s)
+    assert (opened["lane"], opened["resumable"]) == (claims_intake.READINGS_FAST_LANE, False)
+    finished = [p for s, p in conn.executed if s.startswith("UPDATE location_claim_batches")]
+    assert [(p["outcome"], p["row_count"]) for p in finished] == [("ok", 5)]
+
+
+def test_mine_readings_stamps_its_batch_failed_and_raises(monkeypatch):
+    conn = _Conn()
+    monkeypatch.setattr(claims_intake, "load_entries", lambda c: {})
+
+    def drain(c, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(claims_intake, "drain_readings", drain)
+    with pytest.raises(RuntimeError):
+        claims_intake.mine_readings(conn, [1], max_seconds=30, statement_timeout=60)
+    finished = [p for s, p in conn.executed if s.startswith("UPDATE location_claim_batches")]
+    assert [(p["outcome"], p["note"]) for p in finished] == [("failed", "RuntimeError: boom")]

@@ -329,7 +329,7 @@ def _stefanikova_mirror(*parts: tuple[int, int]):
 
 
 def test_18909736_from_its_stored_reading_publishes_stefanikova_in_moravske_predmesti():
-    """W3's acceptance: the reading the pilot took off the advert, through bazos@8's reading
+    """W3's acceptance: the reading the pilot took off the advert, through bazos@9's reading
     entries (V1–V4), then the resolver — Štefánikova / Hradec Králové / Moravské Předměstí,
     the register's part and not the advert's Třebeš (Q3), no number (none is stated)."""
     from tests.location_data.test_text_reading import TRIGGER, _claims, _payload
