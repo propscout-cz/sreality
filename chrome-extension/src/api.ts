@@ -12,11 +12,13 @@ import type {
   EstimationRun,
   ExtCollection,
   ExtNote,
+  ExtTag,
   PipelineCardResult,
   PipelineStage,
   PortalListing,
   PortalLookupItem,
   PortalLookupResponse,
+  TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
 
@@ -272,6 +274,37 @@ export async function listCollections(): Promise<ApiResult<ExtCollection[]>> {
   const res = await request<{ data: ExtCollection[] }>('/collections');
   if (!res.ok) return res;
   return { ok: true, data: res.data.data };
+}
+
+/* GET /tags — the caller's tags (rule #18), names + colours for the search-page
+ * card chips. Returns `{data:[...]}` ordered by name; we unwrap to the array. */
+export async function listTags(): Promise<ApiResult<ExtTag[]>> {
+  const res = await request<{ data: ExtTag[] }>('/tags');
+  if (!res.ok) return res;
+  return { ok: true, data: res.data.data };
+}
+
+/* POST /properties/:id/tags — tag the property (rule #18). The SAME route the
+ * SPA's TagAssignList uses; idempotent server-side, resolves a merged-away
+ * property to its survivor. */
+export async function attachTag(
+  tag_id: number,
+  property_id: number,
+): Promise<ApiResult<TagWriteResult>> {
+  return request<TagWriteResult>(`/properties/${property_id}/tags`, {
+    method: 'POST',
+    body: JSON.stringify({ tag_id }),
+  });
+}
+
+/* DELETE /properties/:id/tags/:tag_id — take the tag off the property. */
+export async function detachTag(
+  tag_id: number,
+  property_id: number,
+): Promise<ApiResult<TagWriteResult>> {
+  return request<TagWriteResult>(`/properties/${property_id}/tags/${tag_id}`, {
+    method: 'DELETE',
+  });
 }
 
 /* POST /collections/:id/properties — add the property to a collection (rule #18).

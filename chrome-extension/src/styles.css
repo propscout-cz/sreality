@@ -662,6 +662,54 @@
   letter-spacing: 0.1em;
 }
 
+/* ---- tags (rule #18) ------------------------------------------------- */
+/* A row under the action bar: the SPA's TagChip per tag (the name in the
+   tag's colour on its soft wash), then the button that opens the checklist —
+   dashed, the quietest control in the panel, as a tag is a note, not a deal. */
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.tag-chip {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.1rem 0.4rem;
+  overflow: hidden;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid;
+  border-radius: 2px;
+}
+
+.tag-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink-3);
+  background: transparent;
+  border: 1px dashed var(--ink-4);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.tag-toggle:hover { color: var(--copper); border-color: var(--copper); }
+.tag-toggle:focus-visible { outline: 2px solid var(--copper); outline-offset: 1px; }
+.tag-toggle[aria-expanded="true"] .collection-caret { transform: rotate(180deg); }
+
 .app-link {
   margin-left: auto;  /* right-aligned whether or not the toggle is present */
   display: inline-flex;

@@ -592,8 +592,13 @@ yield badge).
   a tag naming the collection (`chrome-extension/src/index_photo_mark.ts`).
   The photo is found by geometry, not markup; a veiled card, or a card guess
   holding several listings, gets no mark.
-- **Next (not built):** tags from the card (Browse cards have no tag control
-  either — tags are edited on the listing page); verifying the card placement
+- **Tags (2026-10-14):** the cards print the property's tag chips over the
+  photo, and the detail panel assigns tags — a chip row under its action bar
+  and a checklist of every tag over `POST/DELETE /properties/{id}/tags`.
+  `POST /listings/lookup` returns `tag_ids`. Creating and editing tags stay in
+  the app.
+- **Next (not built):** assigning tags from a search-page card (the panel
+  does it; the card cluster has no tag control); verifying the card placement
   on sreality itself (its consent wall blocks an unattended check — idnes and
   bezrealitky were checked against live pages).
 

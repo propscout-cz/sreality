@@ -7,14 +7,17 @@ import {
   addNote,
   addPipelineCard,
   addToCollection,
+  attachTag,
   createEstimation,
   deleteNote,
+  detachTag,
   dismissProperty,
   getBillingMe,
   getEstimation,
   listCollections,
   listNotes,
   listPipelineStages,
+  listTags,
   lookupListings,
   movePipelineCard,
   patchScenario,
@@ -115,6 +118,12 @@ async function handleMessage(
       return undismissProperty(message.property_id);
     case 'list_collections':
       return listCollections();
+    case 'list_tags':
+      return listTags();
+    case 'attach_tag':
+      return attachTag(message.tag_id, message.property_id);
+    case 'detach_tag':
+      return detachTag(message.tag_id, message.property_id);
     case 'add_to_collection':
       return addToCollection(message.collection_id, message.property_id);
     case 'remove_from_collection':

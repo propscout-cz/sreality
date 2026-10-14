@@ -3,11 +3,15 @@
  *   pipeline   — the photo toned in the stage's colour (the operator's, copper
  *                when none — glyphs.stageAccent), the stage's badge and name
  *                set over it. Hovering the card lifts the tone to show the photo.
- *   collection — a copper rim round the photo and a copper tag in its top-right
- *                corner naming the collection (+N for more). The photo keeps
- *                its colours, so a saved card never reads as a stage.
- * A property can carry both. The card's cluster stays the control; this is
- * only the mark (aria-hidden — the funnel's and bookmark's labels say it).
+ *   collection — a copper rim round the photo and a copper label in its
+ *                top-right corner naming the collection (+N for more). The
+ *                photo keeps its colours, so a saved card never reads as a stage.
+ *   tags       — the app's tag chips (the name in the tag's colour), under the
+ *                collection label in the same corner, the bottom being where
+ *                portals put their own broker logos and video marks.
+ * A property can carry all three. The card's cluster stays the control; this
+ * is only the mark (aria-hidden — the cluster's labels say it; tags are edited
+ * in the app).
  *
  * The photo is found by geometry, not markup, like the card itself: the
  * largest image the card shows, cut to the boxes that clip it, each corner
@@ -28,6 +32,8 @@ export const PHOTO_MARK_HOST_CLASS = '__mf_photo_mark_host';
 /* Anything smaller is a broker logo or an icon, not the listing's photo. */
 const MIN_PHOTO_SIDE = 80;
 const FRAME_INSET = 10;
+/* More chips than this fold into one "+N" — the corner must not bury the photo. */
+const MAX_CHIPS = 4;
 
 export interface PhotoMarkView {
   /* The deal's stage; null out of the pipeline. */
@@ -35,6 +41,8 @@ export interface PhotoMarkView {
   /* The names of the collections the property sits in, checklist order — empty
    * while the list is loading; null when it is in none. */
   collections: string[] | null;
+  /* The property's tags, by name; empty when it has none. */
+  tags: { name: string; color: string }[];
 }
 
 export interface PhotoMark {
@@ -93,16 +101,29 @@ const css = (cardAttr: string): string => `
     line-height: 1.2; letter-spacing: 0.2em; text-transform: uppercase; opacity: 0.9;
   }
   .rim { box-shadow: inset 0 0 0 3px var(--copper); }
-  .tag {
+  .corner {
     position: absolute; top: 6px; right: 6px; z-index: 899;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    max-width: 55%;
+  }
+  .saved {
     box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px;
-    max-width: 55%; height: 24px; padding: 0 8px 0 6px;
+    max-width: 100%; height: 24px; padding: 0 8px 0 6px;
     font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: 0.02em;
     color: #fff; background: var(--copper); white-space: nowrap;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   }
-  .tag svg { width: 13px; height: 13px; flex-shrink: 0; }
-  .tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .saved svg { width: 13px; height: 13px; flex-shrink: 0; }
+  .saved-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; max-width: 100%; }
+  /* The app's TagChip on a photo: its pale wash would vanish there, so paper. */
+  .chip {
+    box-sizing: border-box; max-width: 100%; height: 20px; padding: 0 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11px; font-weight: 600; line-height: 18px; color: var(--chip);
+    background: rgba(255, 253, 248, 0.94); border: 1px solid var(--chip); border-radius: 2px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  }
   :host-context([${cardAttr}]:hover) .tone { opacity: 0.25; }
   :host-context([${cardAttr}]:hover) .shade { opacity: 0.15; }
   @media (prefers-reduced-motion: reduce) { .tone, .shade, .face { transition: none; } }
@@ -192,9 +213,9 @@ function place(card: HTMLElement, host: HTMLElement): Placement | null {
 
 const px = (radii: number[]): string => radii.map((r) => `${Math.round(r * 10) / 10}px`).join(' ');
 
-/* The tag's words: the first collection's name, "+N" for the rest; before the
- * names load, the glyph alone. */
-function tagText(names: string[]): string {
+/* The label's words: the first collection's name, "+N" for the rest; before
+ * the names load, the glyph alone. */
+function savedText(names: string[]): string {
   if (names.length === 0) return '';
   return names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
 }
@@ -203,7 +224,8 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
   let host: HTMLElement | null = null;
   let parts: {
     box: HTMLElement; stage: HTMLElement[]; frame: HTMLElement; badge: HTMLElement;
-    rule: HTMLElement; label: HTMLElement; rim: HTMLElement; tag: HTMLElement; tagName: HTMLElement;
+    rule: HTMLElement; label: HTMLElement; rim: HTMLElement; saved: HTMLElement;
+    savedName: HTMLElement; chips: HTMLElement;
   } | null = null;
   let view: PhotoMarkView | null = null;
   let shown = '';
@@ -227,15 +249,18 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
     box.setAttribute('aria-hidden', 'true');
     box.hidden = true;
     const face = div('face');
-    const tag = div('tag');
+    const corner = div('corner');
+    const saved = div('saved');
     const built = {
       box, stage: [div('tone'), div('shade'), face], frame: div('frame'), badge: div('badge'),
-      rule: div('rule'), label: div('label'), rim: div('rim'), tag, tagName: div('tag-name'),
+      rule: div('rule'), label: div('label'), rim: div('rim'), saved,
+      savedName: div('saved-name'), chips: div('chips'),
     };
     face.append(built.frame, built.badge, built.rule, built.label);
-    tag.innerHTML = bookmarkIconSvg(true);
-    tag.append(built.tagName);
-    box.append(...built.stage, built.rim, tag);
+    saved.innerHTML = bookmarkIconSvg(true);
+    saved.append(built.savedName);
+    corner.append(saved, built.chips);
+    box.append(...built.stage, built.rim, corner);
     shadow.append(style, box);
     card.appendChild(host);
     resizes.observe(card);
@@ -285,7 +310,7 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
       return;
     }
     parts ??= build();
-    const { box, stage, badge, rule, label, rim, tag, tagName } = parts;
+    const { box, stage, badge, rule, label, rim, saved, savedName, chips } = parts;
     const s = next.stage;
     for (const layer of stage) layer.hidden = s == null;
     if (s != null) {
@@ -297,10 +322,27 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
       rule.hidden = s.badge == null || s.label == null;
     }
     rim.hidden = next.collections == null;
-    tag.hidden = next.collections == null;
-    const text = tagText(next.collections ?? []);
-    tagName.textContent = text;
-    tagName.hidden = text === '';
+    saved.hidden = next.collections == null;
+    const text = savedText(next.collections ?? []);
+    savedName.textContent = text;
+    savedName.hidden = text === '';
+    const shownTags = next.tags.length > MAX_CHIPS ? next.tags.slice(0, MAX_CHIPS - 1) : next.tags;
+    chips.replaceChildren(...shownTags.map((t) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      // The tag palette IS the stage palette (TagColor), so its accent resolves alike.
+      chip.style.setProperty('--chip', stageAccent(t.color).fg);
+      chip.textContent = t.name;
+      return chip;
+    }));
+    if (shownTags.length < next.tags.length) {
+      const more = document.createElement('span');
+      more.className = 'chip';
+      more.style.setProperty('--chip', 'var(--ink-3)');
+      more.textContent = `+${next.tags.length - shownTags.length}`;
+      chips.append(more);
+    }
+    chips.hidden = next.tags.length === 0;
     shown = '';
     measure();
   }

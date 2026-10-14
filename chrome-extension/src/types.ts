@@ -102,6 +102,13 @@ export interface ExtCollection {
   is_system: boolean;
 }
 
+/* A tag (GET /tags, rule #18): a name in one of the stage palette's colours. */
+export interface ExtTag {
+  id: number;
+  name: string;
+  color: string;
+}
+
 /* Response of POST /dismissals (`added`) and DELETE /dismissals/{id}
  * (`removed`). Read only to confirm the write landed. */
 export interface DismissalWriteResult {
@@ -117,6 +124,13 @@ export interface CollectionWriteResult {
   added?: number;
   skipped?: number;
   removed?: boolean;
+}
+
+/* Response of POST /properties/{id}/tags (`attached`) and DELETE
+ * /properties/{id}/tags/{tag_id} (`detached`). Read only to confirm it landed. */
+export interface TagWriteResult {
+  attached?: boolean;
+  detached?: boolean;
 }
 
 /* One operator note about a PROPERTY (rule #18). `origin_listing_id` is the
@@ -217,6 +231,9 @@ export interface PortalListing {
   /* Collection memberships of the listing's property (rule #18). Null when the
    * listing has no property yet (same posture as `pipeline`). */
   collection_ids: number[] | null;
+  /* The property's tags (rule #18), same posture; absent from an API that
+   * predates the field. Names + colours come from `list_tags`. */
+  tag_ids?: number[] | null;
   /* Whether the caller dismissed the listing's property (migration 536). Null
    * when there is no property yet; absent when the API predates the field —
    * either way the panel shows no hide control. */
@@ -257,6 +274,9 @@ export type ApiMessage =
   | { type: 'dismiss_property'; property_id: number }
   | { type: 'undismiss_property'; property_id: number }
   | { type: 'list_collections' }
+  | { type: 'list_tags' }
+  | { type: 'attach_tag'; tag_id: number; property_id: number }
+  | { type: 'detach_tag'; tag_id: number; property_id: number }
   | { type: 'add_to_collection'; collection_id: number; property_id: number }
   | { type: 'remove_from_collection'; collection_id: number; property_id: number }
   | { type: 'list_notes'; property_id: number }

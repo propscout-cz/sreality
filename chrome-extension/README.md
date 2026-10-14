@@ -48,6 +48,15 @@ maxima, remax, mmreality, ceskereality).
     Creating, renaming and monitoring settings stay in the app ("Spravovat
     kolekce →"). It replaced a one-click "Sledovat" bell that could only reach
     the single monitoring collection.
+  - The **tag row** (rule #18), under the action bar: the property's tags as
+    the app's chips (the name in the tag's colour), then a **Štítky** /
+    **Přidat štítek** button opening the checklist of every tag, where one
+    click attaches or detaches through the same `POST/DELETE
+    /properties/{id}/tags` the SPA's assign list uses. Tags ride on
+    `POST /listings/lookup` (`tag_ids`); names and colours come from
+    `GET /tags`, re-read when the checklist opens. One checklist at a time —
+    opening it closes the collection one. Creating, renaming and recolouring
+    stay in the app's assign list ("Nový štítek v aplikaci →").
   - The panel **scrolls** when it is taller than the window (it is pinned to
     the bottom edge and grows upward), keeping its scroll position across
     re-renders.
@@ -74,9 +83,11 @@ maxima, remax, mmreality, ceskereality).
     across the grid. In the pipeline: the photo toned in the stage colour (the
     operator's, copper when none) with the stage badge and name over it;
     hovering the card lifts the tone to show the photo. In a collection: a
-    copper rim round the photo and a copper tag in its top-right corner
+    copper rim round the photo and a copper label in its top-right corner
     naming the collection (`+N` for more) — the photo keeps its colours, so a
-    saved card never reads as a stage. A property can carry both. The photo is
+    saved card never reads as a stage. Tagged: the tag chips under that label
+    (up to four, then `+N`; names and colours from `GET /tags`, read once a
+    card on the page carries a tag). A property can carry all three. The photo is
     found by geometry (the largest image the card shows, cut to whatever clips
     it, corners matched), not by portal markup. A hidden card drawn barely
     visible gets no mark, and neither does a card guess that holds several
@@ -442,7 +453,8 @@ Odhlásit" line then appears at the top of the panel on every listing; click
    property / show it again). A property in the pipeline also has its photo
    tinted in the stage's colour with the stage number over it (point at the
    card to see the photo through); one saved to a collection gets a copper
-   frame and a tag naming the collection.
+   frame and a label naming the collection; its tags show as coloured chips in
+   the photo's top-right corner.
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
