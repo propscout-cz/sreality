@@ -20,6 +20,7 @@ import pytest
 from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import legacy_retire as L
+from autodedup import rt_lease
 from autodedup.incremental_sql import RT_SCOPE_SCAN_SEEN_SQL
 from tests.autodedup.test_apply import GEN, FakeDb
 from tests._property_ledger import _Ledger, ledger_carriers  # noqa: F401 — the fixture
@@ -1322,3 +1323,37 @@ def test_w8_a_group_holding_an_advert_the_lane_has_not_fingerprinted_is_left(
     assert by[g["splits"]]["unread"] == [4] and db.listings[4]["property_id"] == 300
     assert by[g["mixed"]]["outcome"] == "retired:mixed_deal_type"
     assert L.UNREAD_SQL in db.statements
+
+
+def test_w8_after_the_undo_the_lanes_own_plan_merges_each_unit_and_a_rerun_is_a_no_op(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """What W8 leans on: the reconcile plans the stream's groups through `apply.plan_groups`, so
+    once the old merge is undone each unit is a merge the lane makes (none before: both sat on
+    one property). A second live dispatch finds nothing live to undo."""
+    db = LiveStreamDb()
+    db.live_scope(blocks=sorted(TRIAL))
+    _krkonosska(db)
+    db.verdicts.clear()
+    db.group(74935, [103218, 165670], gen="rt")
+    db.group(74936, [103219, 165665], gen="rt")
+    scope = A.Scope(**A.scope_fields(db.settings[A.SCOPE_SETTING]))
+    assert A.plan_apply(db, "rt", scope).to_apply == []
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(L, "detach_listings", db.detach_recording(calls))
+    A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    assert [g.cluster_key for g in A.plan_apply(db, "rt", scope).to_apply] == [74935, 74936]
+    calls.clear()
+    again = A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    assert calls == [] and again["counts"]["groups_touching"] == 0
+
+
+def test_w8_live_waits_for_a_pass_that_holds_the_lease(tmp_path: Path, monkeypatch: Any) -> None:
+    """Braked is not enough: a pass already running when the interval went to 0 holds the lease,
+    and the live run refuses until it is released."""
+    db, _g = _stream_world()
+    db.lease[rt_lease.NAME] = {"holder": "worker:pass", "live": True}
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(L, "detach_listings", db.detach_recording(calls))
+    with pytest.raises(SystemExit, match="rt_lease is"):
+        A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    assert calls == [] and not any(e["undone"] for e in db.events)
