@@ -592,6 +592,11 @@ yield badge).
   a tag naming the collection (`chrome-extension/src/index_photo_mark.ts`).
   The photo is found by geometry, not markup; a veiled card, or a card guess
   holding several listings, gets no mark.
+- **Sorted cards and ads (2026-10-14):** a saved card is toned like a stage
+  (copper, bookmark + collection name) — the copper rim let a property already
+  reviewed shine like a new one; and the results grid's non-listing cards
+  (paid ads, project promos) are washed whitish (`index_promo.ts`, found by
+  structure: card-sized grid children holding no listing link).
 - **Tags (2026-10-14):** the cards print the property's tag chips over the
   photo, and the detail panel assigns tags — a chip row under its action bar
   and a checklist of every tag over `POST/DELETE /properties/{id}/tags`.

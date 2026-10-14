@@ -3,12 +3,15 @@
  *   pipeline   — the photo toned in the stage's colour (the operator's, copper
  *                when none — glyphs.stageAccent), the stage's badge and name
  *                set over it. Hovering the card lifts the tone to show the photo.
- *   collection — a copper rim round the photo and a copper label in its
- *                top-right corner naming the collection (+N for more). The
- *                photo keeps its colours, so a saved card never reads as a stage.
- *   tags       — the app's tag chips (the name in the tag's colour), under the
- *                collection label in the same corner, the bottom being where
- *                portals put their own broker logos and video marks.
+ *   collection — toned the same way in copper (the extension's "saved"
+ *                colour), a bookmark and the collection's name (+N for more)
+ *                where a stage sets its badge: a property already sorted must
+ *                not shine on the page like a new one. In the pipeline too, the
+ *                stage tones the photo and a copper label in the top-right
+ *                corner names the collection.
+ *   tags       — the app's tag chips (the name in the tag's colour), in the
+ *                same corner, the bottom being where portals put their own
+ *                broker logos and video marks.
  * A property can carry all three. The card's cluster stays the control; this
  * is only the mark (aria-hidden — the cluster's labels say it; tags are edited
  * in the app).
@@ -70,7 +73,7 @@ const css = (cardAttr: string): string => `
   }
   [hidden] { display: none !important; }
   .box { position: absolute; font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
-  .tone, .shade, .face, .rim {
+  .tone, .shade, .face {
     position: absolute; inset: 0; z-index: 899; border-radius: inherit;
     transition: opacity 220ms ease;
   }
@@ -100,7 +103,7 @@ const css = (cardAttr: string): string => `
     white-space: nowrap; font-size: clamp(9px, 3.4cqh, 11px); font-weight: 600;
     line-height: 1.2; letter-spacing: 0.2em; text-transform: uppercase; opacity: 0.9;
   }
-  .rim { box-shadow: inset 0 0 0 3px var(--copper); }
+  .badge svg { display: block; width: clamp(18px, min(15cqh, 12cqw), 44px); height: auto; }
   .corner {
     position: absolute; top: 6px; right: 6px; z-index: 899;
     display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
@@ -224,7 +227,7 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
   let host: HTMLElement | null = null;
   let parts: {
     box: HTMLElement; stage: HTMLElement[]; frame: HTMLElement; badge: HTMLElement;
-    rule: HTMLElement; label: HTMLElement; rim: HTMLElement; saved: HTMLElement;
+    rule: HTMLElement; label: HTMLElement; saved: HTMLElement;
     savedName: HTMLElement; chips: HTMLElement;
   } | null = null;
   let view: PhotoMarkView | null = null;
@@ -253,14 +256,14 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
     const saved = div('saved');
     const built = {
       box, stage: [div('tone'), div('shade'), face], frame: div('frame'), badge: div('badge'),
-      rule: div('rule'), label: div('label'), rim: div('rim'), saved,
+      rule: div('rule'), label: div('label'), saved,
       savedName: div('saved-name'), chips: div('chips'),
     };
     face.append(built.frame, built.badge, built.rule, built.label);
     saved.innerHTML = bookmarkIconSvg(true);
     saved.append(built.savedName);
     corner.append(saved, built.chips);
-    box.append(...built.stage, built.rim, corner);
+    box.append(...built.stage, corner);
     shadow.append(style, box);
     card.appendChild(host);
     resizes.observe(card);
@@ -310,20 +313,28 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
       return;
     }
     parts ??= build();
-    const { box, stage, badge, rule, label, rim, saved, savedName, chips } = parts;
+    const { box, stage, badge, rule, label, saved, savedName, chips } = parts;
     const s = next.stage;
-    for (const layer of stage) layer.hidden = s == null;
-    if (s != null) {
-      box.style.setProperty('--stage', stageAccent(s.color).fg);
-      badge.textContent = s.badge ?? '';
-      badge.hidden = s.badge == null;
-      label.textContent = s.label ?? '';
-      label.hidden = s.label == null;
-      rule.hidden = s.badge == null || s.label == null;
+    const names = next.collections;
+    // The face says the stage; without one, the collection.
+    const face = s != null
+      ? { color: stageAccent(s.color).fg, glyph: false, badge: s.badge, label: s.label }
+      : names != null
+        ? { color: 'var(--copper)', glyph: true, badge: '', label: savedText(names) || 'V kolekci' }
+        : null;
+    for (const layer of stage) layer.hidden = face == null;
+    if (face != null) {
+      box.style.setProperty('--stage', face.color);
+      if (face.glyph) badge.innerHTML = bookmarkIconSvg(true);
+      else badge.textContent = face.badge ?? '';
+      badge.hidden = face.badge == null;
+      label.textContent = face.label ?? '';
+      label.hidden = face.label == null;
+      rule.hidden = face.badge == null || face.label == null;
     }
-    rim.hidden = next.collections == null;
-    saved.hidden = next.collections == null;
-    const text = savedText(next.collections ?? []);
+    // The corner label only when the face is the stage's — else it repeats the face.
+    saved.hidden = names == null || s == null;
+    const text = savedText(names ?? []);
     savedName.textContent = text;
     savedName.hidden = text === '';
     const shownTags = next.tags.length > MAX_CHIPS ? next.tags.slice(0, MAX_CHIPS - 1) : next.tags;
