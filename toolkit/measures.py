@@ -866,6 +866,18 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "anything itself.",
     ),
     RegisteredSite(
+        path="frontend/src/lib/mapOverlayDraw.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_LABELS,
+        why="A reference-overlay scale whose unit token is `rent_per_m2` (the "
+        "MF rent choropleth once it moves onto the overlay path) is labelled "
+        "with the shared monthly-rent unit in its legend and click popup; the "
+        "figure is the stored MF reference rent carried in the vector tile, "
+        "never a client-side ratio.",
+    ),
+    RegisteredSite(
         path="frontend/src/components/estimation/RunPanel.tsx",
         arm="vocab",
         hits=1,
@@ -913,6 +925,15 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         kind=KIND_GUARDS,
         why="The vocabulary's own pinning test; it consumes every table in the "
         "module in order to assert their exact contents.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/mapOverlays.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="Pins that the overlay popup labels a `rent_per_m2` scale with the "
+        "shared monthly-rent unit rather than a spelled-out or capital one.",
     ),
     RegisteredSite(
         path="frontend/src/lib/growthChoropleth.test.ts",

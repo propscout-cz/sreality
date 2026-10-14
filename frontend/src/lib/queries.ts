@@ -2182,10 +2182,9 @@ export const fetchCuratedCityPolygons = async (
 /* -------------------------------------------------------------------------- */
 /* MF rent-price choropleth ("Cenová mapa nájemného"). One polygon per Czech  */
 /* obec / katastrální území, coloured by reference rent (Kč/m²) per size      */
-/* category VK1..VK4. The optional kraj overlay draws the 14 region borders.  */
-/* Both are operator-static reference datasets — fetch once, cache forever    */
-/* (staleTime: Infinity in the Browse useQuery). `geojson` is the raw         */
-/* ST_AsGeoJSON string; the map layer JSON.parses it into a Feature geometry. */
+/* category VK1..VK4. An operator-static reference dataset — fetch once,      */
+/* cache forever (staleTime: Infinity in the Browse useQuery). `geojson` is   */
+/* the raw ST_AsGeoJSON string; the map layer JSON.parses it into a geometry. */
 /* -------------------------------------------------------------------------- */
 
 export interface RentMapPolygon {
@@ -2198,12 +2197,6 @@ export interface RentMapPolygon {
   vk2_per_m2: number | null;
   vk3_per_m2: number | null;
   vk4_per_m2: number | null;
-}
-
-export interface RentMapKraj {
-  ruian_code: number;
-  name: string;
-  geojson: string;
 }
 
 export const fetchRentMapChoropleth = async (
@@ -2220,20 +2213,6 @@ export const fetchRentMapChoropleth = async (
     orderBy: [{ column: 'ruian_code' }],
     key: ['ruian_code'],
     expectMax: 100_000,
-    signal,
-  });
-};
-
-export const fetchRentMapKraje = async (
-  { signal }: PgReadOptions = {},
-): Promise<RentMapKraj[]> => {
-  /* 14 kraje — fixed by geography. */
-  return await fetchAllRows<RentMapKraj>({
-    relation: 'rent_map_kraje_public',
-    build: () => supabase.from('rent_map_kraje_public').select('*', { count: 'exact' }),
-    orderBy: [{ column: 'ruian_code' }],
-    key: ['ruian_code'],
-    expectMax: 1_000,
     signal,
   });
 };
