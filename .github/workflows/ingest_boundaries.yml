@@ -15,6 +15,9 @@ name: "Data: ingest admin boundaries"
 # The script reads SUPABASE_DB_URL via env. It TRUNCATEs admin_boundaries
 # at the start of the load by default so re-runs reproduce live ČÚZK
 # state rather than accumulating retired units.
+#
+# The last step re-renders the kraje map overlay from the fresh polygons
+# (scripts/ingest_map_overlays.py --sections kraje); it is skipped on a dry run.
 
 on:
   workflow_dispatch:
@@ -71,3 +74,9 @@ jobs:
           fi
           echo "Running with: $ARGS"
           eval "python -m scripts.ingest_boundaries $ARGS"
+
+      - name: Re-render the kraje map overlay
+        if: ${{ !inputs.dry_run }}
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: python -m scripts.ingest_map_overlays --sections kraje

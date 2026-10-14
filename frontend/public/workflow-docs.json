@@ -2476,6 +2476,57 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_boundaries.yml"
     },
     {
+      "filename": "ingest_map_overlays.yml",
+      "name": "Data: ingest map overlays",
+      "description": "Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán, the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries) into map_overlay_* and renders each section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand after a publisher revises its data.",
+      "portal": null,
+      "manual": true,
+      "schedules": [
+        {
+          "cron": "0 4 2 1,4,7,10 *",
+          "human": "0 4 2 1,4,7,10 *"
+        }
+      ],
+      "onPush": false,
+      "onPullRequest": false,
+      "paths": null,
+      "inputs": [
+        {
+          "name": "sections",
+          "description": "Sections to ingest (comma-separated: metro,flood,kraje). Empty = all.",
+          "required": false,
+          "type": "string",
+          "default": "",
+          "options": null
+        },
+        {
+          "name": "dry_run",
+          "description": "Fetch and check every layer; write nothing.",
+          "required": false,
+          "type": "boolean",
+          "default": "false",
+          "options": null
+        },
+        {
+          "name": "accept_shrink",
+          "description": "Accept a layer that came back below 90 % of its previous feature count.",
+          "required": false,
+          "type": "boolean",
+          "default": "false",
+          "options": null
+        }
+      ],
+      "secrets": [
+        "SUPABASE_DB_URL"
+      ],
+      "concurrencyGroup": "ingest-map-overlays",
+      "cancelInProgress": false,
+      "timeoutMinutes": 120,
+      "permissions": "contents: read",
+      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/ingest_map_overlays.yml",
+      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/ingest_map_overlays.yml"
+    },
+    {
       "filename": "label_images.yml",
       "name": "Labeling: bulk machine labels",
       "description": "The LLM builds the training set for named heads: one call per image carrying the ACTIVE definitions, verdicts written to image_tag_labels as source='machine' (migration 468 gives the pass its own called_for so its price is measured separately). See scripts/label_images.py for the rails.",
