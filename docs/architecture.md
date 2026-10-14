@@ -1688,7 +1688,9 @@ renumber.** Navigate by area:
     an apply, first undoes the removed engine's still-intact `source='auto'` merges whose adverts
     all sit in the scope's blocks and deal types (or whose merge mixed deal types), unless an
     operator ruling or the engine's own grouping holds one back, stamping
-    `undone_by='autodedup-legacy-retire:<run>'`. Both are group-scoped, so neither can move a
+    `undone_by='autodedup-legacy-retire:<run>'`; with `generation=rt` and `blocks=` (W8, E953) it
+    runs alone against the live stream's groups, over blocks the lane has fully read, and the lane
+    re-merges after the brake lifts. Both are group-scoped, so neither can move a
     native advert: only the operator splits one.
     **AUTODEDUP apply path.** Merges may now ALSO be ordered by the AUTODEDUP engine
     (`docs/design/autodedup/PROGRAM.md` E900–E906) — through the same chokepoint, never around

@@ -116,5 +116,10 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.
   Until then the brake is interval 0, then `unapply` (E927: one `detach_listings` call per group);
-  the commit that deletes the modes must name what replaces it. `legacy_retire` rides on batch
-  `mode=apply` (`retire_legacy=1`), so the same commit must also say where it runs until W8.
+  the commit that deletes the modes must name what replaces it. `legacy_retire` rides on
+  `mode=apply` (`retire_legacy=1`), and since E953 also runs alone under `generation=rt,blocks=`
+  (the per-area undo before an area goes live), so that commit must keep the `rt` form.
+- **Next (W8, E953):** per area, before it enters the apply scope: brake, the area into the scope
+  row, `mode=apply` `generation=rt,retire_legacy=1,blocks=town:<code>` dry run, then live, then
+  the interval back. Beroun (`town:531057`) first, once the lane has read it after the 10-14
+  re-seed (the step refuses an unread block).
