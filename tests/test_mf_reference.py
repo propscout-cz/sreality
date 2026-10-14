@@ -513,7 +513,7 @@ def test_an_ingested_revision_is_live_at_its_refresh_with_nothing_to_recompute(c
     with conn.transaction() as tx:
         rev = insert_revision(conn, parsed, source_filename="mf-next.xlsx",
                               file_sha256="mf-test-next", source_date=date(2026, 11, 15),
-                              uploaded_by=None)
+                              uploaded_by=None).revision
         rent, _, d = mf(conn, has_lift=False)
         assert (d["source_revision"], d["base_per_m2"], rent) == (rev, 400, (400 + 1) * 50)
         assert mf(conn, obec_kod=O_KU, has_lift=False)[2]["status"] == "no_rent_cell"

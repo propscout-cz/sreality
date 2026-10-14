@@ -238,7 +238,7 @@ def _insert(conn):
     return api_rent_map.insert_revision(
         conn, _PARSED, source_filename="2026-08-15_Cenova-mapa.xlsx", file_sha256="ab" * 32,
         source_date=date(2026, 8, 15), uploaded_by="test",
-    )
+    ).revision
 
 
 @pytest.fixture()

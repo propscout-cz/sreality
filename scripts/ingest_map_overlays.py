@@ -611,7 +611,7 @@ SOURCES: dict[str, Section] = {
         ),
     ),
     "kraje": Section(
-        label="Kraje", sort=3, minzoom=5, maxzoom=9,
+        label="Kraje", sort=3, minzoom=3, maxzoom=9,
         attribution="© ČÚZK (RÚIAN)", licence="CC BY 4.0", source_url=RUIAN_ATOM, note=None,
         revised_at=sql_revised_at(KRAJE_REVISED_SQL),
         layers=(
@@ -624,7 +624,7 @@ SOURCES: dict[str, Section] = {
     # the whole-country view keeps it (a z5/z6 tile of all 7.6k territories is ~1 MB).
     # The MF states no licence for the data; its site is "© Ministerstvo financí ČR".
     "rent_map": Section(
-        label="Cenová mapa nájemného", sort=0, minzoom=5, maxzoom=12,
+        label="Cenová mapa nájemného", sort=0, minzoom=3, maxzoom=12,
         attribution="Ministerstvo financí ČR – Cenová mapa nájemného",
         licence="Licence neuvedena (© Ministerstvo financí ČR)", source_url=MF_INFOGRAPHIC_URL,
         note=None,

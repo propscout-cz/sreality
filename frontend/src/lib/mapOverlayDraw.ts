@@ -188,7 +188,10 @@ export function overlayStyleLayers(
         paint: {
           'fill-color': overlayFillColor(layer, variantKey),
           'fill-opacity': layer.scale?.opacity ?? OVERLAY_FILL_OPACITY,
-          'fill-antialias': false,
+          /* A choropleth with its own outline is stored whole (no subdivision cuts), and
+           * MapLibre's antialiased edge — same colour as the fill — was most of the border
+           * the old rent map drew. Subdivided fills (flood) must not stroke their cuts. */
+          'fill-antialias': Boolean(layer.scale?.outline),
         },
       },
     },
@@ -294,6 +297,24 @@ export function overlayDrawOrder(registry: MapOverlayRegistry): string[] {
     }
   }
   return bands.flat();
+}
+
+export type OverlayFillOwner = NonNullable<ReturnType<typeof overlayFillOwner>>;
+
+/* Who answers a click: the topmost hit decides. A listing layer on top → nobody (the
+ * listing handlers own it). A choropleth (scale layer) inside a visible curated city →
+ * nobody, the city card stays, as the rent map always behaved. Anything else → that
+ * overlay layer. `cityHit` is asked only when it matters, so the map is not queried
+ * for every click. */
+export function overlayClickOwner(
+  registry: MapOverlayRegistry,
+  topLayerId: string | null,
+  cityHit: () => boolean,
+): OverlayFillOwner | null {
+  const owner = topLayerId ? overlayFillOwner(registry, topLayerId) : null;
+  if (!owner) return null;
+  if (owner.layer.scale && cityHit()) return null;
+  return owner;
 }
 
 export const overlayFillIds = (registry: MapOverlayRegistry): string[] =>

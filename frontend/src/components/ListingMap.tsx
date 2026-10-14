@@ -31,7 +31,7 @@ import { circleRing } from '@/lib/geoRing';
 import { propertyPath } from '@/lib/listingUrl';
 import {
   overlayFillIds,
-  overlayFillOwner,
+  overlayClickOwner,
   overlayPopupHtml,
   useMapOverlays,
   useMapZoom,
@@ -1094,11 +1094,12 @@ export default function ListingMap({
         const top = map.queryRenderedFeatures(e.point, {
           layers: [...LISTING_HIT_LAYERS, ...fills],
         })[0];
-        const owner = top ? overlayFillOwner(registry, top.layer.id) : null;
+        const owner = overlayClickOwner(
+          registry,
+          top?.layer.id ?? null,
+          () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
+        );
         if (!top || !owner) return;
-        if (owner.layer.scale && map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0) {
-          return;
-        }
         const variant = parseLayers(overlayLayersRef.current).get(owner.layer.key) ?? null;
         popupRef.current?.remove();
         popupRef.current = new maplibregl.Popup({

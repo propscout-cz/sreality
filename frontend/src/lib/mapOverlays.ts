@@ -202,6 +202,20 @@ export const writeRememberedLayers = (layers: string): void => {
   listeners.forEach((listener) => listener());
 };
 
+/* The last size category picked for a layer, so switching it off and on brings it back
+ * (the old `rentvk` URL key survived a `rentmap` toggle the same way). Unknown or first
+ * variant reads as null, the grammar's spelling of "the first one". */
+const variantMemoryKey = (layerKey: string): string => `map.layers.variant.${layerKey}`;
+
+export const readRememberedVariant = (layer: OverlayLayer): string | null => {
+  const key = readValue(variantMemoryKey(layer.key), '');
+  const index = (layer.variants ?? []).findIndex((v) => v.key === key);
+  return index > 0 ? key : null;
+};
+
+export const writeRememberedVariant = (layerKey: string, variant: string): void =>
+  writeValue(variantMemoryKey(layerKey), variant);
+
 /* The remembered selection as live React state; `set` writes it for every subscriber. */
 export function useRememberedLayers(): [string, (next: string) => void] {
   const layers = useSyncExternalStore(subscribeRemembered, readRememberedLayers, readRememberedLayers);

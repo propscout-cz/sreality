@@ -10,6 +10,8 @@ map's rent choropleth is the `rent_map` reference overlay
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import logging
 import re
 from datetime import date
@@ -71,6 +73,14 @@ def fetch_latest_xlsx(
     return resp.content, url.rsplit("/", 1)[-1]
 
 
+@dataclass(frozen=True)
+class RevisionOutcome:
+    """What an ingest did: the new revision (None = file already known) and, when the map
+    overlay could not be re-rendered under its guards, why — the revision still stands."""
+    revision: int | None
+    overlay_refused: str | None
+
+
 def insert_revision(
     conn: "psycopg.Connection",
     parsed: ParsedRentMap,
@@ -79,7 +89,7 @@ def insert_revision(
     file_sha256: str,
     source_date: date | None,
     uploaded_by: str | None,
-) -> int | None:
+) -> "RevisionOutcome":
     """Insert one revision + its values/adjustments, re-render the `rent_map` map
     overlay and refresh `rent_map_cells`, in one transaction.
 
@@ -97,7 +107,7 @@ def insert_revision(
         if existing is not None:
             LOG.info("rent map sha256 %s already ingested (rev %s)",
                      file_sha256[:12], existing[0])
-            return None
+            return RevisionOutcome(None, None)
 
         cur.execute(
             """
@@ -139,9 +149,11 @@ def insert_revision(
         # its previous render, and fetch_rent_map.yml's re-render step fails loudly on
         # the same refusal. Any other failure rolls the whole ingest back, as a failed
         # matview refresh did.
+        overlay_refused: str | None = None
         try:
             tiles = render_sql_section(conn, OVERLAY_SECTION)
         except OverlayRefused as exc:
+            overlay_refused = str(exc)
             LOG.error("rent map: revision %d kept, but the map overlay was NOT "
                       "re-rendered and still shows the previous one: %s", revision, exc)
         else:
@@ -158,7 +170,7 @@ def insert_revision(
 
     LOG.info("rent map: ingested revision %d (%d territories, %d adjustments)",
              revision, territory_count, len(parsed.adjustments))
-    return revision
+    return RevisionOutcome(revision, overlay_refused)
 
 
 def ingest_bytes(
@@ -173,16 +185,18 @@ def ingest_bytes(
         data, source_date=source_date_from_filename(source_filename)
     )
     file_sha256 = sha256_bytes(data)
-    revision = insert_revision(
+    outcome = insert_revision(
         conn, parsed,
         source_filename=source_filename,
         file_sha256=file_sha256,
         source_date=parsed.source_date,
         uploaded_by=uploaded_by,
     )
+    revision = outcome.revision
     return {
         "ingested": revision is not None,
         "source_revision": revision,
+        "overlay_refused": outcome.overlay_refused,
         "source_date": parsed.source_date.isoformat() if parsed.source_date else None,
         "source_filename": source_filename,
         "file_sha256": file_sha256,

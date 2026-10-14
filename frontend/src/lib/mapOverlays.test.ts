@@ -14,6 +14,7 @@ import { ApiError, apiGetBlob } from './api';
 import { PPM2_UNIT } from './measure';
 import {
   fetchOverlayTile,
+  overlayClickOwner,
   overlayDataDate,
   overlayDrawOrder,
   overlayFillOwner,
@@ -26,17 +27,19 @@ import {
   useMapZoom,
 } from './mapOverlayDraw';
 import {
+  type MapOverlayRegistry,
+  type OverlayLayer,
+  type OverlaySection,
   canonicalLayers,
   layersFromSearchParams,
   layersOf,
   parseLayers,
   readRememberedLayers,
+  readRememberedVariant,
   serializeLayers,
   useRememberedLayers,
   writeRememberedLayers,
-  type MapOverlayRegistry,
-  type OverlayLayer,
-  type OverlaySection,
+  writeRememberedVariant,
 } from './mapOverlays';
 
 const section = (over: Partial<OverlaySection> & Pick<OverlaySection, 'key' | 'layers'>): OverlaySection => ({
@@ -609,5 +612,68 @@ describe('useMapZoom', () => {
     fake.zoom = 10.2;
     act(() => fake.handlers.get('zoomend')!());
     expect(result.current).toBe(10);
+  });
+});
+
+/* Review follow-ups (2026-10-15): the rent choropleth's own antialiased edge, the remembered
+ * size category, and the click rule as one pure decision. */
+const RENT_LAYER_R = {
+  key: 'rent_map', label: 'Cenová mapa nájemného', sort: 1, legend: [], feature_count: 2,
+  scale: {
+    prop: 'vk1', stops: [[150, '#eaf0f6'], [600, '#1a1a5e']], null_color: 'rgba(140, 140, 140, 0.35)',
+    unit: 'rent_per_m2', opacity: 0.62, outline: { color: 'rgba(60, 60, 90, 0.25)', width: 0.4 },
+  },
+  variants: [
+    { key: 'vk1', label: '1+kk, 1+1', prop: 'vk1' }, { key: 'vk2', label: '2+kk, 2+1', prop: 'vk2' },
+    { key: 'vk3', label: '3+kk, 3+1', prop: 'vk3' }, { key: 'vk4', label: '4+kk, 4+1', prop: 'vk4' },
+  ],
+} as unknown as import('./mapOverlays').OverlayLayer;
+const RENT_SECTION_R = {
+  key: 'rent_map', label: 'Cenová mapa nájemného', sort: 0, minzoom: 3, maxzoom: 12,
+  attribution: 'MF', licence: '-', source_url: 'https://mf.test', note: null,
+  source_revised_at: null, fetched_at: '2026-10-15T00:00:00Z', version: 1, layers: [RENT_LAYER_R],
+} as unknown as import('./mapOverlays').OverlaySection;
+const FLOOD_R = { key: 'flood', label: 'Záplavová území', sort: 2, minzoom: 10, maxzoom: 12, attribution: 'x',
+  licence: 'x', source_url: 'x', note: null, source_revised_at: null, fetched_at: 'x', version: 1,
+  layers: [{ key: 'flood_q100', label: 'Q100', sort: 3, legend: [{ class: 'q100', label: 'Q100', color: '#7FB3E6' }],
+    scale: null, variants: null, feature_count: 1 }] } as unknown as import('./mapOverlays').OverlaySection;
+
+describe('an outlined choropleth keeps its antialiased edge; subdivided fills do not', () => {
+  it('sets fill-antialias from scale.outline', () => {
+    const rent = overlayStyleLayers(RENT_SECTION_R, RENT_LAYER_R, true).find((l) => l.spec.id === 'ov-rent_map-fill');
+    expect((rent?.spec as { paint: Record<string, unknown> }).paint['fill-antialias']).toBe(true);
+    const flood = overlayStyleLayers(FLOOD_R, FLOOD_R.layers[0], true).find((l) => l.spec.id === 'ov-flood_q100-fill');
+    expect((flood?.spec as { paint: Record<string, unknown> }).paint['fill-antialias']).toBe(false);
+  });
+});
+
+describe('the last picked size category is remembered per layer', () => {
+  it('reads back a known non-first variant and folds the rest to null', () => {
+    writeRememberedVariant('rent_map', 'vk3');
+    expect(readRememberedVariant(RENT_LAYER_R)).toBe('vk3');
+    writeRememberedVariant('rent_map', 'vk1');
+    expect(readRememberedVariant(RENT_LAYER_R)).toBeNull();
+    writeRememberedVariant('rent_map', 'nope');
+    expect(readRememberedVariant(RENT_LAYER_R)).toBeNull();
+  });
+});
+
+describe('overlayClickOwner', () => {
+  const registry = { sections: [RENT_SECTION_R, FLOOD_R] } as unknown as import('./mapOverlays').MapOverlayRegistry;
+  it('yields to a listing on top', () => {
+    expect(overlayClickOwner(registry, 'point', () => false)).toBeNull();
+  });
+  it('leaves the city card when a choropleth is clicked inside a curated city', () => {
+    expect(overlayClickOwner(registry, 'ov-rent_map-fill', () => true)).toBeNull();
+  });
+  it('answers for a flood area even inside a curated city', () => {
+    expect(overlayClickOwner(registry, 'ov-flood_q100-fill', () => true)?.layer.key).toBe('flood_q100');
+  });
+  it('answers for the choropleth outside a city without asking twice', () => {
+    let asked = 0;
+    expect(overlayClickOwner(registry, 'ov-rent_map-fill', () => { asked += 1; return false; })?.layer.key).toBe('rent_map');
+    expect(asked).toBe(1);
+    expect(overlayClickOwner(registry, null, () => { asked += 1; return true; })).toBeNull();
+    expect(asked).toBe(1);
   });
 });

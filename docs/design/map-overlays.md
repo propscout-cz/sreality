@@ -194,7 +194,7 @@ Registry values:
 | --- | --- | --- | --- | --- |
 | metro | Metro | 9–12 | metro (1) | A #00A562, B #FCC400, C #CF003D, D #1F77D0 dash ("Metro D – návrh"), reserve #8C9196 dash ("Územní rezerva"), station #1F77D0 ("Plánovaná stanice") |
 | flood | Záplavová území | 10–12 | flood_q5 (1) #1D4F91, flood_q20 (2) #3B7DD8, flood_q100 (3) #7FB3E6, flood_q500 (4) #C6DCF2, flood_az (5) line #B3261E dash | one class per layer: q5 "Q5 – pětiletá voda", q20, q100 "Q100 – stoletá voda", q500 "Q500 – mapováno jen místy", az "Aktivní zóna" |
-| kraje | Kraje | 5–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
+| kraje | Kraje | 3–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
 
 Notes (Czech, shown in the chip): metro — "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026):
 stav, návrh a územní rezervy. Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E)
@@ -411,7 +411,7 @@ Backend, as built (2026-10-15):
   15 of 7,630 places exceed 256 vertices) because the SPA strokes each place's own outline
   (`scale.outline {color, width}`, today's hairline borders); `scale.opacity` (0.62) keeps today's
   fill; the section has sort 0 (its chip stays directly under the growth control, as before) and
-  no note; minzoom 5 (the country-wide opening view is ~z6.4, which drew the choropleth before).
+  no note; minzoom 3 (see the zoom-floor note below).
   Draw order: a scale (choropleth) layer is always the bottom overlay area, so the rent map never
   covers flood zones; inside a curated city a click on the choropleth leaves the city card in place
   (as today) while flood areas take the click. Accepted small differences: the panel gains the
@@ -420,4 +420,14 @@ Backend, as built (2026-10-15):
   Old links: `rentmap=1&rentvk=N` reads as `rent_map:vkN`. Deploy order: merge the cleanup, then
   dispatch `--sections rent_map` at once (the chip is absent for the minute the render takes; an
   already-open tab needs a reload), then apply 601.
+- **Zoom floors (review of the cleanup, 2026-10-15):** Browse's nationwide fit lands at z≈4.8–5.1 on
+  1280–1440 px screens (map column 42 % beside the 320 px sidebar, 56 px fit padding), and MapLibre
+  loads no tile below a source's minzoom. The old Kraje and rent overlays drew at every zoom, so
+  `kraje` and `rent_map` are tiled from z3 (one tile covers Czechia at z3 and at z4; a rent tile
+  there is ≤ 0.8 MB, the kraje ones are tiny). The rent fill keeps MapLibre's default antialiasing
+  (`fill-antialias` = the layer has a `scale.outline`): the 1 px same-colour edge it draws was most
+  of today's borders; flood fills stay un-antialiased because their pieces are subdivided. The last
+  picked size category is remembered per layer (`map.layers.variant.<key>`) so switching the rent
+  map off and on brings it back, as the old `rentvk` URL key did. A Settings upload or "fetch now"
+  whose overlay render was refused now says so next to "Ingested revision N" (`overlay_refused`).
 

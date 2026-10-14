@@ -52,8 +52,8 @@ def test_the_registry_holds_the_four_sections_in_order() -> None:
     assert {key: (s.label, s.sort, s.minzoom, s.maxzoom) for key, s in mod.SOURCES.items()} == {
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
-        "kraje": ("Kraje", 3, 5, 9),
-        "rent_map": ("Cenová mapa nájemného", 0, 5, 12),
+        "kraje": ("Kraje", 3, 3, 9),
+        "rent_map": ("Cenová mapa nájemného", 0, 3, 12),
     }
     assert list(mod.SOURCES) == ["metro", "flood", "kraje", "rent_map"]
 
@@ -818,7 +818,7 @@ def test_an_sql_section_is_written_and_rendered_from_the_database_alone(offline:
     assert conn.params["lock"] == [("map_overlays:rent_map",)]
     section = conn.params["section"][0]
     assert (section["key"], section["minzoom"], section["maxzoom"], section["revised"],
-            section["source_url"]) == ("rent_map", 5, 12, date(2026, 8, 15), MF_INFOGRAPHIC_URL)
+            section["source_url"]) == ("rent_map", 3, 12, date(2026, 8, 15), MF_INFOGRAPHIC_URL)
     layer = conn.params["layer"][0]
     assert (layer["key"], layer["section"], layer["feature_count"]) == ("rent_map", "rent_map", 2)
     assert (layer["legend"].obj, layer["scale"].obj) == ([], _layer("rent_map").scale)

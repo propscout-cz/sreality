@@ -314,7 +314,7 @@ def test_a_rent_map_ingest_re_renders_the_overlay_from_its_own_revision(cur: Any
     )
     revision = insert_revision(cur.connection, parsed, source_filename="ci.xlsx",
                                file_sha256=f"ci-{uuid.uuid4().hex}",
-                               source_date=date(2026, 11, 15), uploaded_by=None)
+                               source_date=date(2026, 11, 15), uploaded_by=None).revision
 
     assert revision is not None
     cur.execute("SELECT props FROM map_overlay_features WHERE layer_key = 'rent_map'")
@@ -336,7 +336,7 @@ def test_a_refused_rent_map_render_keeps_the_revision_and_the_previous_map(cur: 
     )
     revision = insert_revision(cur.connection, parsed, source_filename="ci.xlsx",
                                file_sha256=f"ci-{uuid.uuid4().hex}",
-                               source_date=date(2026, 11, 15), uploaded_by=None)
+                               source_date=date(2026, 11, 15), uploaded_by=None).revision
 
     cur.execute("SELECT count(*) FROM rent_map_values WHERE source_revision = %s", (revision,))
     assert cur.fetchone() == (1,)

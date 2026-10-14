@@ -11,16 +11,18 @@ import {
   overlayScaleWords,
 } from '@/lib/mapOverlayDraw';
 import {
-  activeVariant,
-  layersOf,
-  parseLayers,
-  serializeLayers,
   type LayerSelection,
   type MapOverlayRegistry,
   type OverlayLayer,
   type OverlayLegendEntry,
   type OverlayScale,
   type OverlaySection,
+  activeVariant,
+  layersOf,
+  parseLayers,
+  readRememberedVariant,
+  serializeLayers,
+  writeRememberedVariant,
 } from '@/lib/mapOverlays';
 
 type Edit = (apply: (next: Map<string, string | null>) => void) => void;
@@ -91,7 +93,7 @@ function SectionControl({
         edit((next) => {
           for (const layer of section.layers) {
             if (!checked) next.delete(layer.key);
-            else if (!next.has(layer.key)) next.set(layer.key, null);
+            else if (!next.has(layer.key)) next.set(layer.key, readRememberedVariant(layer));
           }
         })
       }
@@ -120,10 +122,10 @@ function SectionPanel({
   const multi = section.layers.length > 1;
   const blocks: { key: string; node: ReactNode }[] = [];
   if (multi) {
-    const toggle = (key: string, checked: boolean) =>
+    const toggle = (layer: OverlayLayer, checked: boolean) =>
       edit((next) => {
-        if (checked) next.set(key, null);
-        else next.delete(key);
+        if (checked) next.set(layer.key, readRememberedVariant(layer));
+        else next.delete(layer.key);
       });
     blocks.push({
       key: 'layers',
@@ -134,7 +136,7 @@ function SectionPanel({
               key={layer.key}
               layer={layer}
               checked={sel.has(layer.key)}
-              onChange={(checked) => toggle(layer.key, checked)}
+              onChange={(checked) => toggle(layer, checked)}
             />
           ))}
         </div>
@@ -144,10 +146,12 @@ function SectionPanel({
   for (const layer of section.layers) {
     if (!sel.has(layer.key)) continue;
     if ((layer.variants?.length ?? 0) > 1) {
-      const pick = (variant: string) =>
+      const pick = (variant: string) => {
+        writeRememberedVariant(layer.key, variant);
         edit((next) => {
           next.set(layer.key, variant);
         });
+      };
       blocks.push({
         key: `variants-${layer.key}`,
         node: (
