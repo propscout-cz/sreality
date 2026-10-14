@@ -3,6 +3,7 @@
     python3 -m autodedup.lane --mode apply   --args "generation=g12" --out out/
     python3 -m autodedup.lane --mode apply   --args "generation=g12,dry_run=0" --out out/
     python3 -m autodedup.lane --mode apply   --args "generation=g12,retire_legacy=1" --out out/
+    python3 -m autodedup.lane --mode apply --args "generation=rt,retire_legacy=1,blocks=town:531057"
     python3 -m autodedup.lane --mode unapply --args "generation=g12,dry_run=0" --out out/
     python3 -m autodedup.lane --mode unapply --args "since=2026-09-25T08:00Z" --out out/
 
@@ -30,9 +31,11 @@ it (the chokepoint's merge rows, `source='autodedup'` saying who merged; a detac
 an operator's native split's one closed row). A detach and its read-only preview,
 `detach_outcomes`, read it inside the toolkit. The apply path's own ledger is the only history
 it consults.
-The one carve-out is TEMPORARY: `retire_legacy=1` runs `autodedup.legacy_retire` (A2, kept until
-W8) before the plan, which reads it to undo the old engine's merges in the scope's blocks and
-deal types (plus any that mixes deal types).
+The one carve-out is TEMPORARY: `retire_legacy=1` runs `autodedup.legacy_retire` (A2) before the
+plan, which reads it to undo the old engine's merges in the scope's blocks and deal types (plus
+any that mixes deal types). With `generation=rt` and `blocks=` (W8, E953) it runs ALONE: no plan,
+no merge - the worker's lane re-merges once its interval is back above 0 - and only over blocks
+the lane has fully read (`rt_unread_blocks`, the reconcile's own rule).
 """
 
 from __future__ import annotations
@@ -51,6 +54,8 @@ from autodedup import apply_sql as S
 from autodedup import legacy_retire, rt_lease
 from autodedup.census import write_json
 from autodedup.incremental import GENERATION
+from autodedup.incremental_scope import GRAIN_OF
+from autodedup.incremental_sql import RT_SCOPE_SCAN_SEEN_SQL
 from autodedup.ui_sql import NEGATIVE_VERDICTS
 from toolkit.property_carriers import curation_preview
 from toolkit.property_identity import (
@@ -82,7 +87,8 @@ ID_CHUNK: int = 5000
 SCOPE_KEYS: tuple[str, ...] = (
     "category_types", "blocks", "listing_ids", "all_blocks", "max_clusters_per_run",
 )
-# `retire_legacy`: A2's pre-step (autodedup/legacy_retire.py), temporary, kept until W8.
+# `retire_legacy`: A2's pre-step (autodedup/legacy_retire.py), temporary; alone under
+# `generation=rt` (W8, E953).
 APPLY_ARGS: frozenset[str] = frozenset({"generation", "dry_run", "retire_legacy",
                                         rt_lease.RELEASE_ARG, *SCOPE_KEYS})
 # What `unapply` selects by: a generation (and one of its groups), a run, a time window.
@@ -119,6 +125,9 @@ SKIP_CHANGED_SINCE_PLAN = "changed_since_plan"
 # Not a merge at all: a group ALREADY on one property that an operator negative now covers.
 # Reported, never acted on — `unapply` is the operator's call (E905).
 RULED_AFTER_MERGE = "ruled_different_after_merge"
+# Why the retire step reads a live group as one THIS run does not merge under `generation=rt`
+# although it is proposed and inside the scope: that run merges nothing, the lane does (W8, E953).
+RECONCILED_BY_LANE = "reconciled_by_lane"
 
 
 
@@ -1622,19 +1631,27 @@ def run_apply(
     _check_args(args, APPLY_ARGS)
     generation = _generation_arg(args)
     dry_run = _dry_run_arg(args)
-    if generation.strip() == GENERATION and (not dry_run or _retire_arg(args)):
+    retire = _retire_arg(args)
+    live_stream = generation == GENERATION
+    if live_stream and not retire and not dry_run:
         raise SystemExit(
             f"generation={generation}: the real-time lane's generation is reconciled by the "
             "lane itself, under its own lease (A9) — a dry run may plan it (the G3 "
             "prediction), nothing here applies it"
         )
-    retire = _retire_arg(args)
+    if live_stream and retire and not (args.get("blocks") or "").strip():
+        raise SystemExit(
+            f"retire_legacy=1 with generation={generation} needs blocks= (the area whose old "
+            "merges to undo, e.g. blocks=town:531057): the lane merges, this run only "
+            "retires; nothing was undone")
     override = {key: args[key] for key in SCOPE_KEYS if key in args}
     out_dir = Path(out_dir)
     conn = conn_factory()
     try:
-        with _Writer(conn, live=not dry_run, lease=not dry_run or generation == GENERATION,
+        with _Writer(conn, live=not dry_run, lease=not dry_run or live_stream,
                      release=args.get(rt_lease.RELEASE_ARG), connect=conn_factory):
+            if live_stream and retire:
+                return _retire_live_stream(conn, dry_run, override, out_dir)
             return _apply_run(conn, generation, dry_run, retire, override, out_dir)
     finally:
         _close(conn)
@@ -1649,8 +1666,7 @@ def _apply_run(conn: Any, generation: str, dry_run: bool, retire: bool,
         raise SystemExit(f"scope: {exc}") from exc
     plan = plan_apply(conn, generation, scope)
     if retire:
-        retired = _retire_legacy(conn, generation, scope, plan, dry_run=dry_run,
-                                 out_dir=out_dir)
+        retired = _retire_legacy(conn, generation, scope, dry_run=dry_run, out_dir=out_dir)
         if not dry_run:
             plan = plan_apply(conn, generation, scope)
         retired = legacy_retire.note_deferred(
@@ -1672,41 +1688,88 @@ def _apply_run(conn: Any, generation: str, dry_run: bool, retire: bool,
 
 
 def _retire_legacy(
-    conn: Any, generation: str, scope: Scope, plan: Plan, *, dry_run: bool, out_dir: Path,
+    conn: Any, generation: str, scope: Scope, *, dry_run: bool, out_dir: Path,
 ) -> dict[str, Any]:
-    """A2 (temporary, kept until W8): the old engine's merges in the scope undone first, in this
-    same dispatch, so the plan that follows reads them apart. Refused before anything moves when
-    the run narrows by listing (the step reads blocks only) or when `plan`, read first, holds no
-    proposed group inside the scope: a typo'd or unstored generation would re-merge nothing."""
+    """A2: the old engine's merges in the scope undone first, in this same dispatch, so the plan
+    that follows reads them apart. Refused before anything moves when the run narrows by listing
+    (the step reads blocks only) or when the generation holds no proposed group inside the
+    scope: a typo'd or unstored generation would re-merge nothing. Under `generation=rt` no
+    group is one this run merges (the lane does), so the step leaves every legacy group the
+    live stream holds whole and never parts an operator "same" pair (W8, E953)."""
     if scope.listing_ids is not None:
         raise SystemExit("retire_legacy=1 cannot run with listing_ids: the retire step reads the "
                          "scope's blocks only; nothing was undone")
-    counts = plan.counts
-    proposed = counts.get("clusters", 0) - sum(
-        counts.get(key, 0) for key in ("not_proposed", "no_members", "out_of_scope"))
-    if proposed <= 0:
-        raise SystemExit(f"retire_legacy=1: generation {plan.generation!r} holds no proposed "
-                         "group inside the scope, so nothing would merge again; nothing was undone")
     # Only a group this run may merge (proposed, inside the scope by the plan's own rule)
     # re-merges what the step undoes; the rest touching it are reported apart, with why.
     members = _members(conn, generation)
     merging: dict[int, int] = {}
     other: dict[int, int] = {}
     why: dict[int, str] = {}
+    admitted = 0
     for cluster in _cluster_rows(conn, generation):
         key = int(cluster["cluster_key"])
         found = members.get(key, [])
         why_not = (f"status {cluster['status']}" if cluster["status"] != "proposed"
                    else scope.group_outside(found))
+        if found and not why_not:
+            admitted += 1
+            if generation == GENERATION:
+                why_not = RECONCILED_BY_LANE
         into = other if why_not else merging
         if why_not:
             why[key] = why_not
         for member in found:
             into.setdefault(member.listing_id, key)
+    if not admitted:
+        raise SystemExit(f"retire_legacy=1: generation {generation!r} holds no proposed "
+                         "group inside the scope, so nothing would merge again; nothing was undone")
     return legacy_retire.run(conn, scope.blocks, category_types=scope.category_types,
                              dry_run=dry_run, run_id=new_run_id(), out_dir=out_dir,
                              closed=scope_closed,
                              engine=legacy_retire.EngineMaps(merging, other, why))
+
+
+def rt_unread_blocks(conn: Any, generation: str, blocks: Iterable[str]) -> set[str]:
+    """The live stream's blocks it has not fully read (`obec:` / `cast_obce:` keys): one of
+    `blocks` never walked, or any whose snapshot holds an advert with no fingerprint. The
+    reconcile waits on them; the retire step refuses them."""
+    walked = {str(row[0]) for row in _rows(conn, RT_SCOPE_SCAN_SEEN_SQL,
+                                           {"generation": generation})}
+    unread = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
+                                           {"generation": generation})}
+    return unread | {block for block in blocks if block not in walked}
+
+
+def _retire_live_stream(conn: Any, dry_run: bool, override: Mapping[str, Any],
+                        out_dir: Path) -> dict[str, Any]:
+    """W8 (E953): `retire_legacy=1` under `generation=rt` - the old engine's merges in the named
+    blocks undone against the live stream's groups, and nothing planned or merged: the lane
+    re-merges once its interval is back above 0. Refused before anything moves while the lane has
+    not fully read a named block: an advert it has not read is in no group, which the step would
+    read as the engine keeping it apart."""
+    try:
+        scope = effective_scope(read_scope_setting(conn), override, live=not dry_run)
+    except ValueError as exc:
+        raise SystemExit(f"scope: {exc}") from exc
+    if not scope.blocks:
+        raise SystemExit(
+            f"retire_legacy=1: blocks= names no block of app_settings.{SCOPE_SETTING}, and the "
+            "lane re-merges only inside it - add the area there first, the lane braked; "
+            "nothing was undone")
+    keys: dict[str, str] = {}
+    for block in scope.blocks:
+        grain, _, code = block.partition(":")
+        keys[block] = f"{GRAIN_OF[grain]}:{code}"
+    unread = rt_unread_blocks(conn, GENERATION, keys.values())
+    waiting = sorted(block for block, key in keys.items() if key in unread)
+    if waiting:
+        raise SystemExit(
+            f"retire_legacy=1: the lane has not fully read {' '.join(waiting)} (never walked, or "
+            "an advert there with no fingerprint) - an advert it has not read sits in no group, "
+            "which would read as the engine keeping it apart. Run again once it has; nothing "
+            "was undone")
+    retired = _retire_legacy(conn, GENERATION, scope, dry_run=dry_run, out_dir=out_dir)
+    return {"generation": GENERATION, "dry_run": dry_run, **legacy_retire.brief(retired)}
 
 
 def _with_retire(result: dict[str, Any], retired: dict[str, Any] | None) -> dict[str, Any]:

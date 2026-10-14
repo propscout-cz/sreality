@@ -1,11 +1,14 @@
 """A2: undo the old engine's merges in the apply scope's area before this engine merges there.
 
-TEMPORARY SCAFFOLDING, kept until W8 by the ordering rule of the W5 ONE LANE row in
+TEMPORARY SCAFFOLDING, kept by the ordering rule of the W5 ONE LANE row in
 docs/design/autodedup/PROGRAM.md. Lane mode `apply` with `retire_legacy=1` runs it BEFORE the plan
 it applies, in the same dispatch and under the same `dry_run`, so no duplicate reappears in
 Browse between the undo and the engine's merges (decision 3). The mode refuses it with
 `listing_ids` (the step reads blocks only) and, before anything is undone, for a generation with
 no proposed group inside the scope (a typo'd or unstored generation would undo and merge nothing).
+With `generation=rt` and `blocks=` (W8, E953) it runs alone, against the live stream's groups,
+none of which that run merges (the worker's lane re-merges after the undo): so every legacy group
+the live stream holds whole is left, and an operator "same" pair is never parted.
 
 A legacy group is one `merge_group_id` of `property_merge_events` with `source = 'auto'` (the
 removed engine; NOT `generation = 'legacy'`, which migration 475 stamped on every row of
@@ -29,13 +32,12 @@ property and the survivor's own adverts (those no live old-engine row moved ther
 typed and disjoint (a rental merged onto a sale, in one step or two), wrong by construction and
 never re-made by the engine, so undone whatever the scope names (`retired:mixed_deal_type`).
 Last, a group the ENGINE holds whole - every advert of both sides in ONE engine group of the
-generation that this run may not merge (not proposed, or not admitted by the scope: the trial
-edge cuts it) - is left (`skipped:engine_agrees_out_of_scope`, with that group and why): undoing
-it would split what the engine calls one property, and nothing would re-merge it until the
-scope widens (W6). Where the engine splits the group itself (different engine groups, some or
-all adverts ungrouped), it is undone. Every other group touching the area is reported and left
-alone. The dry run reads the same
-classification, so it predicts every skip.
+generation that this run may not merge (not proposed, not admitted by the scope: the trial
+edge cuts it, or `reconciled_by_lane` under `generation=rt`) - is left (`skipped:engine_agrees`,
+with that group and why): undoing it would split what the engine calls one property, and
+nothing in this run would re-merge it. Where the engine splits the group itself (different engine
+groups, some or all adverts ungrouped), it is undone. Every other group touching the area is
+reported and left alone. The dry run reads the same classification, so it predicts every skip.
 
 Groups go newest first, each in its own transaction over its locked properties and a fresh read,
 as ONE `detach_listings` call over the adverts it moved (ledger order, each back to where THAT
@@ -84,7 +86,7 @@ MIXED: str = "mixed_deal_type"
 OUTSIDE_CATEGORIES: str = "outside_scope_categories"
 RULED_SAME: str = "operator_ruled_same"
 RULED_DIFFERENT: str = "operator_ruled_different"
-ENGINE_AGREES: str = "engine_agrees_out_of_scope"
+ENGINE_AGREES: str = "engine_agrees"
 SAME_VERDICTS: tuple[str, ...] = ("same",)
 MAX_PASSES: int = 10
 ARTIFACT: tuple[str, str] = ("apply", "legacy_retire.json")
@@ -343,7 +345,8 @@ def _engine(g: LegacyGroup, engine: EngineMaps) -> None:
     g.engine_clusters_not_merging = sorted({engine.other[lid] for lid in ids
                                             if lid in engine.other})
     # The engine holds every advert of the group, both sides, in ONE group this run may not
-    # merge: undoing now would split what the engine calls one property (W6 re-merges it).
+    # merge: undoing now would split what the engine calls one property, and nothing in this run
+    # re-merges it.
     one = g.engine_clusters_not_merging
     if ids and not g.engine_clusters and len(one) == 1 and all(lid in engine.other
                                                                 for lid in ids):
@@ -506,7 +509,7 @@ def _counts(first: list[LegacyGroup], final: list[LegacyGroup]) -> dict[str, Any
         "retire_set_without_engine_cluster": sum(not g.engine_clusters for g in chosen),
         "engine_clusters_not_merging_touching_retire_set": len({
             k for g in chosen for k in g.engine_clusters_not_merging}),
-        # Left for W6: the engine holds the whole group in one group this run may not merge.
+        # Left: the engine holds the whole group in one group this run may not merge.
         ENGINE_AGREES: sum(g.outcome == f"skipped:{ENGINE_AGREES}" for g in final),
         f"{ENGINE_AGREES}_by_reason": dict(sorted(Counter(
             g.engine_agrees_why or "unknown" for g in final
@@ -637,7 +640,7 @@ def note_deferred(
     write_json(Path(out_dir).joinpath(*ARTIFACT), result)
     if note:
         _append_summary(f"\n**Run cap:** {note}.\n")
-    return _brief(result)
+    return brief(result)
 
 
 def summary_markdown(result: Mapping[str, Any]) -> str:
@@ -672,7 +675,7 @@ def summary_markdown(result: Mapping[str, Any]) -> str:
                   + " ".join(str(k) for k in result["engine_clusters"][:200])]
     if result.get("engine_clusters_not_merging"):
         lines += ["", "Engine groups touching it that this run will not merge (not proposed, "
-                  "or outside the scope): "
+                  "outside the scope, or the lane's to merge): "
                   + " ".join(str(k) for k in result["engine_clusters_not_merging"][:200])]
     rows = [g for g in result.get("groups") or [] if not g["outcome"].startswith("skipped:")]
     rows += [g for g in result.get("groups") or [] if g["outcome"].startswith("skipped:")]
@@ -705,10 +708,10 @@ def _publish(out_dir: Path, result: dict[str, Any]) -> None:
     _append_summary(summary_markdown(result))
 
 
-def _brief(result: Mapping[str, Any]) -> dict[str, Any]:
+def brief(result: Mapping[str, Any]) -> dict[str, Any]:
     return {key: result[key] for key in (
-        "counts", "stopped", "aborted", "undone_by", "category_types", "passes", "timings",
-        "area_listings")
+        "counts", "stopped", "aborted", "undone_by", "blocks", "category_types", "passes",
+        "timings", "area_listings")
         if key in result}
 
 

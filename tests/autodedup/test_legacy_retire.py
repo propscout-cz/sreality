@@ -1,4 +1,5 @@
-"""A2 (temporary, deleted in W8): the old engine's merges undone in the apply scope's blocks.
+"""A2 (temporary): the old engine's merges undone in the apply scope's blocks; alone under the
+live stream's generation (W8, E953).
 
 Over test_apply's stateful fake (`FakeDb`, whose `location` is `listing_location`), extended with
 the area and the three reads the retire step runs. Its set detach mimics the toolkit's contract
@@ -19,6 +20,7 @@ import pytest
 from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import legacy_retire as L
+from autodedup.incremental_sql import RT_SCOPE_SCAN_SEEN_SQL
 from tests.autodedup.test_apply import GEN, FakeDb
 from tests._property_ledger import _Ledger, ledger_carriers  # noqa: F401 — the fixture
 from toolkit.property_identity import (
@@ -723,8 +725,8 @@ def test_r2_1_only_groups_this_run_may_merge_count_as_re_merging(
         assert counts["engine_clusters_not_merging_touching_retire_set"] == 1
         body = json.loads((tmp_path / "apply" / "legacy_retire.json").read_text())
         assert body["engine_clusters"] == [] and body["engine_clusters_not_merging"] == [10]
-        assert "this run will not merge (not proposed, or outside the scope): 10" \
-            in page.read_text()
+        assert ("this run will not merge (not proposed, outside the scope, or the lane's to "
+                "merge): 10") in page.read_text()
 
 
 def test_r3_the_engine_holding_a_whole_group_outside_the_scope_keeps_it_for_w6(
@@ -1136,3 +1138,143 @@ def test_e907_leaves_the_operator_different_protection_as_it_was() -> None:
     out = L.retire_legacy(db, TRIAL, category_types=SALES, dry_run=True, run_id="r1",
                           engine=HELD)
     assert _by(out) == {group: f"skipped:{L.RULED_DIFFERENT}"}
+
+
+# W8 (E953): the retire step alone under the live stream's generation -----------------------------
+RT_AREA = {"blocks": f"town:{TOWN} quarter:{QUARTER}"}
+RT_KEYS = {f"obec:{TOWN}", f"cast_obce:{QUARTER}"}
+
+
+class LiveStreamDb(RetireDb):
+    """The live stream's two reads the step adds: the blocks its scope scan walked and the ones
+    whose snapshot still holds an advert with no fingerprint."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.walked: set[str] = set(RT_KEYS)
+        self.unread: set[str] = set()
+
+    def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:
+        if sql == RT_SCOPE_SCAN_SEEN_SQL:
+            return [(block,) for block in sorted(self.walked)]
+        if sql == S.RC_UNREAD_BLOCKS_SQL:
+            return [(block,) for block in sorted(self.unread)]
+        return super().dispatch(sql, p)
+
+
+def _rt(db: LiveStreamDb, **extra: str) -> dict[str, str]:
+    return {"generation": "rt", "retire_legacy": "1", **RT_AREA, **extra}
+
+
+def _stream_world() -> tuple[LiveStreamDb, dict[str, str]]:
+    """The four shapes an area holds, the live stream's groups beside each."""
+    db = LiveStreamDb()
+    db.live_scope(blocks=sorted(TRIAL))
+    g = {"agrees": _intact_pair(db, 100, 200, 1)}
+    db.group(10, [1, 2], gen="rt")                     # the lane holds the pair whole
+    g["splits"] = _intact_pair(db, 300, 400, 3)
+    db.group(20, [3, 30], gen="rt")                    # ... and these two apart
+    db.listing(30, 3000)
+    db.location[30] = IN_TOWN
+    g["mixed"] = _mixed(db, 500, 600, 5)
+    g["krkonosska"] = _krkonosska(db)                  # two units, one ruled "same" pair
+    db.group(74935, [103218, 165670], gen="rt")
+    db.group(74936, [103219, 165665], gen="rt")
+    return db, g
+
+
+def test_w8_the_live_stream_retires_only_named_fully_read_blocks_the_scope_admits(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    db, _g = _stream_world()
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(L, "detach_listings", db.detach_recording(calls))
+    refusals = (
+        ({"generation": "rt", "retire_legacy": "1"}, "needs blocks="),
+        (_rt(db, dry_run="0", blocks=""), "needs blocks="),
+        (_rt(db, dry_run="0", blocks="town:531057"), "names no block of app_settings"),
+        (_rt(db, listing_ids="1 2"), "listing_ids"),
+    )
+    for args, why in refusals:
+        with pytest.raises(SystemExit, match=why):
+            A.run_apply(_factory(db), args, tmp_path)
+    db.unread = {f"cast_obce:{QUARTER}"}               # the lane is still reading the quarter
+    with pytest.raises(SystemExit, match=f"has not fully read quarter:{QUARTER}"):
+        A.run_apply(_factory(db), _rt(db), tmp_path)
+    db.unread, db.walked = set(), {f"cast_obce:{QUARTER}"}     # ... or never walked the town
+    with pytest.raises(SystemExit, match=f"has not fully read town:{TOWN} "):
+        A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    db.walked = set(RT_KEYS)
+    db.settings[A.LANE_INTERVAL_SETTING] = 60          # the lane runs: brake it first
+    with pytest.raises(SystemExit, match="is 60"):
+        A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    assert calls == [] and not any(e["undone"] for e in db.events)
+    assert not (tmp_path / "apply").exists()
+
+
+def test_w8_the_dry_run_prints_the_plan_and_writes_nothing(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    db, g = _stream_world()
+    before = db.state()
+    page = tmp_path / "step_summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(page))
+    out = A.run_apply(_factory(db), _rt(db), tmp_path)
+    assert out["generation"] == "rt" and out["dry_run"] is True
+    assert out["undone_by"].startswith(f"{L.RETIRE_BY}:")
+    assert out["counts"]["outcomes"] == {
+        "would_retire": 1, "would_retire:mixed_deal_type": 1,
+        f"skipped:{L.ENGINE_AGREES}": 1, f"skipped:{L.RULED_SAME}": 1}
+    assert out["counts"][f"{L.ENGINE_AGREES}_by_reason"] == {A.RECONCILED_BY_LANE: 1}
+    body = json.loads((tmp_path / "apply" / "legacy_retire.json").read_text())
+    by = {x["merge_group_id"]: x for x in body["groups"]}
+    assert (by[g["agrees"]]["engine_agrees_cluster"], by[g["agrees"]]["engine_agrees_why"]) \
+        == (10, A.RECONCILED_BY_LANE)
+    assert by[g["splits"]]["moved"] == [4] and by[g["splits"]]["engine_clusters"] == []
+    assert by[g["splits"]]["engine_clusters_not_merging"] == [20]
+    assert "legacy retire (A2, temporary) - DRY RUN" in page.read_text()
+    # nothing planned, merged, filed or undone; the lease taken for the read and given back
+    assert db.state() == before and db.ledger == [] and S.LEDGER_INSERT_SQL not in db.statements
+    assert not (tmp_path / "apply.json").exists()
+    assert not any(held["live"] for held in db.lease.values())
+
+
+def test_w8_live_the_engines_whole_groups_and_same_pairs_stay_the_rest_come_apart(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    db, g = _stream_world()
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(L, "detach_listings", db.detach_recording(calls))
+    verdicts = list(db.verdicts)
+    out = A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    assert out["dry_run"] is False
+    body = json.loads((tmp_path / "apply" / "legacy_retire.json").read_text())
+    assert _by(body) == {
+        g["agrees"]: f"skipped:{L.ENGINE_AGREES}",       # the lane holds it whole: left
+        g["splits"]: "retired",                          # the lane keeps 3 and 4 apart
+        g["mixed"]: "retired:mixed_deal_type",          # a rental on a sale, whatever the scope
+        g["krkonosska"]: f"skipped:{L.RULED_SAME}"}      # E907 needs a merge THIS run makes
+    assert db.listings[2]["property_id"] == 100 and db.listings[4]["property_id"] == 400
+    assert db.listings[6]["property_id"] == 600
+    assert {db.listings[lid]["property_id"] for lid in KRKONOSSKA} == {1}
+    # undone through the set detach under the old engine's source, stamped, no ruling written,
+    # nothing merged: the lane re-merges once its interval is back above 0
+    assert {(c["source"], c["decided_by"]) for c in calls} == {("auto", out["undone_by"])}
+    assert db.verdicts == verdicts and db.ledger == []
+    assert all(e["source"] == "auto" for e in db.events)
+    assert not any(held["live"] for held in db.lease.values())
+
+
+def test_w8_two_units_the_old_engine_joined_come_apart_for_the_lane_to_merge_each(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """Krkonošská with no ruling: the live stream holds each unit whole, the old merge put both
+    on one property. Undone; each unit's own group is the lane's to merge again."""
+    db = LiveStreamDb()
+    db.live_scope(blocks=sorted(TRIAL))
+    group = _krkonosska(db)
+    db.verdicts.clear()
+    db.group(74935, [103218, 165670], gen="rt")
+    db.group(74936, [103219, 165665], gen="rt")
+    monkeypatch.setattr(L, "detach_listings", db.detach_recording([]))
+    out = A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    body = json.loads((tmp_path / "apply" / "legacy_retire.json").read_text())
+    assert _by(body) == {group: "retired"} and out["counts"]["listings_moved_back"] == 3
+    assert body["engine_clusters_not_merging"] == [74935, 74936]
+    assert {lid: db.listings[lid]["property_id"] for lid in KRKONOSSKA} == KRKONOSSKA
