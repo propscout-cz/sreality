@@ -102,6 +102,11 @@ _Avoid_: deal, card (alone)
 A named set of properties an account keeps, optionally watched for changes.
 _Avoid_: list, folder, favourites, saved list
 
+**Tag**:
+A coloured label an account puts on a property; a property carries any number. A tag filter
+has two sides: must carry every chosen tag, must carry none of the excluded ones.
+_Avoid_: štítek (in code), label, category, flag
+
 **Dismissal**:
 An account's decision to hide a property from its own Browse.
 _Avoid_: hide, mute, ignore, archive

@@ -2115,19 +2115,39 @@ renumber.** Navigate by area:
     growing a second answer. The allowlist resolves from the SAME member map
     the glyphs render from, and "nothing selected" (no constraint, `null`) stays distinguishable
     from "a selection nothing is in" (zero rows, `[]`) all the way to the query.
-    **Both curated-set prefilters now share one shape** — membership rows reduced to a
-    property-id allowlist, AND for tags, OR for collections — and `tags` left
-    `properties_with_tags(tag_ids)` for `property_tags_public` to get there: the RPC body
-    carries `limit 5000` (migration 202) under a client comment asserting exhaustiveness, and a
-    truncated allowlist silently bleeds listings the operator asked to exclude back into the
-    cohort. The membership read is complete-or-throw (`fetchAllRows`); the RPC stays in the
-    database until the SPA deploy has rolled out. `fetchBrowseStats` was the one Browse fetcher
-    that named its prefilters by hand; it now resolves through `resolveBrowsePrefilters` like
-    every other lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
+    **Tags are collections' twin (2026-10-14).** The same five pieces, one each: ONE whole
+    member map (`fetchPropertyTagMemberSet` under `curationKeys.propertyTagMembers`, the one
+    `fetchMemberSet` reader both maps share — a per-property read and a second,
+    selection-filtered read inside Browse's prefilter were deleted with it), ONE scope module
+    (`lib/tagScope.ts`: AND over `tags`, NONE OF over `tagsExcluded`, `cycleTag` off → on → not —
+    the portal rule's shape, rendered as Browse's id lists and the board's in-memory predicate),
+    ONE revalidation (`lib/tagCache.ts`, called by attach / detach / create / rename / delete; the
+    edit popover used to invalidate a `listing-tags` key that stopped existing at migration 202,
+    so a deleted tag stayed on the property page until staleTime), ONE assign list
+    (`components/curation/TagAssignList`: rows that attach or detach, a find-or-create box, the
+    edit pencil — inline on the property page, a popover from the board card's chip row, a
+    bottom sheet from the phone card) and ONE chip (`TagChip`). The filter control is tri-state
+    (`TagFilterControl`, Browse's sidebar and the board's bar; `tags` / `tags_excluded` in the
+    URL, both inside preset identity unlike `collections`); it filters and nothing else — editing
+    a tag is the assign list's job. **Browse's exclusion is the one DENYLIST**: a property-grain
+    allowlist cannot say "not tagged X" over the market, so migration 598 gave both aggregate
+    RPCs a generic trailing `property_ids_excluded bigint[]` (597's pattern), the list reads add
+    the matching `not in`, and `BrowsePrefilters.propertyIdsExcluded` carries it — named for its
+    id space, so a future "not in collection" reuses it with no schema change. Both curated-set
+    prefilters otherwise share one shape — membership rows reduced to property-id lists, resolved
+    from the SAME member map the chips render from — and `tags` left `properties_with_tags(tag_ids)`
+    for `property_tags_public` to get there: that RPC body carried `limit 5000` (migration 202)
+    under a client comment asserting exhaustiveness (dropped in 553). The membership read is
+    complete-or-throw (`fetchAllRows`). `fetchBrowseStats` was the one Browse fetcher that named
+    its prefilters by hand; it now resolves through `resolveBrowsePrefilters` like every other
+    lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
     property-grain filter cannot narrow the list and leave the panel above it counting the whole
     market. A membership write invalidates the Browse reads only when membership IS the cohort
     (`revalidateCollections`' `cohortScoped`, passed by the Browse card alone — the mirror of
-    `pipelineRevalidation`'s knob).
+    `pipelineRevalidation`'s knob; tags have no Browse-card writer yet, so `revalidateTags` takes
+    no knob). The board offers its collection and tag chips by ONE rule (`lib/curatedSetOffer.ts`:
+    sets with a member on the board plus any selected one, shown only when they could change the
+    view).
     **Adding notes is reachable from the Chrome-extension panel too** — it lists the property's
     existing notes + an add box, writing through the SAME `POST /properties/{id}/notes` the
     `CurationBlock` uses (the viewed advert's `sreality_id` as `origin_listing_id`); notes are

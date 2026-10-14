@@ -7,6 +7,21 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-TAGS: Tags unified, on the pipeline board (done, 2026-10-14)
+- **Done:** tags became collections' twin — one member map, `lib/tagScope.ts`, `lib/tagCache.ts`,
+  one `TagAssignList` (inline on the property page, a popover on the board card, a sheet on the
+  phone card), one `TagChip`, one tri-state `TagFilterControl` (Browse's sidebar + the board's
+  bar; `tags` / `tags_excluded`). The board card prints its tags and assigns from them; the board
+  and the phone board filter by tag, including "none of". Browse's exclusion rides migration 598's
+  generic `property_ids_excluded` on both aggregate RPCs. Deleted: the per-property tag read, the
+  prefilter's second read, the property page's private editor, the sidebar's include-only picker,
+  the edit popover's stale `listing-tags` invalidation. Architecture § rule 18.
+- **Next (unscheduled):**
+  - Browse cards and the Chrome-extension panel show no tag and cannot assign one; when they do,
+    `revalidateTags` grows the same `cohortScoped` knob `revalidateCollections` has.
+  - "Not in collection" on Browse: `property_ids_excluded` already carries it; only the
+    control and `collectionScope` are missing.
+
 ### Phase U-NOTE-FILES: Attachments on notes (done, 2026-10-07)
 - **Done:** files on a property's notes. Drop, paste or pick them into the Notes composer
   (staged until the note is saved) or drop them straight onto a saved note. Images show as
