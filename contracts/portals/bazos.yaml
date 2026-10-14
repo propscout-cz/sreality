@@ -1,4 +1,4 @@
-# bazos — contract v8 (W3 of the plain-text location reader: the advert says where it is).
+# bazos — contract v9 (W3/W4 of the plain-text location reader: the advert says where it is).
 # The detail page's Lokalita row still gives the PSČ (the town anchor's href; its visible text
 # is the OKRES) and the ad's own maps link — the blur marker and the pin.
 #
@@ -11,9 +11,12 @@
 # and decides when a reading names no town) — and `bzs.det.street_cue`, the whole headline.
 # A mined reading supersedes the listing's older claims of its types; a listing with no
 # reading (a delisted advert with no text) keeps its v7 town.
+# v9 (text-reader W4) changes no entry: the reader's rules changed (a value standing in the
+# advert is its own quote, initials ground a name, a not_property advert keeps its town), so
+# every stamped reading is re-mined under them.
 
 portal: bazos
-contract_version: 8
+contract_version: 9
 
 persistence:
   # What this portal's body carries that changes without the listing changing —

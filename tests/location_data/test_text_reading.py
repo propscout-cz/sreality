@@ -116,7 +116,7 @@ def test_the_ad_kind_counts_business_premises_as_an_offer() -> None:
 # ------------------------------------------------ the claim reader (W3): V2, V4, typed numbers
 
 def _claims(payload: dict[str, Any], text: str) -> dict[str, str]:
-    """The bazos@8 reading entries over one reading, as the claim lane runs them."""
+    """The bazos@9 reading entries over one reading, as the claim lane runs them."""
     row, reading = fx.listing("bazos", {}), tr.Reading(1, payload, text)
     out = [c for e in reading_entries(fx.entries_for("bazos"))
            for c in READERS[str(e.reader)].fn(e, row, reading)]

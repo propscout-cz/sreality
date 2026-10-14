@@ -108,7 +108,7 @@ def test_the_current_text_decides_and_supersession_spares_other_types_and_the_op
     assert _mine(conn)["readings_mined"] == 1
     assert _claims(conn, listing) == kept_rows | {("obec_name", "Hradec Králové"),
                                                   ("street_name", "Husova")}
-    assert _stamps(conn, listing) == {ra: "bazos@8"}
+    assert _stamps(conn, listing) == {ra: "bazos@9"}
     assert conn.execute("SELECT 1 FROM dirty_locations WHERE listing_id = %s",
                         (listing,)).fetchone()
     assert _mine(conn)["readings_mined"] == 0                  # a stamped reading is settled
@@ -118,12 +118,12 @@ def test_the_current_text_decides_and_supersession_spares_other_types_and_the_op
     rb = _reading(conn, listing, "m1", town=TOWN, street="Palackého")
     assert _mine(conn)["claims_superseded"] == 1
     assert _claims(conn, listing, "street_name") == {"Palackého"}
-    assert _stamps(conn, listing) == {ra: "bazos@8~", rb: "bazos@8"}
+    assert _stamps(conn, listing) == {ra: "bazos@9~", rb: "bazos@9"}
 
     _listing(conn, A, listing)                                 # B -> A: A's reading again
     assert _mine(conn)["readings_mined"] == 1
     assert _claims(conn, listing, "street_name") == {"Husova"}
-    assert _stamps(conn, listing) == {ra: "bazos@8", rb: "bazos@8~"}
+    assert _stamps(conn, listing) == {ra: "bazos@9", rb: "bazos@9~"}
 
     _listing(conn, ("Koupím byt", "Koupím byt v Hradci Králové."), listing)
     _reading(conn, listing, "m1", ad_kind="wanted", town=TOWN)
@@ -142,7 +142,7 @@ def test_a_model_rolled_back_publishes_its_own_reading_again(conn):
         _mine(conn)
         streets.append(_claims(conn, listing, "street_name"))
     assert streets == [{"Husova"}, {"Palackého"}, {"Husova"}, {"Palackého"}]
-    assert _stamps(conn, listing) == {r1: None, r2: "bazos@8"}
+    assert _stamps(conn, listing) == {r1: None, r2: "bazos@9"}
 
 
 def test_a_contract_bump_re_mines_the_current_reading_and_settles_a_delisted_unread_text(conn):
@@ -150,16 +150,16 @@ def test_a_contract_bump_re_mines_the_current_reading_and_settles_a_delisted_unr
     older = _reading(conn, listing, "m0", street="Palackého")
     current = _reading(conn, listing, "m1", street="Husova")
     _mine(conn)
-    conn.execute("UPDATE portal_contracts SET version = 9 WHERE source = 'bazos' AND is_active")
+    conn.execute("UPDATE portal_contracts SET version = 10 WHERE source = 'bazos' AND is_active")
     stats = _mine(conn)
     assert (stats["readings_mined"], stats["claims_superseded"]) == (1, 1)
-    assert _stamps(conn, listing) == {older: None, current: "bazos@9"}
+    assert _stamps(conn, listing) == {older: None, current: "bazos@10"}
     assert _claims(conn, listing, "street_name") == {"Husova"}
     _listing(conn, B, listing, active=False)             # edited, then delisted before its read:
-    conn.execute("UPDATE portal_contracts SET version = 10 WHERE source = 'bazos' AND is_active")
+    conn.execute("UPDATE portal_contracts SET version = 11 WHERE source = 'bazos' AND is_active")
     assert _mine(conn)["readings_mined"] == 0            # checked once, its claims kept, and
-    assert _stamps(conn, listing) == {older: "bazos@10~", current: "bazos@10~"}  # settled
+    assert _stamps(conn, listing) == {older: "bazos@11~", current: "bazos@11~"}  # settled
     assert _claims(conn, listing, "street_name") == {"Husova"}
-    _listing(conn, A, listing)                           # relisted as A: mined at @10
+    _listing(conn, A, listing)                           # relisted as A: mined at @11
     assert _mine(conn)["readings_mined"] == 1
-    assert _stamps(conn, listing) == {older: None, current: "bazos@10"}
+    assert _stamps(conn, listing) == {older: None, current: "bazos@11"}
