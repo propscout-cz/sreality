@@ -32,8 +32,10 @@ from location_data.resolver.composite import (
     StreetBind,
     match_streets,
     obec_of,
+    places_named,
     resolve_locality,
     resolve_street,
+    street_match_keys,
 )
 from location_data.resolver.geo import distance_between
 from location_data.resolver.normalize import TYP_CP, house_number, normalize_match_key
@@ -343,11 +345,13 @@ def bind_towns(
                 climbed.setdefault(town, []).append(unit)
     named_directly = set(direct)
     codes = sorted(set(direct) | set(climbed))
-    if qualifier and len(codes) > 1:
+    if qualifier:
+        # The base keeps only the obce the qualifier names, and those ARE named; when it names
+        # none, only the PSČ may settle the base — "Vranovice" alone is not "Vranovice u Břas".
         named = {u.code for u in registry.admin_units_by_name(qualifier, levels=("obec",))}
-        if kept := [c for c in codes if c in named]:
-            codes = kept
-            direct = {c: t for c in kept if (t := direct.get(c) or _obec_by_code(c, registry))}
+        kept = [c for c in codes if c in named]
+        codes = kept or codes
+        direct = {c: t for c in kept if (t := direct.get(c) or _obec_by_code(c, registry))}
     towns: list[AdminUnit] = []
     if constraints.psc:
         carrying = _carrying_psc(codes, direct, constraints.psc, registry)
@@ -465,7 +469,9 @@ def constraining_towns(
 ) -> Towns:
     """The towns off the advert's town names, its composite line, the names with their "u X"
     stripped, its part names, then the PSČ — an INFERENCE, so R6 with no agreeing field. S1's
-    town-as-street test asks this same function, so the two cannot disagree about the town."""
+    town-as-street test asks this same function on the same claims, so the two agree about the
+    town — except where 1f read a street line that S1 then refuses as a place, which BIND's
+    second pass no longer sees."""
     composite = CompositeBind()
     towns, applied, climbed = bind_towns(constraints.obec_keys, TOWN_NAME_LEVELS, constraints,
                                          registry=registry, pin_is_precise=pin_is_precise)
@@ -481,9 +487,11 @@ def constraining_towns(
     for key in () if towns else constraints.obec_keys:
         # 1b: "Boudy u Jesenice" is no register name — the village is Boudy, and Jesenice is
         # which of its three. The connector is the single word "u": "nad", "pod" and "v" are
-        # parts of real names ("Ústí nad Labem"), never a qualifier to drop.
+        # parts of real names ("Ústí nad Labem"), never a qualifier to drop. A key that IS a
+        # register name ("Chrášťany u Hulína", a KÚ) was refused by the town rule, not unknown.
         base, connector, qualifier = key.rpartition(" u ")
-        if connector and base and qualifier:
+        if (connector and base and qualifier
+                and not registry.admin_units_by_name(key, levels=TOWN_NAME_LEVELS)):
             towns, applied, climbed = bind_towns(
                 (base,), TOWN_NAME_LEVELS, constraints, registry=registry,
                 pin_is_precise=pin_is_precise, qualifier=qualifier)
@@ -500,10 +508,14 @@ def constraining_towns(
     by_psc = _dedupe_units([chain[0] for k in (registry.obec_codes_for_psc(constraints.psc)
                                                if constraints.psc else ())
                             if (chain := registry.admin_chain_by_code("obec", k))])
-    if constraints.street_lines and len(by_psc) > 1:
+    kods = {t.code for t in by_psc}
+    lines = [line for line in constraints.street_lines if len(kods) > 1
+             and not places_named(street_match_keys(line)[1], kods, registry)]
+    if lines:
         # 1f: a PSČ shared by five towns, and a street the advert names in exactly one of them
-        # (19120281: 68601, "Na Splávku" in Uherské Hradiště). The pin is the post office's.
-        holding = [t for t in by_psc if _holds_street(t, constraints.street_lines, registry)]
+        # (19120281: 68601, "Na Splávku" in Uherské Hradiště). The pin is the post office's. A
+        # line that is also a PLACE of one of them ("Mařatice") settles nothing.
+        holding = [t for t in by_psc if _holds_street(t, lines, registry)]
         if len(holding) == 1:
             return Towns(holding, ["psc", "street_in_town"], "R6", False, composite, {})
     towns, applied = narrow_towns(by_psc, constraints, registry=registry,
@@ -590,42 +602,53 @@ def bind(
     # a composite line named (the rung and qualifier a CLAIMED část gets: a registry bind grades
     # by the unit it landed on, not by the string that pointed at it); since v5.7 the village a
     # town name climbed from (1a: "Hracholusky" is a část of Úlice) and the part a street line
-    # names (1c). The two new ones fail closed as two streets do: one unit, and one the claimed
-    # parts name if there are any — else NO part (19009248: "Dlouhé" against "Rzy").
-    said: list[tuple[AdminUnit, tuple[int, ...], tuple[str, ...]]] = []
+    # names (1c). The climbed part is published for ONE surviving town only and inherits how
+    # that town was chosen — the tie-break's qualifiers, the town claim's agreements, since it
+    # is one claim. A unit named by several sources is ONE candidate.
+    said: list[_Part] = []
     if constraints.cast_obce_keys and constraining_obec_kods:
         for key in constraints.cast_obce_keys:
             for unit in registry.admin_units_by_name(key, levels=(*PART_LEVELS, "zsj")):
                 if unit.obec_kod is None or unit.obec_kod in constraining_obec_kods:
-                    said.append((unit, _ids(constraints, "cast_obce_name"),
-                                 ("obec_constrained",)))
+                    said.append(_Part(unit, _ids(constraints, "cast_obce_name"),
+                                      ("obec_constrained",)))
     if towns.composite.part is not None:
-        said.append((towns.composite.part, _ids(constraints, "obec_name"), ("obec_constrained",)))
-    found = [(part, _ids(constraints, "obec_name"), ("obec_constrained", "climbed_from_town_name"))
-             for town in obec_units
-             if (part := climbed_part(town, towns.climbed.get(town.code, ()), registry))]
+        said.append(_Part(towns.composite.part, _ids(constraints, "obec_name"),
+                          ("obec_constrained",)))
+    found: list[_Part] = []
+    if len(obec_units) == 1:
+        town = obec_units[0]
+        if climbed := climbed_part(town, towns.climbed.get(town.code, ()), registry):
+            found.append(_Part(
+                climbed, _ids(constraints, "obec_name"),
+                ("obec_constrained", "climbed_from_town_name",
+                 *(q for q in towns.applied if q in LOW_CONFIDENCE_QUALIFIERS)),
+                agreed=_admin_agreed("obec", towns.rung, tuple(towns.applied))))
     if line.named_part is not None:
-        found.append((line.named_part, _ids(constraints, "street"),
-                      ("obec_constrained", "street_names_part")))
-    if found and not _parts_agree([u for u, _, _ in said], [u for u, _, _ in found]):
-        said, found = [], []
+        found.append(_Part(line.named_part, _ids(constraints, "street"),
+                           ("obec_constrained", "street_names_part")))
     parts: list[AdminUnit] = []
-    for unit, claim_ids, qualifiers in (*said, *found):
-        parts.append(unit)
-        out.append(_admin_candidate(unit, rung="R4", granularity="cast_obce_or_quarter",
-                                    claim_ids=claim_ids, qualifiers=qualifiers))
+    for named in _merge_parts(*_reconcile_parts(said, found)):
+        parts.append(named.unit)
+        out.append(_admin_candidate(named.unit, rung="R4", granularity="cast_obce_or_quarter",
+                                    claim_ids=named.claim_ids, qualifiers=named.qualifiers,
+                                    agreed=named.agreed))
     cast_parts = {u.unit_id: u for u in parts if u.level == "cast_obce"}
     part = next(iter(cast_parts.values())) if len(cast_parts) == 1 else None
 
-    # 1d: one register name, several streets, and ONE bound part — keep the street with a door
-    # in it. 18625515 was not this (it was the accent fold; `resolve_street` spells it now).
+    # 1d: one register name, several streets. With ONE bound part, the street with a door in
+    # it; failing that, the one a claim WITH diacritics is spelled like (`composite`, rule 3).
+    # 18625515 ("Hanusova", part Michle) is the first; an accent-free claim is never the second.
     relaxed: tuple[str, ...] = ()
-    if line.reason == "ambiguous_streets" and part is not None:
-        inside = [c for c in line.candidates if c.street is not None
+    if line.reason == "ambiguous_streets":
+        inside = [c for c in line.candidates if part is not None and c.street is not None
                   and part.unit_id in getattr(registry.street_point(c.street), "part_unit_ids", ())]
+        spelled = [c for c in line.candidates if c.spelled]
         if len(inside) == 1:
             line = replace(inside[0], named_part=line.named_part)
             relaxed = ("street_part_tiebreak",)
+        elif len(spelled) == 1:
+            line = replace(spelled[0], named_part=line.named_part)
 
     # ---- R1 / R2: a bound street reaches R1 when there is a house number and R2 otherwise.
     if line.street is not None:
@@ -861,13 +884,43 @@ def climbed_part(
     return None if part is None or part.name_norm == town.name_norm else part
 
 
-def _parts_agree(said: Sequence[AdminUnit], found: Sequence[AdminUnit]) -> bool:
-    """The climbed and street-named parts must be one unit per town, and one the advert's
-    claimed parts name, if it claims any."""
-    found_ids = {u.unit_id for u in found}
-    said_ids = {u.unit_id for u in said}
-    one_each = len(found_ids) == len({u.obec_kod for u in found})
-    return one_each and (not said_ids or found_ids <= said_ids)
+@dataclass(frozen=True, slots=True)
+class _Part:
+    """One source's word for a part: the unit, the claims behind it, its qualifiers, and the
+    agreeing fields when they are not the default (a climbed part is ONE claim, the town's)."""
+    unit: AdminUnit
+    claim_ids: tuple[int, ...]
+    qualifiers: tuple[str, ...]
+    agreed: tuple[str, ...] | None = None
+
+
+def _reconcile_parts(said: list[_Part], found: list[_Part]) -> tuple[list[_Part], list[_Part]]:
+    """The climbed and street-named parts fail closed as two streets do: two of them in one
+    town, or one a claimed part of the SAME level contradicts, publish no part at all
+    (19009248: "Dlouhé" against "Rzy"). Units of different levels are not comparable, and the
+    claimed one stands ("Brno-Židenice" the MOMC over Židenice the část)."""
+    if len({p.unit.unit_id for p in found}) != len({p.unit.obec_kod for p in found}):
+        return [], []
+    kept: list[_Part] = []
+    for part in found:
+        peers = {p.unit.unit_id for p in said if p.unit.level == part.unit.level}
+        if peers and part.unit.unit_id not in peers:
+            return [], []
+        if peers or not said:
+            kept.append(part)
+    return said, kept
+
+
+def _merge_parts(said: list[_Part], found: list[_Part]) -> list[_Part]:
+    """ONE candidate per unit: two sources naming one část are one answer, not a tie."""
+    merged: dict[int, _Part] = {}
+    for part in (*said, *found):
+        known = merged.get(part.unit.unit_id)
+        merged[part.unit.unit_id] = part if known is None else _Part(
+            part.unit, tuple(sorted({*known.claim_ids, *part.claim_ids})),
+            tuple(dict.fromkeys((*known.qualifiers, *part.qualifiers))),
+            None if known.agreed is None or part.agreed is None else known.agreed)
+    return list(merged.values())
 
 
 def _dedupe_units(units: Sequence[AdminUnit]) -> list[AdminUnit]:
@@ -944,22 +997,27 @@ def _street_candidate(
 def _admin_candidate(
     unit: AdminUnit, *, rung: str, granularity: str,
     claim_ids: tuple[int, ...], qualifiers: tuple[str, ...],
+    agreed: tuple[str, ...] | None = None,
 ) -> _Candidate:
-    agreed = ["obec"] if granularity == "obec" else [granularity, "obec"]
-    agreed.extend(q for q in qualifiers if q in AGREEMENT_QUALIFIERS)
-    if rung in INFERENCE_RUNGS:
-        # The entity was INFERRED, not named — a PSČ lookup, a reverse geocode, the sliver
-        # fallback, a bare region. Nothing agreed with it, so it contributes no field.
-        agreed = []
     # No lat/lon: a `_Candidate`'s position is the position of a POINT it bound, and a unit
     # is not one. Where the unit sits is FILL's answer, off the chain (W2-a3).
     return _Candidate(
         rung=rung, score=_RUNG_BASE_SCORE[rung] + 5.0 * len(qualifiers),
         target_kind="admin_unit", granularity=granularity, admin_unit_id=unit.unit_id,
         obec_kod=unit.obec_kod if granularity != "obec" else unit.code,
-        agreed=tuple(dict.fromkeys(agreed)),
+        agreed=_admin_agreed(granularity, rung, qualifiers) if agreed is None else agreed,
         relaxations=qualifiers, source_claim_ids=claim_ids,
     )
+
+
+def _admin_agreed(granularity: str, rung: str, qualifiers: tuple[str, ...]) -> tuple[str, ...]:
+    if rung in INFERENCE_RUNGS:
+        # The entity was INFERRED, not named — a PSČ lookup, a reverse geocode, the sliver
+        # fallback, a bare region. Nothing agreed with it, so it contributes no field.
+        return ()
+    agreed = ["obec"] if granularity == "obec" else [granularity, "obec"]
+    agreed.extend(q for q in qualifiers if q in AGREEMENT_QUALIFIERS)
+    return tuple(dict.fromkeys(agreed))
 
 
 # ------------------------------------------------------------------ the pin election

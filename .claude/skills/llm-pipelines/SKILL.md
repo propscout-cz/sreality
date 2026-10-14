@@ -90,13 +90,13 @@ calls an LLM must do the same.
   flag / setting / env var). **A field is in scope only once its `Cell.gate.passed` is true** (R7,
   a measured ≥ 95 % panel — `scripts/bakeoff_text_extraction.py`, dispatch-only): a closed gate is
   not extracted, not billed and not written (open since 2026-09-22: bazos `floor` + `has_lift`).
-  **Since location reader W1 (2026-09-30)** the lane reads the ADVERT TEXT (headline + description,
-  composed and hashed once in SQL), its scope is the open-gate portals ∪ those whose active
-  contract declares `llm_text`, and every call also returns a `location` block
-  (`location_data/text_reading.py`: ad_kind, town, part of town, street, č.p./č.o./č.ev., each
-  quoted) stored RAW in `listing_description_enrichments.extracted`. **W3/W4**: the claim lane (hourly, and the worker after each pass for its listings) mines the
-  CURRENT reading (reader `text_reading`, V1–V4) into bazos@9's claims, superseding the listing's older claims of those types, stamped
-  `mined_contract_version` (mig 581); no model call. W4: a `not_property` advert keeps its town; business premises are an offer (that prompt edit re-reads ≈ 54.7k live bazos adverts, ≈ $25, ≈ 3 days).
+  **Since location reader W1 (2026-09-30)** the lane reads the ADVERT TEXT (headline + description, composed
+  and hashed once in SQL); scope = open-gate portals ∪ those whose active contract declares `llm_text`; every
+  call also returns a `location` block (`location_data/text_reading.py`: ad_kind, town, part, street,
+  č.p./č.o./č.ev., each quoted), stored RAW in `listing_description_enrichments.extracted`. **W3/W4**: the
+  claim lane (hourly, and the worker right after each pass) mines the CURRENT reading (V1–V4) into bazos@9's
+  claims, superseding older ones of its types, stamped `mined_contract_version` (mig 581); no model call. A
+  `not_property` advert keeps its town; business premises are an offer (that edit: ≈ 54.7k re-reads, ≈ $25).
   The cache is keyed `(listing_id, text_hash, extractor_version)` (migration 552),
   `extractor_version` being `'<schema>:<prompt + schema hash>:<model>'` — a model swap re-attempts,
   a price-only snapshot never re-bills, and **a prompt edit or a gate opening re-reads the corpus**

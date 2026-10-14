@@ -38,10 +38,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from location_data.resolver.normalize import (
     case_fold,
+    deaccent,
     house_number,
     normalize_match_key,
     split_street_and_number,
@@ -232,8 +233,10 @@ def _tokens(value: str) -> list[str]:
 # Two more since v5.7, each measured on the register (2026-10-14):
 #
 #  3. SPELLED. `name_norm` is accent-free, so 14 keys in 6 obce reach two streets each (9 in
-#     Praha: Hanusova in Michle, Hanušova in Kbely); all 14 pairs are spelled differently, so a
-#     claim spelled letter for letter like one of them names that one.
+#     Praha: Hanusova in Michle, Hanušova in Kbely); all 14 pairs are spelled differently. A
+#     claim WITH diacritics spelled letter for letter like one of its own twins names that one
+#     (`StreetBind.spelled`); an accent-free one may be either — four such keys have an
+#     accent-free member (Hanusova, Muzikova, Radova ×2) — and BIND asks the part first.
 #  4. ABBREVIATED. `_ABBREVIATIONS` folds a portal's short form onto the register's on BOTH
 #     sides: 1,001 register streets change key and no two streets of one obec share a key
 #     that did not share one before (per entry: csa 19, ceskoslovenske armady 45, nam 597, tr
@@ -254,8 +257,9 @@ def fold_abbreviations(key: str) -> str:
 @dataclass(frozen=True, slots=True)
 class StreetBind:
     """What the street claims name inside the anchoring obec. `reason` is the diagnostic;
-    `candidates` are the streets an `ambiguous_streets` line could mean, each bound as if alone
-    (BIND's part tie-break picks among them), and `named_part` the one part a line names."""
+    `candidates` are the streets an `ambiguous_streets` claim could mean, each bound as if alone
+    (BIND tie-breaks among them: the part, then `spelled`), and `named_part` the one part a line
+    names."""
 
     street: Street | None = None
     cislo_domovni: int | None = None
@@ -264,6 +268,7 @@ class StreetBind:
     reason: str = "no_match"
     candidates: tuple[StreetBind, ...] = ()
     named_part: AdminUnit | None = None
+    spelled: bool = False
 
     @property
     def bound(self) -> bool:
@@ -375,7 +380,9 @@ def resolve_street(
     street, asked only which part of the town they name.
     """
     tiers: dict[str, dict[int, tuple[Street, dict[str, object]]]] = {"exact": {}, "stripped": {}}
-    spelled: set[int] = set()
+    # Per tier, what each line reached and, for a line WITH diacritics reaching several, the one
+    # it is spelled like — a line's own twins only, never pooled across two street claims.
+    reached: dict[str, list[tuple[set[int], int | None]]] = {"exact": [], "stripped": []}
     parts: dict[int, AdminUnit] = {}
     for line in lines:
         _, keys = street_match_keys(line)
@@ -384,33 +391,40 @@ def resolve_street(
         streets, tier = match_streets(line, obec_kods, registry)
         # The place test is asked AFTER the match and only about a claim that matched: asked
         # first, prose keys would fill a `RunCache` that CLEARS ITSELF at 250,000 entries.
-        places = _places_named(keys, {s.obec_kod for s in streets}, registry) if streets else []
+        places = places_named(keys, {s.obec_kod for s in streets}, registry) if streets else []
         if places:
             parts.update(_parts_of_town(places))
             continue
         _, numbers = split_street_and_number(strip_street_generic(line))
-        names = {case_fold(split_street_and_number(text)[0])
-                 for text in (line, strip_street_generic(line))}
         for street in streets:
             tiers[tier].setdefault(street.code, (street, numbers))
-            if case_fold(street.name) in names:
-                spelled.add(street.code)
+        reached[tier].append(({s.code for s in streets}, _spelled_like(line, streets)))
     for line in place_lines:
         parts.update(_parts_of_town(
-            _places_named(street_match_keys(line)[1], set(obec_kods), registry)))
+            places_named(street_match_keys(line)[1], set(obec_kods), registry)))
     named_part = _one_part(parts)
     # The EXACT tier is consulted alone when it has anything at all: a claim that names one
     # street exactly and grazes another through the tolerant fold has named one street.
-    found = tiers["exact"] or tiers["stripped"]
-    if len(found) > 1 and len(spelled & found.keys()) == 1:
-        found = {code: found[code] for code in spelled & found.keys()}
+    tier = "exact" if tiers["exact"] else "stripped"
+    found = tiers[tier]
     if not found:
         return StreetBind(reason="street_names_part" if named_part else "no_match",
                           named_part=named_part)
     if len(found) > 1:
-        return StreetBind(reason="ambiguous_streets", named_part=named_part,
-                          candidates=tuple(_bound(*found[code]) for code in sorted(found)))
+        spelled = set().union(*({one} if one is not None else codes
+                                for codes, one in reached[tier]))
+        return StreetBind(reason="ambiguous_streets", named_part=named_part, candidates=tuple(
+            replace(_bound(*found[code]), spelled=spelled == {code}) for code in sorted(found)))
     return _bound(*found[next(iter(found))], named_part=named_part)
+
+
+def _spelled_like(line: str, streets: Sequence[Street]) -> int | None:
+    if len(streets) < 2 or deaccent(line) == line:
+        return None
+    names = {case_fold(split_street_and_number(text)[0])
+             for text in (line, strip_street_generic(line))}
+    spelled = [s.code for s in streets if case_fold(s.name) in names]
+    return spelled[0] if len(spelled) == 1 else None
 
 
 def _bound(street: Street, numbers: dict[str, object], *,
@@ -423,7 +437,7 @@ def _bound(street: Street, numbers: dict[str, object], *,
     )
 
 
-def _places_named(
+def places_named(
     keys: frozenset[str], obec_kods: set[int], registry: RegistryView
 ) -> list[AdminUnit]:
     """The town itself, or the parts of it, these keys name. `normalize.normalize_claim`'s

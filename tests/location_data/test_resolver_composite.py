@@ -234,14 +234,11 @@ def test_1e_the_abbreviation_fold_keys_both_sides_alike(claim, register):
     assert composite.fold_abbreviations(street.name_norm) in exact
 
 
-def test_1c_a_line_naming_one_part_of_the_town_returns_it_and_never_a_street():
-    """Whether S1 refused it as a place (`place_lines`) or the register spells a street of the
-    town the same way (76 register streets across 20 obce are spelled exactly like a část obce
-    of their own town: Ostrava's Zábřeh), the line names the part; the town itself names none."""
+def test_1c_a_line_s1_refused_as_a_place_names_the_one_part_of_the_town():
+    """`place_lines`: the street claims S1 refused as a place name. A line naming the town
+    itself names none; the matched-street case is `test_resolver_street_line`'s."""
     mirror = mm.w4_mirror()
     named = resolve_street([], (HARRACHOV,), mirror, place_lines=["Nový Svět"])
     assert (named.street, named.named_part.code, named.reason) == (
         None, 410845, "street_names_part")
     assert resolve_street([], (HARRACHOV,), mirror, place_lines=["Harrachov"]).named_part is None
-    zabreh = resolve_street(["Zábřeh"], (554821,), mm.default_mirror())
-    assert (zabreh.street, zabreh.named_part.code) == (None, 554791)

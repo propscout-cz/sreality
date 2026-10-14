@@ -3682,10 +3682,13 @@ portal's payload or its own page, and every other stamp is class E outright.
   the PSČ, else by okres/kraj and — when a PSČ exists or the pin is declared precise — within 40 km
   of the pin; a tie goes to the pin's obec, else the nearest). Since v5.7 (W4) the village a town name
   CLIMBED from is the part (`climbed_from_town_name`: "Hracholusky" is a část of Úlice; a KÚ through
-  the část its qualifier-free name spells), never the town's eponymous main part; a name binding
-  nothing retries without its " u X" tail, kept to X where X is one of the obce the base climbs to
-  (`qualifier_stripped`: "Boudy u Jesenice"); and a PSČ shared by several obce yields to the one whose
-  street index holds the claimed street exactly (`street_in_town`). The tail of that
+  the část its qualifier-free name spells) when ONE town survives, inheriting how it was chosen (a
+  tie-break's low confidence; the one claim's agreements), never the eponymous main part; a name that
+  is no register name retries without its " u X" tail, kept to X where X is one of the obce the base
+  climbs to, else only the PSČ may place it (`qualifier_stripped`: "Boudy u Jesenice"); a PSČ shared by
+  several obce yields to the one whose street index holds a claimed street exactly, a line that is also
+  a place of one of them excepted (`street_in_town`). A part named by several sources is ONE candidate.
+  The tail of that
   chain is what keeps a border pin or a region-only listing from having no town at all, which rule 25
   does not allow: each answers at `low` confidence, and a sliver is NOT a dispute, because a polygon
   edge is not a disagreement. **The pin BIND reverse-geocodes from is the pin the row publishes** —
@@ -3711,9 +3714,10 @@ portal's payload or its own page, and every other stamp is class E outright.
   the anchoring obec or a část obce inside it is never a street — 76 register streets across 20 obce are
   spelled exactly like a část obce of their own town) — since v5.7 such a line, or one S1 refused as a
   place, IS the one část it names (`street_names_part`), and against a claimed part naming another, no
-  part at all. It fails CLOSED on two distinct street codes — except (v5.7) a claim spelled letter for
-  letter like one of two accent-folded twins (14 keys in 6 obce: Hanusova/Hanušova) or, failing that,
-  the one twin with a door in the listing's one bound část (`street_part_tiebreak`) — and a bound street
+  part at all (a claimed part of another level stands). It fails CLOSED on two distinct street codes —
+  except (v5.7) among accent-folded twins (14 keys in 6 obce: Hanusova/Hanušova) the one with a door in
+  the listing's one bound část (`street_part_tiebreak`), else the one a claim WITH diacritics is spelled
+  like, per claim, never pooled — and a bound street
   carrying a house number reaches R1. Portal abbreviations fold on both sides (ČSA, nám., tř., nábř.,
   gen., kpt., plk., sídl.: 0 new collisions in any obec). R3 (trigram) runs only when nothing bound
   exactly and never undoes an exact tie or names a part. W18 split bazos' whole headline on separators and kept R3 off
