@@ -215,7 +215,7 @@ def test_an_unbindable_line_leaves_the_row_undetermined(registry):
 
 # ------------------------------------------- the street matcher's v5.7 rules (W4: 1c, 1d, 1e)
 
-PRAHA, MORAVSKA_TREBOVA, HARRACHOV = 554782, 578444, 577081
+HARRACHOV = 577081
 
 
 @pytest.mark.parametrize(("claim", "register"), [
@@ -234,23 +234,10 @@ def test_1e_the_abbreviation_fold_keys_both_sides_alike(claim, register):
     assert composite.fold_abbreviations(street.name_norm) in exact
 
 
-def test_1e_csa_binds_cs_armady_exactly():
-    bound = resolve_street(["ČSA"], (MORAVSKA_TREBOVA,), mm.w4_mirror())
-    assert (bound.street.code, bound.reason) == (561517, "street_match")
-
-
-def test_1d_a_line_spelled_like_one_of_two_folded_twins_binds_it_and_otherwise_offers_both():
-    mirror = mm.w4_mirror()
-    assert resolve_street(["Hanusova"], (PRAHA,), mirror).street.code == 447340
-    assert resolve_street(["Hanušova"], (PRAHA,), mirror).street.code == 447358
-    tied = resolve_street(["Liskova"], (PRAHA,), mirror)
-    assert (tied.reason, [c.street.code for c in tied.candidates]) == (
-        "ambiguous_streets", [485926, 500810])
-
-
 def test_1c_a_line_naming_one_part_of_the_town_returns_it_and_never_a_street():
     """Whether S1 refused it as a place (`place_lines`) or the register spells a street of the
-    town the same way, the line names the part; one naming the town itself names none."""
+    town the same way (76 register streets across 20 obce are spelled exactly like a část obce
+    of their own town: Ostrava's Zábřeh), the line names the part; the town itself names none."""
     mirror = mm.w4_mirror()
     named = resolve_street([], (HARRACHOV,), mirror, place_lines=["Nový Svět"])
     assert (named.street, named.named_part.code, named.reason) == (

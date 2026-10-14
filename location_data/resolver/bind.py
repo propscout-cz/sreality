@@ -8,21 +8,9 @@ obec, a část obce and a katastrální území, each match climbed to its obec,
 carries the listing's PSČ, else when it is an obec within `TOWN_PIN_REACH_M` of the pin, and
 only then narrowed by the okres/kraj claims and the pin (the geocode of an ambiguous town name
 IS the town centroid, which is how Krásný Les went 100 km wrong — a Mapy geocode is never a
-claim). Its regression tests are in `tests/location_data/test_resolver_bind.py`.
-
-Two things changed in W2-a and both are deletions:
-
-* **The candidate set is no longer STORED.** `location_resolution_candidates` is gone, so
-  BIND returns ONE `Binding` — the winner — plus the evidence GRADE needs to score it. The
-  ranking still happens; only the persistence of the losers does not.
-* **Ambiguity is a CONFIDENCE, not a queue.** "Three equally good candidates" used to be a
-  first-class `ambiguous` status routed to an operator who does not exist. It now grades
-  `low` and is served, because an honest low-confidence answer beats no answer — and the
-  2026-09-11 audit measured the alternative: 24 601 bazos rows served an arbitrary
-  id-ordered winner while the row was labelled ambiguous.
-
-The parcel rung is deleted: it was unreachable (no portal states a cadastral parcel in a
-form that joins) and it was the only reader of `ruian_parcels`.
+claim). Its regression tests are in `tests/location_data/test_resolver_bind.py`, whose
+docstring carries why BIND returns ONE `Binding` (the losers are ranked, never stored) and why
+ambiguity is a CONFIDENCE (`low`, served), never a queue.
 
 **Which coordinate becomes the pin is a decision, not an accident of row order.** A listing
 can carry several `coordinate` claims — a portal-declared exact pin, a blurred fallback, a

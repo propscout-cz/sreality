@@ -94,9 +94,9 @@ calls an LLM must do the same.
   composed and hashed once in SQL), its scope is the open-gate portals ∪ those whose active
   contract declares `llm_text`, and every call also returns a `location` block
   (`location_data/text_reading.py`: ad_kind, town, part of town, street, č.p./č.o./č.ev., each
-  quoted) stored RAW in `listing_description_enrichments.extracted`. **W3**: the hourly claim lane
-  mines the CURRENT reading (reader `text_reading`, V1–V4) into bazos@8's claims, superseding the
-  listing's older claims of those types, stamped `mined_contract_version` (mig 578); no model call.
+  quoted) stored RAW in `listing_description_enrichments.extracted`. **W3/W4**: the claim lane (hourly, and the worker after each pass for its listings) mines the
+  CURRENT reading (reader `text_reading`, V1–V4) into bazos@9's claims, superseding the listing's older claims of those types, stamped
+  `mined_contract_version` (mig 581); no model call. W4: a `not_property` advert keeps its town; business premises are an offer (that prompt edit re-reads ≈ 54.7k live bazos adverts, ≈ $25, ≈ 3 days).
   The cache is keyed `(listing_id, text_hash, extractor_version)` (migration 552),
   `extractor_version` being `'<schema>:<prompt + schema hash>:<model>'` — a model swap re-attempts,
   a price-only snapshot never re-bills, and **a prompt edit or a gate opening re-reads the corpus**

@@ -1863,7 +1863,7 @@ def _intake_fast_pass(conn: Any) -> dict[str, Any]:
         # The run-end backlog `count(*)` is the hourly chain's signal. At a 60 s cadence
         # it would cost more than the drain it measures.
         backlog_readout=False,
-        readings=False,  # the readings half is the hourly run's (its selector's 5 s gate)
+        readings=False,  # the full readings half is hourly (5 s gate); text_extract mines its own
         pool=_intake_fast_pool(),
     )
     stats = claims_intake.run(

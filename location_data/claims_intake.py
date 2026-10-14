@@ -1497,7 +1497,7 @@ class Schedule:
       * `backlog_readout` — the run-end `count(*)`. It is the hourly chain's signal; a
         60 s-cadence lane that paid for it every tick would spend more time counting the
         backlog than draining it.
-      * `readings` — hourly only: its selector's full read (8.2 s cold) fails a 5 s gate (W3).
+      * `readings` — the FULL selector is hourly only: its read (8.2 s cold) fails a 5 s gate (W3).
 
     `pool` is not a schedule difference but a lifetime one: a warm `ExtractionPool` for a
     lane that runs a batch a minute for ever (W7-a2). None = build one per batch, as before.

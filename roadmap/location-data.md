@@ -1126,6 +1126,12 @@ component is slimmed twice — each wave rewrites one component and slims its st
   ≈ 150). The operator accepted +494 as the cost of a new capability and its safeguards; R3 fuzzy
   street matching is kept for reading claims (40 of 42 pilot streets exact, the one near-miss
   right); the `percent` decoder deletion stands.
+  **W4 (draft PR, 2026-10-14) — the operator's 40 verdicts' follow-ups, done:** resolver v5.7 (the
+  climbed village is the part; "X u Y"; a street line naming a part; spelled twins + the part tie-break
+  — Hanusova was an accent-fold collision; abbreviations; a shared PSČ yields to the street), the reader
+  (a value standing in the advert; initials; a not_property town; business premises are an offer — a
+  full bazos re-read, ≈ $25), bazos@9, readings mined on the worker within a text pass. Open: 1g (the
+  town named over the PSČ — its one row's town carries the PSČ, so no rule; operator's call).
 - **Claim fields 498 dropped, deleted from Python** (2026-10-01): `Claim` loses the ten fields no
   column stores and no fingerprint hashes (`snapshot_id/_anchor`, `history_completeness`,
   `legacy_write_path_unknown`, `payload_id/_sha256`, `evidence_quote`, `span_start/_end`,

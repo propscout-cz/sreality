@@ -389,7 +389,7 @@ Per-lane notes:
 - **Text-extract lane** (field-capture W7, `toolkit/description_extraction.run_pass`) — the
   post-publication read of the facts a prose-only advert states only in its text. CONSTANT 300 s
   interval, no flag / setting / env var (a lane nobody enabled is a lane no monitor can see); scope =
-  the open-R7-gate `text` cells ∪ portals declaring `llm_text`; its readings are mined by the claim lane.
+  the open-R7-gate `text` cells ∪ portals declaring `llm_text`; after a pass it mines THAT pass's readings into claims (W4: `claims_intake.mine_readings`, batch lane `location_readings_fast`, 30 s budget, `LOCATION_READINGS_FAST_ENABLED=0` stops it; log `INTAKE readings fast ids=…`; heartbeat `last.readings_fast`), the hourly claim lane the backstop.
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `last_failure_at`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rail = `text_extraction_lag`. Sizing, cache key, write gate: `llm-pipelines`.
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer
   `realtime_autodedup_interval_seconds` (seeded 0 = stopped; 60 running) is cadence AND brake, claim = engine rate × half a 1050 s deadline (a build's three quarters, E951), rate

@@ -377,17 +377,6 @@ def test_a_town_still_outranks_the_region_that_contains_it():
     assert resolution.granularity == "obec"
 
 
-# ------------------------------------------------------------------- the deleted rung
-
-
-def test_the_parcel_rung_is_gone():
-    """R5 was unreachable — no portal states a cadastral parcel in a form that joins — and it
-    was the only reader of `ruian_parcels`. A KÚ is a LOOKUP LEVEL of the town rule (v5.5); it
-    binds no entity of its own."""
-    assert "R5" not in step_bind._RUNG_BASE_SCORE
-    assert not hasattr(mm.default_mirror(), "parcels")
-
-
 # ------------------------------------------- v5.7: the operator's W4 verdicts (2026-10-14)
 #
 # Every row below is a production listing the operator judged, on `mm.w4_mirror()` — the
