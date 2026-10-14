@@ -17,6 +17,9 @@ from location_data.claims_common import Claim, Entry, ListingRow, _base
 
 AD_KINDS = ("offer", "exchange", "wanted", "not_property")
 ADMITTED_AD_KINDS = frozenset({"offer", "exchange"})
+# W4 (2c): an advert for something that is no real estate still says WHERE it is — the 21 mobile
+# homes of 18907132 stand in Sadová. Its town is admitted; its street and numbers never are.
+TOWN_AD_KINDS = ADMITTED_AD_KINDS | {"not_property"}
 # The register is Czech: a reading that places the property abroad admits no slot. The pilot
 # (run 36679622378) saw a Croatian apartment and a Slovak cottage answered with a town.
 _COUNTRY = ("ISO 3166-1 alpha-2 of the country the property is in, from the text: 'CZ' when a "
@@ -42,8 +45,9 @@ _SLOT_SPEC: dict[str, str] = {
 SLOTS = tuple(_SLOT_SPEC)
 _AD_KIND = ("offer: sells or lets the property described (also 'hledáme nájemníka'); exchange: "
             "offers their own for another; wanted: seeks one; not_property: no real estate at a fixed "
-            "place (a prefab or mobile garage, a mobile home, a container, materials, a service). "
-            "Always set, even with no quote.")
+            "place (a prefab or mobile garage, a mobile home, a container, materials, a service) — "
+            "business premises at an address (a shop, a bar, an office, a warehouse: to let, to "
+            "sell or to take over) are an offer. Always set, even with no quote.")
 
 LOCATION_PROMPT = (
     "`location` records where the advertised property ITSELF is — never a place near it (a "
@@ -77,7 +81,9 @@ def location_block(cell: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str
 def read_location(payload: Mapping[str, Any] | None,
                   advert_text: str) -> dict[str, dict[str, Any]]:
     """`slot -> {value, quote}` for `ad_kind`, `country` and every slot; a slot that fails V1
-    (quote not in the text) or V3 (not an offered property, or one placed abroad) is null."""
+    (quote not in the text — unless its VALUE stands in the text as whole words, which then is
+    its quote) or V3 (not an offered property, or one placed abroad; the town of a
+    not_property advert stands) is null."""
     # Lazy: toolkit imports this module, and the quote check must stay the lane's ONE check.
     from toolkit.description_extraction import quote_supports
 
@@ -89,14 +95,25 @@ def read_location(payload: Mapping[str, Any] | None,
     country, quote = _cell(block.get("country"))
     country = country.strip().upper() if isinstance(country, str) and country.strip() else None
     out["country"] = {"value": country, "quote": quote if country else None}
-    admitted = kind in ADMITTED_AD_KINDS and country in (None, "CZ")
     for slot in SLOTS:
         value, quote = _cell(block.get(slot))
-        ok = (admitted and isinstance(value, str) and value.strip()
-              and isinstance(quote, str) and quote_supports(advert_text, quote))
-        out[slot] = ({"value": value.strip(), "quote": quote} if ok
+        admitted = (kind in (TOWN_AD_KINDS if slot == "town" else ADMITTED_AD_KINDS)
+                    and country in (None, "CZ") and isinstance(value, str) and value.strip())
+        if admitted and not (isinstance(quote, str) and quote_supports(advert_text, quote)):
+            # W4 (2a): 19009239 quoted "v městyse Koloveč" where the advert says "části městyse
+            # Koloveč" — the span is the model's, the town in it is the advert's.
+            quote = value.strip() if _stands_in(value, advert_text) else None
+        out[slot] = ({"value": value.strip(), "quote": quote} if admitted and quote
                      else {"value": None, "quote": None})
     return out
+
+
+def _stands_in(value: str, advert_text: str) -> bool:
+    from toolkit.description_extraction import _flat
+
+    flat = _flat(value)
+    return bool(flat) and re.search(rf"(?<!\w){re.escape(flat)}(?!\w)",
+                                    _flat(advert_text)) is not None
 
 
 def _cell(raw: Any) -> tuple[Any, Any]:
@@ -160,11 +177,18 @@ def _words(text: str) -> list[str]:
 
 def _grounded(value: str, quote: str) -> bool:
     """V2: a value word of 3+ letters shares its first three with a quote word (Brno/Brně,
-    Plzeň/Plzni, Hora/Hoře); a name with no such word ("Aš") must stand in the quote whole."""
+    Plzeň/Plzni, Hora/Hoře); a name with no such word ("Aš") must stand in the quote whole; a
+    name of two or more words may stand as its initials (W4, 2b: "Č.B." is České Budějovice),
+    one token ("ČB") or single letters in a row."""
     said, named = _words(quote), _words(value)
     long = [w[:3] for w in named if len(w) >= 3]
     if not long:
         return bool(named) and all(w in said for w in named)
+    initials = "".join(w[0] for w in named)
+    if len(named) >= 2 and (initials in said or any(
+            all(len(w) == 1 for w in run) and "".join(run) == initials
+            for run in (said[i:i + len(named)] for i in range(len(said))))):
+        return True
     return bool(set(long) & {w[:3] for w in said if len(w) >= 3})
 
 
