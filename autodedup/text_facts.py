@@ -450,8 +450,11 @@ _STOREY_ADJECTIVE_PREFIXES: dict[str, int] = {
     "jedno": 1, "dvou": 2, "tri": 3, "ctyr": 4, "peti": 5, "sesti": 6, "sedmi": 7, "osmi": 8,
     "deviti": 9, "deseti": 10,
 }
+# Bažoš's form line `Typ bytu: jednopodlažní` names the flat's own type (not a maisonette), never
+# the building's storeys, so the value after `bytu:` is not read.
 _STOREY_ADJECTIVE = re.compile(
-    r"\b(\d{1,2}\s*-?\s*|" + "|".join(sorted(_STOREY_ADJECTIVE_PREFIXES, key=len, reverse=True))
+    r"(?<!bytu: )(?<!bytu:)\b(\d{1,2}\s*-?\s*|"
+    + "|".join(sorted(_STOREY_ADJECTIVE_PREFIXES, key=len, reverse=True))
     + r")podlazn\w*\b(?!\s+(?:byt|mezonet|apartman|jednotk|plocha|plose))")
 STOREY_COUNT_MAX: int = 50
 

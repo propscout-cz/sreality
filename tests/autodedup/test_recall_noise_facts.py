@@ -65,6 +65,9 @@ def test_E954_the_reader_names_the_building_never_the_unit() -> None:
     assert printed_storey_counts("byt ve 2 nadzemním podlaží") == frozenset()
     assert printed_storey_counts("panelový dům o 7 nadzemních podlažích") == {7}
     assert printed_storey_counts(SILENT) == frozenset()
+    # Bažoš's form line names the flat's type, not the building (37 c18 bodies read it as 1).
+    assert printed_storey_counts("Typ bytu: Jednopodlažní Užitná plocha (m2): 63") == frozenset()
+    assert printed_storey_counts("Typ bytu:jednopodlažní, dům o 8 nadzemních podlažích") == {8}
 
 
 def test_E954_every_body_saying_three_storeys_outweighs_a_box_saying_five() -> None:
