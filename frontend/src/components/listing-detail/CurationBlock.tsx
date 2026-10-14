@@ -1,4 +1,4 @@
-/* Collections + tags + notes for a single PROPERTY. Wired into PropertyDetail.
+/* Collections + tags + artifact link + notes for a single PROPERTY. Wired into PropertyDetail.
  *
  * Curation is property-grain (migration 202): a tag / collection membership /
  * note describes the real-world property, so this block operates on the
@@ -48,6 +48,7 @@ import { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
 import { SectionLabel } from '@/components/section';
+import ArtifactLinkRow from './ArtifactLinkRow';
 import { NOTE_ATTACHMENT_MAX_FILES, sortAttachments } from '@/lib/noteAttachments';
 import {
   AttachButton,
@@ -79,9 +80,10 @@ export default function CurationBlock({
       {/* The pipeline bookmark moved to the listing-detail header action bar
           (PipelineToggle) — a deal-stage verb belongs at the top, next to
           "New estimation", not buried below the estimates. This block keeps
-          the secondary curation: collections, tags, notes. */}
+          the secondary curation: collections, tags, artifact link, notes. */}
       <CollectionsRow property_id={property_id} />
       <TagsRow property_id={property_id} />
+      <ArtifactLinkRow property_id={property_id} />
       <NotesRow property_id={property_id} sreality_id={sreality_id} listing_id={listing_id} />
     </div>
   );
@@ -102,6 +104,7 @@ export function PhoneTagsAndNotes({
   return (
     <div className="space-y-7">
       <TagsRow property_id={property_id} label="Štítky" />
+      <ArtifactLinkRow property_id={property_id} label="Odkaz na artefakt" />
       <NotesRow
         property_id={property_id}
         sreality_id={sreality_id}

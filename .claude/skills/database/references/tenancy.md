@@ -33,7 +33,9 @@ since `grant insert` on the table does not cover the sequence.
 
 **Migration 290 — curation tables**, `account_id` on the row directly (not
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
-`notification_subscriptions`, `manual_rental_estimates`.
+`notification_subscriptions`, `manual_rental_estimates`. Later siblings: `property_dismissals`
+(536) and `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
+caller-supplied account, API-only reads and writes).
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
