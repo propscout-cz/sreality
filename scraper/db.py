@@ -547,9 +547,10 @@ def stamp_derived_artifact(
     rows: int | None = None,
     duration_ms: int | None = None,
 ) -> None:
-    """Stamp a registered NON-matview artifact (migration 441) from Python — the one call
-    shape the stamping rail reads (`stamp_derived_artifact(conn, "<name>", …)`), so the
-    name is checked against `derived_artifacts` offline before it can stamp nothing."""
+    """Stamp a registered NON-matview artifact (migration 441) from Python. Callers pass
+    the connection first and the artifact name as a string literal second — the one call
+    shape the stamping rail reads — so a name is checked against `derived_artifacts`
+    offline before it can stamp nothing."""
     with conn.cursor() as cur:
         cur.execute(STAMP_DERIVED_ARTIFACT_SQL, (name, rows, duration_ms))
 
