@@ -40,8 +40,8 @@ of the analytical and UI phases; runs alongside them.
   reserves incl. the tangential corridor the press calls metro E, named planned stations) and the
   VÚV TGM / MŽP national flood-zone register (Q5/Q20/Q100/Q500 + active zone, fetched in native
   S-JTSK — the server's WGS84 output is ~10 m off). Kraje move off `rent_map_kraje_public`.
-- **Next (cleanup PR):** the MF rent choropleth onto the same path (`rent_map` section with VK
-  variants; `fetch_rent_map.yml` re-renders), then migration 601 drops `rent_map_choropleth_public`,
+- **Cleanup PR (building, stacked on #1808):** the MF rent choropleth onto the same path (`rent_map`
+  section with VK variants; `fetch_rent_map.yml` re-renders), then migration 601 drops `rent_map_choropleth_public`,
   `rent_map_kraje_public` and the `rent_map_choropleth` matview. Named follow-ups: curated-city
   polygons and price-growth obec shapes stay on GeoJSON (dynamic values); the boundary ingest could
   move onto the same ArcGIS reader (ČÚZK RÚIAN REST) and drop the `geo` extra.

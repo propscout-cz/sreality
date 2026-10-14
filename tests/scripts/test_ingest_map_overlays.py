@@ -53,7 +53,7 @@ def test_the_registry_holds_the_four_sections_in_order() -> None:
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
         "kraje": ("Kraje", 3, 5, 9),
-        "rent_map": ("Cenová mapa nájemného", 4, 5, 12),
+        "rent_map": ("Cenová mapa nájemného", 0, 5, 12),
     }
     assert list(mod.SOURCES) == ["metro", "flood", "kraje", "rent_map"]
 
@@ -66,7 +66,7 @@ def test_layers_their_sort_and_how_they_are_stored() -> None:
                   ("flood_q100", 3, "dissolve"), ("flood_q500", 4, "dissolve"),
                   ("flood_az", 5, "outline")],
         "kraje": [("kraje", 1, "plain")],
-        "rent_map": [("rent_map", 1, "plain")],
+        "rent_map": [("rent_map", 1, "whole")],
     }
 
 
@@ -105,10 +105,8 @@ def test_the_notes_attribution_and_licences() -> None:
         "přívalové povodně nejsou zahrnuty. Závazné informace: vodoprávní úřad."
     )
     assert mod.SOURCES["kraje"].note is None
-    assert mod.SOURCES["rent_map"].note == (
-        "Měsíční nájemné referenčního bytu za m² podle Ministerstva financí ČR, zvlášť pro "
-        "každou velikostní kategorii bytu."
-    )
+    # No note: the rent map's panel showed none before it moved onto this path.
+    assert mod.SOURCES["rent_map"].note is None
     assert {k: (s.attribution, s.licence) for k, s in mod.SOURCES.items()} == {
         "metro": ("datový podklad © IPR Praha", "CC BY 4.0"),
         "flood": ("© VÚV TGM pro MŽP (ISVS VODA)", "CC BY 4.0"),
@@ -143,7 +141,8 @@ def test_the_rent_map_paints_the_choropleth_the_browse_map_drew() -> None:
     (ListingMap.tsx RENT_RAMP / RENT_NULL_COLOR / fill-opacity / RENT_VK_LABELS), unchanged:
     the operator's condition for this move is no visible difference."""
     rent = _layer("rent_map")
-    assert (rent.label, rent.legend, rent.store) == ("Cenová mapa nájemného", (), "plain")
+    # `whole`: each place stays one polygon, so the outline the SPA strokes never shows a cut.
+    assert (rent.label, rent.legend, rent.store) == ("Cenová mapa nájemného", (), "whole")
     assert rent.scale == {
         "prop": "vk1",
         "stops": [[150, "#eaf0f6"], [250, "#9ec3e6"], [350, "#5a7fd6"],
@@ -151,6 +150,7 @@ def test_the_rent_map_paints_the_choropleth_the_browse_map_drew() -> None:
         "null_color": "rgba(140, 140, 140, 0.35)",
         "unit": "rent_per_m2",
         "opacity": 0.62,
+        "outline": {"color": "rgba(60, 60, 90, 0.25)", "width": 0.4},
     }
     assert rent.variants == (
         {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1"},
@@ -177,7 +177,7 @@ def test_registry_invariants() -> None:
         for layer in section.layers:
             classes = [entry["class"] for entry in layer.legend]
             assert len(classes) == len(set(classes)), layer.key
-            if layer.store != "plain":
+            if layer.store in ("dissolve", "outline"):
                 assert len(classes) == 1, f"{layer.key}: a dissolved layer has one class"
                 assert all(isinstance(r, mod.ArcGisLayer) and r.geometry_type == mod.POLYGON
                            for r in layer.readers), layer.key
@@ -606,7 +606,7 @@ _TAGS = {
     mod.STATEMENT_TIMEOUT_SQL: "timeout", mod.LOCK_SQL: "lock",
     scraper_db.STAMP_DERIVED_ARTIFACT_SQL: "stamp", mod.UPSERT_SECTION_SQL: "section",
     mod.PRUNE_LAYERS_SQL: "prune", mod.UPSERT_LAYER_SQL: "layer",
-    mod.DELETE_FEATURES_SQL: "delete", mod.INSERT_FEATURE_SQL: "insert",
+    mod.DELETE_FEATURES_SQL: "delete", mod.INSERT_FEATURE_SQL: "insert", mod.INSERT_WHOLE_FEATURE_SQL: "insert-whole",
     mod.DISSOLVE_SQL: "dissolve", mod.RENDER_SQL: "render", mod.SECTION_STATS_SQL: "stats",
     mod.TILE_COUNT_SQL: "tilecount", mod.RENT_MAP_REVISED_SQL: "revised",
 }
@@ -812,7 +812,7 @@ def test_an_sql_section_is_written_and_rendered_from_the_database_alone(offline:
     assert mod.render_sql_section(conn, "rent_map") == 42
 
     assert conn.log == ["datum", "previous", "select-source", "revised", "BEGIN", "timeout",
-                        "lock", "section", "prune", "layer", "delete", "insert", "render",
+                        "lock", "section", "prune", "layer", "delete", "insert-whole", "render",
                         "stats", "COMMIT"]
     assert mod.RENT_MAP_SQL in conn.composed[0]
     assert conn.params["lock"] == [("map_overlays:rent_map",)]

@@ -270,7 +270,8 @@ today).
   round-trip test. Memory adapter (Explore modal): initial = remembered.
 - `DetailMap` and `ComparablesMap`: local state initialised from the remembered selection, written
   back on change; both mount the hook (`beforeId` 'pin' / 'comparables-point') and the compact
-  controls. `ListingMap`: `beforeId` 'city-fill'.
+  controls. `ListingMap`: under the first growth-choropleth layer (where the rent map and the
+  kraj borders have always sat), so a choropleth on top still tints them as before.
 - Delete: `rent_map_kraje_public` fetch (`fetchRentMapKraje`, `RentMapKraj`), `rentKrajeQuery`,
   `toKrajFC`, the `rent-kraje` source/layer/effect, the nested Kraje checkbox, `showKraje`,
   `onToggleShowKraje`, `rentMapKraje`. The view itself is dropped by migration 601 after deploy.
@@ -406,4 +407,17 @@ Backend, as built (2026-10-15):
   flood clicks in Prague); the remembered selection is ONE live store (`useSyncExternalStore`) read
   by every map and by Browse's fallback, so two maps on one page agree and a navigation to a bare
   `/browse` keeps the page's own last choice.
+- **Cleanup integration (2026-10-15):** the `rent_map` layer is stored `whole` (no `ST_Subdivide`;
+  15 of 7,630 places exceed 256 vertices) because the SPA strokes each place's own outline
+  (`scale.outline {color, width}`, today's hairline borders); `scale.opacity` (0.62) keeps today's
+  fill; the section has sort 0 (its chip stays directly under the growth control, as before) and
+  no note; minzoom 5 (the country-wide opening view is ~z6.4, which drew the choropleth before).
+  Draw order: a scale (choropleth) layer is always the bottom overlay area, so the rent map never
+  covers flood zones; inside a curated city a click on the choropleth leaves the city card in place
+  (as today) while flood areas take the click. Accepted small differences: the panel gains the
+  source footer and the map's attribution credits the Ministry of Finance; "Načítání…" is gone;
+  the rent map is part of the remembered selection, so it follows the operator to the other maps.
+  Old links: `rentmap=1&rentvk=N` reads as `rent_map:vkN`. Deploy order: merge the cleanup, then
+  dispatch `--sections rent_map` at once (the chip is absent for the minute the render takes; an
+  already-open tab needs a reload), then apply 601.
 

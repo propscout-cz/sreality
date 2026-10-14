@@ -109,6 +109,15 @@ select %s, %s, %s::jsonb,
            st_setsrid(st_force2d(st_geomfromgeojson(%s::text)), %s), 3857)), 256)
 """
 
+# A `whole` layer keeps each source polygon in one piece: the SPA strokes a scale layer's
+# own outline, and a subdivision cut would draw as a border inside the place.
+INSERT_WHOLE_FEATURE_SQL = """
+insert into map_overlay_features (layer_key, source_id, props, geom)
+select %s, %s, %s::jsonb,
+       st_makevalid(st_transform(
+           st_setsrid(st_force2d(st_geomfromgeojson(%s::text)), %s), 3857))
+"""
+
 # A dissolve layer is stored first as its source features (INSERT_FEATURE_SQL), then
 # replaced in place by the subdivided union, so same-band overlaps (Berounka and Vltava
 # share ~16 km2 of Q100) cannot render darker. Each piece is named after the source
@@ -248,7 +257,7 @@ class Layer:
     sort: int
     legend: tuple[dict[str, Any], ...]
     readers: tuple[ArcGisLayer | SqlSource, ...]
-    store: Literal["plain", "dissolve", "outline"] = "plain"
+    store: Literal["plain", "whole", "dissolve", "outline"] = "plain"
     scale: dict[str, Any] | None = None
     variants: tuple[dict[str, Any], ...] | None = None
 
@@ -615,16 +624,15 @@ SOURCES: dict[str, Section] = {
     # the whole-country view keeps it (a z5/z6 tile of all 7.6k territories is ~1 MB).
     # The MF states no licence for the data; its site is "© Ministerstvo financí ČR".
     "rent_map": Section(
-        label="Cenová mapa nájemného", sort=4, minzoom=5, maxzoom=12,
+        label="Cenová mapa nájemného", sort=0, minzoom=5, maxzoom=12,
         attribution="Ministerstvo financí ČR – Cenová mapa nájemného",
         licence="Licence neuvedena (© Ministerstvo financí ČR)", source_url=MF_INFOGRAPHIC_URL,
-        note="Měsíční nájemné referenčního bytu za m² podle Ministerstva financí ČR, zvlášť "
-             "pro každou velikostní kategorii bytu.",
+        note=None,
         revised_at=sql_revised_at(RENT_MAP_REVISED_SQL),
         layers=(
             Layer(
                 "rent_map", "Cenová mapa nájemného", 1, legend=(),
-                readers=(SqlSource(RENT_MAP_SQL),),
+                readers=(SqlSource(RENT_MAP_SQL),), store="whole",
                 scale={
                     "prop": "vk1",
                     "stops": [[150, "#eaf0f6"], [250, "#9ec3e6"], [350, "#5a7fd6"],
@@ -632,6 +640,7 @@ SOURCES: dict[str, Section] = {
                     "null_color": "rgba(140, 140, 140, 0.35)",
                     "unit": "rent_per_m2",
                     "opacity": 0.62,
+                    "outline": {"color": "rgba(60, 60, 90, 0.25)", "width": 0.4},
                 },
                 variants=(
                     {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1"},
@@ -717,11 +726,12 @@ def write_section(
                 "variants": _jsonb(layer.variants), "feature_count": len(features),
             })
             cur.execute(DELETE_FEATURES_SQL, (layer.key,))
+            insert_sql = INSERT_WHOLE_FEATURE_SQL if layer.store == "whole" else INSERT_FEATURE_SQL
             for batch in itertools.batched(features, INSERT_BATCH):
-                cur.executemany(INSERT_FEATURE_SQL, [
+                cur.executemany(insert_sql, [
                     (layer.key, f.source_id, Jsonb(f.props), f.geometry, f.srid) for f in batch
                 ])
-            if layer.store != "plain":
+            if layer.store in ("dissolve", "outline"):
                 cur.execute(DISSOLVE_SQL, {
                     "layer": layer.key, "class": layer.legend[0]["class"],
                     "outline": layer.store == "outline",
