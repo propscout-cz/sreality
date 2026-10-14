@@ -246,8 +246,8 @@ def test_the_dry_run_counts_reproduce_the_probe_and_write_nothing() -> None:
                           detach=db.detach_recording(calls))
     assert calls == [] and db.state() == before
     assert set(db.statements) == {L.AREA_SQL, L.GROUPS_SQL, S.PROPERTY_STATE_SQL, L.ADVERTS_SQL,
-                                  L.BUILT_ON_SQL, S.PAIR_VERDICTS_SQL, S.MUST_NOT_LINK_SQL,
-                                  L.AUTO_MOVED_SQL}
+                                  L.BUILT_ON_SQL, S.PAIR_VERDICTS_SQL, S.CLUSTER_VERDICTS_SQL,
+                                  S.MUST_NOT_LINK_SQL, L.AUTO_MOVED_SQL}
     counts = out["counts"]
     assert counts["groups_touching"] == 10
     assert counts["touching_only_through_survivor_side"] == 1
@@ -1139,6 +1139,27 @@ def test_e907_leaves_the_operator_different_protection_as_it_was() -> None:
                           engine=HELD)
     assert _by(out) == {group: f"skipped:{L.RULED_DIFFERENT}"}
 
+
+
+def test_a_group_ruling_of_same_holds_the_group_like_a_pair_ruling() -> None:
+    """The operator ruled the whole Krkonošská set one property in a GROUP verdict (kind
+    'cluster', 227 such rows in production): the undo would part 103218 from 165670, which no
+    pair ruling names, and the lane reads pair rulings only. Held, as a pair ruling holds it;
+    a newer word on the same set (here `different`) lifts it."""
+    db = RetireDb()
+    group = _krkonosska(db)
+    db.verdicts.clear()
+    ruled = sorted(KRKONOSSKA)
+    db.verdicts.append({"kind": "cluster", "cluster_key": 7, "verdict": "same",
+                        "member_ids": ruled})
+    out = L.retire_legacy(db, TRIAL, category_types=SALES, dry_run=False, run_id="r1",
+                          detach=db.detach_recording([]))
+    assert _by(out) == {group: f"skipped:{L.RULED_SAME}"}
+    assert {db.listings[lid]["property_id"] for lid in KRKONOSSKA} == {1}
+    db.verdicts.append({"kind": "cluster", "cluster_key": 7, "verdict": "different",
+                        "member_ids": ruled})
+    out = L.retire_legacy(db, TRIAL, category_types=SALES, dry_run=True, run_id="r2")
+    assert _by(out) == {group: "would_retire"}
 
 # W8 (E953): the retire step alone under the live stream's generation -----------------------------
 RT_AREA = {"blocks": f"town:{TOWN} quarter:{QUARTER}"}

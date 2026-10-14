@@ -20,7 +20,7 @@ engine); then `operator_split` (a row of it undone by anyone but this step: the 
 advert back by hand and ruled it apart from the rest), else `intact`. An intact group is undone
 only when its adverts (the survivor's, the retired properties' and every advert the merge moved)
 ALL sit inside the scope's blocks, the undo would neither separate two adverts an operator
-ruled "same" that THIS RUN does not re-join (`skipped:operator_ruled_same`; E907: a ruled pair
+ruled "same" (a pair ruling, or a group ruling over both) that THIS RUN does not re-join (`skipped:operator_ruled_same`; E907: a ruled pair
 the undo separates but that sits inside ONE engine group this run may merge is re-merged by the
 apply that follows, so it does not hold the group back) nor NEWLY join two the operator ruled
 apart (a
@@ -69,6 +69,8 @@ import os
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -259,7 +261,8 @@ def _statement(sql: str) -> str:
     names = {AREA_SQL: "area", GROUPS_SQL: "groups", ADVERTS_SQL: "adverts",
              AUTO_MOVED_SQL: "auto_moved", BUILT_ON_SQL: "built_on",
              S.PROPERTY_STATE_SQL: "property_state", S.PAIR_VERDICTS_SQL: "pair_verdicts",
-             S.MUST_NOT_LINK_SQL: "must_not_link", S.LOCK_PROPERTIES_SQL: "lock_properties"}
+             S.CLUSTER_VERDICTS_SQL: "group_verdicts", S.MUST_NOT_LINK_SQL: "must_not_link",
+             S.LOCK_PROPERTIES_SQL: "lock_properties"}
     return names.get(sql, "other")
 
 
@@ -430,17 +433,36 @@ def _rulings(
 ) -> tuple[set[tuple[int, int]], set[tuple[int, int]], set[int]]:
     """The operator's "same" pairs and negatives (pair verdicts, and must-not-links whose
     source is 'operator': a machine guard is not a ruling) among these adverts, and which of
-    them a live old-engine row moved."""
+    them a live old-engine row moved. A group ruling whose newest word is "same" makes every
+    pair of its set a "same" pair: the lane reads pair rulings only, so it need not hold them."""
     if not listing_ids:
         return set(), set(), set()
     same = {(int(lo), int(hi)) for lo, hi, _v in _rows(conn, S.PAIR_VERDICTS_SQL, {
         "listing_ids": listing_ids, "negatives": list(SAME_VERDICTS)})}
+    same |= _same_sets(conn, listing_ids)
     different = {(int(lo), int(hi)) for lo, hi, _v in _rows(conn, S.PAIR_VERDICTS_SQL, {
         "listing_ids": listing_ids, "negatives": list(NEGATIVE_VERDICTS)})}
     different |= {(int(lo), int(hi)) for lo, hi, src in _rows(
         conn, S.MUST_NOT_LINK_SQL, {"listing_ids": listing_ids}) if src == "operator"}
     moved = {int(r[0]) for r in _rows(conn, AUTO_MOVED_SQL, {"listing_ids": listing_ids})}
     return same, different, moved
+
+
+def _same_sets(conn: Any, listing_ids: list[int]) -> set[tuple[int, int]]:
+    """Every pair of a group ruling's set whose NEWEST ruling is "same" (per set the newest word
+    stands, as `apply.Negatives` reads it); a setless row names no set and is skipped."""
+    newest: dict[frozenset[int], tuple[tuple[float, int], str]] = {}
+    for _key, verdict, _gen, member_ids, decided_at, vid in _rows(conn, S.CLUSTER_VERDICTS_SQL, {
+            "listing_ids": listing_ids, "cluster_keys": []}):
+        if member_ids is None:
+            continue
+        ruled = frozenset(int(x) for x in member_ids)
+        order = (decided_at.timestamp() if isinstance(decided_at, datetime) else 0.0,
+                 int(vid or 0))
+        if len(ruled) >= 2 and (ruled not in newest or order > newest[ruled][0]):
+            newest[ruled] = (order, str(verdict))
+    return {pair for ruled, (_order, verdict) in newest.items() if verdict in SAME_VERDICTS
+            for pair in combinations(sorted(ruled), 2)}
 
 
 def _retire_one(
