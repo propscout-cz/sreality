@@ -1218,6 +1218,8 @@ def test_w8_the_live_stream_retires_only_named_fully_read_blocks_the_scope_admit
         ({"generation": "rt", "retire_legacy": "1"}, "needs blocks="),
         (_rt(db, dry_run="0", blocks=""), "needs blocks="),
         (_rt(db, dry_run="0", blocks="town:531057"), "names no block of app_settings"),
+        (_rt(db, dry_run="0", blocks=f"town:{TOWN} town:531057"),
+         "names town:531057, outside app_settings"),
         (_rt(db, listing_ids="1 2"), "listing_ids"),
     )
     for args, why in refusals:

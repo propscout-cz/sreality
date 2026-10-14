@@ -1753,11 +1753,16 @@ def _retire_live_stream(conn: Any, dry_run: bool, override: Mapping[str, Any],
         scope = effective_scope(read_scope_setting(conn), override, live=not dry_run)
     except ValueError as exc:
         raise SystemExit(f"scope: {exc}") from exc
-    if not scope.blocks:
+    # A live run's arguments only NARROW the scope row (E904): a named block the row lacks would
+    # drop out silently, and the operator would read the area as retired when it was not.
+    missing = sorted((scope_fields(override).get("blocks") or frozenset())
+                     - (scope.blocks or frozenset()))
+    if not scope.blocks or missing:
+        named = (f"{' '.join(missing)}, outside" if scope.blocks else "no block of")
         raise SystemExit(
-            f"retire_legacy=1: blocks= names no block of app_settings.{SCOPE_SETTING}, and the "
-            "lane re-merges only inside it - add the area there first, the lane braked; "
-            "nothing was undone")
+            f"retire_legacy=1: blocks= names {named} app_settings.{SCOPE_SETTING}, and the lane "
+            "re-merges only inside it - add the area there first, the lane braked; nothing was "
+            "undone")
     keys: dict[str, str] = {}
     for block in scope.blocks:
         grain, _, code = block.partition(":")
