@@ -1595,6 +1595,32 @@ def delete_property_note(
     return curation.delete_note(conn, property_id, note_id)
 
 
+@app.get("/properties/{property_id}/artifact-link")
+def get_property_artifact_link(
+    property_id: int,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return curation.get_artifact_link(conn, property_id)
+
+
+@app.put("/properties/{property_id}/artifact-link")
+def put_property_artifact_link(
+    property_id: int,
+    body: s.SetArtifactLinkIn,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+) -> dict[str, Any]:
+    return curation.set_artifact_link(conn, property_id, body, account_id=str(account_id))
+
+
+@app.delete("/properties/{property_id}/artifact-link")
+def delete_property_artifact_link(
+    property_id: int,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return curation.delete_artifact_link(conn, property_id)
+
+
 @app.post("/properties/{property_id}/notes/{note_id}/attachments")
 def post_note_attachment(
     property_id: int,

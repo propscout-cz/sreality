@@ -34,6 +34,7 @@ import type {
   ManualRentalEstimate,
   CreateManualEstimateIn,
   UpdateManualEstimateIn,
+  ArtifactLink,
   Note,
   NoteAttachment,
   ParseResult,
@@ -2644,6 +2645,29 @@ export const deletePropertyNote = (
   note_id: number,
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/properties/${property_id}/notes/${note_id}`, {
+    method: 'DELETE',
+  });
+
+/* Artifact link (migration 599): one http(s) URL per property; PUT sets or replaces it. */
+
+export const getPropertyArtifactLink = (
+  property_id: number,
+): Promise<{ data: ArtifactLink | null }> =>
+  request<{ data: ArtifactLink | null }>(`/properties/${property_id}/artifact-link`);
+
+export const setPropertyArtifactLink = (
+  property_id: number,
+  url: string,
+): Promise<ArtifactLink> =>
+  request<ArtifactLink>(`/properties/${property_id}/artifact-link`, {
+    method: 'PUT',
+    json: { url },
+  });
+
+export const deletePropertyArtifactLink = (
+  property_id: number,
+): Promise<{ deleted: boolean }> =>
+  request<{ deleted: boolean }>(`/properties/${property_id}/artifact-link`, {
     method: 'DELETE',
   });
 

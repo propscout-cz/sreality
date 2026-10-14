@@ -2027,7 +2027,10 @@ renumber.** Navigate by area:
     `toolkit/property_carriers.py` (`PROPERTY_CARRIERS`, the one ordered list; `NOT_CARRIED` +
     the census) carries that state inside the merge transaction, in a fixed order:
     collections, tags, notes AND `notification_dispatches` as `CurationTable`s (SET tables union
-    with collision-collapse; APPEND tables move every row); the pipeline (rule #22); then
+    with collision-collapse; APPEND tables move every row), then `property_artifact_links` (migration
+    599: the operator's one "Artifact link" URL per property, a SET table on `account_id` with no
+    `at`, so the survivor's link stands on a collision, nothing is recorded, and a detach leaves
+    it where it is); the pipeline (rule #22); then
     dismissals, AFTER the pipeline so a live card lifts its account's dismissal. The private
     `_merge_pair` (one per retired property of a `merge_property_set`) is the only writer that
     retires a property, and it runs every carrier before the retire, so no operator-state row can

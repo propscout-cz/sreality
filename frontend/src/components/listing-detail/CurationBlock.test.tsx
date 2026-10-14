@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import type { Note, Tag } from '@/lib/types';
+import type { ArtifactLink, Note, Tag } from '@/lib/types';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
@@ -20,6 +20,9 @@ vi.mock('@/lib/api', async (orig) => ({
   listPropertyNotes: vi.fn(),
   createPropertyNote: vi.fn(),
   deletePropertyNote: vi.fn(),
+  getPropertyArtifactLink: vi.fn(),
+  setPropertyArtifactLink: vi.fn(),
+  deletePropertyArtifactLink: vi.fn(),
   uploadNoteAttachment: vi.fn(),
   fetchNoteAttachmentBlob: vi.fn(),
   deleteNoteAttachment: vi.fn(),
@@ -34,11 +37,14 @@ vi.mock('@/lib/queries', async (orig) => ({
 import {
   createPropertyNote,
   deleteNoteAttachment,
+  deletePropertyArtifactLink,
   deletePropertyNote,
   fetchNoteAttachmentBlob,
+  getPropertyArtifactLink,
   listCollections,
   listPropertyNotes,
   listTags,
+  setPropertyArtifactLink,
   uploadNoteAttachment,
 } from '@/lib/api';
 import { curationKeys, fetchPropertyCollectionMemberSet, fetchPropertyTagMemberSet } from '@/lib/queries';
@@ -54,7 +60,13 @@ const NOTE: Note = {
   created_at: '2026-05-02T00:00:00+00:00', updated_at: null,
 };
 
+const LINK: ArtifactLink = {
+  property_id: 42, url: 'https://claude.ai/artifact/abc123',
+  created_at: '2026-05-03T00:00:00+00:00', updated_at: '2026-05-03T00:00:00+00:00',
+};
+
 function mockReads() {
+  vi.mocked(getPropertyArtifactLink).mockResolvedValue({ data: null });
   vi.mocked(listCollections).mockResolvedValue({ data: [] } as never);
   vi.mocked(listTags).mockResolvedValue({ data: [TAG] } as never);
   vi.mocked(listPropertyNotes).mockResolvedValue({ data: [NOTE] } as never);
@@ -279,4 +291,99 @@ describe('<CurationBlock> note attachments', () => {
       await waitFor(() => expect(deleteNoteAttachment).toHaveBeenCalledWith(42, 11, 2));
       click.mockRestore();
     });
+});
+
+/* The per-property Artifact link (migration 599): one clickable http(s) URL, set, replaced and
+ * removed through the API; anything else is never drawn as an href. */
+describe('<CurationBlock> artifact link', () => {
+  beforeEach(() => {
+    vi.mocked(setPropertyArtifactLink).mockReset();
+    vi.mocked(deletePropertyArtifactLink).mockReset();
+  });
+
+  it('offers an empty field, names it by its heading, and saves a link', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(setPropertyArtifactLink).mockResolvedValue(LINK);
+    renderWithReads();
+
+    const field = await screen.findByRole('textbox', { name: 'Artifact link' });
+    await user.type(field, '  https://claude.ai/artifact/abc123 ');
+    await user.click(screen.getByRole('button', { name: 'Save link' }));
+
+    await waitFor(() =>
+      expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://claude.ai/artifact/abc123'));
+    const anchor = await screen.findByRole('link', { name: 'claude.ai/artifact/abc123' });
+    expect(anchor).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
+    expect(anchor).toHaveAttribute('target', '_blank');
+    expect(anchor).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('refuses a value that is not an http(s) address without calling the API', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    renderWithReads();
+
+    await user.type(await screen.findByRole('textbox', { name: 'Artifact link' }), 'javascript:alert(1)');
+    await user.click(screen.getByRole('button', { name: 'Save link' }));
+
+    expect(await screen.findByText(/starting with http/)).toBeInTheDocument();
+    expect(setPropertyArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it('shows a saved link as a clickable anchor, and replaces it in place', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(getPropertyArtifactLink).mockResolvedValue({ data: LINK });
+    vi.mocked(setPropertyArtifactLink).mockResolvedValue({ ...LINK, url: 'https://example.cz/page' });
+    renderWithReads();
+
+    expect(await screen.findByRole('link', { name: 'claude.ai/artifact/abc123' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit artifact link' }));
+    const field = screen.getByRole('textbox', { name: 'Artifact link' });
+    expect(field).toHaveValue(LINK.url);
+    await user.clear(field);
+    await user.type(field, 'https://example.cz/page');
+    await user.click(screen.getByRole('button', { name: 'Save link' }));
+
+    expect(await screen.findByRole('link', { name: 'example.cz/page' })).toHaveAttribute(
+      'href', 'https://example.cz/page');
+    expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://example.cz/page');
+  });
+
+  it('asks before removing, then clears the field', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(getPropertyArtifactLink).mockResolvedValue({ data: LINK });
+    vi.mocked(deletePropertyArtifactLink).mockResolvedValue({ deleted: true });
+    renderWithReads();
+
+    await user.click(await screen.findByRole('button', { name: 'Remove artifact link' }));
+    expect(deletePropertyArtifactLink).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(deletePropertyArtifactLink).toHaveBeenCalledWith(42));
+    expect(await screen.findByRole('textbox', { name: 'Artifact link' })).toHaveValue('');
+    expect(screen.queryByRole('link', { name: /claude\.ai/ })).not.toBeInTheDocument();
+  });
+
+  it('never draws a stored non-http value as a link', async () => {
+    mockReads();
+    vi.mocked(getPropertyArtifactLink).mockResolvedValue({
+      data: { ...LINK, url: 'javascript:alert(1)' },
+    });
+    renderWithReads();
+
+    expect(await screen.findByText('javascript:alert(1)')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /alert/ })).not.toBeInTheDocument();
+  });
+
+  it('says a failed read failed, instead of offering an empty field', async () => {
+    mockReads();
+    vi.mocked(getPropertyArtifactLink).mockRejectedValue(new Error('boom'));
+    renderWithReads();
+
+    expect(await screen.findByText(/Odkaz na artefakt/)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Artifact link' })).not.toBeInTheDocument();
+  });
 });

@@ -1,4 +1,4 @@
-"""Persistence helpers for /collections, /properties/{id}/notes, /tags.
+"""Persistence helpers for /collections, /properties/{id}/notes, /artifact-link, /tags.
 
 CRUD over the property-grain curation tables (migration 202): collection
 membership, tags and notes are keyed on `property_id` so operator curation
@@ -416,6 +416,57 @@ def delete_note(
     return {"deleted": True}
 
 
+# --- artifact link (migration 599) -----------------------------------------
+
+_ARTIFACT_LINK_PROJECTION = "property_id, url, created_at, updated_at"
+
+
+def get_artifact_link(conn: "psycopg.Connection", property_id: int) -> dict[str, Any]:
+    """The property's artifact link, or `{"data": None}`; a merged-away id reads its survivor's."""
+    pid = resolve_active_property_id(conn, property_id) or property_id
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT {_ARTIFACT_LINK_PROJECTION} FROM property_artifact_links "
+            "WHERE property_id = %s ORDER BY updated_at DESC LIMIT 1",
+            (pid,),
+        )
+        row = cur.fetchone()
+    return {"data": _to_artifact_link(row) if row else None}
+
+
+def set_artifact_link(
+    conn: "psycopg.Connection",
+    property_id: int,
+    body: s.SetArtifactLinkIn,
+    account_id: str,
+) -> dict[str, Any]:
+    """Set or replace the caller's link on a property (an upsert on the one-per-account key);
+    the INSERT names its owner (tenancy shape 2), the route resolves exactly one."""
+    sql = (
+        "INSERT INTO property_artifact_links (account_id, property_id, url) VALUES (%s, %s, %s) "
+        "ON CONFLICT (account_id, property_id) "
+        "DO UPDATE SET url = EXCLUDED.url, updated_at = now() "
+        f"RETURNING {_ARTIFACT_LINK_PROJECTION}"
+    )
+    with conn.transaction(), conn.cursor() as cur:
+        pid = resolve_active_property_id(conn, property_id)
+        if pid is None:
+            raise HTTPException(404, "property not found")
+        cur.execute(sql, (account_id, pid, body.url))
+        row = cur.fetchone()
+    assert row is not None
+    return _to_artifact_link(row)
+
+
+def delete_artifact_link(conn: "psycopg.Connection", property_id: int) -> dict[str, Any]:
+    """Clear the caller's link (RLS-scoped, so only their own rows); idempotent."""
+    pid = resolve_active_property_id(conn, property_id) or property_id
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute("DELETE FROM property_artifact_links WHERE property_id = %s", (pid,))
+        removed = cur.rowcount > 0
+    return {"deleted": removed}
+
+
 # --- tags ------------------------------------------------------------------
 
 _TAG_FULL_PROJECTION = (
@@ -615,6 +666,15 @@ def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
         "origin_listing_id": int(row[3]) if row[3] is not None else None,
         "created_at":        _iso(row[4]),
         "updated_at":        _iso(row[5]),
+    }
+
+
+def _to_artifact_link(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "property_id": int(row[0]),
+        "url":         row[1],
+        "created_at":  _iso(row[2]),
+        "updated_at":  _iso(row[3]),
     }
 
 

@@ -888,6 +888,14 @@ export interface Note {
   attachments?: NoteAttachment[];
 }
 
+/* A property's one operator-supplied link (migration 599). */
+export interface ArtifactLink {
+  property_id: number;
+  url: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface NoteAttachment {
   id: number;
   note_id: number;

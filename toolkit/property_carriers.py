@@ -241,6 +241,9 @@ PROPERTY_CARRIERS: tuple[Carrier, ...] = (
     CurationTable("collection_properties", ("collection_id",), at="added_at"),
     CurationTable("property_tags", ("tag_id",), at="attached_at"),
     CurationTable("property_notes", at="created_at"),
+    # One link per (account, property), no `at`: no carry row, so a detach leaves it where it is,
+    # and a collision keeps the survivor's link (migration 599).
+    CurationTable("property_artifact_links", ("account_id",)),
     Dispatches(),
     Pipeline(),
     Dismissals(),
