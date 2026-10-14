@@ -1174,8 +1174,12 @@ class LiveStreamDb(RetireDb):
         super().__init__()
         self.walked: set[str] = set(RT_KEYS)
         self.unread: set[str] = set()
+        self.not_fingerprinted: set[int] = set()
 
     def dispatch(self, sql: str, p: dict[str, Any]) -> list[tuple]:
+        if sql == L.UNREAD_SQL:
+            assert p["generation"] == "rt"
+            return [(lid,) for lid in p["area_ids"] if lid in self.not_fingerprinted]
         if sql == RT_SCOPE_SCAN_SEEN_SQL:
             return [(block,) for block in sorted(self.walked)]
         if sql == S.RC_UNREAD_BLOCKS_SQL:
@@ -1299,3 +1303,22 @@ def test_w8_two_units_the_old_engine_joined_come_apart_for_the_lane_to_merge_eac
     assert _by(body) == {group: "retired"} and out["counts"]["listings_moved_back"] == 3
     assert body["engine_clusters_not_merging"] == [74935, 74936]
     assert {lid: db.listings[lid]["property_id"] for lid in KRKONOSSKA} == KRKONOSSKA
+
+
+def test_w8_a_group_holding_an_advert_the_lane_has_not_fingerprinted_is_left(
+        tmp_path: Path, monkeypatch: Any) -> None:
+    """The block-level wait reads the block's snapshot only: an advert re-located into the town
+    since the lane's last walk of it, or past the walk's row cap (`enter_slice`, 20,000: Brno and
+    Ostrava hold more), is in no snapshot and no group. Read as the engine keeping it apart, the
+    undo would part what the engine never judged; the group is left instead, and reported."""
+    db, g = _stream_world()
+    db.not_fingerprinted = {4}                         # the moved advert of `splits`
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(L, "detach_listings", db.detach_recording(calls))
+    A.run_apply(_factory(db), _rt(db, dry_run="0"), tmp_path)
+    body = json.loads((tmp_path / "apply" / "legacy_retire.json").read_text())
+    by = {x["merge_group_id"]: x for x in body["groups"]}
+    assert by[g["splits"]]["outcome"] == f"skipped:{L.UNREAD}"
+    assert by[g["splits"]]["unread"] == [4] and db.listings[4]["property_id"] == 300
+    assert by[g["mixed"]]["outcome"] == "retired:mixed_deal_type"
+    assert L.UNREAD_SQL in db.statements

@@ -1726,7 +1726,9 @@ def _retire_legacy(
     return legacy_retire.run(conn, scope.blocks, category_types=scope.category_types,
                              dry_run=dry_run, run_id=new_run_id(), out_dir=out_dir,
                              closed=scope_closed,
-                             engine=legacy_retire.EngineMaps(merging, other, why))
+                             engine=legacy_retire.EngineMaps(
+                                 merging, other, why,
+                                 stream=GENERATION if generation == GENERATION else None))
 
 
 def rt_unread_blocks(conn: Any, generation: str, blocks: Iterable[str]) -> set[str]:

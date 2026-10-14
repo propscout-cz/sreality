@@ -323,8 +323,10 @@ name: "AUTODEDUP: engine lane"
 #             `blocks=town:531057`) the step runs ALONE against the live stream's groups - no
 #             plan, no merge, no applied_merges row: the worker's lane re-merges once its interval
 #             is back above 0. No live group is one that run merges, so a legacy group the stream
-#             holds whole is left (engine_agrees, reconciled_by_lane) and an operator "same" pair
-#             is never parted (E907 does not apply). Refused, nothing undone: without blocks=;
+#             holds whole is left (engine_agrees, reconciled_by_lane), an operator "same" pair
+#             (a pair ruling, or a group ruling over both) is never parted (E907 does not apply),
+#             and a group holding an advert the lane has not fingerprinted is left
+#             (unread_by_lane: in no snapshot, so in no group). Refused, nothing undone: without blocks=;
 #             live, when the scope row does not name the blocks (add the area there first, the
 #             lane braked); while the lane has not fully read a named block (never walked, or an
 #             advert there with no fingerprint - the reconcile's own wait); with listing_ids.
