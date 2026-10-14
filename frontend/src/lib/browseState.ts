@@ -37,6 +37,7 @@ import {
   canonicalLayers,
   layersFromSearchParams,
   readRememberedLayers,
+  useRememberedLayers,
   writeRememberedLayers,
 } from '@/lib/mapOverlays';
 import type { Disposition, FilterPreset, ListingPublic } from '@/lib/types';
@@ -116,9 +117,10 @@ export function useUrlBrowseState(): BrowseViewState {
   const filters = useMemo(() => fromSearchParams(searchParams), [searchParams]);
   const sort = useMemo(() => parseSort(searchParams.get('sort')), [searchParams]);
   const tab = (searchParams.get('tab') ?? 'map') as TabKey;
-  /* Read once: another surface rewriting the remembered selection must not
-   * flip this page's layers on its next unrelated URL change. */
-  const [rememberedLayers] = useState(readRememberedLayers);
+  /* The live remembered selection: a bare /browse shows what the operator last
+   * chose on any map, and this page's own writes survive a navigation that drops
+   * the `layers` key. */
+  const [rememberedLayers] = useRememberedLayers();
   const overlay = useMemo<MapOverlayState>(() => {
     const rentVkParam = parseInt(searchParams.get('rentvk') ?? '1', 10);
     return {

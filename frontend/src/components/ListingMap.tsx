@@ -1265,17 +1265,18 @@ export default function ListingMap({
           .addTo(map);
       });
 
-      /* Reference-overlay areas (flood zones, …) sit under the city polygons,
-       * so they answer a click only when nothing drawn above them is hit —
-       * the topmost rendered feature decides. Registered after the rent-map
-       * handler, whose fill lies BELOW the overlays, so this popup wins there. */
+      /* Reference-overlay areas (flood zones, …) answer a click unless a listing
+       * is hit — the topmost rendered feature decides. The city polygon is NOT
+       * in the list: 'Show cities' is on by default and Praha is a curated city,
+       * so it would swallow every flood click in Prague. Registered after the
+       * rent-map and city handlers, so this popup replaces theirs inside an area. */
       map.on('click', (e) => {
         const registry = overlayRegistryRef.current;
         if (!registry) return;
         const fills = overlayFillIds(registry).filter((id) => map.getLayer(id));
         if (fills.length === 0) return;
         const top = map.queryRenderedFeatures(e.point, {
-          layers: [...LISTING_HIT_LAYERS, 'city-fill', ...fills],
+          layers: [...LISTING_HIT_LAYERS, ...fills],
         })[0];
         const owner = top ? overlayFillOwner(registry, top.layer.id) : null;
         if (!top || !owner) return;

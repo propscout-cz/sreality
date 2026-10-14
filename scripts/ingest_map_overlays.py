@@ -138,6 +138,7 @@ select %(layer)s, origin.source_id,
 """
 
 RENDER_SQL = "select map_overlay_render_section(%s)"
+TILE_COUNT_SQL = "select count(*) from map_overlay_tiles"
 
 SECTION_STATS_SQL = """
 select (select count(*)
@@ -171,7 +172,7 @@ class DatumRefused(Refused):
     """PostGIS's S-JTSK transform is off, so no section can be trusted."""
 
 
-class _Transient(Exception):
+class _Transient(requests.RequestException):
     """A response worth retrying (429/5xx, or an ArcGIS error body carrying one)."""
 
 
@@ -287,7 +288,8 @@ class Http:
                     raise RuntimeError(f"ArcGIS error from {url}: {error}")
                 return payload
             except (requests.ConnectionError, requests.Timeout, requests.JSONDecodeError,
-                    _Transient) as exc:
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.ContentDecodingError, _Transient) as exc:
                 if attempt == self.attempts:
                     raise
                 delay = 2.0 ** attempt
@@ -417,8 +419,9 @@ def metro_line_props(a: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def metro_station_props(a: dict[str, Any]) -> dict[str, Any] | None:
-    """Named planned stations; vestibules (druh 3), depots (druh 1) and stav 4 are skipped."""
-    if a.get("druh") != 2 or a.get("stav") == 4:
+    """Named planned stations = station points (druh 2) in the návrh stage (stav 2). Vestibules,
+    depots, existing points and reserve-stage points are skipped (ruling 4)."""
+    if a.get("druh") != 2 or a.get("stav") != 2:
         return None
     name = (a.get("nazev") or "").strip() or None
     label = name.removeprefix(STATION_PREFIX) if name else None
@@ -671,6 +674,12 @@ def write_section(
     return int(rows), tiles, int(max_bytes), int(avg_bytes)
 
 
+def count_tiles(conn: psycopg.Connection) -> int:
+    with conn.cursor() as cur:
+        cur.execute(TILE_COUNT_SQL)
+        return int(cur.fetchone()[0])
+
+
 def run_section(
     conn: psycopg.Connection,
     http: Http,
@@ -768,8 +777,10 @@ def main(argv: list[str] | None = None) -> int:
         if failed:
             LOG.error("RUN done failed=%s", ",".join(failed))
             return 1
-        if not args.dry_run:
-            stamp_derived_artifact(conn, "map_overlay_tiles", rows=tiles,
+        # Only a run over EVERY section refreshes the whole store, so only that run stamps it:
+        # a kraje-only step after a boundaries ingest must not hide a dead quarterly job.
+        if not args.dry_run and keys == list(SOURCES):
+            stamp_derived_artifact(conn, "map_overlay_tiles", rows=count_tiles(conn),
                                    duration_ms=int((time.monotonic() - started) * 1000))
     LOG.info("RUN done sections=%s tiles=%d", ",".join(keys), tiles)
     return 0

@@ -26,6 +26,7 @@ router = APIRouter(
 
 MVT_MEDIA_TYPE = "application/vnd.mapbox-vector-tile"
 CACHE_CONTROL = "private, max-age=31536000, immutable"
+NO_CACHE = "private, no-cache"
 
 # At most nine digits: every bound value fits the int tile columns, so the read stays on the primary key.
 _COORD = re.compile(r"[0-9]{1,9}")
@@ -42,7 +43,7 @@ select section, key, label, sort, legend, scale, variants, feature_count
 """
 
 _TILE_SQL = """
-select s.minzoom, s.maxzoom, t.mvt
+select s.minzoom, s.maxzoom, s.version, t.mvt
   from map_overlay_sections s
   left join map_overlay_tiles t
     on t.section = s.key and t.z = %(z)s and t.x = %(x)s and t.y = %(y)s
@@ -95,15 +96,23 @@ def tile_address(z: str, x: str, y: str) -> tuple[int, int, int]:
 
 @router.get("/{section}/{z}/{x}/{y}.mvt")
 def get_map_overlay_tile(
-    section: str, z: str, x: str, y: str, conn: Any = Depends(deps.get_db_conn)
+    section: str,
+    address: tuple[int, int, int] = Depends(tile_address),
+    v: str | None = None,
+    conn: Any = Depends(deps.get_db_conn),
 ) -> Response:
-    zi, xi, yi = tile_address(z, x, y)
+    # `address` is declared before `conn`, so a malformed tile is refused before a
+    # connection is opened. `v` is the section version the SPA puts in the URL: only a
+    # URL naming the LIVE version may be cached for a year, else a tab open across an
+    # ingest would pin new bytes under the old version's URL.
+    zi, xi, yi = address
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(_TILE_SQL, {"section": section, "z": zi, "x": xi, "y": yi})
         row = cur.fetchone()
     if row is None:
         raise _refuse(404, "unknown_section", "Neznámá vrstva mapy")
-    headers = {"Cache-Control": CACHE_CONTROL}
+    cacheable = v is not None and v == str(row["version"])
+    headers = {"Cache-Control": CACHE_CONTROL if cacheable else NO_CACHE}
     if row["mvt"] is None or not row["minzoom"] <= zi <= row["maxzoom"]:
         return Response(status_code=204, headers=headers)
     return Response(content=row["mvt"], media_type=MVT_MEDIA_TYPE, headers=headers)

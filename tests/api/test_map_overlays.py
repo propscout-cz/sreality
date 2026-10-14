@@ -92,7 +92,9 @@ class _Conn:
     def __init__(self) -> None:
         self.sections: list[dict[str, Any]] = []
         self.layers: list[dict[str, Any]] = []
-        self.tile: dict[str, Any] | None = {"minzoom": 9, "maxzoom": 12, "mvt": MVT}
+        self.tile: dict[str, Any] | None = {
+            "minzoom": 9, "maxzoom": 12, "version": 1760414400, "mvt": MVT,
+        }
         self.statements: list[tuple[str, Any]] = []
 
     def cursor(self, row_factory: Any = None) -> _Cursor:
@@ -209,11 +211,21 @@ def test_tile_is_one_primary_key_read_and_never_a_render(client, conn):
 
 
 def test_tile_without_a_stored_row_is_an_empty_204(client, conn):
-    conn.tile = {"minzoom": 9, "maxzoom": 12, "mvt": None}
-    res = client.get(TILE, headers=AUTH)
+    conn.tile = {"minzoom": 9, "maxzoom": 12, "version": 1760414400, "mvt": None}
+    res = client.get(TILE, params={"v": 1760414400}, headers=AUTH)
     assert res.status_code == 204
     assert res.content == b""
     assert res.headers["cache-control"] == YEAR_IMMUTABLE
+
+
+@pytest.mark.parametrize("params", [{}, {"v": 1}, {"v": "1760414400x"}])
+def test_a_tile_url_not_naming_the_live_version_is_served_but_never_pinned(client, conn, params):
+    """A tab left open across an ingest keeps asking for the old version: it gets the
+    live bytes, but they must not be cached for a year under that URL."""
+    res = client.get(TILE, params=params, headers=AUTH)
+    assert res.status_code == 200
+    assert res.content == MVT
+    assert res.headers["cache-control"] == "private, no-cache"
 
 
 @pytest.mark.parametrize("z", ["8", "13", "999999999"])

@@ -6,7 +6,7 @@
  * first-visit bundle (scripts/bundle-budget.mjs). Nothing here names a layer:
  * adding one is a registry row and an ingest run. */
 
-import { useCallback, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import { apiGet, isApiConfigured } from './api';
@@ -171,17 +171,25 @@ const REMEMBERED_LAYERS_KEY = 'map.layers';
 export const readRememberedLayers = (): string =>
   canonicalLayers(readValue(REMEMBERED_LAYERS_KEY, ''));
 
-export const writeRememberedLayers = (layers: string): void =>
-  writeValue(REMEMBERED_LAYERS_KEY, canonicalLayers(layers));
+/* ONE live copy of the remembered selection per page: two maps mounted at once
+ * (the listing header map and the comparables map) and Browse's fallback all
+ * read this store, so a toggle on one is the selection of every other. */
+const listeners = new Set<() => void>();
+const subscribeRemembered = (listener: () => void): (() => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
 
-/* A map with no URL of its own (listing detail, comparables): the remembered
- * selection, written back on every change. */
+export const writeRememberedLayers = (layers: string): void => {
+  const canonical = canonicalLayers(layers);
+  writeValue(REMEMBERED_LAYERS_KEY, canonical);
+  listeners.forEach((listener) => listener());
+};
+
+/* The remembered selection as live React state; `set` writes it for every subscriber. */
 export function useRememberedLayers(): [string, (next: string) => void] {
-  const [layers, setLayers] = useState(readRememberedLayers);
-  const set = useCallback((next: string) => {
-    const canonical = canonicalLayers(next);
-    writeRememberedLayers(canonical);
-    setLayers(canonical);
-  }, []);
-  return [layers, set];
+  const layers = useSyncExternalStore(subscribeRemembered, readRememberedLayers, readRememberedLayers);
+  return [layers, writeRememberedLayers];
 }

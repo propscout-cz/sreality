@@ -168,8 +168,9 @@ def test_metro_proposals_take_the_letter_from_the_name_and_reserves_are_one_clas
 
 def test_planned_stations_are_labelled_without_the_prefix() -> None:
     props = _props("ipr_metro_stations_query.json", mod.metro_station_props)
-    assert sorted(props, key=lambda p: p["label"]) == [
-        {"class": "station", "name": "Stanice metra Labe", "label": "Labe"},
+    # The fixture's reserve-stage station (Labe, stav 3) is skipped, not drawn as planned.
+    assert props.count(None) == 1
+    assert sorted((p for p in props if p), key=lambda p: p["label"]) == [
         {"class": "station", "name": "Stanice metra Náměstí Míru (D)", "label": "Náměstí Míru (D)"},
         {"class": "station", "name": "Stanice metra Olbrachtova", "label": "Olbrachtova"},
     ]
@@ -184,6 +185,9 @@ def test_cancelled_rows_vestibules_and_depots_are_skipped() -> None:
     assert mod.metro_station_props({"druh": 3, "stav": 2, "nazev": "Vestibul stanice metra Libuš"}) is None
     assert mod.metro_station_props({"druh": 1, "stav": 2, "nazev": "Depo metra Písnice"}) is None
     assert mod.metro_station_props({"druh": 2, "stav": 4, "nazev": "Stanice metra Kačerov"}) is None
+    # Reserve-stage (stav 3) and existing (stav 1) station points are not "planned stations".
+    assert mod.metro_station_props({"druh": 2, "stav": 3, "nazev": "Stanice metra Labe"}) is None
+    assert mod.metro_station_props({"druh": 2, "stav": 1, "nazev": "Stanice metra Florenc"}) is None
 
 
 @pytest.mark.parametrize("attrs", [
@@ -411,6 +415,26 @@ def test_http_retries_an_arcgis_5xx_body_but_not_a_client_error() -> None:
     assert not_found.calls == 1
 
 
+def test_http_retries_a_connection_dropped_mid_body() -> None:
+    session = _Scripted(requests.exceptions.ChunkedEncodingError("Connection broken"),
+                        _Resp(200, {"ok": 1}))
+    assert _http(session).json("https://example.test/q") == {"ok": 1}
+    assert session.calls == 2
+
+
+def test_a_transient_revision_source_degrades_to_none_not_a_failed_section() -> None:
+    """heis.vuv.cz answering 503 on the ISO record must not throw away a finished flood fetch."""
+    def busy(section: mod.Section, ctx: mod.Context) -> date | None:
+        raise mod._Transient("HTTP 503")
+
+    conn = _FakeConn()
+    http = _http(_q5_server())
+    section = dataclasses.replace(_q5_section(), revised_at=busy)
+    mod.run_section(conn, http, mod.ArcGis(http), "flood", section,
+                    dry_run=False, accept_shrink=False)
+    assert conn.params["section"][0]["revised"] is None and conn.log[-1] == "COMMIT"
+
+
 def test_http_gives_up_after_the_last_attempt() -> None:
     session = _Scripted(*[_Resp(502) for _ in range(mod.ATTEMPTS)])
     with pytest.raises(Exception, match="HTTP 502"):
@@ -505,6 +529,7 @@ _TAGS = {
     mod.PRUNE_LAYERS_SQL: "prune", mod.UPSERT_LAYER_SQL: "layer",
     mod.DELETE_FEATURES_SQL: "delete", mod.INSERT_FEATURE_SQL: "insert",
     mod.DISSOLVE_SQL: "dissolve", mod.RENDER_SQL: "render", mod.SECTION_STATS_SQL: "stats",
+    mod.TILE_COUNT_SQL: "tilecount",
 }
 
 
@@ -533,6 +558,7 @@ class _FakeCursor:
             "previous": list(self.conn.previous.items()),
             "render": [(42,)],
             "stats": [(100, 5000, 1200)],
+            "tilecount": [(1234,)],
         }.get(tag, [])
 
     def executemany(self, query: str, rows: list[tuple[Any, ...]]) -> None:
@@ -721,16 +747,32 @@ def test_a_datum_refusal_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen == ["metro"]
 
 
-def test_a_clean_run_exits_zero_and_stamps_the_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_clean_full_run_exits_zero_and_stamps_the_store_wide_tile_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seen: list[str] = []
     stamps: list[tuple[Any, ...]] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))
     monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "count_tiles", lambda conn: 1234)
     monkeypatch.setattr(mod, "stamp_derived_artifact",
                         lambda conn, name, **kw: stamps.append((name, kw["rows"])))
+    assert mod.main([]) == 0
+    assert seen == list(mod.SOURCES)
+    assert stamps == [("map_overlay_tiles", 1234)]
+
+
+def test_a_partial_run_stamps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ingest_boundaries' `--sections kraje` step must not mark metro + flood fresh."""
+    seen: list[str] = []
+    stamps: list[str] = []
+    monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))
+    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "stamp_derived_artifact",
+                        lambda conn, name, **kw: stamps.append(name))
     assert mod.main(["--sections", "kraje"]) == 0
     assert seen == ["kraje"]
-    assert stamps == [("map_overlay_tiles", 7)]
+    assert stamps == []
 
 
 def test_a_dry_run_and_a_failed_run_stamp_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

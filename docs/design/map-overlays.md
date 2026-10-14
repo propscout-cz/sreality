@@ -346,3 +346,15 @@ refresh call in `api/rent_map.py`.
   both popup builders; `.overlay-popup` in `globals.css`; compact chips sit top-left on the two small
   maps; a toast reports a failed registry read while layers are selected; `kraje` stays in
   `OVERLAY_URL_KEYS` so an old link keeps its borders through filter changes.
+- **After the code review (3 Opus lenses, 2026-10-14):** planned stations are station points in the
+  návrh stage only (`druh=2 and stav=2`; the plan's four reserve-stage stations are not drawn);
+  the whole-store artifact is stamped only by a run over EVERY section (a kraje-only step after a
+  boundaries ingest stamps nothing), with the store-wide tile count; a transient ISO-record failure
+  degrades the revision date to NULL instead of failing the section, and a connection dropped
+  mid-body is retried; the tile route validates the address before a connection is opened and pins
+  a tile for a year only when `?v=` names the section's LIVE version (else `private, no-cache`); a
+  click on an overlay area is answered unless a listing is hit (the city polygon no longer swallows
+  flood clicks in Prague); the remembered selection is ONE live store (`useSyncExternalStore`) read
+  by every map and by Browse's fallback, so two maps on one page agree and a navigation to a bare
+  `/browse` keeps the page's own last choice.
+
