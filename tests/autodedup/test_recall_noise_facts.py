@@ -9,7 +9,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from autodedup.d43 import ClusterRelation
 from autodedup.dataset import Listing
+from autodedup.demonstrate import floating_price
 from autodedup.indistinguishable import CLUSTER, GATE, PROMOTE, distinguishing_facts
 from autodedup.settings import Settings
 from autodedup.text_facts import printed_storey_counts
@@ -173,3 +175,57 @@ def test_E955_two_storeys_that_differ_keep_the_price() -> None:
     a = kolben(1, "idnes", 19_990.0, 0, 21, floor=1)
     b = kolben(2, "sreality", 18_990.0, 21, 49, floor=3)
     assert {"floor", "price"} <= set(names(a, b, CLUSTER))
+
+
+# --- E956: a price re-converted from another currency every day is one price ---------------
+# 81968 (Praha-Nusle, 850 m² office): sreality re-converts the EUR rent at every scrape, idnes
+# converted it once on 2026-06-07 and never again.
+SREALITY_EUR = [308266.0, 308392.0, 308329.0, 308772.0, 309026.0, 308392.0, 309215.0, 309532.0,
+                309849.0, 309785.0, 309089.0, 308709.0]
+OFFICE = ("Pronájem kanceláře 850 m², Praha 4 - Pankrác, v moderní administrativní budově s "
+          "recepcí, klimatizací a parkováním v podzemních garážích.")
+
+
+def office(listing_id: int, source: str, path: list[float], **fields: object) -> Listing:
+    history = [[stamp(day), price] for day, price in enumerate(path)]
+    raw: dict[str, object] = {"category_main": "komercni", "category_type": "pronajem",
+                              "area_m2": 850.0, "price_history": history}
+    return advert(listing_id, source, OFFICE, first=0, last=120, price=path[-1],
+                  **{**raw, **fields})
+
+
+def relation_ok(a: Listing, b: Listing) -> bool:
+    return ClusterRelation({a.id: a, b.id: b}, None, W31).ok(a.id, b.id)
+
+
+def test_E956_a_path_of_small_moves_both_ways_floats_and_a_seller_s_does_not() -> None:
+    assert floating_price(office(81918, "sreality", SREALITY_EUR), W31.d43_price_path_tol)
+    assert not floating_price(office(1, "idnes", [306114.0]), W31.d43_price_path_tol)
+    # A seller's re-pricing: round steps, one way.
+    cuts = [320000.0, 310000.0, 300000.0, 295000.0, 290000.0, 285000.0]
+    assert not floating_price(office(2, "idnes", cuts), W31.d43_price_path_tol)
+
+
+def test_E956_a_floating_rent_and_its_one_conversion_are_one_price() -> None:
+    a = office(81918, "sreality", SREALITY_EUR)
+    b = office(250719, "idnes", [306114.0])
+    assert relation_ok(a, b)
+
+
+def test_E956_two_seller_prices_a_rounding_apart_still_conflict() -> None:
+    # 46208 (Vysočany): two units of one development at 19,373,005 and 19,054,735, co-live.
+    a = office(19280, "sreality", [19_373_005.0], category_main="byt", category_type="prodej")
+    b = office(34490, "sreality", [19_054_735.0], category_main="byt", category_type="prodej")
+    assert not relation_ok(a, b)
+
+
+def test_E956_two_floating_rents_of_one_portal_were_converted_at_one_rate() -> None:
+    a = office(1, "sreality", SREALITY_EUR)
+    b = office(2, "sreality", [p * 1.02 for p in SREALITY_EUR])
+    assert not relation_ok(a, b)
+
+
+def test_E956_beyond_the_cross_portal_bar_a_floating_rent_still_conflicts() -> None:
+    a = office(81918, "sreality", SREALITY_EUR)
+    b = office(250719, "idnes", [290000.0])
+    assert not relation_ok(a, b)

@@ -402,6 +402,25 @@ PRICE_COLIVE_MAX_GAP: float = 0.20
 RECOVER_MIN_BODY_CHARS: int = 200
 
 
+# E956: how many moves make a path a CONVERSION rather than a seller's re-pricing.
+FLOATING_MIN_MOVES: int = 4
+
+
+def floating_price(listing: Listing, tol: float) -> bool:
+    """E956: an asking price re-converted from another currency at every scrape.
+
+    Sreality re-converts a EUR rent each day: one Pankrác office reads 238,196, 238,343,
+    237,951 ... 239,028, 238,881 — a hundred moves in five months, nearly every one under the
+    width of one amount (`d43_price_path_tol`), in both directions. A seller re-prices in round
+    steps; a path that moves at least four times by less than one amount, up as well as down,
+    is an exchange rate, not a price list."""
+    points = [float(p) for _when, p in listing.price_history if p]
+    small = [(right - left) / max(left, right) for left, right in zip(points, points[1:])]
+    small = [step for step in small if step and abs(step) <= tol]
+    return (len(small) >= FLOATING_MIN_MOVES
+            and any(step > 0 for step in small) and any(step < 0 for step in small))
+
+
 def price_conflict(
     a: Listing,
     b: Listing,
@@ -412,12 +431,23 @@ def price_conflict(
     """Two prices both adverts STATE, never reconciled, and too close to be two prices of one
     unit. The cluster-grain half of E157's price limb: the pairwise filter stops a promotion,
     and a group is built transitively, so without this the three Hlubočky houses still meet
-    through a sixth portal whose 5 % cross-portal slack covers the 2 % between them."""
+    through a sixth portal whose 5 % cross-portal slack covers the 2 % between them.
+
+    E956: where a price FLOATS, the two are one foreign-currency price converted on two days,
+    and the gap is read at the cross-portal bar E160 tightened only for prices a seller wrote:
+    308,709 on sreality against 306,114 converted once by idnes is one 850 m² office. Two that
+    float on ONE portal were converted on the same day at the same rate, so their gap is the
+    sellers' and stays a conflict."""
     if price_demonstrated(a, b, settings, paths_agree, overlap):
         return False
     if not (a.price and b.price):
         return False
-    return rel_diff(float(a.price), float(b.price)) <= PRICE_COLIVE_MAX_GAP
+    gap = rel_diff(float(a.price), float(b.price))
+    floats = (floating_price(a, settings.d43_price_path_tol),
+              floating_price(b, settings.d43_price_path_tol))
+    if gap <= PRICE_CROSS_TOL and any(floats) and not (all(floats) and a.source == b.source):
+        return False
+    return gap <= PRICE_COLIVE_MAX_GAP
 
 
 # E164: which of the A-limb's refusals is a DISAGREEMENT and which is only a silence. On the
