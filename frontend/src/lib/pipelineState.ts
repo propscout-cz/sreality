@@ -7,7 +7,8 @@
  *
  * Param names and encodings are Browse's, not new ones: `status`, `cat`,
  * `collections` (Browse's own CSV of collection ids, parsed by its
- * `parseIntList`), and the `districts` / `districts_ctx` / `districts_excl` /
+ * `parseIntList`), `tags` / `tags_excluded` (the tag rule's two sides,
+ * lib/tagScope), and the `districts` / `districts_ctx` / `districts_excl` /
  * `districts_lvl` / `districts_id` CSV family that `districtChipsToCsvParams` +
  * `parseDistrictChips` already define as "the one wire format every
  * location-filterable surface uses". Same meaning, same spelling, everywhere.
@@ -30,6 +31,7 @@ import {
   PIPELINE_SORT_OPTIONS,
   type PipelineSort,
 } from './pipelineSort';
+import type { TagChoice } from './tagScope';
 
 const DISTRICT_PARAMS = [
   'districts',
@@ -44,11 +46,13 @@ export interface PipelineViewState {
   types: ReadonlySet<string>;
   districts: DistrictChip[];
   collectionIds: number[];
+  tagChoice: TagChoice;
   sort: PipelineSort;
   setStatus: (next: ListingStatus) => void;
   setTypes: (next: string[]) => void;
   setDistricts: (next: DistrictChip[]) => void;
   setCollections: (next: number[]) => void;
+  setTagChoice: (next: TagChoice) => void;
   setSort: (next: PipelineSort) => void;
   reset: () => void;
 }
@@ -59,6 +63,8 @@ export function usePipelineViewState(): PipelineViewState {
   const status = (searchParams.get('status') as ListingStatus | null) ?? 'any';
   const typesParam = searchParams.get('cat');
   const collectionsParam = searchParams.get('collections');
+  const tagsParam = searchParams.get('tags');
+  const tagsExcludedParam = searchParams.get('tags_excluded');
   const sortParam = searchParams.get('sort');
 
   const types = useMemo(
@@ -67,6 +73,11 @@ export function usePipelineViewState(): PipelineViewState {
   );
 
   const collectionIds = useMemo(() => parseIntList(collectionsParam), [collectionsParam]);
+
+  const tagChoice = useMemo<TagChoice>(
+    () => ({ tags: parseIntList(tagsParam), tagsExcluded: parseIntList(tagsExcludedParam) }),
+    [tagsParam, tagsExcludedParam],
+  );
 
   /* Rebuilt from the five district params rather than from a single joined
    * string, so a chip's admin id / level / exclusion survives a reload — the
@@ -127,6 +138,17 @@ export function usePipelineViewState(): PipelineViewState {
     [patch],
   );
 
+  const setTagChoice = useCallback(
+    (next: TagChoice) =>
+      patch((sp) => {
+        if (next.tags.length === 0) sp.delete('tags');
+        else sp.set('tags', next.tags.join(','));
+        if (next.tagsExcluded.length === 0) sp.delete('tags_excluded');
+        else sp.set('tags_excluded', next.tagsExcluded.join(','));
+      }),
+    [patch],
+  );
+
   const setDistricts = useCallback(
     (next: DistrictChip[]) =>
       patch((sp) => {
@@ -166,7 +188,9 @@ export function usePipelineViewState(): PipelineViewState {
   const reset = useCallback(
     () =>
       patch((sp) => {
-        for (const p of ['status', 'cat', 'collections', ...DISTRICT_PARAMS]) sp.delete(p);
+        for (const p of ['status', 'cat', 'collections', 'tags', 'tags_excluded', ...DISTRICT_PARAMS]) {
+          sp.delete(p);
+        }
       }),
     [patch],
   );
@@ -176,11 +200,13 @@ export function usePipelineViewState(): PipelineViewState {
     types,
     districts,
     collectionIds,
+    tagChoice,
     sort,
     setStatus,
     setTypes,
     setDistricts,
     setCollections,
+    setTagChoice,
     setSort,
     reset,
   };

@@ -2377,6 +2377,25 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "sql_kind": null
     },
     {
+      "id": "tags_excluded",
+      "type": "int_list",
+      "pg_column": null,
+      "default": null,
+      "description": "The other side of `tags`: drop every property that carries ANY listed tag. Combines with `tags` ('tagged k prohlídce, not tagged odmítnuto'). Empty list / null = no exclusion. BROWSE-only, like `tags`.",
+      "category": "Curation",
+      "ui_control": "multiselect",
+      "agendas": [
+        "browse"
+      ],
+      "constraints": null,
+      "unit": null,
+      "basis": null,
+      "enum_values": null,
+      "aliases": [],
+      "nullable": false,
+      "sql_kind": null
+    },
+    {
       "id": "collections",
       "type": "int_list",
       "pg_column": null,

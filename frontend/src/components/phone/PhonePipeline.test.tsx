@@ -30,12 +30,14 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   getNotificationUnreadCount: vi.fn(),
   movePipelineCard: vi.fn(),
   removePipelineCard: vi.fn(),
+  listTags: vi.fn(),
 }));
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
   fetchPipelineStages: vi.fn(),
   fetchPipelineBoard: vi.fn(),
   fetchListingCovers: vi.fn(),
+  fetchPropertyTagMemberSet: vi.fn(),
 }));
 vi.mock('@/lib/pinAudit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
@@ -153,6 +155,10 @@ beforeEach(() => {
   vi.mocked(queries.fetchListingCovers).mockResolvedValue(new Map());
   vi.mocked(api.movePipelineCard).mockResolvedValue({ property_id: 42, stage_id: 2, stage_key: 'viewing' });
   vi.mocked(api.removePipelineCard).mockResolvedValue({ removed: true });
+  vi.mocked(api.listTags).mockResolvedValue({
+    data: [{ id: 5, name: 'k prohlídce', color: 'copper', created_at: '2026-05-01T00:00:00Z', listing_count: 1 }],
+  });
+  vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
 });
 
 afterEach(() => {
@@ -296,5 +302,17 @@ describe('phone pipeline', () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
     fireEvent.click(screen.getByRole('button', { name: 'Zkusit znovu' }));
     expect(await screen.findByRole('tablist', { name: 'Fáze' })).toBeInTheDocument();
+  });
+
+  /* The board card's tags, in the phone's container: the chips row is the tap
+     that opens the one assign list as a bottom sheet (rule #18). */
+  it('prints a card\'s tags and opens the tag sheet from them', async () => {
+    renderPipeline();
+    const chips = await screen.findByRole('button', { name: 'Štítky: k prohlídce, upravit' });
+    expect(within(chips).getByText('k prohlídce')).toBeInTheDocument();
+    fireEvent.click(chips);
+    const sheet = await screen.findByRole('dialog', { name: 'Štítky' });
+    expect(within(sheet).getByRole('textbox', { name: 'Najít nebo vytvořit štítek' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: /k prohlídce/, pressed: true })).toBeInTheDocument();
   });
 });

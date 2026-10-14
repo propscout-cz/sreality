@@ -121,10 +121,14 @@ describe('priceNullTolerantOr', () => {
  * predicate would match a DIFFERENT listing. Pin the filter column here. */
 describe('applyPrefilters (prefilter id-spaces)', () => {
   const record = () => {
-    const calls: Array<{ col: string; vals: readonly unknown[] }> = [];
+    const calls: Array<{ col: string; vals: readonly unknown[] } | { not: [string, string, string] }> = [];
     const q = {
       in(col: string, vals: readonly unknown[]) {
         calls.push({ col, vals });
+        return q;
+      },
+      not(col: string, op: 'in', v: string) {
+        calls.push({ not: [col, op, v] });
         return q;
       },
     };
@@ -133,6 +137,7 @@ describe('applyPrefilters (prefilter id-spaces)', () => {
   const base: BrowsePrefilters = {
     obecIds: null,
     propertyIds: null,
+    propertyIdsExcluded: null,
     empty: false,
   };
 
@@ -151,7 +156,7 @@ describe('applyPrefilters (prefilter id-spaces)', () => {
       { col: 'obec_id', vals: [500] },
       { col: 'property_id', vals: [7] },
     ]);
-    expect(calls.some((c) => c.col === 'sreality_id')).toBe(false);
+    expect(calls.some((c) => 'col' in c && c.col === 'sreality_id')).toBe(false);
   });
 
   it('applies no id filter when every prefilter is inactive (null)', () => {
@@ -164,6 +169,20 @@ describe('applyPrefilters (prefilter id-spaces)', () => {
     const { q, calls } = record();
     applyPrefilters(q, { ...base, propertyIds: [] });
     expect(calls).toEqual([{ col: 'property_id', vals: [] }]);
+  });
+
+  /* Migration 598: the one denylist rides as `not in` on the same column; an
+   * empty one drops nothing, so it emits nothing. */
+  it('applies the denylist as a not-in on property_id, after the allowlists', () => {
+    const { q, calls } = record();
+    applyPrefilters(q, { ...base, propertyIds: [7, 8], propertyIdsExcluded: [8, 9] });
+    expect(calls).toEqual([
+      { col: 'property_id', vals: [7, 8] },
+      { not: ['property_id', 'in', '(8,9)'] },
+    ]);
+    const empty = record();
+    applyPrefilters(empty.q, { ...base, propertyIdsExcluded: [] });
+    expect(empty.calls).toEqual([]);
   });
 });
 
@@ -730,7 +749,7 @@ describe('dismissed properties are hidden at the source', () => {
   });
 
   it('puts the flag on the one Stats/map argument object', () => {
-    const resolved = { obec_ids_filter: null, property_ids_filter: null };
+    const resolved = { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null };
     expect(buildBrowseStatsArgs(DEFAULT_FILTERS, resolved).hide_dismissed).toBe(true);
     expect(buildBrowseStatsArgs(revealed, resolved).hide_dismissed).toBe(false);
   });
@@ -741,7 +760,7 @@ describe('dismissed properties are hidden at the source', () => {
  * list and were silently dropped on the way to the two aggregate RPCs, whose
  * parameters have existed since migrations 133/439. */
 describe('buildBrowseStatsArgs sends the size bounds', () => {
-  const resolved = { obec_ids_filter: null, property_ids_filter: null };
+  const resolved = { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null };
 
   it('passes every Size-group bound through', () => {
     const args = buildBrowseStatsArgs({
@@ -854,9 +873,28 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     });
     await fetchBrowseStats({ ...DEFAULT_FILTERS, tags: [5, 6] });
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
-    /* property_tags_public, not the properties_with_tags RPC, whose body
-     * truncates at 5000 rows under a comment claiming exhaustiveness. */
+    expect(rpcArgs[0].property_ids_excluded).toBeNull();
+    /* The whole member map (the one every tag chip renders from), not the
+     * properties_with_tags RPC, whose body truncated at 5000 rows under a
+     * comment claiming exhaustiveness. */
     expect(supabase.from).toHaveBeenCalledWith('property_tags_public');
+  });
+
+  it('sends the excluded tags as the denylist (migration 598), beside any allowlist', async () => {
+    const { rpcArgs } = stubReads({
+      property_tags_public: [
+        { property_id: 1, tag_id: 5 },
+        { property_id: 1, tag_id: 6 },
+        { property_id: 2, tag_id: 5 },
+        { property_id: 3, tag_id: 6 },
+      ],
+    });
+    await fetchBrowseStats({ ...DEFAULT_FILTERS, tagsExcluded: [6] });
+    expect(rpcArgs[0].property_ids_filter).toBeNull();
+    expect(rpcArgs[0].property_ids_excluded).toEqual([1, 3]);
+    await fetchBrowseStats({ ...DEFAULT_FILTERS, tags: [5], tagsExcluded: [6] });
+    expect(rpcArgs[1].property_ids_filter).toEqual([1, 2]);
+    expect(rpcArgs[1].property_ids_excluded).toEqual([1, 3]);
   });
 
   it('intersects the curated sets: a property must satisfy both', async () => {
@@ -898,7 +936,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
   it('sends the portal rule\'s two inputs without a broker', () => {
     const args = buildBrowseStatsArgs(
       { ...DEFAULT_FILTERS, portals: ['idnes'], status: 'inactive' },
-      { obec_ids_filter: null, property_ids_filter: null },
+      { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null },
     );
     expect(args.portal_filter).toEqual(['idnes']);
     expect([args.active_only_filter, args.inactive_only_filter]).toEqual([false, true]);

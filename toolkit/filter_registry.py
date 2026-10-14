@@ -1655,6 +1655,21 @@ def _build_registry() -> dict[str, FilterDef]:
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(
+            id="tags_excluded",
+            type=FilterType.INT_LIST,
+            pg_column=None,  # the tag rule's second side: a property-id DENYLIST (migration 598)
+            default=None,
+            description=(
+                "The other side of `tags`: drop every property that carries ANY "
+                "listed tag. Combines with `tags` ('tagged k prohlídce, not "
+                "tagged odmítnuto'). Empty list / null = no exclusion. BROWSE-only, "
+                "like `tags`."
+            ),
+            category=CATEGORY_CURATION,
+            ui_control=UiControl.MULTISELECT,
+            agendas=frozenset({Agenda.BROWSE}),
+        ),
+        FilterDef(
             id="collections",
             type=FilterType.INT_LIST,
             pg_column=None,  # prefilter via collection_properties_public (mig 202)

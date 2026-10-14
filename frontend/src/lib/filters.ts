@@ -284,6 +284,8 @@ export interface ListingFilters {
    * every selected tag id. Stored as ids (not names) so renames /
    * recolour-by-delete-recreate stay queryable. */
   tags: number[];
+  /* The other side (lib/tagScope): a listing must carry NONE of these. */
+  tagsExcluded: number[];
   /* Browse-only collection scope (rule #18). Empty = off. Like `pipeline`
    * above, a lens over operator state, so it sits outside preset identity. */
   collections: number[];
@@ -374,6 +376,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   pipeline: null,
   brokerId: null,
   tags: [],
+  tagsExcluded: [],
   collections: [],
   bounds: null,
   locationMode: 'viewport',
@@ -654,6 +657,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     pipeline: parsePipelineScope(sp.get('pipeline')),
     brokerId: parseIntOrNull(sp.get('broker')),
     tags: parseIntList(sp.get('tags')),
+    tagsExcluded: parseIntList(sp.get('tags_excluded')),
     collections: parseIntList(sp.get('collections')),
     bounds: parseBounds(sp.get('bbox')),
     locationMode: sp.get('locmode') === 'center_radius'
@@ -893,6 +897,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   }
   if (f.brokerId != null) sp.set('broker', String(f.brokerId));
   if (f.tags.length) sp.set('tags', f.tags.join(','));
+  if (f.tagsExcluded.length) sp.set('tags_excluded', f.tagsExcluded.join(','));
   if (f.collections.length) sp.set('collections', f.collections.join(','));
   if (f.bounds) {
     const { west, south, east, north } = f.bounds;
@@ -1347,6 +1352,7 @@ export const REGISTRY_KEY_MAP = {
   show_dismissed: 'showDismissed',
   pipeline: 'pipeline',
   tags: 'tags',
+  tags_excluded: 'tagsExcluded',
   collections: 'collections',
   tom_days_min: 'tomDaysMin',
   tom_days_max: 'tomDaysMax',
@@ -1481,7 +1487,7 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
     label: 'recently added/changed',
   },
   { test: (f) => f.tomDaysMin != null || f.tomDaysMax != null, label: 'time on market' },
-  { test: (f) => f.tags.length > 0, label: 'tags' },
+  { test: (f) => f.tags.length > 0 || f.tagsExcluded.length > 0, label: 'tags' },
   { test: (f) => f.priceGrowthRules.length > 0, label: 'market growth (datasets)' },
   { test: (f) => f.withEstimates, label: 'with estimates' },
   /* A watchdog never surfaces a dismissed property, whatever the spec says. */

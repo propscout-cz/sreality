@@ -45,12 +45,14 @@ import {
 } from '@/lib/phonePipeline';
 import { TAB_BAR_SPACE } from '@/lib/phoneShell';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
+import { useCardTags } from '@/lib/useCardTags';
+import TagChip from '@/components/curation/TagChip';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
 import { PHOTO_DARK } from './CardPhotoStrip';
 import { feedDelta, feedLayout, feedMfYield, feedPrice } from './FeedCard';
-import { StageSheet, type SheetSubject } from './FeedSheets';
+import { StageSheet, TagSheet, type SheetSubject } from './FeedSheets';
 import PhonePipelineSkeleton from './PhonePipelineSkeleton';
 import { usePhoneHeaderAside } from './PhoneShell';
 import StageWash from './StageWash';
@@ -141,7 +143,11 @@ function StagePager({ pages, stages }: { pages: StagePage[]; stages: PipelineSta
   const pagerRef = useRef<HTMLDivElement>(null);
   const remembered = useRef(readLastStage());
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [sheetFor, setSheetFor] = useState<{ card: PipelineBoardCard; subject: SheetSubject } | null>(null);
+  const [sheetFor, setSheetFor] = useState<{
+    kind: 'stage' | 'tags';
+    card: PipelineBoardCard;
+    subject: SheetSubject;
+  } | null>(null);
 
   const found = activeId == null ? -1 : pages.findIndex((p) => p.stage.id === activeId);
   const active = found >= 0 ? found : initialStageIndex(pages, remembered.current);
@@ -305,17 +311,21 @@ function StagePager({ pages, stages }: { pages: StagePage[]; stages: PipelineSta
             count={pages.length}
             stages={stages}
             subjectId={sheetCard?.property_id ?? null}
-            onStage={(card, subject) => setSheetFor({ card, subject })}
+            onStage={(card, subject) => setSheetFor({ kind: 'stage', card, subject })}
+            onTags={(card, subject) => setSheetFor({ kind: 'tags', card, subject })}
           />
         ))}
       </div>
 
-      {sheetFor && sheetCard && (
+      {sheetFor?.kind === 'stage' && sheetCard && (
         <StageSheet
           subject={sheetFor.subject}
           stageId={sheetCard.stage_id}
           onClose={() => setSheetFor(null)}
         />
+      )}
+      {sheetFor?.kind === 'tags' && sheetCard && (
+        <CardTagSheet subject={sheetFor.subject} onClose={() => setSheetFor(null)} />
       )}
     </div>
   );
@@ -328,6 +338,7 @@ function StagePageView({
   stages,
   subjectId,
   onStage,
+  onTags,
 }: {
   page: StagePage;
   index: number;
@@ -335,6 +346,7 @@ function StagePageView({
   stages: PipelineStage[];
   subjectId: number | null;
   onStage: (card: PipelineBoardCard, subject: SheetSubject) => void;
+  onTags: (card: PipelineBoardCard, subject: SheetSubject) => void;
 }) {
   const { stage, cards } = page;
   const ref = useRef<HTMLElement>(null);
@@ -378,6 +390,7 @@ function StagePageView({
               badge={badge}
               subject={c.property_id === subjectId}
               onStage={onStage}
+              onTags={onTags}
             />
           ))}
         </div>
@@ -396,12 +409,14 @@ function PipelinePhoneCard({
   badge,
   subject,
   onStage,
+  onTags,
 }: {
   card: PipelineBoardCard;
   stage: PipelineStage;
   badge: string;
   subject: boolean;
   onStage: (card: PipelineBoardCard, subject: SheetSubject) => void;
+  onTags: (card: PipelineBoardCard, subject: SheetSubject) => void;
 }) {
   const { coverFor } = useCardHydration();
   const src = coverFor(card.listing_id);
@@ -415,6 +430,7 @@ function PipelinePhoneCard({
   const days = fmtDaysInStage(daysInStage(card.entered_stage_at));
   const mf = feedMfYield(card);
   const text = [layout, place].filter(Boolean).join(' · ');
+  const sheetSubject: SheetSubject = { property_id: card.property_id, text, figure: price.text ? priceLabel : null };
 
   return (
     <article
@@ -470,12 +486,13 @@ function PipelinePhoneCard({
           {mf && <span title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)">{mf}</span>}
           {!card.is_active && <span>neaktivní</span>}
         </p>
+        <PhoneCardTags property_id={card.property_id} onOpen={() => onTags(card, sheetSubject)} />
       </div>
       <button
         type="button"
         aria-haspopup="dialog"
         aria-label={`Fáze ${stage.label}, změnit`}
-        onClick={() => onStage(card, { property_id: card.property_id, text, figure: price.text ? priceLabel : null })}
+        onClick={() => onStage(card, sheetSubject)}
         className="card-action group flex h-12 w-[52px] shrink-0 items-center justify-center gap-0.5 self-center text-[var(--st)]"
       >
         <span aria-hidden className={`${BADGE} group-active:bg-[var(--st-soft)]`}>
@@ -485,6 +502,47 @@ function PipelinePhoneCard({
       </button>
     </article>
   );
+}
+
+/* The card's tags as chips — the board card's row (useCardTags), in the
+ * phone's type size — and the tap that opens the tag sheet. */
+function PhoneCardTags({ property_id, onOpen }: { property_id: number; onOpen: () => void }) {
+  const { membersQ, mine } = useCardTags(property_id);
+  if (readFailed(membersQ)) {
+    return (
+      <button
+        type="button"
+        onClick={() => void membersQ.refetch()}
+        className="card-action mt-1 self-start text-[12px] text-[var(--color-brick)]"
+      >
+        Štítky se nepodařilo načíst — zkusit znovu
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-haspopup="dialog"
+      aria-label={mine.length ? `Štítky: ${mine.map((t) => t.name).join(', ')}, upravit` : 'Přidat štítek'}
+      onClick={onOpen}
+      className="card-action mt-1 flex flex-wrap items-center gap-1 self-start text-left text-[12px] leading-none"
+    >
+      {mine.length ? (
+        mine.map((t) => <TagChip key={t.id} tag={t} />)
+      ) : (
+        <span className="rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule)] px-1.5 leading-[1.5] text-[var(--color-ink-4)]">
+          + štítek
+        </span>
+      )}
+    </button>
+  );
+}
+
+/* The sheet reads the membership itself: it acts on the property as the map
+ * holds it NOW, not as the card read it when tapped. */
+function CardTagSheet({ subject, onClose }: { subject: SheetSubject; onClose: () => void }) {
+  const { memberIds } = useCardTags(subject.property_id);
+  return <TagSheet subject={subject} memberIds={memberIds} onClose={onClose} />;
 }
 
 function Notice({

@@ -5,7 +5,7 @@
  * refuses to focus a hidden element, jsdom does not care. These pin the
  * ordering (focus only once positioned) and the restore. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createRef, useState } from 'react';
 import AnchoredPopover from './AnchoredPopover';
 
@@ -55,6 +55,21 @@ describe('<AnchoredPopover>', () => {
   it('has no group role when it has no name', () => {
     render(<Harness />);
     expect(screen.queryByRole('group')).toBeNull();
+  });
+
+  /* A transient layer opened FROM the panel — the tag-edit popover on an
+   * assign-list row — is portalled beside it, so `contains` says "outside";
+   * the `[data-transient-layer]` marker says it is ours. */
+  it('stays open on a press inside a nested transient layer, closes on a genuine outside press', () => {
+    render(<Harness label="Menu" />);
+    const nested = document.createElement('div');
+    nested.setAttribute('data-transient-layer', '');
+    document.body.appendChild(nested);
+    fireEvent.pointerDown(nested);
+    expect(screen.getByRole('group', { name: 'Menu' })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('group')).toBeNull();
+    nested.remove();
   });
 
   it('hands focus back to the anchor when it closes', () => {
