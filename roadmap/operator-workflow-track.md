@@ -9,9 +9,13 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
 - **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),
-  a single-valued sibling of notes: `GET/PUT/DELETE /properties/{id}/artifact-link`, a row between
+  a single-valued sibling of notes: `PUT/DELETE /properties/{id}/artifact-link`, a row between
   tags and notes on the property page and the phone page (`ArtifactLinkRow`), drawn as an anchor
   only when it parses as http(s). Carried across a merge (the survivor's link wins a collision).
+  Read as ONE whole set (`GET /artifact-links`, `lib/useArtifactLinks`) — the shape every
+  curation fact is read in — so the pipeline board's card and the phone board's card print it as
+  a small button (`ArtifactLinkButton`, new tab) for one request, not one per card; the
+  per-property GET went with it.
 - **Next (unscheduled):** Browse cards and the Chrome-extension panel do not show it.
 
 ### Phase U-TAGS: Tags unified, on the pipeline board (done, 2026-10-14)

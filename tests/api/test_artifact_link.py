@@ -139,22 +139,28 @@ class _Conn:
 _ROW = (42, _URL, datetime(2026, 10, 14, 8, 0), datetime(2026, 10, 14, 9, 0))
 
 
-def test_get_returns_the_link_or_an_explicit_none():
-    conn = _Conn([(lambda q: "RECURSIVE chain" in q, [(42, 42)]),
-                  (lambda q: "FROM property_artifact_links" in q, [_ROW])])
-    assert curation.get_artifact_link(conn, 42) == {"data": {
+def test_list_returns_every_link_of_the_caller_as_one_set():
+    """The whole set, RLS-scoped, no property filter: the board reads it once for every card,
+    the property page reads the same entry. An empty account is an empty list, never None."""
+    conn = _Conn([(lambda q: "FROM property_artifact_links" in q, [_ROW, (43, "https://x.cz/", _ROW[2], _ROW[3])])])
+    out = curation.list_artifact_links(conn)
+    assert [l["property_id"] for l in out["data"]] == [42, 43]
+    assert out["data"][0] == {
         "property_id": 42, "url": _URL,
-        "created_at": "2026-10-14T08:00:00", "updated_at": "2026-10-14T09:00:00"}}
-    empty = _Conn([(lambda q: "RECURSIVE chain" in q, [(42, 42)])])
-    assert curation.get_artifact_link(empty, 42) == {"data": None}
+        "created_at": "2026-10-14T08:00:00", "updated_at": "2026-10-14T09:00:00"}
+    sql = conn.executed[0][0]
+    assert "WHERE" not in sql and "ORDER BY property_id" in sql
+    assert curation.list_artifact_links(_Conn([])) == {"data": []}
 
 
-def test_get_follows_a_merged_away_id_to_its_survivor():
-    conn = _Conn([(lambda q: "RECURSIVE chain" in q, [(99, 42)]),
-                  (lambda q: "FROM property_artifact_links" in q, [_ROW])])
-    curation.get_artifact_link(conn, 99)
-    read = [p for q, p in conn.executed if "FROM property_artifact_links" in q]
-    assert read == [(42,)]
+def test_the_list_route_is_the_read(client, monkeypatch):
+    monkeypatch.setattr(curation, "list_artifact_links", lambda conn: {"data": [
+        {"property_id": 42, "url": _URL,
+         "created_at": "2026-10-14T00:00:00+00:00", "updated_at": "2026-10-14T00:00:00+00:00"}]})
+    res = client.get("/artifact-links")
+    assert res.status_code == 200
+    assert [l["property_id"] for l in res.json()["data"]] == [42]
+    assert client.get("/properties/42/artifact-link").status_code in (404, 405)
 
 
 def test_set_is_an_upsert_on_the_account_property_key_that_names_its_owner():

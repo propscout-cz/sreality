@@ -33,6 +33,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listTags: vi.fn(),
     attachTag: vi.fn(),
     detachTag: vi.fn(),
+    fetchArtifactLinks: vi.fn(),
   };
 });
 
@@ -245,6 +246,7 @@ describe('<Pipeline> board', () => {
     vi.mocked(api.attachTag).mockResolvedValue({ attached: true });
     vi.mocked(api.detachTag).mockResolvedValue({ detached: true });
     vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(new Map());
     vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
     vi.mocked(api.movePipelineCard).mockResolvedValue({
@@ -756,5 +758,22 @@ describe('<Pipeline> board', () => {
     fireEvent.click(retries[0]);
     await waitFor(() => expect(screen.queryByText('Lesní')).not.toBeInTheDocument());
     expect(screen.getByText('Sadová')).toBeInTheDocument();
+  });
+
+  /* The property's Artifact link (migration 599) on its card: a small button to
+     the page the operator keeps about it, in a new tab, only when there is one. */
+  it('shows a card\'s artifact link as a small button that opens in a new tab', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(
+      new Map([[42, { property_id: 42, url: 'https://claude.ai/artifact/abc123', created_at: '2026-10-14T00:00:00Z', updated_at: '2026-10-14T00:00:00Z' }]]),
+    );
+    renderBoard();
+    const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
+    expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
+    expect(button).toHaveAttribute('target', '_blank');
+    expect(button).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(button).toHaveTextContent('Artifact');
+    // The card without a link offers nothing.
+    expect(screen.getAllByRole('link', { name: /^Artifact:/ })).toHaveLength(1);
   });
 });

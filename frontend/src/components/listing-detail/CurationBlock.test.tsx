@@ -20,7 +20,7 @@ vi.mock('@/lib/api', async (orig) => ({
   listPropertyNotes: vi.fn(),
   createPropertyNote: vi.fn(),
   deletePropertyNote: vi.fn(),
-  getPropertyArtifactLink: vi.fn(),
+  fetchArtifactLinks: vi.fn(),
   setPropertyArtifactLink: vi.fn(),
   deletePropertyArtifactLink: vi.fn(),
   uploadNoteAttachment: vi.fn(),
@@ -40,7 +40,7 @@ import {
   deletePropertyArtifactLink,
   deletePropertyNote,
   fetchNoteAttachmentBlob,
-  getPropertyArtifactLink,
+  fetchArtifactLinks,
   listCollections,
   listPropertyNotes,
   listTags,
@@ -66,7 +66,7 @@ const LINK: ArtifactLink = {
 };
 
 function mockReads() {
-  vi.mocked(getPropertyArtifactLink).mockResolvedValue({ data: null });
+  vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map());
   vi.mocked(listCollections).mockResolvedValue({ data: [] } as never);
   vi.mocked(listTags).mockResolvedValue({ data: [TAG] } as never);
   vi.mocked(listPropertyNotes).mockResolvedValue({ data: [NOTE] } as never);
@@ -334,7 +334,7 @@ describe('<CurationBlock> artifact link', () => {
   it('shows a saved link as a clickable anchor, and replaces it in place', async () => {
     const user = userEvent.setup();
     mockReads();
-    vi.mocked(getPropertyArtifactLink).mockResolvedValue({ data: LINK });
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
     vi.mocked(setPropertyArtifactLink).mockResolvedValue({ ...LINK, url: 'https://example.cz/page' });
     renderWithReads();
 
@@ -354,7 +354,7 @@ describe('<CurationBlock> artifact link', () => {
   it('asks before removing, then clears the field', async () => {
     const user = userEvent.setup();
     mockReads();
-    vi.mocked(getPropertyArtifactLink).mockResolvedValue({ data: LINK });
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map([[42, LINK]]));
     vi.mocked(deletePropertyArtifactLink).mockResolvedValue({ deleted: true });
     renderWithReads();
 
@@ -369,9 +369,9 @@ describe('<CurationBlock> artifact link', () => {
 
   it('never draws a stored non-http value as a link', async () => {
     mockReads();
-    vi.mocked(getPropertyArtifactLink).mockResolvedValue({
-      data: { ...LINK, url: 'javascript:alert(1)' },
-    });
+    vi.mocked(fetchArtifactLinks).mockResolvedValue(
+      new Map([[42, { ...LINK, url: 'javascript:alert(1)' }]]),
+    );
     renderWithReads();
 
     expect(await screen.findByText('javascript:alert(1)')).toBeInTheDocument();
@@ -380,7 +380,7 @@ describe('<CurationBlock> artifact link', () => {
 
   it('says a failed read failed, instead of offering an empty field', async () => {
     mockReads();
-    vi.mocked(getPropertyArtifactLink).mockRejectedValue(new Error('boom'));
+    vi.mocked(fetchArtifactLinks).mockRejectedValue(new Error('boom'));
     renderWithReads();
 
     expect(await screen.findByText(/Odkaz na artefakt/)).toBeInTheDocument();

@@ -1,4 +1,4 @@
-"""Persistence helpers for /collections, /properties/{id}/notes, /artifact-link, /tags.
+"""Persistence helpers for /collections, /properties/{id}/notes, /artifact-links, /tags.
 
 CRUD over the property-grain curation tables (migration 202): collection
 membership, tags and notes are keyed on `property_id` so operator curation
@@ -421,17 +421,15 @@ def delete_note(
 _ARTIFACT_LINK_PROJECTION = "property_id, url, created_at, updated_at"
 
 
-def get_artifact_link(conn: "psycopg.Connection", property_id: int) -> dict[str, Any]:
-    """The property's artifact link, or `{"data": None}`; a merged-away id reads its survivor's."""
-    pid = resolve_active_property_id(conn, property_id) or property_id
+def list_artifact_links(conn: "psycopg.Connection") -> dict[str, Any]:
+    """Every artifact link of the caller's account (RLS-scoped), one row per property — the
+    whole-set shape every curation fact is read in, so a board of cards costs one request."""
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT {_ARTIFACT_LINK_PROJECTION} FROM property_artifact_links "
-            "WHERE property_id = %s ORDER BY updated_at DESC LIMIT 1",
-            (pid,),
+            f"SELECT {_ARTIFACT_LINK_PROJECTION} FROM property_artifact_links ORDER BY property_id"
         )
-        row = cur.fetchone()
-    return {"data": _to_artifact_link(row) if row else None}
+        rows = cur.fetchall()
+    return {"data": [_to_artifact_link(r) for r in rows]}
 
 
 def set_artifact_link(
