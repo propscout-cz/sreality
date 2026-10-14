@@ -220,6 +220,21 @@ def _valid_closures(
     return kept, dissolved
 
 
+def refusing_pair(invariant: str | None, relation: ClusterRelation | None,
+                  members: Sequence[int]) -> dict[str, Any]:
+    """E957: the two adverts a stated fact parts, named beside the union it refused.
+
+    The refused EDGE is what a conflict row is keyed on, and the edge's own two adverts are
+    often not the two the relation separates: a 3 000 m² object's new sreality advert is
+    refused because a May advert of the same object, inside the ruled closure it would join,
+    printed the old price. Naming the pair lets the split page say which two adverts disagree.
+    The relation is memoised, so this re-reads what the invariant just read."""
+    if invariant != "d43_distinguishable" or relation is None:
+        return {}
+    pair = relation.violating_pair(members)
+    return {"pair": list(pair)} if pair is not None else {}
+
+
 def _repartition_clusters(
     edges: Sequence[Decision],
     fps: Mapping[int, Fingerprint],
@@ -321,15 +336,17 @@ def _repartition_clusters(
         members = sorted(set(grouped.get(membership.get(decision.lo, -1), [decision.lo]))
                          | set(grouped.get(membership.get(decision.hi, -1), [decision.hi])))
         fingerprints = [fps[m] for m in members if m in fps]
+        invariant = cluster_invariants_ok(fingerprints, settings, must_not_link, relation,
+                                          node_of) or "repartition"
         conflicts.append({
             "lo": decision.lo,
             "hi": decision.hi,
             "score": decision.score,
             "certificate": decision.certificate,
-            "invariant": cluster_invariants_ok(fingerprints, settings, must_not_link, relation,
-                                               node_of) or "repartition",
+            "invariant": invariant,
             "members": members,
             "families": sorted(decision.families),
+            **refusing_pair(invariant, relation, members),
         })
     return grouped, conflicts, cut
 
@@ -432,6 +449,7 @@ def cluster_pairs(
                 "invariant": invariant,
                 "members": sorted(members),
                 "families": sorted(decision.families),
+                **refusing_pair(invariant, relation, members),
             })
             continue
         union_find.union(root_lo, root_hi)

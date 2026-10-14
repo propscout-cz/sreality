@@ -261,3 +261,32 @@ def test_a_named_live_stream_that_is_not_live_proposes_nothing_and_says_why(clie
     assert one.status_code == 409 and "not the live stream" in one.json()["detail"]
     batch = client.get("/autodedup/proposed-splits?generation=g12").json()["data"]
     assert batch["withheld"] is None and batch["total"] == 2
+
+
+@pytest.mark.parametrize("pair, said", [
+    ([45562, 103], " — 103 × 45562, not this property's"),
+    ([101, 103], " — 101 × 103"),
+    ([103, 102], ""),
+])
+def test_E957_a_refused_union_names_the_two_adverts_a_fact_parts(client, monkeypatch, pair, said):
+    """The conflict row is keyed on the refused EDGE (102 x 103); the pair the stated fact
+    parts may be another, and may not be this property's advert at all."""
+    monkeypatch.setitem(CANNED, usql.CLUSTER_CONFLICTS_SQL, [
+        _row(usql.CONFLICT_COLUMNS, kind="invariant", listing_lo=102, listing_hi=103,
+             invariant="d43_distinguishable", detail={"generation": "g12", "pair": pair})])
+    first = client.get("/autodedup/proposed-splits").json()["data"]["items"][0]
+    assert first["splits"][1] == {
+        "listing_lo": 102, "listing_hi": 103, "reason_source": "conflict",
+        "reason": "invariant: d43_distinguishable" + said, "ruling": None}
+
+
+def test_E957_the_pair_rides_with_the_row_whose_reason_is_shown(client, monkeypatch):
+    """Two rows of one edge (newest first): the page shows one row's reason, so it names that
+    row's pair or none — never a pair another row carried."""
+    monkeypatch.setitem(CANNED, usql.CLUSTER_CONFLICTS_SQL, [
+        _row(usql.CONFLICT_COLUMNS, kind="invariant", listing_lo=102, listing_hi=103,
+             invariant="d43_distinguishable", detail={"generation": "g12", "pair": [101, 103]}),
+        _row(usql.CONFLICT_COLUMNS, kind="invariant", listing_lo=102, listing_hi=103,
+             invariant="area_spread", detail={"generation": "g12"})])
+    first = client.get("/autodedup/proposed-splits").json()["data"]["items"][0]
+    assert first["splits"][1]["reason"] == "invariant: area_spread"

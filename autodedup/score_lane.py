@@ -443,6 +443,9 @@ def conflict_params(
                     "certificate": conflict.get("certificate"),
                     "families": conflict.get("families") or [],
                     "members": conflict.get("members") or [],
+                    # E957: the two adverts the stated fact parts, as the rt lane writes it.
+                    **({"pair": [int(x) for x in conflict["pair"]]}
+                       if conflict.get("pair") else {}),
                 },
                 ensure_ascii=False, sort_keys=True,
             ),

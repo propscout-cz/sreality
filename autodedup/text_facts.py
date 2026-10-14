@@ -422,6 +422,67 @@ def states_top_storey(text: str | None) -> bool:
     return bool(_TOP_STOREY.search(fact_text(text))) if text else False
 
 
+# E954: how many storeys the BUILDING has, as the body prints it. The portal's `total_floors`
+# box is filled by hand and disagrees with the text it sits beside — one Jablonec 2+1 is filed
+# with 5 storeys on sreality and mmreality and 3 on idnes while every body says `v domě celkem
+# třemi nadzemními podlažími`; one Kolmá 2+1 is 4 on bezrealitky and 3 on realitymix under
+# `ve 2. podlaží ze 3`. Three shapes, each naming the building and never the unit: the
+# storey's own count (`podlaží ze 3`, `patře z celkových 17`), a count of ABOVE-GROUND storeys
+# (`třemi nadzemními podlažími`), and the compound adjective of a house (`třípodlažní dům`) —
+# never of a flat, because `dvoupodlažní byt` is a maisonette's own two storeys.
+_STOREY_COUNT_WORDS: dict[str, int] = {
+    "jedno": 1, "jednoho": 1, "jednom": 1, "jednim": 1,
+    "dve": 2, "dva": 2, "dvou": 2, "dvema": 2,
+    "tri": 3, "trech": 3, "trem": 3, "tremi": 3,
+    "ctyri": 4, "ctyr": 4, "ctyrech": 4, "ctyrem": 4, "ctyrmi": 4,
+    "pet": 5, "peti": 5, "sest": 6, "sesti": 6, "sedm": 7, "sedmi": 7,
+    "osm": 8, "osmi": 8, "devet": 9, "deviti": 9, "deset": 10, "deseti": 10,
+}
+_STOREY_COUNT = r"(\d{1,2}|" + "|".join(sorted(_STOREY_COUNT_WORDS, key=len, reverse=True)) + r")"
+_STOREY_OF_TOTAL = re.compile(
+    r"\b(?:podlazi|np|patre|patro|poschodi|prizemi)\s*,?\s+(?:ze|z)\s+(?:celkovych\s+|celkem\s+)?"
+    + _STOREY_COUNT + r"\b(?!\s*(?:stran|pokoj|mistnost|oken|bytu|jednotek))")
+# A count, never a placement: `celkem třemi`, `o 7`, `má 3` count storeys; `ve 2 nadzemním
+# podlaží` (an ordinal without its dot) places the flat and is not read.
+_ABOVE_GROUND_COUNT = re.compile(
+    r"\b(?:celkem|o|s|se|ma|maji|z|ze)\s+" + _STOREY_COUNT + r"\s+nadzemni\w*\s+podlazi\w*")
+_STOREY_ADJECTIVE_PREFIXES: dict[str, int] = {
+    "jedno": 1, "dvou": 2, "tri": 3, "ctyr": 4, "peti": 5, "sesti": 6, "sedmi": 7, "osmi": 8,
+    "deviti": 9, "deseti": 10,
+}
+# Bažoš's form line `Typ bytu: jednopodlažní` names the flat's own type (not a maisonette), never
+# the building's storeys, so the value after `bytu:` is not read.
+_STOREY_ADJECTIVE = re.compile(
+    r"(?<!bytu: )(?<!bytu:)\b(\d{1,2}\s*-?\s*|"
+    + "|".join(sorted(_STOREY_ADJECTIVE_PREFIXES, key=len, reverse=True))
+    + r")podlazn\w*\b(?!\s+(?:byt|mezonet|apartman|jednotk|plocha|plose))")
+STOREY_COUNT_MAX: int = 50
+
+
+def printed_storey_counts(text: str | None) -> frozenset[int]:
+    """Every storey count of the BUILDING the body prints (E954)."""
+    return _printed_storey_counts(text) if text else frozenset()
+
+
+def _storey_count(raw: str) -> int | None:
+    raw = raw.replace("-", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return _STOREY_COUNT_WORDS.get(raw, _STOREY_ADJECTIVE_PREFIXES.get(raw))
+
+
+@body_cached
+def _printed_storey_counts(text: str) -> frozenset[int]:
+    folded = fact_text(text)
+    out: set[int] = set()
+    for pattern in (_STOREY_OF_TOTAL, _ABOVE_GROUND_COUNT, _STOREY_ADJECTIVE):
+        for match in pattern.finditer(folded):
+            value = _storey_count(match.group(1))
+            if value is not None and 0 < value <= STOREY_COUNT_MAX:
+                out.add(value)
+    return frozenset(out)
+
+
 def ground_or_upper(text: str | None, words: bool = False) -> frozenset[str]:
     """`{"ground"}`, `{"upper"}`, both, or nothing — the storey named in words, not digits."""
     return _ground_or_upper(text, words) if text else frozenset()

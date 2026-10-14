@@ -1019,6 +1019,8 @@ def _conflict_params(row: Mapping[str, Any], generation: str) -> dict[str, Any]:
         detail["right_members"] = list(row.get("right_members") or ())
     else:
         detail["members"] = list(row.get("members") or ())
+    if row.get("pair"):
+        detail["pair"] = [int(listing_id) for listing_id in row["pair"]]
     if row.get("must_link"):
         detail["must_link"] = [list(pair) for pair in row["must_link"]]
     return {
