@@ -6,7 +6,13 @@ name: "Jobs: fetch MF rent map (monthly)"
 # updates 4×/year (published within 45 days of each quarter end), so a monthly
 # cron mostly no-ops and catches the new release within ~30 days. The same
 # data also lands via manual upload from the Settings page; both share
-# api.rent_map.ingest_bytes, so the latest revision always wins.
+# api.rent_map.ingest_bytes, so the latest revision always wins. Every run then
+# re-renders the map's rent choropleth (the `rent_map` reference overlay).
+#
+# A new revision already re-renders that overlay inside its own ingest
+# transaction; the last step also covers a no-op month and fails the run when the
+# overlay's guards refuse (a refused render keeps the previous tiles; dispatch
+# ingest_map_overlays.yml with sections=rent_map and accept_shrink to override).
 #
 # Required GitHub secret:
 #   SUPABASE_DB_URL  -- same one used by every other workflow.
@@ -65,3 +71,11 @@ jobs:
             ARGS="$ARGS --dry-run"
           fi
           python -m scripts.fetch_rent_map $ARGS
+
+      - name: Re-render the rent map overlay
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          ARGS=(--sections rent_map)
+          if [ "$DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          python -m scripts.ingest_map_overlays "${ARGS[@]}"
