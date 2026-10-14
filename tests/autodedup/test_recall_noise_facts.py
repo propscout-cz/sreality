@@ -180,6 +180,23 @@ def test_E955_two_storeys_that_differ_keep_the_price() -> None:
     assert {"floor", "price"} <= set(names(a, b, CLUSTER))
 
 
+def test_E955_a_commercial_letting_keeps_the_identity_in_every_reading() -> None:
+    # Spaces Pankrác: a dedicated desk at 4,890 and, after it, a `již od` 6,690 membership, 10 m²
+    # both, two portals, no photograph or text in common. A tier is not a unit (Regus 85261).
+    desk = advert(10681402, "bezrealitky", "S vyhrazeným stolem získáte nepřetržitý přístup.",
+                  first=0, last=40, price=4_890.0, category_main="komercni",
+                  category_type="pronajem", area_m2=10.0)
+    tier = advert(13483628, "sreality", "Veškeré uvedené ceny jsou orientační („již od“).",
+                  first=41, last=80, price=6_690.0, category_main="komercni",
+                  category_type="pronajem", area_m2=10.0)
+    for mode in (PROMOTE, GATE, CLUSTER):
+        assert "price" in names(desk, tier, mode)
+    # A commercial SALE keeps the new reading (Liberecká, above); so does a flat let (Kolbenova).
+    a = liberecka(45562, "sreality", LIBERECKA_OLD, 27_750_000.0, 0, 3)
+    b = liberecka(244241, "idnes", LIBERECKA_NEW, 25_700_000.0, 3, 130)
+    assert "price" not in names(a, b, CLUSTER)
+
+
 # --- E956: a price re-converted from another currency every day is one price ---------------
 # 81968 (Praha-Nusle, 850 m² office): sreality re-converts the EUR rent at every scrape, idnes
 # converted it once on 2026-06-07 and never again.

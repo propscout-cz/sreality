@@ -945,7 +945,9 @@ def _price_sequential_path(
     if (gap is not None and gap > 0.0 and not _column_rounding(a, b, settings)
             and not (settings.d43_printed_area_prevails and _printed_areas_prevail(a, b))):
         return False
-    if lenient and gap is not None:
+    if lenient and gap is not None and not any(
+            listing.category_main == "komercni" and listing.category_type == "pronajem"
+            for listing in (a, b)):
         # E955: in the gate and the cluster, two postings never on sale together that state one
         # area, and no two dispositions or storeys (a side silent on either is not read against
         # it), are one unit at two moments — the standing ruling
@@ -954,6 +956,9 @@ def _price_sequential_path(
         # rewrites its text and re-shoots its photographs (Liberecká 3 000 m² at 27,750,000 then
         # 25,700,000; Čtvrť Emila Kolbena 1+kk at 19,990 then 18,990, one text inside project
         # vocabulary), and a merge the engine already certified needs no second identity.
+        # Never for a COMMERCIAL LETTING: one building lets desks, membership tiers and offices
+        # under one area, and a tier is not a unit (the operator's Regus 85261 split, 2026-10-13;
+        # Spaces Pankrác, a 4,890 dedicated desk against a `již od` 6,690 membership, 10 m² both).
         return True
     if gap is None:
         # E192: a side that states no area has demonstrated no area — unless the two adverts
