@@ -96,6 +96,8 @@ const RENT_LAYER = layer({
     stops: [[600, '#1a1a5e'], [150, '#eaf0f6']],
     null_color: 'rgba(140,140,140,0.35)',
     unit: 'rent_per_m2',
+    opacity: 0.62,
+    outline: { color: 'rgba(60, 60, 90, 0.25)', width: 0.4 },
   },
   variants: [
     { key: 'vk1', label: '1+kk, 1+1', prop: 'vk1' },
@@ -163,7 +165,18 @@ describe('layersFromSearchParams — the URL rule and the legacy key', () => {
 
   it('reads the old rent-map panel checkbox `kraje=1` as the kraje layer', () => {
     expect(read('kraje=1')).toBe('kraje');
-    expect(read('rentmap=1&kraje=1')).toBe('kraje');
+    expect(read('rentmap=1&kraje=1')).toBe('kraje,rent_map');
+  });
+
+  it('reads the old rent-map knobs `rentmap=1&rentvk=N` as `rent_map:vkN`, beside the rest', () => {
+    expect(read('rentmap=1&rentvk=3')).toBe('rent_map:vk3');
+    expect(read('rentmap=1')).toBe('rent_map');
+    expect(read('rentmap=1&rentvk=9')).toBe('rent_map');
+    expect(read('rentvk=2')).toBeNull();
+    expect(read('rentmap=0&rentvk=2')).toBeNull();
+    expect(read('layers=metro&rentmap=1&rentvk=2')).toBe('metro,rent_map:vk2');
+    expect(read('layers=&rentmap=1')).toBe('rent_map');
+    expect(read('layers=rent_map:vk4&rentmap=1&rentvk=2')).toBe('rent_map:vk4');
   });
 
   it('lets an explicit `layers` win over the legacy key', () => {
@@ -248,6 +261,32 @@ describe('style layers from the registry', () => {
     });
   });
 
+  it('fills a scale layer at its own opacity, every other area at the default', () => {
+    const opacityOf = (sec: OverlaySection, l: OverlayLayer) =>
+      specOf(overlayStyleLayers(sec, l, true), `ov-${l.key}-fill`)?.paint?.['fill-opacity'];
+    expect(opacityOf(RENT, RENT_LAYER)).toBe(0.62);
+    expect(opacityOf(FLOOD, FLOOD.layers[0])).toBe(0.4);
+    const unset = { ...RENT_LAYER, scale: { ...RENT_LAYER.scale!, opacity: undefined } };
+    expect(opacityOf(RENT, unset)).toBe(0.4);
+  });
+
+  it("draws a choropleth's borders from its own polygons, a hairline right over its fill", () => {
+    expect(specOf(overlayStyleLayers(RENT, RENT_LAYER, true), 'ov-rent_map-outline')).toMatchObject({
+      type: 'line',
+      source: 'ov-rent_map',
+      'source-layer': 'rent_map',
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      layout: { visibility: 'visible' },
+      paint: { 'line-color': 'rgba(60, 60, 90, 0.25)', 'line-width': 0.4 },
+    });
+    const order = overlayDrawOrder(REGISTRY);
+    expect(order.indexOf('ov-rent_map-outline')).toBe(order.indexOf('ov-rent_map-fill') + 1);
+    expect(order.indexOf('ov-rent_map-outline')).toBeLessThan(order.indexOf('ov-flood_az-fill'));
+    const borderless = { ...RENT_LAYER, scale: { ...RENT_LAYER.scale!, outline: null } };
+    expect(specOf(overlayStyleLayers(RENT, borderless, true), 'ov-rent_map-outline')).toBeUndefined();
+    expect(overlayStyleLayers(METRO, METRO_LAYER, true).some((l) => l.spec.id.endsWith('-outline'))).toBe(false);
+  });
+
   it('paints a scale layer from the shown variant, grey below zero', () => {
     const fillOf = (variant: string | null) =>
       specOf(overlayStyleLayers(RENT, RENT_LAYER, true, variant), 'ov-rent_map-fill')?.paint?.['fill-color'];
@@ -277,6 +316,18 @@ describe('style layers from the registry', () => {
     expect(Math.max(...fills.map(at))).toBeLessThan(at('ov-rent_map-line'));
     expect(at('ov-flood_az-dash')).toBeLessThan(at('ov-metro-point'));
     expect(at('ov-metro-point')).toBeLessThan(at('ov-flood_az-label'));
+    expect(fills).toEqual([
+      'ov-rent_map-fill',
+      'ov-flood_az-fill',
+      'ov-flood_q100-fill',
+      'ov-flood_q5-fill',
+      'ov-metro-fill',
+    ]);
+  });
+
+  it('lays a choropleth under every other area, whatever its sort', () => {
+    const first = { sections: [{ ...RENT, sort: 0 }, METRO, FLOOD] };
+    const fills = overlayDrawOrder(first).filter((id) => id.endsWith('-fill'));
     expect(fills).toEqual([
       'ov-rent_map-fill',
       'ov-flood_az-fill',
@@ -354,12 +405,27 @@ describe('overlayPopupHtml', () => {
     expect(nameless).not.toContain('lp-meta');
   });
 
-  it('gives a scale layer the shown variant with its unit, and a dash with none', () => {
-    const props = { name: 'Brno', vk1: 250.4, vk2: null };
-    expect(overlayPopupHtml('Cenová mapa nájemného', props, RENT_LAYER, null)).toContain(
-      `1+kk, 1+1: 250,4 ${PPM2_UNIT.rent}`,
+  /* Word for word the popup the rent map had before it moved onto this path. */
+  it("words a rent-map click as it always read: the place, its kraj and the shown size category's rent", () => {
+    const props = { name: 'Brno', kraj: 'Jihomoravský', level: 'obec', vk1: 312, vk2: null };
+    const html = overlayPopupHtml('Cenová mapa nájemného', props, RENT_LAYER, null);
+    expect(html).toContain('<p class="lp-kicker">Cenová mapa nájemného</p>');
+    expect(html).toContain('<p class="lp-price">Brno</p>');
+    expect(html).toContain(
+      `<p class="lp-meta">Obec: Brno, Jihomoravský, Nájemné referenčního bytu: 312\u00a0${PPM2_UNIT.rent}</p>`,
     );
-    expect(overlayPopupHtml('Cenová mapa nájemného', props, RENT_LAYER, 'vk2')).toContain('2+kk, 2+1: —');
+    expect(overlayPopupHtml('Cenová mapa nájemného', props, RENT_LAYER, 'vk2')).toContain(
+      '<p class="lp-meta">Obec: Brno, Jihomoravský, Nájemné referenčního bytu: —</p>',
+    );
+    expect(overlayPopupHtml('Cenová mapa nájemného', { name: 'Brno', vk2: 1250 }, RENT_LAYER, 'vk2')).toContain(
+      `<p class="lp-meta">Obec: Brno, Nájemné referenčního bytu: 1\u00a0250\u00a0${PPM2_UNIT.rent}</p>`,
+    );
+  });
+
+  it("names any other scale's figure by the shown variant, in its own unit", () => {
+    const decibels = { ...RENT_LAYER, scale: { ...RENT_LAYER.scale!, unit: 'dB' } };
+    const html = overlayPopupHtml('Hluk', { name: 'Brno', vk2: 55.5 }, decibels, 'vk2');
+    expect(html).toContain('<p class="lp-meta">2+kk, 2+1: 55,5\u00a0dB</p>');
   });
 });
 
@@ -472,6 +538,16 @@ describe('useMapOverlays', () => {
     expect(fake.ids().indexOf('city-fill')).toBe(fake.ids().length - 2);
   });
 
+  it('slides a choropleth switched on later under the areas already drawn, whatever its sort', () => {
+    const registry = { sections: [{ ...RENT, sort: 0 }, METRO, FLOOD] };
+    const fake = new FakeMap();
+    const { rerender } = mount(fake, 'flood_q5,metro', registry);
+    rerender({ selection: 'flood_q5,metro,rent_map', registry });
+    const ov = fake.ids().filter((id) => id.startsWith('ov-'));
+    expect(ov.slice(0, 3)).toEqual(['ov-rent_map-fill', 'ov-rent_map-outline', 'ov-flood_az-fill']);
+    expect(ov).toEqual(overlayDrawOrder(registry).filter((id) => ov.includes(id)));
+  });
+
   it('hides rather than removes a deselected layer, so switching back costs no fetch', () => {
     const fake = new FakeMap();
     const { rerender } = mount(fake, 'metro');
@@ -485,6 +561,8 @@ describe('useMapOverlays', () => {
     const fake = new FakeMap();
     const { rerender } = mount(fake, 'rent_map:vk2');
     expect(JSON.stringify(fake.getLayer('ov-rent_map-fill')!.paint['fill-color'])).toContain('"vk2"');
+    expect(fake.getLayer('ov-rent_map-fill')!.paint['fill-opacity']).toBe(0.62);
+    expect(fake.visibility('ov-rent_map-outline')).toBe('visible');
     rerender({ selection: 'rent_map', registry: REGISTRY });
     expect(JSON.stringify(fake.getLayer('ov-rent_map-fill')!.paint['fill-color'])).toContain('"vk1"');
     expect(fake.sources.size).toBe(1);

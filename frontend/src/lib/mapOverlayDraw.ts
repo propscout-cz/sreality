@@ -187,7 +187,7 @@ export function overlayStyleLayers(
         layout: { visibility },
         paint: {
           'fill-color': overlayFillColor(layer, variantKey),
-          'fill-opacity': OVERLAY_FILL_OPACITY,
+          'fill-opacity': layer.scale?.opacity ?? OVERLAY_FILL_OPACITY,
           'fill-antialias': false,
         },
       },
@@ -260,21 +260,40 @@ export function overlayStyleLayers(
       },
     },
   );
+  const outline = layer.scale?.outline;
+  if (outline) {
+    /* A choropleth's borders: each place's own rings, a hairline over its fill. */
+    out.push({
+      tier: 0,
+      spec: {
+        ...src,
+        id: `ov-${layer.key}-outline`,
+        type: 'line',
+        filter: IS_POLYGON,
+        layout: { visibility },
+        paint: { 'line-color': outline.color, 'line-width': outline.width },
+      },
+    });
+  }
   return out;
 }
 
 /* Every overlay style-layer id, bottom to top: tier by tier, and within a tier
- * sections and layers in REVERSE sort, so sort 1 draws on top. */
+ * sections and layers in REVERSE sort, so sort 1 draws on top — except that a
+ * choropleth's area (a scale layer's fill and its borders) is the floor under
+ * every other area: it covers every place, so anything beneath would wash out. */
 export function overlayDrawOrder(registry: MapOverlayRegistry): string[] {
-  const tiers: string[][] = [[], [], [], []];
+  const bands: string[][] = [[], [], [], [], []];
   const descending = <T extends { sort: number }>(xs: readonly T[]): T[] =>
     [...xs].sort((a, b) => b.sort - a.sort);
   for (const section of descending(registry.sections)) {
     for (const layer of descending(section.layers)) {
-      for (const { tier, spec } of overlayStyleLayers(section, layer, false)) tiers[tier].push(spec.id);
+      for (const { tier, spec } of overlayStyleLayers(section, layer, false)) {
+        bands[tier === 0 && layer.scale ? 0 : tier + 1].push(spec.id);
+      }
     }
   }
-  return tiers.flat();
+  return bands.flat();
 }
 
 export const overlayFillIds = (registry: MapOverlayRegistry): string[] =>
@@ -424,10 +443,21 @@ const czNumber = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 1 });
 
 export const formatOverlayNumber = (n: number): string => czNumber.format(n);
 
-/* A scale's unit token as the label a reader sees; per-m² rent comes from the
- * one shared vocabulary (rule 23). */
-export const overlayScaleUnit = (unit: string | null | undefined): string | null =>
-  unit === 'rent_per_m2' ? PPM2_UNIT.rent : unit || null;
+/* What a scale's unit token reads as: the unit after a figure, the legend's
+ * caption, and the popup's words for the place and the figure. `rent_per_m2`
+ * is the MF reference rent — the shared monthly-rent unit (rule 23) and the
+ * words its map has always used; any other token is just its own unit. */
+export interface OverlayScaleWords {
+  unit: string | null;
+  caption: string | null;
+  place: string | null;
+  value: string | null;
+}
+
+export const overlayScaleWords = (unit: string | null | undefined): OverlayScaleWords =>
+  unit === 'rent_per_m2'
+    ? { unit: PPM2_UNIT.rent, caption: `Nájemné (${PPM2_UNIT.rent})`, place: 'Obec', value: 'Nájemné referenčního bytu' }
+    : { unit: unit || null, caption: unit || null, place: null, value: null };
 
 const dateIn = (timeZone: string) =>
   new Intl.DateTimeFormat('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric', timeZone });
@@ -448,8 +478,9 @@ const textOf = (v: unknown): string | null =>
   typeof v === 'string' && v.trim() !== '' ? v : typeof v === 'number' ? String(v) : null;
 
 /* The popup for a click on an overlay area: kicker = section, title = the
- * feature's name, meta = its class label and, on a scale layer, the shown
- * variant's value with its unit. */
+ * feature's name, meta = its class label — or, on a scale layer, the place and
+ * the shown variant's figure with its unit ("—" when the place has none): for
+ * the rent map "Obec: Brno, Jihomoravský, Nájemné referenčního bytu: 312 Kč/m²/měs". */
 export function overlayPopupHtml(
   sectionLabel: string,
   props: Record<string, unknown>,
@@ -459,17 +490,19 @@ export function overlayPopupHtml(
   const cls = textOf(props.class);
   const classLabel = cls == null ? null : layer.legend.find((e) => String(e.class) === cls)?.label ?? null;
   const title = textOf(props.name) ?? textOf(props.label) ?? classLabel ?? layer.label;
-  const meta: string[] = [];
-  if (classLabel && classLabel !== title) meta.push(classLabel);
+  let meta = classLabel && classLabel !== title ? classLabel : null;
   if (layer.scale) {
+    const words = overlayScaleWords(layer.scale.unit);
     const variant = activeVariant(layer, variantKey);
     const raw = props[variant?.prop ?? layer.scale.prop];
     const value = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
-    const unit = overlayScaleUnit(layer.scale.unit);
     const figure = Number.isFinite(value) && value >= 0
-      ? `${formatOverlayNumber(value)}${unit ? ` ${unit}` : ''}`
+      ? `${formatOverlayNumber(value)}${words.unit ? `\u00a0${words.unit}` : ''}`
       : '—';
-    meta.push(variant ? `${variant.label}: ${figure}` : figure);
+    const kraj = textOf(props.kraj);
+    const place = words.place && textOf(props.name) ? `${words.place}: ${title}${kraj ? `, ${kraj}` : ''}, ` : '';
+    const named = words.value ?? variant?.label;
+    meta = `${place}${named ? `${named}: ` : ''}${figure}`;
   }
   return `
     <div class="lp">
@@ -477,7 +510,7 @@ export function overlayPopupHtml(
       <div class="lp-row">
         <p class="lp-price">${escapeHtml(title)}</p>
       </div>
-      ${meta.length ? `<p class="lp-meta">${meta.map(escapeHtml).join(' · ')}</p>` : ''}
+      ${meta ? `<p class="lp-meta">${escapeHtml(meta)}</p>` : ''}
     </div>
   `;
 }

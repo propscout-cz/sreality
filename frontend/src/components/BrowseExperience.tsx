@@ -79,7 +79,6 @@ import {
   fetchListingsForTable,
   fetchBrowseCount,
   fetchBrowseStats,
-  fetchRentMapChoropleth,
   orderPortal,
   sortToParam,
   CARD_PAGE_SIZE,
@@ -92,7 +91,6 @@ import {
   type CityPolygon,
   type CuratedCity,
   type MapResult,
-  type RentMapPolygon,
   type SortDirection,
   type SortField,
   type TableRow,
@@ -301,7 +299,7 @@ export default function BrowseExperience({
   });
 
   /* All three feed cityOverlay below, which only the map (ListingMap) reads —
-   * same gate as the sibling cityPolygons/rentMap queries just below. */
+   * same gate as the sibling cityPolygons query just below. */
   const citiesQuery = useQuery<CuratedCity[], Error>({
     queryKey: cityQualityKeys.cities,
     queryFn: fetchCuratedCities,
@@ -337,15 +335,9 @@ export default function BrowseExperience({
     return m;
   }, [cityPolygonsQuery.data]);
 
-  const rentMapQuery = useQuery<RentMapPolygon[], Error>({
-    queryKey: ['rent_map_choropleth'],
-    queryFn: fetchRentMapChoropleth,
-    enabled: mapVisible && overlay.showRentMap,
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
-  /* The reference-overlay registry (metro, flood zones, kraje, …): tiny, and
-   * the same cache entry the listing-detail and comparables maps read. */
+  /* The reference-overlay registry (metro, flood zones, kraje, the rent map,
+   * …): tiny, and the same cache entry the listing-detail and comparables maps
+   * read. */
   const overlayRegistryQuery = useMapOverlayRegistry(mapVisible);
   /* Only worth a toast when layers are selected: they would silently not draw. */
   const overlayRegistryFailed = overlayRegistryQuery.isError && overlay.layers !== '';
@@ -923,11 +915,6 @@ export default function BrowseExperience({
                     cityIndexValuesAll={cityOverlay.cityIndexValuesAll}
                     cityIndexDefinitions={cityDefsQuery.data ?? []}
                     onColorByIndexChange={(name) => view.setOverlay({ colorByIndexName: name })}
-                    rentMapPolygons={rentMapQuery.data ?? []}
-                    showRentMap={overlay.showRentMap}
-                    rentVk={overlay.rentVk}
-                    onToggleShowRentMap={(next) => view.setOverlay({ showRentMap: next })}
-                    onRentVkChange={(vk) => view.setOverlay({ rentVk: vk })}
                     overlayRegistry={overlayRegistryQuery.data}
                     overlayLayers={overlay.layers}
                     onOverlayLayersChange={(layers) => view.setOverlay({ layers })}
