@@ -901,7 +901,7 @@ def _printed_areas_prevail(a: Listing, b: Listing) -> bool:
 
 
 def _price_sequential_path(
-    a: Listing, b: Listing, feats: Feats | None, settings: Settings
+    a: Listing, b: Listing, feats: Feats | None, settings: Settings, lenient: bool = False
 ) -> bool:
     """E185: a price MOVE between two postings that were never on sale together.
 
@@ -945,6 +945,15 @@ def _price_sequential_path(
     if (gap is not None and gap > 0.0 and not _column_rounding(a, b, settings)
             and not (settings.d43_printed_area_prevails and _printed_areas_prevail(a, b))):
         return False
+    if lenient and gap is not None:
+        # E955: in the gate and the cluster, two postings never on sale together that state one
+        # area, one disposition and one storey are one unit at two moments — the standing ruling
+        # that a re-list is a duplicate, and D43's line that a price of one moment says nothing
+        # about another. The photo or body identity below stays PROMOTION's alone: a re-list
+        # rewrites its text and re-shoots its photographs (Liberecká 3 000 m² at 27,750,000 then
+        # 25,700,000; Čtvrť Emila Kolbena 1+kk at 19,990 then 18,990, one text inside project
+        # vocabulary), and a merge the engine already certified needs no second identity.
+        return True
     if gap is None:
         # E192: a side that states no area has demonstrated no area — unless the two adverts
         # carry the seller's own order code for ONE object, or one body essentially IS the
@@ -2734,7 +2743,7 @@ def distinguishing_facts(
                              and price_gap > PRICE_CROSS_TOL
                              and _co_live(a, b, cfg.d43_price_colive_min_overlap_days))
             # E185: a move between two postings that were never on sale together is one path.
-            moved = _price_sequential_path(a, b, feats, cfg)
+            moved = _price_sequential_path(a, b, feats, cfg, lenient)
             if ((over and not agree) or contradiction) and not moved:
                 add("price", a.price, b.price)
         elif over:
