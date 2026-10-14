@@ -124,6 +124,7 @@ from autodedup.text_facts import (
     priced_letting_plan,
     printed_house_numbers,
     printed_house_numbers_meet,
+    printed_storey_counts,
     accessory_areas,
     accessory_designators,
     body_localities,
@@ -2409,6 +2410,21 @@ def total_floors_agreeing_unit(a: Listing, b: Listing, cfg: Settings) -> bool:
             or price_paths_agree(a, b, cfg.d43_price_path_tol))
 
 
+def printed_storeys_prevail(a: Listing, b: Listing) -> bool:
+    """E954: the building's storey count a body PRINTS stands in for its own `total_floors` box.
+
+    The operator's ruling (2026-10-13, convention 1): a portal form field against the
+    descriptions — the descriptions' figure counts. Each side reads as the counts its body
+    prints, or its column where the body prints none, and the two are one building when they
+    name a common count. Read only where the columns already disagree, so it removes a fact
+    and never adds one."""
+    left = printed_storey_counts(a.description) or (
+        frozenset({a.total_floors}) if a.total_floors is not None else frozenset())
+    right = printed_storey_counts(b.description) or (
+        frozenset({b.total_floors}) if b.total_floors is not None else frozenset())
+    return bool(left & right)
+
+
 def _floor_fact(a: Listing, b: Listing, cfg: Settings) -> bool:
     """The `floor` fact of `distinguishing_facts`, read once so E185 can ask the same question.
 
@@ -2682,9 +2698,11 @@ def distinguishing_facts(
         # ambiguity again — the same slack `floor` already carries across every portal pair.
         ambiguous = (lenient and cfg.d43_gate_total_floors_slack and delta_total == 1
                      and convention_ambiguous(cfg.floor_camps, a.source, b.source))
-        # E301 (one camp shift, both numbers) and E302 (prepared: the unit agrees).
+        # E301 (one camp shift, both numbers), E302 (prepared: the unit agrees) and E954 (the
+        # count a body prints stands in for its own box).
         excused = (floor_total_camp_shift(a, b, cfg)
-                   or total_floors_agreeing_unit(a, b, cfg))
+                   or total_floors_agreeing_unit(a, b, cfg)
+                   or printed_storeys_prevail(a, b))
         if delta_total and not joint and not camped and not ambiguous and not excused:
             add("total_floors", a.total_floors, b.total_floors)
 
