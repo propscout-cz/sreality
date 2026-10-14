@@ -1,5 +1,6 @@
 """scripts.ingest_map_overlays: the registry, the props mappers on real samples, the ArcGIS
-pager's guards, the revision-date parsers, the shrink guard and the per-section flow.
+pager's guards, the revision-date parsers, the shrink guard, the per-section flow and the
+database-only render of an SQL section (the rent-map ingest's path).
 
 No network and no database. tests/fixtures/map_overlays/ holds real responses fetched on
 2026-10-14; the IPR line geometries were generalised server-side (maxAllowableOffset=25) to
@@ -11,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import re
 from collections import Counter
 from collections.abc import Iterator
 from datetime import date
@@ -20,8 +22,10 @@ from typing import Any
 import pytest
 import requests
 
+from api import rent_map as api_rent_map
 from scripts import ingest_map_overlays as mod
 from scraper import db as scraper_db
+from toolkit.rent_map import MF_INFOGRAPHIC_URL
 from tests.sql_corpus import discover
 from tests.test_sql_placeholders import _invalid_placeholder
 
@@ -44,13 +48,14 @@ def _props(fixture: str, mapper: mod.Props) -> list[dict[str, Any] | None]:
 # --- the registry -----------------------------------------------------------------------
 
 
-def test_the_registry_holds_the_three_sections_in_order() -> None:
+def test_the_registry_holds_the_four_sections_in_order() -> None:
     assert {key: (s.label, s.sort, s.minzoom, s.maxzoom) for key, s in mod.SOURCES.items()} == {
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
         "kraje": ("Kraje", 3, 5, 9),
+        "rent_map": ("Cenová mapa nájemného", 4, 5, 12),
     }
-    assert list(mod.SOURCES) == ["metro", "flood", "kraje"]
+    assert list(mod.SOURCES) == ["metro", "flood", "kraje", "rent_map"]
 
 
 def test_layers_their_sort_and_how_they_are_stored() -> None:
@@ -61,6 +66,7 @@ def test_layers_their_sort_and_how_they_are_stored() -> None:
                   ("flood_q100", 3, "dissolve"), ("flood_q500", 4, "dissolve"),
                   ("flood_az", 5, "outline")],
         "kraje": [("kraje", 1, "plain")],
+        "rent_map": [("rent_map", 1, "plain")],
     }
 
 
@@ -99,10 +105,17 @@ def test_the_notes_attribution_and_licences() -> None:
         "přívalové povodně nejsou zahrnuty. Závazné informace: vodoprávní úřad."
     )
     assert mod.SOURCES["kraje"].note is None
+    assert mod.SOURCES["rent_map"].note == (
+        "Měsíční nájemné referenčního bytu za m² podle Ministerstva financí ČR, zvlášť pro "
+        "každou velikostní kategorii bytu."
+    )
     assert {k: (s.attribution, s.licence) for k, s in mod.SOURCES.items()} == {
         "metro": ("datový podklad © IPR Praha", "CC BY 4.0"),
         "flood": ("© VÚV TGM pro MŽP (ISVS VODA)", "CC BY 4.0"),
         "kraje": ("© ČÚZK (RÚIAN)", "CC BY 4.0"),
+        # The MF states no licence for the data, only its site's copyright.
+        "rent_map": ("Ministerstvo financí ČR – Cenová mapa nájemného",
+                     "Licence neuvedena (© Ministerstvo financí ČR)"),
     }
 
 
@@ -122,11 +135,42 @@ def test_the_readers_ask_each_publisher_for_its_native_crs() -> None:
     ]
     assert all(lyr.readers[0].service_url == mod.VUV_MAPSERVER for lyr in mod.SOURCES["flood"].layers)
     assert _layer("kraje").readers == (mod.SqlSource(mod.KRAJE_SQL),)
+    assert _layer("rent_map").readers == (mod.SqlSource(mod.RENT_MAP_SQL),)
+
+
+def test_the_rent_map_paints_the_choropleth_the_browse_map_drew() -> None:
+    """The ramp, null colour, opacity and VK labels of the SPA's former GeoJSON layer
+    (ListingMap.tsx RENT_RAMP / RENT_NULL_COLOR / fill-opacity / RENT_VK_LABELS), unchanged:
+    the operator's condition for this move is no visible difference."""
+    rent = _layer("rent_map")
+    assert (rent.label, rent.legend, rent.store) == ("Cenová mapa nájemného", (), "plain")
+    assert rent.scale == {
+        "prop": "vk1",
+        "stops": [[150, "#eaf0f6"], [250, "#9ec3e6"], [350, "#5a7fd6"],
+                  [450, "#3b4fb5"], [550, "#2a2a8a"], [600, "#1a1a5e"]],
+        "null_color": "rgba(140, 140, 140, 0.35)",
+        "unit": "rent_per_m2",
+        "opacity": 0.62,
+    }
+    assert rent.variants == (
+        {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1"},
+        {"key": "vk2", "label": "2+kk, 2+1", "prop": "vk2"},
+        {"key": "vk3", "label": "3+kk, 3+1", "prop": "vk3"},
+        {"key": "vk4", "label": "4+kk, 4+1", "prop": "vk4"},
+    )
+    assert json.loads(json.dumps(rent.scale)) == rent.scale, "the scale must survive JSON as is"
+
+
+def test_the_rent_map_cites_the_page_the_fetch_reads() -> None:
+    assert mod.SOURCES["rent_map"].source_url == MF_INFOGRAPHIC_URL == api_rent_map.MF_INFOGRAPHIC_URL
+    assert MF_INFOGRAPHIC_URL.startswith("https://mf.gov.cz/")
 
 
 def test_registry_invariants() -> None:
+    # Layer and variant keys travel in the SPA's `key[:variant]` grammar: [A-Za-z0-9_-] only.
+    token = re.compile(r"[A-Za-z0-9_-]+")
     keys = [lyr.key for s in mod.SOURCES.values() for lyr in s.layers]
-    assert len(keys) == len(set(keys))
+    assert len(keys) == len(set(keys)) and all(token.fullmatch(k) for k in keys)
     for section in mod.SOURCES.values():
         assert section.minzoom <= section.maxzoom
         assert section.attribution and section.licence and section.source_url
@@ -137,6 +181,12 @@ def test_registry_invariants() -> None:
                 assert len(classes) == 1, f"{layer.key}: a dissolved layer has one class"
                 assert all(isinstance(r, mod.ArcGisLayer) and r.geometry_type == mod.POLYGON
                            for r in layer.readers), layer.key
+            if layer.scale is not None:
+                assert not classes, f"{layer.key}: a scale layer is painted by value, not class"
+            if layer.variants:
+                variant_keys = [v["key"] for v in layer.variants]
+                assert len(variant_keys) == len(set(variant_keys)), layer.key
+                assert all(token.fullmatch(k) for k in variant_keys), layer.key
 
 
 # --- the props mappers, on real samples -------------------------------------------------
@@ -492,6 +542,7 @@ def test_every_sql_constant_passes_the_placeholder_rules() -> None:
         "DATUM_CHECK_SQL", "PREVIOUS_COUNTS_SQL", "UPSERT_SECTION_SQL", "PRUNE_LAYERS_SQL",
         "UPSERT_LAYER_SQL", "DELETE_FEATURES_SQL", "INSERT_FEATURE_SQL", "DISSOLVE_SQL",
         "RENDER_SQL", "SECTION_STATS_SQL", "SELECT_SOURCE_SQL", "KRAJE_SQL", "KRAJE_REVISED_SQL",
+        "RENT_MAP_SQL", "RENT_MAP_REVISED_SQL",
     }
     assert [(i.name, err) for i in items if (err := _invalid_placeholder(i.sql))] == []
 
@@ -519,6 +570,34 @@ def test_the_kraje_source_draws_each_kraj_boundary_in_3857() -> None:
     assert "whereb.level='kraj'" in text
 
 
+def test_the_rent_map_source_is_the_old_matviews_query_without_its_geojson() -> None:
+    """Migration 132's rent_map_choropleth: one row per territory of the LATEST revision, its
+    boundary at the level the MF priced it (obec or KÚ), the four VK rents pivoted into flat
+    props, NULLs stripped so an unpriced VK paints as null_color; the geometry stays geometry."""
+    text = _compact(mod.RENT_MAP_SQL)
+    assert text.startswith("selectb.id::textassource_id,")
+    assert ("jsonb_strip_nulls(jsonb_build_object('name',b.name,'kraj',min(v.kraj),"
+            "'level',b.level,") in text
+    for vk in range(1, 5):
+        assert f"'vk{vk}',max(v.ref_rent_per_m2)filter(wherev.vk={vk})" in text
+    assert "st_transform(b.geom::geometry,3857)asgeom" in text
+    assert "joinadmin_boundariesbonb.id=v.ruian_codeandb.level=v.level" in text
+    assert "wherev.source_revision=(selectmax(source_revision)fromrent_map_revisions)" in text
+    assert text.endswith("groupbyb.id")
+    assert "geojson" not in text and "novostavba" not in text
+
+
+def test_the_rent_map_revision_date_is_the_drawn_revisions_source_date() -> None:
+    assert _compact(mod.RENT_MAP_REVISED_SQL) == _compact(
+        "select source_date from rent_map_revisions order by source_revision desc limit 1")
+    conn = _FakeConn()
+    http = _http(_Scripted())
+    ctx = mod.Context(http, mod.ArcGis(http), conn)
+    section = mod.SOURCES["rent_map"]
+    assert section.revised_at(section, ctx) == date(2026, 8, 15)
+    assert conn.log == ["revised"]
+
+
 # --- the per-section flow ---------------------------------------------------------------
 
 
@@ -529,7 +608,7 @@ _TAGS = {
     mod.PRUNE_LAYERS_SQL: "prune", mod.UPSERT_LAYER_SQL: "layer",
     mod.DELETE_FEATURES_SQL: "delete", mod.INSERT_FEATURE_SQL: "insert",
     mod.DISSOLVE_SQL: "dissolve", mod.RENDER_SQL: "render", mod.SECTION_STATS_SQL: "stats",
-    mod.TILE_COUNT_SQL: "tilecount",
+    mod.TILE_COUNT_SQL: "tilecount", mod.RENT_MAP_REVISED_SQL: "revised",
 }
 
 
@@ -559,6 +638,7 @@ class _FakeCursor:
             "render": [(42,)],
             "stats": [(100, 5000, 1200)],
             "tilecount": [(1234,)],
+            "revised": [(date(2026, 8, 15),)],
         }.get(tag, [])
 
     def executemany(self, query: str, rows: list[tuple[Any, ...]]) -> None:
@@ -706,12 +786,130 @@ def test_the_sql_source_reads_its_select_through_the_geojson_wrapper() -> None:
     assert mod.KRAJE_SQL in conn.composed[0]
 
 
+# --- the database-only render of an SQL section (api/rent_map.py's path) ----------------
+
+
+_RENT_ROWS = [
+    (990001, {"name": "Obecov", "kraj": "Kraj Test", "level": "obec",
+              "vk1": 302, "vk2": 255, "vk3": 236, "vk4": 228}, '{"type":"MultiPolygon"}'),
+    (990021, {"name": "KU Test", "kraj": "Kraj Test", "level": "ku", "vk2": 412},
+     '{"type":"MultiPolygon"}'),
+]
+
+
+@pytest.fixture()
+def offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real requests session would mean the render could reach the network."""
+    def no_session() -> Any:
+        raise AssertionError("a database-only render opened a requests session")
+    monkeypatch.setattr(mod.requests, "Session", no_session)
+
+
+def test_an_sql_section_is_written_and_rendered_from_the_database_alone(offline: None) -> None:
+    conn = _FakeConn()
+    conn.source_rows = list(_RENT_ROWS)
+
+    assert mod.render_sql_section(conn, "rent_map") == 42
+
+    assert conn.log == ["datum", "previous", "select-source", "revised", "BEGIN", "timeout",
+                        "lock", "section", "prune", "layer", "delete", "insert", "render",
+                        "stats", "COMMIT"]
+    assert mod.RENT_MAP_SQL in conn.composed[0]
+    assert conn.params["lock"] == [("map_overlays:rent_map",)]
+    section = conn.params["section"][0]
+    assert (section["key"], section["minzoom"], section["maxzoom"], section["revised"],
+            section["source_url"]) == ("rent_map", 5, 12, date(2026, 8, 15), MF_INFOGRAPHIC_URL)
+    layer = conn.params["layer"][0]
+    assert (layer["key"], layer["section"], layer["feature_count"]) == ("rent_map", "rent_map", 2)
+    assert (layer["legend"].obj, layer["scale"].obj) == ([], _layer("rent_map").scale)
+    assert layer["variants"].obj == list(_layer("rent_map").variants)
+    assert [(r[0], r[1], r[2].obj, r[4]) for r in conn.inserted] == [
+        ("rent_map", "990001", _RENT_ROWS[0][1], 3857),
+        ("rent_map", "990021", _RENT_ROWS[1][1], 3857),
+    ]
+    assert conn.params["render"] == [("rent_map",)]
+
+
+def test_a_network_fed_section_is_not_rendered_from_the_database(offline: None) -> None:
+    conn = _FakeConn()
+    for key in ("metro", "flood"):
+        with pytest.raises(ValueError, match="not SQL-sourced"):
+            mod.render_sql_section(conn, key)
+    assert conn.log == []
+
+
+def test_the_database_only_render_keeps_the_shrink_guard(offline: None) -> None:
+    conn = _FakeConn(previous={"rent_map": 7630})
+    conn.source_rows = list(_RENT_ROWS)
+    with pytest.raises(mod.Refused, match="rent_map: 2 features against 7630"):
+        mod.render_sql_section(conn, "rent_map")
+    assert "BEGIN" not in conn.log and conn.inserted == []
+
+
+def test_the_database_only_render_keeps_the_datum_check(offline: None) -> None:
+    conn = _FakeConn(datum=10.3)
+    with pytest.raises(mod.DatumRefused):
+        mod.render_sql_section(conn, "rent_map")
+    assert conn.log == ["datum"]
+
+
+def test_the_database_only_render_refuses_an_empty_first_render(offline: None) -> None:
+    """A join that finds no boundary (an empty admin_boundaries) must not publish an empty map."""
+    conn = _FakeConn()
+    with pytest.raises(mod.Refused, match="0 features against 0"):
+        mod.render_sql_section(conn, "rent_map")
+    assert "BEGIN" not in conn.log
+
+
+def test_the_database_only_render_refuses_nested_props(offline: None) -> None:
+    conn = _FakeConn()
+    conn.source_rows = [(1, {"name": "X", "vk1": {"value": 300}}, '{"type":"Polygon"}')]
+    with pytest.raises(mod.Refused, match="flat scalars"):
+        mod.render_sql_section(conn, "rent_map")
+
+
+class _CountingNoNetwork(mod._NoNetwork):
+    calls: list[str] = []
+
+    def get(self, url: str, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append(url)
+        return super().get(url, *args, **kwargs)
+
+
+def test_the_no_network_session_fails_once_and_is_never_retried() -> None:
+    sleeps: list[float] = []
+    session = _CountingNoNetwork()
+    session.calls = []
+    with pytest.raises(requests.RequestException, match="database-only render"):
+        _http(session, sleeps).content("https://example.test/iso")
+    assert (session.calls, sleeps) == (["https://example.test/iso"], [])
+
+
+def test_a_database_only_render_degrades_a_network_revision_date_at_once(
+    offline: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Were an SQL section's revision date ever read over HTTP, the render inside a request
+    must not fetch it nor back off: one refused attempt, the date degrades to None."""
+    calls: list[str] = []
+    monkeypatch.setattr(_CountingNoNetwork, "calls", calls)
+    monkeypatch.setattr(mod, "_NoNetwork", _CountingNoNetwork)
+    monkeypatch.setitem(mod.SOURCES, "rent_map", dataclasses.replace(
+        mod.SOURCES["rent_map"], revised_at=mod.iso_revised_at("https://example.test/iso")))
+    conn = _FakeConn()
+    conn.source_rows = list(_RENT_ROWS)
+
+    assert mod.render_sql_section(conn, "rent_map") == 42
+    assert conn.params["section"][0]["revised"] is None and conn.log[-1] == "COMMIT"
+    assert calls == ["https://example.test/iso"]
+
+
 # --- the command line -------------------------------------------------------------------
 
 
 def test_sections_are_selected_in_registry_order() -> None:
-    assert mod.select_sections("") == ["metro", "flood", "kraje"]
+    assert mod.select_sections("") == ["metro", "flood", "kraje", "rent_map"]
     assert mod.select_sections("kraje, metro") == ["metro", "kraje"]
+    assert mod.select_sections("rent_map") == ["rent_map"]
     with pytest.raises(ValueError, match="tram"):
         mod.select_sections("metro,tram")
 
@@ -736,7 +934,7 @@ def test_one_refused_section_does_not_block_the_others(monkeypatch: pytest.Monke
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {"flood": mod.Refused("shrunk")}))
     monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
     assert mod.main([]) == 1
-    assert seen == ["metro", "flood", "kraje"]
+    assert seen == ["metro", "flood", "kraje", "rent_map"]
 
 
 def test_a_datum_refusal_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:

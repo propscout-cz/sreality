@@ -3,7 +3,9 @@
 Parsing lives in `toolkit.rent_map`; the write lives here (out of the read-only
 toolkit). Shared by `scripts.fetch_rent_map` and the `/admin/rent-map` upload
 endpoint so both ingest identically. The reference rent itself is the SQL
-measure `mf_reference()` (migration 565), which reads the refreshed cells.
+measure `mf_reference()` (migration 565), which reads the refreshed cells; the
+map's rent choropleth is the `rent_map` reference overlay
+(`scripts.ingest_map_overlays`), re-rendered in the ingest's own transaction.
 """
 
 from __future__ import annotations
@@ -16,7 +18,9 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from scraper import db as scraper_db
+from scripts.ingest_map_overlays import Refused as OverlayRefused, render_sql_section
 from toolkit.rent_map import (
+    MF_INFOGRAPHIC_URL,
     ParsedRentMap,
     parse_rent_map_xlsx,
     sha256_bytes,
@@ -28,10 +32,7 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("rent_map")
 
-MF_INFOGRAPHIC_URL = (
-    "https://mf.gov.cz/cs/rozpoctova-politika/podpora-projektoveho-rizeni/"
-    "cenova-mapa/cenova-mapa-infografika"
-)
+OVERLAY_SECTION = "rent_map"
 _MF_BASE = "https://mf.gov.cz"
 _UA = "Mozilla/5.0 (compatible; sreality-rentmap/1.0)"
 
@@ -79,7 +80,8 @@ def insert_revision(
     source_date: date | None,
     uploaded_by: str | None,
 ) -> int | None:
-    """Insert one revision + its values/adjustments, then refresh both matviews.
+    """Insert one revision + its values/adjustments, re-render the `rent_map` map
+    overlay and refresh `rent_map_cells`, in one transaction.
 
     Returns the new source_revision, or None when this exact file (by
     sha256) was already ingested — re-fetching an unchanged file is a no-op.
@@ -130,15 +132,28 @@ def insert_revision(
                     revision, a.vk, a.is_novostavba, a.attribute, a.czk_per_m2,
                 ))
 
-        # Both publish through the ONE chokepoint (migration 578): CONCURRENTLY,
-        # so no reader ever blocks on an ingest — rent_map_cells is
-        # mf_reference()'s only input (migration 565), read by every Browse and
-        # listing read. Joining the ingest's own transaction (a savepoint here)
-        # keeps the invariant: a rolled-back ingest leaves no refresh and no
-        # stamp claiming freshness the matview does not have. The registry still
-        # says host = 'api-request' — this artifact's freshness depends on
-        # someone loading a page.
-        scraper_db.refresh_matview(conn, "rent_map_choropleth")
+        # The map's rent choropleth is the `rent_map` reference overlay, re-rendered
+        # from the rows just written in a savepoint of this transaction (a rolled-back
+        # ingest leaves the previous tiles). A refused guard (datum, shrink) writes
+        # nothing and must not block the rent data: the revision lands, the map keeps
+        # its previous render, and fetch_rent_map.yml's re-render step fails loudly on
+        # the same refusal. Any other failure rolls the whole ingest back, as a failed
+        # matview refresh did.
+        try:
+            tiles = render_sql_section(conn, OVERLAY_SECTION)
+        except OverlayRefused as exc:
+            LOG.error("rent map: revision %d kept, but the map overlay was NOT "
+                      "re-rendered and still shows the previous one: %s", revision, exc)
+        else:
+            LOG.info("rent map: overlay %s re-rendered (%d tiles)", OVERLAY_SECTION, tiles)
+
+        # rent_map_cells is mf_reference()'s only input (migration 565), read by
+        # every Browse and listing read. It publishes through the ONE chokepoint
+        # (migration 578): CONCURRENTLY, so no reader ever blocks on an ingest.
+        # Joining the ingest's own transaction (a savepoint here) keeps the
+        # invariant: a rolled-back ingest leaves no refresh and no stamp claiming
+        # freshness the matview does not have. The registry says host =
+        # 'api-request' — this artifact's freshness depends on someone loading a page.
         scraper_db.refresh_matview(conn, "rent_map_cells")
 
     LOG.info("rent map: ingested revision %d (%d territories, %d adjustments)",

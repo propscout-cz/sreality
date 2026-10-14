@@ -115,7 +115,7 @@ create table map_overlay_layers (            -- one toggle key = one MVT layer i
   label         text not null,
   sort          int  not null,               -- chip order; drawn in REVERSE sort within a section
   legend        jsonb not null default '[]', -- [{class, label, color, dash?}] categorical paint
-  scale         jsonb,                        -- {prop, stops:[[v,color]…], null_color, unit}
+  scale         jsonb,                        -- {prop, stops:[[v,color]…], null_color, unit, opacity?}
   variants      jsonb,                        -- [{key, label, prop}] (rent_map only, PR C)
   feature_count int  not null default 0
 );
@@ -295,6 +295,55 @@ re-renders the section after an ingest. The SPA deletes `fetchRentMapChoropleth`
 `showRentMap`/`rentVk` (URL `rentmap`/`rentvk` read as legacy → `rent_map:vkN`). Migration 601 drops
 `rent_map_choropleth_public`, `rent_map_kraje_public`, the `rent_map_choropleth` matview and its
 refresh call in `api/rent_map.py`.
+
+Backend, as built (2026-10-15):
+
+- **Registry** (`scripts/ingest_map_overlays.py`): section `rent_map`, sort 4, **zoom 5–12, not 7–12**:
+  the old layer draws at every zoom, and at 7 it would vanish from the whole-country view (≈ z6.6 on a
+  1000×700 desktop map, ≈ z5.3 on a phone), against the operator's no-visible-change condition. Measured
+  on production 2026-10-15, a low zoom costs nothing: the z5 tile over Czechia carries 7,582 of the 7,630
+  territories in 1.0 MB, a z6 tile 1.0 MB, a z7 tile 0.77 MB (z8 ≈ 128 KB, z10 ≈ 17 KB, z12 ≈ 2 KB),
+  against ~10 MB of GeoJSON geometry the old read fetched whole on every load. Reverting to 7 is one
+  number. Attribution "Ministerstvo financí ČR – Cenová mapa nájemného"; licence "Licence neuvedena
+  (© Ministerstvo financí ČR)" (the MF page states no licence for the data, only its site's copyright);
+  `source_url` = `MF_INFOGRAPHIC_URL`, moved to `toolkit/rent_map.py` so the ingest and `api/rent_map.py`
+  share it without an import cycle; note "Měsíční nájemné referenčního bytu za m² podle Ministerstva
+  financí ČR, zvlášť pro každou velikostní kategorii bytu."; `source_revised_at` = the `source_date` of
+  the revision the source draws (the latest by `source_revision`).
+- **Layer** `rent_map`: legend empty, store `plain`, `scale = {prop: 'vk1', stops: RENT_RAMP (150
+  #eaf0f6 … 600 #1a1a5e), null_color: 'rgba(140, 140, 140, 0.35)', unit: 'rent_per_m2', opacity: 0.62}`
+  — `opacity` is new to the scale contract (the SPA's `OverlayScale` had none); `variants` vk1..vk4
+  with the MF labels. `RENT_MAP_SQL` is migration 132's matview query without its GeoJSON column:
+  props `{name, kraj, level, vk1..vk4}` through `jsonb_strip_nulls` (an unpriced VK or a NULL kraj is
+  absent and paints `null_color`), geometry `st_transform(geom::geometry, 3857)`. On production it yields
+  7,630 features identical (name, kraj, vk1–4) to the matview's 7,630 rows; only 15 polygons exceed 256
+  vertices, so `ST_Subdivide` splits almost nothing.
+- **`render_sql_section(conn, key)`**: one SQL-sourced section through `run_section` — datum check,
+  legend/flat-props and shrink guards, the one write transaction (a savepoint inside a caller's) —
+  from the database alone: its HTTP session refuses any fetch at once, never retried, so a request
+  never waits on the network. `api/rent_map.py`'s `insert_revision` calls it where it refreshed the
+  matview, after the COPYs and before the `rent_map_cells` refresh. A refused guard writes nothing and
+  is caught: the revision still lands (`mf_reference()` keeps flowing), the map keeps its previous
+  tiles, the API logs an ERROR, and `fetch_rent_map.yml`'s re-render step fails red on the same refusal
+  (`ingest_map_overlays.yml` with `accept_shrink` overrides). Any other failure rolls the whole ingest
+  back, as a failed refresh did. Cost, estimated (not yet measured end to end): the ingest request
+  grows by 30–60 s — 19 MB of EPSG:3857 GeoJSON through Python and ~4.7k tile envelopes rendered (a
+  dense Prague sample of z8–z12 tiles took ~14 ms a tile, sparse ones far less) — inside the SPA's
+  130 s request deadline.
+- **Workflow**: `fetch_rent_map.yml` ends with `python -m scripts.ingest_map_overlays --sections
+  rent_map` (`--dry-run` mirrored); every run re-renders, so the tile version, and with it the
+  browsers' cached tiles, turns over monthly. `ingest_map_overlays.yml`'s full quarterly run includes
+  `rent_map`, so it still stamps `map_overlay_tiles`; the API's single-section render stamps nothing.
+- **Migration 601**: drops both views and the matview (its unique index goes with it) and deletes the
+  matview's `derived_artifacts` row (`tests/test_derived_artifacts_stamping.py` fails a row nothing
+  stamps); no CASCADE (the live catalog shows no other dependent), a DO-block self-check. Applied only
+  after the cleanup deploys, with the operator's go.
+- **Deploy order, a window either way**: the deployed feature SPA draws a chip for every registry
+  section, so `rent_map` ingested before this PR's SPA is live (step 5 below) shows a second rent-map
+  chip (generic paint, no `opacity`) until the rollout lands. Ingested after the rollout, the rent layer
+  is missing until the ingest finishes, and for a tab opened in between until a reload (the registry
+  query never goes stale). Which is quieter turns on whether the new SPA keeps a `rentmap=` /
+  `rent_map:vkN` selection while the registry lacks the section.
 
 ## Files and ownership
 

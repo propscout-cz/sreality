@@ -1,8 +1,10 @@
 """Reference overlays, executed (migration 600, docs/design/map-overlays.md): the datum control
 point the ingest checks before it trusts PostGIS with S-JTSK, `map_overlay_render_section` on a
 square, a line and a point (one MVT layer per layer key, feature ids, props as attributes, the
-tile range from the Web Mercator formula), and the store's posture. Runs in CI's migrations job
-(`TEST_DATABASE_URL`); every test rolls back.
+tile range from the Web Mercator formula), the store's posture, and the MF rent choropleth
+(section `rent_map`, migration 601's cleanup) rendered from admin_boundaries × the latest
+rent_map revision, both by the database-only render and inside a rent-map ingest. Runs in CI's
+migrations job (`TEST_DATABASE_URL`); every test rolls back.
 """
 
 from __future__ import annotations
@@ -10,12 +12,16 @@ from __future__ import annotations
 import json
 import math
 import uuid
+from datetime import date
 from typing import Any, Iterator
 
 import psycopg
 import pytest
 
+from api.rent_map import insert_revision
+from scripts import ingest_map_overlays as overlays
 from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from toolkit.rent_map import ParsedRentMap, RentValue
 
 pytestmark = REQUIRED_DB
 
@@ -63,14 +69,24 @@ def _packed(buf: bytes) -> list[int]:
     return out
 
 
-def _layers(tile: bytes) -> dict[str, list[tuple[int, int, dict[str, str]]]]:
-    """Layer name -> [(feature id, geometry type, string attributes)] of an MVT tile."""
-    out: dict[str, list[tuple[int, int, dict[str, str]]]] = {}
+def _value(buf: bytes) -> str | int:
+    """One MVT Value: string_value (1), or an integer as int_value (4), uint_value (5) or the
+    zigzag sint_value (6). PostGIS writes a jsonb integer >= 0 as uint_value."""
+    ((field, value),) = list(_fields(buf))
+    assert field in (1, 4, 5, 6), f"unexpected MVT value field {field}"
+    if field == 1:
+        return value.decode()
+    return (value >> 1) ^ -(value & 1) if field == 6 else value
+
+
+def _layers(tile: bytes) -> dict[str, list[tuple[int, int, dict[str, str | int]]]]:
+    """Layer name -> [(feature id, geometry type, attributes)] of an MVT tile."""
+    out: dict[str, list[tuple[int, int, dict[str, str | int]]]] = {}
     for field, layer in _fields(tile):
         assert field == 3, f"a tile holds only layers, got field {field}"
         msg = list(_fields(layer))
         keys = [v.decode() for f, v in msg if f == 3]
-        values = [dict(_fields(v))[1].decode() for f, v in msg if f == 4]
+        values = [_value(v) for f, v in msg if f == 4]
         features = []
         for f, v in msg:
             if f == 2:
@@ -201,3 +217,127 @@ def test_the_store_is_dark_to_the_browser_roles(cur: Any, table: str) -> None:
         (f"public.{table}",),
     )
     assert cur.fetchone() == (True, 0, False, False)
+
+
+# --- the MF rent choropleth: section `rent_map` -----------------------------------------
+
+OBEC, KU, NO_SHAPE, NO_RENT = 990_101, 990_102, 990_103, 990_104
+
+
+def _boundary(cur: Any, code: int, level: str, name: str, east: int) -> None:
+    """A 0.01° square `east` hundredths of a degree east of Florenc."""
+    lon = FLORENC_LON + east * 0.01
+    cur.execute(
+        "INSERT INTO admin_boundaries (id, level, name, geom) VALUES (%s, %s, %s, "
+        "ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 4326))::geography)",
+        (code, level, name, lon, FLORENC_LAT, lon + 0.01, FLORENC_LAT + 0.01),
+    )
+
+
+def _rent_revision(cur: Any, source_date: date,
+                   rows: list[tuple[int, str, str | None, int, int | None]]) -> int:
+    cur.execute(
+        "INSERT INTO rent_map_revisions (source_date, source_filename, file_sha256, row_count) "
+        "VALUES (%s, 'ci.xlsx', %s, %s) RETURNING source_revision",
+        (source_date, f"ci-{uuid.uuid4().hex}", len(rows)),
+    )
+    revision = int(cur.fetchone()[0])
+    for code, level, kraj, vk, rent in rows:
+        cur.execute(
+            "INSERT INTO rent_map_values (source_revision, ruian_code, level, kraj, vk, "
+            "ref_rent_per_m2) VALUES (%s, %s, %s, %s, %s, %s)",
+            (revision, code, level, kraj, vk, rent),
+        )
+    return revision
+
+
+def _rent_overlay(cur: Any) -> tuple[Any, ...] | None:
+    cur.execute("SELECT version, fetched_at, source_revised_at FROM map_overlay_sections "
+                "WHERE key = 'rent_map'")
+    return cur.fetchone()
+
+
+def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -> None:
+    """One feature per territory the latest revision prices AND admin_boundaries can draw, at
+    the level the MF priced it, its VK rents as flat numeric props (an unpriced VK and a NULL
+    kraj stripped); the stale revision, an undrawable code and an unpriced boundary are absent."""
+    _boundary(cur, OBEC, "obec", "Obecov", 0)
+    _boundary(cur, KU, "ku", "KU Test", 1)
+    _boundary(cur, NO_RENT, "obec", "Nikde", 2)
+    _rent_revision(cur, date(2026, 5, 15), [(OBEC, "obec", "Kraj Test", 1, 999)])
+    _rent_revision(cur, date(2026, 8, 15), [
+        (OBEC, "obec", "Kraj Test", 1, 300), (OBEC, "obec", "Kraj Test", 2, 250),
+        (OBEC, "obec", "Kraj Test", 3, 220), (OBEC, "obec", "Kraj Test", 4, 180),
+        (KU, "ku", None, 2, 412), (KU, "ku", None, 3, None),
+        (NO_SHAPE, "obec", "Kraj Test", 1, 310),
+    ])
+
+    tiles = overlays.render_sql_section(cur.connection, "rent_map")
+
+    section, layer = overlays.SOURCES["rent_map"], overlays.SOURCES["rent_map"].layers[0]
+    obec_props = {"name": "Obecov", "kraj": "Kraj Test", "level": "obec",
+                  "vk1": 300, "vk2": 250, "vk3": 220, "vk4": 180}
+    ku_props = {"name": "KU Test", "level": "ku", "vk2": 412}
+    cur.execute("SELECT id, source_id, props FROM map_overlay_features "
+                "WHERE layer_key = 'rent_map' ORDER BY source_id")
+    features = cur.fetchall()
+    assert [(source_id, props) for _, source_id, props in features] == [
+        (str(OBEC), obec_props), (str(KU), ku_props)]
+    cur.execute("SELECT label, minzoom, maxzoom, attribution, licence, source_url, note, "
+                "source_revised_at, fetched_at IS NOT NULL FROM map_overlay_sections "
+                "WHERE key = 'rent_map'")
+    assert cur.fetchone() == (section.label, 5, 12, section.attribution, section.licence,
+                              section.source_url, section.note, date(2026, 8, 15), True)
+    cur.execute("SELECT legend, scale, variants, feature_count FROM map_overlay_layers "
+                "WHERE key = 'rent_map'")
+    assert cur.fetchone() == ([], layer.scale, list(layer.variants), 2)
+
+    cur.execute("SELECT z, x, y, mvt FROM map_overlay_tiles WHERE section = 'rent_map'")
+    rendered = {(z, x, y): bytes(mvt) for z, x, y, mvt in cur.fetchall()}
+    assert len(rendered) == tiles
+    inside = {(z, *_tile(FLORENC_LON + 0.005, FLORENC_LAT + 0.005, z)) for z in range(5, 13)}
+    assert inside <= set(rendered) and {z for z, _, _ in rendered} == set(range(5, 13))
+    ids = {source_id: fid for fid, source_id, _ in features}
+    for key in inside:
+        drawn = {fid: attrs for fid, _, attrs in _layers(rendered[key])["rent_map"]}
+        assert drawn[ids[str(OBEC)]] == obec_props, key
+
+
+def test_a_rent_map_ingest_re_renders_the_overlay_from_its_own_revision(cur: Any) -> None:
+    """api/rent_map.py renders the overlay where it refreshed rent_map_choropleth, inside the
+    ingest's transaction: the tiles carry the revision being written, before any commit, and
+    the ingest completes without the matview, which migration 601 dropped."""
+    _boundary(cur, OBEC, "obec", "Obecov", 0)
+    parsed = ParsedRentMap(
+        values=[RentValue(OBEC, "obec", "Kraj Test", None, "Obecov", 2, 260, 300, None)],
+        adjustments=[], source_date=date(2026, 11, 15),
+    )
+    revision = insert_revision(cur.connection, parsed, source_filename="ci.xlsx",
+                               file_sha256=f"ci-{uuid.uuid4().hex}",
+                               source_date=date(2026, 11, 15), uploaded_by=None)
+
+    assert revision is not None
+    cur.execute("SELECT props FROM map_overlay_features WHERE layer_key = 'rent_map'")
+    assert cur.fetchall() == [({"name": "Obecov", "kraj": "Kraj Test", "level": "obec",
+                                "vk2": 260},)]
+    assert _rent_overlay(cur)[2] == date(2026, 11, 15)
+    cur.execute("SELECT to_regclass('public.rent_map_choropleth')")
+    assert cur.fetchone() == (None,)
+
+
+def test_a_refused_rent_map_render_keeps_the_revision_and_the_previous_map(cur: Any) -> None:
+    """Nothing to draw (no boundary for the priced code) is an empty first map, which the
+    shrink guard refuses before writing: the revision still lands, the overlay is untouched,
+    and the ingest's transaction stays usable."""
+    before = _rent_overlay(cur)
+    parsed = ParsedRentMap(
+        values=[RentValue(NO_SHAPE, "obec", "Kraj Test", None, "Nikde", 1, 310, None, None)],
+        adjustments=[], source_date=date(2026, 11, 15),
+    )
+    revision = insert_revision(cur.connection, parsed, source_filename="ci.xlsx",
+                               file_sha256=f"ci-{uuid.uuid4().hex}",
+                               source_date=date(2026, 11, 15), uploaded_by=None)
+
+    cur.execute("SELECT count(*) FROM rent_map_values WHERE source_revision = %s", (revision,))
+    assert cur.fetchone() == (1,)
+    assert _rent_overlay(cur) == before

@@ -179,9 +179,10 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   frozen breakdown (rule #12).
 - **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops) +
   `rent_map_values` + `rent_map_adjustments` (migration 132, history kept).
-  `api.rent_map.insert_revision` parses (stdlib `zipfile`+`xml.etree`), COPYs, REFRESHes
-  `rent_map_choropleth` (the Browse map layer, VK1–4 + Kraje overlay) and — CONCURRENTLY —
-  `rent_map_cells`, stamping both in `derived_artifacts`; every caller of the measure sees the
-  new revision at that REFRESH, nothing to recompute. Fed by the monthly `fetch_rent_map.yml` and
-  the Settings upload / "Fetch latest now" (`POST /admin/rent-map/*`). Sheet sanity check:
+  `api.rent_map.insert_revision` parses (stdlib `zipfile`+`xml.etree`), COPYs, re-renders the
+  map's choropleth (reference overlay `rent_map`, VK1–4 variants; a refused guard keeps the revision
+  and the old tiles) and REFRESHes `rent_map_cells` CONCURRENTLY, stamping it; every caller of the
+  measure sees the new revision at that REFRESH, nothing to recompute. Fed by the monthly
+  `fetch_rent_map.yml` (its last step re-renders `rent_map`) and the Settings upload / "Fetch latest
+  now" (`POST /admin/rent-map/*`). Sheet sanity check:
   Litoměřice older 3+1, 68 m², +výtah +balkon +garáž → 291 Kč/m² → 19 788 Kč.
