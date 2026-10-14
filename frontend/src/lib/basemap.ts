@@ -9,7 +9,13 @@
 
 import maplibregl, { type MapOptions } from 'maplibre-gl';
 
+import { registerOverlayProtocol } from '@/lib/mapOverlayDraw';
+
 export const TILE_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+
+/* Every map can draw the reference overlays (lib/mapOverlayDraw): their tiles
+ * load through the API with the caller's session, not a bare fetch. */
+registerOverlayProtocol(maplibregl.addProtocol);
 
 type CreateMapOptions = Omit<MapOptions, 'container'> & {
   /* Add the metric ScaleControl (bottom-left). On for every map except the
