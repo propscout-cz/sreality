@@ -245,6 +245,15 @@ def test_E956_two_floating_rents_of_one_portal_were_converted_at_one_rate() -> N
     assert not relation_ok(a, b)
 
 
+def test_E956_one_portal_never_gets_the_relief_however_young_the_partner() -> None:
+    # A sreality EUR office first seen three scrapes ago has not moved four times yet; it is
+    # converted on the same day at the same rate as its floating neighbour all the same.
+    a = office(1, "sreality", SREALITY_EUR)
+    young = office(2, "sreality", [p * 1.02 for p in SREALITY_EUR[-3:]])
+    assert not floating_price(young, W31.d43_price_path_tol)
+    assert not relation_ok(a, young)
+
+
 def test_E956_beyond_the_cross_portal_bar_a_floating_rent_still_conflicts() -> None:
     a = office(81918, "sreality", SREALITY_EUR)
     b = office(250719, "idnes", [290000.0])

@@ -435,17 +435,17 @@ def price_conflict(
 
     E956: where a price FLOATS, the two are one foreign-currency price converted on two days,
     and the gap is read at the cross-portal bar E160 tightened only for prices a seller wrote:
-    308,709 on sreality against 306,114 converted once by idnes is one 850 m² office. Two that
-    float on ONE portal were converted on the same day at the same rate, so their gap is the
-    sellers' and stays a conflict."""
+    308,709 on sreality against 306,114 converted once by idnes is one 850 m² office. ACROSS
+    portals only: one portal reads its two adverts on one day at one rate, so their gap is the
+    sellers' — and a partner too young to have moved four times floats as surely as one that has."""
     if price_demonstrated(a, b, settings, paths_agree, overlap):
         return False
     if not (a.price and b.price):
         return False
     gap = rel_diff(float(a.price), float(b.price))
-    floats = (floating_price(a, settings.d43_price_path_tol),
-              floating_price(b, settings.d43_price_path_tol))
-    if gap <= PRICE_CROSS_TOL and any(floats) and not (all(floats) and a.source == b.source):
+    if (gap <= PRICE_CROSS_TOL and a.source != b.source
+            and (floating_price(a, settings.d43_price_path_tol)
+                 or floating_price(b, settings.d43_price_path_tol))):
         return False
     return gap <= PRICE_COLIVE_MAX_GAP
 
