@@ -2079,6 +2079,7 @@ async def _text_extract_pass(
 ) -> None:
     if stop_event.is_set():
         return
+    started = time.monotonic()
     last = await asyncio.to_thread(_text_extract_sync)
     # Only when the pass did work: at a 5-minute cadence an unconditional line is ~290
     # "claimed=0" a day once the backlog is drained. The heartbeat records every pass.
@@ -2088,6 +2089,16 @@ async def _text_extract_pass(
             last.get("claimed"), last.get("extracted"), last.get("written"),
             last.get("errors"), last.get("spent_usd", 0.0), last.get("model"),
         )
+    if last.get("fatal"):
+        # The provider stopped the batch (credit, quota, key: `vision_batch.is_fatal`) and will
+        # stop the next one alike, so the pass FAILED, booked as the autodedup lane books a
+        # refusal: no raise, since vision_batch already logs LLM-BATCH STOPPED each pass and a
+        # traceback per pass adds nothing. Booked as a success, the heartbeat showed
+        # 2026-10-02..10 as eight clean days that wrote nothing. `aborted` with no `fatal` is
+        # the pass's own $/time ceiling: bounded, not failed.
+        _record_pass_failed(state, "text_extract", round(time.monotonic() - started, 1))
+        state["lanes"]["text_extract"]["last"] = last
+        return
     _record_pass(state, "text_extract", last)
 
 
@@ -2221,6 +2232,13 @@ def _autodedup_outcome(
             wanted_pairs=counts.get("wanted_pairs"),
             wanted_by_attempt=counts.get("wanted_by_attempt"),
             aborted=aborted[:AUTODEDUP_REASON_CHARS] or None,
+            # E943: what the pair budget counts — the pairs left to decide once the reject
+            # ledger answered, the last claim's and each claim's — the wanted pairs the ledger
+            # answered instead of a re-score, and the rejects this pass ledgered.
+            pairs_to_decide=counts.get("pairs_to_decide"),
+            pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
+            ledger_skipped=counts.get("ledger_skipped"),
+            ledger_written=counts.get("ledger_written"),
         )
     return last
 
@@ -2269,7 +2287,7 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540) is "
+                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596) is "
                     "absent on this database; the lane skips every tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False

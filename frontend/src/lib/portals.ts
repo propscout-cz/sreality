@@ -4,6 +4,7 @@
  * `listings.source` vocabulary. Falls back to the raw source code
  * (capitalised) for a portal not yet in the registry enum. */
 import { filterById } from './filterRegistry.generated';
+import type { ListingFilters } from './filters';
 
 const PORTAL_LABELS: Record<string, string> = Object.fromEntries(
   (filterById('portals')?.enum_values ?? []).map((o) => [o.value, o.label_cs]),
@@ -26,6 +27,59 @@ export const PORTAL_SHORT_LABEL: Record<string, string> = {
 
 export function portalShort(source: string): string {
   return PORTAL_SHORT_LABEL[source] ?? portalLabel(source) ?? source;
+}
+
+/* The portal filter's three values (MS19 + migration 597): the portals a property
+ * must have an ad on, the portals it must have none on, and whether only active
+ * ads count against the latter. */
+export type PortalChoice = Pick<
+  ListingFilters, 'portals' | 'portalsExcluded' | 'portalsExcludedActiveOnly'
+>;
+
+export const NO_PORTALS: PortalChoice = {
+  portals: [], portalsExcluded: [], portalsExcludedActiveOnly: false,
+};
+
+/* THE chip transition, for every portal control (Browse, the Watchdog editor, the
+ * phone Feed): one tap moves a portal off → on it → not on it → off, and "active
+ * ads only" lives only while something is excluded. Builds the three fields
+ * explicitly, so a caller may pass a whole ListingFilters. */
+export function cyclePortal(c: PortalChoice, p: string): PortalChoice {
+  const without = (xs: ReadonlyArray<string>) => xs.filter((x) => x !== p);
+  if (c.portals.includes(p)) {
+    return {
+      portals: without(c.portals),
+      portalsExcluded: [...c.portalsExcluded, p],
+      portalsExcludedActiveOnly: c.portalsExcludedActiveOnly,
+    };
+  }
+  if (c.portalsExcluded.includes(p)) {
+    const portalsExcluded = without(c.portalsExcluded);
+    return {
+      portals: [...c.portals],
+      portalsExcluded,
+      portalsExcludedActiveOnly: portalsExcluded.length > 0 && c.portalsExcludedActiveOnly,
+    };
+  }
+  return {
+    portals: [...c.portals, p],
+    portalsExcluded: [...c.portalsExcluded],
+    portalsExcludedActiveOnly: c.portalsExcludedActiveOnly,
+  };
+}
+
+/* Both sides of the portal filter in words (MS19 + migration 597) — "on iDNES
+ * −Sreality" — for every summary that names a cohort, so an exclusion that hides
+ * most of the market is never invisible. Null when the filter is off. */
+export function portalScopeLabel(
+  included: ReadonlyArray<string>,
+  excluded: ReadonlyArray<string>,
+  excludedActiveOnly: boolean,
+): string | null {
+  const parts = excluded.map((p) => `−${portalShort(p)}`);
+  if (included.length) parts.unshift(`on ${included.map(portalShort).join(', ')}`);
+  if (!parts.length) return null;
+  return parts.join(' ') + (excluded.length && excludedActiveOnly ? ' (active ads)' : '');
 }
 
 /* A listing's URL on its portal is `source_url` on the row — a fact the portal's

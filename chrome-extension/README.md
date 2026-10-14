@@ -70,14 +70,17 @@ maxima, remax, mmreality, ceskereality).
     removes the property. The list is re-read each time the checklist opens.
   - **Eye** (hide, migration 536): one click hides the property, one click
     restores it. Absent while the property is a LIVE deal, like everywhere else.
-  - **Stage mark** (`src/index_stage.ts`): a card in the pipeline has its
-    photo toned in the stage colour (the operator's, copper when none) with
-    the stage badge set large on it and the stage name beneath, so a deal
-    reads from across the grid; hovering the card lifts the tone to show the
-    photo. The photo is found by geometry (the largest image the card shows,
-    cut to whatever clips it, corners matched), not by portal markup. A hidden
-    card drawn barely visible gets no mark, and neither does a card guess that
-    holds several listings (it could tone another listing's photo).
+  - **Photo mark** (`src/index_photo_mark.ts`), so the state reads from
+    across the grid. In the pipeline: the photo toned in the stage colour (the
+    operator's, copper when none) with the stage badge and name over it;
+    hovering the card lifts the tone to show the photo. In a collection: a
+    copper rim round the photo and a copper tag in its top-right corner
+    naming the collection (`+N` for more) — the photo keeps its colours, so a
+    saved card never reads as a stage. A property can carry both. The photo is
+    found by geometry (the largest image the card shows, cut to whatever clips
+    it, corners matched), not by portal markup. A hidden card drawn barely
+    visible gets no mark, and neither does a card guess that holds several
+    listings (it could mark another listing's photo).
   - All three write through the same routes as the panel and the app, are
     optimistic (a failure puts the state back and says why in the corner), and
     are property-grain: a write repaints every card of that property on the
@@ -437,8 +440,9 @@ Odhlásit" line then appears at the top of the panel on every listing; click
    the pipeline; once added, click again to change the stage), the **bookmark**
    (tick the collections the property belongs in) and the **eye** (hide the
    property / show it again). A property in the pipeline also has its photo
-   tinted in the stage's colour with the stage number in large type over it;
-   point at the card to see the photo through.
+   tinted in the stage's colour with the stage number over it (point at the
+   card to see the photo through); one saved to a collection gets a copper
+   frame and a tag naming the collection.
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
@@ -485,8 +489,8 @@ The bundle itself carries no secret and every write is per-user + RLS-scoped
 - Staged rollout, with the API kept backward-compatible across at least two
   extension versions. **No auth safety net remains**: the `verify_jwt`
   dual-auth window closed 2026-08-04 (PR #941), so a build still presenting
-  the static `API_TOKEN` gets a flat `401` today — it does not keep working
-  (`tests/api/test_auth.py` asserts this). Every install must carry a real
+  a static `API_TOKEN` gets a flat `401` today — the key itself was deleted on
+  2026-10-13 (`tests/api/test_auth.py` asserts a non-JWT bearer is refused). Every install must carry a real
   Supabase JWT; plan the rollout accordingly.
 
 Full detail: `docs/design/waves-1-4-public-features.md`, "Chrome Web Store

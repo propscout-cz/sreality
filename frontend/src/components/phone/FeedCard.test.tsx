@@ -2,11 +2,13 @@
  * measure under the server's basis label — a sale in Kč/m², a rent in
  * Kč/m²/měs — and a row whose basis is missing or mixed shows no figure at all,
  * never a bare number. Plus the card's other promises: the 1080 px photo copy,
- * the stage wash on a filed property, the funnel's two meanings. */
-import { render, screen, waitFor, within } from '@testing-library/react';
+ * the stage wash on a filed property, the funnel's two meanings, and the photo
+ * strip (a swipe turns the photos, a tap opens the property), and the map-pin
+ * mark that opens Poloha. */
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
@@ -34,6 +36,8 @@ vi.mock('@/lib/queries', async (importOriginal) => {
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   addPipelineCard: vi.fn(),
+  apiGet: vi.fn(),
+  apiGetBlob: vi.fn(),
 }));
 vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
@@ -107,14 +111,51 @@ function renderCard(r: CardRow) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
-        <CardHydrationProvider listingIds={[r.listing_id]} renders={{ photos: 50 }}>
-          <FeedCard r={r} coverTag="default" />
-        </CardHydrationProvider>
+      <MemoryRouter initialEntries={['/feed']}>
+        <Routes>
+          <Route
+            path="/feed"
+            element={
+              <CardHydrationProvider listingIds={[r.listing_id]} renders={{ photos: 50 }}>
+                <FeedCard r={r} coverTag="default" />
+              </CardHydrationProvider>
+            }
+          />
+          <Route path="/property/:id" element={<p>Stránka nemovitosti</p>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
+
+const photos = (n: number) => Array.from({ length: n }, (_, i) => photo(i + 1));
+const strip = () => screen.getByRole('group', { name: /^Fotky/ });
+const slides = () => within(strip()).getAllByRole('link');
+const dots = () => strip().parentElement!.querySelectorAll('i');
+
+/* jsdom has no layout and no PointerEvent: give the strip a width and a scroll
+ * offset, and press with a MouseEvent named pointerdown (React reads it as one). */
+function scrollStripTo(el: HTMLElement, left: number) {
+  Object.defineProperty(el, 'clientWidth', { configurable: true, value: 390 });
+  Object.defineProperty(el, 'scrollLeft', { configurable: true, writable: true, value: left });
+}
+const press = (el: HTMLElement, clientX: number, clientY: number) =>
+  fireEvent(el, new MouseEvent('pointerdown', { bubbles: true, clientX, clientY }));
+
+const FILED = new Map([
+  [
+    304388,
+    {
+      property_id: 304388,
+      stage_id: 2,
+      stage_label: 'Prohlídka',
+      stage_color: 'ochre',
+      stage_code: 'P1',
+      stage_position: 2,
+      is_terminal: false,
+    },
+  ],
+]) as PipelineMembers;
 
 beforeEach(() => {
   vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(new Map() as PipelineMembers);
@@ -122,6 +163,8 @@ beforeEach(() => {
   vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
   vi.mocked(queries.fetchIsDismissed).mockResolvedValue(false);
   vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
+  vi.mocked(api.apiGet).mockReset();
+  vi.mocked(api.apiGetBlob).mockReset();
 });
 
 describe('<FeedCard> — the per-m² figure carries its basis (rule 23)', () => {
@@ -181,11 +224,16 @@ describe('<FeedCard> — the lines', () => {
     expect(plain(portalsWord(5))).toBe('5 portálů');
   });
 
-  it('opens the property page from the price link stretched over the card', () => {
+  it('opens the property page from the price link stretched over the text, not the photos', () => {
     renderCard(base);
     const link = screen.getByRole('link', { name: /7\s490\s000\sKč, 2\+kk/ });
     expect(link).toHaveAttribute('href', expect.stringContaining('/property/304388'));
     expect(link).toHaveClass('stretched-link');
+    /* The ::after resolves against the nearest positioned box: the text body. A
+     * link stretched over the strip would swallow every swipe. */
+    const body = link.closest('.relative') as HTMLElement;
+    expect(body.tagName).toBe('DIV');
+    expect(within(body).queryByRole('group')).toBeNull();
   });
 });
 
@@ -210,22 +258,7 @@ describe('<FeedCard> — photo, wash, funnel', () => {
   });
 
   it('washes a filed photo in its stage and opens the stage sheet, never removing', async () => {
-    vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(
-      new Map([
-        [
-          304388,
-          {
-            property_id: 304388,
-            stage_id: 2,
-            stage_label: 'Prohlídka',
-            stage_color: 'ochre',
-            stage_code: 'P1',
-            stage_position: 2,
-            is_terminal: false,
-          },
-        ],
-      ]) as PipelineMembers,
-    );
+    vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(FILED);
     const { container } = renderCard(base);
     const funnel = await screen.findByRole('button', { name: 'Fáze Prohlídka, změnit' });
     /* The wash: the stage's code set large and its name, over the photo. */
@@ -246,5 +279,143 @@ describe('<FeedCard> — photo, wash, funnel', () => {
     /* The remove is two-step, as everywhere (rule 22). */
     await userEvent.click(within(sheet).getByRole('menuitem', { name: 'Odebrat z pipeline' }));
     expect(within(sheet).getByText('Odebrat z pipeline?')).toBeInTheDocument();
+  });
+});
+
+describe('<FeedCard> — the photo strip', () => {
+  it('draws a slide per photo; the cover and the next load, the rest as the swipe nears them', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(5)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(5));
+    for (const slide of slides()) {
+      expect(slide).toHaveAttribute('href', expect.stringContaining('/property/304388'));
+      expect(slide).toHaveAttribute('tabindex', '-1');
+    }
+    const el = strip();
+    let imgs = el.querySelectorAll('img');
+    expect(imgs).toHaveLength(2);
+    expect(imgs[0]).toHaveAttribute('src', '/images/9001/0001.jpg?w=1080');
+    expect(imgs[1]).toHaveAttribute('src', '/images/9001/0002.jpg?w=1080');
+    for (const img of imgs) expect(img).toHaveAttribute('loading', 'lazy');
+    expect(dots()).toHaveLength(5);
+    expect(dots()[0]).toHaveAttribute('data-dot', 'on');
+
+    scrollStripTo(el, 390);
+    fireEvent.scroll(el);
+    await waitFor(() => expect(el.querySelectorAll('img')).toHaveLength(3));
+    imgs = el.querySelectorAll('img');
+    expect(imgs[2]).toHaveAttribute('src', '/images/9001/0003.jpg?w=1080');
+    expect(imgs[2]).toHaveAttribute('loading', 'lazy');
+    expect(dots()[1]).toHaveAttribute('data-dot', 'on');
+    expect(dots()[0]).not.toHaveAttribute('data-dot');
+  });
+
+  it('stops at eight and ends on "all N photos" when the ad has more', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(12)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(9));
+    const last = slides()[8];
+    expect(last).toHaveTextContent('Zobrazit všech 12 fotek');
+    expect(last).toHaveAttribute('href', expect.stringContaining('/property/304388'));
+    expect(dots()).toHaveLength(8);
+    expect(screen.getByText(/fot\./).textContent).toMatch(/12/);
+  });
+
+  it('draws neither dots nor an end slide for a single photo', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(1)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(1));
+    expect(dots()).toHaveLength(0);
+    expect(screen.queryByText(/Zobrazit všech/)).toBeNull();
+  });
+
+  it('opens the property on a tap, never on a swipe', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(3)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(3));
+    const el = strip();
+
+    /* A drag across the photo: the click at its end is swallowed. */
+    press(el, 100, 120);
+    fireEvent.click(slides()[0], { clientX: 160, clientY: 122 });
+    expect(screen.queryByText('Stránka nemovitosti')).toBeNull();
+
+    /* A gesture that moved the strip, wherever it ended: swallowed too. */
+    press(el, 100, 120);
+    scrollStripTo(el, 390);
+    fireEvent.click(slides()[1], { clientX: 100, clientY: 120 });
+    expect(screen.queryByText('Stránka nemovitosti')).toBeNull();
+
+    /* A tap: opens the property. */
+    press(el, 100, 120);
+    fireEvent.click(slides()[1], { clientX: 103, clientY: 121 });
+    expect(await screen.findByText('Stránka nemovitosti')).toBeInTheDocument();
+  });
+
+  it('lays the stage wash over every photo of a filed property', async () => {
+    vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(FILED);
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(4)]]));
+    renderCard(base);
+    await waitFor(() => expect(within(slides()[0]).queryByText('P1')).not.toBeNull());
+    expect(slides()).toHaveLength(4);
+    for (const slide of slides()) {
+      expect(within(slide).getByText('P1')).toBeInTheDocument();
+      expect(within(slide).getByText('Prohlídka')).toBeInTheDocument();
+    }
+  });
+});
+
+describe('<FeedCard> — Poloha', () => {
+  it('carries the map-pin mark on every card, under the eye', () => {
+    for (const r of [base, rent]) {
+      const { unmount } = renderCard(r);
+      const pin = screen.getByRole('button', { name: 'Poloha' });
+      expect(pin).toHaveAttribute('aria-haspopup', 'dialog');
+      /* A tick between, then the eye. */
+      expect(pin.previousElementSibling?.previousElementSibling).toHaveAttribute(
+        'aria-label',
+        'Skrýt nemovitost',
+      );
+      unmount();
+    }
+    /* Nothing is read until the sheet opens. */
+    expect(api.apiGet).not.toHaveBeenCalled();
+    expect(api.apiGetBlob).not.toHaveBeenCalled();
+  });
+
+  it('opens the Poloha sheet with the map, the place and the three map apps', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:map');
+    URL.revokeObjectURL = vi.fn();
+    vi.mocked(api.apiGet).mockResolvedValue({
+      lat: 50.105,
+      lon: 14.5,
+      granularity: 'street',
+      granularity_rank: 60,
+      label: 'Freyova, Praha 9 – Vysočany',
+      zoom: 16,
+      note: null,
+    });
+    vi.mocked(api.apiGetBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    renderCard(base);
+    await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Poloha' });
+    expect(api.apiGet).toHaveBeenCalledWith('/properties/304388/location', undefined, expect.anything());
+    expect(await within(sheet).findByRole('img')).toHaveAttribute('src', 'blob:map');
+    expect(within(sheet).getAllByRole('link').map((a) => a.textContent)).toEqual([
+      'Apple Maps',
+      'Google Maps',
+      'Mapy.cz',
+    ]);
+  });
+
+  it('says "Bez polohy" when the property has no point', async () => {
+    const none = new api.ApiError('no_location', 404, { detail: { reason: 'no_location' } });
+    vi.mocked(api.apiGet).mockRejectedValue(none);
+    vi.mocked(api.apiGetBlob).mockRejectedValue(none);
+    renderCard(base);
+    await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Poloha' });
+    expect(await within(sheet).findByText('Bez polohy')).toBeInTheDocument();
+    expect(within(sheet).queryByRole('link')).toBeNull();
   });
 });

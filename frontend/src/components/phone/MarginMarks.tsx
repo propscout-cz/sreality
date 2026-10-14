@@ -1,12 +1,15 @@
 /* The feed card's margin (#1762's signature): a 44 px translucent paper strip
  * over the photo's right edge holding the extension's three actions — funnel,
- * bookmark, eye — like ticks in a notebook margin, with the photo count at its
- * foot.
+ * bookmark, eye — and the map-pin that opens Poloha, like ticks in a notebook
+ * margin, with the photo count at its foot (four 48 px marks and the foot still
+ * fit the 292 px photo of a 390 px phone). Only the marks take a touch: the column's bare paper passes it through,
+ * so a swipe that starts there still turns the card's photos (CardPhotoStrip).
  *
  * Every write is the SPA's own, unchanged (rule 22): the funnel is
  * `usePipelineCard` (out → a tap adds at the entry stage; in → the stage menu,
  * never a remove toggle), the bookmark is the collection save list, the eye is
- * `useDismissal` (hide with an undo toast; on a hidden property, restore). The
+ * `useDismissal` (hide with an undo toast; on a hidden property, restore); the pin
+ * writes nothing (the location sheet reads only while open). The
  * reads are the shared ones every Browse card dedupes onto: pipeline members +
  * stages, the collection member map, the per-property dismissal state. A failed
  * membership read is a retry, never the "add" verb (MS16). */
@@ -29,9 +32,11 @@ import { useDismissal } from '@/lib/useDismissal';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 
 import { CollectionSheet, StageSheet, type SheetSubject } from './FeedSheets';
+import LocationSheet from './LocationSheet';
+import { PinIcon } from './phoneIcons';
 
 const MARK =
-  'flex h-12 w-full flex-col items-center justify-center gap-0.5 transition-colors aria-disabled:opacity-60';
+  'pointer-events-auto flex h-12 w-full flex-col items-center justify-center gap-0.5 transition-colors aria-disabled:opacity-60';
 const IDLE = 'text-[var(--color-ink-3)] active:text-[var(--color-ink)]';
 const PRESSED = 'text-[var(--color-ink)]';
 
@@ -84,7 +89,7 @@ export interface MarginMarksProps {
 
 export default function MarginMarks({ subject, photoCount }: MarginMarksProps) {
   const { property_id } = subject;
-  const [sheet, setSheet] = useState<'stage' | 'collections' | null>(null);
+  const [sheet, setSheet] = useState<'stage' | 'collections' | 'location' | null>(null);
 
   const { membersQ, member, badge, accent } = usePipelineLook(property_id);
   const collectionsQ = useQuery({
@@ -107,7 +112,7 @@ export default function MarginMarks({ subject, photoCount }: MarginMarksProps) {
   const eyeBlocked = liveDeal || dismissed == null || dismissPending;
 
   return (
-    <div className="absolute inset-y-0 right-0 z-[var(--z-card-action)] flex w-11 flex-col items-center border-l border-[var(--color-rule-strong)] bg-[var(--color-paper-2)]/88 pt-1">
+    <div className="pointer-events-none absolute inset-y-0 right-0 z-[var(--z-card-action)] flex w-11 flex-col items-center border-l border-[var(--color-rule-strong)] bg-[var(--color-paper-2)]/88 pt-1">
       {readFailed(membersQ) ? (
         <RetryMark what="Pipeline" onRetry={() => void membersQ.refetch()} />
       ) : (
@@ -166,6 +171,16 @@ export default function MarginMarks({ subject, photoCount }: MarginMarksProps) {
       >
         <EyeOffIcon filled={hidden} className="h-5 w-5" />
       </button>
+      <Tick />
+      <button
+        type="button"
+        onClick={() => setSheet('location')}
+        aria-haspopup="dialog"
+        aria-label="Poloha"
+        className={`${MARK} ${IDLE}`}
+      >
+        <PinIcon className="h-5 w-5" />
+      </button>
       {photoCount != null && photoCount > 0 && (
         <span className="mt-auto pb-2 text-center font-mono text-[10px] leading-[1.3] tabular-nums text-[var(--color-ink-3)]">
           {photoCount}
@@ -180,6 +195,7 @@ export default function MarginMarks({ subject, photoCount }: MarginMarksProps) {
       {sheet === 'collections' && (
         <CollectionSheet subject={subject} memberIds={collectionIds} onClose={() => setSheet(null)} />
       )}
+      {sheet === 'location' && <LocationSheet subject={subject} onClose={() => setSheet(null)} />}
     </div>
   );
 }

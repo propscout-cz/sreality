@@ -360,10 +360,12 @@ nothing else.
   `apply` / `unapply` holds it for its run, so a worker pass that fires meanwhile is a green
   `skipped: leased`; every refusal names the holder, and `release_lease=<holder>` ends the lease a
   dead writer left (a pass whose own connection the server terminated releases its lease itself,
-  over the fresh connection it halves its rate on — E931; `release_lease` is for a worker that died
-  with the row). The brake: set the interval to 0, then `mode=unapply` (by `run=rt:<holder>` or
-  a `since=` window) — a live `apply` or `unapply` REFUSES while the interval is above 0, because
-  the lane's next sweep would re-merge what it undoes.
+  over the fresh connection it halves its rate on (E931) or, when a database restart took that
+  one too, over new ones, one every 20 s for up to 180 s before falling back to the TTL;
+  `release_lease` is for a worker that died with the row). The brake: set the interval to 0,
+  then `mode=unapply` (by `run=rt:<holder>` or a `since=` window) — a live `apply` or `unapply`
+  REFUSES while the interval is above 0, because the lane's next sweep would re-merge what it
+  undoes.
 - **The engine bounds its own time (E913).** A pass reads its deadline (1,050 s) between steps and
   every 256 pair decisions; past it the one transaction rolls back (nothing written, no cursor
   moved), the lease is freed and the pass records its rate HALVED, so the next claim is half the
@@ -435,7 +437,10 @@ nothing else.
   empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
   before the pass and at its end; E949: on every path but `previous_pass_running`, and a raised
   pass writes no `last`, so the heartbeat keeps the previous pass's until the next pass's
-  rss_at_start_mb shows what the raised one left)}`; an absent store (migrations 539/540) =
+  rss_at_start_mb shows what the raised one left), pairs_to_decide + pairs_to_decide_by_attempt
+  (E943: what the pair budget counts, the last claim's and each claim's), ledger_skipped +
+  ledger_written (the wanted below-floor rejects the reject ledger answered instead of a re-score,
+  and the rejects the pass ledgered)}`; an absent store (migrations 539/540/596) =
   `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,

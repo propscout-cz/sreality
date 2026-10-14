@@ -1,6 +1,6 @@
 ---
 name: toolkit-api
-description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the two-gate auth split (require_token shared-secret vs. require_admin/verify_jwt real Supabase JWT / login / admin gating / identity), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, notification delivery, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_TOKEN, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/RESEND/TELEGRAM/STRIPE keys, CORS.
+description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, notification delivery, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/RESEND/TELEGRAM/STRIPE keys, CORS.
 ---
 
 # Toolkit & API
@@ -102,14 +102,14 @@ it (`api/`). They do not apply to the scraper.
    `ST_DWithin(ll.geom::geography, target, radius_m)`. Never compute distance in Python.
 7. **psycopg directly, not supabase-py.** Same reasoning as the scraper.
    `prepare_threshold=None` for pgbouncer-mode pooler.
-8. **Two auth gates coexist by design: `require_token` (shared secret) and
-   `require_admin`/`verify_jwt` (real identity, JWT-only since 2026-08-04).** Baseline:
-   a `require_token` route needs `Authorization: Bearer <API_TOKEN>` and fails CLOSED (`503`
-   when `API_TOKEN` is unset, unless `API_AUTH_OPTIONAL=1` for local dev); `/health` stays open for Railway
-   healthchecks. `/admin/*` (Settings-page surface: skills, `app_settings`, agent tool
-   inventory) is bearer-gated like every other write surface — it was historically exempt
-   on the theory that the private Railway URL was the perimeter, but that URL ships
-   inside the public SPA bundle, so the exemption gave no real protection.
+8. **One credential — a Supabase JWT; the gate decides what it needs from it, the client never chooses
+   per request.** A person (SPA, extension) sends the session JWT; a machine (ClickUp, a script) signs in as
+   its own Supabase user and sends that JWT — no static key exists (`API_TOKEN` deleted 2026-10-13).
+   `api/dependencies.py` `_bearer` is the ONE reader of `Authorization`: `require_token` = any verified
+   JWT, no identity (401 without one, `503` with no verifier; `API_AUTH_OPTIONAL=1` opens it for local dev
+   ONLY), `verify_jwt` = the claims, `account_scope` = a read scope; every 401 is RFC 6750
+   (`WWW-Authenticate: Bearer error="invalid_token"` + the reason). `/health` stays open for Railway
+   healthchecks. `/admin/*` (Settings-page surface) is gated like every write surface.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
    of the token: `/admin/*`, `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
@@ -118,8 +118,8 @@ it (`api/`). They do not apply to the scraper.
    `/pipeline/*`, `/collections`, `/tags`, `/filter-presets` (per account, mig 595), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
-   most other routes are still `require_token`-only (a shared secret, no identity — buildings,
-   the manual-estimate read, estimation preview). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   most other routes are `require_token` (any signed-in caller, no identity — buildings,
+   the manual-estimate read, estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -145,7 +145,7 @@ it (`api/`). They do not apply to the scraper.
    `tests/api/test_broker_routes.py` holds two standing gates: no `/brokers` route may
    ride `require_token`, and every non-admin one must stamp `pii_masked` — a new route
    must be added to that table. The SPA is the main consumer since 2026-08-12
-   (`frontend/src/lib/brokers.ts`, every call `jwt: true`); it previously read the
+   (`frontend/src/lib/brokers.ts`, on the session JWT); it previously read the
    underlying views straight off PostgREST and had been dark since migration 299 revoked
    them. Migration 395 revoked the last one A6 missed (`firms_public`, default-ACL drift).
    Because the cap is a 422 on the WHOLE batch, `fetchListingBrokersByIds` chunks
@@ -161,12 +161,10 @@ it (`api/`). They do not apply to the scraper.
    the client treats 404 as an answer only when the body carries this module's own
    `broker not found` detail — any other 404 (edge, stale base URL, renamed route) must
    surface as an error, not as "no broker". One per-ad read: `POST /brokers/by-listings`.
-   **The old coexistence window is gone for `require_admin`/`verify_jwt`**: the static
-   `API_TOKEN`, extractable from the shipped SPA bundle via devtools, used to also satisfy
-   `verify_jwt` as a synthetic `is_admin: True` identity — a live CRITICAL finding closed
-   2026-08-04 (`docs/design/api-token-rotation-and-spa-jwt-migration.md`). It never
-   authenticates through `verify_jwt` now; `require_token`-only routes are unaffected (a
-   fully separate, simpler check that was never the vulnerable path).
+   **The static key is gone (2026-10-13)**: `API_TOKEN`, extractable from the shipped SPA bundle via
+   devtools, once also satisfied `verify_jwt` as a synthetic `is_admin: True` identity (a live CRITICAL
+   finding closed 2026-08-04) and then only `require_token`; today `require_token` delegates to
+   `verify_jwt` and nothing reads the variable (`docs/design/api-token-rotation-and-spa-jwt-migration.md`).
    See "Identity, login, and admin gating" for the JWT mechanics.
 9. **Trace format on `estimation_runs.trace` is versioned.** `TRACE_SCHEMA_VERSION` lives in
    `api/estimation_runs.py`; every row's `trace.version` matches that constant at write time.
@@ -260,26 +258,25 @@ the deadline by value; its overlay keeps `LOOKUP_TIMEOUT_MS` for MV3 port loss n
 
 ## Identity, login, and admin gating (Phase 1, `api/dependencies.py`)
 
-Six auth primitives coexist — four in `api/dependencies.py`, two in `api/tenant_pool.py` (`tenant_conn` after this list):
-- `require_token` — the original bearer-token gate (rule #8's baseline), now fail-closed (`503` when `API_TOKEN` unset).
-- `account_scope` — an EITHER gate returning a READ SCOPE (the tenancy doctrine's FOURTH shape),
-  for routes serving a browser session AND a non-browser caller over the one `Authorization`
-  header: the static token resolves to `[SYSTEM]` (it ships in the SPA bundle, so it is no
-  identity), a verified JWT to `[that account, SYSTEM]` — mirroring `estimation_runs_tenant_read`
-  (291), never a second tenancy definition. Unset/wrong-credential contract matches
-  `require_token` (503 / 401). Used by `GET /estimations{,/latest-by-listing}`, deliberately
-  SERVICE-ROLE: their LEFT JOIN onto `listings` + `parsed_url_cache` (RLS-on, zero policies) would
-  silently NULL `locality_display` on a tenant conn. `account_ids` is a REQUIRED kwarg on those
-  read helpers — omitting it is a `TypeError`, never a silent unscoped read.
-- `verify_jwt` — verifies a Supabase user JWT and returns its claims. Preferred path:
-  asymmetric JWKS (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached
-  via `PyJWKClient`, no shared secret). Falls back to a shared HS256 secret
-  (`SUPABASE_JWT_SECRET`) if that's all that's configured. Fails closed with `503` if
-  neither JWKS nor the HS256 secret is configured (an unconfigured auth backend must
-  never authenticate anyone). **The legacy dual-auth branch is gone (removed 2026-08-04):** it
-  checked the static `API_TOKEN` bearer FIRST and returned a synthetic `is_admin: True` claims
-  dict, so every `verify_jwt`/`require_admin` route accepted the SPA-bundle-embedded token as a
-  god-credential; it now 401s like any garbage bearer. Incident + fix:
+Six auth primitives coexist — four in `api/dependencies.py` over ONE header reader, two in
+`api/tenant_pool.py` (`tenant_conn` after this list). `_bearer` (2026-10-13): `API_AUTH_OPTIONAL=1` → anonymous
+(local dev only), else `verify_jwt` — a verified JWT's claims or a 401/503. Tests mint a caller with
+`tests/api/_jwt.py` `mint` (an autouse fixture serves its key).
+- `require_token` — any signed-in caller, nothing returned (rule #8's baseline). Every client sends its
+  session JWT to every route, so a route moves between gates without a client change (the deploy-skew
+  class behind the 2026-10-13 "Invalid token" preset incident: #1775's stale bundle).
+- `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
+  opt-out or a JWT with no resolvable account → `[SYSTEM]`, a verified JWT → `[that account, SYSTEM]` — mirroring
+  `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
+  /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings` +
+  `parsed_url_cache` (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
+  `account_ids` is a REQUIRED kwarg on those read helpers — omitting it is a `TypeError`, never a silent
+  unscoped read.
+- `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
+  (`SUPABASE_URL` → `/auth/v1/.well-known/jwks.json`, ES256/RS256, cached via `PyJWKClient`); no shared
+  secret anywhere (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13); `503` with `SUPABASE_URL`
+  unset (an unconfigured auth backend must never authenticate anyone). History of the static key it once
+  also accepted (the 2026-08-04 god-credential removal, the 2026-10-13 deletion):
   `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - `require_admin` (`Depends(verify_jwt)`) — gates on `claims["is_admin"]` or
   `claims["app_metadata"]["is_admin"]`; `403` otherwise. Only reachable via a real Supabase JWT
@@ -363,9 +360,8 @@ Database:
   compatibility; the v1 scraper connects to Postgres directly and does not need them.
   (`SUPABASE_SERVICE_ROLE_KEY` is the 2025 `sb_secret_...` token, **not** a JWT.) **On the
   Railway API service, `SUPABASE_URL` is now load-bearing**, not just forward-compatible:
-  `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs.
-- `SUPABASE_JWT_SECRET` (Railway API, optional) — HS256 fallback for `verify_jwt` when
-  JWKS/`SUPABASE_URL` isn't set. Prefer JWKS; this exists for environments without it.
+  `verify_jwt` builds the JWKS URL from it to verify Supabase user JWTs (its only verifier;
+  `SUPABASE_JWT_SECRET` is read by nothing since 2026-10-13 and can be deleted from Railway).
 - `TENANT_POOL_DB_URL` (Railway API only) — connection string for the `tenant_pool` role
   (migration 293), used by `api/tenant_pool.py`'s `tenant_conn` for RLS-scoped per-account
   writes. Distinct from `SUPABASE_DB_URL` (service-role, unscoped, bypasses RLS).
@@ -417,20 +413,21 @@ LLM + maps (FastAPI service + scoring jobs):
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
   explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is the
   on-demand URL parse and `scripts/seed_curated_cities.py`. Display-only Mapy use
-  (`/maps/suggest`, tiles) is NOT gated — the prohibition is on persistence, not display.
+  (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
-- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings and powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream).
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. `scraper.geocoding` and the
-  `/maps/suggest` proxy fail over to it automatically **only** when the primary is rejected
-  (401/403) or rate-limited (429); a Mapy outage (5xx) does not trigger failover. Set it in
-  the two places that still geocode — the GitHub Actions secret (`seed_curated_cities.yml`) and
-  the **Railway API service env var** (`/maps/suggest` + URL-parse geocoding). Unset → no-op.
+- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. `scraper.geocoding`, the `/maps/suggest` proxy and the
+  static map fail over to it **only** when the primary is rejected (401/403) or rate-limited (429), never on a 5xx.
+  Set it as the GitHub Actions secret (`seed_curated_cities.yml`) and the **Railway API env var**. Unset → no-op.
+- `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
+  `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
+  `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
 - `LLM_DAILY_COST_WARN_USD` (optional, default `5.0`) — soft cross-provider warning
   threshold; `LLMClient` logs one WARNING per day when the `llm_calls.cost_usd` sum first
   crosses it. Each provider's own console spend cap is the hard guard.
 
 API service:
-- `API_TOKEN` — bearer-token gate; unset → `503` unless `API_AUTH_OPTIONAL=1` (local dev only). See Toolkit rule #8.
+- `API_AUTH_OPTIONAL=1` — LOCAL DEV ONLY: opens every `require_token` route to anonymous callers. Never on Railway (rule #8).
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
 - `STUCK_ROW_SWEEP_DISABLED`, `NOTIFICATIONS_MATCHER_DISABLED` (optional flags) — disable the
@@ -489,12 +486,11 @@ NEW DEDUP (docs/design/new-dedup/PROGRAM.md, Wave 1):
 
 Frontend / extension (build-time only, inlined into the browser bundle — *not* backend
 runtime): `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (the publishable anon key, safe in
-the browser), and `VITE_API_BASE_URL` / `VITE_API_TOKEN` for the SPA (Path 1 posture: the
-static token is embedded in a build shipped only to trusted operators, until the
-platform-wide rotation cutover). The **extension** (`EXT_API_BASE_URL` /
-`EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY` repo secrets → `VITE_API_BASE_URL` /
-`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` at build) no longer carries `VITE_API_TOKEN` /
-`EXT_API_TOKEN` at all (Wave 1, 2026-07-21) — it runs its own Supabase session via a
-hand-rolled PKCE flow (`chrome-extension/src/auth.ts`), so no bearer secret ships in the
-bundle and it's safe to distribute broadly.
+the browser) and `VITE_API_BASE_URL`. Neither bundle carries an API bearer: the SPA dropped
+`VITE_API_TOKEN` on 2026-10-13 (every request sends the session JWT; `api/dependencies.py`
+`_bearer`), the **extension** (`EXT_API_BASE_URL` / `EXT_SUPABASE_URL` / `EXT_SUPABASE_ANON_KEY`
+repo secrets → the same `VITE_*` names at build) dropped `EXT_API_TOKEN` on 2026-07-21 (Wave 1)
+and runs its own Supabase session via a hand-rolled PKCE flow (`chrome-extension/src/auth.ts`).
+There is no static API key at all since 2026-10-13: a machine that needs the API signs in as its own
+Supabase user and sends that JWT, exactly as the smoke-check account does.
 

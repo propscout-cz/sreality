@@ -59,8 +59,10 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
 - **E941 (2026-10-09, S0 rails for the widened S1, ~38k ads):** the seed re-checks storage after its
   walk and cut (+18 KiB an ad), `MAX_SCHEMA_MB` 1,500, no quarter beside its town, the rate halved
   before each pass, `peak_rss_mb` in the heartbeat, SIGTERM stops the pass and frees the lease at
-  once (every lane write fenced, 30 s drain). Owed: the cgroup memory limit, the revive cap,
-  `verify_pipeline`'s heartbeat check.
+  once (every lane write fenced, 30 s drain). Follow-up 2026-10-10: a pass whose connections a
+  database restart took retries the lease's release on new ones, every 20 s for up to 180 s,
+  before falling back to its TTL.
+  Owed: the cgroup memory limit, the revive cap, `verify_pipeline`'s heartbeat check.
 - **E948 (2026-10-10, a worker that died holding the lease):** its restart in place (same hostname
   and pid) releases that lease before its take and halves the claim cap in the same commit (floor
   25; only a seed or, E948b, a bigger container raises it); at the floor the lease waits out its
@@ -94,9 +96,22 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   300,000 pairs (`BOOTSTRAP_PAIR_BUDGET`; live stays 150,000), since a 30-advert claim on the 27k
   store already wanted more; a refusal now re-claims a quarter of the claim actually made, not of
   `max_listings`, and no longer reads the claim's CLIP vectors; the heartbeat carries `attempts`,
-  `wanted_pairs`, `wanted_by_attempt` and `aborted`. Owed: before `rt_bootstrap` flips, read
-  `wanted_pairs` over the last build passes and decide whether live passes fit 150k (hold the phase
-  or raise the live budget until E943's ledger of rejected pairs bounds the wanted set).
+  `wanted_pairs`, `wanted_by_attempt` and `aborted`. The build's own budget was undone by E943 below.
+- **E943, the reject ledger (2026-10-12, two PRs: migration 596, then the code):** a pair decided
+  below `store_floor` was deleted at write and re-scored by every pass that wanted it again (≥ 95 %
+  of a 35-advert build pass's 117,795 scored pairs). It is now ledgered under both adverts' decision
+  digests (the whole advert and its gallery, CLIP tags and stamp included), the calibration digest,
+  the feature version and an engine digest (the decision code, the model, the settings), and a pass
+  skips it while all five match and neither advert was refreshed; the budget is one 150k of pairs
+  to DECIDE, build and live (`BOOTSTRAP_PAIR_BUDGET` deleted). Equivalence with today's engine is
+  pinned pass by pass, a deploy and a late CLIP vector included; decisions and `SEED_VERSION`
+  unchanged. Rollout: apply 596, merge its PR, then the code (before 596 the lane skips
+  `store_absent`). Heartbeat: `pairs_to_decide`(`_by_attempt`), `ledger_skipped`, `ledger_written`.
+  Costs: a re-cut or a deploy touching the decision code re-scores every wanted reject once (2–4
+  deadline-halved passes); the seed's projection is 20 KiB an advert. Residuals: a CLIP re-embed
+  that leaves `clip_tagged_at` alone must empty the ledger; a sighting (`last_seen_at`) re-scores an
+  advert's rejects as it does its stored pairs. Next (E943's other half, before Prague): facts only
+  for the claim and the scored endpoints, the decision digest stored on `rt_fp`.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

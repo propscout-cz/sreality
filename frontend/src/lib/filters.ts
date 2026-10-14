@@ -13,6 +13,7 @@ import { fmtArea } from './format';
 /* Value import, but not a runtime cycle: districtCodes imports only TYPES from
  * this file, and "what a valid RÚIAN code is" must have ONE definition. */
 import { isValidCode } from './districtCodes';
+import { portalScopeLabel } from './portals';
 
 export type TriState = 'any' | 'yes' | 'no';
 export type ListingStatus = 'active' | 'inactive' | 'any';
@@ -83,18 +84,6 @@ export interface CityIndexRule {
   value: number;
 }
 
-/* Phase QUAL — composite "within X km of a city matching Y" filter.
- * Snake_case keys for the same wire-parity reason. `index_rules`
- * is the inner per-city criterion (same shape as `CityIndexRule[]`);
- * `population_min` is an optional minimum for the matching city;
- * `radius_km` is the spatial range to allow listings around any
- * matching city. */
-export interface NearCityProximity {
-  index_rules: CityIndexRule[];
-  population_min: number | null;
-  radius_km: number;
-}
-
 /* One entry of the district chip list. A chip is a LEVEL plus a RÚIAN
  * CODE, and it compiles to `<level>_id = any(codes)` — plain equality,
  * nothing else (W3 S3; lib/districtCodes). A 'locality' (street / POI /
@@ -142,7 +131,7 @@ export interface DistrictChip {
  * a non-empty list narrows to those stages (e.g. hide the closed ones). Snake-
  * cased inside the object because composite filter values cross into the
  * registry / watchdog JSON world verbatim (same convention as CenterRadius's
- * `radius_m` and NearCityProximity's `population_min`).
+ * `radius_m`).
  *
  * Stage ids are ACCOUNT-scoped (migration 294), so a URL carrying ids only
  * reproduces for the account that wrote it — the empty-list form is the
@@ -227,7 +216,12 @@ export interface ListingFilters {
    * UNKNOWN_FILTER_VALUE and queries.ts:applyFilters). Empty = no constraint. */
   furnished: string[];
   ownership: string[];
+  /* The portal rule's two sides (MS19 + migration 597, queries.ts applyPortalRule):
+   * an ad on one of `portals`, and none on `portalsExcluded` — any ad, or only
+   * active ones when `portalsExcludedActiveOnly`. */
   portals: string[];
+  portalsExcluded: string[];
+  portalsExcludedActiveOnly: boolean;
   conditionMatch: string[];
   categorySubCb: number | null;
   /* Portal-agnostic property sub-type (multi-select). Only surfaced for
@@ -308,7 +302,6 @@ export interface ListingFilters {
   cityIndexRules: CityIndexRule[];
   minCityPopulation: number | null;
   maxCityPopulation: number | null;
-  nearCityProximity: NearCityProximity | null;
   /* Fast polygon-edge proximity (migration 142). Each is a precomputed
    * `properties` column filtered as `>= value`: the MAX metric found within
    * a fixed 5 / 15 km of the listing (population of obce >= 10k, or one of
@@ -356,6 +349,8 @@ export const DEFAULT_FILTERS: ListingFilters = {
   furnished: [],
   ownership: [],
   portals: [],
+  portalsExcluded: [],
+  portalsExcludedActiveOnly: false,
   conditionMatch: [],
   categorySubCb: null,
   subtype: [],
@@ -386,7 +381,6 @@ export const DEFAULT_FILTERS: ListingFilters = {
   cityIndexRules: [],
   minCityPopulation: null,
   maxCityPopulation: null,
-  nearCityProximity: null,
   nearPop5kmMin: null,
   nearPop15kmMin: null,
   nearJobs5kmMin: null,
@@ -581,8 +575,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
   const [lastMin, lastMax] = parseRange(sp.get('seen'));
   const [firstMin, firstMax] = parseRange(sp.get('first'));
   const [tomMin, tomMax] = parseRange(sp.get('tom'));
-  /* Legacy ?active=0 from pre-status-enum URLs. The newer ?status= wins. */
-  const legacyStatus: ListingStatus = sp.get('active') === '0' ? 'any' : 'any';
+  const portalsExcluded = splitCsv(sp.get('portal_excl')).filter((v) => PORTAL_VALUES.includes(v));
   return {
     /* Absent `cat` = the default cohort (['byt']); an empty `cat=` token =
      * the deliberate "all categories" ([]). Otherwise CSV, filtered to the
@@ -613,7 +606,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     mfGrossYieldPctMax: yieldMax,
     areaMin,
     areaMax,
-    status: enumOr(sp.get('status'), STATUS_VALUES, legacyStatus),
+    status: enumOr(sp.get('status'), STATUS_VALUES, 'any'),
     lastSeenMinDays: lastMin,
     lastSeenMaxDays: lastMax,
     firstSeenMinDays: firstMin,
@@ -631,6 +624,9 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     furnished: splitCsv(sp.get('furnished')).filter((v) => FURNISHED_VALUES.includes(v)),
     ownership: splitCsv(sp.get('ownership')).filter((v) => OWNERSHIP_VALUES.includes(v)),
     portals: splitCsv(sp.get('portal')).filter((v) => PORTAL_VALUES.includes(v)),
+    portalsExcluded,
+    /* Meaningful only beside an exclusion (cyclePortal drops it with the last one). */
+    portalsExcludedActiveOnly: portalsExcluded.length > 0 && sp.get('portal_excl_active') === '1',
     conditionMatch: splitCsv(sp.get('condition')).filter(
       (c) => CONDITION_VALUES.includes(c),
     ),
@@ -667,7 +663,6 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     cityIndexRules: parseCityIndexRules(sp.get('cq_rules')),
     minCityPopulation: parseIntOrNull(sp.get('cq_pop_min')),
     maxCityPopulation: parseIntOrNull(sp.get('cq_pop_max')),
-    nearCityProximity: parseNearCityProximity(sp.get('cq_prox')),
     nearPop5kmMin: parseIntOrNull(sp.get('np5')),
     nearPop15kmMin: parseIntOrNull(sp.get('np15')),
     nearJobs5kmMin: parseFloatOrNull(sp.get('nj5')),
@@ -743,31 +738,6 @@ const fmtPriceGrowthRules = (rules: PriceGrowthRule[]): string =>
       [r.datasetId, r.fromYm ?? '', r.toYm ?? '', r.rentMinPct ?? '', r.saleMinPct ?? ''].join(':'),
     )
     .join(';');
-
-/* `cq_prox` URL shape: `radius_km|index_name:value,...|pop_min`.
- * `pop_min` is empty when null. */
-const parseNearCityProximity = (s: string | null): NearCityProximity | null => {
-  if (!s) return null;
-  const parts = s.split('|');
-  if (parts.length < 2) return null;
-  const radiusKm = Number(parts[0]);
-  if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
-  const indexRules = parseCityIndexRules(parts[1] ?? '');
-  const popMin = parts[2] && parts[2] !== ''
-    ? parseIntOrNull(parts[2])
-    : null;
-  return {
-    radius_km: Math.trunc(radiusKm),
-    index_rules: indexRules,
-    population_min: popMin,
-  };
-};
-
-const fmtNearCityProximity = (p: NearCityProximity): string => {
-  const rules = fmtCityIndexRules(p.index_rules);
-  const pop = p.population_min == null ? '' : String(p.population_min);
-  return `${p.radius_km}|${rules}|${pop}`;
-};
 
 const parseBounds = (s: string | null): MapBounds | null => {
   if (!s) return null;
@@ -891,6 +861,8 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.furnished.length) sp.set('furnished', f.furnished.join(','));
   if (f.ownership.length) sp.set('ownership', f.ownership.join(','));
   if (f.portals.length) sp.set('portal', f.portals.join(','));
+  if (f.portalsExcluded.length) sp.set('portal_excl', f.portalsExcluded.join(','));
+  if (f.portalsExcluded.length && f.portalsExcludedActiveOnly) sp.set('portal_excl_active', '1');
   if (f.conditionMatch.length) sp.set('condition', f.conditionMatch.join(','));
   if (f.categorySubCb != null) sp.set('subcat', String(f.categorySubCb));
   if (f.subtype.length) sp.set('subtype', f.subtype.join(','));
@@ -942,9 +914,6 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   }
   if (f.minCityPopulation != null) sp.set('cq_pop_min', String(f.minCityPopulation));
   if (f.maxCityPopulation != null) sp.set('cq_pop_max', String(f.maxCityPopulation));
-  if (f.nearCityProximity) {
-    sp.set('cq_prox', fmtNearCityProximity(f.nearCityProximity));
-  }
   if (f.nearPop5kmMin != null) sp.set('np5', String(f.nearPop5kmMin));
   if (f.nearPop15kmMin != null) sp.set('np15', String(f.nearPop15kmMin));
   if (f.nearJobs5kmMin != null) sp.set('nj5', String(f.nearJobs5kmMin));
@@ -1061,6 +1030,8 @@ export const summarise = (
   if (f.dispositions.length) {
     bits.push(`(${f.dispositions.slice(0, 4).join(', ')}${f.dispositions.length > 4 ? '…' : ''})`);
   }
+  const portalScope = portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
+  if (portalScope) bits.push(portalScope);
   const seenLabel = fmtDaysRange(f.lastSeenMinDays, f.lastSeenMaxDays);
   if (seenLabel) bits.push(`last seen ${seenLabel}`);
   if (f.recentlyAddedDays != null) bits.push(`added ≤ ${f.recentlyAddedDays} d`);
@@ -1099,6 +1070,8 @@ export const watchdogNameSuggestion = (f: ListingFilters): string => {
       + (f.districts.length > 3 ? '…' : ''),
     );
   }
+  const portalScope = portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
+  if (portalScope) parts.push(portalScope);
   return parts.join(' · ');
 };
 
@@ -1140,7 +1113,7 @@ export const browseTitleSummary = (f: ListingFilters): string | null => {
 /* Generic compare against DEFAULT_FILTERS so new fields can never be
  * forgotten here (the old hand-maintained &&-chain silently missed
  * priceGrowthRules). Arrays count as default when empty; object-valued
- * fields (bounds, centerRadius, nearCityProximity) default to null, so a
+ * fields (bounds, centerRadius) default to null, so a
  * null-vs-set check is exact. */
 export const isDefault = (f: ListingFilters): boolean =>
   (Object.keys(DEFAULT_FILTERS) as Array<keyof ListingFilters>).every((k) => {
@@ -1356,6 +1329,8 @@ export const REGISTRY_KEY_MAP = {
   furnished: 'furnished',
   ownership: 'ownership',
   portals: 'portals',
+  portals_excluded: 'portalsExcluded',
+  portals_excluded_active_only: 'portalsExcludedActiveOnly',
   condition_match: 'conditionMatch',
   building_material: 'buildingMaterial',
   min_parking_lots: 'parkingLotsMin',
@@ -1384,7 +1359,6 @@ export const REGISTRY_KEY_MAP = {
   city_index_rules: 'cityIndexRules',
   min_city_population: 'minCityPopulation',
   max_city_population: 'maxCityPopulation',
-  near_city_proximity: 'nearCityProximity',
   near_pop_5km_min: 'nearPop5kmMin',
   near_pop_15km_min: 'nearPop15kmMin',
   near_jobs_5km_min: 'nearJobs5kmMin',
@@ -1411,8 +1385,7 @@ const boolNullableToTri = (v: unknown): TriState => {
 
 /** Project a `ListingFilters` onto the snake_case shape that
  *  `<FilterForm>` reads. Tri-state amenities convert to `bool | null`;
- *  empty `tags` array becomes `null` (registry's "no constraint"
- *  sentinel for list filters). */
+ *  an empty list becomes `null` (the registry's "no constraint"). */
 export function listingFiltersToRegistryView(
   filters: ListingFilters,
 ): Record<string, unknown> {
@@ -1421,24 +1394,8 @@ export function listingFiltersToRegistryView(
     const v = filters[key as keyof ListingFilters];
     if ((TRISTATE_KEYS as ReadonlyArray<string>).includes(registryId)) {
       out[registryId] = triToBoolNullable(v as TriState);
-    } else if (
-      registryId === 'tags'
-      || registryId === 'collections'
-      || registryId === 'category_main_in'
-      || registryId === 'dispositions'
-      || registryId === 'districts'
-      || registryId === 'condition_match'
-      || registryId === 'furnished'
-      || registryId === 'ownership'
-      || registryId === 'portals'
-      || registryId === 'building_material'
-      || registryId === 'subtype'
-    ) {
-      const arr = v as unknown[];
-      out[registryId] = arr.length === 0 ? null : arr;
-    } else if (registryId === 'city_index_rules') {
-      const arr = v as CityIndexRule[];
-      out[registryId] = arr.length === 0 ? null : arr;
+    } else if (Array.isArray(v)) {
+      out[registryId] = v.length === 0 ? null : v;
     } else {
       out[registryId] = v;
     }
@@ -1459,54 +1416,8 @@ export function applyRegistryUpdate(
   if ((TRISTATE_KEYS as ReadonlyArray<string>).includes(id)) {
     return { ...filters, [key]: boolNullableToTri(value) };
   }
-  if (id === 'tags' || id === 'collections') {
-    return { ...filters, [key]: value == null ? [] : (value as number[]) };
-  }
-  if (id === 'category_main_in') {
-    const next = value == null ? [] : (value as CategoryMain[]);
-    return { ...filters, categoryMain: next };
-  }
-  if (id === 'dispositions') {
-    const next = value == null ? [] : (value as Disposition[]);
-    return { ...filters, dispositions: next };
-  }
-  if (id === 'districts') {
-    if (value == null) return { ...filters, districts: [] };
-    /* Lift legacy callers that still emit `string[]` so a registry-
-     * scope edit (or a stale test fixture) doesn't quietly drop the
-     * context shape. Mixed arrays are tolerated; objects pass through. */
-    const next = (value as Array<DistrictChip | string>).map((v) =>
-      typeof v === 'string' ? { name: v, context: null } : v,
-    );
-    return { ...filters, districts: next };
-  }
-  if (id === 'condition_match') {
-    const next = value == null ? [] : (value as string[]);
-    return { ...filters, conditionMatch: next };
-  }
-  if (id === 'furnished') {
-    const next = value == null ? [] : (value as string[]);
-    return { ...filters, furnished: next };
-  }
-  if (id === 'ownership') {
-    const next = value == null ? [] : (value as string[]);
-    return { ...filters, ownership: next };
-  }
-  if (id === 'subtype') {
-    const next = value == null ? [] : (value as string[]);
-    return { ...filters, subtype: next };
-  }
-  if (id === 'portals') {
-    const next = value == null ? [] : (value as string[]);
-    return { ...filters, portals: next };
-  }
-  if (id === 'building_material') {
-    const next = value == null ? [] : (value as BuildingMaterial[]);
-    return { ...filters, buildingMaterial: next };
-  }
-  if (id === 'city_index_rules') {
-    const next = value == null ? [] : (value as CityIndexRule[]);
-    return { ...filters, cityIndexRules: next };
+  if (Array.isArray(DEFAULT_FILTERS[key])) {
+    return { ...filters, [key]: value ?? [] } as ListingFilters;
   }
   return { ...filters, [key]: value } as ListingFilters;
 }
@@ -1539,8 +1450,8 @@ export function applyRegistryUpdates(
  *
  * Honoured (mapped): category, disposition, district chips, price / price-per-m²
  * / MF-yield / area / usable / estate / garden bounds, building material,
- * tri-state amenities, furnished, ownership, portals (any of the property's
- * ads, MS19), condition_match, parking-lots min, condition-level bounds, the
+ * tri-state amenities, furnished, ownership, both sides of the portal rule
+ * (MS19 + migration 597), condition_match, parking-lots min, condition-level bounds, the
  * price-history pair (price-change count in a window, total price change %),
  * and the city-quality predicates (index rules, population min/max, the near-*
  * minimums).
@@ -1637,6 +1548,8 @@ export function filtersToWatchdogSpec(
     furnished: arr(f.furnished),
     ownership: arr(f.ownership),
     portals: arr(f.portals),
+    portals_excluded: arr(f.portalsExcluded),
+    portals_excluded_active_only: f.portalsExcludedActiveOnly,
     condition_match: arr(f.conditionMatch),
     min_parking_lots: f.parkingLotsMin,
     building_condition_level_min: f.buildingConditionLevelMin,
@@ -1653,7 +1566,6 @@ export function filtersToWatchdogSpec(
     city_index_rules: arr(f.cityIndexRules),
     min_city_population: f.minCityPopulation,
     max_city_population: f.maxCityPopulation,
-    near_city_proximity: f.nearCityProximity,
     near_pop_5km_min: f.nearPop5kmMin,
     near_pop_15km_min: f.nearPop15kmMin,
     near_jobs_5km_min: f.nearJobs5kmMin,

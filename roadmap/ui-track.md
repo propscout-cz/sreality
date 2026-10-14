@@ -7,6 +7,18 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Negative portal filters (2026-10-13, migration 597)
+- **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal
+  cycles off → on it → not on it (Browse sidebar, Watchdog editor, phone Feed); once something is
+  excluded, the user picks whether any ad or only active ads count (default: any ad). The rule
+  (`portal_status_matches`, `applyPortalRule`, the Watchdog hook) and its table
+  (`tests/fixtures/portal_rule.json`) carry both sides; the exclusion ignores the status switch and
+  a broker. Paid for by deleting the five RPC parameters nothing sent, the map's
+  `listing_ids_filter`, the retired near-city filter state and dead filter plumbing (#1788).
+- **Next (not started):** its precision tracks merging — outside the AUTODEDUP apply scope about
+  half to three quarters of a "not on sreality" cohort have an unmerged sreality twin (measured
+  2026-10-13); widening the scope (the Prague plan) is the fix, not a UI caveat (operator ruling).
+
 ### Phone app (W1 merged 2026-10-12, closes on the install walk; W2–W4 next — map [#1759](https://github.com/waiff/sreality/issues/1759))
 - The platform on the operator's iPhone home screen: the same SPA at the same address, a
   phone shell by screen width. Waves W0 prototype → W1 feed → W2 property page → W3 pipeline
@@ -29,6 +41,7 @@ toolkit work.
   marks (`usePipelineCard`, the collection list, `useDismissal` — the stage and collection menus
   are the desktop bodies in a bottom sheet), the extension's stage wash, per-m² through
   `lib/measure` (rule 23).
+  Follow-up: a photo strip per card (up to eight, cover first, the wash on each; `/feed` a lazy chunk), PR [#1785](https://github.com/waiff/sreality/pull/1785).
 - Next: the install walk on the iPhone (resolves W1: Safari install, sign-in inside the app,
   `visibilitychange` on resume, the worker's cost on feed photos); then W2 — the property page as
   reading + curation and the paste box (the fifth tab, Odkaz).
@@ -43,7 +56,7 @@ toolkit work.
   no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
   property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
   portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
-  install walk.
+  install walk. Follow-up (PR open): **Poloha** — Mapy's static map streamed through the API (never stored), label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; `MAPY_STATIC_MAPS_ENABLED=0` turns the image off.
 - **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
   `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
   (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per
@@ -886,8 +899,7 @@ unmonitored for watchdogs.
 - Also surfaced, untouched: the agent tool schema advertises 10 comparables
   filters `_FCR_OVERRIDE_FIELDS` drops; `api/main.py:_build_comparables_inputs`
   drops `tom_days_*`/`*_seen_*_days` that `estimation_runs._build_filters` passes;
-  5 registry ids falsely claim `Agenda.WATCHDOG`; the portal filter is
-  mode-dependent (single portal → listing grain, else representative-only).
+  5 registry ids falsely claim `Agenda.WATCHDOG`.
 
 ### Phase U3: Toolkit-backed views (later)
 Surfacing `describe_neighborhood`, `find_distribution_outliers`, and

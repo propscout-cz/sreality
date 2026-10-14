@@ -430,8 +430,7 @@ def test_route_rejects_over_50_items(client) -> None:
 
 def test_route_fails_closed_without_token(monkeypatch) -> None:
     """No tenant_conn override here — the real verify_jwt chain must 401 a
-    missing bearer (fail-closed, Phase 1), even with API_TOKEN unset."""
-    monkeypatch.delenv("API_TOKEN", raising=False)
+    missing bearer (fail-closed, Phase 1)."""
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     try:
         res = TestClient(api_main.app).post(

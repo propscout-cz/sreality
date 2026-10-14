@@ -7,6 +7,7 @@ isolation of run_checks.
 
 from __future__ import annotations
 
+import datetime as _dt
 import io
 import json
 import pytest
@@ -23,6 +24,7 @@ from scripts.verify_pipeline import (
     check_migration_drift,
     check_worker_lane_stall,
     check_walk_coverage,
+    check_walk_end_streak,
     _status_for_cron,
     _status_for_burn,
     _status_for_llm_errors,
@@ -659,12 +661,14 @@ def test_live_state_errors_but_never_a_success_is_failing() -> None:
 
 
 class _LlmErrorsConn:
-    """Three-query fake for check_llm_errors: rates, credit count, liveness."""
+    """Two-query fake for check_llm_errors: per-called_for rates, per-provider state rows
+    (provider, last_err_at, last_ok_at, last_credit_err_at, credit_errors, models, jobs)."""
 
-    def __init__(self, rates: list[tuple[Any, ...]], credit_count: int,
-                 live_row: tuple[Any, ...]) -> None:
-        self._rates, self._credit, self._live = rates, credit_count, live_row
+    def __init__(self, rates: list[tuple[Any, ...]],
+                 providers: list[tuple[Any, ...]]) -> None:
+        self._rates, self._providers = rates, providers
         self._last = ""
+        self.provider_params: Any = None
 
     def cursor(self) -> "_LlmErrorsConn":
         return self
@@ -680,15 +684,13 @@ class _LlmErrorsConn:
 
     def execute(self, sql: str, params: Any = None) -> None:
         self._last = sql
+        if "group by provider" in sql:
+            self.provider_params = params
 
     def fetchall(self) -> Any:
-        return self._rates
+        return self._providers if "group by provider" in self._last else self._rates
 
     def fetchone(self) -> Any:
-        if "last_err_at" in self._last:
-            return self._live
-        if "count(*)" in self._last:
-            return (self._credit,)
         return None
 
 
@@ -699,16 +701,17 @@ def test_check_llm_errors_reds_on_a_days_old_credit_outage() -> None:
 
     conn = _LlmErrorsConn(
         rates=[("extract_location_claims", 500, 500)],
-        credit_count=63547,
-        live_row=(_t(hours=-30), _t(hours=-40), _t(hours=-30)),
+        providers=[("openai", _t(hours=-30), _t(hours=-40), _t(hours=-30), 63547,
+                    ["gpt-5-mini"], ["extract_location_claims"])],
     )
     out = check_llm_errors(conn, T)
     assert out["status"] == "fail"
     assert out["details"]["currently_failing"] is True
     assert out["details"]["credit_live"] is True
-    # Operator copy must not name a provider we may not be on, nor a subsystem that
+    # Operator copy names the provider the rows name and no other, nor a subsystem that
     # was deleted 2026-08-06 (rule 15).
-    assert "Anthropic" not in out["message"]
+    assert "openai" in out["message"]
+    assert "anthropic" not in out["message"].lower()
     assert "dedup vision" not in out["message"]
 
 
@@ -717,12 +720,60 @@ def test_check_llm_errors_is_ok_once_a_success_lands() -> None:
 
     conn = _LlmErrorsConn(
         rates=[("extract_location_claims", 500, 400)],
-        credit_count=63547,          # still in the 24h window, but superseded
-        live_row=(_t(hours=-30), _t(minutes=-2), None),
+        # Credit errors still in the 24h window, superseded by the SAME provider's success.
+        providers=[("openai", _t(hours=-30), _t(minutes=-2), _t(hours=-30), 63547,
+                    ["gpt-5-mini"], ["extract_location_claims"])],
     )
     out = check_llm_errors(conn, T)
     assert out["status"] == "ok"
     assert out["details"]["currently_failing"] is False
+    assert out["details"]["credit_live"] is False
+
+
+def _openai_out_of_credit_anthropic_answering() -> Any:
+    """OpenAI out of credit as on 2026-10-02..10 (the text lane), and an Anthropic success
+    after its newest credit error."""
+    return _LlmErrorsConn(
+        rates=[("enrich_listing_description", 96, 96), ("agent_estimation", 12, 0)],
+        providers=[
+            ("anthropic", None, _t(minutes=-1), None, 0, None, None),
+            ("openai", _t(minutes=-5), None, _t(minutes=-5), 96, ["gpt-5.6-luna"],
+             ["enrich_listing_description"]),
+        ],
+    )
+
+
+def test_one_providers_success_never_clears_anothers_credit_outage() -> None:
+    """Credit is one account's state. Read across all providers, as before, Anthropic's
+    success a minute ago superseded OpenAI's credit error and the check read healthy."""
+    from scripts.verify_pipeline import _CREDIT_ERROR_PATTERNS, check_llm_errors
+
+    conn = _openai_out_of_credit_anthropic_answering()
+    out = check_llm_errors(conn, T)
+
+    assert out["status"] == "fail"
+    assert out["details"]["credit_live"] is True
+    per = {p["provider"]: p for p in out["details"]["per_provider"]}
+    assert per["openai"]["credit_live"] is True
+    assert per["anthropic"]["credit_live"] is False
+    # The rate arm's gate still reads the newest call of any provider: Anthropic's success.
+    assert out["details"]["currently_failing"] is False
+    # Patterns bound as values (psycopg-%-safe), and details stay JSON for write_results.
+    assert conn.provider_params == _CREDIT_ERROR_PATTERNS
+    json.dumps(out["details"])
+
+
+def test_the_credit_alert_names_the_provider_and_model_that_failed() -> None:
+    """The onset alert is the check's message. It names what failed, from the rows, and no
+    job that runs on another provider's account."""
+    from scripts.verify_pipeline import check_llm_errors
+
+    msg = check_llm_errors(_openai_out_of_credit_anthropic_answering(), T)["message"]
+
+    assert "openai" in msg and "gpt-5.6-luna" in msg
+    assert "enrich_listing_description" in msg
+    for elsewhere in ("anthropic", "estimation", "summar", "url parsing", "labelling"):
+        assert elsewhere not in msg.lower()
 
 
 # --- W0.3: llm_burn_rate starvation arm ------------------------------------
@@ -1739,6 +1790,9 @@ class _RowsConn:
     def cursor(self) -> "_RowsConn":
         return self
 
+    def transaction(self) -> "_RowsConn":
+        return self
+
     def __enter__(self) -> "_RowsConn":
         return self
 
@@ -1853,6 +1907,178 @@ def test_walk_coverage_never_certifies_a_self_reported_total() -> None:
     for source in ("remax", "maxima", "mmreality"):
         assert out["details"]["per_source"][source]["verifiable"] is False
         assert out["details"]["per_source"][source]["gap_pct"] is None
+
+
+# --- walk_end_streak: walks in a row a category stopped short of the portal's end ---
+
+
+_T0 = _dt.datetime(2026, 10, 13, 6, 0, tzinfo=_dt.timezone.utc)
+
+
+def _walks(source: str, cm: str | None, ct: str, verdicts: list[bool | None], *,
+           every_hours: float = 7.0, skip_newest: int = 0) -> list[tuple[Any, ...]]:
+    """One (run id, source, started_at, cm, ct, reached_end) row per walk, NEWEST FIRST:
+    the first verdict is the latest run. Run i has id 10_000 - i, so rows built for two
+    categories of one source share their runs; `skip_newest` leaves the category out of
+    that many newest runs (they exist only if another category's rows carry them)."""
+    return [(10_000 - i, source, _T0 - _dt.timedelta(hours=every_hours * i), cm, ct, v)
+            for i, v in enumerate(verdicts, start=skip_newest)]
+
+
+def test_walk_end_streak_counts_back_to_the_last_walk_that_reached_the_end() -> None:
+    conn = _RowsConn(_walks("bazos", "byt", "prodej", [False, False, True, False, False]))
+    out = check_walk_end_streak(conn, T)
+    cell = out["details"]["per_category"][0]
+    assert cell["streak"] == 2  # the two older misses sit behind a reached end
+    assert cell["walks"] == 5 and cell["runs_since_walked"] == 0
+    assert cell["last_reached_end_at"] == "2026-10-12 16:00 UTC"
+    assert cell["last_walked_at"] == "2026-10-13 06:00 UTC"
+    assert out["status"] == "ok" and out["value"] == 2
+
+
+def test_walk_end_streak_resets_on_the_latest_walk_reaching_the_end() -> None:
+    conn = _RowsConn(_walks("sreality", "dum", "prodej", [True] + [False] * 9))
+    out = check_walk_end_streak(conn, T)
+    assert out["value"] == 0 and out["status"] == "ok"
+    assert out["details"]["offenders"] == []
+
+
+def test_walk_end_streak_skips_runs_that_never_walked_the_category() -> None:
+    """idnes walks 5 of its 10 categories per run: a run that omitted this one has no
+    row, so the streak runs straight through it."""
+    full = _walks("idnes", "byt", "prodej", [False] * 6)
+    sparse = [r for i, r in enumerate(_walks("idnes", "dum", "prodej", [False] * 6))
+              if i % 2 == 0]  # walked in 3 of the 6 runs
+    out = check_walk_end_streak(_RowsConn(full + sparse), T)
+    streaks = {c["category_main"]: c["streak"] for c in out["details"]["per_category"]}
+    assert streaks == {"byt": 6, "dum": 3}
+
+
+@pytest.mark.parametrize(("unwalked", "status"), [(5, "fail"), (6, "warn"), (12, "warn")])
+def test_walk_end_streak_caps_a_category_its_portal_stopped_walking_at_warn(
+        unwalked: int, status: str) -> None:
+    """A category dropped from the config (or starved by a deadline) keeps its last
+    streak in the window. Once its portal has walked `fail` times without it, it reads
+    amber and names when it was last walked, so a retired category cannot hold the bell
+    red for 14 days and a starved one does not read ok."""
+    rows = (_walks("mmreality", "byt", "prodej", [True] * (unwalked + 8))
+            + _walks("mmreality", "old", "prodej", [False] * 8, skip_newest=unwalked))
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == status
+    cell = next(c for c in out["details"]["per_category"] if c["category_main"] == "old")
+    assert cell["runs_since_walked"] == unwalked and cell["status"] == status
+    if status == "warn":
+        assert out["value"] == 0  # a category nobody walks any more is not the worst streak
+        last = _T0 - _dt.timedelta(hours=7.0 * unwalked)
+        assert out["details"]["offenders"] == [
+            f"mmreality old/prodej not walked since {last:%Y-%m-%d %H:%M} UTC "
+            f"({unwalked} mmreality walks since)"
+        ]
+        assert "left the portal's config" in out["message"]
+
+
+def test_walk_end_streak_does_not_read_a_starved_category_as_ok() -> None:
+    """A category that last reached the end and was then never walked again has a
+    streak of 0; silence is not recovery, so it still warns."""
+    rows = (_walks("realitymix", "byt", "prodej", [True] * 10)
+            + _walks("realitymix", "dum", "prodej", [True, True], skip_newest=8))
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == "warn" and out["value"] == 0
+    assert out["details"]["offenders"][0].startswith("realitymix dum/prodej not walked since ")
+
+
+def test_walk_end_streak_ignores_a_verdict_the_run_did_not_record() -> None:
+    """A row from before the key existed reads NULL: neither a miss nor a reached end."""
+    conn = _RowsConn(_walks("remax", "byt", "prodej", [False, None, False, False, True]))
+    cell = check_walk_end_streak(conn, T)["details"]["per_category"][0]
+    assert cell["streak"] == 3 and cell["walks"] == 4
+
+
+def test_walk_end_streak_does_not_trust_the_row_order() -> None:
+    rows = list(reversed(_walks("maxima", "byt", "pronajem", [False, False, False, True])))
+    assert check_walk_end_streak(_RowsConn(rows), T)["value"] == 3
+
+
+def test_walk_end_streak_breaks_a_started_at_tie_on_the_run_id() -> None:
+    newer = (2, "bazos", _T0, "byt", "prodej", False)
+    older = (1, "bazos", _T0, "byt", "prodej", True)
+    for rows in ([newer, older], [older, newer]):
+        assert check_walk_end_streak(_RowsConn(rows), T)["value"] == 1
+
+
+@pytest.mark.parametrize(("misses", "status"), [(2, "ok"), (3, "warn"), (5, "warn"),
+                                                 (6, "fail"), (40, "fail")])
+def test_walk_end_streak_warns_at_three_walks_and_fails_at_six(misses: int, status: str) -> None:
+    conn = _RowsConn(_walks("realitymix", "pozemek", "prodej", [False] * misses + [True]))
+    out = check_walk_end_streak(conn, T)
+    assert out["status"] == status
+    assert out["value"] == misses
+    assert bool(out["details"]["offenders"]) is (status != "ok")
+
+
+def test_walk_end_streak_fails_on_the_ceskereality_byty_signature() -> None:
+    """2026-09-16 -> 10-13: byt/prodej never reached the end, every other category
+    did. Per portal that was a ~4.6% gap under walk_coverage's 5% warn."""
+    rows = (_walks("ceskereality", "byt", "prodej", [False] * 48)
+            + _walks("ceskereality", "dum", "prodej", [True] * 48)
+            + _walks("bazos", "byt", "prodej", [False, False, False, True]))
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == "fail" and out["value"] == 48
+    first = out["details"]["offenders"][0]
+    # the window cuts the streak, so the count is a floor, not an exact figure
+    assert first == ("ceskereality byt/prodej not at the portal's end for at least 48 "
+                     "walks (not reached in 14 d)")
+    assert out["message"].index("ceskereality byt/prodej") < out["message"].index("bazos")
+    assert "rule #3" in out["message"] and "VERIFY skipped" in out["message"]
+    assert "left the portal's config" not in out["message"]
+    assert len(out["details"]["offenders"]) == 2  # dum/prodej is not one
+
+
+def test_walk_end_streak_names_a_null_label_rather_than_crashing() -> None:
+    conn = _RowsConn(_walks("bezrealitky", None, "pronajem", [False] * 3))
+    out = check_walk_end_streak(conn, T)
+    assert out["details"]["offenders"][0].startswith("bezrealitky */pronajem ")
+
+
+def test_walk_end_streak_with_no_finished_walk_measured_nothing() -> None:
+    """No rows is not a clean bill of health: value None and an amber row, never a 0."""
+    out = check_walk_end_streak(_RowsConn([]), T)
+    assert out["status"] == "warn" and out["value"] is None
+    assert out["details"]["per_category"] == [] and out["details"]["offenders"] == []
+    assert "measured nothing" in out["message"]
+
+
+def test_walk_end_streak_with_no_recorded_verdict_measured_nothing() -> None:
+    """by_category losing its walk_reached_end key reads NULL on every row: the check
+    read categories but scored none, so it must not certify them."""
+    rows = [r for cm in ("byt", "dum", "pozemek")
+            for r in _walks("sreality", cm, "prodej", [None] * 24)]
+    out = check_walk_end_streak(_RowsConn(rows), T)
+    assert out["status"] == "warn" and out["value"] is None
+    assert "measured nothing" in out["message"] and "3 categories read" in out["message"]
+
+
+def test_walk_end_streak_reads_finished_index_walks_in_the_window_only() -> None:
+    from scripts.verify_pipeline import _WALK_END_WINDOW_DAYS
+
+    conn = _RowsConn([])
+    check_walk_end_streak(conn, T)
+    assert conn.executed[0][0].startswith("SET LOCAL statement_timeout")
+    sql, params = conn.executed[1]
+    assert params == {"days": _WALK_END_WINDOW_DAYS}
+    assert "make_interval(days => %(days)s)" in sql
+    assert "run_type = 'index'" in sql and "ended_at is not null" in sql
+    # a non-array by_category must yield no rows, not a jsonb_array_elements error
+    assert "jsonb_typeof(r.by_category) = 'array'" in sql
+    assert "bool_and" in sql  # two descriptors behind one label: both must reach the end
+
+
+def test_walk_end_streak_is_registered_beside_walk_coverage() -> None:
+    from scripts.verify_pipeline import _CHECKS
+
+    keys = [k for k, _ in _CHECKS]
+    assert ("walk_end_streak", check_walk_end_streak) in _CHECKS
+    assert keys.index("walk_end_streak") == keys.index("walk_coverage") + 1
 
 
 # --- migration_drift: merged is not applied --------------------------------
@@ -2969,8 +3195,9 @@ class _ScriptedConn:
         return rows[0] if rows else None
 
 
-def _text_lane_conn(*, waiting: int, oldest_hours: float, claimed: int | None) -> Any:
-    lane = None if claimed is None else {"last": {"claimed": claimed}}
+def _text_lane_conn(*, waiting: int, oldest_hours: float, claimed: int | None,
+                    **last: Any) -> Any:
+    lane = None if claimed is None else {"last": {"claimed": claimed, **last}}
     return _ScriptedConn({
         "FROM app_settings": [("gpt-5-mini",)],
         "GROUP BY l.source": ([("bazos", waiting, oldest_hours, oldest_hours / 2)]
@@ -3033,6 +3260,43 @@ def test_text_extraction_lag_names_the_open_scope() -> None:
         _text_lane_conn(waiting=0, oldest_hours=0.0, claimed=0), T)
     assert out["status"] == "ok"
     assert out["details"]["scope"] == {"bazos": ["floor", "has_lift"]}
+
+
+def test_text_extraction_lag_fails_on_a_pass_the_provider_stopped(
+        monkeypatch: Any) -> None:
+    """2026-10-02..10: OpenAI out of credit, and the lane claimed 500 a pass and wrote
+    nothing. The wedge arm needs `claimed == 0`, so it never fired, and the check blamed
+    backlog age, never the provider. The provider's own words are the alarm, at any age."""
+    from scripts.verify_pipeline import check_text_extraction_lag
+
+    _open_one_gate(monkeypatch)
+    # The heartbeat's `fatal`, as it read on 2026-10-10.
+    fatal = ('openai call failed: HTTP 429 {\n    "error": {\n        "message": "You have '
+             'no credits remaining. Add credits to continue using the API at '
+             'https://platform.openai.com/settings/organization/billing/.",\n')
+    out = check_text_extraction_lag(
+        _text_lane_conn(waiting=500, oldest_hours=0.05, claimed=500, written=0,
+                        aborted=True, fatal=fatal, model="gpt-5.6-luna"), T)
+    assert out["status"] == "fail"
+    assert '"message": "You have no credits remaining.' in out["message"]
+    assert "\n" not in out["message"]
+    # The model the provider refused (not today's setting), and both remedies: four of
+    # vision_batch.FATAL_MARKERS are key errors, fixed on the worker's Railway service.
+    assert "refused gpt-5.6-luna" in out["message"]
+    assert "credit or quota" in out["message"] and "OPENAI_API_KEY" in out["message"]
+
+
+def test_text_extraction_lag_reads_a_pass_at_its_ceiling_as_bounded(
+        monkeypatch: Any) -> None:
+    """`aborted` with no `fatal` is the pass's own $/time ceiling: it wrote, and a backlog
+    it leaves behind is what the age arms are for."""
+    from scripts.verify_pipeline import check_text_extraction_lag
+
+    _open_one_gate(monkeypatch)
+    out = check_text_extraction_lag(
+        _text_lane_conn(waiting=500, oldest_hours=0.05, claimed=500, written=410,
+                        aborted=True, fatal=None), T)
+    assert out["status"] == "ok"
 
 
 # --- false_delist_share: a flip a later sighting reversed was a false delisting ---------

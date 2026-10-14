@@ -20,8 +20,7 @@ Three drifts are possible and all three are silent. This file is the net for eac
 
   3. A prefilter id space the RPC does not carry. `applyPrefilters` emits `.in()` on two
      spaces, obec_id and property_id (the broker allowlist among the latter since W5,
-     MS19), and the RPC read has no `.in()` to inherit. `listing_ids_filter`, which no
-     caller sent after W5, left `browse_map_cells` in W6 (migration 593).
+     MS19), and the RPC read has no `.in()` to inherit.
 
 Offline; runs in the normal `pytest -q` lane. Nothing here needs a database — the
 behaviour of the shipped SQL is tests/test_browse_map_cells_live.py's subject.
@@ -163,8 +162,8 @@ def test_the_map_rpc_carries_both_prefilter_id_spaces() -> None:
     RPC read has no `.in()` to inherit, so each space has to be handed over by name.
 
     RED by: adding an `.in()` to applyPrefilters without a matching argument, or by
-    sending the retired `listing_ids_filter` again (gone since W6, migration 593: a
-    bundle that names it fails every map read).
+    sending the retired `listing_ids_filter` again (migration 597 dropped the
+    parameter, so a bundle that names it fails every map read).
     """
     src = _ts()
     at = src.index("export const applyPrefilters")

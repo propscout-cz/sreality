@@ -19,6 +19,7 @@ import {
   type WatchdogFilterSpec,
 } from '@/lib/types';
 import { FilterForm } from '@/components/FilterForm';
+import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
 import { DeliveryChannelsPicker } from '@/components/DeliveryChannelsPicker';
 import {
@@ -174,8 +175,27 @@ export default function WatchdogEdit() {
               return next as unknown as WatchdogFilterSpec;
             })
           }
-          exclude={['location']}
+          exclude={['location', 'portals_excluded', 'portals_excluded_active_only']}
           customWidgets={{
+            // Both sides of the portal rule in Browse's one control (migration 597);
+            // the two exclusion ids render inside it, so the form skips them.
+            portals: () => (
+              <PortalFilterControl
+                value={{
+                  portals: spec.portals ?? [],
+                  portalsExcluded: spec.portals_excluded ?? [],
+                  portalsExcludedActiveOnly: spec.portals_excluded_active_only ?? false,
+                }}
+                onChange={(next) =>
+                  setSpec((prev) => ({
+                    ...prev,
+                    portals: next.portals.length ? next.portals : null,
+                    portals_excluded: next.portalsExcluded.length ? next.portalsExcluded : null,
+                    portals_excluded_active_only: next.portalsExcludedActiveOnly,
+                  }))
+                }
+              />
+            ),
             // Same Mapy.cz typeahead as Browse — keeps the operator's
             // muscle memory consistent across surfaces.
             districts: LocationTypeahead as never,
@@ -191,6 +211,7 @@ export default function WatchdogEdit() {
             category_sub_cb: 'Subtype',
             dispositions: 'Dispositions',
             districts: 'Place',
+            portals: 'Portal',
             min_price_czk: 'Price Kč',
             include_no_price: 'Include listings without a price',
             min_area_m2: 'Area m²',

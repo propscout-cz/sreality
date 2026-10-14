@@ -388,10 +388,19 @@ independent of the `portals` row's `kind`.
 category on the **14 declared kraj slugs** (`KRAJ_SLUGS`, a proven row-level partition —
 never the rendered facet block, which is a top-10-by-popularity list), pages each slice to
 its own declared tail (a *filtered* search URL caps at 99 pages / 1,980 rows; the famous
-12-page cap belongs only to UNFILTERED category URLs), and descends onto a declared subtype
-axis for the one kraj slice that exceeds that ceiling. A 200 carrying zero cards is the
-portal's real degraded response and is only ever read as a finished slice when the page's
-H1 proves it is the empty slice we asked for. ceskereality is a STRUCTURED HTML portal
+12-page cap belongs only to UNFILTERED category URLs), and re-walks any kraj slice past that
+ceiling per subtype: on a **declared** axis for the three categories measured at it
+(`SUBTYPE_SLUGS`: byty, rodinne-domy, pozemky — each a measured true partition of a kraj),
+else on the kraj page's own two-segment `/{sale}/{cat}/{subtype}/{kraj}/` links (subtype
+precedes kraj in the site's URLs; one-segment links are okresy, not subtypes). Either way the
+children's declared sum must add back up to the parent's, or the category stays un-nominated
+(an unmapped byty held byt/prodej un-nominated for 89 walks, 2026-09-16 → 10-13). A subtype child
+itself past the ceiling descends once more, onto its kraj's **declared** okresy (`OKRES_SLUGS`, the
+RÚIAN districts of 13 kraje, each measured an exact partition on prodej/rodinne-domy on 2026-10-13 —
+any other category relies on the per-level self-verify; the okres slug takes the kraj's URL slot) and self-verifies the same way; Praha's okres axis is owed (praha-1..10 are not a
+partition), so an over-ceiling Praha subtype stays `ceiling` and logs `DESCENT no okres axis`. A 200 carrying
+zero cards is the portal's real degraded response and is only ever read as a finished slice when
+the page's H1 proves it is the empty slice we asked for. ceskereality is a STRUCTURED HTML portal
 like idnes: each detail page carries a `schema.org` `individualProduct` JSON-LD block (clean price +
 broker), an `i-info` spec list, **precise per-listing coordinates** in `data-coord-lat/lng` (and a
 Google-Maps `?q=` link) so there is **no geocoding step**, and an `img.ceskereality.cz/foto/` gallery.
@@ -560,15 +569,14 @@ rules. Identify which one a task belongs to before you start.
   routes, and **Settings**. The `Timeline` component dispatches on `step.kind` so it
   renders today's deterministic traces and the agent's longer traces without rework.
   Extend this SPA; do not fork a separate frontend tree.
-- **Credentials it holds:** the publishable (`anon`) Supabase key, the signed-in user's
-  Supabase session JWT, and `VITE_API_TOKEN` (`frontend/src/lib/api.ts`, baked in at build
-  by `frontend/Dockerfile`). Never embed a backend secret — the service-role key, the
-  `SUPABASE_DB_URL`, an LLM / maps / R2 key — in browser-shipped code. `VITE_API_TOKEN` is a
-  secret in name only: Caddy serves the bundle to anyone, before sign-in, so the token
-  proves "loaded the SPA" and nothing more. A `require_token` route may therefore never
-  return identity, admin or account-scoped data; those sit behind `verify_jwt` /
-  `require_admin` / `tenant_conn` and are called with `jwt: true` (see "Two auth shapes"
-  below). At least these still break it, running service-role behind `require_token`
+- **Credentials it holds:** the publishable (`anon`) Supabase key and the signed-in user's
+  Supabase session JWT — nothing else. Never embed a backend secret — the service-role key, the
+  `SUPABASE_DB_URL`, an LLM / maps / R2 key — in browser-shipped code; since 2026-10-13 the bundle
+  carries no API bearer at all (`VITE_API_TOKEN` is gone: Caddy serves the bundle to anyone before
+  sign-in, so whatever it held proved only "loaded the SPA"). Every API call sends the session JWT
+  (see "One credential" below); a `require_token` route still returns no identity, admin or
+  account-scoped data — those sit behind `verify_jwt` / `require_admin` / `tenant_conn`.
+  At least these still break it, running service-role behind `require_token`
   alone with no account predicate: `/buildings*` (`building_runs` has tenant RLS since
   migration 291) and `POST /notifications/dispatches/{id}/estimate` (returns any account's
   dispatch and starts a run for it) — owed as `roadmap/public-release-track.md` item 11, an
@@ -735,10 +743,13 @@ rules. Identify which one a task belongs to before you start.
   its lazily loaded phone layout by `usePhoneShell()`, so `routes.tsx` does not change.
   The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
   query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
-  `pages/Link` is, so the first-visit budget never pays for them; no maps, no estimation start —
+  `pages/Link` is, so the first-visit budget never pays for them; no WebGL maps, no estimation start —
   RunPanel skips `ComparablesMap` under the shell), and the fifth tab `/link`
   resolves a pasted portal URL through `lib/pastedLink` → `parsePortalUrl` → the
-  `/listing/:source/:nativeId` alias.
+  `/listing/:source/:nativeId` alias. Poloha (the feed card's fourth margin mark → a bottom sheet,
+  and the phone property page's first section, one `LocationBody`) is a Mapy static image the API
+  streams on every view (`api/routes/property_location.py`; Mapy's terms forbid storing it, so never
+  R2, only an hour of private browser cache) — never a WebGL map on the phone.
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical
@@ -748,21 +759,15 @@ rules. Identify which one a task belongs to before you start.
   FastAPI service, not direct Postgres — by convention: `authenticated` holds RLS-scoped
   table write grants (migrations 290/292/294) the SPA never uses. The toolkit's
   write-allowed exceptions (see Toolkit rule #5) are reachable only via the API.
-- **Two auth shapes to the FastAPI service** (`frontend/src/lib/api.ts`), matching the
-  backend gate each route actually uses. `require_admin`/`verify_jwt`/`tenant_conn` routes
-  (Settings, Outreach, broker-review, skill-refinements, Collections
-  list, Pipeline, Watchdog subscriptions, `/estimations` create/read) get `jwt: true` on
-  their `request()` call and receive the caller's real Supabase session `access_token`
-  (`supabase.auth.getSession()`) — `api/dependencies.py:verify_jwt` no longer accepts
-  anything else there (the legacy static-token branch that used to grant a synthetic
-  `is_admin: True` identity was removed 2026-08-04; see
-  `docs/design/api-token-rotation-and-spa-jwt-migration.md`). Routes still gated by the
-  simpler `require_token` (a shared-secret check, no identity) keep sending the static
-  `VITE_API_TOKEN` — readable by anyone from the bundle Caddy serves before sign-in, so
-  that gate proves only "loaded the SPA," never an identity, admin or per-account claim.
-  Adding a new
-  `require_admin`/`verify_jwt` route means adding `jwt: true` to its frontend call in the
-  same change, or it 401s.
+- **One credential to the FastAPI service** (`frontend/src/lib/api.ts`): every `request()` sends
+  the caller's Supabase session `access_token` (`supabase.auth.getSession()`), whichever gate the
+  route uses — `api/dependencies.py` `_bearer` (2026-10-13) requires a verified JWT on every route
+  (`require_token` discards the claims; `verify_jwt` / `require_admin` / `tenant_conn` use them), so a route moves
+  between gates with no frontend change. The per-call `jwt: true` choice and its static-token
+  fallback were the deploy-skew class behind the 2026-10-13 "Invalid token" preset incident (a tab
+  open across #1775's deploy kept choosing the static token). No session → no header; the server's
+  401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
+  History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
 - **`Mapy.cz`-powered location search.** The Region/Browse pages call `GET /maps/suggest`
   and `POST /maps/resolve` on the FastAPI service for autocomplete + admin-unit
   resolution. The `MAPY_CZ_API_KEY` is server-side only — never inlined into the browser
@@ -1035,7 +1040,10 @@ renumber.** Navigate by area:
    replace the veto are the runner's `COVERAGE` warning (logged whenever a walk nominates with
    `walk_coverage != "complete"`), the two facts now recorded per category in
    `scrape_runs.by_category` (`walk_reached_end` + `walk_coverage` — JSONB, no migration), and
-   `scripts/verify_pipeline.py`'s coverage check. Those must not be silenced.
+   `scripts/verify_pipeline.py`'s two checks on them — `walk_coverage` on the count and
+   `walk_end_streak` (2026-10-13) on the walks in a row a category did NOT reach the end, i.e.
+   nominated nothing (ceskereality byt/prodej went 89 walks that way while the portal-wide gap
+   read 4.6%). Those must not be silenced.
 
    The numeric verdict is unchanged and still runs every walk — it just no longer gates. It
    drives ceskereality's descent trigger, idnes's resample trigger, sreality's national-fallback
@@ -1820,21 +1828,34 @@ renumber.** Navigate by area:
     `_shared_filter_where` admits an advert only as its property's canonical advert and drops
     every advert of the subject's property (`exclude_listing_ids`, the one exclusion; decision
     13), so comparables, velocity and the corridor count each property once.
-    **PORTALS AND BROKERS are one rule too (MS19, migration 590): a filter selects ADS, the
-    rows stay properties.** A property matches portal set P when any of its ads is on P,
-    active or not (`properties.all_sources`); the status switch is judged on those ads (active =
-    an active ad on P, `active_sources`; inactive = ads on P and none active); several portals =
-    any of them; with no portal the status is the property's own. A broker filter is the same
-    rule over that broker's ads only, so broker + portal means one ad satisfies both. ONE SQL
-    function, `public.portal_status_matches`, is read by both aggregate RPCs and the broker
-    lookup (`toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`); the
-    Watchdog compiles its `any` arm (`PROPERTIES_GRAIN.clauses`: `l.all_sources && …`, it has
-    no status filter); the SPA renders it on PostgREST (`queries.ts applyPortalRule`: `ov` /
-    `not.ov` on the two lists, a property-id allowlist under a broker). All four are pinned to
-    one table, `tests/fixtures/portal_rule.json` (`tests/test_portal_rule.py` in CI's
-    migrations lane, `queries.test.ts`). The named exception: estimation cohorts keep each
-    ad's own portal (`LISTINGS_GRAIN`, `l.source = ANY`) until the estimation subject is a
-    property (MS20, PROGRAM.md §9). The badge on a Browse card lists the portals with an
+    **PORTALS AND BROKERS are one rule too (MS19, migration 590; two-sided since 597): a filter
+    selects ADS, the rows stay properties.** A property matches portal set P when any of its ads
+    is on P, active or not (`properties.all_sources`); the status switch is judged on those ads
+    (active = an active ad on P, `active_sources`; inactive = ads on P and none active); several
+    portals = any of them; with no portal the status is the property's own. **And it has no ad
+    on an EXCLUDED portal** (`portals_excluded`): any ad, active or ended (`all_sources`), or only
+    active ones under `portals_excluded_active_only` (`active_sources`, the operator's choice per
+    filter, ruled 2026-10-13); several excluded = none of them; both sides combine ("on idnes, not
+    on sreality"). The exclusion is a statement about the PROPERTY, so neither the status switch
+    nor a broker moves it (no broker is linked to a bazos, bezrealitky or maxima ad: a
+    broker-scoped exclusion would exclude nothing). It is only as true as merging: an unmerged
+    twin on the excluded portal leaves its property in, and the operator ruled no caveat in the
+    UI because it sharpens as the AUTODEDUP scope grows (measured 2026-10-13: outside the apply
+    scope about half to three quarters of a "not on sreality" cohort have an unmerged sreality
+    twin). A broker filter is the include side over that broker's ads only, so broker + portal
+    means one ad satisfies both. ONE SQL function, `public.portal_status_matches` (seven
+    arguments since 597, the two exclusion ones defaulted), is read by both aggregate RPCs and
+    the broker lookup (`toolkit/brokers.broker_property_ids`, `GET /brokers/{id}/property-ids`,
+    which passes no exclusion); the Watchdog compiles its `any` arm and the exclusion
+    (`PROPERTIES_GRAIN.clauses` + the `portals_excluded` hook; it has no status filter); the SPA
+    renders it on PostgREST (`queries.ts applyPortalRule`: `ov` / `not.ov` on the two lists, a
+    property-id allowlist under a broker). All three renderings are pinned to one table,
+    `tests/fixtures/portal_rule.json` (`tests/test_portal_rule.py` in CI's migrations lane,
+    `queries.test.ts`). The named exception: estimation cohorts keep the canonical ad's own
+    portal (`LISTINGS_GRAIN`, `l.source = ANY`) until the estimation subject is a property
+    (MS20, PROGRAM.md §9); the exclusion is Browse + Watchdog only. One control edits both
+    sides on Browse, the Watchdog editor and the phone Feed: a portal chip cycles off → on it →
+    not on it ("−", brick on the desktop, ink on the phone). The badge on a Browse card lists the portals with an
     active ad, or every portal marked inactive. A second badge, "N inzeráty", reads
     `source_count` off the card's `browse_list` row (every ad, active or not: the rollup's
     count, projected since 590), from two ads up.
@@ -1843,7 +1864,8 @@ renumber.** Navigate by area:
     on P was first seen, active or not; nine `properties` columns written by the rollup since
     588, copied into `browse_list` with one partial index each by 590), `property_id` breaking
     ties, so a property advertised on P again rises to the top. No portal, several portals or
-    any other sort: unchanged; a broker filter changes neither rule. Only the order changes:
+    any other sort: unchanged; a broker filter changes neither rule, and an excluded portal is
+    never "the one portal" (`solePortal` reads the included side only). Only the order changes:
     every filter, "added in the last N days" included, keeps its meaning, rows keep the
     property's own dates, a header chip names the order and a card whose day on P differs
     from its first seen shows both (`effectiveSort`, never in a URL). A redundant
@@ -1990,9 +2012,9 @@ renumber.** Navigate by area:
     the other leaves a function that compiles and fails on its first call. What it does NOT delete is the obec-keyed pair this pattern was
     modelled on: `home_obec_pop` and the eight `near_*` columns (migration 142) stay, because
     they are population/proximity FACTS about the obec, not a membership cache.
-    The one exception is `near_city_proximity` (an operator-chosen radius search, not curated-city
-    membership) — not precomputable the same way, and confirmed dead in the SPA UI today (no
-    widget wires it), so left as a live, unoptimized, unexercised code path.
+    The one exception was `near_city_proximity` (an operator-chosen radius search, not curated-city
+    membership): retired in W5 (migration 436); the SPA state and the RPCs' `city_proximity`
+    parameter went in 597, and only the compiler's retired-loudly guard remains for stored specs.
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections` +
     `collection_properties(collection_id, property_id)`, `tags` + `property_tags(property_id,
     tag_id)`, `property_notes(property_id, body, origin_listing_id)`, migration 202 — was
@@ -2127,7 +2149,7 @@ renumber.** Navigate by area:
     exceptions** (hydration sprint W-1c). Until then the collection CRUD (`POST /collections`,
     `GET`/`PATCH`/`DELETE /collections/{id}`) and every `/tags` route were still on the
     `get_db_conn` + `require_token` pair the rest of the module had already left: that pair is
-    service-role (RLS off) behind the static `API_TOKEN` that ships inside the public SPA bundle,
+    service-role (RLS off) behind the static `API_TOKEN` that shipped inside the public SPA bundle,
     and `api/curation.py`'s statements carry no account predicate of their own — they lean
     entirely on RLS — so any holder of the token could read, rename or delete another account's
     collections and tags (live data at the time: five collections across five distinct accounts).
@@ -2136,9 +2158,9 @@ renumber.** Navigate by area:
     `property_tags` (whose BEFORE triggers copy `account_id` off the parent, migration 292) their
     INSERTs must stamp `account_id` explicitly or fail the WITH CHECK closed — `create_collection`
     / `create_tag` / `create_note` all take it as a parameter, resolved route-side by
-    `tenant_pool.resolve_account_id`; and (b) the frontend wrappers for these routes must pass
-    `jwt: true` (`frontend/src/lib/api.ts`), because `verify_jwt` no longer accepts the static
-    token as a synthetic identity. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
+    `tenant_pool.resolve_account_id`; and (b) every frontend request carries the session JWT
+    (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
+    accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
@@ -2172,7 +2194,7 @@ renumber.** Navigate by area:
     functions rather than views because `browse_list` and
     `properties_map_mv` are blue-green rebuilt (a view or policy on them would block the DROP or
     vanish with it), and they return `browse_projection`'s row type, never the rebuilt
-    relation's. `browse_stats_properties` / `browse_map_cells` take one trailing
+    relation's. `browse_stats_properties` / `browse_map_cells` take a
     `hide_dismissed` flag (default false). The SPA's `queries.ts:readSource` is the one seam:
     every cohort read starts from the twin unless `?dismissed=show` reveals them — a lens outside
     preset identity, like the pipeline scope — and the sidebar says how many the cohort hides
@@ -2676,7 +2698,7 @@ renumber.** Navigate by area:
     2026-08-12 and were dark the whole time:** Phase 0's A6 revoked `listing_broker_public` +
     `brokers_public` from `anon` AND `authenticated`, so every read returned SQLSTATE `42501` and
     every card degraded to "no broker shown". `frontend/src/lib/brokers.ts` is now repointed wholesale
-    onto the identity-gated API (every call `jwt: true`; the routes reject the static bundle token),
+    onto the identity-gated API (on the session JWT every request carries; the routes reject the static token),
     so a logged-in caller gets HTTP 200 with either the values or `has_email`/`has_phone` — there is
     no longer an *expected* failure, and the 42501 special case is gone. The read stays isolated
     from the board (broker data is an enrichment; a failure must not take stages/cards/images down)

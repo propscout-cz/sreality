@@ -233,20 +233,23 @@ export const sortToParam = (s: SortSpec): string =>
   `${s.direction === 'desc' ? '-' : ''}${s.field}`;
 
 /* -------------------------------------------------------------------------- */
-/* THE PORTAL RULE (MS19, migration 590): portal and broker filters select    */
-/* ADS; rows are always properties.                                           */
+/* THE PORTAL RULE (MS19, migration 590; two-sided since 597): portal and     */
+/* broker filters select ADS; rows are always properties.                     */
 /* -------------------------------------------------------------------------- */
 /* A property matches portal set P when any of its ads is on P, active or not
  * (`all_sources`); the status switch is judged on those ads: active = an active
  * ad on P (`active_sources`), inactive = ads on P and none of them active. With
- * no portal the status is the property's own. One rule in four renderings,
- * pinned to each other by tests/fixtures/portal_rule.json: this one (list,
- * cards, count, map points), `public.portal_status_matches` (Stats, map cells,
- * the broker lookup) and the Watchdog's compiled clause.
+ * no portal the status is the property's own. AND it has no ad on an excluded
+ * portal — any ad, or only active ones under `portalsExcludedActiveOnly`. One
+ * rule in three renderings, pinned to each other by tests/fixtures/
+ * portal_rule.json: this one (list, cards, count, map points),
+ * `public.portal_status_matches` (Stats, map cells, the broker lookup) and the
+ * Watchdog's compiled clauses.
  *
- * A broker filter moves the rule onto the broker's own ads: the server judges
- * portal and status over them (fetchBrokerPropertyIds), so one ad satisfies
- * both and the property-level rule steps aside here. */
+ * A broker filter moves the include side onto the broker's own ads: the server
+ * judges portal and status over them (fetchBrokerPropertyIds), so one ad
+ * satisfies both and that side steps aside here. The exclusion is a statement
+ * about the PROPERTY, so neither a broker nor the status switch moves it. */
 export const adScope = (f: ListingFilters): { portals: string[]; status: ListingStatus } =>
   f.brokerId != null ? { portals: [], status: 'any' } : { portals: f.portals, status: f.status };
 
@@ -268,12 +271,23 @@ export const applyPortalRule = <T>(q: T, f: ListingFilters): T => {
     r = r.overlaps('all_sources', portals);
     if (status === 'inactive') r = r.not('active_sources', 'ov', `{${portals.join(',')}}`);
   }
+  if (f.portalsExcluded.length) {
+    const ads = f.portalsExcludedActiveOnly ? 'active_sources' : 'all_sources';
+    r = r.not(ads, 'ov', `{${f.portalsExcluded.join(',')}}`);
+  }
   /* Redundant by the stored invariant (listed <=> dated): narrows nothing, lets the
    * portal's partial index serve every sort AND the count, so list, cards and count
    * keep ONE filter chain. */
-  if (f.portals.length === 1) r = r.not(`newest_ad_at_${f.portals[0]}`, 'is', null);
+  const sole = solePortal(f);
+  if (sole) r = r.not(`newest_ad_at_${sole}`, 'is', null);
   return r as unknown as T;
 };
+
+/* The one INCLUDED portal, when exactly one is: it names the newest-ad column the
+ * one-portal order sorts by and the conjunct above narrows on, so the two cannot
+ * disagree (keyset.ts treats that column as NOT NULL on every paged row). */
+const solePortal = (f: ListingFilters): string | null =>
+  f.portals.length === 1 ? f.portals[0] : null;
 
 /* Relation names, in one place so a fetcher cannot read one relation and count
  * another. */
@@ -324,7 +338,7 @@ const mapSource = (f: ListingFilters, columns: string) =>
  * changes neither rule. Only the order changes — every filter keeps its meaning
  * and rows keep the property's own dates. Never in SORTABLE_FIELDS or a URL. */
 export const orderPortal = (f: ListingFilters, sort: SortSpec): string | null =>
-  f.portals.length === 1 && sort.field === 'first_seen_at' ? f.portals[0] : null;
+  sort.field === 'first_seen_at' ? solePortal(f) : null;
 
 export const effectiveSort = (f: ListingFilters, sort: SortSpec): SortSpec => {
   const p = orderPortal(f, sort);
@@ -386,11 +400,9 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
     or:  (q: string) => typeof r;
   };
   r = applyPortalRule(r, f);
-  /* Days-ago ranges. min = most recent allowed (so last_seen >= now()
-   * minus min); max = oldest allowed (so last_seen <= now() minus max).
-   * Wait — that's inverted. min_days = 3 means "seen at least 3 days
-   * ago", which is `last_seen <= now() - 3d`. max_days = 10 means
-   * "seen at most 10 days ago", which is `last_seen >= now() - 10d`. */
+  /* Days-ago ranges: min_days = 3 means "seen at least 3 days ago"
+   * (`last_seen <= now() - 3d`); max_days = 10 means "seen at most 10 days
+   * ago" (`last_seen >= now() - 10d`). */
   if (f.lastSeenMaxDays != null) r = r.gte('last_seen_at', isoNDaysAgo(f.lastSeenMaxDays));
   if (f.lastSeenMinDays != null) r = r.lte('last_seen_at', isoNDaysAgo(f.lastSeenMinDays));
   if (f.firstSeenMaxDays != null) r = r.gte('first_seen_at', isoNDaysAgo(f.firstSeenMaxDays));
@@ -580,8 +592,7 @@ async function resolveCollectionPrefilter(
 /* min/max city population and the near_* proximity filters are NOT here:
  * since migration 142 they're precomputed columns on properties_public, so
  * they dispatch directly via applyRegistryFilters (no prefilter RPC, no anon
- * 3s timeout). Only the flexible any-index rule list + the legacy centroid
- * near_city_proximity still need the spatial RPC. */
+ * 3s timeout). Only the flexible any-index rule list needs a prefilter. */
 const hasCityQualityFilter = (f: ListingFilters): boolean =>
   f.cityIndexRules.length > 0;
 
@@ -810,19 +821,6 @@ export const fetchNoPriceCount = async (
   return count ?? 0;
 };
 
-/* Browse cohort fetchers (Map / Table / Cards) AND fetchBrowseStats read the
- * property grain (properties_public / browse_stats_properties), so Browse is
- * one-dot-per-property. `sreality_id` on properties_public is the
- * representative child, so detail links, image / snapshot / tag lookups, and
- * the sreality_id-keyed prefilters all carry over unchanged. Today every
- * property is a singleton, so the surface is visually identical to
- * listings_public; multi-source collapsing arrives with the portal scrapers.
- *
- * The Stats RPC was repointed in Slice 2a once migration 095 denormalised the
- * filter columns onto `properties` — that drops the listings join from the
- * function's plan, making browse_stats_properties perf-equivalent to the
- * listing-grain browse_stats. Migration 173 carries the merged price-change
- * predicates, the condition-level bounds, and the with-estimates flag. */
 /* Above this many MAPPABLE rows the map asks the server to aggregate; at or
  * below it, today's per-point read is already correct and is what runs. Measured
  * 2026-08-26 on the live default cohort: a 2,000-row point read is 153 blocks and
@@ -1005,10 +1003,11 @@ export interface CohortCount {
 }
 
 /* The ONE cohort total — header, tab badge, and the infinite-scroll progress
- * labels. EXACT FIRST on the compact browse_list read model: on the snapshot,
- * a market-wide exact count is an index-only scan (measured 201 ms fully cold
- * for the broadest single cohort — 68k rows, zero heap fetches), so precision
- * is the norm, not the exception. The pre-read-model planner-estimate-first
+ * labels. EXACT FIRST on the compact browse_list read model: a one-category
+ * exact count is an index-only scan (measured 201 ms fully cold for the
+ * broadest single cohort — 68k rows, zero heap fetches); a cohort with no
+ * category is a sequential scan (~2.4 s cold, 2026-10-13), so precision is the
+ * norm, not the exception. The pre-read-model planner-estimate-first
  * hybrid existed because an exact count on the churned live table could not
  * finish under the anon 3s budget; that constraint is gone. `count=planned`
  * stays as the graceful FALLBACK when the exact count exceeds the abort budget
@@ -1267,11 +1266,11 @@ export interface BrowseStatsResolvedFilters {
   property_ids_filter: number[] | null;
 }
 
-/* The ~74-key argument object `browse_stats_properties` takes.
+/* The argument object `browse_stats_properties` takes.
  *
  * ONE builder, because there are now TWO callers: fetchBrowseStats and
  * fetchListingsForMap's `browse_map_cells` read (migration 439), which takes the
- * SAME named parameters plus two of its own. Built inline in each caller, this
+ * SAME named parameters plus its own `point_budget`. Built inline in each caller, this
  * object is the single richest opportunity for the Stats cohort and the map
  * cohort to silently disagree — a new filter wired into one literal and not the
  * other produces a map and a Stats tab describing different sets of properties,
@@ -1296,9 +1295,6 @@ export const buildBrowseStatsArgs = (
     category_main_filter:    f.categoryMain.length ? f.categoryMain : null,
     category_type_filter:    f.categoryType,
     districts_filter:        f.districts.length ? f.districts.map((d) => d.name) : null,
-    districts_context_filter: f.districts.length
-      ? f.districts.map((d) => d.context ?? '')
-      : null,
     /* Parallel exclude flags (migration 146) — full-length array so the RPC's
      * unnest stays aligned with names; absent excluded => include. */
     districts_excluded_filter: f.districts.length
@@ -1308,7 +1304,7 @@ export const buildBrowseStatsArgs = (
      * two RPCs compile (migration 504, lib/districtCodes). A NULL entry is a
      * chip with no code, which matches NOTHING there exactly as it does here;
      * `districts_filter` (the names) is now only the array that drives the
-     * unnest, and `districts_context_filter` is inert. */
+     * unnest. */
     districts_levels: f.districts.length
       ? f.districts.map((d) => d.level ?? null)
       : null,
@@ -1366,20 +1362,8 @@ export const buildBrowseStatsArgs = (
     bbox_south:              effBbox?.south ?? null,
     bbox_east:               effBbox?.east  ?? null,
     bbox_north:              effBbox?.north ?? null,
-    /* Phase QUAL. The rules never travel as rules any more: W5 resolved them
-     * to an obec allowlist (curated_cities_matching -> obec_ids_filter) and W3
-     * S4 deleted the `?cityQualityLegacy=1` hatch that was the only caller
-     * still sending them here. The parameter stays in the signature because
-     * dropping it needs a DROP FUNCTION and would break every deployed bundle
-     * mid-rollout; it is inert. */
-    city_index_rules:        null,
-    /* Off for a different reason: both resolve to property-id allowlists
-     * client-side (resolveBrowsePrefilters), so there is one resolution path. */
-    tag_ids:                 null,
-    with_estimates:          false,
     city_pop_min:            f.minCityPopulation,
     city_pop_max:            f.maxCityPopulation,
-    city_proximity:          null,   // retired (W5); the RPC raises on a non-null value
     /* Migration 142/143 — fast polygon-edge proximity precomputed columns. */
     near_pop_5km_min:        f.nearPop5kmMin,
     near_pop_15km_min:       f.nearPop15kmMin,
@@ -1408,6 +1392,9 @@ export const buildBrowseStatsArgs = (
     apartment_condition_level_min: f.apartmentConditionLevelMin,
     apartment_condition_level_max: f.apartmentConditionLevelMax,
     portal_filter:           scope.portals.length ? scope.portals : null,
+    /* Migration 597 — the property-level side: under a broker too. */
+    portal_excluded_filter:      f.portalsExcluded.length ? f.portalsExcluded : null,
+    portal_excluded_active_only: f.portalsExcludedActiveOnly,
     /* Migration 162 — market-growth obec allowlist (price-stats datasets).
      * Migration 378 — generic property-id allowlist; carries the deal-pipeline
      * scope (rule #22) today, and is the seam any future property-grain

@@ -17,6 +17,22 @@ single-collection CRUD, tags, buildings, manual estimates, filter-presets, and (
 brokers still authenticate via the shared static token and are not yet per-account scoped.
 The "treat the SPA as operator-only" interim posture stays in force until that audit lands.
 
+**2026-10-13 update:** Part A step 2 is closed by construction, not by audit. `require_token` now
+accepts a verified JWT too — `api/dependencies.py` `_bearer` is the one reader of the `Authorization`
+header (static token → a machine with no identity, JWT → claims) — so every route the SPA calls
+accepts its session JWT and the SPA sends ONE credential everywhere (done the same day: `jwt: true`
+and `VITE_API_TOKEN` are deleted from the bundle; `frontend/src/lib/api.ts` `authHeader`). Trigger:
+the 2026-10-13 "Invalid token" preset incident — a desktop tab open across #1775's deploy kept
+sending the static token to a route that had just moved to `verify_jwt`. With no per-call choice
+left, that skew class is gone.
+
+**2026-10-13, W4 — the static key is deleted.** `API_TOKEN` is read by nothing: `_bearer` accepts only a
+verified Supabase JWT (local dev: `API_AUTH_OPTIONAL=1`), so an old bundle holds a dead string and Part B
+(rotation) is moot. A machine that needs the API (ClickUp, a script) signs in as its own Supabase user
+and sends that JWT — per-caller identity, scope and revocation instead of one shared string. Operator
+steps: delete `API_TOKEN` and `SUPABASE_JWT_SECRET` from the Railway API service's variables and
+`VITE_API_TOKEN` from the `vite` service's; never set `API_AUTH_OPTIONAL` there.
+
 ## What `API_TOKEN` is
 
 `API_TOKEN` is a **single shared static bearer token** — one secret string, the same for
@@ -84,7 +100,7 @@ The extension already does exactly this; the SPA was the last static-token clien
    this up, `verify_jwt`'s legacy branch is now fully removed (not just de-privileged) — see
    the status note at the top of this doc — so a `require_admin`/`verify_jwt` route rejects
    the static token outright regardless of what the frontend sends.
-2. **STILL OPEN — route audit: every route the SPA calls must accept a JWT, not only the
+2. **CLOSED 2026-10-13 by `_bearer` (see the update above); the audit as written: every route the SPA calls must accept a JWT, not only the
    static token.** Routes still on `require_token` that the SPA calls (`POST /collections`,
    `GET/PATCH/DELETE /collections/{id}`, tags, buildings, manual estimates, filter-presets,
    and pre-#940 brokers) still authenticate via the shared static token and are not yet

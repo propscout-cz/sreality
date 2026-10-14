@@ -288,6 +288,8 @@ export function Segmented<T extends string | number | null>({
 /* on selected) is the default and reads as "one of many tagged options";    */
 /* 'solid' (filled copper background, white text) is louder and reserved for  */
 /* the Disposition grid where each cell is a fixed property of the listing.   */
+/* `negative` paints a pressed cell brick: an EXCLUDE pick, the same colour   */
+/* an excluded location chip carries.                                         */
 /* -------------------------------------------------------------------------- */
 
 export function PickButton({
@@ -295,6 +297,7 @@ export function PickButton({
   onClick,
   children,
   variant = 'soft',
+  negative = false,
   className = '',
   ariaLabel,
   disabled = false,
@@ -303,12 +306,16 @@ export function PickButton({
   onClick: () => void;
   children: ReactNode;
   variant?: 'soft' | 'solid';
+  negative?: boolean;
   className?: string;
   ariaLabel?: string;
   disabled?: boolean;
 }) {
-  const onClasses =
-    variant === 'solid'
+  const onClasses = negative
+    ? variant === 'solid'
+      ? 'bg-[var(--color-brick)] text-white border-[var(--color-brick)]'
+      : 'bg-[var(--color-brick-soft)] text-[var(--color-brick)] border-[var(--color-brick)]'
+    : variant === 'solid'
       ? 'bg-[var(--color-copper)] text-white border-[var(--color-copper)]'
       : 'bg-[var(--color-copper-soft)] text-[var(--color-copper)] border-[var(--color-copper)]';
   // Resting label is ink-2, not ink-3: ink-3 on paper-2 is 3.9:1 (below the

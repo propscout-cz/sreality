@@ -1243,9 +1243,12 @@ export interface WatchdogFilterSpec {
   // Raw sreality condition enum (Stav objektu). Matches l.condition = ANY(...);
   // null / empty = any. Honoured by the matcher (_build_match_clauses).
   condition_match: string[] | null;
-  // Source portals (migration 091). A listing matches if its source is
-  // in the list; null / empty = all portals.
+  // The portal rule's two sides (MS19 + migration 597): a property with an ad on
+  // one of `portals` (null / empty = all) and none on `portals_excluded` (any ad,
+  // or only active ones under `portals_excluded_active_only`).
   portals: string[] | null;
+  portals_excluded: string[] | null;
+  portals_excluded_active_only: boolean;
   min_parking_lots: number | null;
   // Derived condition scores (migrations 072 / 073). Same NULL-excluding
   // `>= N` / `<= N` semantics as the Browse filter.
@@ -1278,15 +1281,6 @@ export interface WatchdogFilterSpec {
   }> | null;
   min_city_population: number | null;
   max_city_population: number | null;
-  near_city_proximity: {
-    index_rules: Array<{
-      index_name: string;
-      op?: '>=' | '<=' | '==' | '!=' | '>' | '<';
-      value: number;
-    }>;
-    population_min: number | null;
-    radius_km: number;
-  } | null;
   /* Fast polygon-edge proximity (migration 142). Precomputed-column
    * predicates the matcher reads off properties_public — `>= value`. */
   near_pop_5km_min: number | null;
@@ -1332,6 +1326,8 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   ownership: null,
   condition_match: null,
   portals: null,
+  portals_excluded: null,
+  portals_excluded_active_only: false,
   min_parking_lots: null,
   building_condition_level_min: null,
   building_condition_level_max: null,
@@ -1347,7 +1343,6 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   city_index_rules: null,
   min_city_population: null,
   max_city_population: null,
-  near_city_proximity: null,
   near_pop_5km_min: null,
   near_pop_15km_min: null,
   near_jobs_5km_min: null,

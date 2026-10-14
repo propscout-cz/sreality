@@ -32,6 +32,11 @@ from autodedup.score_sql import CLUSTER_CONFLICT_INSERT_SQL
 from autodedup.score_lane import CLUSTER_INSERT_SQL, CLUSTER_MEMBER_INSERT_SQL
 
 
+# The reject ledger's key a test store is built with when the test is not about the ledger
+# (E943: `SqlStore` takes both, so the lookup and the write read one source).
+LEDGER_KEY: dict[str, str] = {"calibration_digest": "c", "engine_digest": "e"}
+
+
 def _jsonb(value: Any) -> Any:
     """psycopg hands a jsonb column back as a parsed object, not as text."""
     if isinstance(value, str):
@@ -50,6 +55,12 @@ class FakePg:
         self.fp_key: set[tuple[str, str, str, int]] = set()
         self.rt_fp: dict[tuple[str, int], dict[str, Any]] = {}
         self.pairs: dict[tuple[str, int, int], dict[str, Any]] = {}
+        # Tables of schema `autodedup` a migration has not created here yet: the presence check
+        # answers from the tables its statement NAMES, so one it forgets cannot hide a missing
+        # migration (E943: 596 applied after the code merged).
+        self.absent_tables: set[str] = set()
+        # `autodedup.rt_reject_ledger` (migration 596, E943), keyed as its primary key.
+        self.reject_ledger: dict[tuple[str, int, int], dict[str, Any]] = {}
         self.clusters: dict[tuple[str, int], dict[str, Any]] = {}
         self.cluster_members: set[tuple[str, int, int]] = set()
         self.cluster_conflicts: list[dict[str, Any]] = []
@@ -127,6 +138,7 @@ class FakePg:
             "fp_key": set(self.fp_key),
             "rt_fp": {k: dict(v) for k, v in self.rt_fp.items()},
             "pairs": {k: dict(v) for k, v in self.pairs.items()},
+            "reject_ledger": {k: dict(v) for k, v in self.reject_ledger.items()},
             "clusters": {k: dict(v) for k, v in self.clusters.items()},
             "cluster_members": set(self.cluster_members),
             "cluster_conflicts": [dict(row) for row in self.cluster_conflicts],
@@ -150,6 +162,7 @@ class FakePg:
         self.fp_key = state["fp_key"]
         self.rt_fp = state["rt_fp"]
         self.pairs = state["pairs"]
+        self.reject_ledger = state["reject_ledger"]
         self.clusters = state["clusters"]
         self.cluster_members = state["cluster_members"]
         self.cluster_conflicts = state["cluster_conflicts"]
@@ -302,7 +315,8 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     gen = str(p.get("generation") or "")
 
     if sql == S.RT_STORE_PRESENT_SQL:
-        return [(True,)]
+        named = re.findall(r"to_regclass\('autodedup\.(\w+)'\)", sql)
+        return [(all(table not in db.absent_tables for table in named),)]
     if sql == S.RT_SCHEMA_SIZE_SQL:
         return [(int(db.schema_bytes),)]
     if sql == S.RT_ROW_CENSUS_SQL:
@@ -323,6 +337,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             "rt_scope_ids": [key[0] for key in db.scope_ids],
             "rt_scope_scan": [row["generation"] for row in db.scope_scans],
             "rt_retire_event": [row["generation"] for row in db.retire_events],
+            "rt_reject_ledger": [key[0] for key in db.reject_ledger],
         }
         return [(name, int(db.table_bytes.get(name, 0)), len(gens),
                  sum(1 for g in gens if g == gen)) for name, gens in held.items()]
@@ -494,6 +509,42 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         return []
     if sql == S.RT_PAIR_DELETE_SQL:
         db.pairs.pop((gen, int(p["listing_lo"]), int(p["listing_hi"])), None)
+        return []
+
+    # ---------------------------------------------------------------- the reject ledger
+    if sql == S.RT_REJECT_LEDGER_LOOKUP_SQL:
+        # The four keys are READ from the statement, never assumed: a lookup that stopped
+        # matching one of them answers here what it would answer in Postgres.
+        text = " ".join(sql.split())
+        matched = [column for column in ("dd_lo", "dd_hi", "calibration_digest",
+                                         "feature_version", "engine_digest")
+                   if f"l.{column} = " in text]
+        out = []
+        for lo, hi, dd_lo, dd_hi in zip(p["los"], p["his"], p["dd_los"], p["dd_his"]):
+            row = db.reject_ledger.get((gen, int(lo), int(hi)))
+            asked = {"dd_lo": dd_lo, "dd_hi": dd_hi,
+                     "calibration_digest": p["calibration_digest"],
+                     "feature_version": p["feature_version"],
+                     "engine_digest": p["engine_digest"]}
+            if row is not None and all(row[column] == asked[column] for column in matched):
+                out.append((int(lo), int(hi)))
+        return out
+    if sql == S.RT_REJECT_LEDGER_UPSERT_SQL:
+        keys = [(gen, int(lo), int(hi)) for lo, hi in zip(p["los"], p["his"])]
+        # Postgres: "ON CONFLICT DO UPDATE command cannot affect row a second time".
+        assert len(set(keys)) == len(keys), "one statement may not ledger a pair twice"
+        for key, dd_lo, dd_hi in zip(keys, p["dd_los"], p["dd_his"]):
+            assert key[1] < key[2], "a ledgered pair is (lo, hi)"
+            row = {"dd_lo": dd_lo, "dd_hi": dd_hi, "calibration_digest": p["calibration_digest"],
+                   "feature_version": p["feature_version"], "engine_digest": p["engine_digest"],
+                   "decided_at": db.now}
+            assert all(value is not None for value in row.values()), (
+                f"rt_reject_ledger columns are NOT NULL: {row}")
+            db.reject_ledger[key] = row
+        return []
+    if sql == S.RT_REJECT_LEDGER_DELETE_SQL:
+        for lo, hi in zip(p["los"], p["his"]):
+            db.reject_ledger.pop((gen, int(lo), int(hi)), None)
         return []
     if sql == S.RT_PAIR_CLUSTER_SQL:
         ids = set(p["ids"])
@@ -734,6 +785,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         gone = len(db.scope_scans) - len(keep)
         db.scope_scans[:] = keep
         return [(gone,)]
+    if sql == S.RT_FRESH_REJECT_LEDGER_SQL:
+        gone = [key for key in db.reject_ledger if key[0] == gen]
+        for key in gone:
+            db.reject_ledger.pop(key)
+        return [(len(gone),)]
     if sql == S.RT_FRESH_RETIRE_EVENT_SQL:
         keep = [row for row in db.retire_events if row["generation"] != gen]
         gone = len(db.retire_events) - len(keep)

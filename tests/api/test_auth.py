@@ -1,11 +1,9 @@
-"""Tests for the API_TOKEN bearer-token gate.
+"""Tests for the bearer gate: one credential, a Supabase JWT.
 
-require_token fails CLOSED (Phase 0): with API_TOKEN unset every gated endpoint
-returns 503 UNLESS API_AUTH_OPTIONAL=1 is set (the explicit local-dev opt-out),
-so a forgotten prod secret can never silently disable auth. With API_TOKEN set,
-every endpoint EXCEPT /health requires the matching Authorization: Bearer <token>
-header. (conftest sets API_AUTH_OPTIONAL=1 for the suite; the fail-closed test
-below deletes it to prove the 503 path.)
+require_token admits any verified JWT and nothing else; it fails CLOSED (401 without
+one, 503 with no verifier configured) UNLESS API_AUTH_OPTIONAL=1 — the explicit
+local-dev opt-out, never set in production. conftest sets the opt-out for the suite;
+the tests below delenv it to exercise the gate.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ jwt = pytest.importorskip("jwt")  # PyJWT (api extra)
 
 from api import curation as api_curation
 from api import dependencies as deps
+from tests.api._jwt import mint
 from api import feedback as api_feedback
 from api import main as api_main
 from api import maps as api_maps
@@ -302,8 +301,8 @@ def _gated_calls(client) -> list:
 
 def _jwt_gated_calls() -> list:
     """Routes on verify_jwt / tenant_pool.tenant_conn (Phase 1): fail CLOSED
-    when auth is unconfigured, unlike require_token's open-when-unset
-    behavior. The Wave 1 W1-1 batch (/estimations create/read/scenario,
+    even under the local-dev opt-out (API_AUTH_OPTIONAL=1 opens require_token
+    routes only). The Wave 1 W1-1 batch (/estimations create/read/scenario,
     /collections list + /properties writes, /properties/{id}/notes) moved
     here from _gated_calls in lockstep with api/main.py.
 
@@ -354,9 +353,8 @@ def _call(client, method: str, path: str, body, headers=None):
     return client.get(path, headers=headers or {})
 
 
-def test_token_unset_with_optout_all_endpoints_open(client, monkeypatch):
-    """Local-dev opt-out: API_TOKEN unset + API_AUTH_OPTIONAL=1 → open."""
-    monkeypatch.delenv("API_TOKEN", raising=False)
+def test_optout_opens_token_routes(client, monkeypatch):
+    """Local-dev opt-out: API_AUTH_OPTIONAL=1 → every require_token route is open."""
     monkeypatch.setenv("API_AUTH_OPTIONAL", "1")
 
     res = client.get("/health")
@@ -367,11 +365,11 @@ def test_token_unset_with_optout_all_endpoints_open(client, monkeypatch):
         assert res.status_code == 200, f"{path} should be open with the opt-out"
 
 
-def test_token_unset_without_optout_fails_closed(client, monkeypatch):
-    """No API_TOKEN and no opt-out → every gated route 503 (never fail-open).
-    /health stays open (it carries no require_token gate)."""
-    monkeypatch.delenv("API_TOKEN", raising=False)
+def test_unconfigured_fails_closed(client, monkeypatch):
+    """No opt-out and no verifier (SUPABASE_URL unset) → every gated route 503, never
+    open. /health stays open (it carries no gate)."""
     monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
 
     assert client.get("/health").status_code == 200
 
@@ -380,34 +378,25 @@ def test_token_unset_without_optout_fails_closed(client, monkeypatch):
         assert res.status_code == 503, f"{path} must fail closed when auth is unconfigured"
 
 
-def test_token_set_missing_header_rejects(client, monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+def test_missing_header_rejects(client, monkeypatch):
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
 
     for method, path, body in _gated_calls(client):
         res = _call(client, method, path, body)
-        assert res.status_code == 401, f"{path} should reject missing token"
+        assert res.status_code == 401, f"{path} should reject a missing bearer"
 
 
-def test_token_set_wrong_header_rejects(client, monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+def test_wrong_bearer_rejects(client, monkeypatch):
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     headers = {"Authorization": "Bearer wrong-token"}
 
     for method, path, body in _gated_calls(client):
         res = _call(client, method, path, body, headers=headers)
-        assert res.status_code == 401, f"{path} should reject wrong token"
-
-
-def test_token_set_correct_header_passes(client, monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    headers = {"Authorization": "Bearer secret-token-xyz"}
-
-    for method, path, body in _gated_calls(client):
-        res = _call(client, method, path, body, headers=headers)
-        assert res.status_code == 200, f"{path} should pass with correct token"
+        assert res.status_code == 401, f"{path} should reject a non-JWT bearer"
 
 
 def test_health_always_open(client, monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
 
     res = client.get("/health")
     assert res.status_code == 200
@@ -416,20 +405,64 @@ def test_health_always_open(client, monkeypatch):
 
 def test_malformed_authorization_header_rejected(client, monkeypatch):
     """Plain token (no `Bearer` prefix) is treated as missing."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     headers = {"Authorization": "secret-token-xyz"}
 
     res = client.post("/tools/find_comparables", json=_FIND_BODY, headers=headers)
     assert res.status_code == 401
 
 
-# --- verify_jwt-gated routes (Phase 1 tenant pool) --------------------------
+def test_token_routes_accept_real_jwt(client, monkeypatch):
+    """One caller, one credential: a human's session JWT passes the require_token
+    routes in `_gated_calls` too, so the SPA sends it everywhere and a route moves
+    between gates with no client change (the deploy-skew class behind the 2026-10-13
+    "Invalid token" preset incident: a stale bundle met a route that had just moved
+    to verify_jwt)."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    headers = {"Authorization": f"Bearer {mint({'sub': _ACCT})}"}
 
-_JWT_SECRET = "test-hs256-secret"
+    for method, path, body in _gated_calls(client):
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 200, f"{path} should accept a verified JWT"
+
+
+def test_token_routes_reject_forged_jwt(client, monkeypatch):
+    """A JWS-shaped bearer that fails verification is a 401 that names the reason
+    (RFC 6750 challenge) — never a pass, never a 503. The forgery is a structurally
+    valid ES256 token signed by a key the JWKS does not serve, so the failure is the
+    SIGNATURE on every PyJWT version (byte-tampering the signature segment is
+    classified `malformed` on some, `bad signature` on others)."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    forged = jwt.encode(
+        {"aud": "authenticated", "sub": _ACCT},
+        ec.generate_private_key(ec.SECP256R1()), algorithm="ES256",
+    )
+    headers = {"Authorization": f"Bearer {forged}"}
+
+    for method, path, body in _gated_calls(client):
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 401, f"{path} should reject a forged JWT"
+        assert res.json()["detail"] == "Invalid token: bad signature"
+        assert 'error="invalid_token"' in res.headers["WWW-Authenticate"]
+
+
+def test_bearer_non_ascii_header_is_401(monkeypatch):
+    """Starlette decodes headers as latin-1; a non-ASCII bearer must stay a clean 401
+    through verify_jwt's decode, with an ASCII challenge."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    for bearer in ("Bearer sécret", "Bearer é.é.é"):
+        with pytest.raises(fastapi.HTTPException) as exc:
+            deps.require_token(authorization=bearer)
+        assert exc.value.status_code == 401, bearer
+        assert exc.value.headers["WWW-Authenticate"].isascii()
+
+
+# --- verify_jwt-gated routes (Phase 1 tenant pool) --------------------------
 
 
 def test_jwt_routes_fail_closed_without_token(client, monkeypatch):
-    monkeypatch.delenv("API_TOKEN", raising=False)
 
     for method, path, body in _jwt_gated_calls():
         res = _call(client, method, path, body)
@@ -437,9 +470,7 @@ def test_jwt_routes_fail_closed_without_token(client, monkeypatch):
 
 
 def test_jwt_routes_reject_wrong_token(client, monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     headers = {"Authorization": "Bearer wrong-token"}
 
     for method, path, body in _jwt_gated_calls():
@@ -447,44 +478,39 @@ def test_jwt_routes_reject_wrong_token(client, monkeypatch):
         assert res.status_code == 401, f"{path} should reject a garbage non-JWT token"
 
 
-def test_jwt_routes_reject_legacy_static_token(client, monkeypatch):
-    """The old dual-auth branch is gone: the static API_TOKEN is no longer
-    special-cased by verify_jwt, so it's rejected here exactly like any other
-    string that isn't a valid Supabase JWT."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
-    headers = {"Authorization": "Bearer secret-token-xyz"}
-
-    for method, path, body in _jwt_gated_calls():
-        res = _call(client, method, path, body, headers=headers)
-        assert res.status_code == 401, f"{path} should reject the retired legacy token"
-
-
 def test_jwt_routes_accept_real_jwt(client, monkeypatch):
     """A real Supabase-signed JWT (no admin claim needed — these routes gate on
     identity via verify_jwt/tenant_conn, not require_admin) passes."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
-    tok = jwt.encode(
-        {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-        _JWT_SECRET, algorithm="HS256",
-    )
-    headers = {"Authorization": f"Bearer {tok}"}
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    headers = {"Authorization": f"Bearer {mint({'sub': '11111111-1111-1111-1111-111111111111'})}"}
 
     for method, path, body in _jwt_gated_calls():
         res = _call(client, method, path, body, headers=headers)
         assert res.status_code == 200, f"{path} should pass with a real JWT"
 
 
+def test_a_configured_legacy_key_is_not_a_credential(client, monkeypatch):
+    """The deleted static key must stay deleted: with API_TOKEN set in the
+    environment (old bundles still carry such a string), presenting it is a 401 on
+    every gate and never widens account_scope — a re-added static branch fails here."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    monkeypatch.setenv("API_TOKEN", "legacy-static-key")
+    headers = {"Authorization": "Bearer legacy-static-key"}
+
+    for method, path, body in [*_gated_calls(client), *_jwt_gated_calls()]:
+        res = _call(client, method, path, body, headers=headers)
+        assert res.status_code == 401, f"{path} accepted the retired static key"
+    with pytest.raises(fastapi.HTTPException) as exc:
+        deps.account_scope(authorization="Bearer legacy-static-key", conn=object())
+    assert exc.value.status_code == 401
+
+
 # ----------------------------------------------------------------------
-# deps.account_scope — the EITHER gate behind the account-scoped estimation
+# deps.account_scope — the read-scope gate behind the account-scoped estimation
 # reads (GET /estimations, GET /estimations/latest-by-listing).
 #
-# These routes must serve a logged-in browser session AND a non-browser
-# static-token caller (the Chrome extension today via JWT; MCP / ClickUp
-# tomorrow) over the single Authorization header the transport gives us.
+# These routes serve every signed-in caller (the SPA, the extension, a machine
+# signed in as its own Supabase user) over the single Authorization header.
 # Scope is asserted on the RESOLVED ACCOUNT LIST, not on row counts: a
 # mis-wire yields a shrunken-but-plausible page that no human would notice.
 # ----------------------------------------------------------------------
@@ -492,45 +518,33 @@ def test_jwt_routes_accept_real_jwt(client, monkeypatch):
 _ACCT = "e93e2b77-56f1-4a56-903b-204e4f0e4e90"
 
 
-def test_account_scope_static_token_is_system_only(monkeypatch):
-    """The static token is NOT an identity — it ships inside the SPA bundle in a
-    public repo — so it may never widen scope beyond the shared SYSTEM cohort."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    assert deps.account_scope(
-        authorization="Bearer secret-token-xyz", conn=object(),
-    ) == [deps.SYSTEM_ACCOUNT_ID]
+def test_account_scope_optout_is_system_only(monkeypatch):
+    """The local-dev opt-out is NOT an identity, so it may never widen scope beyond
+    the shared SYSTEM cohort."""
+    monkeypatch.setenv("API_AUTH_OPTIONAL", "1")
+    assert deps.account_scope(authorization=None, conn=object()) == [deps.SYSTEM_ACCOUNT_ID]
 
 
 def test_account_scope_jwt_adds_own_account_and_keeps_system(monkeypatch):
     """SYSTEM stays in scope alongside the caller's account, mirroring the
     estimation_runs_tenant_read policy (migration 291). Dropping it would hide
     the operator's own watchdog-produced runs, which carry the SYSTEM default."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     monkeypatch.setattr(
         tenant_pool, "resolve_account_id", lambda conn, claims: _ACCT,
     )
-    tok = jwt.encode(
-        {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    tok = mint({"sub": "11111111-1111-1111-1111-111111111111"})
     assert deps.account_scope(
         authorization=f"Bearer {tok}", conn=object(),
     ) == [_ACCT, deps.SYSTEM_ACCOUNT_ID]
 
 
 def test_account_scope_unresolvable_jwt_falls_back_to_system_only(monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     monkeypatch.setattr(
         tenant_pool, "resolve_account_id", lambda conn, claims: None,
     )
-    tok = jwt.encode(
-        {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    tok = mint({"sub": "11111111-1111-1111-1111-111111111111"})
     assert deps.account_scope(
         authorization=f"Bearer {tok}", conn=object(),
     ) == [deps.SYSTEM_ACCOUNT_ID]
@@ -539,46 +553,35 @@ def test_account_scope_unresolvable_jwt_falls_back_to_system_only(monkeypatch):
 def test_account_scope_never_returns_an_empty_scope(monkeypatch):
     """An empty list would reach `ANY('{}')` and match nothing — a silent blank
     page. Every branch must return at least SYSTEM or raise."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     for resolved in (None, _ACCT):
         monkeypatch.setattr(
             tenant_pool, "resolve_account_id", lambda conn, claims, r=resolved: r,
         )
-        tok = jwt.encode(
-            {"aud": "authenticated", "sub": "11111111-1111-1111-1111-111111111111"},
-            _JWT_SECRET, algorithm="HS256",
-        )
+        tok = mint({"sub": "11111111-1111-1111-1111-111111111111"})
         assert deps.account_scope(authorization=f"Bearer {tok}", conn=object())
 
 
-def test_account_scope_non_jwt_wrong_token_is_401_not_503(monkeypatch):
-    """A wrong token that is not even JWS-shaped must not surface as verify_jwt's
-    503 ('auth is not configured') on a deployment with no Supabase auth env —
-    that would report a bad credential as a server fault.
-
-    Scope note: a JWT-SHAPED credential still reaches verify_jwt, so with no
-    Supabase env configured it correctly yields 503 — at that point the auth
-    backend genuinely is unconfigured. Production always sets SUPABASE_URL."""
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_JWT_SECRET", raising=False)
-    with pytest.raises(fastapi.HTTPException) as exc:
-        deps.account_scope(authorization="Bearer wrong-token", conn=object())
-    assert exc.value.status_code == 401
+def test_account_scope_wrong_bearer_is_401(monkeypatch):
+    """A bearer that is not a verifiable JWT is a bad credential (401), never a pass
+    and never a widened scope."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    for bearer in ("Bearer wrong-token", "Bearer a.b.c"):
+        with pytest.raises(fastapi.HTTPException) as exc:
+            deps.account_scope(authorization=bearer, conn=object())
+        assert exc.value.status_code == 401, bearer
 
 
 def test_account_scope_fails_closed_when_gate_unconfigured(monkeypatch):
-    monkeypatch.delenv("API_TOKEN", raising=False)
     monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
     with pytest.raises(fastapi.HTTPException) as exc:
         deps.account_scope(authorization="Bearer anything", conn=object())
     assert exc.value.status_code == 503
 
 
 def test_account_scope_missing_header_is_401(monkeypatch):
-    monkeypatch.setenv("API_TOKEN", "secret-token-xyz")
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     with pytest.raises(fastapi.HTTPException) as exc:
         deps.account_scope(authorization=None, conn=object())
     assert exc.value.status_code == 401

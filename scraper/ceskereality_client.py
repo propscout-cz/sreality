@@ -21,8 +21,8 @@ Three ceskereality specifics live here:
     `/prodej/byty/stredocesky-kraj/?strana=13` is fine and that slice pages to 50
     of 50). A *filtered* URL caps at 99 pages (1,980 rows; `?strana=100` = 404).
     So the walk partitions each category by the 14 declared `KRAJ_SLUGS`
-    (`search_url`), with an optional subtype axis under a kraj that would exceed
-    99 pages. Detail pages are always fetched on www.
+    (`search_url`), descending onto a subtype axis and then an okres axis only
+    where a slice would exceed 99 pages. Detail pages are always fetched on www.
 """
 
 from __future__ import annotations
@@ -58,17 +58,105 @@ KRAJ_SLUGS: tuple[str, ...] = CZ_KRAJ_SLUGS
 # The second axis, used ONLY when a kraj slice would exceed the 99-page cap.
 # Declared per category, never scraped: a kraj page's facet block OMITS
 # zero-count subtypes (`ostatni-rd` is absent from stredocesky), so walking the
-# rendered list would silently drop a subtype the moment it emptied. Measured
-# 2026-08-27: these 10 slugs sum to 2,312 in stredocesky-kraj — EXACTLY the
-# kraj total, so subtype is a true partition within a kraj. Categories absent
-# from this map fall back to the page's rendered facets, and the descent
-# self-verifies its children's declared sum against the parent either way.
+# rendered list would silently drop a subtype the moment it emptied. Every entry
+# is a measured TRUE partition of a kraj (the slugs' declared counts sum to the
+# kraj total exactly). Categories absent from this map fall back to the kraj
+# page's own `/{sale}/{cat}/{subtype}/{kraj}/` links
+# (`ceskereality_parser.extract_subtype_slugs`), and the descent self-verifies its
+# children's declared sum against the parent either way.
 SUBTYPE_SLUGS: dict[str, tuple[str, ...]] = {
+    # 2026-08-27: these 10 sum to 2,312 in stredocesky-kraj, the kraj total.
     "rodinne-domy": (
         "rodinne-domy", "chaty", "chalupy", "cinzovni-domy",
         "zemedelske-usedlosti", "vily", "na-klic", "dvougeneracni-domy",
         "historicke-objekty", "ostatni-rd",
     ),
+    # 2026-10-13: prodej/praha 2,161 and pronajem/praha 1,229, each = the sum of
+    # these 12 (diff 0). Praha prodej crossed 1,980 on 2026-09-16 and, unmapped,
+    # held byt/prodej un-nominated for 89 walks. TRAP: `atypicke-byty` and `pokoj`
+    # do not start with `byty-`. TRAP: `pokoj` 301s to `pokoje`
+    # (/prodej/byty/pokoje/praha-hlavni-mesto/, 2026-10-13); the page links the
+    # alias, so keep it in step with `extract_subtype_slugs`.
+    "byty": (
+        "byty-1-kk", "byty-1-1", "byty-2-kk", "byty-2-1", "byty-3-kk",
+        "byty-3-1", "byty-4-kk", "byty-4-1", "byty-5-kk", "byty-5-1-vetsi",
+        "atypicke-byty", "pokoj",
+    ),
+    # 2026-10-13: prodej/stredocesky-kraj 1,976 = the sum of these 8 (diff 0) —
+    # four rows under the 1,980 ceiling, mapped before it crosses.
+    "pozemky": (
+        "stavebni-parcely", "orna-puda", "ostatni-pozemky", "komercni",
+        "zahrady", "louky", "lesy", "vodni-plochy",
+    ),
+}
+
+# The THIRD axis, used ONLY when a subtype child of a kraj is itself past the
+# 99-page cap: the okresy (districts) of that kraj, from RÚIAN (76 + Praha). The
+# site takes an okres slug in the kraj slot of the same grammar `search_url`
+# builds (/prodej/rodinne-domy/rodinne-domy/praha-vychod/ -> H1 "Rodinné domy na
+# prodej v okrese Praha-východ"). DECLARED, never scraped: a kraj page's
+# one-segment facet block lists only ~10 okresy by popularity (stredocesky omits
+# kutna-hora and nymburk). Slug = the RÚIAN name lowercased, diacritics stripped,
+# spaces to hyphens. MEASURED 2026-10-13 on prodej/rodinne-domy/rodinne-domy (116
+# GETs, all HTTP 200, no redirect, every H1 "… v okrese <Name>"): in each of the
+# 13 kraje the okres totals sum to the kraj child's EXACTLY (diff 0, child read
+# before and after) — the per-kraj figures below. 8,369 rows in all. That is ONE
+# category: any other relies on the per-level self-verify (region-filed ads with
+# no okres exist — see Praha below), which reads a short sum as residue.
+# `praha` is deliberately ABSENT: praha-1..praha-10 summed to 2,148 of prodej/byty
+# 2,161 on 2026-10-13 (13 short), so they are not a partition, and no Praha subtype
+# is near the ceiling (largest byty-2-kk 638 = 32 pages). An over-ceiling Praha
+# child stays `ceiling` and logs "DESCENT no okres axis" — the map it is owed.
+OKRES_SLUGS: dict[str, tuple[str, ...]] = {
+    # child 1,918 = okres sum
+    "stredocesky-kraj": (
+        "benesov", "beroun", "kladno", "kolin", "kutna-hora", "melnik",
+        "mlada-boleslav", "nymburk", "praha-vychod", "praha-zapad", "pribram",
+        "rakovnik",
+    ),
+    # child 947 = okres sum
+    "jihocesky-kraj": (
+        "ceske-budejovice", "cesky-krumlov", "jindrichuv-hradec", "pisek",
+        "prachatice", "strakonice", "tabor",
+    ),
+    # child 654 = okres sum
+    "plzensky-kraj": (
+        "domazlice", "klatovy", "plzen-jih", "plzen-mesto", "plzen-sever",
+        "rokycany", "tachov",
+    ),
+    # child 307 = okres sum
+    "karlovarsky-kraj": ("cheb", "karlovy-vary", "sokolov"),
+    # child 714 = okres sum
+    "ustecky-kraj": (
+        "chomutov", "decin", "litomerice", "louny", "most", "teplice",
+        "usti-nad-labem",
+    ),
+    # child 396 = okres sum
+    "liberecky-kraj": ("ceska-lipa", "jablonec-nad-nisou", "liberec", "semily"),
+    # child 456 = okres sum
+    "kralovehradecky-kraj": (
+        "hradec-kralove", "jicin", "nachod", "rychnov-nad-kneznou", "trutnov",
+    ),
+    # child 445 = okres sum
+    "pardubicky-kraj": ("chrudim", "pardubice", "svitavy", "usti-nad-orlici"),
+    # child 382 = okres sum
+    "kraj-vysocina": (
+        "havlickuv-brod", "jihlava", "pelhrimov", "trebic", "zdar-nad-sazavou",
+    ),
+    # child 839 = okres sum
+    "jihomoravsky-kraj": (
+        "blansko", "breclav", "brno-mesto", "brno-venkov", "hodonin", "vyskov",
+        "znojmo",
+    ),
+    # child 423 = okres sum
+    "olomoucky-kraj": ("jesenik", "olomouc", "prerov", "prostejov", "sumperk"),
+    # child 559 = okres sum
+    "moravskoslezsky-kraj": (
+        "bruntal", "frydek-mistek", "karvina", "novy-jicin", "opava",
+        "ostrava-mesto",
+    ),
+    # child 329 = okres sum
+    "zlinsky-kraj": ("kromeriz", "uherske-hradiste", "vsetin", "zlin"),
 }
 
 # Substrings ceskereality serves (HTTP 200) for a listing no longer offered.

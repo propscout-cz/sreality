@@ -24,17 +24,14 @@ from api import main as api_main
 from api import manual_estimates as me
 from api import schemas as s
 from api import tenant_pool
+from tests.api._jwt import mint
 
-_JWT_SECRET = "test-hs256-secret"
 _ADMIN_CLAIMS = {"sub": "op-uuid", "email": "op@example.com",
                  "app_metadata": {"is_admin": True}}
 
 
 def _jwt(is_admin: bool) -> str:
-    return jwt.encode(
-        {"aud": "authenticated", "sub": "u", "app_metadata": {"is_admin": is_admin}},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    return mint({"sub": "u", "app_metadata": {"is_admin": is_admin}})
 
 
 @pytest.fixture()
@@ -289,11 +286,8 @@ def test_tools_endpoint_delegates_to_toolkit(client, store, monkeypatch) -> None
 
 @pytest.fixture()
 def gated_client(client, store, monkeypatch):
-    """The real require_admin gate (no override), HS256 verification, a set API_TOKEN."""
+    """The real require_admin gate (no override) and the JWKS verifier."""
     api_main.app.dependency_overrides.pop(deps.require_admin, None)
-    monkeypatch.setenv("API_TOKEN", "secret-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     store["rows"][1] = {
         "id": 1, "sreality_id": 12345, "rent_czk": 30000, "author": "op",
         "source_kind": "broker", "notes": None,
@@ -338,11 +332,13 @@ def test_writes_accept_admin_jwt(gated_client, store) -> None:
     assert 1 not in store["rows"] and 2 in store["rows"]
 
 
-def test_read_stays_on_static_token(gated_client, store) -> None:
+def test_read_accepts_any_signed_in_user(gated_client, store, monkeypatch) -> None:
+    """The read stays on require_token (any verified JWT), never the admin gate."""
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
     api_main.app.dependency_overrides.pop(deps.require_token, None)
     r = gated_client.get(
         "/listings/12345/manual_estimates",
-        headers={"Authorization": "Bearer secret-xyz"},
+        headers={"Authorization": f"Bearer {_jwt(False)}"},
     )
     assert r.status_code == 200, r.text
     assert len(r.json()["data"]) == 1

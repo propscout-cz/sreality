@@ -34,7 +34,7 @@ from autodedup.incremental_sql import (
     RT_PAIRS_WITHIN_SQL,
 )
 from autodedup.settings import Settings
-from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg
 from tests.autodedup.lane_world import GENERATION, SCOPE, seed_lane, true_population
 from tests.autodedup.lane_world import world as lane_world
 
@@ -168,7 +168,8 @@ def test_every_stored_pair_names_the_scorer_that_decided_it(world) -> None:
     """All 15,923 rows of the live generation carried a NULL `model_version` against `w6_gold`
     on the batch generation's, because the lane wrote `evidence["_model"]` — a key nothing has
     ever set."""
-    store = SqlStore(world, GENERATION, model_version="w6_gold", calibration_digest="abc123")
+    store = SqlStore(world, GENERATION, model_version="w6_gold", calibration_digest="abc123",
+                     engine_digest="e")
     store.upsert_pairs([PairRow(lo=4_000, hi=4_001, probes=["img"], from_lo=True,
                                 from_hi=True, zone="merge", score=0.99, families=["IMG"],
                                 certificate="K-C", veto="", reason="r", evidence={},
@@ -194,7 +195,7 @@ def _components_world(conn: FakePg, n: int) -> list[PairRow]:
 
 
 def _recluster_cost(conn: FakePg, n: int) -> tuple[int, dict[str, int], PassResult]:
-    store = SqlStore(conn, GENERATION)
+    store = SqlStore(conn, GENERATION, **LEDGER_KEY)
     store.upsert_pairs(_components_world(conn, n))
     store.flush()
     before = dict(store.__dict__)  # noqa: F841 — readability only

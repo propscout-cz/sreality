@@ -2,15 +2,15 @@
  *
  * These functions moved off supabase-js onto the identity-gated /brokers API on
  * 2026-08-12. Three things are worth pinning, because each has a silent-failure
- * mode: (1) EVERY call must carry the caller's real session JWT — the routes
- * reject the static bundle token, and a missed `jwt: true` reads as "no broker"
- * rather than as an error; (2) a 404 (unknown broker) is an ANSWER, everything
+ * mode: (1) EVERY call must carry the caller's real session JWT — a call that
+ * reached the route without one read as "no broker" rather than as an error;
+ * (2) a 404 (unknown broker) is an ANSWER, everything
  * else must propagate; (3) contact PII arrives as
  * has_email/has_phone flags for a non-admin, and `contactState` must not collapse
  * that into "no contact exists".
  *
- * The module is imported dynamically because lib/api reads BASE_URL and TOKEN
- * from import.meta.env at module-evaluation time.
+ * The module is imported dynamically because lib/api reads BASE_URL from
+ * import.meta.env at module-evaluation time.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +18,6 @@ import { supabase } from './supabase';
 
 async function loadBrokers() {
   vi.stubEnv('VITE_API_BASE_URL', 'https://api.test.invalid');
-  vi.stubEnv('VITE_API_TOKEN', 'STATIC-BUNDLE-TOKEN');
   return import('./brokers');
 }
 
@@ -89,7 +88,7 @@ describe('contactState', () => {
 });
 
 describe('auth mode', () => {
-  it('sends the session JWT on every repointed read, never the bundle token', async () => {
+  it('sends the session JWT on every repointed read', async () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const b = await loadBrokers();
     await b.fetchBrokerLeaderboard({

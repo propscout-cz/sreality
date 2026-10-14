@@ -92,13 +92,10 @@ _W3_S3 = "504_location_w3_one_code_predicate.sql"
 # two estate-area predicates, which now read the plot MEASURE column; 549 carries
 # 547's forward verbatim except the ownership `__unknown__` array, which gained
 # `jine`; 590 carries 549's forward verbatim except the status and portal arms,
-# which became one portal_status_matches() call (MS19); 593 carries 590's map
-# body forward verbatim except `listing_ids_filter` and its one predicate (W6).
-# Re-read the chip arms when this moves again.
-_LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "590_read_model_portal_rule.sql",
-    "browse_map_cells": "593_merge_sprint_w6_drops.sql",
-}
+# which became one portal_status_matches() call (MS19); 597 carries 590's forward
+# verbatim except the dead parameters' arms and the two exclusion arguments of
+# that call. Re-read the chip arms when this moves again.
+_LATEST_RPC_DEFINITION = "597_portal_exclusion.sql"
 
 
 def _function_body(func: str) -> str:
@@ -166,7 +163,7 @@ def test_the_rpc_bodies_compile_the_same_level_map(func: str) -> None:
     """RED by: an RPC arm pointed at a different column than the API/SPA use, or
     a level served in one RPC and not the other — the Stats tab and the map
     would then answer for different cohorts under the same chips."""
-    assert latest_definition(func).name == _LATEST_RPC_DEFINITION[func]
+    assert latest_definition(func).name == _LATEST_RPC_DEFINITION
     for arms in _chip_case_arms(func):
         # `locality` is compiled, not stored: a street pick filters at its obec.
         assert arms == {**LEVEL_COLUMN, "locality": LEVEL_COLUMN["obec"]}
@@ -204,24 +201,25 @@ def test_a_chip_without_a_code_matches_nothing_in_sql_too(func: str) -> None:
         assert re.search(r"else false", block, re.IGNORECASE)
 
 
-def test_the_rpc_signatures_only_grew_hide_dismissed() -> None:
-    """`create or replace function` cannot change a parameter list, and the SPA
-    builds ONE argument object for both RPCs (tests/test_browse_map_read_
-    contract.py). The chip parameters therefore stay exactly as they were — the
-    now-inert `districts_context_filter` included. The changes since 436/439 are
-    537's trailing `hide_dismissed` (a DROP + CREATE, defaulted to false) and the
-    map's `listing_ids_filter`, which 593 took out (a DROP + CREATE, W6)."""
-    for func, previous, gone in (
-        ("browse_stats_properties", "436_city_quality_obec_key.sql", ()),
-        ("browse_map_cells", "439_browse_map_cells.sql", ("listing_ids_filter",)),
+def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
+    """The SPA builds ONE argument object for both RPCs (tests/test_browse_map_read_
+    contract.py), so the chip parameters are the one place predicate's wire shape.
+    Since 436/439 the lists grew 537's `hide_dismissed` and 597's two exclusion
+    parameters, and 597 dropped the five nothing sent (and the map's
+    `listing_ids_filter`) — tests/test_portal_exclusion_migration.py pins each step."""
+    gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
+            "with_estimates", "listing_ids_filter"}
+    for func, previous in (
+        ("browse_stats_properties", "436_city_quality_obec_key.sql"),
+        ("browse_map_cells", "439_browse_map_cells.sql"),
     ):
         new = _params_of(latest_definition(func).read_text(encoding="utf-8"), func)
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
-        kept = [p for p in old if p not in gone]
-        assert new == [*kept, "hide_dismissed"], f"{func}: parameter list changed"
+        assert new == [p for p in old if p not in gone] + [
+            "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
+        ], f"{func}: parameter list changed"
         for chip_param in (
-            "districts_filter", "districts_levels", "districts_ids",
-            "districts_excluded_filter", "districts_context_filter",
+            "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",
         ):
             assert chip_param in new
 

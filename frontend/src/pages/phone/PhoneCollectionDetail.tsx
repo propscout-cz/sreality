@@ -18,7 +18,8 @@ import { useMemo } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
-import { CardRoll, RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
+import { CardRoll } from '@/components/phone/CardRoll';
+import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import DayRule from '@/components/phone/DayRule';
 import { ChevronIcon } from '@/components/phone/phoneIcons';
 import { ApiError, getCollection } from '@/lib/api';

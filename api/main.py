@@ -73,6 +73,7 @@ from api.routes.outreach import router as outreach_router
 from api.routes.filter_presets import router as filter_presets_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
+from api.routes.property_location import router as property_location_router
 from api.new_dedup_bakeoff import router as new_dedup_bakeoff_router
 from api.new_dedup_labeling import router as new_dedup_labeling_router
 from api.new_dedup_tags import router as new_dedup_tags_router
@@ -309,7 +310,7 @@ app.include_router(property_merge_router)
 app.include_router(labeling_router)
 # /brokers/* (broker intelligence reads: leaderboard, detail, listings, contacts)
 # — real user identity (verify_jwt) with contact PII masked to has_email/has_phone
-# for non-admins; /contacts is admin-only. The static token is bundle-extractable.
+# for non-admins; /contacts is admin-only.
 app.include_router(brokers_router)
 # /outreach/* (broker outreach CRM: campaigns, LLM-drafted messages, suppression)
 # — operator write actions over PII, admin-gated (require_admin). Human-in-the-loop send.
@@ -328,6 +329,10 @@ app.include_router(images_router)
 # canonical ad's photos, zipped server-side (R2 sends no CORS header, so the SPA can't).
 # JWT-gated: it proxies bytes through us, and broker contacts follow the PII policy.
 app.include_router(property_download_router)
+# /properties/{id}/location + /static-map.png — the phone's Poloha: the canonical ad's point,
+# granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
+# terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
+app.include_router(property_location_router)
 # /new-dedup/settings/* (simulation-engine settings registry: list + per-key
 # update/reset) — operator config, admin-gated (require_admin). See
 # toolkit/dedup_sim_settings.py and docs/design/new-dedup/PROGRAM.md (Wave 1).

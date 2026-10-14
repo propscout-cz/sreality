@@ -82,10 +82,8 @@ def _bucket(route: APIRoute) -> str:
         return "tenant"
     if deps.require_token in calls:
         return "token"
-    # account_scope is an EITHER gate: it accepts the static token OR a real
-    # Supabase JWT on the one Authorization header, and resolves the caller's
-    # read scope. It is strictly stronger than require_token (same secret, same
-    # timing-safe compare, plus an account predicate), so it buckets with it.
+    # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
+    # read scope, so it buckets with it.
     if deps.account_scope in calls:
         return "token"
     return "public"
@@ -375,7 +373,7 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
         calls = _reachable_calls(routes[key].dependant)
         assert deps.verify_jwt in calls, f"{key} no longer verifies a real JWT"
         assert deps.require_token not in calls, (
-            f"{key} accepts the static bundle token again — it proves only 'loaded the SPA'"
+            f"{key} is back on require_token — the claims it discards are what scopes this read"
         )
     for key in _ESTIMATION_CHILD_READS:
         calls = _reachable_calls(routes[key].dependant)

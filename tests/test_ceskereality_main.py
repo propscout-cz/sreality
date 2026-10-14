@@ -22,10 +22,13 @@ from __future__ import annotations
 import re
 from types import SimpleNamespace
 
+import pytest
+
 from scraper import ceskereality_main as m
 from scraper import portal as m_portal
 from scraper.ceskereality_client import (
     KRAJ_SLUGS,
+    OKRES_SLUGS,
     SUBTYPE_SLUGS,
     CeskerealityClient,
     search_url,
@@ -441,6 +444,75 @@ def test_a_category_whose_slices_all_failed_to_start_never_reaches_the_end(monke
 # --- the subtype descent (a kraj past the site's 99-page ceiling) ------------
 
 
+class _CeilingClient:
+    """One kraj of `cat` past the 99-page ceiling, the other 13 at 40 rows, and a
+    subtype slice of that kraj serving `per_sub[subtype]`. Path shape:
+    /{sale}/{cat}[/{subtype}]/{kraj-or-okres}/ — the segment BETWEEN the category
+    and the last one is the subtype (and only that segment); an okres slug takes
+    the kraj's slot, serving `per_okres[subtype][okres]`. `kraj_links` is extra
+    markup on the over-ceiling kraj's own page, for the unmapped-category
+    fallback."""
+
+    def __init__(
+        self, cat: str, kraj: str, per_sub: dict[str, int], kraj_links: str = "",
+        per_okres: dict[str, dict[str, int]] | None = None,
+    ) -> None:
+        self.urls: list[str] = []
+        self._cat, self._kraj, self._per_sub = cat, kraj, per_sub
+        self._subs = list(per_sub)
+        self._links = kraj_links
+        self._per_okres = per_okres or {}
+        self.declared = sum(per_sub.values())
+
+    def _parts(self, url: str) -> tuple[str | None, str | None]:
+        segs = url.split("?")[0].split(f"/prodej/{self._cat}/")[1].strip("/")
+        segs = segs.split("/") if segs else []
+        return (segs[-2] if len(segs) == 2 else None), (segs[-1] if segs else None)
+
+    def fetch_search(self, url: str) -> tuple[str, int]:
+        self.urls.append(url)
+        sub, kraj = self._parts(url)
+        pg = _page_num(url)
+        first = (pg - 1) * 20
+        okresy = self._per_okres.get(sub or "", {})
+        if kraj in okresy:
+            total = okresy[kraj]
+            base = (5_000_000 + 100_000 * self._subs.index(sub)
+                    + 10_000 * list(okresy).index(kraj))
+        else:
+            if kraj != self._kraj:
+                total = 4 if sub else 40
+            else:
+                total = self._per_sub[sub] if sub else self.declared
+            base = (3_000_000 + 100_000 * (self._subs.index(sub) if sub else 99)
+                    + 1_000 * KRAJ_SLUGS.index(kraj))
+        n = max(0, min(20, total - first))
+        ids = [str(base + first + k) for k in range(n)]
+        last = max(1, -(-total // 20))
+        html = _page_html(total, ids, next_page=pg + 1 if pg < last else None,
+                          heading=f"Nabídka {kraj}")
+        if kraj == self._kraj and sub is None:
+            html = html.replace("</body>", f"{self._links}</body>")
+        return html, 200
+
+    def fetch_index(
+        self, sale_type: str, cat: str, page: int | None,
+    ) -> tuple[str, int]:
+        return _page_html(self.declared + 13 * 40, []), 200
+
+
+def _walk_ceiling(
+    monkeypatch: pytest.MonkeyPatch, fake: _CeilingClient, cat: str,
+    deadline: float | None = None,
+) -> tuple[set[str], dict[str, int], int | None, int, bool]:
+    monkeypatch.setattr(m, "CeskerealityClient", lambda **k: fake)
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    return portal.walk_category(
+        {"sale_type": "prodej", "category": cat},
+        conn=None, dry_run=True, limiter=None, deadline=deadline,
+    )
+
+
 def test_a_slice_over_the_page_ceiling_descends_onto_subtypes(monkeypatch):
     """/prodej/rodinne-domy/stredocesky-kraj/ is 2,312 rows = 116 pages, and a
     FILTERED url 404s at ?strana=100 — so 332 rows are unreachable on the kraj
@@ -449,47 +521,9 @@ def test_a_slice_over_the_page_ceiling_descends_onto_subtypes(monkeypatch):
     subs = SUBTYPE_SLUGS["rodinne-domy"]
     per_sub = {s: 240 for s in subs}
     per_sub[subs[0]] = 2312 - 240 * (len(subs) - 1)
+    fake = _CeilingClient("rodinne-domy", "stredocesky-kraj", per_sub)
 
-    class _CeilingClient:
-        """Path shape: /{sale}/{cat}[/{subtype}]/{kraj}/ — the segment BETWEEN the
-        category and the kraj is the subtype (and only that segment)."""
-
-        def __init__(self) -> None:
-            self.urls: list[str] = []
-
-        @staticmethod
-        def _parts(url):  # noqa: ANN001
-            segs = url.split("?")[0].split("/prodej/rodinne-domy/")[1].strip("/")
-            segs = segs.split("/") if segs else []
-            return (segs[-2] if len(segs) == 2 else None), (segs[-1] if segs else None)
-
-        def fetch_search(self, url):  # noqa: ANN001
-            self.urls.append(url)
-            sub, kraj = self._parts(url)
-            pg = _page_num(url)
-            if kraj != "stredocesky-kraj":
-                total = 4 if sub else 40
-            else:
-                total = per_sub[sub] if sub else 2312
-            first = (pg - 1) * 20
-            n = max(0, min(20, total - first))
-            base = 3_000_000 + 100_000 * (subs.index(sub) if sub else 99)
-            ids = [str(base + 1_000 * KRAJ_SLUGS.index(kraj) + first + k)
-                   for k in range(n)]
-            last = max(1, -(-total // 20))
-            return _page_html(total, ids, next_page=pg + 1 if pg < last else None,
-                              heading=f"Domy {kraj}"), 200
-
-        def fetch_index(self, sale_type, cat, page):  # noqa: ANN001
-            return _page_html(2312 + 13 * 40, []), 200
-
-    fake = _CeilingClient()
-    monkeypatch.setattr(m, "CeskerealityClient", lambda **k: fake)
-    portal = m.CeskerealityPortal(default_config("ceskereality"))
-    seen, _c, _t, _p, complete = portal.walk_category(
-        {"sale_type": "prodej", "category": "rodinne-domy"},
-        conn=None, dry_run=True, limiter=None,
-    )
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
 
     # the over-ceiling kraj bailed at page 1 and was re-walked per subtype...
     stredo = [u for u in fake.urls if _kraj_of(u) == "stredocesky-kraj"]
@@ -498,6 +532,89 @@ def test_a_slice_over_the_page_ceiling_descends_onto_subtypes(monkeypatch):
         assert any(f"/{slug}/stredocesky-kraj/" in u for u in fake.urls), slug
     assert len(seen) == 2312 + 13 * 40
     assert complete is True
+
+
+# 2026-10-13, measured on the live site: prodej/byty/praha by subtype. Its sum is
+# the 2,161 the kraj page declared at that moment; the walk that parked the
+# category read 2,171, so the extra ten (the count is live) sit on byty-2-kk.
+_PRAHA_BYTY_PRODEJ = {
+    "byty-1-kk": 339, "byty-1-1": 55, "byty-2-kk": 638 + 10, "byty-2-1": 172,
+    "byty-3-kk": 439, "byty-3-1": 226, "byty-4-kk": 181, "byty-4-1": 50,
+    "byty-5-kk": 29, "byty-5-1-vetsi": 19, "atypicke-byty": 9, "pokoj": 4,
+}
+
+
+def test_praha_byty_over_the_ceiling_descends_onto_all_twelve_subtypes(monkeypatch):
+    """The production defect: Praha byt/prodej crossed 1,980 rows on 2026-09-16,
+    byty had no declared subtypes, the page-scraped fallback found none, and
+    `DESCENT no subtype axis` left the kraj at `ceiling` — so byt/prodej, the
+    whole category, nominated nothing for 89 walks. It now descends onto the
+    twelve declared slugs, two of which (`atypicke-byty`, `pokoj`) a `byty-*`
+    prefix would have dropped."""
+    assert set(SUBTYPE_SLUGS["byty"]) == set(_PRAHA_BYTY_PRODEJ)
+    fake = _CeilingClient("byty", "praha", dict(_PRAHA_BYTY_PRODEJ))
+    assert fake.declared == 2171
+
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    for slug in SUBTYPE_SLUGS["byty"]:
+        assert any(f"/prodej/byty/{slug}/praha/" in u for u in fake.urls), slug
+    assert len(seen) == 2171 + 13 * 40
+    assert complete is True
+
+
+def test_an_unmapped_category_descends_on_the_kraj_pages_own_subtype_links(
+    monkeypatch,
+):
+    """No declared map: the kraj page's two-segment `/{sale}/{cat}/{subtype}/{kraj}/`
+    links ARE the axis (subtype precedes kraj in this site's URLs). The page's
+    other links — okresy, části, kraj-first filters, other kraje — are not, and
+    the children's declared sum still has to add back up to the parent's."""
+    monkeypatch.setattr(m, "SUBTYPE_SLUGS", {})
+    per_sub = {"atypicke-byty": 900, "byty-2-kk": 900, "pokoj": 371}
+    links = "".join(
+        f'<a href="/prodej/byty/{s}/praha/">x</a>' for s in per_sub
+    ) + (
+        '<a href="/prodej/byty/praha-4/">okres</a>'
+        '<a href="/prodej/byty/cast-praha-zizkov/">cast</a>'
+        '<a href="/prodej/byty/praha/soukromy/">filter</a>'
+        '<a href="/prodej/byty/byty-3-1/stredocesky-kraj/">other kraj</a>'
+    )
+    fake = _CeilingClient("byty", "praha", per_sub, kraj_links=links)
+
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    walked = {fake._parts(u)[0] for u in fake.urls if _kraj_of(u) == "praha"}
+    assert walked - {None} == set(per_sub)
+    assert len(seen) == 2171 + 13 * 40
+    assert complete is True
+
+
+def test_an_unmapped_kraj_page_without_subtype_links_stays_incomplete(monkeypatch):
+    """The last resort, unchanged: no declared map and no two-segment link on the
+    page leaves the kraj at `ceiling`, and the category cannot nominate."""
+    monkeypatch.setattr(m, "SUBTYPE_SLUGS", {})
+    fake = _CeilingClient(
+        "byty", "praha", {"byty-2-kk": 2171},
+        kraj_links='<a href="/prodej/byty/praha-4/">okres</a>'
+                   '<a href="/prodej/byty/praha/soukromy/">filter</a>')
+
+    _seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    assert not any("/byty-2-kk/" in u for u in fake.urls)
+    assert complete is False
+
+
+def test_every_category_measured_at_the_ceiling_has_a_declared_subtype_map():
+    """A rail: these three were measured at or over the 1,980-row ceiling in one
+    kraj (byty praha 2,171; rodinne-domy stredocesky 2,312; pozemky stredocesky
+    1,978). Without a map each depends on whatever the kraj page happens to link."""
+    walked = {c["category"] for c in default_config("ceskereality").categories}
+    for cat in ("byty", "rodinne-domy", "pozemky"):
+        assert cat in walked
+        slugs = SUBTYPE_SLUGS.get(cat)
+        assert slugs, f"{cat} lost its declared subtype axis"
+        assert len(set(slugs)) == len(slugs)
 
 
 def test_a_descent_that_loses_the_residue_reports_incomplete(monkeypatch):
@@ -522,6 +639,287 @@ def test_a_descent_that_loses_the_residue_reports_incomplete(monkeypatch):
     # The residue child carries the parent's stop, so the category cannot nominate
     # while a slice of it is unreachable.
     assert not all(k.reached_end for k in kids)
+
+
+# --- the okres descent (a subtype child itself past the ceiling) -------------
+#
+# 2026-10-13: prodej/rodinne-domy/rodinne-domy/stredocesky-kraj declared 1,922 —
+# 97 of the 99 pages a filtered URL serves. Past 1,980 the subtype descent alone
+# leaves that child at `ceiling` and parks the whole 11,487-row category, so the
+# child descends once more, onto the kraj's declared okresy.
+
+
+def _rd_stredocesky(
+    child: int, okres_each: int | dict[str, int],
+    cls: type[_CeilingClient] = _CeilingClient, *, kraj: str = "stredocesky-kraj",
+    **kw,  # noqa: ANN003
+) -> _CeilingClient:
+    """`kraj` rodinne-domy: the `rodinne-domy` subtype child declares `child` rows,
+    its okresy `okres_each` each (or per okres, from a dict), the other 9 subtypes
+    400 between them."""
+    per_sub = {s: 40 for s in SUBTYPE_SLUGS["rodinne-domy"]}
+    per_sub["chaty"] = 80
+    per_sub["rodinne-domy"] = child
+    okresy = (okres_each if isinstance(okres_each, dict)
+              else dict.fromkeys(OKRES_SLUGS[kraj], okres_each))
+    return cls("rodinne-domy", kraj, per_sub,
+               per_okres={"rodinne-domy": okresy}, **kw)
+
+
+def _capture_results(monkeypatch: pytest.MonkeyPatch) -> list[list[m.SliceResult]]:
+    captured: list[list[m.SliceResult]] = []
+    monkeypatch.setattr(
+        m.CeskerealityPortal, "_record_slices",
+        lambda self, conn, category, kraje, results, hit: captured.append(results))
+    return captured
+
+
+def test_a_subtype_child_over_the_ceiling_descends_onto_the_okresy(monkeypatch):
+    fake = _rd_stredocesky(child=2100, okres_each=175)
+    assert fake.declared == 2500
+
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
+
+    assert max(_page_num(u) for u in fake.urls) <= 99     # never asks for the 404
+    child = search_url("prodej", "rodinne-domy", kraj="stredocesky-kraj",
+                       subtype="rodinne-domy")
+    assert [u for u in fake.urls if u.startswith(child)] == [child]   # bailed at p.1
+    for okres in OKRES_SLUGS["stredocesky-kraj"]:
+        assert any(f"/rodinne-domy/rodinne-domy/{okres}/" in u for u in fake.urls), okres
+    # only the over-ceiling child descends; its siblings are walked whole
+    assert not any(f"/chaty/{o}/" in u for u in fake.urls
+                   for o in OKRES_SLUGS["stredocesky-kraj"])
+    assert len(seen) == 2500 + 13 * 40
+    assert complete is True
+
+
+def test_the_okres_level_is_recorded_as_one_ledger_row_per_kraj(monkeypatch):
+    """Grandchildren keep their parent kraj, so the ledger's key set never changes
+    shape however deep the descent went."""
+    fake = _rd_stredocesky(child=2100, okres_each=175)
+    captured: list[list[m.SliceResult]] = []
+    real = m.CeskerealityPortal._record_slices
+    monkeypatch.setattr(
+        m.CeskerealityPortal, "_record_slices",
+        lambda self, conn, category, kraje, results, hit: captured.append(results))
+    _walk_ceiling(monkeypatch, fake, "rodinne-domy")
+    results = captured[0]
+    okres_parts = [r for r in results if r.okres]
+    assert {r.okres for r in okres_parts} == set(OKRES_SLUGS["stredocesky-kraj"])
+    assert {r.kraj for r in okres_parts} == {"stredocesky-kraj"}
+    assert {r.subtype for r in okres_parts} == {"rodinne-domy"}
+
+    written: list[dict] = []
+    monkeypatch.setattr(m.db, "record_index_slice", lambda _c, **kw: written.append(kw))
+    real(m.CeskerealityPortal(default_config("ceskereality")), object(),
+         {"sale_type": "prodej", "category": "rodinne-domy"}, KRAJ_SLUGS, results, False)
+    assert sorted(w["slice_key"] for w in written) == sorted(KRAJ_SLUGS)
+    stredo = next(w for w in written if w["slice_key"] == "stredocesky-kraj")
+    assert (stredo["outcome"], stredo["declared_total"], stredo["collected"]) == (
+        "exhausted", 2500, 2500)
+
+
+def test_okres_grandchildren_short_of_their_child_leave_a_residue(monkeypatch):
+    """Self-verification one level down: 12 x 150 = 1,800 of a 2,100-row child is
+    a hole, and the category must read incomplete rather than drop 300 rows."""
+    fake = _rd_stredocesky(child=2100, okres_each=150)
+
+    seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
+
+    assert len(seen) == 2500 - 300 + 13 * 40
+    assert complete is False
+    parent = m.SliceResult(
+        "stredocesky-kraj", None, [], 2500, 1, "ceiling", "page_cap")
+    kids = m.CeskerealityPortal(default_config("ceskereality"))._descend_slice(
+        fake, "prodej", "rodinne-domy", parent)
+    residue = [k for k in kids if k.outcome == "ceiling"]
+    # the residue declares only the hole, so the kraj's ledger sum stays 2,500
+    assert [(k.subtype, k.okres, k.declared_total, k.reached_end) for k in residue] == [
+        ("rodinne-domy", None, 300, False)]
+    assert sum(k.declared_total or 0 for k in kids) == 2500
+    assert all(k.positive for k in kids if k.okres)
+
+
+class _ClockedCeiling(_CeilingClient):
+    """After `trip_after` fetches, the fake monotonic clock jumps past the deadline."""
+
+    def __init__(self, *a, clock: dict, trip_after: int, **kw) -> None:  # noqa: ANN002, ANN003
+        super().__init__(*a, **kw)
+        self._clock, self._trip_after = clock, trip_after
+
+    def fetch_search(self, url: str) -> tuple[str, int]:
+        out = super().fetch_search(url)
+        if len(self.urls) >= self._trip_after:
+            self._clock["t"] = 9_999.0
+        return out
+
+
+def test_the_deadline_inside_the_okres_loop_is_our_stop(monkeypatch):
+    """praha (2 pages) + stredocesky p.1 + the rodinne-domy child p.1 + benesov's
+    9 pages = 13 fetches; the clock trips inside beroun. Every level stops there,
+    and a walk cut short at depth two is still never 'reached the end'."""
+    clock = {"t": 0.0}
+    monkeypatch.setattr(m_portal, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
+    fake = _rd_stredocesky(2100, 175, _ClockedCeiling, clock=clock, trip_after=15)
+
+    seen, _c, _t, _p, complete = _walk_ceiling(
+        monkeypatch, fake, "rodinne-domy", deadline=10.0)
+
+    assert any("/rodinne-domy/beroun/" in u for u in fake.urls)
+    assert not any("/rodinne-domy/kladno/" in u for u in fake.urls)   # next okres
+    assert not any("/chalupy/" in u for u in fake.urls)                # next subtype
+    assert {_kraj_of(u) for u in fake.urls} <= {"praha", "stredocesky-kraj", None}
+    assert len(seen) >= 175                 # benesov's rows are kept
+    assert complete is False
+
+
+def test_a_deadline_between_okresy_in_the_last_kraj_is_our_stop(monkeypatch, caplog):
+    """The okres loop's OWN deadline marker, with nothing else to catch it:
+    zlinsky is the LAST kraj, so the kraj loop never sees the deadline, and the
+    clock trips exactly as kromeriz's last page lands (13 x 2 + zlinsky p.1 + the
+    child's p.1 + kromeriz's 27 = 55 fetches), so no slice walk sees it either.
+    Each marker declares only the part it stands for: the ledger sum is 2,500."""
+    assert KRAJ_SLUGS[-1] == "zlinsky-kraj"
+    clock = {"t": 0.0}
+    monkeypatch.setattr(m_portal, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
+    fake = _rd_stredocesky(2100, 525, _ClockedCeiling, kraj="zlinsky-kraj",
+                           clock=clock, trip_after=55)
+    captured = _capture_results(monkeypatch)
+
+    with caplog.at_level("INFO", logger=m.LOG.name):
+        _seen, _c, _t, _p, complete = _walk_ceiling(
+            monkeypatch, fake, "rodinne-domy", deadline=10.0)
+
+    assert len([u for u in fake.urls if "/rodinne-domy/kromeriz/" in u]) == 27
+    assert not any("/uherske-hradiste/" in u for u in fake.urls)   # next okres
+    assert complete is False
+    zlin = [r for r in captured[0] if r.kraj == "zlinsky-kraj"]
+    assert [(r.subtype, r.okres, r.stop, r.reached_end, r.declared_total)
+            for r in zlin] == [
+        ("rodinne-domy", "kromeriz", zlin[0].stop, True, 525),
+        ("rodinne-domy", None, "deadline", False, 2100 - 525),
+        (None, None, "deadline", False, 2500 - 2100),
+    ]
+    assert any(
+        r.getMessage().startswith("DESCENT ") and "axis=okres" in r.getMessage()
+        for r in caplog.records)
+
+
+def test_an_okres_still_over_the_ceiling_keeps_the_category_incomplete(
+    monkeypatch, caplog,
+):
+    """No axis below okres: an okres grandchild past 99 pages comes back as
+    itself, still `ceiling`. Its declared total already sits in the child's okres
+    sum, so the level above sees an exact partition and adds no residue — this
+    return is the ONLY thing keeping its unwalked tail from reading as the end."""
+    okresy = dict.fromkeys(OKRES_SLUGS["stredocesky-kraj"], 10)
+    okresy["praha-vychod"] = 1990                 # 100 pages
+    fake = _rd_stredocesky(2100, okresy)
+    captured = _capture_results(monkeypatch)
+
+    with caplog.at_level("WARNING", logger=m.LOG.name):
+        _seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "rodinne-domy")
+
+    assert [u for u in fake.urls if "/rodinne-domy/praha-vychod/" in u] == [
+        search_url("prodej", "rodinne-domy", kraj="praha-vychod",
+                   subtype="rodinne-domy")]                       # bailed at p.1
+    assert complete is False
+    ceiling = [(r.subtype, r.okres) for r in captured[0] if r.outcome == "ceiling"]
+    assert ceiling == [("rodinne-domy", "praha-vychod")]          # no residue
+    assert any("DESCENT no axis left" in r.getMessage()
+               and "okres=praha-vychod" in r.getMessage() for r in caplog.records)
+
+
+def test_an_unmapped_kraj_keeps_an_over_ceiling_child_at_the_ceiling(
+    monkeypatch, caplog,
+):
+    """Praha has no okres map (praha-1..10 summed to 2,148 of 2,161 on 2026-10-13:
+    not a partition). A Praha subtype past the ceiling stays `ceiling`, the
+    category cannot nominate, and the warning names the map it is owed."""
+    assert "praha" not in OKRES_SLUGS
+    per_sub = dict(_PRAHA_BYTY_PRODEJ)
+    per_sub["byty-2-kk"] = 2100
+    fake = _CeilingClient("byty", "praha", per_sub)
+
+    with caplog.at_level("WARNING", logger=m.LOG.name):
+        _seen, _c, _t, _p, complete = _walk_ceiling(monkeypatch, fake, "byty")
+
+    child = search_url("prodej", "byty", kraj="praha", subtype="byty-2-kk")
+    assert [u for u in fake.urls if u.startswith(child)] == [child]
+    assert not any(re.search(r"/byty-2-kk/praha-\d+/", u) for u in fake.urls)
+    msgs = [r.getMessage() for r in caplog.records if "DESCENT" in r.getMessage()]
+    assert any(
+        "DESCENT no okres axis" in x and "kraj=praha subtype=byty-2-kk" in x
+        and "OKRES_SLUGS['praha']" in x for x in msgs), msgs
+    assert complete is False
+
+
+# RÚIAN (admin_boundaries), 2026-10-13: okresy per kraj.
+_RUIAN_OKRES_COUNT = {
+    "stredocesky-kraj": 12, "jihocesky-kraj": 7, "plzensky-kraj": 7,
+    "karlovarsky-kraj": 3, "ustecky-kraj": 7, "liberecky-kraj": 4,
+    "kralovehradecky-kraj": 5, "pardubicky-kraj": 4, "kraj-vysocina": 5,
+    "jihomoravsky-kraj": 7, "olomoucky-kraj": 5, "moravskoslezsky-kraj": 6,
+    "zlinsky-kraj": 4,
+}
+
+
+def test_every_kraj_but_praha_declares_its_ruian_okresy():
+    """A rail on the declared okres axis: 76 okresy, each in exactly one kraj,
+    every slug a plain URL segment. A kraj losing its entry would quietly bring
+    back the parked-category failure the moment one of its subtypes crossed."""
+    assert set(OKRES_SLUGS) == set(KRAJ_SLUGS) - {"praha"}
+    assert {k: len(v) for k, v in OKRES_SLUGS.items()} == _RUIAN_OKRES_COUNT
+    slugs = [o for v in OKRES_SLUGS.values() for o in v]
+    assert len(slugs) == len(set(slugs)) == 76
+    assert all(re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", o) for o in slugs), slugs
+    assert not set(slugs) & set(KRAJ_SLUGS)
+
+
+class _OkresPageClient:
+    """One page for every url: zero cards, no total, H1 `heading`."""
+
+    def __init__(self, heading: str) -> None:
+        self.urls: list[str] = []
+        self._heading = heading
+
+    def fetch_search(self, url: str) -> tuple[str, int]:
+        self.urls.append(url)
+        return _page_html(None, [], heading=self._heading), 200
+
+
+def test_an_okres_slice_puts_the_okres_in_the_kraj_slot_and_in_the_h1_proof():
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    fake = _OkresPageClient("Rodinné domy na prodej v okrese Nymburk")
+    r = portal._walk_slice(fake, "prodej", "rodinne-domy", "stredocesky-kraj",
+                           subtype="rodinne-domy", okres="nymburk")
+    assert fake.urls[0] == (
+        "https://www.ceskereality.cz/prodej/rodinne-domy/rodinne-domy/nymburk/")
+    assert (r.kraj, r.subtype, r.okres) == ("stredocesky-kraj", "rodinne-domy", "nymburk")
+    assert (r.stop, r.outcome) == ("empty_confirmed", "exhausted")
+    # an H1 naming the KRAJ is not proof that the OKRES is empty
+    fake = _OkresPageClient("Rodinné domy na prodej Středočeský kraj")
+    r = portal._walk_slice(fake, "prodej", "rodinne-domy", "stredocesky-kraj",
+                           subtype="rodinne-domy", okres="nymburk")
+    assert (r.stop, r.reached_end) == ("barren", False)
+
+
+def test_an_okres_page_archives_under_its_own_key(monkeypatch):
+    """portal_raw_pages is UNIQUE(source, source_id_native, page_kind): without the
+    okres segment, the 12 okres page-1s would share the subtype child's key."""
+    keys: list[str] = []
+    monkeypatch.setattr(m.db, "upsert_portal_raw_page",
+                        lambda _c, **kw: keys.append(kw["source_id_native"]))
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    for okres, h1 in ((None, "Středočeský kraj"), ("benesov", "v okrese Benešov")):
+        portal._walk_slice(
+            _OkresPageClient(f"Rodinné domy na prodej {h1}"), "prodej", "rodinne-domy",
+            "stredocesky-kraj", subtype="rodinne-domy", okres=okres, conn=object(),
+            archive_week="2026-W42")
+    assert keys == [
+        "v2/prodej/rodinne-domy/stredocesky-kraj/rodinne-domy/1/2026-W42",
+        "v2/prodej/rodinne-domy/stredocesky-kraj/rodinne-domy/benesov/1/2026-W42",
+    ]
 
 
 # --- the deadline + the unmeasurable total ----------------------------------
@@ -908,11 +1306,12 @@ def _record(monkeypatch, results, *, kraje=("praha", "stredocesky-kraj")):
 
 
 def _sr(kraj, outcome, *, subtype=None, declared=100, ids=("a",), pages=4,
-        stop="declared_total_reached"):
+        stop="declared_total_reached", okres=None):
     return m.SliceResult(
         kraj=kraj, subtype=subtype,
         rows=[(i, f"https://x/{i}", None) for i in ids],
-        declared_total=declared, pages=pages, outcome=outcome, stop=stop)
+        declared_total=declared, pages=pages, outcome=outcome, stop=stop,
+        okres=okres)
 
 
 def test_one_row_per_kraj_not_per_subtype(monkeypatch):
@@ -931,6 +1330,20 @@ def test_one_row_per_kraj_not_per_subtype(monkeypatch):
     assert praha["declared_total"] == 100          # children partition the parent
     assert praha["collected"] == 3                 # union of their rows
     assert praha["pages"] == 8
+
+
+def test_okres_grandchildren_still_write_one_row_per_kraj(monkeypatch):
+    written = _record(monkeypatch, [
+        _sr("stredocesky-kraj", "exhausted", subtype="chaty", declared=40, ids=("a",)),
+        _sr("stredocesky-kraj", "exhausted", subtype="rodinne-domy", okres="benesov",
+            declared=1000, ids=("b", "c")),
+        _sr("stredocesky-kraj", "exhausted", subtype="rodinne-domy", okres="beroun",
+            declared=1100, ids=("d",)),
+        _sr("praha", "exhausted", declared=100, ids=("e",)),
+    ])
+    assert [w["slice_key"] for w in written] == ["stredocesky-kraj", "praha"]
+    stredo = written[0]
+    assert (stredo["declared_total"], stredo["collected"], stredo["pages"]) == (2140, 4, 12)
 
 
 def test_a_kraj_is_exhausted_only_if_every_part_is(monkeypatch):

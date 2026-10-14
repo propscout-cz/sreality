@@ -115,6 +115,22 @@ describe('URL round-trip', () => {
     expect(fromSearchParams(dirty).portals).toEqual(['idnes']);
   });
 
+  it('round-trips the excluded portals and their active-ads switch', () => {
+    const f: ListingFilters = {
+      ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality', 'bazos'],
+      portalsExcludedActiveOnly: true,
+    };
+    const sp = toSearchParams(f);
+    expect(sp.get('portal_excl')).toBe('sreality,bazos');
+    expect(sp.get('portal_excl_active')).toBe('1');
+    const back = fromSearchParams(sp);
+    expect(back.portalsExcluded).toEqual(['sreality', 'bazos']);
+    expect(back.portalsExcludedActiveOnly).toBe(true);
+    expect(toSearchParams(DEFAULT_FILTERS).has('portal_excl')).toBe(false);
+    expect(fromSearchParams(new URLSearchParams('portal_excl=sreality,bogus')).portalsExcluded)
+      .toEqual(['sreality']);
+  });
+
   it('round-trips the condition-level bounds and price-change filters', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
@@ -367,6 +383,15 @@ describe('nullable deal type', () => {
     expect(line).not.toMatch(/null|undefined/);
     expect(line).toMatch(/12/);
   });
+
+  it('names both sides of the portal filter, so an exclusion is never invisible', () => {
+    expect(summarise(DEFAULT_FILTERS, 1)).not.toMatch(/Sreality|iDNES/);
+    expect(summarise({ ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality'] }, 1))
+      .toMatch(/on iDNES −Sreality$/);
+    expect(summarise({
+      ...DEFAULT_FILTERS, portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
+    }, 1)).toMatch(/−Sreality \(active ads\)$/);
+  });
 });
 
 describe('pipeline scope URL codec', () => {
@@ -545,20 +570,12 @@ describe('applyRegistryUpdate', () => {
     expect(f.tags).toEqual([5, 7]);
   });
 
-  it('accepts DistrictChip[] for districts and lifts legacy string[] callers', () => {
+  it('accepts DistrictChip[] for districts; null clears the list', () => {
     let f = { ...DEFAULT_FILTERS };
     f = applyRegistryUpdate(f, 'districts', [
       { name: 'Edvarda Beneše', context: 'Plzeň' },
     ]);
     expect(f.districts).toEqual([{ name: 'Edvarda Beneše', context: 'Plzeň' }]);
-
-    // Legacy callers (e.g. a registry-driven test fixture) that still
-    // pass plain strings get lifted to context-null chips so the
-    // shape stays consistent at the boundary.
-    f = applyRegistryUpdate(DEFAULT_FILTERS, 'districts', ['okres Jihlava']);
-    expect(f.districts).toEqual([
-      { name: 'okres Jihlava', context: null },
-    ]);
 
     f = applyRegistryUpdate(f, 'districts', null);
     expect(f.districts).toEqual([]);
@@ -644,8 +661,20 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.dispositions).toBeNull();
     expect(spec.districts).toBeNull();
     expect(spec.portals).toBeNull();
+    expect(spec.portals_excluded).toBeNull();
     expect(spec.condition_match).toBeNull();
     expect(spec.city_index_rules).toBeNull();
+  });
+
+  it('carries both sides of the portal rule to the Watchdog', () => {
+    const { spec, unsupported } = filtersToWatchdogSpec({
+      ...DEFAULT_FILTERS, portals: ['idnes'], portalsExcluded: ['sreality'],
+      portalsExcludedActiveOnly: true,
+    });
+    expect(spec.portals).toEqual(['idnes']);
+    expect(spec.portals_excluded).toEqual(['sreality']);
+    expect(spec.portals_excluded_active_only).toBe(true);
+    expect(unsupported).toEqual([]);
   });
 
   it('reports the broker scope as unmonitored instead of silently dropping it', () => {
@@ -668,11 +697,6 @@ describe('filtersToWatchdogSpec', () => {
       minCityPopulation: 50_000,
       maxCityPopulation: 200_000,
       cityIndexRules: [{ index_name: 'safety', op: '>=', value: 7 }],
-      nearCityProximity: {
-        index_rules: [{ index_name: 'safety', op: '>=', value: 8 }],
-        population_min: 100_000,
-        radius_km: 15,
-      },
     };
     const { spec } = filtersToWatchdogSpec(f);
     expect(spec.min_price_czk).toBe(1_000_000);
@@ -684,7 +708,6 @@ describe('filtersToWatchdogSpec', () => {
     expect(spec.min_city_population).toBe(50_000);
     expect(spec.max_city_population).toBe(200_000);
     expect(spec.city_index_rules).toEqual([{ index_name: 'safety', op: '>=', value: 7 }]);
-    expect(spec.near_city_proximity?.radius_km).toBe(15);
   });
 
   it('center+radius location maps to lat/lng/radius_m; viewport does not', () => {

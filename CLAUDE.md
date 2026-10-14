@@ -43,8 +43,10 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   — Python 3.12, stdlib-first, `psycopg` direct to Postgres, service-role (reads + writes
   anything). Runs in GitHub Actions + Railway. All architectural rules below apply.
 - **Frontend** (`frontend/`) — Vite + React 18 + TypeScript + Tailwind v4 SPA on Railway. **No backend secret in browser code.** It holds the
-  anon key, the user's Supabase JWT and `VITE_API_TOKEN`, a static bearer readable from the public bundle: it may gate only "loaded the SPA",
-  never identity, admin or per-account data (those take `jwt: true`; routes still breaking this: `roadmap/public-release-track.md` item 11).
+  anon key and the user's Supabase JWT — nothing else: every API request sends that JWT (`frontend/src/lib/api.ts` `authHeader`, no per-call
+  choice, no fallback) and the API accepts no other credential (`api/dependencies.py` `_bearer`; no static key exists since 2026-10-13). A
+  `require_token` route still returns no identity, admin or per-account data (those take `verify_jwt`/`tenant_conn`; routes still breaking
+  this: `roadmap/public-release-track.md` item 11).
   Reads run as `authenticated` (`anon` gets nothing): `*_public` views, RLS'd tables, read models granted with no RLS (`browse_list`,
   `properties_map_mv`, `location_pin_audit_mv`), INVOKER RPCs, DEFINER RPCs only if admin-gated or `ci-allow-ungated`. Writes go via the API by
   convention, not grant (`database` skill). Design tokens (`globals.css` `@theme`) need operator OK. Backend rules don't apply.
@@ -277,10 +279,11 @@ secret (the frontend build must not see it). **Full env-var / secrets reference:
   Auth signup/login, per-user JWTs, `accounts` + RLS, plans + trial; doctrine: `database` skill).
   Out: a 2nd member per account — `account_members.role` is written and read by nothing — and
   any invite / role / remove surface; platform admins are still provisioned by hand in SQL.
-- **A public read API** — every data route is gated (`require_token` only as far as § Territories → Frontend allows) and `anon` reads nothing;
+- **A public read API** — every data route requires a Supabase JWT (`require_token` = any signed-in user; identity routes `verify_jwt`/
+  `tenant_conn`; local dev opts out with `API_AUTH_OPTIONAL=1`, never production) and `anon` reads nothing;
   `/health` + the `/images/{key}` photo proxy are open by design, and webhooks + `/u/{token}` verify their own signature/token.
 
-ClickUp is *not* out of scope (a supported API consumer; `'clickup'` is a reserved `estimation_runs.source`);
+ClickUp is *not* out of scope (a supported API consumer that signs in as its own Supabase user; `'clickup'` is a reserved `estimation_runs.source`);
 nor are the email/Telegram channels (rule #16). Don't start out-of-scope work without explicit direction.
 ## Where the detail lives
 | Need | Load |

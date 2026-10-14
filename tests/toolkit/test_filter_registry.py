@@ -481,7 +481,7 @@ def test_sql_kind_snapshot() -> None:
     from collections import Counter
 
     counts = Counter(fr.sql_kind(f) for f in fr.all_filters())
-    assert counts == {"gte": 18, "lte": 10, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 31}
+    assert counts == {"gte": 18, "lte": 10, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 33}
     numeric_eq = {
         f.id for f in fr.all_filters()
         if f.type in (fr.FilterType.INT, fr.FilterType.FLOAT) and fr.sql_kind(f) == "eq"

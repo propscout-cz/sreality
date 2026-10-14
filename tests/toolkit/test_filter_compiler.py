@@ -76,17 +76,6 @@ def test_each_kind_renders_its_template(grain: fc.FilterGrain) -> None:
         assert compile_filter_where(values, grain) == ([clause], params), values
 
 
-def test_a_portal_is_the_ads_own_on_listings_and_any_ad_on_properties() -> None:
-    """MS19: the Watchdog matches a property when any of its ads is on a portal (the
-    `any` arm of portal_status_matches); estimation cohorts keep each ad's own (§9)."""
-    values = {"portals": ("sreality", "idnes")}
-    params = {"portals": ["sreality", "idnes"]}
-    assert compile_filter_where(values, LISTINGS_GRAIN) == (
-        ["l.source = ANY(%(portals)s)"], params)
-    assert compile_filter_where(values, PROPERTIES_GRAIN) == (
-        ["l.all_sources && %(portals)s::text[]"], params)
-
-
 def test_the_property_grain_clauses_are_the_shared_table() -> None:
     """Browse hand-codes the same ids (registryQueryBuilder.test.ts reads this table)."""
     table = json.loads((_ROOT / "tests" / "fixtures" / "filter_sql_kinds.json").read_text())

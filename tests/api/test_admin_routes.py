@@ -1,9 +1,9 @@
 """Tests for /admin/* — skills + app_settings + tools endpoints.
 
 The whole prefix is admin-gated (require_admin: a real Supabase JWT carrying
-the is_admin claim — the legacy API_TOKEN branch has been retired) and FAILS
-CLOSED when nothing is configured. We confirm that gate here (missing/wrong
-token -> 401, the old static token -> 401, a real admin JWT -> 200), plus the
+the is_admin claim; no other credential exists) and FAILS CLOSED when nothing
+is configured. We confirm that gate here (missing/wrong token -> 401, a real
+admin JWT -> 200), plus the
 happy-path read / update flows. The happy-path tests override require_admin
 with synthetic admin claims.
 """
@@ -21,15 +21,11 @@ jwt = pytest.importorskip("jwt")  # PyJWT (api extra)
 
 from api import dependencies as deps
 from api import main as api_main
-
-_JWT_SECRET = "test-hs256-secret"
+from tests.api._jwt import mint
 
 
 def _admin_jwt() -> str:
-    return jwt.encode(
-        {"aud": "authenticated", "sub": "op", "app_metadata": {"is_admin": True}},
-        _JWT_SECRET, algorithm="HS256",
-    )
+    return mint({"sub": "op", "app_metadata": {"is_admin": True}})
 
 
 class _InMemorySkill:
@@ -268,26 +264,16 @@ def test_admin_tools_lists_agent_registry(client):
 
 
 def test_admin_routes_require_admin(client, monkeypatch):
-    """/admin/* rejects a missing/wrong/legacy-static token and accepts only a
-    real admin JWT."""
+    """/admin/* rejects a missing or wrong bearer and accepts only a real admin
+    JWT."""
     # Drop the happy-path override so the real require_admin gate is under test.
     api_main.app.dependency_overrides.pop(deps.require_admin, None)
-    # Phase 1: admin routes fail closed
-    monkeypatch.delenv("API_TOKEN", raising=False)
-    assert client.get("/admin/skills").status_code == 401
-    monkeypatch.setenv("API_TOKEN", "secret-xyz")
-    # HS256 secret set (and JWKS unset) so a garbage token deterministically 401s.
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
+    # Admin routes fail closed without a bearer.
     assert client.get("/admin/skills").status_code == 401
     assert client.get("/admin/tools").status_code == 401
     assert client.get(
         "/admin/skills", headers={"Authorization": "Bearer wrong"}
     ).status_code == 401
-    # The old static token: no longer special-cased, just an invalid JWT.
-    legacy = {"Authorization": "Bearer secret-xyz"}
-    assert client.get("/admin/skills", headers=legacy).status_code == 401
-    assert client.get("/admin/tools", headers=legacy).status_code == 401
     # A real admin JWT is the only thing that passes.
     good = {"Authorization": f"Bearer {_admin_jwt()}"}
     assert client.get("/admin/skills", headers=good).status_code == 200
@@ -357,16 +343,9 @@ def test_put_filter_visibility_rejects_undeclared_pairing(client):
 
 def test_filter_schema_requires_admin(client, monkeypatch):
     api_main.app.dependency_overrides.pop(deps.require_admin, None)
-    monkeypatch.setenv("API_TOKEN", "secret-xyz")
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", _JWT_SECRET)
     assert client.get("/admin/filter-schema").status_code == 401
     assert client.get(
         "/admin/filter-schema", headers={"Authorization": "Bearer wrong"}
-    ).status_code == 401
-    # The old static token no longer authenticates at all.
-    assert client.get(
-        "/admin/filter-schema", headers={"Authorization": "Bearer secret-xyz"}
     ).status_code == 401
     res = client.get(
         "/admin/filter-schema", headers={"Authorization": f"Bearer {_admin_jwt()}"}

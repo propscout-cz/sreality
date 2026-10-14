@@ -21,7 +21,6 @@ from api.location_filter import (
     district_code_plan,
     district_where,
     needs_upgrade,
-    parse_district_chips_csv,
     upgrade_district_chips,
 )
 
@@ -224,49 +223,12 @@ def test_already_resolved_chips_skip_the_resolver_entirely() -> None:
     assert upgrade_district_chips(chips, never) == chips
 
 
-# --- the wire format --------------------------------------------------------
-
-
-def test_parse_csv_absent_names_is_none() -> None:
-    assert parse_district_chips_csv(None) is None
-    assert parse_district_chips_csv("") is None
-
-
-def test_parse_csv_legacy_names_only() -> None:
-    chips = parse_district_chips_csv("Praha,Brno")
-    assert chips == [DistrictChip(name="Praha"), DistrictChip(name="Brno")]
-
-
-def test_parse_csv_full_shape_round_trips() -> None:
-    chips = parse_district_chips_csv(
-        names_raw="Jihlava,Modřany",
-        ctx_raw=",Praha",
-        excl_raw="0,1",
-        lvl_raw="obec,cast_obce",
-        id_raw="586846,490017",
-    )
-    assert chips == [
-        DistrictChip(name="Jihlava", context=None, level="obec", id=586846),
-        DistrictChip(
-            name="Modřany", context="Praha", excluded=True,
-            level="cast_obce", id=490017,
-        ),
-    ]
-
-
 def test_a_non_positive_id_is_not_a_resolved_chip() -> None:
-    """RÚIAN codes are positive. A hand-typed `districts_id=-1` must not be able
-    to spell the no-match sentinel as though it were a real pick — it is simply
-    a chip with no code, and it says so (`unresolved`)."""
-    chips = parse_district_chips_csv(names_raw="Praha", lvl_raw="obec", id_raw="-1")
-    assert chips == [DistrictChip(name="Praha", level="obec")]
-    assert district_code_plan(chips).unresolved == ["Praha"]
-    assert district_code_plan(
-        [DistrictChip(name="Praha", level="obec", id=0)]
-    ).unresolved == ["Praha"]
+    """RÚIAN codes are positive. A chip carrying the no-match sentinel or zero is
+    simply a chip with no code, and it says so (`unresolved`)."""
+    for bad in (NO_MATCH_CODE, 0):
+        assert district_code_plan(
+            [DistrictChip(name="Praha", level="obec", id=bad)]
+        ).unresolved == ["Praha"]
 
 
-def test_parse_csv_unresolved_level_falls_back_to_no_code() -> None:
-    chips = parse_district_chips_csv(names_raw="Praha", lvl_raw="bogus", id_raw="123")
-    assert chips == [DistrictChip(name="Praha")]
-    assert district_code_plan(chips).unresolved == ["Praha"]

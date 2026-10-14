@@ -27,9 +27,10 @@ against a healthy pipeline. A fixed hours threshold over an on-demand workload i
 false-red generator, and the fix is not a bigger number — it is a per-lane instrument
 with its own baseline. That is `text_extraction_lag` (field-capture R8, W7): oldest
 ELIGIBLE-unextracted age and waiting count per source, computed from the text lane's own
-selector predicate, plus the wedge arm — rows eligible and the lane claiming none. It
-covers the one recurring producer; `llm_errors` still catches "calls are failing" (state,
-not recency) and `llm_burn_rate`'s starvation arm "attempting and never succeeding". The
+selector predicate, plus the wedge arm — rows eligible and the lane claiming none — and the
+abort arm — the provider stopped the lane's last pass. It covers the one recurring producer;
+`llm_errors` still catches "calls are failing" (state, not recency; credit per provider)
+and `llm_burn_rate`'s starvation arm "attempting and never succeeding". The
 residual, stated plainly: both of those derive from rows that EXIST, so a total stop on a
 lane R8 does not cover — every remaining producer is dispatch-driven — still reads `ok`.
 
@@ -169,6 +170,17 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "migration_drift_window": 25,
     "walk_coverage_warn_gap": 0.05,
     "walk_coverage_fail_gap": 0.15,
+    # Consecutive index walks in which ONE category was walked and did not reach the
+    # portal's end, so it nominated nothing (rule #3). Counted in walks, not hours,
+    # because the gate is per walk: GitHub fires the index crons every ~6-9 h whatever
+    # the cron line says, so 3 walks is ~1 day and 6 is ~2 days for a category walked
+    # every run (idnes's rotated categories take about twice as long). A single short
+    # walk (a throttled page, a deadline) is routine and clears on the next one; a day
+    # of them is a category that has stopped closing anything. The 2026-09-16 -> 10-13
+    # ceskereality byt/prodej hole ran 89 walks and only ever logged a WARNING. A
+    # category its portal has not walked in its last `_fail` walks warns instead.
+    "walk_end_streak_warn": 3,
+    "walk_end_streak_fail": 6,
     # Portal-URL contract (docs/design/portal-listing-url.md). ABSOLUTE counts of active
     # rows with no source_url, per source: the failure being watched — sreality adds a
     # sub-category code the closed codebook does not know and every new row of it
@@ -979,22 +991,27 @@ group by called_for
 order by total desc
 """
 
-_LLM_CREDIT_SQL = """
-select count(*) from llm_calls
-where called_at > now() - interval '24 hours' and (error ilike %s or error ilike %s)
-"""
-
-# Liveness: is the provider failing RIGHT NOW? Compares the newest failure vs the newest
-# success — a success after the last error means recovered, and nothing else does. The
-# `min_live_at` staleness column this used to select was removed in W0.3: see
-# _llm_live_state for why bounding "live" by elapsed time made a total outage read `ok`.
-_LLM_LIVENESS_SQL = """
-select
-  max(called_at) filter (where error is not null) as last_err_at,
-  max(called_at) filter (where error is null) as last_ok_at,
-  max(called_at) filter (where error ilike %s or error ilike %s) as last_credit_err_at
-from llm_calls
-where called_at > now() - interval '24 hours'
+# Liveness, PER PROVIDER: is a provider failing RIGHT NOW? Its newest failure vs ITS newest
+# success — a success after the last error means recovered, and nothing else does. Per
+# provider because credit is one account's state: the text lane calls OpenAI up to every
+# 5 minutes, so one comparison across all providers would let those successes clear an empty
+# Anthropic account (summaries, URL parsing, condition scoring) within minutes, and one
+# Anthropic success clear an OpenAI outage. The `min_live_at` staleness column was removed
+# in W0.3: see _llm_live_state for why bounding "live" by elapsed time made a total outage
+# read `ok`.
+_LLM_PROVIDER_STATE_SQL = """
+select provider,
+       max(called_at) filter (where error is not null) as last_err_at,
+       max(called_at) filter (where error is null) as last_ok_at,
+       max(called_at) filter (where credit) as last_credit_err_at,
+       count(*) filter (where credit) as credit_errors,
+       array_agg(distinct model) filter (where credit) as credit_models,
+       array_agg(distinct called_for) filter (where credit) as credit_jobs
+  from (select provider, model, called_for, called_at, error,
+               (error ilike %s or error ilike %s) as credit
+          from llm_calls
+         where called_at > now() - interval '24 hours') calls
+ group by provider
 """
 
 # Two providers, two wordings for the same outage: OpenAI's 429 says "You have no credits
@@ -1003,17 +1020,32 @@ where called_at > now() - interval '24 hours'
 _CREDIT_ERROR_PATTERNS = ("%credit balance%", "%no credits remaining%")
 
 
+def _llm_provider_states(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
+    """One JSON-ready live state per provider, from _LLM_PROVIDER_STATE_SQL's rows."""
+    states: list[dict[str, Any]] = []
+    for provider, last_err, last_ok, last_credit, credit_errors, models, jobs in rows:
+        failing, credit_live = _llm_live_state(last_err, last_ok, last_credit)
+        states.append({
+            "provider": provider, "currently_failing": failing, "credit_live": credit_live,
+            "credit_errors": int(credit_errors or 0),
+            "credit_models": sorted(models or []), "credit_jobs": sorted(jobs or []),
+            "last_error_at": str(last_err) if last_err else None,
+            "last_success_at": str(last_ok) if last_ok else None,
+        })
+    return states
+
+
 def check_llm_errors(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     rows = _fetchall(conn, _LLM_ERRORS_SQL)
-    credit_row = _fetchone(conn, _LLM_CREDIT_SQL, _CREDIT_ERROR_PATTERNS)
-    credit_errors = int(credit_row[0]) if credit_row and credit_row[0] is not None else 0
-
-    live = _fetchone(conn, _LLM_LIVENESS_SQL, _CREDIT_ERROR_PATTERNS)
-    last_err_at, last_ok_at, last_credit_err_at = (
-        (live[0], live[1], live[2]) if live else (None, None, None)
-    )
-    currently_failing, credit_live = _llm_live_state(
-        last_err_at, last_ok_at, last_credit_err_at)
+    state_rows = _fetchall(conn, _LLM_PROVIDER_STATE_SQL, _CREDIT_ERROR_PATTERNS)
+    providers = _llm_provider_states(state_rows)
+    credit_errors = sum(p["credit_errors"] for p in providers)
+    dead = [p for p in providers if p["credit_live"]]
+    credit_live = bool(dead)
+    # The rate arm still reads the newest call of ANY provider; only credit is per account.
+    last_err_at = max((r[1] for r in state_rows if r[1] is not None), default=None)
+    last_ok_at = max((r[2] for r in state_rows if r[2] is not None), default=None)
+    currently_failing = _llm_live_state(last_err_at, last_ok_at, None)[0]
 
     per_called_for: list[dict[str, Any]] = []
     tot = err = 0
@@ -1031,12 +1063,14 @@ def check_llm_errors(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     )
 
     if credit_live:
-        message = (
-            "LLM calls are failing with credit-balance errors right now — the provider "
-            "account is out of credit. Every paid LLM path (estimations, summaries, "
-            "autodedup judging, image labelling, location claims, URL parsing) is down "
-            f"({credit_errors} credit errors in 24h, no successful call since)."
-        )
+        # Names what failed, from the rows. The fixed list it replaces named every paid job and
+        # no provider: 2026-10-02..10 that took in Anthropic's (summaries, URL parsing), though
+        # no Anthropic call had failed.
+        message = "Out of LLM credit right now — " + "; ".join(
+            f"{p['provider']}: {p['credit_errors']} credit-balance errors in 24h on "
+            f"{', '.join(p['credit_models'])} ({', '.join(p['credit_jobs'])}) and no "
+            f"successful {p['provider']} call since" for p in dead
+        ) + (". Top up that account." if len(dead) == 1 else ". Top up those accounts.")
     elif offenders:
         message = (
             f"LLM error rate exceeded {thresholds['llm_error_rate_warn']:.0%} and is still "
@@ -1058,6 +1092,7 @@ def check_llm_errors(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
             "warn_rate": thresholds["llm_error_rate_warn"],
             "offending_called_for": offenders,
             "per_called_for": per_called_for,
+            "per_provider": providers,
         },
         "message": message,
     }
@@ -2387,13 +2422,26 @@ def check_text_extraction_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str
             + ("nothing — it is not in the heartbeat at all" if lane is None
                else f"{claimed} on its last pass")
         )
+    # The abort arm, needing neither an old row nor `claimed == 0`: the provider stopped the
+    # last pass (credit, quota, key) and will stop the next alike. 2026-10-02..10 the lane
+    # claimed 500 a pass and wrote nothing: the wedge arm never fired, and the check blamed
+    # backlog age, never the provider. (Its "Recovered" flaps then were its own statement
+    # timeouts, which never reach this arm.)
+    fatal = " ".join(str(lane_last.get("fatal") or "").split())[:200]
+    if fatal:
+        status = "fail"
+        offenders.insert(0, f"the provider stopped the lane's last pass ({fatal})")
 
     p99 = float(latency[1]) if latency and latency[1] is not None else None
     if offenders:
         message = (
             "Prose facts are not being extracted: " + "; ".join(offenders)
-            + " — check the realtime worker's text_extract lane and OPENAI_API_KEY on "
-            "that Railway service."
+            + (f" — the provider refused {lane_last.get('model') or model}: fix that "
+               f"account's credit or quota (app_settings.{text_lane.MODEL_SETTING} picks the "
+               "model) or, for a key error, OPENAI_API_KEY on the realtime worker's Railway "
+               "service." if fatal else
+               " — check the realtime worker's text_extract lane and OPENAI_API_KEY on "
+               "that Railway service.")
         )
     else:
         message = (
@@ -2481,7 +2529,8 @@ def check_walk_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
     Since 2026-09-08 the count no longer gates nomination (rule #3), so this is the
     standing rail on it. `categories_nominating` is reported beside the gap — the
     count of categories whose walk reached the portal's end — but never changes the
-    status: a walk can legitimately reach the end and still be short."""
+    status: a walk can legitimately reach the end and still be short. A category that
+    keeps NOT reaching it is `walk_end_streak`'s to ring."""
     with conn.cursor() as cur:
         cur.execute(_WALK_COVERAGE_SQL)
         rows = cur.fetchall()
@@ -2539,6 +2588,161 @@ def check_walk_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
         "value": round(worst * 100, 2),
         "details": {"per_source": per_source, "offenders": offenders,
                     "unverified": sorted(unverified)},
+        "message": message,
+    }
+
+
+# One row per (index run, category) over the window: did that walk reach the portal's
+# end? Two descriptors behind one label count as reached only if every one the run
+# WALKED did, so a run that stops between them reads the label as reached (a known
+# blind spot). A run that never started the category has no row: its streak skips
+# that run, and the cell counts its portal's walks since it was last walked instead
+# (`runs_since_walked`). The streak is counted in Python (`_walk_end_streaks`): a
+# gaps-and-islands window query would be harder to read than the loop, and the rows
+# are few (one per category per finished walk, nine portals, 14 days).
+_WALK_END_WINDOW_DAYS = 14
+_WALK_END_STREAK_SQL = """
+select r.id,
+       r.source,
+       r.started_at,
+       c->>'category_main' as category_main,
+       c->>'category_type' as category_type,
+       bool_and((c->>'walk_reached_end')::boolean) as reached_end
+  from scrape_runs r
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(r.by_category) = 'array' then r.by_category end) c
+ where r.run_type = 'index'
+   and r.ended_at is not null
+   and r.started_at > now() - make_interval(days => %(days)s)
+ group by r.id, r.source, r.started_at, c->>'category_main', c->>'category_type'
+"""
+
+
+def _utc_minute(ts: Any) -> str | None:
+    """A timestamp as 'YYYY-MM-DD HH:MM UTC' for operator-facing text."""
+    if ts is None:
+        return None
+    if isinstance(ts, _dt.datetime):
+        if ts.tzinfo is not None:
+            ts = ts.astimezone(_dt.timezone.utc)
+        return ts.strftime("%Y-%m-%d %H:%M UTC")
+    return str(ts)
+
+
+def _walk_end_streaks(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
+    """Per (source, category_main, category_type): walks since it last reached the end
+    (a NULL verdict is neither), and its portal's walks since it was last walked."""
+    by_cell: dict[tuple[Any, Any, Any], list[tuple[Any, Any, Any]]] = {}
+    source_runs: dict[Any, set[tuple[Any, Any]]] = {}
+    for run_id, source, started_at, cm, ct, reached in rows:
+        by_cell.setdefault((source, cm, ct), []).append((started_at, run_id, reached))
+        source_runs.setdefault(source, set()).add((started_at, run_id))
+    cells: list[dict[str, Any]] = []
+    for (source, cm, ct), runs in by_cell.items():
+        runs.sort(key=lambda r: (r[0], r[1]), reverse=True)
+        streak = walks = 0
+        last_end = None
+        for started_at, _run_id, reached in runs:
+            if reached is None:
+                continue
+            walks += 1
+            if last_end is not None:
+                continue
+            if reached:
+                last_end = started_at
+            else:
+                streak += 1
+        last_walked = runs[0][:2]
+        cells.append({
+            "source": source, "category_main": cm, "category_type": ct,
+            "streak": streak, "walks": walks,
+            "runs_since_walked": sum(1 for r in source_runs[source] if r > last_walked),
+            "last_walked_at": _utc_minute(runs[0][0]),
+            "last_reached_end_at": _utc_minute(last_end),
+        })
+    return cells
+
+
+def _walk_end_offender(c: dict[str, Any], fail: int) -> str:
+    label = f"{c['source']} {c['category_main'] or '*'}/{c['category_type'] or '*'}"
+    if c["runs_since_walked"] >= fail:
+        return (f"{label} not walked since {c['last_walked_at']} "
+                f"({c['runs_since_walked']} {c['source']} walks since)")
+    if c["last_reached_end_at"] is None:
+        return (f"{label} not at the portal's end for at least {c['streak']} walks "
+                f"(not reached in {_WALK_END_WINDOW_DAYS} d)")
+    return (f"{label} not at the portal's end for {c['streak']} walks "
+            f"(last reached {c['last_reached_end_at']})")
+
+
+def check_walk_end_streak(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """Walks in a row each category was walked and did not reach the portal's end."""
+    rows = _fetchall(conn, _WALK_END_STREAK_SQL, {"days": _WALK_END_WINDOW_DAYS})
+    warn = int(thresholds["walk_end_streak_warn"])
+    fail = int(thresholds["walk_end_streak_fail"])
+    cells = _walk_end_streaks(rows)
+    for c in cells:
+        # A category its portal has not walked for `fail` of its own walks is starved or
+        # gone from the config: amber, never the bell, so a retired one cannot hold the
+        # check red until it ages out of the window.
+        c["status"] = (
+            "warn" if c["runs_since_walked"] >= fail
+            else "fail" if c["streak"] >= fail
+            else "warn" if c["streak"] >= warn
+            else "ok"
+        )
+    cells.sort(key=lambda c: (-_STATUS_SEVERITY[c["status"]], -c["streak"],
+                              -c["runs_since_walked"], c["source"] or "",
+                              c["category_main"] or "", c["category_type"] or ""))
+    scored = [c for c in cells if c["walks"]]
+    offenders = [_walk_end_offender(c, fail) for c in cells if c["status"] != "ok"]
+    details: dict[str, Any] = {
+        "per_category": cells, "offenders": offenders,
+        "warn": warn, "fail": fail, "window_days": _WALK_END_WINDOW_DAYS,
+    }
+    if not scored:
+        details["skipped"] = "no walk in the window carried a verdict — nothing was verified"
+        return {
+            "check_key": "walk_end_streak",
+            "status": "warn",
+            "value": None,
+            "details": details,
+            "message": (
+                f"walk_end_streak measured nothing: no finished index walk in the last "
+                f"{_WALK_END_WINDOW_DAYS} days carried a walk_reached_end verdict "
+                f"({len(cells)} categories read). Either no portal finished an index walk "
+                "in that window or portal_runner stopped writing walk_reached_end into "
+                "scrape_runs.by_category. No alerting check here judges index-walk "
+                "liveness, so read scrape_runs directly."
+            ),
+        }
+
+    worst = max((c["streak"] for c in scored if c["runs_since_walked"] < fail), default=0)
+    status = _worst_status("ok", *(c["status"] for c in cells))
+    if offenders:
+        unwalked = any(c["runs_since_walked"] >= fail for c in cells)
+        message = (
+            "Categories are not reaching the portal's end: "
+            + "; ".join(offenders[:6])
+            + (f" (+{len(offenders) - 6} more)" if len(offenders) > 6 else "")
+            + ". A walk that stops short of the end, or never starts the category, "
+            "nominates nothing for delisting (rule #3), so the category's gone ads stay "
+            "active and its stock drifts above the portal's own count. The index-walk log "
+            "names the stop: the category's 'VERIFY skipped' line, and the portal's "
+            "SLICE / DESCENT / COVERAGE lines for which slice it was."
+            + (" A category its portal no longer walks may instead have left the "
+               "portal's config." if unwalked else "")
+        )
+    else:
+        message = (
+            f"No category has missed the portal's end for {warn} walks in a row (worst "
+            f"{worst}; {len(scored)} categories scored in {_WALK_END_WINDOW_DAYS} days)."
+        )
+    return {
+        "check_key": "walk_end_streak",
+        "status": status,
+        "value": worst,
+        "details": details,
         "message": message,
     }
 
@@ -3622,6 +3826,11 @@ _CHECKS: list[tuple[str, Callable[[Any, dict[str, Any]], dict[str, Any]]]] = [
     ("ppm2_measure_coverage", check_ppm2_measure_coverage),
     ("acquisition_lag", check_acquisition_lag),
     ("walk_coverage", check_walk_coverage),
+    # walk_coverage's per-category twin (2026-10-13): consecutive walks a category did
+    # not reach the portal's end, i.e. nominated nothing. One scan of 14 days of
+    # scrape_runs. 6h lane + in-app bell; NOT in llm_health.yml's hourly --only list
+    # (ship, soak, promote).
+    ("walk_end_streak", check_walk_end_streak),
     ("migration_drift", check_migration_drift),
     ("worker_lane_stall", check_worker_lane_stall),
     ("delist_flip_refused", check_delist_flip_refused),

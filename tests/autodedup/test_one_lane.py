@@ -31,7 +31,7 @@ from autodedup.incremental_store import MemoryStore
 from autodedup.indistinguishable import FEATURE_SLOTS
 from autodedup.incremental_store import CohortFacts, Schedule
 from autodedup.settings import Settings
-from tests.autodedup.fake_pg import FakePg, _Cursor
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg, _Cursor
 from tests.autodedup.test_apply import FakeDb, _pair_group
 from tests.autodedup.test_incremental import _listing
 
@@ -90,12 +90,12 @@ def test_the_lane_reclusters_with_the_d43_relation_the_batch_reads() -> None:
 
 def test_the_sql_store_reads_back_the_three_slots_the_relation_reads() -> None:
     db = FakePg()
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     feats = {name: (1.0, True) for name in FEATURE_SLOTS}
     feats["clip_mean_top3_cos"] = (0.9, True)
     feats["floorplan_conflict"] = (0.0, False)
     store.upsert_pairs([_pair(A, B, "merge", 0.99, feats=feats)])
-    (row,) = SqlStore(db, "rt").pairs_within([A, B])
+    (row,) = SqlStore(db, "rt", **LEDGER_KEY).pairs_within([A, B])
     assert row.slots == {"tag_room_clip_min2": (1.0, True),
                          "phash_tight_matches": (1.0, True)}, (
         "the three slots only, and an absent one reads as no slot — which D43 reads as absent")
@@ -108,7 +108,7 @@ def test_the_sql_store_clusters_like_the_twin() -> None:
     _recluster_all(twin, ds, D43_ON)
 
     db = FakePg()
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     _edges(store)
     _recluster_all(store, ds, D43_ON)
     stored = {}
@@ -121,7 +121,7 @@ def test_a_designator_veto_row_is_kept_so_it_still_binds_the_clustering() -> Non
     """E61 names the two units on the row and scores 0. The SQL store evicted it as a reject
     below the floor, so the lane forgot the veto the batch pass unions into must-not-link."""
     db = FakePg()
-    store = SqlStore(db, "rt", store_floor=0.02)
+    store = SqlStore(db, "rt", store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
     veto = replace(_pair(A, C, "veto", 0.0), veto="unit_designator", reason="guard:x",
                    evidence={"unit_lo": "12", "unit_hi": "14"})
     store.upsert_pairs([veto, _pair(A, B, "reject", 0.001)])
@@ -322,7 +322,7 @@ def test_the_sql_store_files_the_record_once_as_its_twin_does() -> None:
     ds = _sale_and_rent()
     db = FakePg()
     db.ml = set(SAME)
-    sql, twin = SqlStore(db, "rt"), MemoryStore()
+    sql, twin = SqlStore(db, "rt", **LEDGER_KEY), MemoryStore()
     twin.ml = set(SAME)
     for store in (sql, twin):
         _known(store, A, B, C, D)
@@ -367,7 +367,7 @@ def test_a_closure_that_changes_and_changes_back_is_filed_again() -> None:
     blamed the rental. It is filed unless the NEWEST record sharing an advert is identical."""
     ds = _mnl_then_rental()
     db = FakePg()
-    sql, twin = SqlStore(db, "rt"), MemoryStore()
+    sql, twin = SqlStore(db, "rt", **LEDGER_KEY), MemoryStore()
     chain = {(A, B), (B, C)}
     for store, rulings in ((sql, db), (twin, twin)):
         _known(store, A, B, C, D)
@@ -400,7 +400,7 @@ def test_the_sql_store_reads_the_newest_pair_ruling_only() -> None:
     assert "distinct on" in RT_MUST_LINK_SQL and "v.verdict = 'same'" in RT_MUST_LINK_SQL
     db = FakePg()
     db.ml = {(A, C)}
-    assert SqlStore(db, "rt").must_link() == {(A, C)}
+    assert SqlStore(db, "rt", **LEDGER_KEY).must_link() == {(A, C)}
 
 
 def test_a_withdrawn_same_re_clusters_its_component_on_the_next_pass() -> None:
@@ -456,7 +456,7 @@ def test_the_sql_store_reads_the_rulings_changed_since_the_previous_pass() -> No
     db = FakePg()
     start = db.now
     db.rulings.append((start - timedelta(days=3), [A, C]))
-    store = SqlStore(db, "rt")
+    store = SqlStore(db, "rt", **LEDGER_KEY)
     assert store.rulings_changed() == set(), "the first pass starts at the present"
     store.flush()
     assert db.cursors[CURSOR_RULINGS]["watermark"] == start
@@ -465,7 +465,7 @@ def test_the_sql_store_reads_the_rulings_changed_since_the_previous_pass() -> No
     db.rulings.append((db.now, [A, B]))
     assert store.rulings_changed() == {A, B}
     # A pass that rolls back never flushes, so the next pass reads the same change.
-    assert SqlStore(db, "rt").rulings_changed() == {A, B}
+    assert SqlStore(db, "rt", **LEDGER_KEY).rulings_changed() == {A, B}
     # A ruling whose transaction began before the previous pass started and committed after it
     # read is inside the overlap; one older than the overlap was read by that pass.
     db.rulings.append((start - timedelta(seconds=RULINGS_OVERLAP_S / 2), [C]))
@@ -1414,13 +1414,13 @@ def test_a_build_s_budget_is_three_quarters_of_the_deadline(tmp_path) -> None:
     assert built["claim_bound"]["pass_budget_s"] == PASS_BUDGET_S
 
 
-# ---------------------------------- E952: a build's pair budget; the pass reports its attempts
+# ------------------- E952/E943: one pair budget, build and live; the pass reports its attempts
 
 
-def test_a_build_s_pair_budget_is_300k_and_a_live_pass_s_stays_150k(tmp_path, monkeypatch) -> None:
-    """At a 27k-advert store a 30-advert claim already wants more than 150k pairs, so a build
-    runs the pass under `BOOTSTRAP_PAIR_BUDGET`; after it the live 150,000 of E75 holds. The
-    budget is a `Limits` the lane hands the pass, beside the claim bound in the summary."""
+def test_one_pair_budget_of_150k_holds_for_build_and_live(tmp_path, monkeypatch) -> None:
+    """E943 restated E952: the budget counts the pairs a pass will DECIDE, after the reject
+    ledger, so a build needs no budget of its own. One `PASS_LIMITS` the lane hands the pass,
+    beside the claim bound in the summary, in the build and after it."""
     from autodedup import incremental_lane
     from autodedup.incremental import bootstrap_key
     from tests.autodedup import lane_world
@@ -1439,13 +1439,12 @@ def test_a_build_s_pair_budget_is_300k_and_a_live_pass_s_stays_150k(tmp_path, mo
     conn.settings[bootstrap_key()] = False
     built = incremental_lane.run_incremental(lambda: conn)
 
-    assert incremental_lane.BOOTSTRAP_PAIR_BUDGET == 300_000
+    assert not hasattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET")
     assert incremental_lane.PASS_LIMITS == Limits(max_listings=500, max_pairs=150_000,
                                                   max_component=400)
-    assert [limits.max_pairs for limits in handed] == [300_000, 150_000]
-    assert all((limits.max_listings, limits.max_component) == (500, 400) for limits in handed)
+    assert handed == [incremental_lane.PASS_LIMITS] * 2
     assert building["bootstrap"]["active"] is True and not building["aborted"]
-    assert building["claim_bound"]["max_pairs"] == 300_000
+    assert building["claim_bound"]["max_pairs"] == 150_000
     assert built["bootstrap"]["active"] is False and not built["aborted"]
     assert built["claim_bound"]["max_pairs"] == 150_000
 
@@ -1455,8 +1454,8 @@ def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
     """A budget nothing fits refuses all four claims of the ladder: the clock's 78, then a
     quarter of each claim MADE (19, 4, 1; a quarter of `max_listings` would re-claim the same
     78 twice). The summary says so — `counts.attempts` 4, each claim's wanted set, the last
-    one's `wanted_pairs`, `aborted` "pair_budget" — and nothing is written. The live pass after
-    it runs under its own budget."""
+    one's `wanted_pairs` and `pairs_to_decide`, `aborted` "pair_budget" — and nothing is
+    written, the reject ledger included. With the budget back the next pass commits."""
     from autodedup import incremental_lane
     from autodedup.incremental import bootstrap_key
     from tests.autodedup import lane_world
@@ -1470,7 +1469,8 @@ def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
         return items
 
     monkeypatch.setattr(incremental_lane.SqlWork, "claim", claim)
-    monkeypatch.setattr(incremental_lane, "BOOTSTRAP_PAIR_BUDGET", -1)
+    budget = incremental_lane.PASS_LIMITS
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", replace(budget, max_pairs=-1))
     conn = lane_world.world()
     lane_world.seed_lane(conn, tmp_path)
     cursors = {key: dict(value) for key, value in conn.cursors.items()}
@@ -1480,18 +1480,21 @@ def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
     # The last claim, one advert against a store holding none, wants no pair: -1 refuses it.
     assert made == [78, 19, 4, 1]
     assert (refused["counts"]["attempts"], refused["counts"]["wanted_pairs"]) == (4, 0)
+    assert refused["counts"]["pairs_to_decide"] == 0
+    by_attempt = refused["counts"]["pairs_to_decide_by_attempt"]
+    assert len(by_attempt) == 4 and by_attempt[-1] == 0
     assert len(refused["counts"]["wanted_by_attempt"]) == 4
     assert refused["counts"]["wanted_by_attempt"][-1] == 0
     # What production read as "count" (2026-10-12): the ladder's last claim, not the clock's.
     assert refused["claim_bound"]["max_pairs"] == -1
     assert (refused["claim_bound"]["max_listings"], refused["claim_bound"]["bound_by"]) == (
         1, "count")
-    assert conn.cursors == cursors and conn.pairs == pairs
+    assert conn.cursors == cursors and conn.pairs == pairs and not conn.reject_ledger
 
-    conn.settings[bootstrap_key()] = False
-    live = incremental_lane.run_incremental(lambda: conn)
-    assert live["aborted"] == "" and live["counts"]["attempts"] == 1
-    assert live["claim_bound"]["max_pairs"] == 150_000
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", budget)
+    again = incremental_lane.run_incremental(lambda: conn)
+    assert again["aborted"] == "" and again["counts"]["attempts"] == 1
+    assert again["claim_bound"]["max_pairs"] == 150_000
 
 
 def test_the_fact_reads_are_sliced_by_whole_listings(tmp_path, monkeypatch) -> None:
@@ -1696,6 +1699,292 @@ def test_a_raise_on_a_live_connection_releases_the_lease_the_existing_way(
     assert RT_LEASE_RELEASE_SQL not in fresh.issued
     assert world.statements.count(RT_LEASE_RELEASE_SQL) == releases_before + 1, "once"
     assert not any("rt_lease" in note for note in getattr(raised.value, "__notes__", []))
+
+
+# ------------------------------------------- a restart takes both connections (2026-10-10)
+#
+# Postgres restarted under a pass (a Supabase compute change): it began shutting down at
+# 05:56:15Z and the pooler's first checkout went through at 05:57:13Z, 58 s later. The pass's
+# own connection and the fresh one its raise opened both died with it, so the lease sat its
+# whole 2,400 s TTL and every pass skipped "leased" meanwhile. `release_after` now opens NEW
+# connections from the caller's factory, one every 20 s for up to 180 s, before it leaves the
+# lease to its TTL.
+
+
+def _dead(world: FakePg) -> _Session:
+    session = _Session(world)
+    session.dead = True
+    return session
+
+
+def _no_wall_clock(monkeypatch) -> SimpleNamespace:
+    """rt_lease's own wait and clock, stubbed in that module alone: every wait is recorded in
+    `slept` and moves `now`, so a budget of minutes runs in no time."""
+    from autodedup import rt_lease
+
+    clock = SimpleNamespace(now=0.0, slept=[])
+
+    def sleep(seconds: float) -> None:
+        clock.slept.append(seconds)
+        clock.now += seconds
+
+    monkeypatch.setattr(rt_lease, "_sleep", sleep)
+    monkeypatch.setattr(rt_lease, "_clock", lambda: clock.now)
+    return clock
+
+
+def _lease_notes(exc: BaseException) -> list[str]:
+    return [note for note in getattr(exc, "__notes__", []) if "rt_lease" in note]
+
+
+def test_a_restart_that_takes_both_connections_releases_on_a_new_one(monkeypatch) -> None:
+    """The release fails on the pass's connection and on the fresh one: a NEW connection from
+    the caller's factory, opened after one wait (the two the run holds have just failed), ends
+    the lease and is closed, ONE note says so, and the statement still ends this holder's row
+    only."""
+    from autodedup import rt_lease
+
+    world = FakePg()
+    clock = _no_wall_clock(monkeypatch)
+    opened: list[object] = []
+
+    def connect() -> object:
+        opened.append(world.other_session())
+        return opened[-1]
+
+    assert rt_lease.take(world, "worker:1:1", 2_400)
+    original = RuntimeError("terminating connection due to administrator command")
+    assert rt_lease.release_after(_dead(world), "worker:1:1", original, fallback=_dead(world),
+                                  connect=connect) is True
+    assert rt_lease.current(world)["live"] is False
+    assert clock.slept == [rt_lease.NEW_CONNECTION_DELAY_S], "a wait before the first one too"
+    assert len(opened) == 1 and opened[0].closed
+    assert _lease_notes(original) == [
+        "releasing autodedup.rt_lease for 'worker:1:1' failed (ConnectionError: server closed "
+        "the connection unexpectedly); released on a new connection 20 s later (try 1)"]
+
+    assert rt_lease.take(world, "rt_seed:other", 2_400)
+    assert rt_lease.release_after(_dead(world), "worker:1:1", RuntimeError("x"),
+                                  fallback=_dead(world), connect=connect) is True
+    row = rt_lease.current(world)
+    assert (row["holder"], row["live"]) == ("rt_seed:other", True), "not that holder's row"
+
+
+def test_a_new_connection_the_restart_still_refuses_is_closed_and_the_next_one_tried(
+        monkeypatch) -> None:
+    """The pooler hands out a connection while the database behind it is still down (on 10-10
+    it completed client connects in about 1 s, then failed each query): that one is closed,
+    the next comes `NEW_CONNECTION_DELAY_S` later, and the release lands."""
+    from autodedup import rt_lease
+
+    world = FakePg()
+    clock = _no_wall_clock(monkeypatch)
+    starting, live = _dead(world), _Session(world)
+    queue = [starting, live]
+    assert rt_lease.take(world, "worker:1:1", 2_400)
+    original = RuntimeError("terminating connection due to administrator command")
+
+    assert rt_lease.release_after(_dead(world), "worker:1:1", original,
+                                  connect=lambda: queue.pop(0)) is True
+    assert rt_lease.current(world)["live"] is False
+    assert clock.slept == [20.0, 20.0]
+    assert (starting.closed, live.closed) == (1, 1)
+    notes = _lease_notes(original)
+    assert len(notes) == 1 and "released on a new connection 40 s later (try 2)" in notes[0]
+
+
+def test_the_10_10_restart_replayed_frees_the_lease_inside_the_budget(monkeypatch) -> None:
+    """The 10-10 timeline in seconds from the shutdown at 05:56:15Z: the fresh connection's
+    release failed at about 2 s, every failed try then cost up to 6.5 s (the pooler's
+    timeouts), and the database was back at 58 s. Three tries 20 s apart, the first at once,
+    made their last at 55 s, inside the outage; one every 20 s for 180 s lands at 75 s."""
+    from autodedup import rt_lease
+
+    world = FakePg()
+    clock = _no_wall_clock(monkeypatch)
+    clock.now = 2.0
+    tries: list[float] = []
+
+    def through_the_pooler() -> _Session:
+        tries.append(clock.now)
+        if clock.now >= 58.0:
+            return _Session(world)
+        clock.now += 6.5
+        raise ConnectionError("Failed to connect to database: {:error, :timeout}")
+
+    assert rt_lease.take(world, "worker:1:1", 2_400)
+    original = RuntimeError("terminating connection due to administrator command")
+    assert rt_lease.release_after(_dead(world), "worker:1:1", original, fallback=_dead(world),
+                                  connect=through_the_pooler) is True
+    assert tries == [22.0, 48.5, 75.0]
+    assert rt_lease.current(world)["live"] is False, "released, not left to its TTL"
+
+
+def test_new_connections_that_never_come_leave_the_lease_to_its_ttl(monkeypatch) -> None:
+    """An outage past the budget: one try every 20 s for 180 s, then the lease expires by
+    itself. ONE note names the count and the last failure, and nothing is raised in place of
+    the raise; with no raise to note it on, the last failure is raised, as before."""
+    from autodedup import rt_lease
+
+    clock = _no_wall_clock(monkeypatch)
+    calls: list[int] = []
+
+    def refused() -> _Session:
+        calls.append(len(calls) + 1)
+        raise ConnectionError(f"connection refused (try {calls[-1]})")
+
+    world = FakePg()
+    original = RuntimeError("terminating connection due to administrator command")
+    assert rt_lease.release_after(_dead(world), "worker:1:1", original, fallback=_dead(world),
+                                  connect=refused) is False
+    assert (rt_lease.NEW_CONNECTION_BUDGET_S, rt_lease.NEW_CONNECTION_DELAY_S) == (180.0, 20.0)
+    assert calls == list(range(1, 10)) and clock.slept == [20.0] * 9 and clock.now == 180.0
+    assert _lease_notes(original) == [
+        "releasing autodedup.rt_lease for 'worker:1:1' also failed (9 new connections over "
+        "180 s, the last with ConnectionError: connection refused (try 9)); it expires by "
+        "itself"]
+
+    calls.clear()
+    with pytest.raises(ConnectionError, match=r"\(try 9\)"):
+        rt_lease.release_after(_dead(world), "worker:1:1", None, connect=refused)
+
+
+def test_the_budget_is_time_whatever_a_try_costs(monkeypatch) -> None:
+    """Tries that each wait out the lane's 10 s connect timeout: fewer fit, and the release
+    gives up within the budget plus the one try that started inside it."""
+    from autodedup import rt_lease
+
+    clock = _no_wall_clock(monkeypatch)
+    tries: list[float] = []
+
+    def timing_out() -> _Session:
+        tries.append(clock.now)
+        clock.now += 10.0
+        raise ConnectionError("connection timeout expired")
+
+    original = RuntimeError("terminating connection due to administrator command")
+    assert rt_lease.release_after(_dead(FakePg()), "worker:1:1", original,
+                                  connect=timing_out) is False
+    assert tries == [20.0, 50.0, 80.0, 110.0, 140.0, 170.0]
+    assert clock.now == 180.0
+
+
+def test_no_new_connection_while_one_the_run_holds_can_release(monkeypatch) -> None:
+    from autodedup import rt_lease
+
+    world = FakePg()
+    clock = _no_wall_clock(monkeypatch)
+
+    def never() -> _Session:
+        pytest.fail("a new connection opened while one the run holds could release")
+
+    assert rt_lease.take(world, "worker:1:1", 2_400)
+    assert rt_lease.release_after(world, "worker:1:1", None, connect=never) is True
+    assert rt_lease.take(world, "worker:1:1", 2_400)
+    assert rt_lease.release_after(_dead(world), "worker:1:1", RuntimeError("x"),
+                                  fallback=world, connect=never) is True
+    assert rt_lease.current(world)["live"] is False
+    assert clock.slept == []
+
+
+def test_a_run_that_succeeded_still_says_a_restart_forced_a_new_connection(
+        monkeypatch, caplog) -> None:
+    """The `finally` of a committed pass, a seed, a live apply or unapply has no raise to note
+    it on: the release that needed a new connection is logged as a warning instead, so a
+    restart after a commit stays visible."""
+    import logging
+
+    from autodedup import rt_lease
+
+    world = FakePg()
+    _no_wall_clock(monkeypatch)
+    assert rt_lease.take(world, "rt_seed:1", 2_400)
+    with caplog.at_level(logging.WARNING, logger="autodedup.rt_lease"):
+        assert rt_lease.release_after(_dead(world), "rt_seed:1", None,
+                                      connect=world.other_session) is True
+    assert rt_lease.current(world)["live"] is False
+    assert [record.getMessage() for record in caplog.records] == [
+        "AUTODEDUP: releasing autodedup.rt_lease for 'rt_seed:1' failed (ConnectionError: "
+        "server closed the connection unexpectedly); released on a new connection 20 s later "
+        "(try 1)"]
+
+
+def test_a_restart_mid_pass_releases_the_lease_on_a_new_connection(tmp_path,
+                                                                    monkeypatch) -> None:
+    """End to end: the restart kills the pass's connection, and the fresh one its raise opens
+    is dead too. The lane's factory then opens new ones, 20 s apart, until the release lands,
+    so the next pass need not wait out the TTL."""
+    from autodedup import rt_lease
+    from autodedup.incremental_lane import run_incremental
+    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from tests.autodedup import lane_world
+
+    world = lane_world.world()
+    lane_world.seed_lane(world, tmp_path)
+    clock = _no_wall_clock(monkeypatch)
+    conn = _Session(world)
+    fresh, starting, live = _dead(world), _dead(world), _Session(world)
+    queue = [fresh, starting, live]
+    _pass_that_kills_its_connection(
+        monkeypatch, conn, RuntimeError("terminating connection due to administrator command"))
+
+    with pytest.raises(RuntimeError, match="administrator command") as raised:
+        run_incremental(lambda: conn, fresh_conn=lambda: queue.pop(0))
+
+    assert not queue and clock.slept == [20.0, 20.0], "a wait before each new connection"
+    assert rt_lease.current(world)["live"] is False, "released, not left to its TTL"
+    assert live.issued.count(RT_LEASE_RELEASE_SQL) == 1
+    assert (fresh.closed, starting.closed, live.closed) == (1, 1, 1)
+    notes = _lease_notes(raised.value)
+    assert len(notes) == 1 and "released on a new connection 40 s later (try 2)" in notes[0]
+
+
+def test_a_restart_after_the_commit_releases_the_lease_on_a_new_connection(
+        tmp_path, monkeypatch) -> None:
+    """The restart lands after the pass committed, so no fresh connection was opened for a
+    raise: the `finally` itself turns to the lane's factory."""
+    from autodedup import incremental_lane, rt_lease
+    from autodedup.incremental_lane import run_incremental
+    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from tests.autodedup import lane_world
+
+    world = lane_world.world()
+    lane_world.seed_lane(world, tmp_path)
+    clock = _no_wall_clock(monkeypatch)
+    conn, new = _Session(world), _Session(world)
+
+    def restart(_conn: object) -> int:
+        conn.dead = True
+        raise ConnectionError("terminating connection due to administrator command")
+
+    monkeypatch.setattr(incremental_lane, "phash_pop_rows", restart)
+    with pytest.raises(ConnectionError, match="administrator command") as raised:
+        run_incremental(lambda: conn, fresh_conn=lambda: new)
+
+    assert clock.slept == [20.0]
+    assert rt_lease.current(world)["live"] is False, "released, not left to its TTL"
+    assert new.issued.count(RT_LEASE_RELEASE_SQL) == 1 and new.closed == 1
+    assert any("released on a new connection 20 s later (try 1)" in note
+               for note in _lease_notes(raised.value))
+
+
+def test_every_end_of_a_run_that_holds_the_lease_can_open_a_new_connection() -> None:
+    """The lane's raise and its `finally`, the seed, and a live apply or unapply each hand the
+    release a factory for NEW connections. Read off the source, so a call site added without
+    one fails here."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "autodedup"
+    sites: list[tuple[str, bool]] = []
+    for path in sorted(root.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and ast.unparse(node.func) in (
+                    "rt_lease.release_after", "_Writer"):
+                sites.append((f"{path.name}:{node.lineno}",
+                              any(keyword.arg == "connect" for keyword in node.keywords)))
+    assert len(sites) == 6, sites
+    assert all(wired for _site, wired in sites), sites
 
 
 # ------------------------------------------------------------- E941: the worker's shutdown

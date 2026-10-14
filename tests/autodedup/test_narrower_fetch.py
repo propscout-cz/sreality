@@ -41,7 +41,7 @@ from autodedup.model import hand_initialised
 from autodedup.score_lane import families_of_bitmask
 from autodedup.settings import Settings
 from tests.autodedup import lane_world
-from tests.autodedup.fake_pg import FakePg, _Cursor
+from tests.autodedup.fake_pg import LEDGER_KEY, FakePg, _Cursor
 from tests.autodedup.test_one_lane import _Session
 
 GEN = "rt"
@@ -153,7 +153,7 @@ def _memory_rows(store: MemoryStore) -> dict[tuple[int, int], tuple]:
 
 
 def _sql_rows(conn: FakePg) -> dict[tuple[int, int], tuple]:
-    rows = SqlStore(conn, GEN).pairs_within(sorted(conn.listings))
+    rows = SqlStore(conn, GEN, **LEDGER_KEY).pairs_within(sorted(conn.listings))
     return {(row.lo, row.hi): (row.zone, round(row.score, 9), tuple(sorted(row.families)),
                                row.veto, row.certificate, row.reason, row.fp_lo, row.fp_hi,
                                tuple(sorted(row.evidence.items())))
@@ -209,9 +209,9 @@ def test_the_narrower_fetch_decides_exactly_what_the_full_fetch_decides() -> Non
     assert _memory_evidence(twin) == _memory_evidence(twin_full), "the refresh's evidence"
 
     conn = _world()
-    passes, _ = _drain(SqlStore(conn, GEN, store_floor=0.0), SqlFacts(conn), conn)
+    passes, _ = _drain(SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY), SqlFacts(conn), conn)
     full = _world()
-    _drain(SqlStore(full, GEN, store_floor=0.0), _EveryVector(SqlFacts(full)), full)
+    _drain(SqlStore(full, GEN, store_floor=0.0, **LEDGER_KEY), _EveryVector(SqlFacts(full)), full)
     assert _sql_rows(conn) == _sql_rows(full)
     assert {key: row["features"] for key, row in conn.pairs.items()} == {
         key: row["features"] for key, row in full.pairs.items()}
@@ -238,9 +238,11 @@ def test_the_vector_read_names_the_claim_and_the_scored_endpoints_only() -> None
     those of a neighbourhood listing, nor of the sides of a wanted pair whose stored decision
     stands. The read before E933 carried all of them, every pass."""
     conn = _world()
-    passes, statements = _drain(SqlStore(conn, GEN, store_floor=0.0), SqlFacts(conn), conn)
+    passes, statements = _drain(SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY),
+                                SqlFacts(conn), conn)
     full = _world()
-    _, before = _drain(SqlStore(full, GEN, store_floor=0.0), _EveryVector(SqlFacts(full)),
+    _, before = _drain(SqlStore(full, GEN, store_floor=0.0, **LEDGER_KEY),
+                       _EveryVector(SqlFacts(full)),
                        full)
     assert (GEN, *sorted(OUTLIERS)) in conn.pairs, "the outliers pair with each other"
     assert all(set(key[1:]) <= set(OUTLIERS) or not set(key[1:]) & set(OUTLIERS)
@@ -271,7 +273,7 @@ def test_a_refused_attempt_reads_no_vector() -> None:
     conn = _world()
     settings = Settings()
     calibration = harness.calibrated(_dataset(_world()), settings)[1]
-    store = SqlStore(conn, GEN, store_floor=0.0)
+    store = SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY)
 
     def attempt(max_pairs: int) -> Any:
         mark = len(conn.issued)

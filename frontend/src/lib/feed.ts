@@ -10,6 +10,7 @@
 
 import { DEFAULT_FILTERS, filtersForPreset, readPresetSpec, type ListingFilters } from './filters';
 import type { CardRow } from './queries';
+import type { PortalChoice } from './portals';
 import type { FilterPreset } from './types';
 
 export const FEED_SCOPE_KEY = 'sreality.feed.scope';
@@ -29,10 +30,10 @@ export function feedFiltersForPreset(preset: FilterPreset | null | undefined): L
   return filtersForPreset(readPresetSpec(preset.filter_spec).filters, true);
 }
 
-/* The portal chips REPLACE the scope's own portal list (a preset may carry one);
- * null = keep the scope's. */
-export function withPortals(f: ListingFilters, portals: string[] | null): ListingFilters {
-  return portals == null ? f : { ...f, portals };
+/* The portal chips REPLACE the scope's own portal filter, both sides (a preset may
+ * carry one); null = keep the scope's. */
+export function withPortals(f: ListingFilters, choice: PortalChoice | null): ListingFilters {
+  return choice == null ? f : { ...f, ...choice };
 }
 
 export function readFeedScope(): string {

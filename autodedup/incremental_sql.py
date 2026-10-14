@@ -41,7 +41,8 @@ select to_regclass('autodedup.fp_key')         is not null
    and to_regclass('autodedup.rt_fp')          is not null
    and to_regclass('autodedup.rt_calibration') is not null
    and to_regclass('autodedup.rt_block_cell')  is not null
-   and to_regclass('autodedup.rt_lease')       is not null as present
+   and to_regclass('autodedup.rt_lease')       is not null
+   and to_regclass('autodedup.rt_reject_ledger') is not null as present
 """
 
 # A pass is one transaction (E75) and a statement that runs away is a lease held past its TTL,
@@ -604,6 +605,12 @@ select 'rt_retire_event',
        count(*)::bigint,
        count(*) filter (where generation = %(generation)s::text)::bigint
   from autodedup.rt_retire_event
+union all
+select 'rt_reject_ledger',
+       pg_total_relation_size('autodedup.rt_reject_ledger'::regclass)::bigint,
+       count(*)::bigint,
+       count(*) filter (where generation = %(generation)s::text)::bigint
+  from autodedup.rt_reject_ledger
 """
 
 RT_SETTINGS_MANY_SQL = """
@@ -983,6 +990,51 @@ delete from autodedup.pairs
    and listing_hi = %(listing_hi)s::bigint
 """
 
+# E943, the reject ledger (migration 596): which of these not-stored pairs were decided below
+# `store_floor` on the SAME inputs and code. All five must match; one primary-key probe a pair.
+RT_REJECT_LEDGER_LOOKUP_SQL = """
+select l.listing_lo, l.listing_hi
+  from unnest(%(los)s::bigint[], %(his)s::bigint[], %(dd_los)s::text[], %(dd_his)s::text[])
+       as k(lo, hi, dd_lo, dd_hi)
+  join autodedup.rt_reject_ledger l
+    on l.generation = %(generation)s::text
+   and l.listing_lo = k.lo
+   and l.listing_hi = k.hi
+ where l.dd_lo = k.dd_lo
+   and l.dd_hi = k.dd_hi
+   and l.calibration_digest = %(calibration_digest)s::text
+   and l.feature_version = %(feature_version)s::smallint
+   and l.engine_digest = %(engine_digest)s::text
+"""
+
+# At most one row a pair: a re-decision overwrites it, so nothing ever prunes the table.
+RT_REJECT_LEDGER_UPSERT_SQL = """
+insert into autodedup.rt_reject_ledger (
+    generation, listing_lo, listing_hi, dd_lo, dd_hi, calibration_digest, feature_version,
+    engine_digest, decided_at
+)
+select %(generation)s::text, k.lo, k.hi, k.dd_lo, k.dd_hi, %(calibration_digest)s::text,
+       %(feature_version)s::smallint, %(engine_digest)s::text, now()
+  from unnest(%(los)s::bigint[], %(his)s::bigint[], %(dd_los)s::text[], %(dd_his)s::text[])
+       as k(lo, hi, dd_lo, dd_hi)
+on conflict (generation, listing_lo, listing_hi) do update set
+    dd_lo              = excluded.dd_lo,
+    dd_hi              = excluded.dd_hi,
+    calibration_digest = excluded.calibration_digest,
+    feature_version    = excluded.feature_version,
+    engine_digest      = excluded.engine_digest,
+    decided_at         = now()
+"""
+
+# A pair the lane STORES leaves the ledger: `pairs` and the ledger never hold the same pair.
+RT_REJECT_LEDGER_DELETE_SQL = """
+delete from autodedup.rt_reject_ledger l
+ using unnest(%(los)s::bigint[], %(his)s::bigint[]) as k(lo, hi)
+ where l.generation = %(generation)s::text
+   and l.listing_lo = k.lo
+   and l.listing_hi = k.hi
+"""
+
 # A pair is a cluster's EDGE only when both sides landed in that cluster (the score lane's
 # rule), so membership is stamped from the cluster's own member set.
 RT_PAIR_CLUSTER_SQL = """
@@ -1301,6 +1353,15 @@ select count(*)::bigint from gone
 RT_FRESH_RETIRE_EVENT_SQL = """
 with gone as (
     delete from autodedup.rt_retire_event
+     where generation = %(generation)s::text
+ returning 1
+)
+select count(*)::bigint from gone
+"""
+
+RT_FRESH_REJECT_LEDGER_SQL = """
+with gone as (
+    delete from autodedup.rt_reject_ledger
      where generation = %(generation)s::text
  returning 1
 )

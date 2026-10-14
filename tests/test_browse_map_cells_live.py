@@ -221,15 +221,12 @@ def test_the_point_budget_is_a_strict_threshold(conn):
 
 
 def test_both_prefilter_id_spaces_are_applied(conn):
-    """obec_id AND property_id each narrow the cohort.
+    """obec_id AND property_id each narrow the cohort: the two spaces the SPA's
+    applyPrefilters emits `.in()` on (the listing_id space went with W5's legacy
+    city-quality path; migration 597 dropped its parameter).
 
-    The SPA's applyPrefilters emits `.in()` on both (the broker allowlist is a
-    property_id list since W5), and the RPC read has no `.in()` to inherit, so a
-    dropped predicate would show the unfiltered market on the map while Cards/Table/Count
-    show the filtered one. The third space, listing_id, left with W6 (migration 593).
-
-    RED by: deleting either `= any(...)` predicate from the map's body — the
-    corresponding call below then returns 3 instead of 1.
+    RED by: deleting either `= any(...)` predicate — the call below then returns 3, not 1:
+    the map would show the unfiltered market while Cards/Table/Count show the filtered one.
     """
     with conn.cursor() as cur:
         _park(cur)

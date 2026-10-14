@@ -277,7 +277,15 @@ reported `no slice ledger` every cycle, forever. Its walk was already kraj-slice
 so wiring it was one call — but with one non-obvious rule.
 
 **ONE LEDGER ROW PER KRAJ, not per subtype.** A kraj past the 99-page ceiling is
-re-walked per subtype and comes back as several `SliceResult`s sharing one kraj.
+re-walked per subtype (and a subtype child itself past it, per okres —
+`_DESCENT_AXES`: the okres axis is a declared map, the subtype axis is declared
+where measured, else the kraj page's links; each level checked against its
+parent's declared total) and comes back as several `SliceResult`s sharing one
+kraj; an okres grandchild keeps its parent kraj in `kraj` and rides the okres in
+`okres`. Every descent logs `DESCENT cm=… axis=subtype|okres declared=… slugs=…`
+(INFO); `grep 'DESCENT.*axis=okres'` is how to see the okres level fire. A
+residue or deadline marker declares only its unwalked part, so the kraj row's
+`declared_total` stays the kraj's own total.
 Recording those individually would poison the ledger the first time a kraj stopped
 needing the descent: the `kraj/subtype-*` rows from the old shape would linger,
 never be re-walked, and age forever — and the gate reads "every slice of this
@@ -450,6 +458,24 @@ entry now carries `walk_reached_end` (bool — did it nominate?) and
 `walk_reached_end: true, walk_coverage: "incomplete"` is the new normal case the
 old gate refused. `scripts/verify_pipeline.py`'s `walk_coverage` check reads the
 same rows and is now the standing rail on the count.
+
+The other half of that record is a rail too. **`walk_end_streak`** (2026-10-13)
+counts, per (source, category_main, category_type), the finished index walks in a
+row in which the category was walked and `walk_reached_end` was false — walks that
+nominated nothing. Warn at 3 (~1 day at the real 6-9 h cron cadence for a
+category walked every run; idnes's rotated ones take ~twice as long), fail at 6
+(~2 days). A run that never started the category is skipped, not counted; a
+category its portal has not walked in its last 6 walks warns instead (starved, or
+dropped from the config) — `walk_coverage`'s truncation arm only compares category
+counts against a 7-day best and only warns, so it does not cover that case. The
+window is 14 days, so a streak with no reached end in it reads "at least N". It
+exists because ceskereality byt/prodej missed
+the end for 89 walks (2026-09-16 -> 10-13): nothing was nominated, 13,373 active
+rows piled up against 9,771 on the portal, each walk logged `VERIFY skipped`,
+and `walk_coverage` read ~4.6% because it averages the gap over the whole portal
+and lets `categories_nominating` move nothing. When it rings, the category's
+`VERIFY skipped` line names the stop and the portal's SLICE / DESCENT lines name
+the slice.
 
 ## The four layers, in order (as rebuilt 2026-09-07, regated 2026-09-08)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import hmac
 import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
@@ -151,26 +150,58 @@ def get_channel_client(conn: Any = Depends(get_db_conn)) -> Any:
     return ChannelClient(conn, transports=get_transports())
 
 
-def require_token(authorization: str | None = Header(default=None)) -> None:
-    """Bearer-token gate. Fails CLOSED: with API_TOKEN unset the API refuses every
-    request (503) UNLESS the operator explicitly opts out for local dev with
-    API_AUTH_OPTIONAL=1. A forgotten prod secret can therefore never silently
-    disable auth (the old behaviour was fail-open). The compare is timing-safe."""
-    expected = os.environ.get("API_TOKEN")
-    if not expected:
-        if os.environ.get("API_AUTH_OPTIONAL") == "1":
-            return
-        raise HTTPException(
-            status_code=503,
-            detail="API auth is not configured (set API_TOKEN, or API_AUTH_OPTIONAL=1 for local dev)",
-        )
-    # Compare as bytes: hmac.compare_digest on two str raises TypeError for a
-    # non-ASCII Authorization header (Starlette decodes headers as latin-1), which
-    # would surface as a 500 instead of a clean 401.
-    if not authorization or not hmac.compare_digest(
-        authorization.encode("utf-8", "ignore"), f"Bearer {expected}".encode("utf-8")
+# ONE credential. Every caller — a person in the SPA or the extension, or a machine
+# signed in as its own Supabase user — presents a Supabase session JWT; no static key
+# exists (deleted 2026-10-13). The GATE decides what it needs from the JWT — the client
+# never chooses per request — so a route moves between gates without a client change,
+# and no shipped bundle holds a secret. `_bearer` is the one reader of the
+# Authorization header; the three gates below differ only in what they return.
+
+
+def _unauthorized(detail: str, *, reason: str | None = None) -> HTTPException:
+    """Every 401 this module raises, RFC 6750-shaped: the `WWW-Authenticate: Bearer`
+    challenge names the scheme, and `error="invalid_token"` + its description say WHY
+    (expired, bad signature, not a token at all) instead of a bare "Invalid token".
+    `reason` is always one of this module's fixed words — see `_jwt_reason`."""
+    challenge = "Bearer"
+    if reason is not None:
+        detail = f"{detail}: {reason}"
+        challenge += f' error="invalid_token", error_description="{reason}"'
+    return HTTPException(status_code=401, detail=detail, headers={"WWW-Authenticate": challenge})
+
+
+def _jwt_reason(exc: Exception) -> str:
+    """A fixed, printable reason per PyJWT failure class — never the exception text,
+    which echoes unverified token content (the header's `kid`): a non-latin-1 or
+    CR/LF value there broke the response header, a 500 any unauthenticated caller
+    could trigger."""
+    import jwt
+
+    for cls, reason in (
+        (jwt.ExpiredSignatureError, "expired"),
+        (jwt.InvalidSignatureError, "bad signature"),
+        (jwt.InvalidAudienceError, "wrong audience"),
+        (jwt.PyJWKClientError, "unknown signing key"),
     ):
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
+        if isinstance(exc, cls):
+            return reason
+    return "malformed"
+
+
+def _bearer(authorization: str | None) -> dict | None:
+    """Classify the one Authorization header: a verified Supabase JWT → its claims;
+    nothing else is a credential (401; no verifier configured → 503). Local dev may
+    switch this gate off with API_AUTH_OPTIONAL=1, which makes every caller anonymous
+    (None) — never set it in production: it would open every require_token route."""
+    if os.environ.get("API_AUTH_OPTIONAL") == "1":
+        return None
+    return verify_jwt(authorization)
+
+
+def require_token(authorization: str | None = Header(default=None)) -> None:
+    """Any signed-in caller — a verified Supabase JWT — with no identity returned.
+    A route that needs one takes verify_jwt / tenant_conn."""
+    _bearer(authorization)
 
 
 # Fixed system account id (mirrors migrations/286_accounts_foundation.sql). The
@@ -203,68 +234,51 @@ def _jwks_client(jwks_url: str) -> Any:
 
 
 def verify_jwt(authorization: str | None = Header(default=None)) -> dict:
-    """Phase 1 auth: verify a Supabase user JWT and return its claims.
+    """Verify a Supabase user JWT and return its claims — the credential check behind
+    `_bearer` and the gate of every identity route.
 
-    Preferred path (this project): asymmetric signing keys (ES256/RS256) verified
-    against the project's public JWKS — no shared secret needed. Set SUPABASE_URL.
-    Falls back to a legacy shared HS256 secret (SUPABASE_JWT_SECRET) if that is all
-    that is configured.
-
-    The dual-auth window (accepting the static API_TOKEN here as a synthetic
-    operator/admin identity) has been retired: that branch made every
-    require_admin route only as protected as require_token, since the token is
-    embedded in the shipped SPA bundle and extractable via devtools. A caller
-    must now present a real Supabase-signed JWT. `require_token`-gated routes
-    are unaffected — that gate doesn't call this function. Fails closed when
-    nothing is configured.
+    One verification path: the project's asymmetric signing keys (ES256/RS256)
+    against its public JWKS, built from SUPABASE_URL — no shared secret anywhere
+    (the HS256 `SUPABASE_JWT_SECRET` fallback was deleted 2026-10-13; production has
+    signed ES256 since the JWKS cutover). Fails closed (503) with SUPABASE_URL unset:
+    an unconfigured auth backend must never authenticate anyone.
     """
+    # The verifier check comes FIRST: a deployment that cannot verify anyone answers
+    # 503 to every request, header or not — a server fault must never read as a
+    # client's missing credential.
+    base = os.environ.get("SUPABASE_URL")
+    if not base:
+        raise HTTPException(status_code=503, detail="Auth is not configured")
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token")
+        raise _unauthorized("Missing bearer token")
     token = authorization[len("Bearer "):]
 
     import jwt  # PyJWT (api extra); imported lazily to keep boot light
 
-    base = os.environ.get("SUPABASE_URL")
-    if base:
-        jwks_url = base.rstrip("/") + "/auth/v1/.well-known/jwks.json"
-        try:
-            signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
-            return jwt.decode(
-                token, signing_key.key,
-                algorithms=["ES256", "RS256"], audience="authenticated",
-            )
-        except jwt.PyJWTError as exc:
-            raise HTTPException(status_code=401, detail="Invalid token") from exc
-
-    secret = os.environ.get("SUPABASE_JWT_SECRET")
-    if not secret:
-        # Fail closed: an unconfigured auth backend must never authenticate anyone.
-        raise HTTPException(status_code=503, detail="Auth is not configured")
+    jwks_url = base.rstrip("/") + "/auth/v1/.well-known/jwks.json"
     try:
+        signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
         return jwt.decode(
-            token, secret, algorithms=["HS256"], audience="authenticated"
+            token, signing_key.key,
+            algorithms=["ES256", "RS256"], audience="authenticated",
         )
     except jwt.PyJWTError as exc:
-        raise HTTPException(status_code=401, detail="Invalid token") from exc
+        raise _unauthorized("Invalid token", reason=_jwt_reason(exc)) from exc
 
 
 def account_scope(
     authorization: str | None = Header(default=None),
     conn: Any = Depends(get_db_conn),
 ) -> list[str]:
-    """Read scope for routes that must serve BOTH a logged-in browser session and a
-    non-browser static-token caller (the future MCP / ClickUp / script integrations)
-    over the one Authorization header the transport gives us.
+    """Read scope for the account-scoped estimation reads, over the one Authorization
+    header.
 
     Returns the account ids the caller may read, ALWAYS including SYSTEM — mirroring
     the estimation_runs_tenant_read policy (migration 291) rather than inventing a
-    second definition of tenancy. A verified JWT adds its own account; the static
-    token is NOT an identity (it ships inside the SPA bundle, in a public repo), so
-    it stays SYSTEM-only.
-
-    Fails CLOSED at every branch: a missing header, an unconfigured gate, and an
-    expired or unparseable JWT all raise. No branch degrades silently to a wider or
-    narrower row set, and verify_jwt's HTTPException is never swallowed.
+    second definition of tenancy. A verified JWT adds its own account; a caller with
+    no resolvable account, and the local-dev opt-out, stay SYSTEM-only (the opt-out can
+    therefore never widen scope to another account's rows). Fails CLOSED at every
+    branch — `_bearer` raises; nothing degrades to a wider or narrower row set.
 
     Why not require_token + tenant_conn: `listings` and `parsed_url_cache` are
     RLS-enabled-with-zero-policies, so the /estimations list query (which LEFT JOINs
@@ -272,31 +286,9 @@ def account_scope(
     silently, no error. The service-role connection plus an explicit predicate is the
     only shape that scopes without blanking data.
     """
-    expected = os.environ.get("API_TOKEN")
-    # Gate-configuration contract mirrors require_token EXACTLY, so swapping that
-    # dependency for this one changes no status code: unset API_TOKEN is a 503
-    # (never a silent open door), with the documented local-dev opt-out pinned to
-    # SYSTEM so it can never widen scope to another account's rows.
-    if not expected:
-        if os.environ.get("API_AUTH_OPTIONAL") == "1":
-            return [SYSTEM_ACCOUNT_ID]
-        raise HTTPException(
-            status_code=503,
-            detail="API auth is not configured (set API_TOKEN, or API_AUTH_OPTIONAL=1 for local dev)",
-        )
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
-    if hmac.compare_digest(
-        authorization.encode("utf-8", "ignore"), f"Bearer {expected}".encode("utf-8")
-    ):
+    claims = _bearer(authorization)
+    if claims is None:
         return [SYSTEM_ACCOUNT_ID]
-    # Not the shared secret, so it must be a real Supabase JWT. Require the JWS
-    # shape before calling verify_jwt: otherwise a merely WRONG static token would
-    # surface as verify_jwt's 503 ("auth is not configured") on a deployment with
-    # no Supabase auth env, masking a bad credential as a server fault.
-    if authorization[len("Bearer "):].count(".") != 2:
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
-    claims = verify_jwt(authorization)
     from api import tenant_pool  # lazy: tenant_pool imports this module
 
     account_id = tenant_pool.resolve_account_id(conn, claims)

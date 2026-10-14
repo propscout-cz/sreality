@@ -49,9 +49,9 @@ class FilterGrain:
 # `listings` has no price_per_m2 column, so the measure is the four-argument call there; the
 # read model PUBLISHES it, so `l.price_per_m2` is the measure on `properties_public`. Neither
 # relation publishes a plot column, so both call plot_area_m2() (migration 534). A portal is
-# each ad's own on `listings` (estimation comparables, the §9 exception) and any of the
-# property's ads on `properties_public` (MS19, the `any` arm of portal_status_matches,
-# migration 590: the Watchdog has no status filter).
+# the canonical ad's own on `listings` (estimation comparables) and any of the property's ads
+# on `properties_public` (MS19, the `any` arm of portal_status_matches: the Watchdog has no
+# status filter); the exclusion side is `_portals_excluded`.
 LISTINGS_GRAIN = FilterGrain(
     agenda=Agenda.COMPARABLES,
     exprs=MappingProxyType({"price_per_m2": per_m2_sql("l"), "plot_area_m2": plot_area_sql("l")}),
@@ -214,6 +214,18 @@ def _city_index_rules(
     return [f"l.obec_id = ANY (ARRAY(SELECT curated_cities_matching(%({fid})s::jsonb)))"]
 
 
+def _portals_excluded(
+    fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any],
+) -> list[str]:
+    """The portal rule's second side (migration 597): no ad on an excluded portal — any ad,
+    or only active ones under `portals_excluded_active_only`."""
+    if not v:
+        return []
+    params[fid] = list(v)
+    ads = "active_sources" if values.get("portals_excluded_active_only") else "all_sources"
+    return [f"not (l.{ads} && %({fid})s::text[])"]
+
+
 def _building_material(
     fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any],
 ) -> list[str]:
@@ -228,6 +240,7 @@ _HOOKS: Mapping[str, Hook] = MappingProxyType({
     "max_price_czk": _price_bound,
     "include_no_price": _modifier,
     "price_change_window_days": _modifier,
+    "portals_excluded_active_only": _modifier,
     "tom_days_min": _tom,
     "tom_days_max": _tom,
     **{fid: _seen_days for fid in _SEEN_DAYS},
@@ -235,6 +248,7 @@ _HOOKS: Mapping[str, Hook] = MappingProxyType({
     "total_price_change_pct": _total_price_change,
     "city_index_rules": _city_index_rules,
     "building_material": _building_material,
+    "portals_excluded": _portals_excluded,
 })
 
 

@@ -824,9 +824,6 @@ function ErrorBlock({ error, kind }: { error: ApiError; kind: Kind }) {
       }
       return "That URL doesn't look like a supported listing page.";
     }
-    if (error.status === 401) {
-      return 'API authentication failed. Check VITE_API_TOKEN.';
-    }
     if (error.status === 502) {
       return "Couldn't reach the listing source right now.";
     }

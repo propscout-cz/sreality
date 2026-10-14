@@ -5,6 +5,85 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### ceskereality byt/prodej parked over the 99-page ceiling — byty + pozemky subtype maps (2026-10-13, done)
+- **Found:** Praha byt/prodej crossed 1,980 rows (a filtered URL's 99 pages × 20) on 2026-09-16.
+  `byty` had no `SUBTYPE_SLUGS` entry, and the fallback read the kraj page's ONE-segment links
+  (okresy, části, obce) kept by a `byty-*` prefix — never a subtype — so the walk logged
+  `DESCENT no subtype axis`, the kraj stayed `ceiling`, and the structural gate (rule #3) held all
+  of byt/prodej un-nominated for 89 consecutive walks (09-16 11:51 → 10-13). By then production held
+  13,373 active ceskereality byt/prodej rows vs 9,771 on the portal (5,394 unseen 2+ d, 4,156 14+ d);
+  Health: ceskereality `stale_active` 4,829 FAIL, `index_completeness` 22.3% FAIL.
+- **Done:** `SUBTYPE_SLUGS` declares `byty` (12 slugs; prodej/praha 2,161 and pronajem/praha 1,229,
+  each = the slugs' sum, diff 0; `atypicke-byty` + `pokoj` are not `byty-*`) and `pozemky` (8 slugs;
+  prodej/stredocesky-kraj 1,976 = sum, four rows under the ceiling). An unmapped category now reads
+  the kraj page's TWO-segment `/{sale}/{cat}/{subtype}/{kraj}/` links
+  (`ceskereality_parser.extract_subtype_slugs`, replacing `extract_facet_slugs`); the children-sum
+  self-check and the `DESCENT no subtype axis` last resort are unchanged. Tests: the Praha descent,
+  the unmapped fallback, a real-page fixture (`portal_html/ceskereality_index_praha_byty.html`) and a
+  rail that byty / rodinne-domy / pozemky keep a declared map.
+- **Done (2026-10-13, the okres axis):** prodej/rodinne-domy `subtype=rodinne-domy` in
+  stredocesky-kraj stood at 1,922 of 1,980 (97 pages); past the ceiling it would have parked all
+  11,487 rows of prodej/rodinne-domy. The descent is now an ordered list of axes
+  (`ceskereality_main._DESCENT_AXES`: subtype, then okres): only a subtype child that is itself
+  `ceiling` re-walks per okres, the okres slug in the kraj's URL slot
+  (`/prodej/rodinne-domy/rodinne-domy/praha-vychod/` → "… v okrese Praha-východ"), grandchildren
+  self-verify against the child, keep `kraj` = the parent (one ledger row per kraj) and the empty-page
+  H1 proof checks the okres. `OKRES_SLUGS` declares the 76 RÚIAN okresy of 13 kraje (the page's
+  facet block lists ~10 of stredocesky's 12). Measured live the same day, 116 GETs, all 200, no
+  redirect, every H1 "v okrese …": each kraj's rodinne-domy child = its okres sum EXACTLY —
+  stredocesky 1,918, jihomoravsky 839, jihocesky 947, ustecky 714, plzensky 654, moravskoslezsky 559,
+  kralovehradecky 456, pardubicky 445, olomoucky 423, liberecky 396, vysocina 382, zlinsky 329,
+  karlovarsky 307 (8,369 in all); no slug needed correcting.
+- **Next:** (i) Praha's okres axis (owed, not urgent): `praha` has no `OKRES_SLUGS` entry because
+  praha-1..10 summed to 2,148 of prodej/byty 2,161 (13 short) — not a partition — and the largest
+  Praha subtype is byty-2-kk at 638 (32 pages). Find where the 13 live before mapping; until then an
+  over-ceiling Praha subtype logs `DESCENT no okres axis … owed=OKRES_SLUGS['praha']` and parks its
+  category exactly as byt/prodej did; (ii) a health
+  signal for "category has not reached the portal's end for N consecutive walks" — the WARNING sat
+  unread for 27 days — that also covers a MAPPED category's `DESCENT residue` (a new or renamed
+  subtype), which `index_completeness` cannot see: the children still collect ~99% of the total;
+  (iii) after deploy, confirm a walk logs the twelve praha subtype slices (`byty-*`, `atypicke-byty`,
+  `pokoj`) and a `VERIFY cm=byt ct=prodej` with candidates, and that no `subtype=pokoj` /
+  `atypicke-byty` slice reads `stop=barren` (a zero-count subtype page is accepted as empty only when
+  its H1 names the kraj — proven for stredocesky-kraj, never yet for a Praha subtype page). Expected
+  Health, not new incidents: `index_completeness` green at the first walk (W1); `stale_active` ~4.8k
+  → ~2.9k at W1 → ~80 (WARN, see (v)) about 2 days later — first gone verdicts across W1–W3, each flip
+  ≥ 24 h after its first verdict (`presence_candidates` skips rows completed in the last 24 h, so the
+  second verdict outlasts `GONE_DWELL`'s 12 h); ceskereality `delisting_latency` FAIL for ~7 days
+  after the flips (their `last_seen_at` is 2–4 weeks old; fail is p90 > 72 h) and `delisting_spike`
+  up to WARN while the ~3.6k surplus drains under `delist_flip_cap`; (iv) a self-repairing descent:
+  `SUBTYPE_SLUGS` hides the page-link fallback, so a stale map parks the category exactly as this
+  incident did — on a residue, read `extract_subtype_slugs` from the kraj page, walk the slugs the
+  map lacks (accepting the `praha-hlavni-mesto` kraj spelling too), then repeat the sum check (a
+  spurious link fails closed: it pushes the children's sum past the parent's); (v) 81 active
+  ceskereality rows with `category_type` NULL, unseen > 7 d, sit outside every nomination scope
+  (`db.presence_candidates` filters `category_type = %s`), so `stale_active` rests at WARN: a
+  one-off VERIFY-priority enqueue (precedent `scripts/renominate_false_gone_crawler_rows.py`) plus a
+  rule that nominates NULL-category rows per source.
+
+### ceskereality byt/prodej unnominated for 89 walks — the `walk_end_streak` alarm (2026-10-13, done)
+- **Found:** ceskereality byt/prodej did not reach the portal's end for 89 consecutive index walks
+  (2026-09-16 11:51 → 10-13): a kraj slice over the site's 99-page ceiling with no subtype axis held
+  rule #3's structural gate shut, nothing was nominated, and 13,373 active rows piled up against 9,771
+  on the portal. Every walk logged `VERIFY skipped` at WARNING and nobody read it; Health's
+  `index_completeness` failed but is a dashboard matview, not an alert producer; and
+  `verify_pipeline`'s `walk_coverage` averages collected vs declared per PORTAL (one category's 22%
+  read ~4.6%, under its 5% warn) and reports `categories_nominating` without letting it move the status.
+- **Done:** `verify_pipeline` `walk_end_streak` — per (source, category_main, category_type), over 14 d
+  of finished `scrape_runs` index rows, the walks in a row in which the category was walked and
+  `by_category.walk_reached_end` was false; a run that never started the category is skipped, not
+  counted, and a category its portal has not walked in its last 6 walks warns instead (starved, or
+  dropped from the config — capped at warn so a retired one cannot hold the bell red).
+  Warn ≥ 3 walks (~1 day at the real 6–9 h cron cadence for a category walked every run), fail ≥ 6;
+  each offender names its last reached end, or "at least N walks (not reached in 14 d)". A window
+  with no verdict is an unmeasured warn (value None), never ok. It also catches a mapped category's
+  `DESCENT residue` (the residue slice stays `ceiling`, so the walk reads `reached_end=false`), which
+  `index_completeness` cannot see. 6 h lane + in-app bell; not in `llm_health.yml`'s hourly `--only`
+  list.
+- **Next:** soak, then promote into the hourly `--only` list (the emailing lane); have
+  `portal_runner` mark a deliberately capped walk (`--max-pages` / `--limit` / bazos region) in each
+  `by_category` entry so the check skips it — today each such dispatch counts as a miss.
+
 ### Delisting hysteresis — portals blink (2026-10-09, shipped)
 - **Found:** a gone verdict flipped an ad on one 404; sreality takes ads down (index AND detail)
   for hours around its nightly expiry/renewal and brings them back under the same id — 35% of
