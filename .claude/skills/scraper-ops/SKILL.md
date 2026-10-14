@@ -386,10 +386,11 @@ Per-lane notes:
   non-advancing `nextPage`) cut short carries `truncated: …` in `error`; 1 req/5 s + ONE retry on the
   shared rate ledger; one in-process pass lock. Heartbeat `details.sold_comps.last` = `{ran, cells,
   records, new, failed, skipped, seconds}`; no store = `ran: false` + one warning.
-- **Text-extract lane** (field-capture W7, `description_extraction.run_pass`): the facts only an advert's text
-  states. CONSTANT 300 s, no flag/setting/env var (an unset flag hides a lane from every monitor); scope =
-  open-R7-gate `text` cells ∪ portals declaring `llm_text`. W4: a pass's readings become claims at once (lane
-  `location_readings_fast`, log `INTAKE readings fast ids=…`, off: `LOCATION_READINGS_FAST_ENABLED=0`).
+- **Text-extract lane** (field-capture W7, `description_extraction.run_pass`): facts only an advert's text states.
+  CONSTANT 300 s, no flag/setting/env var (an unset flag hides a lane); scope = open-R7-gate `text` cells ∪ portals
+  declaring `llm_text`. W4: then `claims_intake.mine_readings` mines that pass's readings (30 s, batch lane
+  `location_readings_fast`, log `INTAKE readings fast ids=…`, heartbeat `last.readings_fast`, off:
+  `LOCATION_READINGS_FAST_ENABLED=0`; the hourly claim run is the backstop).
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `last_failure_at`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rail = `text_extraction_lag`. Sizing, cache key, write gate: `llm-pipelines`.
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer
   `realtime_autodedup_interval_seconds` (seeded 0 = stopped; 60 running) is cadence AND brake, claim = engine rate × half a 1050 s deadline (a build's three quarters, E951), rate

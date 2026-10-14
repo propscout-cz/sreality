@@ -546,15 +546,19 @@ def test_1c_leaves_the_rows_the_operator_judged_correct_where_they_were():
 def test_1d_hanusova_binds_through_its_part_and_a_spelling_only_with_diacritics():
     """18625515 bound no street because `name_norm` is accent-free: Praha's Hanusova (Michle)
     and Hanušova (Kbely) share the key `hanusova` — the census's "1 row with several". The part
-    breaks the tie first; failing that, only a claim WITH diacritics names its twin by spelling
-    — bazos writes "Hanusova" for both — and never pooled across two street claims (review)."""
+    breaks the tie first; with no part bound, only a claim WITH diacritics names its twin by
+    spelling — bazos writes "Hanusova" for both — never pooled across two street claims, and
+    never against the part: "Hanušova" in Michle, where only Hanusova has doors, is no street
+    (review)."""
     hanusova = _w4(18625515, ("obec_name", "Praha"), ("cast_obce_name", "Michle"),
                    ("street_name", "Hanusova"), ("psc", "14000"), pin=(50.041266, 14.442902))
     assert (hanusova.ulice_kod, hanusova.cast_obce_kod, hanusova.granularity) == (
         447340, 490130, "street")
     praha = ("obec_name", "Praha")
     for claimed, code in (((("cast_obce_name", "Kbely"), ("street_name", "Hanusova")), 447358),
-                          ((("cast_obce_name", "Michle"), ("street_name", "Hanušova")), 447340),
+                          ((("cast_obce_name", "Michle"), ("street_name", "Hanušova")), None),
+                          ((("cast_obce_name", "Kbely"), ("street_name", "Hanušova")), 447358),
+                          ((("cast_obce_name", "Hloubětín"), ("street_name", "Hanušova")), None),
                           ((("street_name", "Hanušova"),), 447358),
                           ((("street_name", "Hanusova"),), None),
                           ((("street_name", "Hanusova"), ("street_name", "Liskova")), None),
@@ -588,6 +592,14 @@ def test_1f_a_shared_psc_yields_to_the_one_town_holding_the_street():
     towns = step_bind.constraining_towns(step_bind.collect_constraints(
         claims, normalize.normalize_all(claims)), mm.w4_mirror(), pin_is_precise=False)
     assert ([t.code for t in towns.units], towns.applied) == ([592005], ["psc", "street_in_town"])
+    asked: list[str] = []
+    mirror = mm.w4_mirror()
+    lookup = mirror.admin_units_by_name
+    mirror.admin_units_by_name = lambda key, **kw: asked.append(key) or lookup(key, **kw)
+    claims.append(mm.claim(3, "street_name", value_text="Neexistující"))
+    step_bind.constraining_towns(step_bind.collect_constraints(
+        claims, normalize.normalize_all(claims)), mirror, pin_is_precise=False)
+    assert "na splavku" in asked and "neexistujici" not in asked   # places: held lines only
     assert _w4(19120281, ("psc", "68601"), pin=pin).obec_kod == 550752
 
 
@@ -609,6 +621,8 @@ def test_1f_a_street_line_that_is_also_a_place_of_one_of_the_towns_settles_nothi
     resolution = _resolve(claims, mirror)
     assert (resolution.obec_kod, resolution.cast_obce_kod, resolution.ulice_kod) == (
         592005, 412600, None)
+    # The pin chose the town (undeclared, so imprecise): the part it names inherits that.
+    assert resolution.match_confidence == "low"
 
 
 def _from_reading(listing: int, payload, text: str, *page: tuple[str, str],

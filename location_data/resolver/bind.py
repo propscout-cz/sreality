@@ -508,25 +508,28 @@ def constraining_towns(
     by_psc = _dedupe_units([chain[0] for k in (registry.obec_codes_for_psc(constraints.psc)
                                                if constraints.psc else ())
                             if (chain := registry.admin_chain_by_code("obec", k))])
-    kods = {t.code for t in by_psc}
-    lines = [line for line in constraints.street_lines if len(kods) > 1
-             and not places_named(street_match_keys(line)[1], kods, registry)]
-    if lines:
+    if constraints.street_lines and len(by_psc) > 1:
         # 1f: a PSČ shared by five towns, and a street the advert names in exactly one of them
         # (19120281: 68601, "Na Splávku" in Uherské Hradiště). The pin is the post office's. A
-        # line that is also a PLACE of one of them ("Mařatice") settles nothing.
-        holding = [t for t in by_psc if _holds_street(t, lines, registry)]
+        # line that is also a PLACE of one of them ("Mařatice") settles nothing — asked only
+        # of a line some town holds.
+        kods = {t.code for t in by_psc}
+        holding = {t.code: t for line in constraints.street_lines
+                   if (held := [t for t in by_psc if _holds_street(t, line, registry)])
+                   and not places_named(street_match_keys(line)[1], kods, registry)
+                   for t in held}
         if len(holding) == 1:
-            return Towns(holding, ["psc", "street_in_town"], "R6", False, composite, {})
+            return Towns(list(holding.values()), ["psc", "street_in_town"], "R6", False,
+                         composite, {})
     towns, applied = narrow_towns(by_psc, constraints, registry=registry,
                                   pin_is_precise=pin_is_precise, applied=["psc"])
     return Towns(towns, applied, "R6", False, composite, {})
 
 
-def _holds_street(town: AdminUnit, lines: Sequence[str], registry: RegistryView) -> bool:
+def _holds_street(town: AdminUnit, line: str, registry: RegistryView) -> bool:
     """A street of the town reached on the EXACT tier — the tolerant fold settles no town."""
-    return any(found and tier == "exact"
-               for found, tier in (match_streets(line, (town.code,), registry) for line in lines))
+    found, tier = match_streets(line, (town.code,), registry)
+    return bool(found) and tier == "exact"
 
 
 # ------------------------------------------------------------------------- the ladder
@@ -602,9 +605,9 @@ def bind(
     # a composite line named (the rung and qualifier a CLAIMED část gets: a registry bind grades
     # by the unit it landed on, not by the string that pointed at it); since v5.7 the village a
     # town name climbed from (1a: "Hracholusky" is a část of Úlice) and the part a street line
-    # names (1c). The climbed part is published for ONE surviving town only and inherits how
-    # that town was chosen — the tie-break's qualifiers, the town claim's agreements, since it
-    # is one claim. A unit named by several sources is ONE candidate.
+    # names (1c). Both inherit how their town was chosen (a tie-break's low confidence); the
+    # climbed part is published for ONE surviving town only and counts the town claim's
+    # agreements, since it is one claim. A unit named by several sources is ONE candidate.
     said: list[_Part] = []
     if constraints.cast_obce_keys and constraining_obec_kods:
         for key in constraints.cast_obce_keys:
@@ -616,17 +619,17 @@ def bind(
         said.append(_Part(towns.composite.part, _ids(constraints, "obec_name"),
                           ("obec_constrained",)))
     found: list[_Part] = []
+    weak = tuple(q for q in towns.applied if q in LOW_CONFIDENCE_QUALIFIERS)
     if len(obec_units) == 1:
         town = obec_units[0]
         if climbed := climbed_part(town, towns.climbed.get(town.code, ()), registry):
             found.append(_Part(
                 climbed, _ids(constraints, "obec_name"),
-                ("obec_constrained", "climbed_from_town_name",
-                 *(q for q in towns.applied if q in LOW_CONFIDENCE_QUALIFIERS)),
+                ("obec_constrained", "climbed_from_town_name", *weak),
                 agreed=_admin_agreed("obec", towns.rung, tuple(towns.applied))))
     if line.named_part is not None:
         found.append(_Part(line.named_part, _ids(constraints, "street"),
-                           ("obec_constrained", "street_names_part")))
+                           ("obec_constrained", "street_names_part", *weak)))
     parts: list[AdminUnit] = []
     for named in _merge_parts(*_reconcile_parts(said, found)):
         parts.append(named.unit)
@@ -637,17 +640,19 @@ def bind(
     part = next(iter(cast_parts.values())) if len(cast_parts) == 1 else None
 
     # 1d: one register name, several streets. With ONE bound part, the street with a door in
-    # it; failing that, the one a claim WITH diacritics is spelled like (`composite`, rule 3).
+    # it; without one, the one a claim WITH diacritics is spelled like (`composite`, rule 3).
     # 18625515 ("Hanusova", part Michle) is the first; an accent-free claim is never the second.
+    # The two contradicting ("Hanušova" in Michle, where only Hanusova has doors), or a bound
+    # part holding no candidate, is a tie neither may break: no street.
     relaxed: tuple[str, ...] = ()
     if line.reason == "ambiguous_streets":
         inside = [c for c in line.candidates if part is not None and c.street is not None
                   and part.unit_id in getattr(registry.street_point(c.street), "part_unit_ids", ())]
         spelled = [c for c in line.candidates if c.spelled]
-        if len(inside) == 1:
+        if len(inside) == 1 and (len(spelled) != 1 or spelled[0].street == inside[0].street):
             line = replace(inside[0], named_part=line.named_part)
             relaxed = ("street_part_tiebreak",)
-        elif len(spelled) == 1:
+        elif len(spelled) == 1 and len(inside) != 1 and (part is None or inside):
             line = replace(spelled[0], named_part=line.named_part)
 
     # ---- R1 / R2: a bound street reaches R1 when there is a house number and R2 otherwise.

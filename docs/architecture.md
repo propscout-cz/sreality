@@ -3716,8 +3716,8 @@ portal's payload or its own page, and every other stamp is class E outright.
   place, IS the one část it names (`street_names_part`), and against a claimed part naming another, no
   part at all (a claimed part of another level stands). It fails CLOSED on two distinct street codes —
   except (v5.7) among accent-folded twins (14 keys in 6 obce: Hanusova/Hanušova) the one with a door in
-  the listing's one bound část (`street_part_tiebreak`), else the one a claim WITH diacritics is spelled
-  like, per claim, never pooled — and a bound street
+  the listing's one bound část (`street_part_tiebreak`), with no part bound the one a claim WITH
+  diacritics is spelled like (per claim; the two contradicting is no street) — and a bound street
   carrying a house number reaches R1. Portal abbreviations fold on both sides (ČSA, nám., tř., nábř.,
   gen., kpt., plk., sídl.: 0 new collisions in any obec). R3 (trigram) runs only when nothing bound
   exactly and never undoes an exact tie or names a part. W18 split bazos' whole headline on separators and kept R3 off
