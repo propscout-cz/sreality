@@ -295,8 +295,8 @@ def test_the_rent_map_draws_the_latest_revision_per_priced_territory(cur: Any) -
     cur.execute("SELECT z, x, y, mvt FROM map_overlay_tiles WHERE section = 'rent_map'")
     rendered = {(z, x, y): bytes(mvt) for z, x, y, mvt in cur.fetchall()}
     assert len(rendered) == tiles
-    inside = {(z, *_tile(FLORENC_LON + 0.005, FLORENC_LAT + 0.005, z)) for z in range(5, 13)}
-    assert inside <= set(rendered) and {z for z, _, _ in rendered} == set(range(5, 13))
+    inside = {(z, *_tile(FLORENC_LON + 0.005, FLORENC_LAT + 0.005, z)) for z in range(3, 13)}
+    assert inside <= set(rendered) and {z for z, _, _ in rendered} == set(range(3, 13))
     ids = {source_id: fid for fid, source_id, _ in features}
     for key in inside:
         drawn = {fid: attrs for fid, _, attrs in _layers(rendered[key])["rent_map"]}
