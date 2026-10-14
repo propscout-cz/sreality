@@ -27,3 +27,21 @@ of the analytical and UI phases; runs alongside them.
   `.github/workflows/ingest_boundaries.yml`. Bridge table populated
   by the ingest workflow.
 
+
+### map-2: reference overlays — metro, flood zones, kraje (building 2026-10-14)
+- **One tile path** (spec + rulings: `docs/design/map-overlays.md`; draft PR #1808): migration 600
+  (`map_overlay_sections` / `_layers` / `_features` in 3857 / pre-rendered `_tiles` + the render
+  function), `scripts/ingest_map_overlays.py` (ONE Python registry; ArcGIS REST + SQL readers;
+  datum control point, completeness guards; quarterly `ingest_map_overlays.yml`), two API routes
+  (`GET /map-overlays`, `GET /map-overlays/{section}/{z}/{x}/{y}.mvt`), one SPA hook + chip
+  control on Browse/Explore, the listing-detail header map and the comparables map; selection
+  remembered per browser, Browse URL `layers=` wins.
+- **Sources:** IPR Praha Metropolitní plán (A/B/C existing, Metro D proposals, territorial
+  reserves incl. the tangential corridor the press calls metro E, named planned stations) and the
+  VÚV TGM / MŽP national flood-zone register (Q5/Q20/Q100/Q500 + active zone, fetched in native
+  S-JTSK — the server's WGS84 output is ~10 m off). Kraje move off `rent_map_kraje_public`.
+- **Next (cleanup PR):** the MF rent choropleth onto the same path (`rent_map` section with VK
+  variants; `fetch_rent_map.yml` re-renders), then migration 601 drops `rent_map_choropleth_public`,
+  `rent_map_kraje_public` and the `rent_map_choropleth` matview. Named follow-ups: curated-city
+  polygons and price-growth obec shapes stay on GeoJSON (dynamic values); the boundary ingest could
+  move onto the same ArcGIS reader (ČÚZK RÚIAN REST) and drop the `geo` extra.

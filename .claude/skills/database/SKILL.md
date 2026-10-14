@@ -465,7 +465,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `ll.geom::geography` (index `listing_location_geog_gist`, migration 507) or it silently
   measures degrees. The place STRING every surface renders is `location_display_label(...)`
   (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`.
-  `admin_boundaries` survives for price stats / the rent map / city proximity only — it is no
+  `admin_boundaries` survives for price stats / the rent map / city proximity / the kraje overlay only — it is no
   longer a location path. `scraper/street.py` still extracts a street from a portal page; that
   extraction is now a CLAIM the resolver arbitrates, not a column — and since W18
   (resolver v5.2) `ll.street_name` is **the REGISTER's or NULL**: a claim text that does not bind
@@ -473,6 +473,9 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `ulice_kod IS NOT NULL` — but only on rows re-resolved at v5.2 or later, i.e. after the
   `location_resolve.yml mode=full-resolve` sweep the bump triggers; check `resolver_version`
   before relying on it.
+- **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
+  are rebuilt by `scripts/ingest_map_overlays.py` (`ingest_map_overlays.yml`; `--sections kraje` after a boundaries ingest)
+  and read only through the API `/map-overlays*`; to change a layer edit the Python registry and re-run, never the rows.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.
