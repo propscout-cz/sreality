@@ -82,10 +82,11 @@ maxima, remax, mmreality, ceskereality).
   - **Photo mark** (`src/index_photo_mark.ts`), so the state reads from
     across the grid. In the pipeline: the photo toned in the stage colour (the
     operator's, copper when none) with the stage badge and name over it;
-    hovering the card lifts the tone to show the photo. In a collection: a
-    copper rim round the photo and a copper label in its top-right corner
-    naming the collection (`+N` for more) — the photo keeps its colours, so a
-    saved card never reads as a stage. Tagged: the tag chips under that label
+    hovering the card lifts the tone to show the photo. In a collection: the
+    same tone in copper, a bookmark and the collection's name (`+N` for more)
+    where a stage sets its badge — a property already sorted must not shine
+    like a new one; in the pipeline too, the stage tones the photo and a copper
+    label in the top-right corner names the collection. Tagged: the tag chips under that label
     (up to four, then `+N`; names and colours from `GET /tags`, read once a
     card on the page carries a tag). A property can carry all three. The photo is
     found by geometry (the largest image the card shows, cut to whatever clips
@@ -101,6 +102,12 @@ maxima, remax, mmreality, ceskereality).
     so a photo carousel that repeats the link on every slide gets one set of
     controls, not one per slide. The controls live in a closed shadow root per
     card; the two menus float in one page-level shadow host.
+- **Non-listing cards** (`src/index_promo.ts`): a card-sized child of the
+  results grid that holds no listing link — a paid ad, a project promo — is
+  washed whitish (opacity), lifted on hover. Found by structure: each listing
+  card's item is its highest ancestor holding no other listing, and the
+  parent of three or more items is the grid; smaller children (sort bars,
+  pagination) are left alone.
 - **The corner dock** (`src/index_dock.ts`) sits **bottom-left** on every index
   page with listing cards (the panel owns the bottom-right): a **Skrýt skryté**
   switch plus how many hidden properties this page holds. On (the default), a
@@ -452,9 +459,11 @@ Odhlásit" line then appears at the top of the panel on every listing; click
    (tick the collections the property belongs in) and the **eye** (hide the
    property / show it again). A property in the pipeline also has its photo
    tinted in the stage's colour with the stage number over it (point at the
-   card to see the photo through); one saved to a collection gets a copper
-   frame and a label naming the collection; its tags show as coloured chips in
-   the photo's top-right corner.
+   card to see the photo through); one saved to a collection gets the same
+   tint in copper with a bookmark and the collection's name; its tags show as
+   coloured chips in the photo's top-right corner. Cards in the results that
+   are not listings — paid ads, developer-project promos — are washed white
+   (point at one to see it).
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
