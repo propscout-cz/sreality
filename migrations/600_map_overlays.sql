@@ -217,6 +217,14 @@ comment on function public.map_overlay_render_section(text) is
 revoke execute on function public.map_overlay_render_section(text) from public, anon, authenticated;
 grant execute on function public.map_overlay_render_section(text) to service_role;
 
+-- Corollary E (migrations 437/440/441): the tiles are a precomputed artifact. The ingest
+-- stamps this row (scraper.db.stamp_derived_artifact) after a clean run, so the Health
+-- panel can tell a dead quarterly job from a quiet one. 100 days = one quarter + grace.
+insert into public.derived_artifacts (name, producer, host, cadence, staleness_budget, is_serving)
+values ('map_overlay_tiles', 'scripts/ingest_map_overlays.py', 'github-actions',
+        '0 4 2 1,4,7,10 *', interval '100 days', true)
+on conflict (name) do nothing;
+
 notify pgrst, 'reload schema';
 
 reset lock_timeout;

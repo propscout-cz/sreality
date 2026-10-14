@@ -537,6 +537,23 @@ def refresh_matview(
         return int(cur.fetchone()[0])
 
 
+STAMP_DERIVED_ARTIFACT_SQL = "select public.stamp_derived_artifact(%s, %s, %s)"
+
+
+def stamp_derived_artifact(
+    conn: psycopg.Connection,
+    name: str,
+    *,
+    rows: int | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    """Stamp a registered NON-matview artifact (migration 441) from Python — the one call
+    shape the stamping rail reads (`stamp_derived_artifact(conn, "<name>", …)`), so the
+    name is checked against `derived_artifacts` offline before it can stamp nothing."""
+    with conn.cursor() as cur:
+        cur.execute(STAMP_DERIVED_ARTIFACT_SQL, (name, rows, duration_ms))
+
+
 # The Gate-2 flip-writer scaffold (wave-5 item 7): OFF by default, so the listing
 # writer's first-sight nextval draw (scraper/listing_write.py) stays on until an
 # operator explicitly opts in.

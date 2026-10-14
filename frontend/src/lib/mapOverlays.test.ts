@@ -215,7 +215,11 @@ describe('style layers from the registry', () => {
       'A', '#00A562', 'D', '#1F77D0', 'reserve', '#8C9196', 'station', '#1F77D0',
       '#8c9196',
     ];
-    const dashed = ['in', ['to-string', ['get', 'class']], ['literal', ['D', 'reserve']]];
+    const dashed = [
+      'any',
+      ['in', ['to-string', ['get', 'class']], ['literal', ['D', 'reserve']]],
+      ['==', ['coalesce', ['get', 'dash'], false], true],
+    ];
     const isLine = ['==', ['geometry-type'], 'LineString'];
     expect(specOf(styleLayers, 'ov-metro-line')?.paint).toEqual({ 'line-color': colour, 'line-width': 2.2 });
     expect(specOf(styleLayers, 'ov-metro-line')?.filter).toEqual(['all', isLine, ['!', dashed]]);
@@ -225,10 +229,14 @@ describe('style layers from the registry', () => {
     expect(specOf(styleLayers, 'ov-metro-label')?.layout).toMatchObject({ 'text-field': ['get', 'label'] });
   });
 
-  it('draws areas translucent and un-antialiased, with no dashed layer when no class is dashed', () => {
+  it('draws areas translucent and un-antialiased; a feature-level dash flag still gets the dashed line layer', () => {
     const q5 = FLOOD.layers[0];
     const styleLayers = overlayStyleLayers(FLOOD, q5, false);
-    expect(styleLayers.map((l) => l.spec.id)).not.toContain('ov-flood_q5-dash');
+    expect(specOf(styleLayers, 'ov-flood_q5-dash')?.filter).toEqual([
+      'all',
+      ['==', ['geometry-type'], 'LineString'],
+      ['any', ['in', ['to-string', ['get', 'class']], ['literal', []]], ['==', ['coalesce', ['get', 'dash'], false], true]],
+    ]);
     expect(specOf(styleLayers, 'ov-flood_q5-fill')).toMatchObject({
       filter: ['==', ['geometry-type'], 'Polygon'],
       layout: { visibility: 'none' },

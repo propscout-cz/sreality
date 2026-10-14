@@ -21,6 +21,7 @@ import pytest
 import requests
 
 from scripts import ingest_map_overlays as mod
+from scraper import db as scraper_db
 from tests.sql_corpus import discover
 from tests.test_sql_placeholders import _invalid_placeholder
 
@@ -65,12 +66,12 @@ def test_layers_their_sort_and_how_they_are_stored() -> None:
 
 def test_the_metro_legend() -> None:
     assert list(_layer("metro").legend) == [
-        {"class": "A", "label": "Metro A", "color": "#00A562"},
-        {"class": "B", "label": "Metro B", "color": "#FCC400"},
-        {"class": "C", "label": "Metro C", "color": "#CF003D"},
+        {"class": "A", "label": "Metro A", "color": "#00A562", "geom": "line"},
+        {"class": "B", "label": "Metro B", "color": "#FCC400", "geom": "line"},
+        {"class": "C", "label": "Metro C", "color": "#CF003D", "geom": "line"},
         {"class": "D", "label": "Metro D – návrh", "color": "#1F77D0", "dash": True},
         {"class": "reserve", "label": "Územní rezerva", "color": "#8C9196", "dash": True},
-        {"class": "station", "label": "Plánovaná stanice", "color": "#1F77D0"},
+        {"class": "station", "label": "Plánovaná stanice", "color": "#1F77D0", "geom": "point"},
     ]
 
 
@@ -82,7 +83,7 @@ def test_the_flood_and_kraje_legends() -> None:
         [{"class": "q100", "label": "Q100 – stoletá voda", "color": "#7FB3E6"}],
         [{"class": "q500", "label": "Q500 – mapováno jen místy", "color": "#C6DCF2"}],
         [{"class": "az", "label": "Aktivní zóna", "color": "#B3261E", "dash": True}],
-        [{"class": "kraj", "label": "Hranice krajů", "color": "rgba(40,40,70,0.55)"}],
+        [{"class": "kraj", "label": "Hranice krajů", "color": "rgba(40,40,70,0.55)", "geom": "line"}],
     ]
 
 
@@ -499,7 +500,8 @@ def test_the_kraje_source_draws_each_kraj_boundary_in_3857() -> None:
 
 _TAGS = {
     mod.DATUM_CHECK_SQL: "datum", mod.PREVIOUS_COUNTS_SQL: "previous",
-    mod.STATEMENT_TIMEOUT_SQL: "timeout", mod.UPSERT_SECTION_SQL: "section",
+    mod.STATEMENT_TIMEOUT_SQL: "timeout", mod.LOCK_SQL: "lock",
+    scraper_db.STAMP_DERIVED_ARTIFACT_SQL: "stamp", mod.UPSERT_SECTION_SQL: "section",
     mod.PRUNE_LAYERS_SQL: "prune", mod.UPSERT_LAYER_SQL: "layer",
     mod.DELETE_FEATURES_SQL: "delete", mod.INSERT_FEATURE_SQL: "insert",
     mod.DISSOLVE_SQL: "dissolve", mod.RENDER_SQL: "render", mod.SECTION_STATS_SQL: "stats",
@@ -588,7 +590,7 @@ def test_a_section_is_fetched_first_then_written_in_one_transaction() -> None:
     writes = conn.log[conn.log.index("BEGIN"):]
     assert conn.log[:2] == ["datum", "previous"]
     assert "GET" not in writes
-    assert writes == ["BEGIN", "timeout", "section", "prune", "layer", "delete", "insert",
+    assert writes == ["BEGIN", "timeout", "lock", "section", "prune", "layer", "delete", "insert",
                       "dissolve", "render", "stats", "COMMIT"]
     assert conn.params["section"][0]["revised"] == date(2025, 8, 31)
     assert conn.params["prune"] == [("flood", ["flood_q5"])]
@@ -695,10 +697,11 @@ def test_an_unknown_section_is_a_usage_error() -> None:
 
 
 def _fake_run(seen: list[str], fail: dict[str, Exception]) -> Any:
-    def run(conn: Any, http: Any, arcgis: Any, key: str, section: Any, **kwargs: Any) -> None:
+    def run(conn: Any, http: Any, arcgis: Any, key: str, section: Any, **kwargs: Any) -> int:
         seen.append(key)
         if key in fail:
             raise fail[key]
+        return 7
     return run
 
 
@@ -718,9 +721,25 @@ def test_a_datum_refusal_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen == ["metro"]
 
 
-def test_a_clean_run_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_clean_run_exits_zero_and_stamps_the_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
+    stamps: list[tuple[Any, ...]] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))
     monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "stamp_derived_artifact",
+                        lambda conn, name, **kw: stamps.append((name, kw["rows"])))
     assert mod.main(["--sections", "kraje"]) == 0
     assert seen == ["kraje"]
+    assert stamps == [("map_overlay_tiles", 7)]
+
+
+def test_a_dry_run_and_a_failed_run_stamp_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    stamps: list[str] = []
+    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "stamp_derived_artifact",
+                        lambda conn, name, **kw: stamps.append(name))
+    monkeypatch.setattr(mod, "run_section", _fake_run([], {}))
+    assert mod.main(["--sections", "kraje", "--dry-run"]) == 0
+    monkeypatch.setattr(mod, "run_section", _fake_run([], {"kraje": mod.Refused("short page")}))
+    assert mod.main(["--sections", "kraje"]) == 1
+    assert stamps == []

@@ -314,3 +314,35 @@ refresh call in `api/rent_map.py`.
 4. Railway commit status per service; read-only browser check of Browse with `?layers=metro`.
 5. Cleanup PR: build, ingest `rent_map` from the branch (the workflow now exists on main), merge,
    then apply 601.
+
+## Build record (2026-10-14) — where the build deviates from the text above, and why
+
+- **Ingest:** the fetch runs BEFORE the write transaction (a multi-minute HTTP fetch must not hold an
+  open transaction on the pooler); the datum check still runs first and a refusal writes nothing.
+  `statement_timeout` is `SET LOCAL` inside the write transaction (a session SET would leak through
+  the transaction-mode pooler). A `Layer` has `readers` (a tuple — metro is fed by three services) and
+  a `store` kind (`plain` | `dissolve` | `outline`); flood bands are dissolved per LAYER after insert,
+  each piece named with the distinct watercourses within 0.5 m ("Berounka, Vltava"); `ST_Force2D` and
+  `ST_CollectionExtract(…, 3)` precede the union (the source carries Z/M and make-valid can yield
+  collections). Extra refusals: an empty layer on first run, a class outside the layer's legend, a
+  non-flat prop, a proposal without a line letter. Layers removed from the registry are deleted for
+  the section being ingested. An unreadable revision date degrades to NULL with a warning. The
+  per-section write takes `pg_advisory_xact_lock('map_overlays:<section>')` so the boundaries
+  workflow's kraje step and the quarterly run cannot interleave. Legend entries carry an optional
+  `geom` (`line` | `point`) that only shapes the chip swatch. The tiles are registered as the derived
+  artifact `map_overlay_tiles` (migration 600 seeds the row; the ingest stamps it through
+  `scraper.db.stamp_derived_artifact` after a clean non-dry run). The workflow docs file is
+  `frontend/public/workflow-docs.json`.
+- **API:** 204 answers carry the same immutable `Cache-Control` as the bytes (the URL is versioned,
+  and most flood tiles are empty); z/x/y must be 1–9 ASCII digits (else 400 `bad_tile`); order of
+  checks 400 → 404 → 204; a registered but never-fetched section answers 204 on tiles.
+- **SPA:** the overlay code is two modules — `lib/mapOverlays.ts` (registry types, fetch, grammar,
+  remembered selection; eager) and `lib/mapOverlayDraw.ts` (protocol, style layers, hook, popup;
+  only the lazy map chunks import it) — to stay inside the first-visit bundle budget;
+  `registerOverlayProtocol(maplibregl.addProtocol)` is called from `basemap.ts`. Draw order is global
+  across sections: areas, then lines, then points, then labels, reverse sort within each band (the
+  flood active-zone line sits above the bands). A line is dashed by its legend class OR its own `dash`
+  prop (the metro B extension); the dashed line layer always exists. `escapeHtml.ts` is shared by
+  both popup builders; `.overlay-popup` in `globals.css`; compact chips sit top-left on the two small
+  maps; a toast reports a failed registry read while layers are selected; `kraje` stays in
+  `OVERLAY_URL_KEYS` so an old link keeps its borders through filter changes.

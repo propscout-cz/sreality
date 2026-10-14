@@ -28,7 +28,7 @@ import requests
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from scraper.db import connect
+from scraper.db import connect, stamp_derived_artifact
 
 LOG = logging.getLogger("ingest_map_overlays")
 
@@ -66,6 +66,7 @@ select st_distance(
 PREVIOUS_COUNTS_SQL = "select key, feature_count from map_overlay_layers where section = %s"
 
 STATEMENT_TIMEOUT_SQL = "set local statement_timeout = '30min'"
+LOCK_SQL = "select pg_advisory_xact_lock(hashtextextended(%s, 0))"
 
 UPSERT_SECTION_SQL = """
 insert into map_overlay_sections
@@ -496,8 +497,11 @@ def sql_revised_at(query: str) -> RevisedAt:
     return read
 
 
-def _entry(cls: str, label: str, color: str, *, dash: bool = False) -> dict[str, Any]:
-    return {"class": cls, "label": label, "color": color, **({"dash": True} if dash else {})}
+def _entry(cls: str, label: str, color: str, *, dash: bool = False,
+           geom: str | None = None) -> dict[str, Any]:
+    """One legend class; `geom` ('fill' | 'line' | 'point') only shapes the chip's swatch."""
+    return {"class": cls, "label": label, "color": color,
+            **({"dash": True} if dash else {}), **({"geom": geom} if geom else {})}
 
 
 def _ipr(service: str, where: str, geometry_type: str, props: Props,
@@ -525,12 +529,12 @@ SOURCES: dict[str, Section] = {
             Layer(
                 "metro", "Metro", 1,
                 legend=(
-                    _entry("A", "Metro A", "#00A562"),
-                    _entry("B", "Metro B", "#FCC400"),
-                    _entry("C", "Metro C", "#CF003D"),
+                    _entry("A", "Metro A", "#00A562", geom="line"),
+                    _entry("B", "Metro B", "#FCC400", geom="line"),
+                    _entry("C", "Metro C", "#CF003D", geom="line"),
                     _entry("D", "Metro D – návrh", "#1F77D0", dash=True),
                     _entry("reserve", "Územní rezerva", "#8C9196", dash=True),
-                    _entry("station", "Plánovaná stanice", "#1F77D0"),
+                    _entry("station", "Plánovaná stanice", "#1F77D0", geom="point"),
                 ),
                 readers=(
                     _ipr("MPP_CUR_MPP_STAV_600_DI_TRASY_L", "kapitola=621", POLYLINE,
@@ -572,7 +576,7 @@ SOURCES: dict[str, Section] = {
         attribution="© ČÚZK (RÚIAN)", licence="CC BY 4.0", source_url=RUIAN_ATOM, note=None,
         revised_at=sql_revised_at(KRAJE_REVISED_SQL),
         layers=(
-            Layer("kraje", "Kraje", 1, (_entry("kraj", "Hranice krajů", "rgba(40,40,70,0.55)"),),
+            Layer("kraje", "Kraje", 1, (_entry("kraj", "Hranice krajů", "rgba(40,40,70,0.55)", geom="line"),),
                   (SqlSource(KRAJE_SQL),)),
         ),
     ),
@@ -636,6 +640,7 @@ def write_section(
     """Replace the section in ONE transaction; returns (rows, tiles, max bytes, avg bytes)."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(STATEMENT_TIMEOUT_SQL)
+        cur.execute(LOCK_SQL, (f"map_overlays:{key}",))
         cur.execute(UPSERT_SECTION_SQL, {
             "key": key, "label": section.label, "sort": section.sort,
             "minzoom": section.minzoom, "maxzoom": section.maxzoom,
@@ -675,7 +680,8 @@ def run_section(
     *,
     dry_run: bool,
     accept_shrink: bool,
-) -> None:
+) -> int:
+    """Fetch, check and (unless dry-run) replace one section; returns the tiles stored."""
     started = time.monotonic()
     datum = check_datum(conn)
     ctx = Context(http, arcgis, conn)
@@ -693,12 +699,13 @@ def run_section(
     if dry_run:
         LOG.info("DRY-RUN section=%s features=%d revised=%s datum=%.2fm seconds=%.1f "
                  "(nothing written)", key, total, revised, datum, time.monotonic() - started)
-        return
+        return 0
     rows, tiles, max_bytes, avg_bytes = write_section(conn, key, section, layers, revised)
     LOG.info("SECTION key=%s features=%d rows=%d tiles=%d max_tile_bytes=%d "
              "avg_tile_bytes=%d revised=%s datum=%.2fm seconds=%.1f",
              key, total, rows, tiles, max_bytes, avg_bytes, revised, datum,
              time.monotonic() - started)
+    return tiles
 
 
 def _revised_at(key: str, section: Section, ctx: Context) -> date | None:
@@ -741,11 +748,13 @@ def main(argv: list[str] | None = None) -> int:
     http = Http()
     arcgis = ArcGis(http)
     failed: list[str] = []
+    tiles = 0
+    started = time.monotonic()
     with connect() as conn:
         for key in keys:
             try:
-                run_section(conn, http, arcgis, key, SOURCES[key],
-                            dry_run=args.dry_run, accept_shrink=args.accept_shrink)
+                tiles += run_section(conn, http, arcgis, key, SOURCES[key],
+                                     dry_run=args.dry_run, accept_shrink=args.accept_shrink)
             except DatumRefused as exc:
                 LOG.error("REFUSED datum control point: %s", exc)
                 return 1
@@ -756,10 +765,13 @@ def main(argv: list[str] | None = None) -> int:
                 # Sections are independent: one publisher's outage must not block the others.
                 LOG.exception("FAILED section=%s", key)
                 failed.append(key)
-    if failed:
-        LOG.error("RUN done failed=%s", ",".join(failed))
-        return 1
-    LOG.info("RUN done sections=%s", ",".join(keys))
+        if failed:
+            LOG.error("RUN done failed=%s", ",".join(failed))
+            return 1
+        if not args.dry_run:
+            stamp_derived_artifact(conn, "map_overlay_tiles", rows=tiles,
+                                   duration_ms=int((time.monotonic() - started) * 1000))
+    LOG.info("RUN done sections=%s tiles=%d", ",".join(keys), tiles)
     return 0
 
 

@@ -168,8 +168,14 @@ export function overlayStyleLayers(
   const visibility = visible ? 'visible' : 'none';
   const color = classColor(layer.legend);
   const dashed = [...new Set(layer.legend.filter((e) => e.dash).map((e) => String(e.class)))];
-  const isDashed: Expression = ['in', CLASS, ['literal', dashed]];
-  const lineFilter: FilterSpecification = dashed.length ? ['all', IS_LINE, ['!', isDashed]] : IS_LINE;
+  /* A line is dashed by its class (the legend) OR by its own `dash` flag — the metro B
+   * extension is class B (solid in the legend) and a proposal (dashed), per feature. */
+  const isDashed: Expression = [
+    'any',
+    ['in', CLASS, ['literal', dashed]],
+    ['==', ['coalesce', ['get', 'dash'], false], true],
+  ];
+  const lineFilter: FilterSpecification = ['all', IS_LINE, ['!', isDashed]];
   const out: OverlayStyleLayer[] = [
     {
       tier: 0,
@@ -198,23 +204,21 @@ export function overlayStyleLayers(
       },
     },
   ];
-  if (dashed.length) {
-    out.push({
-      tier: 1,
-      spec: {
-        ...src,
-        id: `ov-${layer.key}-dash`,
-        type: 'line',
-        filter: ['all', IS_LINE, isDashed],
-        layout: { visibility, 'line-join': 'round' },
-        paint: {
-          'line-color': color,
-          'line-width': OVERLAY_LINE_WIDTH,
-          'line-dasharray': OVERLAY_DASH,
-        },
+  out.push({
+    tier: 1,
+    spec: {
+      ...src,
+      id: `ov-${layer.key}-dash`,
+      type: 'line',
+      filter: ['all', IS_LINE, isDashed],
+      layout: { visibility, 'line-join': 'round' },
+      paint: {
+        'line-color': color,
+        'line-width': OVERLAY_LINE_WIDTH,
+        'line-dasharray': OVERLAY_DASH,
       },
-    });
-  }
+    },
+  });
   out.push(
     {
       tier: 2,
