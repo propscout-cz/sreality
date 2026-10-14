@@ -947,7 +947,8 @@ def _price_sequential_path(
         return False
     if lenient and gap is not None:
         # E955: in the gate and the cluster, two postings never on sale together that state one
-        # area, one disposition and one storey are one unit at two moments — the standing ruling
+        # area, and no two dispositions or storeys (a side silent on either is not read against
+        # it), are one unit at two moments — the standing ruling
         # that a re-list is a duplicate, and D43's line that a price of one moment says nothing
         # about another. The photo or body identity below stays PROMOTION's alone: a re-list
         # rewrites its text and re-shoots its photographs (Liberecká 3 000 m² at 27,750,000 then
