@@ -41,6 +41,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from location_data.resolver.normalize import (
+    case_fold,
     house_number,
     normalize_match_key,
     split_street_and_number,
@@ -225,18 +226,44 @@ def _tokens(value: str) -> list[str]:
 #     worth 215 titles that bind only with the generic word kept.
 #  2. NOT A PLACE. A claim naming the anchoring obec, or a část obce / MOMC inside it, is
 #     never a street candidate — 76 register streets across 20 obce are spelled exactly like a
-#     část obce of their own town.
+#     část obce of their own town. Since v5.7 a line naming exactly one part of the town IS
+#     that part (`named_part`): "Nový Svět" in Harrachov is the village whose č.p. 701 it is.
+#
+# Two more since v5.7, each measured on the register (2026-10-14):
+#
+#  3. SPELLED. `name_norm` is accent-free, so 14 keys in 6 obce reach two streets each (9 in
+#     Praha: Hanusova in Michle, Hanušova in Kbely); all 14 pairs are spelled differently, so a
+#     claim spelled letter for letter like one of them names that one.
+#  4. ABBREVIATED. `_ABBREVIATIONS` folds a portal's short form onto the register's on BOTH
+#     sides: 1,001 register streets change key and no two streets of one obec share a key
+#     that did not share one before (per entry: csa 19, ceskoslovenske armady 45, nam 597, tr
+#     60, nabr 27, gen 85, kpt 126, plk 25, sidl 30 streets — 0 new collisions each).
+_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in (
+    ("ceskoslovenske armady", "cs armady"), ("csa", "cs armady"), ("nam", "namesti"),
+    ("tr", "trida"), ("nabr", "nabrezi"), ("gen", "generala"), ("kpt", "kapitana"),
+    ("plk", "plukovnika"), ("sidl", "sidliste")))
+_PART_OF_TOWN_LEVELS = ("cast_obce", "momc")
+
+
+def fold_abbreviations(key: str) -> str:
+    for pattern, full in _ABBREVIATIONS:
+        key = pattern.sub(full, key)
+    return key
 
 
 @dataclass(frozen=True, slots=True)
 class StreetBind:
-    """What the street claims name inside the anchoring obec. `reason` is the diagnostic."""
+    """What the street claims name inside the anchoring obec. `reason` is the diagnostic;
+    `candidates` are the streets an `ambiguous_streets` line could mean, each bound as if alone
+    (BIND's part tie-break picks among them), and `named_part` the one part a line names."""
 
     street: Street | None = None
     cislo_domovni: int | None = None
     typ_so: str | None = None
     cislo_orientacni: int | None = None
     reason: str = "no_match"
+    candidates: tuple[StreetBind, ...] = ()
+    named_part: AdminUnit | None = None
 
     @property
     def bound(self) -> bool:
@@ -264,10 +291,14 @@ def street_match_keys(value: str) -> tuple[frozenset[str], frozenset[str]]:
     """
     verbatim, _ = split_street_and_number((value or "").strip())
     unwrapped, _ = split_street_and_number(strip_street_generic(value))
-    exact = {normalize_match_key(verbatim), normalize_match_key(unwrapped)}
+    exact = {_key(verbatim), _key(unwrapped)}
     without_type, _ = split_street_type(unwrapped or verbatim)
-    every = exact | {normalize_match_key(without_type)}
+    every = exact | {_key(without_type)}
     return (frozenset(k for k in exact if k), frozenset(k for k in every if k))
+
+
+def _key(value: str) -> str:
+    return fold_abbreviations(normalize_match_key(value))
 
 
 def register_street_keys(street: Street) -> frozenset[str]:
@@ -276,7 +307,7 @@ def register_street_keys(street: Street) -> frozenset[str]:
     everything else — so the fold is made symmetric HERE, in the resolver, rather than by
     re-normalising 83,451 rows in the loader for a question only the matcher asks."""
     stripped, _ = split_street_type(street.name)
-    return frozenset(k for k in {street.name_norm, normalize_match_key(stripped)} if k)
+    return frozenset(k for k in {fold_abbreviations(street.name_norm), _key(stripped)} if k)
 
 
 def build_street_index(streets: Sequence[Street]) -> dict[str, list[Street]]:
@@ -323,7 +354,7 @@ def match_streets(
         index = street_index(registry, obec_kod)
         for key in keys:
             for street in index.get(key, ()):
-                if street.name_norm in exact_keys:
+                if fold_abbreviations(street.name_norm) in exact_keys:
                     exact.setdefault(street.code, street)
                 else:
                     tolerant.setdefault(street.code, street)
@@ -333,15 +364,19 @@ def match_streets(
 
 
 def resolve_street(
-    lines: Sequence[str], obec_kods: Sequence[int], registry: RegistryView
+    lines: Sequence[str], obec_kods: Sequence[int], registry: RegistryView,
+    *, place_lines: Sequence[str] = (),
 ) -> StreetBind:
     """-> the ONE street the claims name inside the constraining obec, or nothing.
 
     Distinct across every claim, because two streets are two answers and neither is the
     listing's. Two SPELLINGS of one register row are one answer, which is why the set is keyed
-    on the street's code.
+    on the street's code. `place_lines` are street claims S1 refused as a place name: never a
+    street, asked only which part of the town they name.
     """
     tiers: dict[str, dict[int, tuple[Street, dict[str, object]]]] = {"exact": {}, "stripped": {}}
+    spelled: set[int] = set()
+    parts: dict[int, AdminUnit] = {}
     for line in lines:
         _, keys = street_match_keys(line)
         if not keys:
@@ -349,33 +384,53 @@ def resolve_street(
         streets, tier = match_streets(line, obec_kods, registry)
         # The place test is asked AFTER the match and only about a claim that matched: asked
         # first, prose keys would fill a `RunCache` that CLEARS ITSELF at 250,000 entries.
-        if not streets or _names_a_place(keys, {s.obec_kod for s in streets}, registry):
+        places = _places_named(keys, {s.obec_kod for s in streets}, registry) if streets else []
+        if places:
+            parts.update(_parts_of_town(places))
             continue
         _, numbers = split_street_and_number(strip_street_generic(line))
+        names = {case_fold(split_street_and_number(text)[0])
+                 for text in (line, strip_street_generic(line))}
         for street in streets:
             tiers[tier].setdefault(street.code, (street, numbers))
+            if case_fold(street.name) in names:
+                spelled.add(street.code)
+    for line in place_lines:
+        parts.update(_parts_of_town(
+            _places_named(street_match_keys(line)[1], set(obec_kods), registry)))
+    named_part = _one_part(parts)
     # The EXACT tier is consulted alone when it has anything at all: a claim that names one
     # street exactly and grazes another through the tolerant fold has named one street.
     found = tiers["exact"] or tiers["stripped"]
+    if len(found) > 1 and len(spelled & found.keys()) == 1:
+        found = {code: found[code] for code in spelled & found.keys()}
     if not found:
-        return StreetBind(reason="no_match")
+        return StreetBind(reason="street_names_part" if named_part else "no_match",
+                          named_part=named_part)
     if len(found) > 1:
-        return StreetBind(reason="ambiguous_streets")
-    street, numbers = found[next(iter(sorted(found)))]
+        return StreetBind(reason="ambiguous_streets", named_part=named_part,
+                          candidates=tuple(_bound(*found[code]) for code in sorted(found)))
+    return _bound(*found[next(iter(found))], named_part=named_part)
+
+
+def _bound(street: Street, numbers: dict[str, object], *,
+           named_part: AdminUnit | None = None) -> StreetBind:
     cislo_domovni, typ_so = house_number(numbers)
     return StreetBind(
         street=street, cislo_domovni=cislo_domovni, typ_so=typ_so,
         cislo_orientacni=_as_int(numbers.get("cislo_orientacni")), reason="street_match",
+        named_part=named_part,
     )
 
 
-def _names_a_place(
+def _places_named(
     keys: frozenset[str], obec_kods: set[int], registry: RegistryView
-) -> bool:
-    """The town itself, or a part of it. `normalize.normalize_claim`'s `town_as_street` rule
-    covers the town, when S1 is handed the place lookup; the collision is real at part level
-    too (76 register streets across 20 obce are spelled exactly like a část obce of their own
-    town)."""
+) -> list[AdminUnit]:
+    """The town itself, or the parts of it, these keys name. `normalize.normalize_claim`'s
+    `town_as_street` rule covers the town, when S1 is handed the place lookup; the collision is
+    real at part level too (76 register streets across 20 obce are spelled exactly like a část
+    obce of their own town)."""
+    found: dict[int, AdminUnit] = {}
     for key in keys:
         for unit in registry.admin_units_by_name(key, levels=("obec", *PART_LEVELS)):
             # Through the CHAIN, not through `AdminUnit.obec_kod`: that column is filled off
@@ -383,8 +438,25 @@ def _names_a_place(
             # reading it here would make the rail fire in production and nowhere else.
             town = obec_of(unit, registry)
             if town is not None and town.code in obec_kods:
-                return True
-    return False
+                found.setdefault(unit.unit_id, unit)
+    return list(found.values())
+
+
+def _parts_of_town(places: Sequence[AdminUnit]) -> dict[int, AdminUnit]:
+    """A line naming the town itself names no part of it."""
+    if any(unit.level == "obec" for unit in places):
+        return {}
+    return {u.unit_id: u for u in places if u.level in _PART_OF_TOWN_LEVELS}
+
+
+def _one_part(parts: dict[int, AdminUnit]) -> AdminUnit | None:
+    """The one část the lines name — a MOMC spelled alike (Ostrava's Poruba) is the same place,
+    and the část is the level a streetless house number is unique in."""
+    for level in _PART_OF_TOWN_LEVELS:
+        found = [u for u in parts.values() if u.level == level]
+        if found:
+            return found[0] if len(found) == 1 else None
+    return None
 
 
 def _as_int(value: object) -> int | None:

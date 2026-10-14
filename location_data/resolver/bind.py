@@ -34,19 +34,21 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import Any, NamedTuple
 
+from location_data.name_index import split_qualifier
 from location_data.resolver.composite import (
     PART_LEVELS,
     CompositeBind,
     StreetBind,
+    match_streets,
     obec_of,
     resolve_locality,
     resolve_street,
 )
 from location_data.resolver.geo import distance_between
-from location_data.resolver.normalize import TYP_CP, house_number
+from location_data.resolver.normalize import TYP_CP, house_number, normalize_match_key
 from location_data.resolver.types import (
     AddressPoint,
     AdminUnit,
@@ -327,16 +329,20 @@ def bind_towns(
     *,
     registry: RegistryView,
     pin_is_precise: bool,
-) -> tuple[list[AdminUnit], list[str]]:
-    """THE TOWN RULE (v5.5, D4) for one set of names -> (the towns left, the qualifiers).
+    qualifier: str | None = None,
+) -> tuple[list[AdminUnit], list[str], dict[int, tuple[AdminUnit, ...]]]:
+    """THE TOWN RULE (v5.5, D4) for one set of names -> (the towns left, the qualifiers, and
+    per town the units its name CLIMBED from — the village that is the part, 1a).
     1. Every match at `levels` climbs to its obec; the towns carrying the listing's PSČ stay.
     2. Else the OBEC-level matches, narrowed by okres/kraj first, then to those in reach of a
        pin worth more than the name: the PSČ vouched for none, or the portal declares the pin
        precise. An undeclared pin is often a placeholder (56 realitymix rows share the centre
        of Czechia): there the name stands, and CHECK flags `pin_outside_obec`.
-    3. `narrow_towns` settles what is left: the pin's obec, else the nearest."""
+    3. `narrow_towns` settles what is left: the pin's obec, else the nearest.
+    `qualifier` (1b): the "u X" a retry stripped off the name. Where the base climbs to
+    several obce and X is one of them, X is the town the advert named."""
     direct: dict[int, AdminUnit] = {}
-    climbed: set[int] = set()
+    climbed: dict[int, list[AdminUnit]] = {}
     for key in keys:
         for unit in registry.admin_units_by_name(key, levels=levels):
             if unit.level == "obec":
@@ -346,17 +352,28 @@ def bind_towns(
             # that does not fill it. A common part name must not cost a round trip per match.
             town = unit.obec_kod or getattr(obec_of(unit, registry), "code", None)
             if town is not None:
-                climbed.add(town)
-    codes = sorted(set(direct) | climbed)
+                climbed.setdefault(town, []).append(unit)
+    named_directly = set(direct)
+    codes = sorted(set(direct) | set(climbed))
+    if qualifier and len(codes) > 1:
+        named = {u.code for u in registry.admin_units_by_name(qualifier, levels=("obec",))}
+        if kept := [c for c in codes if c in named]:
+            codes = kept
+            direct = {c: t for c in kept if (t := direct.get(c) or _obec_by_code(c, registry))}
+    towns: list[AdminUnit] = []
     if constraints.psc:
         carrying = _carrying_psc(codes, direct, constraints.psc, registry)
         towns = [t for c in carrying if (t := direct.get(c) or _obec_by_code(c, registry))]
         if towns:
-            return narrow_towns(towns, constraints, registry=registry,
-                                pin_is_precise=pin_is_precise,
-                                applied=["psc"] if len(codes) > 1 else [])
-    return narrow_towns([t for _, t in sorted(direct.items())], constraints, registry=registry,
-                        pin_is_precise=pin_is_precise, reach=_reach_of(constraints, pin_is_precise))
+            towns, applied = narrow_towns(towns, constraints, registry=registry,
+                                          pin_is_precise=pin_is_precise,
+                                          applied=["psc"] if len(codes) > 1 else [])
+    if not towns:
+        towns, applied = narrow_towns(
+            [t for _, t in sorted(direct.items())], constraints, registry=registry,
+            pin_is_precise=pin_is_precise, reach=_reach_of(constraints, pin_is_precise))
+    return towns, applied, {t.code: tuple(climbed[t.code]) for t in towns
+                            if t.code in climbed and t.code not in named_directly}
 
 
 def narrow_towns(
@@ -443,16 +460,27 @@ def _town_distance(town: AdminUnit, pin: tuple[float, float], registry: Registry
     return math.inf if distance is None else distance
 
 
+class Towns(NamedTuple):
+    """What `constraining_towns` says. `named` (the advert's OWN town field gave the towns) is
+    what Q3 reads; `climbed` holds, per town, the part/KÚ units its name climbed from (1a)."""
+
+    units: list[AdminUnit]
+    applied: list[str]
+    rung: str
+    named: bool
+    composite: CompositeBind
+    climbed: dict[int, tuple[AdminUnit, ...]]
+
+
 def constraining_towns(
     constraints: Constraints, registry: RegistryView, *, pin_is_precise: bool
-) -> tuple[list[AdminUnit], list[str], str, bool, CompositeBind]:
-    """-> (towns, qualifiers, rung, named, composite line) off the advert's town names, its
-    composite line, its part names, then the PSČ — an INFERENCE, so R6 with no agreeing field.
-    `named` (the advert's OWN town field gave it) is what Q3 reads. S1's town-as-street test
-    asks this same function, so the two cannot disagree about the town."""
+) -> Towns:
+    """The towns off the advert's town names, its composite line, the names with their "u X"
+    stripped, its part names, then the PSČ — an INFERENCE, so R6 with no agreeing field. S1's
+    town-as-street test asks this same function, so the two cannot disagree about the town."""
     composite = CompositeBind()
-    towns, applied = bind_towns(constraints.obec_keys, TOWN_NAME_LEVELS, constraints,
-                                registry=registry, pin_is_precise=pin_is_precise)
+    towns, applied, climbed = bind_towns(constraints.obec_keys, TOWN_NAME_LEVELS, constraints,
+                                         registry=registry, pin_is_precise=pin_is_precise)
     if not towns and constraints.obec_lines:
         # W9: the line named no obec, so the REGISTER is asked what it DOES name — the whole
         # string at every level first, then its parts scoped by the anchoring town, and
@@ -462,19 +490,43 @@ def constraining_towns(
         found = first_composite_bind(constraints.obec_lines, registry)
         if found.obec is not None and _admits(found.obec, constraints, registry, pin_is_precise):
             composite, towns, applied = found, [found.obec], ["composite_locality"]
+    for key in () if towns else constraints.obec_keys:
+        # 1b: "Boudy u Jesenice" is no register name — the village is Boudy, and Jesenice is
+        # which of its three. The connector is the single word "u": "nad", "pod" and "v" are
+        # parts of real names ("Ústí nad Labem"), never a qualifier to drop.
+        base, connector, qualifier = key.rpartition(" u ")
+        if connector and base and qualifier:
+            towns, applied, climbed = bind_towns(
+                (base,), TOWN_NAME_LEVELS, constraints, registry=registry,
+                pin_is_precise=pin_is_precise, qualifier=qualifier)
+            if towns:
+                applied = [*applied, "qualifier_stripped"]
+                break
     if towns:
-        return towns, applied, "R4", True, composite
+        return Towns(towns, applied, "R4", True, composite, climbed)
     if constraints.cast_obce_keys:
-        towns, applied = bind_towns(constraints.cast_obce_keys, PART_LEVELS, constraints,
-                                    registry=registry, pin_is_precise=pin_is_precise)
+        towns, applied, _ = bind_towns(constraints.cast_obce_keys, PART_LEVELS, constraints,
+                                       registry=registry, pin_is_precise=pin_is_precise)
         if towns:
-            return towns, applied, "R4", False, composite
-    by_psc = [chain[0] for k in (registry.obec_codes_for_psc(constraints.psc)
-                                 if constraints.psc else ())
-              if (chain := registry.admin_chain_by_code("obec", k))]
-    towns, applied = narrow_towns(_dedupe_units(by_psc), constraints, registry=registry,
+            return Towns(towns, applied, "R4", False, composite, {})
+    by_psc = _dedupe_units([chain[0] for k in (registry.obec_codes_for_psc(constraints.psc)
+                                               if constraints.psc else ())
+                            if (chain := registry.admin_chain_by_code("obec", k))])
+    if constraints.street_lines and len(by_psc) > 1:
+        # 1f: a PSČ shared by five towns, and a street the advert names in exactly one of them
+        # (19120281: 68601, "Na Splávku" in Uherské Hradiště). The pin is the post office's.
+        holding = [t for t in by_psc if _holds_street(t, constraints.street_lines, registry)]
+        if len(holding) == 1:
+            return Towns(holding, ["psc", "street_in_town"], "R6", False, composite, {})
+    towns, applied = narrow_towns(by_psc, constraints, registry=registry,
                                   pin_is_precise=pin_is_precise, applied=["psc"])
-    return towns, applied, "R6", False, composite
+    return Towns(towns, applied, "R6", False, composite, {})
+
+
+def _holds_street(town: AdminUnit, lines: Sequence[str], registry: RegistryView) -> bool:
+    """A street of the town reached on the EXACT tier — the tolerant fold settles no town."""
+    return any(found and tier == "exact"
+               for found, tier in (match_streets(line, (town.code,), registry) for line in lines))
 
 
 # ------------------------------------------------------------------------- the ladder
@@ -511,14 +563,16 @@ def bind(
     pin_is_precise: bool = False,
     pin_blurred: bool = False,
     pin_claim_id: int | None = None,
+    place_lines: Sequence[str] = (),
 ) -> tuple[Binding, Constraints]:
-    """BIND. -> (the winner, the constraints FILL still needs)."""
+    """BIND. -> (the winner, the constraints FILL still needs). `place_lines` are the street
+    claims S1 refused as a place name (`town_as_street`): 1c asks which part they name."""
     registry = ctx.registry
     constraints = collect_constraints(claims, normalized, pin_claim_id=pin_claim_id)
     out: list[_Candidate] = []
 
-    obec_units, obec_qualifiers, obec_rung, named, composite = constraining_towns(
-        constraints, registry, pin_is_precise=pin_is_precise)
+    towns = constraining_towns(constraints, registry, pin_is_precise=pin_is_precise)
+    obec_units = towns.units
     constraining_obec_kods = tuple(sorted({u.code for u in obec_units}))
 
     # ---- R0: a portal-supplied registry key. The prize (bezrealitky `ruianId`).
@@ -532,17 +586,60 @@ def bind(
                 )
             )
 
-    # ---- R1 / R2: THE street claim (W18). `composite.resolve_street` matches every street
-    # claim EXACTLY against the register inside the anchoring obec, in two tiers: a full-name
-    # match wins outright, the type-word-tolerant fold is consulted only when nothing matched
-    # exactly, and two distinct streets bind nothing at all. A bound street reaches R1 when
-    # there is a house number and R2 otherwise. v5.6 deleted the split on separators: its one
-    # user was bazos' whole headline, and the text reading names the street itself.
+    # THE street claims (W18). `composite.resolve_street` matches every street claim EXACTLY
+    # against the register inside the anchoring obec, in two tiers: a full-name match wins
+    # outright, the type-word-tolerant fold is consulted only when nothing matched exactly,
+    # and two distinct streets bind nothing at all. v5.6 deleted the split on separators: its
+    # one user was bazos' whole headline, and the text reading names the street itself.
     line = (
-        resolve_street(constraints.street_lines, constraining_obec_kods, registry)
-        if constraining_obec_kods and constraints.street_lines
+        resolve_street(constraints.street_lines, constraining_obec_kods, registry,
+                       place_lines=place_lines)
+        if constraining_obec_kods and (constraints.street_lines or place_lines)
         else StreetBind()
     )
+
+    # ---- R4: the část obce / quarter, from four places. The advert's part claim and the part
+    # a composite line named (the rung and qualifier a CLAIMED část gets: a registry bind grades
+    # by the unit it landed on, not by the string that pointed at it); since v5.7 the village a
+    # town name climbed from (1a: "Hracholusky" is a část of Úlice) and the part a street line
+    # names (1c). The two new ones fail closed as two streets do: one unit, and one the claimed
+    # parts name if there are any — else NO part (19009248: "Dlouhé" against "Rzy").
+    said: list[tuple[AdminUnit, tuple[int, ...], tuple[str, ...]]] = []
+    if constraints.cast_obce_keys and constraining_obec_kods:
+        for key in constraints.cast_obce_keys:
+            for unit in registry.admin_units_by_name(key, levels=(*PART_LEVELS, "zsj")):
+                if unit.obec_kod is None or unit.obec_kod in constraining_obec_kods:
+                    said.append((unit, _ids(constraints, "cast_obce_name"),
+                                 ("obec_constrained",)))
+    if towns.composite.part is not None:
+        said.append((towns.composite.part, _ids(constraints, "obec_name"), ("obec_constrained",)))
+    found = [(part, _ids(constraints, "obec_name"), ("obec_constrained", "climbed_from_town_name"))
+             for town in obec_units
+             if (part := climbed_part(town, towns.climbed.get(town.code, ()), registry))]
+    if line.named_part is not None:
+        found.append((line.named_part, _ids(constraints, "street"),
+                      ("obec_constrained", "street_names_part")))
+    if found and not _parts_agree([u for u, _, _ in said], [u for u, _, _ in found]):
+        said, found = [], []
+    parts: list[AdminUnit] = []
+    for unit, claim_ids, qualifiers in (*said, *found):
+        parts.append(unit)
+        out.append(_admin_candidate(unit, rung="R4", granularity="cast_obce_or_quarter",
+                                    claim_ids=claim_ids, qualifiers=qualifiers))
+    cast_parts = {u.unit_id: u for u in parts if u.level == "cast_obce"}
+    part = next(iter(cast_parts.values())) if len(cast_parts) == 1 else None
+
+    # 1d: one register name, several streets, and ONE bound part — keep the street with a door
+    # in it. 18625515 was not this (it was the accent fold; `resolve_street` spells it now).
+    relaxed: tuple[str, ...] = ()
+    if line.reason == "ambiguous_streets" and part is not None:
+        inside = [c for c in line.candidates if c.street is not None
+                  and part.unit_id in getattr(registry.street_point(c.street), "part_unit_ids", ())]
+        if len(inside) == 1:
+            line = replace(inside[0], named_part=line.named_part)
+            relaxed = ("street_part_tiebreak",)
+
+    # ---- R1 / R2: a bound street reaches R1 when there is a house number and R2 otherwise.
     if line.street is not None:
         # The street claim's own number first; a listing-wide `house_number_*` claim behind it
         # (the portals that state the street and the číslo in separate fields). The number
@@ -567,11 +664,11 @@ def bind(
                 agreed.append("psc")
             out.append(
                 _point_candidate(
-                    point, rung="R1", agreed=tuple(agreed),
+                    point, rung="R1", agreed=tuple(agreed), relaxations=relaxed,
                     claim_ids=_ids(constraints, "street", "house_number_cp",
                                    "house_number_co")))
         if not points:
-            out.append(_street_candidate(line.street, "R2", constraints))
+            out.append(_street_candidate(line.street, "R2", constraints, relaxations=relaxed))
 
     # ---- R3: the typo-tolerant rung, and the ONE place a street may be bound by similarity
     # rather than by identity. It runs only when nothing bound exactly. (W18 kept it off
@@ -585,8 +682,9 @@ def bind(
         and not bound_exactly
         # A tie is not a typo. When the exact binder FAILED CLOSED on two register rows the
         # claim could mean, letting the fuzzy rung pick one of the very candidates just
-        # refused would undo the refusal — so R3 runs only where nothing matched at all.
-        and line.reason != "ambiguous_streets"
+        # refused would undo the refusal — so R3 runs only where nothing matched at all. A
+        # line that names a part of the town is never a street, fuzzily or otherwise (1c).
+        and line.reason not in ("ambiguous_streets", "street_names_part")
     ):
         fuzzy: list[tuple[float, Any]] = []
         for obec_kod in constraining_obec_kods:
@@ -606,33 +704,15 @@ def bind(
                     )
                 )
 
-    # ---- R4: obec / část obce / quarter by name (the point-set level).
+    # ---- R4: the obec by name (the point-set level).
     for unit in obec_units:
         out.append(
             _admin_candidate(
-                unit, rung=obec_rung, granularity="obec",
+                unit, rung=towns.rung, granularity="obec",
                 claim_ids=_ids(constraints, "obec_name", "psc"),
-                qualifiers=tuple(obec_qualifiers),
+                qualifiers=tuple(towns.applied),
             )
         )
-    parts: list[AdminUnit] = []
-    if constraints.cast_obce_keys and constraining_obec_kods:
-        for key in constraints.cast_obce_keys:
-            for unit in registry.admin_units_by_name(key, levels=(*PART_LEVELS, "zsj")):
-                if unit.obec_kod is None or unit.obec_kod in constraining_obec_kods:
-                    parts.append(unit)
-                    out.append(_admin_candidate(
-                        unit, rung="R4", granularity="cast_obce_or_quarter",
-                        claim_ids=_ids(constraints, "cast_obce_name"),
-                        qualifiers=("obec_constrained",)))
-    if composite.part is not None:
-        # The part the composite line named, at the rung and with the qualifier a separately
-        # CLAIMED část obce gets: a registry bind grades by the unit it landed on, not by the
-        # shape of the string that pointed at it.
-        parts.append(composite.part)
-        out.append(_admin_candidate(
-            composite.part, rung="R4", granularity="cast_obce_or_quarter",
-            claim_ids=_ids(constraints, "obec_name"), qualifiers=("obec_constrained",)))
 
     # ---- R1 WITHOUT a street (D7): the house number inside the ONE bound část obce, where a
     # č.p. (and a č.ev.) is unique by law — 475 of 478 sampled sreality numbers are, against
@@ -640,8 +720,6 @@ def bind(
     # rows): a number written after a street the register could not bind is that street's,
     # often its č.o. The pin must not contradict the point — absent, declared blurred, or
     # within `REGISTRY_PIN_CONFLICT_M` — because `place()` moves the row there unflagged.
-    cast_parts = {u.unit_id: u for u in parts if u.level == "cast_obce"}
-    part = next(iter(cast_parts.values())) if len(cast_parts) == 1 else None
     town = obec_of(part, registry) if part is not None else None
     if (town is not None and constraints.cislo_domovni is not None
             and not constraints.street_lines and not any(
@@ -724,7 +802,8 @@ def bind(
     # the advert claims. Across several parts: none (RÚIAN draws no část polygon to test a pin
     # against). A town only the PSČ or a part claim supplied lends its street no part.
     part_unit_id = top.cast_obce_unit_id
-    if named and top.rung == "R2" and street_point and len(street_point.part_unit_ids) == 1:
+    if (towns.named and top.rung == "R2" and street_point
+            and len(street_point.part_unit_ids) == 1):
         part_unit_id = street_point.part_unit_ids[0]
     # The margin compares LIKE WITH LIKE. Comparing the top candidate against the next row
     # whatever it is compared it against its own ANCESTOR: a quarter (45 + 5) ties the obec
@@ -773,6 +852,36 @@ def first_composite_bind(lines: Sequence[str], registry: RegistryView) -> Compos
     return unbound
 
 
+def climbed_part(
+    town: AdminUnit, climbed: Sequence[AdminUnit], registry: RegistryView
+) -> AdminUnit | None:
+    """1a: the ONE část obce a town name climbed from — the part itself, or for a KÚ the část
+    of the same obec its name minus the qualifier spells ("Podolí u Mohelnice" -> Podolí).
+    None for two, and for the town's eponymous main part, which adds nothing and overstates
+    the precision (18827725: "Nové Hrady u Skutče" is Nové Hrady's own KÚ)."""
+    found: dict[int, AdminUnit] = {}
+    for unit in climbed:
+        if unit.level == "katastralni_uzemi":
+            key = normalize_match_key(split_qualifier(unit.name)[0])
+            spelled = {u.unit_id: u
+                       for u in registry.admin_units_by_name(key, levels=("cast_obce",))
+                       if (u.obec_kod or getattr(obec_of(u, registry), "code", None)) == town.code}
+            unit = next(iter(spelled.values())) if len(spelled) == 1 else None
+        if unit is not None and unit.level in ("cast_obce", "momc"):
+            found.setdefault(unit.unit_id, unit)
+    part = next(iter(found.values())) if len(found) == 1 else None
+    return None if part is None or part.name_norm == town.name_norm else part
+
+
+def _parts_agree(said: Sequence[AdminUnit], found: Sequence[AdminUnit]) -> bool:
+    """The climbed and street-named parts must be one unit per town, and one the advert's
+    claimed parts name, if it claims any."""
+    found_ids = {u.unit_id for u in found}
+    said_ids = {u.unit_id for u in said}
+    one_each = len(found_ids) == len({u.obec_kod for u in found})
+    return one_each and (not said_ids or found_ids <= said_ids)
+
+
 def _dedupe_units(units: Sequence[AdminUnit]) -> list[AdminUnit]:
     seen: dict[int, AdminUnit] = {}
     for unit in units:
@@ -801,7 +910,8 @@ def _rank(candidates: Sequence[_Candidate], rank: GranularityRank) -> list[_Cand
 
 
 def _point_candidate(
-    point, *, rung: str, agreed: tuple[str, ...], claim_ids: tuple[int, ...]
+    point, *, rung: str, agreed: tuple[str, ...], claim_ids: tuple[int, ...],
+    relaxations: tuple[str, ...] = (),
 ) -> _Candidate:
     return _Candidate(
         rung=rung, score=_RUNG_BASE_SCORE[rung] + 2.0 * len(agreed),
@@ -809,7 +919,7 @@ def _point_candidate(
         ruian_adm_kod=point.kod_adm, ulice_kod=point.ulice_kod, obec_kod=point.obec_kod,
         street_name=point.street_name, lat=point.lat, lon=point.lon,
         cast_obce_unit_id=point.cast_obce_unit_id,
-        agreed=agreed, source_claim_ids=claim_ids,
+        agreed=agreed, relaxations=relaxations, source_claim_ids=claim_ids,
     )
 
 

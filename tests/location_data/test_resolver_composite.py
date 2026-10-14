@@ -21,8 +21,9 @@ from __future__ import annotations
 import pytest
 
 from location_data.resolver import bind as step_bind
-from location_data.resolver import core, normalize
-from location_data.resolver.composite import resolve_locality
+from location_data.resolver import composite, core, normalize
+from location_data.resolver.composite import resolve_locality, resolve_street
+from location_data.resolver.types import Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -210,3 +211,50 @@ def test_an_unbindable_line_leaves_the_row_undetermined(registry):
     row = _resolve([mm.claim(1, "obec_name", value_text="Poruba")], registry)
     assert row.obec_name is None and row.cast_obce_name is None
     assert row.granularity == "unknown"
+
+
+# ------------------------------------------- the street matcher's v5.7 rules (W4: 1c, 1d, 1e)
+
+PRAHA, MORAVSKA_TREBOVA, HARRACHOV = 554782, 578444, 577081
+
+
+@pytest.mark.parametrize(("claim", "register"), [
+    ("ČSA", "Čs. armády"), ("Československé armády", "Čs. armády"),
+    ("nám. Míru", "náměstí Míru"), ("tř. Kpt. Jaroše", "třída Kapitána Jaroše"),
+    ("nábř. Svobody", "nábřeží Svobody"), ("Gen. Svobody", "Generála Svobody"),
+    ("Plk. Švece", "Plukovníka Švece"), ("sídl. Míru", "sídliště Míru"),
+])
+def test_1e_the_abbreviation_fold_keys_both_sides_alike(claim, register):
+    """Folded on the claim AND on the register row, so either spelling on either side meets
+    the other on the EXACT tier — and the register's own key is never rewritten in the mirror."""
+    street = Street(code=1, name=register, name_norm=normalize.normalize_match_key(register),
+                       obec_kod=1)
+    exact, _ = composite.street_match_keys(claim)
+    assert exact & composite.register_street_keys(street), (claim, register)
+    assert composite.fold_abbreviations(street.name_norm) in exact
+
+
+def test_1e_csa_binds_cs_armady_exactly():
+    bound = resolve_street(["ČSA"], (MORAVSKA_TREBOVA,), mm.w4_mirror())
+    assert (bound.street.code, bound.reason) == (561517, "street_match")
+
+
+def test_1d_a_line_spelled_like_one_of_two_folded_twins_binds_it_and_otherwise_offers_both():
+    mirror = mm.w4_mirror()
+    assert resolve_street(["Hanusova"], (PRAHA,), mirror).street.code == 447340
+    assert resolve_street(["Hanušova"], (PRAHA,), mirror).street.code == 447358
+    tied = resolve_street(["Liskova"], (PRAHA,), mirror)
+    assert (tied.reason, [c.street.code for c in tied.candidates]) == (
+        "ambiguous_streets", [485926, 500810])
+
+
+def test_1c_a_line_naming_one_part_of_the_town_returns_it_and_never_a_street():
+    """Whether S1 refused it as a place (`place_lines`) or the register spells a street of the
+    town the same way, the line names the part; one naming the town itself names none."""
+    mirror = mm.w4_mirror()
+    named = resolve_street([], (HARRACHOV,), mirror, place_lines=["Nový Svět"])
+    assert (named.street, named.named_part.code, named.reason) == (
+        None, 410845, "street_names_part")
+    assert resolve_street([], (HARRACHOV,), mirror, place_lines=["Harrachov"]).named_part is None
+    zabreh = resolve_street(["Zábřeh"], (554821,), mm.default_mirror())
+    assert (zabreh.street, zabreh.named_part.code) == (None, 554791)

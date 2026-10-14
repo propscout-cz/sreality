@@ -71,10 +71,14 @@ def resolve(
     # not rank a candidate, drive the hierarchy or fill a NULL.
     admissible = _admissible(ordered, normalized)
 
-    # ---- 1. BIND.
+    # ---- 1. BIND. A street claim S1 refused as a place name may still name the PART (1c).
     binding, constraints = step_bind.bind(
         admissible, normalized, ctx, pin_is_precise=pin_is_precise,
         pin_blurred=declared.blurred, pin_claim_id=pin_claim_id,
+        place_lines=tuple(
+            str(c.value_text) for c in ordered
+            if c.claim_type == "street_name" and step_bind.admissible(c, None) is None
+            and normalized[c.id].rejections == ("town_as_street",)),
     )
     position = step_bind.place(binding, pin_claim, declared=declared)
 

@@ -48,12 +48,14 @@ def test_the_official_generic_word_is_matched_and_so_is_its_absence():
 
 def test_an_exact_full_name_match_wins_outright_over_the_tolerant_fold():
     """Kladno holds `náměstí Svobody` AND `Svobody`, both folding to `svobody`: on two tiers a
-    correct exact claim reads as one candidate. The abbreviation reaches both through the
-    fold and fails closed — and R3 never undoes that refusal, a tie is not a typo."""
+    correct exact claim reads as one candidate. The abbreviation is exact since v5.7 (`nám.`
+    folds to `náměstí`); a claim reaching both through the type-word fold still fails closed,
+    and R3 never undoes that refusal — a tie is not a typo."""
     assert _street("náměstí Svobody", town="Kladno").ulice_kod == 112
     assert _street("Svobody", town="Kladno").ulice_kod == 113
-    assert _bind("nám. Svobody", (KLADNO,)).reason == "ambiguous_streets"
-    assert _street("nám. Svobody", town="Kladno").street_name is None
+    assert _street("nám. Svobody", town="Kladno").ulice_kod == 112
+    assert _bind("třída Svobody", (KLADNO,)).reason == "ambiguous_streets"
+    assert _street("třída Svobody", town="Kladno").street_name is None
 
 
 def test_a_claim_naming_the_town_or_one_of_its_parts_is_never_a_street():

@@ -86,4 +86,8 @@ from __future__ import annotations
 # v5.6 = text-reader W3: the separator split is deleted (a street claim is matched whole) and R3
 #      runs for every street claim (the `low` gate left with bazos' headline, its one user);
 #      bazos' town, part, street and numbers come from the stored reading.
-RESOLVER_VERSION = "resolver:v5.6"
+# v5.7 = text-reader W4 (operator verdicts 2026-10-14): the village a town name climbed from is
+#      the part; "X u Y" retries as X kept to Y; a street line naming a part is that part; a
+#      street spelled like one of two accent-folded twins, or with a door in the one bound part,
+#      binds; portal abbreviations fold (ČSA, nám., tř. …); a shared PSČ yields to the street.
+RESOLVER_VERSION = "resolver:v5.7"
