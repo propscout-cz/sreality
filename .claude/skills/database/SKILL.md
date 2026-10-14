@@ -354,7 +354,7 @@ exemption set is now empty and **nothing may be added to it**. Two budgets are d
 NOT their cadence and 440's header carries the measurements: the six health matviews get
 45 min (not 10 — the 30d p95 gap is 15.8 min and a 10-min budget reads red on the healthy
 case), and `broker_region_type_stats` gets 30 h (not 24 — its daily sweep itself runs up to
-2h01m, so 24 h alarms on every healthy run). `rent_map_choropleth`'s `host` is honestly
+2h01m, so 24 h alarms on every healthy run). `rent_map_cells`'s `host` is honestly
 `api-request`: it is refreshed inside a FastAPI request handler — don't launder it into a
 cron string. `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is
 deliberately unregistered.
@@ -474,8 +474,8 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `location_resolve.yml mode=full-resolve` sweep the bump triggers; check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
-  are rebuilt by `scripts/ingest_map_overlays.py` (`ingest_map_overlays.yml`; `--sections kraje` after a boundaries ingest)
-  and read only through the API `/map-overlays*`; to change a layer edit the Python registry and re-run, never the rows.
+  are rebuilt by `scripts/ingest_map_overlays.py` (`ingest_map_overlays.yml`; `--sections kraje` after a boundaries ingest;
+  `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.
