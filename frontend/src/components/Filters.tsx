@@ -32,9 +32,9 @@ import MarketGrowthFilter from '@/components/MarketGrowthFilter';
 import {
   LocationTypeahead,
   MultiselectChips,
-  TagPicker,
   PipelineScopePicker,
 } from '@/components/filter-controls';
+import { AccountTagFilter } from '@/components/filter-controls/TagFilterControl';
 /* Lazy: this is the only control here that draws a map, it renders only in
  * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
  * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
@@ -90,7 +90,7 @@ const FEATURES_KEYS = [
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
 
 const CURATION_KEYS = [
-  'pipeline', 'tags', 'collections', 'withEstimates', 'showDismissed',
+  'pipeline', 'tags', 'tagsExcluded', 'collections', 'withEstimates', 'showDismissed',
   'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
   'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
   'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
@@ -344,7 +344,6 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
   // onChange through. The District field renders inline (below) so it
   // can also surface its picked-suggestion side channel to Browse.
   const customWidgets = {
-    tags: TagPicker as never,
     collections: CollectionsPicker as never,
     city_index_rules: CityIndexRulesPicker as never,
     pipeline: PipelineScopePicker as never,
@@ -624,16 +623,23 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
               scope="browse"
               state={registryView}
               onChange={handleRegistryChange}
-              includeOnly={['pipeline', 'tags', 'collections', 'with_estimates']}
+              includeOnly={['pipeline', 'collections', 'with_estimates']}
               labels={{
                 pipeline: 'Pipeline',
-                tags: 'Tags',
                 collections: 'Kolekce',
                 with_estimates: 'With estimates',
               }}
               customWidgets={customWidgets}
               flat
             />
+            {/* Two registry ids, one control (the portal control's shape below):
+                rendered beside the form rather than through it. */}
+            <Section label="Tags">
+              <AccountTagFilter
+                value={filters}
+                onChange={(next) => onChange({ ...filters, ...next })}
+              />
+            </Section>
             <ShowDismissedToggle filters={filters} onChange={onChange} />
           </ControlGroup>
 

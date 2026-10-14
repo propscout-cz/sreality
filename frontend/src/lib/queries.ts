@@ -23,6 +23,7 @@ import {
 } from './filters';
 import { applyAgendaFilters, applyRegistryFilters } from './registryQueryBuilder';
 import { propertyIdsInCollections } from './collectionScope';
+import { propertyIdsForTags, tagChoiceActive } from './tagScope';
 import {
   applyKeyset,
   nextCursorFrom,
@@ -543,8 +544,10 @@ export interface MapResult {
 }
 
 /* The two curated-set prefilters share ONE shape: read the membership rows
- * whole (complete-or-throw, via fetchAllRows) and reduce them to a property-id
- * allowlist. They differ only in the predicate — tags AND, collections OR.
+ * whole (complete-or-throw, via fetchAllRows — the SAME member map every tag
+ * chip and collection glyph renders from) and reduce them to property-id
+ * lists. They differ only in the predicate — tags AND (plus a "none of" side),
+ * collections OR.
  *
  * Returns null when the filter is off, [] when it matched nothing (the caller
  * short-circuits to zero results), else the ids. Hoistable functions so the
@@ -552,27 +555,9 @@ export interface MapResult {
 async function resolveTagPrefilter(
   f: ListingFilters,
   signal?: AbortSignal,
-): Promise<number[] | null> {
-  if (f.tags.length === 0) return null;
-  const rows = await fetchAllRows<{ property_id: number; tag_id: number }>({
-    relation: 'property_tags_public',
-    build: () =>
-      supabase
-        .from('property_tags_public')
-        .select('property_id, tag_id', { count: 'exact' })
-        .in('tag_id', f.tags),
-    orderBy: [{ column: 'property_id' }, { column: 'tag_id' }],
-    key: ['property_id', 'tag_id'],
-    expectMax: 100_000,
-    signal,
-  });
-  /* The read restricts tag_id to the selection and fetchAllRows dedupes on
-   * (property_id, tag_id), so a tally IS the distinct count; the Set keeps
-   * `?tags=3,3` from raising the bar to two. */
-  const needed = new Set(f.tags).size;
-  const carried = new Map<number, number>();
-  for (const r of rows) carried.set(r.property_id, (carried.get(r.property_id) ?? 0) + 1);
-  return [...carried].filter(([, n]) => n === needed).map(([property_id]) => property_id);
+): Promise<{ allow: number[] | null; deny: number[] | null }> {
+  if (!tagChoiceActive(f)) return { allow: null, deny: null };
+  return propertyIdsForTags(await fetchPropertyTagMemberSet({ signal }), f);
 }
 
 /* Collection scope (rule #18). Reads through the SAME member map every
@@ -752,6 +737,11 @@ const intersectPrefilters = (
 export interface BrowsePrefilters {
   obecIds: number[] | null;       // market growth (price-stats datasets)
   propertyIds: number[] | null;   // tags ∩ with-estimates ∩ pipeline ∩ collections ∩ broker
+  /* The one DENYLIST: properties carrying an excluded tag (migration 598's
+   * `property_ids_excluded`). A denylist cannot ride in an allowlist — "not
+   * tagged X" is the market minus a few — so it is its own id space, and a
+   * future "not in collection" joins it here rather than growing a parameter. */
+  propertyIdsExcluded: number[] | null;
   empty: boolean;
 }
 
@@ -774,7 +764,7 @@ async function resolveBrowsePrefilters(
   // applyPrefilters emits.
   const propertyIds = [estimateProps, pipelineProps, collectionProps, brokerProps].reduce(
     intersectPrefilters,
-    tagProps,
+    tagProps.allow,
   );
   // City-quality and market-growth are BOTH obec-grain now, and applyPrefilters applies
   // .in('obec_id', …) once — so they must be intersected here, not applied twice.
@@ -782,16 +772,21 @@ async function resolveBrowsePrefilters(
   const empty =
     (obecIds != null && obecIds.length === 0)
     || (propertyIds != null && propertyIds.length === 0);
-  return { obecIds, propertyIds, empty };
+  return { obecIds, propertyIds, propertyIdsExcluded: tagProps.deny, empty };
 }
 
 /* Exported for queries.test.ts. */
 export const applyPrefilters = <T>(q: T, p: BrowsePrefilters): T => {
   let r = q as unknown as {
     in: (c: string, v: readonly unknown[]) => typeof r;
+    not: (c: string, op: 'in', v: string) => typeof r;
   };
   if (p.obecIds != null) r = r.in('obec_id', p.obecIds);
   if (p.propertyIds != null) r = r.in('property_id', p.propertyIds);
+  /* An empty denylist drops nothing, so it emits nothing. */
+  if (p.propertyIdsExcluded?.length) {
+    r = r.not('property_id', 'in', `(${p.propertyIdsExcluded.join(',')})`);
+  }
   return r as unknown as T;
 };
 
@@ -881,6 +876,7 @@ export const fetchListingsForMap = async (
       ...buildBrowseStatsArgs(f, {
         obec_ids_filter: pre.obecIds,
         property_ids_filter: pre.propertyIds,
+        property_ids_excluded: pre.propertyIdsExcluded,
       }),
       point_budget: MAP_POINT_BUDGET,
     }),
@@ -1264,6 +1260,7 @@ export interface BrowseStats {
 export interface BrowseStatsResolvedFilters {
   obec_ids_filter: number[] | null;
   property_ids_filter: number[] | null;
+  property_ids_excluded: number[] | null;
 }
 
 /* The argument object `browse_stats_properties` takes.
@@ -1419,6 +1416,7 @@ export const fetchBrowseStats = async (
       buildBrowseStatsArgs(f, {
         obec_ids_filter: pre.obecIds,
         property_ids_filter: pre.propertyIds,
+        property_ids_excluded: pre.propertyIdsExcluded,
       }),
     ),
     { signal },
@@ -2333,59 +2331,59 @@ export const useUrlPreview = (): UseMutationResult<
 /*                                                                            */
 /* The "list collections / tags / notes" indices go through the bearer-gated  */
 /* FastAPI service (lib/api.ts) so listing_count + ordering live in one      */
-/* place. The reverse-index queries below — "which tags / collections does    */
-/* property X belong to" — read directly from the property-grain *_public      */
-/* views via the anon key, matching the read-only pattern Browse / Region use. */
-/* Both Browse curated-set facets (tags, collections) resolve from those same  */
-/* membership rows — see resolveTagPrefilter / resolveCollectionPrefilter.     */
+/* place. The reverse-index reads below — "which tags / collections does      */
+/* property X belong to" — read the property-grain *_public views directly,  */
+/* whole, matching the read-only pattern Browse / Region use. Both Browse     */
+/* curated-set facets (tags, collections) resolve from those same membership  */
+/* rows — see resolveTagPrefilter / resolveCollectionPrefilter.              */
 /* -------------------------------------------------------------------------- */
 
-export const fetchPropertyTagIds = async (
-  property_id: number,
-  { signal }: PgReadOptions = {},
-): Promise<number[]> => {
-  const { data } = await pgRead<Array<{ tag_id: number }> | null>(
-    supabase.from('property_tags_public').select('tag_id').eq('property_id', property_id),
-    { signal },
-  );
-  return (data ?? []).map((r) => r.tag_id);
-};
-
-/* All (property_id → collection_ids) memberships in ONE read, shared (React
- * Query dedupes the key) by every Browse-card collection control — the
- * collection analogue of fetchPipelineMemberSet, so Browse fires one query
- * instead of one-per-card.
+/* All (property_id → member ids) rows of one membership view in ONE read,
+ * shared (React Query dedupes the key) by every card control, glyph and cohort
+ * filter that asks — the curation analogue of fetchPipelineMemberSet, so Browse
+ * fires one query instead of one-per-card.
  *
- * It is also the ONLY membership read: a per-property `propertyCollections(id)`
- * key existed alongside it until W1, which meant a writer had two keys to
- * remember and every writer but the save menu forgot one (the same collapse
- * pipelineKeys records below). One property's ids are
- * `members.get(property_id) ?? []`. fetchAllRows REJECTS past expectMax rather
- * than resolving a truncated map, so an outgrown map can never read as a
- * smaller one. A REJECTED read is never "no membership": it says so and offers
- * a retry (MS16); the board's collection filter alone also fails open (rule #22). */
-export const fetchPropertyCollectionMemberSet = async (
-  { signal }: PgReadOptions = {},
+ * It is also the ONLY membership read of its view: a per-property key existed
+ * beside the collection map until W1, and beside the tag map until the tags
+ * sprint, which meant a writer had two keys to remember and every writer but
+ * one forgot one (the same collapse pipelineKeys records below). One
+ * property's ids are `members.get(property_id) ?? []`. fetchAllRows REJECTS
+ * past expectMax rather than resolving a truncated map, so an outgrown map can
+ * never read as a smaller one. A REJECTED read is never "no membership": it
+ * says so and offers a retry (MS16); the board's curation filters alone also
+ * fail open (rule #22). */
+const fetchMemberSet = async <K extends string>(
+  relation: 'collection_properties_public' | 'property_tags_public',
+  member: K,
+  signal?: AbortSignal,
 ): Promise<Map<number, number[]>> => {
-  const rows = await fetchAllRows<{ property_id: number; collection_id: number }>({
-    relation: 'collection_properties_public',
+  const rows = await fetchAllRows<{ property_id: number } & Record<K, number>>({
+    relation,
     build: () =>
-      supabase
-        .from('collection_properties_public')
-        .select('property_id, collection_id', { count: 'exact' }),
-    orderBy: [{ column: 'property_id' }, { column: 'collection_id' }],
-    key: ['property_id', 'collection_id'],
+      supabase.from(relation).select(`property_id, ${member}`, { count: 'exact' }),
+    orderBy: [{ column: 'property_id' }, { column: member }],
+    key: ['property_id', member],
     expectMax: 100_000,
     signal,
   });
   const map = new Map<number, number[]>();
   for (const r of rows) {
     const arr = map.get(r.property_id);
-    if (arr) arr.push(r.collection_id);
-    else map.set(r.property_id, [r.collection_id]);
+    if (arr) arr.push(r[member]);
+    else map.set(r.property_id, [r[member]]);
   }
   return map;
 };
+
+export const fetchPropertyCollectionMemberSet = (
+  { signal }: PgReadOptions = {},
+): Promise<Map<number, number[]>> =>
+  fetchMemberSet('collection_properties_public', 'collection_id', signal);
+
+export const fetchPropertyTagMemberSet = (
+  { signal }: PgReadOptions = {},
+): Promise<Map<number, number[]>> =>
+  fetchMemberSet('property_tags_public', 'tag_id', signal);
 
 /* How many notes the caller's account holds on each property (MS16): the note
  * mark on every Browse row, from ONE whole-set read rather than one per row.
@@ -2432,8 +2430,7 @@ export const curationKeys = {
   collections: ['curation', 'collections'] as const,
   collection: (id: number) => ['curation', 'collection', id] as const,
   tags: ['curation', 'tags'] as const,
-  propertyTags: (property_id: number) =>
-    ['curation', 'property-tags', property_id] as const,
+  propertyTagMembers: ['curation', 'property-tag-members'] as const,
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,

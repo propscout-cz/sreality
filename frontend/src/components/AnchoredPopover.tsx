@@ -108,6 +108,11 @@ export default function AnchoredPopover({
       const target = e.target as Node;
       if (panelRef.current?.contains(target)) return;
       if (anchorRef.current?.contains(target)) return;
+      /* A transient layer opened FROM this panel — the tag-edit popover on an
+       * assign-list row — is portalled to <body>, so `contains` is false while
+       * the press is legitimately ours. Same marker lib/useDialog's focus trap
+       * treats as part of the layer. */
+      if (target instanceof Element && target.closest('[data-transient-layer]')) return;
       onClose();
     };
     const onKeyDown = (e: KeyboardEvent) => {

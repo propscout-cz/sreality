@@ -1,12 +1,12 @@
 /* Inline rename / recolour / delete for a single tag.
  *
- * Wired into both the CurationBlock TagPicker (per-listing) and the
- * Filters TagsPicker (Browse sidebar). The trigger sits next to each
- * tag row; the popover opens beneath it. Saving issues a PATCH /tags/{id}
- * which preserves listing_tags rows (the join is by tag_id, not name).
+ * Wired into the one tag assign list (components/curation/TagAssignList),
+ * beside each tag row; the popover opens beneath the pencil. Saving issues a
+ * PATCH /tags/{id} which preserves property_tags rows (the join is by tag_id,
+ * not name).
  *
- * Invalidates the global tags index plus every per-listing membership
- * cache so renamed/recoloured chips repaint everywhere without a reload.
+ * Revalidates through lib/tagCache — the tags index and the one member map —
+ * so renamed/recoloured chips repaint everywhere without a reload.
  *
  * NOT A MODAL, and it never was one: it announced `role="dialog"` with no
  * `aria-modal`, which is the announcement without any of the behaviour — no
@@ -26,7 +26,7 @@
 import { useCallback, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { deleteTag, updateTag } from '@/lib/api';
-import { curationKeys } from '@/lib/queries';
+import { revalidateTags } from '@/lib/tagCache';
 import type { Tag, TagColor } from '@/lib/types';
 import AnchoredPopover from '@/components/AnchoredPopover';
 import TagColorPicker from '@/components/TagColorPicker';
@@ -118,20 +118,6 @@ function Popover({
     otherNames.includes(trimmed.toLowerCase());
   const dirty = trimmed !== tag.name || color !== tag.color;
 
-  const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: curationKeys.tags });
-    qc.invalidateQueries({
-      predicate: (q) => {
-        const k = q.queryKey;
-        return (
-          Array.isArray(k) &&
-          k[0] === 'curation' &&
-          (k[1] === 'listing-tags' || k[1] === 'collections')
-        );
-      },
-    });
-  };
-
   const save = useMutation({
     mutationFn: () =>
       updateTag(tag.id, {
@@ -140,7 +126,7 @@ function Popover({
       }),
     onSuccess: () => {
       setError(null);
-      invalidateAll();
+      revalidateTags(qc);
       onClose();
     },
     onError: (err: Error) => setError(err.message || 'Failed to save'),
@@ -149,7 +135,7 @@ function Popover({
   const del = useMutation({
     mutationFn: () => deleteTag(tag.id),
     onSuccess: () => {
-      invalidateAll();
+      revalidateTags(qc);
       onDeleted?.(tag.id);
       onClose();
     },

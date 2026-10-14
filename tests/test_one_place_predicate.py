@@ -94,8 +94,9 @@ _W3_S3 = "504_location_w3_one_code_predicate.sql"
 # `jine`; 590 carries 549's forward verbatim except the status and portal arms,
 # which became one portal_status_matches() call (MS19); 597 carries 590's forward
 # verbatim except the dead parameters' arms and the two exclusion arguments of
-# that call. Re-read the chip arms when this moves again.
-_LATEST_RPC_DEFINITION = "597_portal_exclusion.sql"
+# that call; 598 carries 597's forward verbatim plus one property-id denylist
+# conjunct after the allowlist arm. Re-read the chip arms when this moves again.
+_LATEST_RPC_DEFINITION = "598_property_ids_excluded.sql"
 
 
 def _function_body(func: str) -> str:
@@ -204,9 +205,10 @@ def test_a_chip_without_a_code_matches_nothing_in_sql_too(func: str) -> None:
 def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     """The SPA builds ONE argument object for both RPCs (tests/test_browse_map_read_
     contract.py), so the chip parameters are the one place predicate's wire shape.
-    Since 436/439 the lists grew 537's `hide_dismissed` and 597's two exclusion
-    parameters, and 597 dropped the five nothing sent (and the map's
-    `listing_ids_filter`) — tests/test_portal_exclusion_migration.py pins each step."""
+    Since 436/439 the lists grew 537's `hide_dismissed`, 597's two exclusion
+    parameters and 598's `property_ids_excluded`, and 597 dropped the five nothing
+    sent (and the map's `listing_ids_filter`) — tests/test_portal_exclusion_migration.py
+    and tests/test_property_ids_excluded_migration.py pin each step."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
     for func, previous in (
@@ -217,6 +219,7 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
         assert new == [p for p in old if p not in gone] + [
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
+            "property_ids_excluded",
         ], f"{func}: parameter list changed"
         for chip_param in (
             "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",
