@@ -113,7 +113,7 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   advert's rejects as it does its stored pairs. Next (E943's other half, before Prague): facts only
   for the claim and the scored endpoints, the decision digest stored on `rt_fp`.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
-  `apply`/`unapply` modes; `legacy_retire` goes at W8. Widening the scope is the operator's call.
+  `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.
   Until then the brake is interval 0, then `unapply` (E927: one `detach_listings` call per group);
   the commit that deletes the modes must name what replaces it. `legacy_retire` rides on
