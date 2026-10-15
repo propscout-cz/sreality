@@ -45,7 +45,6 @@ from autodedup.incremental_sql import (
     RT_CURSOR_READ_SQL,
     RT_CURSOR_SET_SQL,
     RT_LOCK_GUARD_SQL,
-    RT_SCOPE_SCAN_SEEN_SQL,
     RT_STATEMENT_GUARD_SQL,
 )
 from toolkit.property_identity import merge_property_set
@@ -108,11 +107,7 @@ def _unread(conn: Any, generation: str, listing_ids: Sequence[int],
             blocks: Sequence[str]) -> set[int]:
     """The adverts whose scope block the lane has not fully read: a block never walked, or one
     whose snapshot still holds an advert with no fingerprint."""
-    walked = {str(row[0]) for row in _rows(conn, RT_SCOPE_SCAN_SEEN_SQL,
-                                           {"generation": generation})}
-    unread = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
-                                           {"generation": generation})}
-    unread |= {block for block in blocks if block not in walked}
+    unread = A.rt_unread_blocks(conn, generation, blocks)
     if not unread or not listing_ids:
         return set()
     return {int(lid) for lid, block in _rows(conn, S.RC_MEMBER_BLOCKS_SQL, {

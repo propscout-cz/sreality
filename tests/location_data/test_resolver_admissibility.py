@@ -108,7 +108,7 @@ class _ClaimCursor:
     It refuses a statement that does not carry them and then applies them to its own rows, so
     the tests below go red BOTH when a rail is dropped from the SQL and when the loader stops
     using that SQL. `sreality` is at version 4 and `bazos` at 7 (W18's head, which the rows
-    below were written against; bazos@8 declares the same five types plus three).
+    below were written against; bazos@9 declares the same five types plus three).
     """
 
     ACTIVE = {"sreality": 4, "bazos": 7}

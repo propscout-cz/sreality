@@ -1,11 +1,14 @@
 """A2: undo the old engine's merges in the apply scope's area before this engine merges there.
 
-TEMPORARY SCAFFOLDING, kept until W8 by the ordering rule of the W5 ONE LANE row in
+TEMPORARY SCAFFOLDING, kept by the ordering rule of the W5 ONE LANE row in
 docs/design/autodedup/PROGRAM.md. Lane mode `apply` with `retire_legacy=1` runs it BEFORE the plan
 it applies, in the same dispatch and under the same `dry_run`, so no duplicate reappears in
 Browse between the undo and the engine's merges (decision 3). The mode refuses it with
 `listing_ids` (the step reads blocks only) and, before anything is undone, for a generation with
 no proposed group inside the scope (a typo'd or unstored generation would undo and merge nothing).
+With `generation=rt` and `blocks=` (W8, E953) it runs alone, against the live stream's groups,
+none of which that run merges (the worker's lane re-merges after the undo): so every legacy group
+the live stream holds whole is left, and an operator "same" pair is never parted.
 
 A legacy group is one `merge_group_id` of `property_merge_events` with `source = 'auto'` (the
 removed engine; NOT `generation = 'legacy'`, which migration 475 stamped on every row of
@@ -17,7 +20,8 @@ engine); then `operator_split` (a row of it undone by anyone but this step: the 
 advert back by hand and ruled it apart from the rest), else `intact`. An intact group is undone
 only when its adverts (the survivor's, the retired properties' and every advert the merge moved)
 ALL sit inside the scope's blocks, the undo would neither separate two adverts an operator
-ruled "same" that THIS RUN does not re-join (`skipped:operator_ruled_same`; E907: a ruled pair
+ruled "same" (a pair ruling, or a group ruling over both) that THIS RUN does not re-join
+(`skipped:operator_ruled_same`; E907: a ruled pair
 the undo separates but that sits inside ONE engine group this run may merge is re-merged by the
 apply that follows, so it does not hold the group back) nor NEWLY join two the operator ruled
 apart (a
@@ -29,13 +33,14 @@ property and the survivor's own adverts (those no live old-engine row moved ther
 typed and disjoint (a rental merged onto a sale, in one step or two), wrong by construction and
 never re-made by the engine, so undone whatever the scope names (`retired:mixed_deal_type`).
 Last, a group the ENGINE holds whole - every advert of both sides in ONE engine group of the
-generation that this run may not merge (not proposed, or not admitted by the scope: the trial
-edge cuts it) - is left (`skipped:engine_agrees_out_of_scope`, with that group and why): undoing
-it would split what the engine calls one property, and nothing would re-merge it until the
-scope widens (W6). Where the engine splits the group itself (different engine groups, some or
-all adverts ungrouped), it is undone. Every other group touching the area is reported and left
-alone. The dry run reads the same
-classification, so it predicts every skip.
+generation that this run may not merge (not proposed, not admitted by the scope: the trial
+edge cuts it, or `reconciled_by_lane` under `generation=rt`) - is left (`skipped:engine_agrees`,
+with that group and why): undoing it would split what the engine calls one property, and
+nothing in this run would re-merge it. Where the engine splits the group itself (different engine
+groups, some or all adverts ungrouped), it is undone - under the live stream only when the lane
+has fingerprinted every advert of it (else `skipped:unread_by_lane`: an unread advert is in no
+group). Every other group touching the area is reported and left alone. The dry run reads the
+same classification, so it predicts every skip.
 
 Groups go newest first, each in its own transaction over its locked properties and a fresh read,
 as ONE `detach_listings` call over the adverts it moved (ledger order, each back to where THAT
@@ -66,7 +71,9 @@ from __future__ import annotations
 import os
 import time
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -84,7 +91,8 @@ MIXED: str = "mixed_deal_type"
 OUTSIDE_CATEGORIES: str = "outside_scope_categories"
 RULED_SAME: str = "operator_ruled_same"
 RULED_DIFFERENT: str = "operator_ruled_different"
-ENGINE_AGREES: str = "engine_agrees_out_of_scope"
+ENGINE_AGREES: str = "engine_agrees"
+UNREAD: str = "unread_by_lane"
 SAME_VERDICTS: tuple[str, ...] = ("same",)
 MAX_PASSES: int = 10
 ARTIFACT: tuple[str, str] = ("apply", "legacy_retire.json")
@@ -164,6 +172,19 @@ select l.property_id, l.id, l.category_type,
 # Which of these adverts a live old-engine row moved: the rest of a survivor's adverts are its own
 # (or an operator's merge), the side a merge that CREATED a deal-type mix is read against.
 # property_merge_events_listing_live_idx (migration 560).
+# Under the live stream: the area's adverts with no fingerprint in it, which the lane has not read
+# (its block-level wait, `apply.rt_unread_blocks`, reads only the block's membership snapshot: an
+# advert re-located into the block since its last walk, or past the walk's `enter_slice` row cap,
+# is in no snapshot). `rt_fp` primary key (generation, listing_id).
+UNREAD_SQL = """
+select a.listing_id
+  from unnest(%(area_ids)s::bigint[]) as a(listing_id)
+ where not exists (select 1
+                     from autodedup.rt_fp f
+                    where f.generation = %(generation)s::text
+                      and f.listing_id = a.listing_id)
+"""
+
 AUTO_MOVED_SQL = """
 select distinct e.listing_ref_id
   from public.property_merge_events e
@@ -205,6 +226,8 @@ class LegacyGroup:
     # E907: the ruled-same pairs of `separates_same` one mergeable engine group re-joins.
     same_held_by_engine: list[list[int]] = field(default_factory=list)
     joins_different: list[list[int]] = field(default_factory=list)
+    # Under the live stream: its adverts the lane has not fingerprinted (UNREAD_SQL).
+    unread: list[int] = field(default_factory=list)
     health: str = INTACT
     selected: bool = False
     outcome: str = ""
@@ -254,10 +277,11 @@ _CLOCK: dict[str, list[float]] = {}
 
 
 def _statement(sql: str) -> str:
-    names = {AREA_SQL: "area", GROUPS_SQL: "groups", ADVERTS_SQL: "adverts",
+    names = {AREA_SQL: "area", GROUPS_SQL: "groups", ADVERTS_SQL: "adverts", UNREAD_SQL: "unread",
              AUTO_MOVED_SQL: "auto_moved", BUILT_ON_SQL: "built_on",
              S.PROPERTY_STATE_SQL: "property_state", S.PAIR_VERDICTS_SQL: "pair_verdicts",
-             S.MUST_NOT_LINK_SQL: "must_not_link", S.LOCK_PROPERTIES_SQL: "lock_properties"}
+             S.CLUSTER_VERDICTS_SQL: "group_verdicts", S.MUST_NOT_LINK_SQL: "must_not_link",
+             S.LOCK_PROPERTIES_SQL: "lock_properties"}
     return names.get(sql, "other")
 
 
@@ -303,6 +327,9 @@ def _outcome(g: LegacyGroup, categories: frozenset[str] | None) -> str:
         return f"skipped:{g.health}"
     if g.outside:
         return "skipped:straddling"
+    # An advert the live stream has not read sits in no group: not the engine keeping it apart.
+    if g.unread:
+        return f"skipped:{UNREAD}"
     # E907: only a ruled-same pair nothing re-joins holds the group back.
     if len(g.same_held_by_engine) < len(g.separates_same):
         return f"skipped:{RULED_SAME}"
@@ -324,6 +351,10 @@ class EngineMaps:
     merging: Mapping[int, int] = field(default_factory=dict)
     other: Mapping[int, int] = field(default_factory=dict)
     why: Mapping[int, str] = field(default_factory=dict)
+    # The live stream's generation (W8): an advert with no fingerprint in it was never read, so
+    # a group holding one is left (`skipped:unread_by_lane`). `unread` is filled from the area.
+    stream: str | None = None
+    unread: frozenset[int] = frozenset()
 
 
 def _held_by_engine(pair: list[int], engine: EngineMaps) -> bool:
@@ -338,12 +369,14 @@ def _held_by_engine(pair: list[int], engine: EngineMaps) -> bool:
 
 def _engine(g: LegacyGroup, engine: EngineMaps) -> None:
     ids = {*g.adverts, *g.moved}
+    g.unread = sorted(lid for lid in ids if lid in engine.unread)
     g.same_held_by_engine = [pair for pair in g.separates_same if _held_by_engine(pair, engine)]
     g.engine_clusters = sorted({engine.merging[lid] for lid in ids if lid in engine.merging})
     g.engine_clusters_not_merging = sorted({engine.other[lid] for lid in ids
                                             if lid in engine.other})
     # The engine holds every advert of the group, both sides, in ONE group this run may not
-    # merge: undoing now would split what the engine calls one property (W6 re-merges it).
+    # merge: undoing now would split what the engine calls one property, and nothing in this run
+    # re-merges it.
     one = g.engine_clusters_not_merging
     if ids and not g.engine_clusters and len(one) == 1 and all(lid in engine.other
                                                                 for lid in ids):
@@ -427,17 +460,36 @@ def _rulings(
 ) -> tuple[set[tuple[int, int]], set[tuple[int, int]], set[int]]:
     """The operator's "same" pairs and negatives (pair verdicts, and must-not-links whose
     source is 'operator': a machine guard is not a ruling) among these adverts, and which of
-    them a live old-engine row moved."""
+    them a live old-engine row moved. A group ruling whose newest word is "same" makes every
+    pair of its set a "same" pair: the lane reads pair rulings only, so it need not hold them."""
     if not listing_ids:
         return set(), set(), set()
     same = {(int(lo), int(hi)) for lo, hi, _v in _rows(conn, S.PAIR_VERDICTS_SQL, {
         "listing_ids": listing_ids, "negatives": list(SAME_VERDICTS)})}
+    same |= _same_sets(conn, listing_ids)
     different = {(int(lo), int(hi)) for lo, hi, _v in _rows(conn, S.PAIR_VERDICTS_SQL, {
         "listing_ids": listing_ids, "negatives": list(NEGATIVE_VERDICTS)})}
     different |= {(int(lo), int(hi)) for lo, hi, src in _rows(
         conn, S.MUST_NOT_LINK_SQL, {"listing_ids": listing_ids}) if src == "operator"}
     moved = {int(r[0]) for r in _rows(conn, AUTO_MOVED_SQL, {"listing_ids": listing_ids})}
     return same, different, moved
+
+
+def _same_sets(conn: Any, listing_ids: list[int]) -> set[tuple[int, int]]:
+    """Every pair of a group ruling's set whose NEWEST ruling is "same" (per set the newest word
+    stands, as `apply.Negatives` reads it); a setless row names no set and is skipped."""
+    newest: dict[frozenset[int], tuple[tuple[float, int], str]] = {}
+    for _key, verdict, _gen, member_ids, decided_at, vid in _rows(conn, S.CLUSTER_VERDICTS_SQL, {
+            "listing_ids": listing_ids, "cluster_keys": []}):
+        if member_ids is None:
+            continue
+        ruled = frozenset(int(x) for x in member_ids)
+        order = (decided_at.timestamp() if isinstance(decided_at, datetime) else 0.0,
+                 int(vid or 0))
+        if len(ruled) >= 2 and (ruled not in newest or order > newest[ruled][0]):
+            newest[ruled] = (order, str(verdict))
+    return {pair for ruled, (_order, verdict) in newest.items() if verdict in SAME_VERDICTS
+            for pair in combinations(sorted(ruled), 2)}
 
 
 def _retire_one(
@@ -506,7 +558,7 @@ def _counts(first: list[LegacyGroup], final: list[LegacyGroup]) -> dict[str, Any
         "retire_set_without_engine_cluster": sum(not g.engine_clusters for g in chosen),
         "engine_clusters_not_merging_touching_retire_set": len({
             k for g in chosen for k in g.engine_clusters_not_merging}),
-        # Left for W6: the engine holds the whole group in one group this run may not merge.
+        # Left: the engine holds the whole group in one group this run may not merge.
         ENGINE_AGREES: sum(g.outcome == f"skipped:{ENGINE_AGREES}" for g in final),
         f"{ENGINE_AGREES}_by_reason": dict(sorted(Counter(
             g.engine_agrees_why or "unknown" for g in final
@@ -536,6 +588,9 @@ def retire_legacy(
     detach = detach or detach_listings
     undone_by = f"{RETIRE_BY}:{run_id}"
     engine = engine or EngineMaps()
+    if engine.stream:
+        engine = replace(engine, unread=frozenset(int(r[0]) for r in _rows(
+            conn, UNREAD_SQL, {**area, "generation": engine.stream})))
     first = read_groups(conn, area, categories, engine=engine)
     final: dict[str, LegacyGroup] = {g.merge_group_id: g for g in first}
     result: dict[str, Any] = {
@@ -637,7 +692,7 @@ def note_deferred(
     write_json(Path(out_dir).joinpath(*ARTIFACT), result)
     if note:
         _append_summary(f"\n**Run cap:** {note}.\n")
-    return _brief(result)
+    return brief(result)
 
 
 def summary_markdown(result: Mapping[str, Any]) -> str:
@@ -672,7 +727,7 @@ def summary_markdown(result: Mapping[str, Any]) -> str:
                   + " ".join(str(k) for k in result["engine_clusters"][:200])]
     if result.get("engine_clusters_not_merging"):
         lines += ["", "Engine groups touching it that this run will not merge (not proposed, "
-                  "or outside the scope): "
+                  "outside the scope, or the lane's to merge): "
                   + " ".join(str(k) for k in result["engine_clusters_not_merging"][:200])]
     rows = [g for g in result.get("groups") or [] if not g["outcome"].startswith("skipped:")]
     rows += [g for g in result.get("groups") or [] if g["outcome"].startswith("skipped:")]
@@ -705,10 +760,10 @@ def _publish(out_dir: Path, result: dict[str, Any]) -> None:
     _append_summary(summary_markdown(result))
 
 
-def _brief(result: Mapping[str, Any]) -> dict[str, Any]:
+def brief(result: Mapping[str, Any]) -> dict[str, Any]:
     return {key: result[key] for key in (
-        "counts", "stopped", "aborted", "undone_by", "category_types", "passes", "timings",
-        "area_listings")
+        "counts", "stopped", "aborted", "undone_by", "blocks", "category_types", "passes",
+        "timings", "area_listings")
         if key in result}
 
 

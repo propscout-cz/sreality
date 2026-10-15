@@ -193,15 +193,18 @@ serve delisted pages again), an off-database copy lives in R2 under
 `export_raw_pages_archive.yml`), and `tests/test_portal_raw_pages_guard.py` fails CI on
 any `DELETE`/`TRUNCATE`/`DROP` against the table. Coordinates come from the detail page's embedded Google-Maps/Mapy.cz link
 (page-wide, CZ-bbox-guarded); they are what lets cross-source dedup match bazos against
-sreality. **bazos' location TEXT is claimed from the text lane's reading since W3** (`bazos@8`, the
+sreality. **bazos' location TEXT is claimed from the text lane's reading since W3** (`bazos@9`, the
 `bzs.txt.*` entries): the one call that reads each advert (headline + description) for floor and lift
 also answers where the property itself is — town, part of town, street, house numbers — quoting its
 words (`location_data/text_reading.py`), and the claim lane mines that stored answer. It replaced two
 carriers: the town anchor's href slug, which names the POST OFFICE's town (35 of 137 sampled adverts
 sat in the wrong town, 33 of them by postcode — the PSČ entry stays), and W18's whole-headline street
 claim (`bzs.det.street_cue`, split by the resolver). Nothing in the reading is trusted on its own: V1
-the quote is verbatim in the advert, V2 the value is grounded in its quote, V3 an offered property in
-Czechia, V4 a number carries its marker — and the register decides whether a name is a place.
+the quote is verbatim in the advert (W4: or the value itself stands in it as whole words, and is then its
+quote), V2 the value is grounded in its quote (W4: or by its initials, "Č.B."), V3 an offered property
+in Czechia (W4: a `not_property` advert keeps its TOWN alone, and the prompt counts business premises
+— a shop, a bar, an office to let, sell or take over — as an offer), V4 a number carries its marker —
+and the register decides whether a name is a place.
 
 **Data source (bezrealitky.cz).** A scheduled scraper (`scraper/bezrealitky_client.py`,
 `bezrealitky_parser.py`, `bezrealitky_main.py`, workflow `scrape_bezrealitky.yml` — pilot,
@@ -1491,9 +1494,9 @@ renumber.** Navigate by area:
     **Standing rule: the removed code, its comments and its design docs are never consulted
     again for any purpose.** They survive in git history and on branch
     `backup/pre-new-dedup-2026-08` for forensic recovery only. The removed engine's OUTPUT, the
-    `source='auto'` rows of `property_merge_events`, is selected BY SOURCE by one piece of code only, until W8: the
+    `source='auto'` rows of `property_merge_events`, is selected BY SOURCE by one piece of code only: the
     AUTODEDUP legacy-retire lane (`autodedup/legacy_retire.py`, `mode=apply` with
-    `retire_legacy=1`; the autodedup PROGRAM.md D7 carve-out), which reads them only to find
+    `retire_legacy=1`; since W8 (E953, 2026-10-14) per area under the live generation, `generation=rt,blocks=<area>`, dry run first; the autodedup PROGRAM.md D7 carve-out), which reads them only to find
     which of those merges to undo and feeds nothing it reads to the engine. The other ledger
     reads (`detach_listings`, `GET /properties/{id}/origins`, which returns the `source` for
     display) are source-blind link mechanics. The operator owns all merge/no-merge logic in the rebuild; thresholds, weights and
@@ -1713,13 +1716,15 @@ renumber.** Navigate by area:
     deadline rolls back and halves its rate. The
     batch `apply` and `unapply` modes stay until the lane has run three live days and checkpoint
     C2 passes (the undo path after that is an open operator decision, `roadmap/autodedup.md`);
-    `legacy_retire` until W8. **The engine's only detaches** are two `detach_listings` callers, one
+    `legacy_retire` per area under the live generation since W8 (E953). **The engine's only detaches** are two `detach_listings` callers, one
     call per group, that write no ruling: `mode=unapply` over its own groups (below), and `retire_legacy=1`
     (`autodedup/legacy_retire.py`), which, in the same dispatch and under the same `dry_run` as
     an apply, first undoes the removed engine's still-intact `source='auto'` merges whose adverts
     all sit in the scope's blocks and deal types (or whose merge mixed deal types), unless an
     operator ruling or the engine's own grouping holds one back, stamping
-    `undone_by='autodedup-legacy-retire:<run>'`. Both are group-scoped, so neither can move a
+    `undone_by='autodedup-legacy-retire:<run>'`; with `generation=rt` and `blocks=` (W8, E953) it
+    runs alone against the live stream's groups, over blocks the lane has fully read, and the lane
+    re-merges after the brake lifts. Both are group-scoped, so neither can move a
     native advert: only the operator splits one.
     **AUTODEDUP apply path.** Merges may now ALSO be ordered by the AUTODEDUP engine
     (`docs/design/autodedup/PROGRAM.md` E900–E906) — through the same chokepoint, never around
@@ -3471,8 +3476,11 @@ writes is not evidence a portal published.
   terminate the parent's session. The pool is an accelerator only: one outcome per body IN ORDER, so
   a content-triggered refusal still costs one listing's page entries and a pool the OOM killer takes
   finishes its batch on the main thread.
-* *The readings half* (W3, migration 581) runs FIRST and hourly only (its full read of the readings
-  table fails the minute lane's 5 s gate cold), in the page half's budget share. It mines each listing's
+* *The readings half* (W3, migration 581) runs FIRST in the hourly run (its full read of the readings
+  table fails the minute lane's 5 s gate cold), in the page half's budget share — and since W4 also on
+  the worker right after each text-lane pass, scoped to the listings that pass read
+  (`claims_intake.mine_readings`, batch lane `location_readings_fast`, 132 ms cold for 500 listings;
+  `LOCATION_READINGS_FAST_ENABLED=0` stops it), the hourly run staying the backstop. It mines each listing's
   CURRENT reading — the successful reading of its CURRENT advert text (hashed by the text lane's SQL),
   at the lane's `extractor_version` if one exists, else the newest — unless its stamp
   (`mined_contract_version`) is the active `<source>@<version>`; readings of another text get it with
@@ -3705,7 +3713,15 @@ portal's payload or its own page, and every other stamp is class E outright.
   část obce by name; a PSČ set; the pin's obec; the nearest obec within the 250 m sliver; last the
   okres or kraj. A town name binds by the v5.5 TOWN RULE (obec/část/KÚ climbed to the obec, kept by
   the PSČ, else by okres/kraj and — when a PSČ exists or the pin is declared precise — within 40 km
-  of the pin; a tie goes to the pin's obec, else the nearest). The tail of that
+  of the pin; a tie goes to the pin's obec, else the nearest). Since v5.7 (W4) the village a town name
+  CLIMBED from is the part (`climbed_from_town_name`: "Hracholusky" is a část of Úlice; a KÚ through
+  the část its qualifier-free name spells) when ONE town survives, inheriting how it was chosen (a
+  tie-break's low confidence; the one claim's agreements), never the eponymous main part; a name that
+  is no register name retries without its " u X" tail, kept to X where X is one of the obce the base
+  climbs to, else only the PSČ may place it (`qualifier_stripped`: "Boudy u Jesenice"); a PSČ shared by
+  several obce yields to the one whose street index holds a claimed street exactly, a line that is also
+  a place of one of them excepted (`street_in_town`). A part named by several sources is ONE candidate.
+  The tail of that
   chain is what keeps a border pin or a region-only listing from having no town at all, which rule 25
   does not allow: each answers at `low` confidence, and a sliver is NOT a dispute, because a polygon
   edge is not a disagreement. **The pin BIND reverse-geocodes from is the pin the row publishes** —
@@ -3729,9 +3745,15 @@ portal's payload or its own page, and every other stamp is class E outright.
   exactly — with **both keys** (the register keeps `náměstí`/`třída`/`nábřeží` in `name_norm` while S1
   parses them off, so both are folded both ways — worth 215 titles) and **not a place** (a claim naming
   the anchoring obec or a část obce inside it is never a street — 76 register streets across 20 obce are
-  spelled exactly like a část obce of their own town). It fails CLOSED on two distinct street codes,
-  and a bound street carrying a house number reaches R1. R3 (trigram) runs only when nothing bound
-  exactly and never undoes an exact tie. W18 split bazos' whole headline on separators and kept R3 off
+  spelled exactly like a část obce of their own town) — since v5.7 such a line, or one S1 refused as a
+  place, IS the one část it names (`street_names_part`), and against a claimed part naming another, no
+  part at all (a claimed part of another level stands). It fails CLOSED on two distinct street codes —
+  except (v5.7) among accent-folded twins (14 keys in 6 obce: Hanusova/Hanušova) the one with a door in
+  the listing's one bound část (`street_part_tiebreak`), with no part bound the one a claim WITH
+  diacritics is spelled like (per claim; the two contradicting is no street) — and a bound street
+  carrying a house number reaches R1. Portal abbreviations fold on both sides (ČSA, nám., tř., nábř.,
+  gen., kpt., plk., sídl.: 0 new collisions in any obec). R3 (trigram) runs only when nothing bound
+  exactly and never undoes an exact tie or names a part. W18 split bazos' whole headline on separators and kept R3 off
   it (`claim_confidence: low`); v5.6 deleted both once W3's reading named the street itself.
 * **FILL** (`fill.py`) joins the hierarchy off the bound ids: ONE `admin_chain` read returning the
   unit itself ahead of its ancestors. Administrative names and codes are ALWAYS the registry's own
