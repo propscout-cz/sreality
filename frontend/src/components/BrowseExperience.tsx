@@ -290,7 +290,8 @@ export default function BrowseExperience({
     [mapSplit],
   );
 
-  /* Map tab fetches the map cohort (capped) + the paginated card slice. */
+  /* Map tab fetches the map cohort (points, or counted by tile above the point
+   * budget) + the paginated card slice. */
   const mapQuery = useQuery<MapResult, Error>({
     queryKey: browseKeys.map(filters),
     queryFn: ({ signal }) => fetchListingsForMap(filters, { signal }),
@@ -887,7 +888,7 @@ export default function BrowseExperience({
                   <ListingMap
                     rows={mapQuery.data?.rows ?? []}
                     cells={mapQuery.data?.cells ?? null}
-                    offGrid={mapQuery.data?.offGrid ?? 0}
+                    cellsLevel={mapQuery.data?.level ?? null}
                     total={mapQuery.data?.total ?? null}
                     cohortTotal={cohortTotal}
                     cohortTotalApprox={cohortTotalApprox}

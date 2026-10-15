@@ -16,7 +16,7 @@
  * which silently stranded two generations of wrong comments: ".range bypasses
  * the cap" (never true — there was just no cap left to hit) and "hard-capped at
  * 1,000, paging is mandatory" (true when written, stale after the lift).
- * Migration 394 re-pins the cap in git (50,000 = MAP_CAP); this helper is
+ * Migration 394 re-pins the cap in git (50,000); this helper is
  * deliberately correct under ANY value — absent, lowered, raised — so the two
  * layers never have to move together.
  *

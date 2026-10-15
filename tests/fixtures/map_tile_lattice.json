@@ -1,0 +1,895 @@
+{
+ "_doc": "Web Mercator world tiles as MapLibre defines them (512 px world at zoom 0; a level-L tile is 512*2^(zoom-L) px). tile(lng, lat, L): lat clamped to +-85.05112878, x = floor((lng+180)/360 * 2^L), y = floor((1 - ln((1+sin)/(1-sin))/(2*pi))/2 * 2^L), both clamped to [0, 2^L-1]. centre: lng = (x+0.5)/2^L*360-180, lat = atan(sinh(pi*(1-2*(y+0.5)/2^L))) in degrees, rounded to 5 decimals. Read by tests/ (SQL, migration 602) AND frontend/src (lib/mapCounts.ts) so the two formulas cannot drift. A centre round-trips to its own tile and to its parent at L-1.",
+ "cases": [
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 5,
+   "x": 17,
+   "y": 10
+  },
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 8,
+   "x": 138,
+   "y": 86
+  },
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 12,
+   "x": 2212,
+   "y": 1387
+  },
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 14,
+   "x": 8849,
+   "y": 5551
+  },
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 15,
+   "x": 17698,
+   "y": 11102
+  },
+  {
+   "name": "praha-namesti-miru",
+   "lng": 14.437,
+   "lat": 50.075,
+   "level": 18,
+   "x": 141584,
+   "y": 88819
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 5,
+   "x": 17,
+   "y": 10
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 8,
+   "x": 139,
+   "y": 87
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 12,
+   "x": 2236,
+   "y": 1403
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 14,
+   "x": 8947,
+   "y": 5613
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 15,
+   "x": 17895,
+   "y": 11226
+  },
+  {
+   "name": "brno-centre",
+   "lng": 16.608,
+   "lat": 49.195,
+   "level": 18,
+   "x": 143165,
+   "y": 89809
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 5,
+   "x": 17,
+   "y": 10
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 8,
+   "x": 140,
+   "y": 87
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 12,
+   "x": 2255,
+   "y": 1392
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 14,
+   "x": 9023,
+   "y": 5568
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 15,
+   "x": 18047,
+   "y": 11136
+  },
+  {
+   "name": "ostrava",
+   "lng": 18.28,
+   "lat": 49.835,
+   "level": 18,
+   "x": 144383,
+   "y": 89091
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 5,
+   "x": 17,
+   "y": 10
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 8,
+   "x": 136,
+   "y": 86
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 12,
+   "x": 2188,
+   "y": 1387
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 14,
+   "x": 8754,
+   "y": 5550
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 15,
+   "x": 17509,
+   "y": 11101
+  },
+  {
+   "name": "cheb-west-edge",
+   "lng": 12.37,
+   "lat": 50.079,
+   "level": 18,
+   "x": 140079,
+   "y": 88815
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 5,
+   "x": 17,
+   "y": 11
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 8,
+   "x": 140,
+   "y": 88
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 12,
+   "x": 2240,
+   "y": 1420
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 14,
+   "x": 8963,
+   "y": 5681
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 15,
+   "x": 17926,
+   "y": 11363
+  },
+  {
+   "name": "south-of-cz-box",
+   "lng": 16.95,
+   "lat": 48.2,
+   "level": 18,
+   "x": 143414,
+   "y": 90906
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 5,
+   "x": 17,
+   "y": 10
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 8,
+   "x": 138,
+   "y": 85
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 12,
+   "x": 2218,
+   "y": 1370
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 14,
+   "x": 8872,
+   "y": 5481
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 15,
+   "x": 17744,
+   "y": 10962
+  },
+  {
+   "name": "north-cz",
+   "lng": 14.95,
+   "lat": 51.05,
+   "level": 18,
+   "x": 141958,
+   "y": 87702
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 5,
+   "x": 5,
+   "y": 12
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 8,
+   "x": 43,
+   "y": 102
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 12,
+   "x": 702,
+   "y": 1635
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 14,
+   "x": 2810,
+   "y": 6542
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 15,
+   "x": 5621,
+   "y": 13084
+  },
+  {
+   "name": "lng-minus-118-outlier",
+   "lng": -118.24,
+   "lat": 34.05,
+   "level": 18,
+   "x": 44972,
+   "y": 104674
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 5,
+   "x": 27,
+   "y": 15
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 8,
+   "x": 216,
+   "y": 120
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 12,
+   "x": 3470,
+   "y": 1933
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 14,
+   "x": 13880,
+   "y": 7734
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 15,
+   "x": 27761,
+   "y": 15469
+  },
+  {
+   "name": "lng-125-outlier",
+   "lng": 125.0,
+   "lat": 10.0,
+   "level": 18,
+   "x": 222094,
+   "y": 123752
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 5,
+   "x": 17,
+   "y": 0
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 8,
+   "x": 138,
+   "y": 0
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 12,
+   "x": 2211,
+   "y": 0
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 14,
+   "x": 8847,
+   "y": 0
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 15,
+   "x": 17694,
+   "y": 0
+  },
+  {
+   "name": "lat-89-clamped",
+   "lng": 14.4,
+   "lat": 89.0,
+   "level": 18,
+   "x": 141557,
+   "y": 0
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 5,
+   "x": 17,
+   "y": 31
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 8,
+   "x": 138,
+   "y": 255
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 12,
+   "x": 2211,
+   "y": 4095
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 14,
+   "x": 8847,
+   "y": 16383
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 15,
+   "x": 17694,
+   "y": 32767
+  },
+  {
+   "name": "lat-minus-89-clamped",
+   "lng": 14.4,
+   "lat": -89.0,
+   "level": 18,
+   "x": 141557,
+   "y": 262143
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 5,
+   "x": 31,
+   "y": 16
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 8,
+   "x": 255,
+   "y": 128
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 12,
+   "x": 4095,
+   "y": 2048
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 14,
+   "x": 16383,
+   "y": 8192
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 15,
+   "x": 32767,
+   "y": 16384
+  },
+  {
+   "name": "antimeridian-east",
+   "lng": 179.99999,
+   "lat": 0.0,
+   "level": 18,
+   "x": 262143,
+   "y": 131072
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 0,
+   "x": 0,
+   "y": 0
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 5,
+   "x": 16,
+   "y": 16
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 8,
+   "x": 128,
+   "y": 128
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 12,
+   "x": 2048,
+   "y": 2048
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 14,
+   "x": 8192,
+   "y": 8192
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 15,
+   "x": 16384,
+   "y": 16384
+  },
+  {
+   "name": "equator-origin",
+   "lng": 0.0,
+   "lat": 0.0,
+   "level": 18,
+   "x": 131072,
+   "y": 131072
+  }
+ ],
+ "centre_round_trip": [
+  {
+   "level": 5,
+   "x": 17,
+   "y": 10,
+   "centre_lng": 16.875,
+   "centre_lat": 52.48278,
+   "parent_x": 8,
+   "parent_y": 5
+  },
+  {
+   "level": 5,
+   "x": 17,
+   "y": 10,
+   "centre_lng": 16.875,
+   "centre_lat": 52.48278,
+   "parent_x": 8,
+   "parent_y": 5
+  },
+  {
+   "level": 5,
+   "x": 17,
+   "y": 10,
+   "centre_lng": 16.875,
+   "centre_lat": 52.48278,
+   "parent_x": 8,
+   "parent_y": 5
+  },
+  {
+   "level": 5,
+   "x": 17,
+   "y": 10,
+   "centre_lng": 16.875,
+   "centre_lat": 52.48278,
+   "parent_x": 8,
+   "parent_y": 5
+  },
+  {
+   "level": 5,
+   "x": 17,
+   "y": 11,
+   "centre_lng": 16.875,
+   "centre_lat": 45.08904,
+   "parent_x": 8,
+   "parent_y": 5
+  },
+  {
+   "level": 5,
+   "x": 17,
+   "y": 10,
+   "centre_lng": 16.875,
+   "centre_lat": 52.48278,
+   "parent_x": 8,
+   "parent_y": 5
+  },
+  {
+   "level": 12,
+   "x": 2212,
+   "y": 1387,
+   "centre_lng": 14.45801,
+   "centre_lat": 50.09239,
+   "parent_x": 1106,
+   "parent_y": 693
+  },
+  {
+   "level": 12,
+   "x": 2236,
+   "y": 1403,
+   "centre_lng": 16.56738,
+   "centre_lat": 49.1817,
+   "parent_x": 1118,
+   "parent_y": 701
+  },
+  {
+   "level": 12,
+   "x": 2255,
+   "y": 1392,
+   "centre_lng": 18.2373,
+   "centre_lat": 49.80963,
+   "parent_x": 1127,
+   "parent_y": 696
+  },
+  {
+   "level": 12,
+   "x": 2188,
+   "y": 1387,
+   "centre_lng": 12.34863,
+   "centre_lat": 50.09239,
+   "parent_x": 1094,
+   "parent_y": 693
+  },
+  {
+   "level": 12,
+   "x": 2240,
+   "y": 1420,
+   "centre_lng": 16.91895,
+   "centre_lat": 48.19539,
+   "parent_x": 1120,
+   "parent_y": 710
+  },
+  {
+   "level": 12,
+   "x": 2218,
+   "y": 1370,
+   "centre_lng": 14.98535,
+   "centre_lat": 51.04139,
+   "parent_x": 1109,
+   "parent_y": 685
+  },
+  {
+   "level": 15,
+   "x": 17698,
+   "y": 11102,
+   "centre_lng": 14.44153,
+   "centre_lat": 50.07477,
+   "parent_x": 8849,
+   "parent_y": 5551
+  },
+  {
+   "level": 15,
+   "x": 17895,
+   "y": 11226,
+   "centre_lng": 16.60583,
+   "centre_lat": 49.19247,
+   "parent_x": 8947,
+   "parent_y": 5613
+  },
+  {
+   "level": 15,
+   "x": 18047,
+   "y": 11136,
+   "centre_lng": 18.27576,
+   "centre_lat": 49.83444,
+   "parent_x": 9023,
+   "parent_y": 5568
+  },
+  {
+   "level": 15,
+   "x": 17509,
+   "y": 11101,
+   "centre_lng": 12.36511,
+   "centre_lat": 50.08182,
+   "parent_x": 8754,
+   "parent_y": 5550
+  },
+  {
+   "level": 15,
+   "x": 17926,
+   "y": 11363,
+   "centre_lng": 16.94641,
+   "centre_lat": 48.19905,
+   "parent_x": 8963,
+   "parent_y": 5681
+  },
+  {
+   "level": 15,
+   "x": 17744,
+   "y": 10962,
+   "centre_lng": 14.9469,
+   "centre_lat": 51.05175,
+   "parent_x": 8872,
+   "parent_y": 5481
+  },
+  {
+   "level": 18,
+   "x": 141584,
+   "y": 88819,
+   "centre_lng": 14.43672,
+   "centre_lat": 50.07521,
+   "parent_x": 70792,
+   "parent_y": 44409
+  },
+  {
+   "level": 18,
+   "x": 143165,
+   "y": 89809,
+   "centre_lng": 16.60789,
+   "centre_lat": 49.19472,
+   "parent_x": 71582,
+   "parent_y": 44904
+  },
+  {
+   "level": 18,
+   "x": 144383,
+   "y": 89091,
+   "centre_lng": 18.28056,
+   "centre_lat": 49.83488,
+   "parent_x": 72191,
+   "parent_y": 44545
+  },
+  {
+   "level": 18,
+   "x": 140079,
+   "y": 88815,
+   "centre_lng": 12.36992,
+   "centre_lat": 50.07874,
+   "parent_x": 70039,
+   "parent_y": 44407
+  },
+  {
+   "level": 18,
+   "x": 143414,
+   "y": 90906,
+   "centre_lng": 16.94984,
+   "centre_lat": 48.20042,
+   "parent_x": 71707,
+   "parent_y": 45453
+  },
+  {
+   "level": 18,
+   "x": 141958,
+   "y": 87702,
+   "centre_lng": 14.95033,
+   "centre_lat": 51.0496,
+   "parent_x": 70979,
+   "parent_y": 43851
+  }
+ ]
+}
