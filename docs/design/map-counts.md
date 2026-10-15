@@ -1,8 +1,8 @@
 # Browse map counts — design and build spec
 
-Status: PROPOSED (2026-10-15), awaiting the operator's rulings in § Rulings needed. Once ruled, this
-document is the north star for the sprint: every decision below is taken once and not re-litigated
-inside a wave. Investigation: 14 Opus agents (four read-only readers, three independent designs,
+Status: RULED (2026-10-15): the operator took all six rulings in § Rulings needed on their defaults.
+This document is the north star for the sprint: every decision below is taken once and not
+re-litigated inside a wave. Investigation: 14 Opus agents (four read-only readers, three independent designs,
 three judges, one synthesis, three adversarial verifiers); every number below was measured on
 production (SELECT-only) or re-read in code at `main` be69959d unless marked "estimated".
 
@@ -258,3 +258,25 @@ Patchwork found and removed by this sprint: the "64-px rule"; "visually the same
   selected.
 - Town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one tile; a location
   precision concern, not a map one.
+
+## Build notes
+
+**W1 (2026-10-15, PR #1812).** Built as specified, rulings 1 to 6 on their defaults; receipt in the
+PR. Frontend production ledger +354 / −330 against #1809's head; the grouping, the pill image and
+the layer spec live in `lib/mapCounts.ts`. The point read's dead `MAP_CAP` limit went with it. The
+header count above the cards is the whole cohort; the map's "X of Y mapped" names the gap (the
+properties without coordinates) and the marks always sum to X.
+
+**W2 (2026-10-15, migration 602).** Measured on production before apply (SELECT-only). Default
+rental cohort nationwide, 176 023 rows: Index Only Scan, Heap Fetches 0, 36 205 level-18 tiles,
+402 ms cold (2 332 blocks) and 223 ms warm; each coarsening level about 21 ms in memory (Batches 1,
+no temp). Worst cohort (no filter, 821 264 rows): parallel Index Only Scan, Heap Fetches 0,
+133 614 level-18 tiles, 1.37 s cold (11 144 blocks); regrouping the full level-18 arrays costs
+about 90 ms per level, and the shipped cascade coarsens the arrays IN PLACE (each level from the
+previous level's groups, review finding 2026-10-15), so the chain is geometric, about 2.5 × the
+first level, roughly 1.6 s cold for a level-11 answer against 598's 657 ms; under the 8 s
+statement limit, no temp. Live `md5(prosrc)` of 598's body confirmed `8bf9e3ad…`; 602's own body
+`ceb508af…`. Ledger (W2, measured): migration +376 (history, rule 1); tests +303 / −147 across the
+five test files (the new static rail is 125 of the additions, the live rail +156 / −123); docs and the
+CI comment +69 / −19; the SQL body replaces 45 lines of grid arithmetic and seven output keys with
+35 lines of tile arithmetic and four keys.
