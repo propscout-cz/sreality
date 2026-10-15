@@ -9,7 +9,6 @@ import type {
   CuratedCity,
   MapCell,
   MapRow,
-  RentMapKraj,
   RentMapPolygon,
 } from '@/lib/queries';
 import type { CenterRadius, MapBounds } from '@/lib/filters';
@@ -31,7 +30,19 @@ import {
   type HoverData,
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
+import MapOverlayControls from '@/components/MapOverlayControls';
+import { OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import { escapeHtml } from '@/lib/escapeHtml';
+import { circleRing } from '@/lib/geoRing';
 import { propertyPath } from '@/lib/listingUrl';
+import {
+  overlayFillIds,
+  overlayFillOwner,
+  overlayPopupHtml,
+  useMapOverlays,
+  useMapZoom,
+} from '@/lib/mapOverlayDraw';
+import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   drawnUncertaintyRadiusM,
   isPinExact,
@@ -41,32 +52,13 @@ import {
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
 
-/* Polygon approximation of a metres-radius circle around (lat, lng).
- * Same haversine ring the small <LocationControl> uses — 96 points is
- * smooth enough to read as a circle while staying cheap. */
-const CENTER_CIRCLE_POINTS = 96;
-const EARTH_RADIUS_M = 6_371_000;
-
 const centerRadiusPolygon = (
   cr: CenterRadius,
-): GeoJSON.Feature<GeoJSON.Polygon> => {
-  const latRad = (cr.lat * Math.PI) / 180;
-  const coords: [number, number][] = [];
-  for (let i = 0; i <= CENTER_CIRCLE_POINTS; i++) {
-    const theta = (i / CENTER_CIRCLE_POINTS) * 2 * Math.PI;
-    const dx = cr.radius_m * Math.cos(theta);
-    const dy = cr.radius_m * Math.sin(theta);
-    const dLng =
-      (dx / (EARTH_RADIUS_M * Math.cos(latRad))) * (180 / Math.PI);
-    const dLat = (dy / EARTH_RADIUS_M) * (180 / Math.PI);
-    coords.push([cr.lng + dLng, cr.lat + dLat]);
-  }
-  return {
-    type: 'Feature',
-    properties: {},
-    geometry: { type: 'Polygon', coordinates: [coords] },
-  };
-};
+): GeoJSON.Feature<GeoJSON.Polygon> => ({
+  type: 'Feature',
+  properties: {},
+  geometry: { type: 'Polygon', coordinates: [circleRing(cr.lat, cr.lng, cr.radius_m)] },
+});
 
 const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
   type: 'Feature',
@@ -76,25 +68,12 @@ const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
 
 /* Fallback shape for a curated city that has no municipality boundary
  * (every city has one today, but a future operator upload might add one
- * before its admin_boundary link is backfilled). Same haversine ring as
- * the centre+radius overlay, returned as a bare Polygon geometry. */
+ * before its admin_boundary link is backfilled). */
 const circlePolygonGeom = (
   lat: number,
   lng: number,
   radiusM: number,
-): GeoJSON.Polygon => {
-  const latRad = (lat * Math.PI) / 180;
-  const coords: [number, number][] = [];
-  for (let i = 0; i <= CENTER_CIRCLE_POINTS; i++) {
-    const theta = (i / CENTER_CIRCLE_POINTS) * 2 * Math.PI;
-    const dx = radiusM * Math.cos(theta);
-    const dy = radiusM * Math.sin(theta);
-    const dLng = (dx / (EARTH_RADIUS_M * Math.cos(latRad))) * (180 / Math.PI);
-    const dLat = (dy / EARTH_RADIUS_M) * (180 / Math.PI);
-    coords.push([lng + dLng, lat + dLat]);
-  }
-  return { type: 'Polygon', coordinates: [coords] };
-};
+): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [circleRing(lat, lng, radiusM)] });
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 9.5 };
 /* Below this zoom only the round point dot is shown; at and above it
@@ -118,6 +97,9 @@ const PRICE_LABEL_MIN_ZOOM = CLUSTER_MAX_ZOOM;
 /* The lowest zoom at which an unclustered point — and therefore a label —
  * can exist. */
 const PIN_LABEL_VISIBLE_ZOOM = CLUSTER_MAX_ZOOM + 1;
+
+/* The listing layers a click hits first, whatever lies under them. */
+const LISTING_HIT_LAYERS = ['point', 'clusters', 'cells'];
 
 const czPriceCompact = new Intl.NumberFormat('cs-CZ', {
   notation: 'compact',
@@ -392,31 +374,6 @@ const toRentFC = (polygons: RentMapPolygon[], vk: RentVk): RentFC => ({
   }),
 });
 
-type KrajFC = GeoJSON.FeatureCollection<
-  GeoJSON.Polygon | GeoJSON.MultiPolygon,
-  { name: string }
->;
-
-const toKrajFC = (kraje: RentMapKraj[]): KrajFC => ({
-  type: 'FeatureCollection',
-  features: kraje.flatMap((k) => {
-    let geometry: GeoJSON.Geometry;
-    try {
-      geometry = JSON.parse(k.geojson) as GeoJSON.Geometry;
-    } catch {
-      return [];
-    }
-    if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') {
-      return [];
-    }
-    return [{
-      type: 'Feature' as const,
-      geometry,
-      properties: { name: k.name },
-    }];
-  }),
-});
-
 const rentPopupHtml = (p: RentFeatureProps): string => {
   /* The MF rent map stores rent_monthly_czk_m2 — the same basis token migration
    * 425 gives a monthly rent — but this popup labelled it with the CAPITAL unit,
@@ -427,9 +384,9 @@ const rentPopupHtml = (p: RentFeatureProps): string => {
     <div class="lp">
       <p class="lp-kicker">Cenová mapa nájemného</p>
       <div class="lp-row">
-        <p class="lp-price">${escape(p.name)}</p>
+        <p class="lp-price">${escapeHtml(p.name)}</p>
       </div>
-      <p class="lp-meta">Obec: ${escape(place)}, Nájemné referenčního bytu: ${escape(rentText)}</p>
+      <p class="lp-meta">Obec: ${escapeHtml(place)}, Nájemné referenčního bytu: ${escapeHtml(rentText)}</p>
     </div>
   `;
 };
@@ -524,19 +481,21 @@ interface Props {
   priceMetric?: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
   /* MF rent-price choropleth ("Cenová mapa nájemného"). The Browse page
-   * hands in the full ~7.6K territory polygons + the 14 kraj borders
-   * (fetched once, cached forever) when the layer is enabled. The fill
-   * sits BELOW the listing markers and city pins so those stay clickable
-   * on top. `rentVk` selects which size category's reference rent colours
-   * the choropleth; `showKraje` toggles the kraj boundary overlay. */
+   * hands in the full ~7.6K territory polygons (fetched once, cached
+   * forever) when the layer is enabled. The fill sits BELOW the listing
+   * markers and city pins so those stay clickable on top. `rentVk` selects
+   * which size category's reference rent colours the choropleth. */
   rentMapPolygons?: RentMapPolygon[];
-  rentMapKraje?: RentMapKraj[];
   showRentMap?: boolean;
   rentVk?: RentVk;
-  showKraje?: boolean;
   onToggleShowRentMap?: (next: boolean) => void;
   onRentVkChange?: (vk: RentVk) => void;
-  onToggleShowKraje?: (next: boolean) => void;
+  /* Reference overlays (lib/mapOverlays): the registry, the canonical
+   * `layers` selection, and where a change goes (the URL + the remembered
+   * selection — MapOverlayState.layers). Drawn under the city polygons. */
+  overlayRegistry?: MapOverlayRegistry;
+  overlayLayers?: string;
+  onOverlayLayersChange?: (next: string) => void;
   /* Price-stats growth overlay ("Růst cen a nájmů"). The Browse page hands in
    * the per-obec growth rows for the chosen dataset + window (price_stat_growth
    * RPC), the dataset list for the picker, and the active metric. Fill sits
@@ -589,13 +548,13 @@ export default function ListingMap({
   onToggleShowCities,
   onColorByIndexChange,
   rentMapPolygons,
-  rentMapKraje,
   showRentMap = false,
   rentVk = 1,
-  showKraje = false,
   onToggleShowRentMap,
   onRentVkChange,
-  onToggleShowKraje,
+  overlayRegistry,
+  overlayLayers = '',
+  onOverlayLayersChange,
   growthRows,
   growthShapes,
   growthDatasets,
@@ -651,11 +610,19 @@ export default function ListingMap({
    * the current callback without needing to rebind. */
   const onBoundsChangeRef = useRef(onBoundsChange);
   onBoundsChangeRef.current = onBoundsChange;
+  /* Latest overlay registry + selection for the click handler, which is
+   * registered once at load (the onHoverRef pattern below). */
+  const overlayRegistryRef = useRef(overlayRegistry);
+  overlayRegistryRef.current = overlayRegistry;
+  const overlayLayersRef = useRef(overlayLayers);
+  overlayLayersRef.current = overlayLayers;
   /* Whether pin labels can be on screen at all right now. Drives the "Ceny"
    * control's hint: without it the operator clicks a toggle at the zoom Browse
    * opens at, waits through a re-cluster of the whole cohort, and sees no
-   * pixel change anywhere — a control that reads as broken. */
-  const [labelsVisible, setLabelsVisible] = useState(false);
+   * pixel change anywhere — a control that reads as broken. The same zoom
+   * tells the overlay panels when to say "zoom in". */
+  const zoomLevel = useMapZoom(mapRef.current, ready);
+  const labelsVisible = zoomLevel != null && zoomLevel >= PIN_LABEL_VISIBLE_ZOOM;
   /* The legend's counts, over the plotted rows, by the same rule that picks each
    * pin's face — so the legend also answers "how much of this is only roughly
    * placed" for the whole view at once. */
@@ -734,23 +701,6 @@ export default function ListingMap({
         },
       });
 
-      /* Optional kraj-boundary overlay (the "Kraje" checkbox). Stronger
-       * line than the per-obec borders so region edges read clearly. */
-      map.addSource('rent-kraje', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      });
-      map.addLayer({
-        id: 'rent-kraje-line',
-        type: 'line',
-        source: 'rent-kraje',
-        layout: { visibility: 'none' },
-        paint: {
-          'line-color': 'rgba(40, 40, 70, 0.55)',
-          'line-width': 1.4,
-        },
-      });
-
       /* Price-stats growth overlay — one fill layer per metric, all hidden
        * until the data-effect flips the active one on. Same background slot as
        * the rent-map choropleth (below the listing dots + city pins). */
@@ -818,8 +768,7 @@ export default function ListingMap({
        * later-registered one replaced the listing popup with the city /
        * rent popup ("I clicked a listing and got city info"). */
       const listingUnderCursor = (p: maplibregl.PointLike): boolean =>
-        map.queryRenderedFeatures(p, { layers: ['point', 'clusters', 'cells'] })
-          .length > 0;
+        map.queryRenderedFeatures(p, { layers: LISTING_HIT_LAYERS }).length > 0;
 
       map.on('mouseenter', 'rent-map-fill', () => {
         map.getCanvas().style.cursor = 'pointer';
@@ -1316,6 +1265,34 @@ export default function ListingMap({
           .addTo(map);
       });
 
+      /* Reference-overlay areas (flood zones, …) answer a click unless a listing
+       * is hit — the topmost rendered feature decides. The city polygon is NOT
+       * in the list: 'Show cities' is on by default and Praha is a curated city,
+       * so it would swallow every flood click in Prague. Registered after the
+       * rent-map and city handlers, so this popup replaces theirs inside an area. */
+      map.on('click', (e) => {
+        const registry = overlayRegistryRef.current;
+        if (!registry) return;
+        const fills = overlayFillIds(registry).filter((id) => map.getLayer(id));
+        if (fills.length === 0) return;
+        const top = map.queryRenderedFeatures(e.point, {
+          layers: [...LISTING_HIT_LAYERS, ...fills],
+        })[0];
+        const owner = top ? overlayFillOwner(registry, top.layer.id) : null;
+        if (!top || !owner) return;
+        const variant = parseLayers(overlayLayersRef.current).get(owner.layer.key) ?? null;
+        popupRef.current?.remove();
+        popupRef.current = new maplibregl.Popup({
+          closeButton: true,
+          closeOnClick: true,
+          maxWidth: '300px',
+          className: 'listing-popup overlay-popup',
+        })
+          .setLngLat(e.lngLat)
+          .setHTML(overlayPopupHtml(owner.section.label, top.properties, owner.layer, variant))
+          .addTo(map);
+      });
+
       /* Locator halo — the card→map "where is it" answer. A separate
        * (unclustered) source fed from the hovered rows' coordinates and
        * drawn above every listing layer, so the highlight lands at the
@@ -1410,16 +1387,6 @@ export default function ListingMap({
       }
     });
 
-    /* Zoom is read back out of the map rather than tracked alongside it: a
-     * fitBounds, a cluster click and a scroll all change it, and only the map
-     * knows the result. `zoomend` fires for every one of them, programmatic
-     * included. Setting the same boolean is a no-op re-render in React, so this
-     * costs nothing while the operator pans within one label regime. */
-    const syncLabelVisibility = () => {
-      setLabelsVisible(map.getZoom() >= PIN_LABEL_VISIBLE_ZOOM);
-    };
-    map.on('zoomend', syncLabelVisibility);
-
     /* Only user-driven moveends propagate to the URL. Programmatic
      * fitBounds / easeTo calls produce events with `originalEvent ===
      * undefined`, which we skip — otherwise the initial-fit refit and
@@ -1469,26 +1436,6 @@ export default function ListingMap({
       map.setLayoutProperty('rent-map-line', 'visibility', vis);
     }
   }, [rentMapPolygons, rentVk, showRentMap, ready]);
-
-  /* MF rent choropleth — kraj-boundary overlay. Independent of VK; gated
-   * on both the rent map being shown AND the "Kraje" checkbox. */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-    const src = map.getSource('rent-kraje') as GeoJSONSource | undefined;
-    if (!src) return;
-    const kraje = rentMapKraje ?? [];
-    if (kraje.length > 0) {
-      src.setData(toKrajFC(kraje));
-    }
-    if (map.getLayer('rent-kraje-line')) {
-      map.setLayoutProperty(
-        'rent-kraje-line',
-        'visibility',
-        showRentMap && showKraje && kraje.length > 0 ? 'visible' : 'none',
-      );
-    }
-  }, [rentMapKraje, showRentMap, showKraje, ready]);
 
   /* Price-stats growth overlay — rebuild the FeatureCollection on data change,
    * and show only the active-metric fill layer when the overlay is enabled. */
@@ -1721,6 +1668,8 @@ export default function ListingMap({
    * state after the source data is replaced. */
   useMapFeatureHover(mapRef.current, ready, 'listings', hoveredIds, rows);
 
+  useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, 'city-fill');
+
   /* Locator halo data: list-origin hovers project the hovered rows'
    * coordinates into the halo source; everything else clears it (a
    * map-origin hover means the cursor is already on the spot). */
@@ -1891,8 +1840,8 @@ export default function ListingMap({
           />
         )}
       </div>
-      {/* Bottom-right overlay stack: growth control sits ABOVE the rent-map
-          control. Both are flex children here so they never overlap. */}
+      {/* Bottom-right overlay stack: growth control above the rent-map control
+          above the reference overlays. Flex children, so they never overlap. */}
       <div className="pointer-events-none absolute bottom-10 right-3 flex flex-col gap-2 items-end">
         <GrowthMapControls
           showGrowth={showGrowth}
@@ -1913,12 +1862,18 @@ export default function ListingMap({
         <RentMapControls
           showRentMap={showRentMap}
           rentVk={rentVk}
-          showKraje={showKraje}
           polygonCount={rentMapPolygons?.length ?? 0}
           onToggleShowRentMap={onToggleShowRentMap}
           onRentVkChange={onRentVkChange}
-          onToggleShowKraje={onToggleShowKraje}
         />
+        {onOverlayLayersChange && (
+          <MapOverlayControls
+            registry={overlayRegistry}
+            selection={overlayLayers}
+            onChange={onOverlayLayersChange}
+            zoom={zoomLevel}
+          />
+        )}
       </div>
     </div>
   );
@@ -1951,14 +1906,13 @@ function GrowthMapControls({
   const gradient = `linear-gradient(to right, ${cfg.ramp.map(([, c]) => c).join(', ')})`;
   return (
     <div className="flex flex-col gap-2 items-end">
-      <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]">
-        <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
-          <input type="checkbox" checked={showGrowth} onChange={(e) => onToggle?.(e.target.checked)} />
-          <span>Růst cen a nájmů</span>
-        </label>
-      </div>
+      <OverlayChip
+        label="Růst cen a nájmů"
+        checked={showGrowth}
+        onChange={(next) => onToggle?.(next)}
+      />
       {showGrowth && (
-        <div className="pointer-events-auto flex flex-col gap-2 px-2.5 py-2 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] min-w-[210px]">
+        <OverlayPanel className="min-w-[210px]">
           {datasets.length === 0 ? (
             <span className="text-[0.7rem] text-[var(--color-ink-3)]">Žádné datasety</span>
           ) : (
@@ -2006,7 +1960,7 @@ function GrowthMapControls({
             </div>
             {rowCount === 0 && <span className="text-[0.65rem] text-[var(--color-ink-3)]">Načítání…</span>}
           </div>
-        </div>
+        </OverlayPanel>
       )}
     </div>
   );
@@ -2015,19 +1969,15 @@ function GrowthMapControls({
 function RentMapControls({
   showRentMap,
   rentVk,
-  showKraje,
   polygonCount,
   onToggleShowRentMap,
   onRentVkChange,
-  onToggleShowKraje,
 }: {
   showRentMap: boolean;
   rentVk: RentVk;
-  showKraje: boolean;
   polygonCount: number;
   onToggleShowRentMap?: (next: boolean) => void;
   onRentVkChange?: (vk: RentVk) => void;
-  onToggleShowKraje?: (next: boolean) => void;
 }) {
   const vkName = useId();
   const rampGradient = `linear-gradient(to right, ${RENT_RAMP
@@ -2035,18 +1985,13 @@ function RentMapControls({
     .join(', ')})`;
   return (
     <div className="flex flex-col gap-2 items-end">
-      <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]">
-        <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showRentMap}
-            onChange={(e) => onToggleShowRentMap?.(e.target.checked)}
-          />
-          <span>Cenová mapa nájemného</span>
-        </label>
-      </div>
+      <OverlayChip
+        label="Cenová mapa nájemného"
+        checked={showRentMap}
+        onChange={(next) => onToggleShowRentMap?.(next)}
+      />
       {showRentMap && (
-        <div className="pointer-events-auto flex flex-col gap-2 px-2.5 py-2 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] min-w-[180px]">
+        <OverlayPanel className="min-w-[180px]">
           <div className="flex flex-col gap-1">
             {([1, 2, 3, 4] as RentVk[]).map((vk) => (
               <label
@@ -2062,16 +2007,6 @@ function RentMapControls({
                 <span>{RENT_VK_LABELS[vk]}</span>
               </label>
             ))}
-          </div>
-          <div className="border-t border-[var(--color-rule)] pt-1.5">
-            <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showKraje}
-                onChange={(e) => onToggleShowKraje?.(e.target.checked)}
-              />
-              <span>Kraje</span>
-            </label>
           </div>
           <div className="flex flex-col gap-1 border-t border-[var(--color-rule)] pt-1.5">
             <span className="text-[0.65rem] text-[var(--color-ink-3)]">
@@ -2092,7 +2027,7 @@ function RentMapControls({
               </span>
             )}
           </div>
-        </div>
+        </OverlayPanel>
       )}
     </div>
   );
@@ -2122,17 +2057,12 @@ function CityMapControls({
   const minById = useId();
   return (
     <>
-      <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]">
-        <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
-          <input
-            type="checkbox"
-            checked={showCities}
-            onChange={(e) => onToggleShowCities?.(e.target.checked)}
-          />
-          <span>Show cities</span>
-          <span className="text-[var(--color-ink-3)] tabular-nums">({cityCount})</span>
-        </label>
-      </div>
+      <OverlayChip
+        label="Show cities"
+        count={cityCount}
+        checked={showCities}
+        onChange={(next) => onToggleShowCities?.(next)}
+      />
       {showCities && (
         <div className="pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
           <span id={colorById} className="text-[var(--color-ink-2)] font-medium">Color by:</span>
@@ -2353,30 +2283,21 @@ function popupHtml(r: MapRow): string {
   return `
     <div class="lp">
       <div class="lp-row">
-        <p class="lp-price">${escape(price)}</p>
+        <p class="lp-price">${escapeHtml(price)}</p>
         ${inactive ? '<span class="lp-inactive">Inactive</span>' : ''}
       </div>
       <p class="lp-meta">
-        <span class="lp-mono">${escape(disposition)}</span>
+        <span class="lp-mono">${escapeHtml(disposition)}</span>
         <span class="lp-sep">·</span>
-        <span class="lp-mono">${escape(area)}</span>
-        ${ppm === '—' ? '' : `<span class="lp-sep">·</span><span class="lp-mono">${escape(ppm)}</span>`}
+        <span class="lp-mono">${escapeHtml(area)}</span>
+        ${ppm === '—' ? '' : `<span class="lp-sep">·</span><span class="lp-mono">${escapeHtml(ppm)}</span>`}
       </p>
-      ${place ? `<p class="lp-district">${escape(place)}</p>` : ''}
-      <p class="lp-precision">${escape(precision)}</p>
-      <p class="lp-seen" title="${escape(seenAbs)}">last seen ${escape(seen)}</p>
+      ${place ? `<p class="lp-district">${escapeHtml(place)}</p>` : ''}
+      <p class="lp-precision">${escapeHtml(precision)}</p>
+      <p class="lp-seen" title="${escapeHtml(seenAbs)}">last seen ${escapeHtml(seen)}</p>
       <a href="${propertyPath(r.property_id, r.listing_id)}" class="lp-link">View details →</a>
     </div>
   `;
-}
-
-function escape(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 function cityPopupHtml(
@@ -2405,17 +2326,17 @@ function cityPopupHtml(
     const isHi = highlighted && d.index_name === highlighted.index_name;
     return `
       <p class="lp-meta${isHi ? ' lp-strong' : ''}">
-        <span>${escape(label)}</span>
-        <span class="lp-mono">${escape(valueText)}</span>
+        <span>${escapeHtml(label)}</span>
+        <span class="lp-mono">${escapeHtml(valueText)}</span>
       </p>`;
   }).join('');
   return `
     <div class="lp">
       <p class="lp-kicker">Kvalita města</p>
       <div class="lp-row">
-        <p class="lp-price">${escape(c.name)}</p>
+        <p class="lp-price">${escapeHtml(c.name)}</p>
       </div>
-      <p class="lp-district">${escape(c.kraj_name)}${popLabel ? ` · ${escape(popLabel)}` : ''}</p>
+      <p class="lp-district">${escapeHtml(c.kraj_name)}${popLabel ? ` · ${escapeHtml(popLabel)}` : ''}</p>
       ${rows}
     </div>
   `;

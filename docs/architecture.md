@@ -543,6 +543,34 @@ match of the register are on screen; and the headline median holds out the 0–3
 Kč/m² is a denominator defect rather than a market fact. The reas.cz and Cenová-mapa outbound chips both stay beside it: the
 table holds only reas.cz's anonymous 24-month window. Waves and sequencing: `roadmap/sold-comps.md`.
 
+### Reference overlays — metro, flood zones, kraje (migration 600; spec `docs/design/map-overlays.md`)
+
+Static geometry from outside publishers, drawn as toggleable map layers. ONE path: a Python registry
+in `scripts/ingest_map_overlays.py` (sections → layers, each with its legend, note, attribution and
+reader) fills `map_overlay_sections` / `map_overlay_layers` / `map_overlay_features` (made valid,
+dissolved per layer, `ST_Subdivide`d, Web Mercator) and renders `map_overlay_tiles` once per ingest
+(`map_overlay_render_section`, z = the section's `minzoom`..`maxzoom`, MapLibre overzooms past 12);
+the API serves the registry (`GET /map-overlays`) and the tile bytes (`GET
+/map-overlays/{section}/{z}/{x}/{y}.mvt`, immutable, versioned by `fetched_at`) under
+`require_token`; the SPA's `lib/mapOverlayDraw` (lazy, map chunks only) registers one `overlay://` MapLibre protocol over
+`apiGetBlob` and one hook that builds the style layers from the registry's legend — no per-layer
+frontend code. The four tables are a MIRROR (rules 10/11's class): service-role only, rebuilt by the
+quarterly `ingest_map_overlays.yml` (dispatch `--sections kraje` after a boundaries ingest).
+Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
+reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
+it — and named planned stations; CC BY) and the VÚV TGM / MŽP national flood-zone register
+(Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly). Two facts the ingest enforces: the VÚV
+service is fetched in its NATIVE S-JTSK (its own WGS84 output applies a 3-parameter datum shift about
+10 m off; a PID stop with both coordinate systems is the control point, > 1 m fails the run), and a
+layer is replaced only when every requested id came back and the count holds (≥ 90 % of the previous
+one unless `--accept-shrink`). The legend states what the data is: the legally designated extent,
+indicative, ignoring flood defences (Karlín shows as Q100 although the city protects it), Q500 mapped
+only locally, bands nested so overlaps render darker. The selection is one URL knob (`layers=`, a
+sorted `key[:variant]` list, `lib/mapOverlays`) remembered per browser (`map.layers`); the Browse/Explore map, the listing-detail header map and the comparables map mount the
+same hook and chip control. The MF rent choropleth moves onto this path in the follow-up cleanup
+(section `rent_map`, VK variants) — then `rent_map_choropleth_public`, `rent_map_kraje_public` and the
+`rent_map_choropleth` matview are dropped.
+
 ## Territories — deep rationale
 
 The three-territory summary is in `CLAUDE.md`; the full per-territory rules and rationale
@@ -4153,6 +4181,7 @@ rendered blank in production.
 | Running/debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Location-data program (claim spine, RÚIAN mirror, contracts) | `roadmap/location-data.md` + the operator-held design corpus |
 | Roadmap / sequencing | `ROADMAP.md` + `roadmap/<track>.md` |
+| Map reference overlays (metro, flood zones, kraje; the tile path) | `docs/design/map-overlays.md` |
 
 **Two "skills" namespaces (don't conflate):** repo-root `skills/` holds **agent** skills
 seeded into the `skills` DB table (architectural rule #10). `.claude/skills/` holds the

@@ -26,10 +26,9 @@ import maplibregl from 'maplibre-gl';
 
 import { NumberCell } from '@/components/controls';
 import { createMap } from '@/lib/basemap';
+import { circleRing } from '@/lib/geoRing';
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 11 };
-const EARTH_RADIUS_M = 6_371_000;
-const CIRCLE_POINTS = 96;
 
 export interface CenterRadius {
   lat: number;
@@ -312,28 +311,15 @@ function setCircle(
   if (marker) (marker as unknown as { _curRadius?: number })._curRadius = radius_m;
 }
 
-/** GeoJSON polygon approximating a circle of `radius_m` around (lat, lng).
- *  Uses an N-point ring; 96 points is smooth enough for the eye while
- *  staying cheap to render. */
 function circlePolygon(
   lat: number,
   lng: number,
   radius_m: number,
 ): GeoJSON.Feature<GeoJSON.Polygon> {
-  const latRad = (lat * Math.PI) / 180;
-  const coords: [number, number][] = [];
-  for (let i = 0; i <= CIRCLE_POINTS; i++) {
-    const theta = (i / CIRCLE_POINTS) * 2 * Math.PI;
-    const dx = radius_m * Math.cos(theta);
-    const dy = radius_m * Math.sin(theta);
-    const dLng = (dx / (EARTH_RADIUS_M * Math.cos(latRad))) * (180 / Math.PI);
-    const dLat = (dy / EARTH_RADIUS_M) * (180 / Math.PI);
-    coords.push([lng + dLng, lat + dLat]);
-  }
   return {
     type: 'Feature',
     properties: {},
-    geometry: { type: 'Polygon', coordinates: [coords] },
+    geometry: { type: 'Polygon', coordinates: [circleRing(lat, lng, radius_m)] },
   };
 }
 
