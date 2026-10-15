@@ -187,17 +187,19 @@ def test_bounded_as_fine_as_the_bound_allows_and_children_sum_to_their_parent(co
 
 def test_every_row_is_in_exactly_one_tile(conn):
     """No off-grid bucket: the far-flung rows the live data holds (lng -118 / +125), a row
-    south of the old CZ box and a polar row are tiles like any other, and the cells sum to
-    the total. RED by: dropping the latitude clamp (a polar row raises) or re-adding an
-    extent guard (the sum falls short of the total)."""
+    south of the old CZ box and the two poles are tiles like any other, and the cells sum
+    to the total. RED by: dropping the latitude clamp (sin(90°) = 1 makes the Mercator
+    expression divide by zero, so a pole raises) or re-adding 439's extent guard (the rows
+    outside it leave the cells and the sum falls short of the total)."""
     inside = [(50.08 + 0.001 * k, 14.42 + 0.001 * k) for k in range(10)]
-    far = [(-20.5, -118.2), (59.3, 125.7), (10.0, 100.0), (0.0, 0.0), (48.4, 11.9), (89.0, 14.4)]
+    far = [(-20.5, -118.2), (59.3, 125.7), (10.0, 100.0), (0.0, 0.0), (48.4, 11.9),
+           (90.0, 14.4), (-90.0, 14.4)]
     with conn.cursor() as cur:
         _park(cur)
         _seed(cur, inside + far)
         r = _call(cur, point_budget=0)
     assert set(r) == _KEYS
-    assert r["total"] == 16 == sum(c["n"] for c in r["cells"])
+    assert r["total"] == 17 == sum(c["n"] for c in r["cells"])
     assert {_tile(lng, lat, 18) for lat, lng in far} <= {
         _tile(lng, lat, 18) for (lng, lat) in _cells(r)
     }

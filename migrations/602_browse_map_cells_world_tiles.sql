@@ -32,7 +32,7 @@
 -- file's own (a re-run). CREATE OR REPLACE keeps the ACL; nothing is dropped.
 --
 -- RECEIPT (after apply_migration.yml, SELECT-only):
---   select md5(p.prosrc) from pg_proc p where p.proname = 'browse_map_cells';  -- e4af960109d1ede2f942f447baf259f6
+--   select md5(p.prosrc) from pg_proc p where p.proname = 'browse_map_cells';  -- ceb508af26b1cfdc106fdb213b0c6dc4
 --   select r->>'level', jsonb_array_length(r->'cells'), (r->>'total')::int,
 --          (select sum((c->>'n')::int) from jsonb_array_elements(r->'cells') c)
 --   from public.browse_map_cells(category_main_filter => array['byt'],
@@ -51,7 +51,7 @@ do $pre$
 begin
   if (select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells')
-     not in ('8bf9e3adea58d433a72881386ef25df1', 'e4af960109d1ede2f942f447baf259f6') then
+     not in ('8bf9e3adea58d433a72881386ef25df1', 'ceb508af26b1cfdc106fdb213b0c6dc4') then
     raise exception '602 refused: browse_map_cells is not 598''s body nor this file''s (or has two overloads)';
   end if;
 end
@@ -158,7 +158,6 @@ declare
   v_n integer[];
   v_total bigint;
   v_level integer := 18;
-  v_occupied bigint;
   v_cells jsonb;
 begin
   -- ONE index-only pass over the cover index: the target list reads nothing but l.lat and
@@ -324,29 +323,30 @@ begin
     return jsonb_build_object('total', v_total, 'clustered', false, 'level', null, 'cells', null);
   end if;
 
-  -- Coarsen level by level from the level-18 groups (x >> k, y >> k), never re-reading the
-  -- base rows, until at most c_max_cells tiles are occupied. Level 0 is one tile, so this
-  -- always terminates bounded.
+  -- Coarsen IN PLACE, level by level (x >> 1, y >> 1, counts summed), until at most
+  -- c_max_cells tiles are occupied: each pass groups the previous level's groups, never the
+  -- base rows, and the arrays shrink as they go. Level 0 is one tile, so this always
+  -- terminates bounded.
   loop
-    select count(*) into v_occupied
-    from (select 1 from unnest(v_x, v_y) as r(x, y)
-          group by r.x >> (18 - v_level), r.y >> (18 - v_level)) t;
-    exit when v_occupied <= c_max_cells or v_level = 0;
+    exit when coalesce(cardinality(v_x), 0) <= c_max_cells or v_level = 0;
+    select array_agg(t.x), array_agg(t.y), array_agg(t.n)
+      into v_x, v_y, v_n
+    from (
+      select r.x >> 1 as x, r.y >> 1 as y, sum(r.n)::int as n
+      from unnest(v_x, v_y, v_n) as r(x, y, n)
+      group by 1, 2
+    ) t;
     v_level := v_level - 1;
   end loop;
 
   -- The tile CENTRE (5 decimals, ~1 m): the SPA regroups cells at its own level with the
   -- same formula, so a centre must fall inside its own tile and its parents, which it does.
   select jsonb_agg(jsonb_build_object(
-           'lat', round(degrees(atan(sinh(pi() * (1 - 2 * (t.ty + 0.5) / 2 ^ v_level))))::numeric, 5),
-           'lng', round(((t.tx + 0.5) / 2 ^ v_level * 360 - 180)::numeric, 5),
-           'n', t.n) order by t.n desc)
+           'lat', round(degrees(atan(sinh(pi() * (1 - 2 * (r.y + 0.5) / 2 ^ v_level))))::numeric, 5),
+           'lng', round(((r.x + 0.5) / 2 ^ v_level * 360 - 180)::numeric, 5),
+           'n', r.n) order by r.n desc)
     into v_cells
-  from (
-    select r.x >> (18 - v_level) as tx, r.y >> (18 - v_level) as ty, sum(r.n)::int as n
-    from unnest(v_x, v_y, v_n) as r(x, y, n)
-    group by 1, 2
-  ) t;
+  from unnest(v_x, v_y, v_n) as r(x, y, n);
 
   return jsonb_build_object('total', v_total, 'clustered', true, 'level', v_level,
                             'cells', coalesce(v_cells, '[]'::jsonb));
@@ -360,7 +360,7 @@ do $post$
 begin
   if (select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells')
-     is distinct from 'e4af960109d1ede2f942f447baf259f6' then
+     is distinct from 'ceb508af26b1cfdc106fdb213b0c6dc4' then
     raise exception '602 post-condition failed: browse_map_cells is not this file''s body (or has two overloads)';
   end if;
   if not exists (select 1 from pg_proc p
