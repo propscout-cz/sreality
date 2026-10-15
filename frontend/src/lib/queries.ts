@@ -507,17 +507,22 @@ export interface MapCell {
   n: number;
 }
 
+/* The server's answer above the point budget: the cells and the tile level they
+ * were counted at. */
+export interface MapCounts {
+  level: number;
+  cells: MapCell[];
+}
+
 export interface MapResult {
-  /* Individual pins. Empty in count mode -- `cells` is populated instead, and
+  /* Individual pins. Empty in count mode -- `counts` is populated instead, and
    * the two are never both non-empty. */
   rows: MapRow[];
   /* Non-null when the cohort was too large to plot point-by-point and the server
-   * returned a bounded tile aggregate instead. `null` means "these are points". */
-  cells: MapCell[] | null;
-  /* The tile level the cells were counted at: the finest level that fits the
-   * server's bound, so the map draws them at this level or coarser. Null with
-   * points. */
-  level: number | null;
+   * returned a bounded tile aggregate instead: the cells and the level they were
+   * counted at (the finest that fits the server's bound; the map draws them at
+   * that level or coarser). `null` means "these are points". */
+  counts: MapCounts | null;
   /* The MAPPABLE cohort size — properties carrying coordinates. Deliberately
    * smaller than the header's cohortTotal, which counts coordinate-less rows
    * too (106,173 vs 104,232 on the default cohort, measured 2026-08-26). In
@@ -809,9 +814,9 @@ export const MAP_POINT_BUDGET = 2_000;
 interface MapGrid {
   clustered: boolean;
   cells: MapCell[] | null;
+  /* The tile level of `cells` (migration 602); null with points. */
+  level: number | null;
   total: number;
-  /* Absent until migration 602 (the cells are then its grid's mean positions). */
-  level?: number | null;
 }
 
 /* The per-point read, run only once the server has said the cohort fits
@@ -847,7 +852,7 @@ export const fetchListingsForMap = async (
   // function's body by its first `{`, and a destructuring pattern or a `{}` default would be it.
   const signal = opts?.signal;
   const pre = await resolveBrowsePrefilters(f, signal);
-  if (pre.empty) return { rows: [], cells: null, level: null, total: 0 };
+  if (pre.empty) return { rows: [], counts: null, total: 0 };
 
   /* W6b, migration 439: the server answers first, with a bounded grid, or
    * `clustered: false` when the points fit. Same named parameters as
@@ -871,10 +876,10 @@ export const fetchListingsForMap = async (
     /* The count lane cannot truncate: the cell count is bounded by construction
      * (the finest tile level that fits the server's bound), with no LIMIT
      * anywhere in the function. */
+    if (grid.level == null) throw new Error('browse_map_cells counted a cohort without naming its tile level');
     return {
       rows: [],
-      cells: grid.cells ?? [],
-      level: grid.level ?? null,
+      counts: { level: grid.level, cells: grid.cells ?? [] },
       total: grid.total,
     };
   }
@@ -887,8 +892,7 @@ export const fetchListingsForMap = async (
   const rows = await fetchMapPoints(f, pre, signal);
   return {
     rows,
-    cells: null,
-    level: null,
+    counts: null,
     /* The server's count, not rows.length: it is the authority on how many of
      * the cohort are mappable, and the pill's "X of Y mapped" is built on it. */
     total: grid.total,
