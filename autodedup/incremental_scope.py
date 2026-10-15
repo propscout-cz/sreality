@@ -37,8 +37,9 @@ from autodedup import cohort
 GRAINS: tuple[str, ...] = ("obec", "cast_obce")
 ALL: str = "all"
 
-# cohort grain -> scope grain. `assembled` is deliberately unmapped (see the module docstring).
-_GRAIN_OF: dict[str, str] = {"town": "obec", "quarter": "cast_obce"}
+# cohort (and apply scope) grain -> scope grain. `assembled` is deliberately unmapped (see the
+# module docstring).
+GRAIN_OF: dict[str, str] = {"town": "obec", "quarter": "cast_obce"}
 
 
 class ScopeError(ValueError):
@@ -121,8 +122,8 @@ class Scope:
 
 # The three trial blocks, derived from the cohort rather than retyped.
 DEFAULT_SCOPE: Scope = Scope(tuple(
-    ScopeBlock(_GRAIN_OF[block.grain], int(block.code))
-    for block in cohort.BLOCKS if block.grain in _GRAIN_OF))
+    ScopeBlock(GRAIN_OF[block.grain], int(block.code))
+    for block in cohort.BLOCKS if block.grain in GRAIN_OF))
 
 # What a whole-corpus generation would COST, on the only per-row costs this schema can actually
 # be MEASURED for (W9d corrects W9c's arithmetic note, not its headline). Neither `fp_key` nor

@@ -1201,9 +1201,12 @@ def test_the_live_stream_is_planned_here_never_applied(tmp_path: Path) -> None:
     assert [g.cluster_key for g in plan.to_apply] == [10]
     with pytest.raises(A.ApplyRefused, match="real-time"):
         A.apply_plan(db, plan, dry_run=False, merge=db.merge([]))
-    for args in ({"generation": "rt", "dry_run": "0"},
-                 {"generation": "rt", "retire_legacy": "1"}):
-        with pytest.raises(SystemExit, match="real-time"):
+    with pytest.raises(SystemExit, match="real-time"):
+        A.run_apply(_factory(db), {"generation": "rt", "dry_run": "0"}, tmp_path)
+    # W8 (E953): the retire step alone may run under it, over named blocks only
+    for args in ({"generation": "rt", "retire_legacy": "1"},
+                 {"generation": "rt", "retire_legacy": "1", "dry_run": "0", "blocks": " "}):
+        with pytest.raises(SystemExit, match="needs blocks="):
             A.run_apply(_factory(db), args, tmp_path)
     assert all(row["dry_run"] for row in db.ledger)
     assert db.listings[11]["property_id"] == 200

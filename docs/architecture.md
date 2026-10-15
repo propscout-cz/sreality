@@ -1463,9 +1463,9 @@ renumber.** Navigate by area:
     **Standing rule: the removed code, its comments and its design docs are never consulted
     again for any purpose.** They survive in git history and on branch
     `backup/pre-new-dedup-2026-08` for forensic recovery only. The removed engine's OUTPUT, the
-    `source='auto'` rows of `property_merge_events`, is selected BY SOURCE by one piece of code only, until W8: the
+    `source='auto'` rows of `property_merge_events`, is selected BY SOURCE by one piece of code only: the
     AUTODEDUP legacy-retire lane (`autodedup/legacy_retire.py`, `mode=apply` with
-    `retire_legacy=1`; the autodedup PROGRAM.md D7 carve-out), which reads them only to find
+    `retire_legacy=1`; since W8 (E953, 2026-10-14) per area under the live generation, `generation=rt,blocks=<area>`, dry run first; the autodedup PROGRAM.md D7 carve-out), which reads them only to find
     which of those merges to undo and feeds nothing it reads to the engine. The other ledger
     reads (`detach_listings`, `GET /properties/{id}/origins`, which returns the `source` for
     display) are source-blind link mechanics. The operator owns all merge/no-merge logic in the rebuild; thresholds, weights and
@@ -1685,13 +1685,15 @@ renumber.** Navigate by area:
     deadline rolls back and halves its rate. The
     batch `apply` and `unapply` modes stay until the lane has run three live days and checkpoint
     C2 passes (the undo path after that is an open operator decision, `roadmap/autodedup.md`);
-    `legacy_retire` until W8. **The engine's only detaches** are two `detach_listings` callers, one
+    `legacy_retire` per area under the live generation since W8 (E953). **The engine's only detaches** are two `detach_listings` callers, one
     call per group, that write no ruling: `mode=unapply` over its own groups (below), and `retire_legacy=1`
     (`autodedup/legacy_retire.py`), which, in the same dispatch and under the same `dry_run` as
     an apply, first undoes the removed engine's still-intact `source='auto'` merges whose adverts
     all sit in the scope's blocks and deal types (or whose merge mixed deal types), unless an
     operator ruling or the engine's own grouping holds one back, stamping
-    `undone_by='autodedup-legacy-retire:<run>'`. Both are group-scoped, so neither can move a
+    `undone_by='autodedup-legacy-retire:<run>'`; with `generation=rt` and `blocks=` (W8, E953) it
+    runs alone against the live stream's groups, over blocks the lane has fully read, and the lane
+    re-merges after the brake lifts. Both are group-scoped, so neither can move a
     native advert: only the operator splits one.
     **AUTODEDUP apply path.** Merges may now ALSO be ordered by the AUTODEDUP engine
     (`docs/design/autodedup/PROGRAM.md` E900–E906) — through the same chokepoint, never around
