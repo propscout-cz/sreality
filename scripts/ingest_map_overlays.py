@@ -107,34 +107,46 @@ select %s, %s, %s::jsonb,
 """
 
 # A dissolve layer is stored first as its source features (INSERT_FEATURE_SQL), then
-# replaced in place by the subdivided union, so same-band overlaps (Berounka and Vltava
-# share ~16 km2 of Q100) cannot render darker. Each piece is named after the source
-# features under its anchor point; the snapshot still sees the rows being deleted.
+# replaced in place by non-overlapping, subdivided pieces, so same-band overlaps (Berounka
+# and Vltava share ~16 km2 of Q100) cannot render darker. Where two zones overlap, the
+# earlier row keeps the shared area and the later one is cut back (ST_Difference against
+# its overlapping predecessors only): a nationwide ST_UnaryUnion of a band ran past the
+# 30-minute statement budget on the first production run (2026-10-15), while overlaps are
+# a handful of confluences. Each piece keeps its own watercourse name.
 DISSOLVE_SQL = """
-with pieces as (
-    select piece, st_pointonsurface(piece) as anchor
-      from (select st_subdivide(
-                       case when %(outline)s then st_boundary(merged) else merged end,
-                       256) as piece
-              from (select st_unaryunion(st_collect(st_collectionextract(geom, 3))) as merged
-                      from map_overlay_features
-                     where layer_key = %(layer)s) dissolved) subdivided
+with sources as (
+    select id, source_id, props, st_collectionextract(geom, 3) as geom
+      from map_overlay_features
+     where layer_key = %(layer)s
+),
+exclusive as (
+    select s.id, s.source_id, s.props,
+           coalesce(st_difference(s.geom, (
+               select st_union(o.geom)
+                 from sources o
+                where o.id < s.id
+                  and o.geom && s.geom
+                  and st_intersects(o.geom, s.geom)
+                  and not st_touches(o.geom, s.geom))),
+                    s.geom) as geom
+      from sources s
+),
+pieces as (
+    select e.source_id, e.props, p.piece
+      from exclusive e
+      cross join lateral st_subdivide(
+          case when %(outline)s then st_boundary(e.geom) else e.geom end, 256) as p(piece)
+     where not st_isempty(e.geom)
 ),
 replaced as (
     delete from map_overlay_features where layer_key = %(layer)s
 )
 insert into map_overlay_features (layer_key, source_id, props, geom)
-select %(layer)s, origin.source_id,
-       jsonb_strip_nulls(jsonb_build_object('class', %(class)s::text, 'name', origin.name)),
+select %(layer)s, pieces.source_id,
+       jsonb_strip_nulls(jsonb_build_object('class', %(class)s::text,
+                                            'name', pieces.props ->> 'name')),
        pieces.piece
   from pieces
-  left join lateral (
-      select min(f.source_id) as source_id,
-             string_agg(distinct f.props ->> 'name', ', ' order by f.props ->> 'name') as name
-        from map_overlay_features f
-       where f.layer_key = %(layer)s
-         and st_dwithin(f.geom, pieces.anchor, 0.5)
-  ) origin on true
 """
 
 RENDER_SQL = "select map_overlay_render_section(%s)"
