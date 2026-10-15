@@ -87,19 +87,6 @@ export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
   return f.bounds;
 };
 
-/* Maplibre-gl renders a GeoJSON source via WebGL, so the bottleneck is
- * wire-bytes, not DOM.
- *
- * MEASURED 2026-08-25, because the figure this comment used to carry ("50k features
- * ≈ 0.3 MB gzipped") was the stated justification for the cap and was off by roughly an
- * order of magnitude: the default cohort's 50,000 rows serialise to 22.66 MB raw,
- * 453 B per row.
- *
- * THIS IS NOT THE ONLY CAP. PostgREST clamps server-side at the same 50,000 via
- * `pgrst.db_max_rows` on the `authenticator` role (migration 394, verified live), so
- * deleting the `.limit()` below would not lift the truncation -- it would only stop the
- * client from knowing about it. Both have to move together. */
-export const MAP_CAP = 50_000;
 export const TABLE_PAGE_SIZE = 50;
 export const CARD_PAGE_SIZE = 24;
 
@@ -828,10 +815,10 @@ interface MapGrid {
 }
 
 /* The per-point read, run only once the server has said the cohort fits
- * (MAP_POINT_BUDGET points), so the `.limit(MAP_CAP)` below never binds.
+ * (MAP_POINT_BUDGET points), so it needs no limit of its own.
  *
  * It reads `properties_map_mv` (migration 254), NOT `properties_public`. Shipping
- * up to MAP_CAP points off the live, churned `properties` table was cold-fragile
+ * the points off the live, churned `properties` table was cold-fragile
  * (>3s, the anon statement_timeout) — the matview is a clean, all-visible, cached
  * copy of the same columns, so the identical scan stays robust cold (~200ms). It
  * carries properties_public's full FILTERABLE surface, so applyFilters /
@@ -848,7 +835,7 @@ const fetchMapPoints = async (
     .not('lat', 'is', null)
     .not('lng', 'is', null);
   const scoped = applyPrefilters(applyFilters(base, f), pre);
-  const { data } = await pgRead<MapRow[] | null>(scoped.limit(MAP_CAP), { signal });
+  const { data } = await pgRead<MapRow[] | null>(scoped, { signal });
   return data ?? [];
 };
 
