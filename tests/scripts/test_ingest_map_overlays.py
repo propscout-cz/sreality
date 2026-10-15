@@ -351,6 +351,24 @@ def test_layer_resolution_asserts_the_name_the_geometry_and_the_fields(change: d
         mod.ArcGis(_http(_navrh_server())).layer(reader)
 
 
+def test_a_layer_spelling_its_fields_in_another_case_is_read_by_the_declared_names() -> None:
+    """The register's Q500 layer spells `Naz_tok` where the other four spell `NAZ_TOK` — the
+    first production run refused the whole flood section on it (2026-10-15)."""
+    server = _FakeServer(mod.VUV_MAPSERVER, "vuv_service.json", 12, "vuv_q5_layer.json",
+                         "vuv_q5_query.json", "OBJECTID")
+    server.layer = {**server.layer, "id": 12, "name": "ZaplavUzemi_Q500", "fields": [
+        {**f, "name": "Naz_tok" if f["name"] == "NAZ_TOK" else f["name"]}
+        for f in server.layer["fields"]]}
+    for feature in server.features.values():
+        feature["properties"] = {("Naz_tok" if k == "NAZ_TOK" else k): v
+                                 for k, v in feature["properties"].items()}
+    reader = mod._flood("ZaplavUzemi_Q500", "q500")
+    names = [f.props.get("name") for f in mod.ArcGis(_http(server)).features(reader)]
+    assert names and all(names)
+    with pytest.raises(mod.Refused, match="missing fields"):
+        mod.ArcGis(_http(server)).layer(dataclasses.replace(reader, fields=("NAZ_TOK", "Rec_naz_x")))
+
+
 def test_the_layer_metadata_is_fetched_once() -> None:
     server = _navrh_server()
     arcgis = mod.ArcGis(_http(server))
