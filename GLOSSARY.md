@@ -176,6 +176,12 @@ rent map — that a user switches on or off; it changes what the map shows aroun
 which properties.
 _Avoid_: data layer, overlay data, map data, GIS layer
 
+**Count mark**:
+The number a map shows for one world tile when the properties in view are too many to draw pin by
+pin: every matching property in that tile, exactly, in a pill at the tile's centre. One tile holds
+one mark, and the marks on a map always add up to the mapped total.
+_Avoid_: cluster, bubble, cell, bin, group
+
 ### A property's working files
 
 **Workbook**:

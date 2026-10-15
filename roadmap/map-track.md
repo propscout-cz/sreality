@@ -51,3 +51,23 @@ of the analytical and UI phases; runs alongside them.
   nationwide per-band `ST_UnaryUnion` ran past the 30-minute statement budget (#1813, per-zone overlap cutting).
   Open follow-up: two expanded chip panels crowd the split-view map (collapse legends by default?).
 
+### map-3: count marks — one count rule on world tiles (built 2026-10-15)
+- **Why:** the count discs hid the basemap on any dense cohort (232 discs at a 55 px median spacing
+  over Prague; 439's 20 × 13 viewport grid painted with the cluster bubble ramp, never merged, and
+  tied to the viewer: a 100 px pan moved a place's count 922 → 1 262). Spec + the six rulings:
+  `docs/design/map-counts.md`.
+- **W1 (done, PR #1812):** ONE count rule, `frontend/src/lib/mapCounts.ts`: points or server cells
+  are grouped by world tile at `round(zoom) + 2` (90 to 181 px pitch); a tile holding one known
+  property is that pin, any other tile its exact count in a dark pill at the tile centre, one symbol
+  layer, never dropped, never overlapping. Deleted: supercluster, both layer pairs, their click and
+  hover paths, three zoom constants, the cell helpers, the off-grid bucket, the compact formatters,
+  the point read's dead 50 000 limit. A click on a mark re-scopes the list.
+- **W2 (done, migration 602):** `browse_map_cells` keeps 598's signature and predicate byte for byte
+  and answers in world tiles: one index-only pass at level 18, coarsened in memory to the finest
+  level with ≤ 1 024 occupied tiles; `{total, clustered, level, cells[{lat, lng, n}]}` with tile
+  centres. Rails: `tests/test_602_*`, the rewritten `tests/test_browse_map_cells_live.py`
+  (fixture parity, bounded-and-finest, one tile per row, pan-stable interiors, children sum to
+  their parent), `tests/fixtures/map_tile_lattice.json` read by pytest AND vitest.
+- **Named follow-ups:** town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one
+  tile (a location-precision concern); `DatasetMap.tsx` interpolates `obec_name` into popup HTML
+  unescaped; four `MAP_COLS` columns are never read and commercial popups show "—" for `subtype`.

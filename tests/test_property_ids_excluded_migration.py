@@ -97,9 +97,12 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
     assert "portal_status_matches" not in outside, "the portal rule is 597's, untouched"
 
 
-def test_the_latest_definitions_are_this_file() -> None:
-    for fn in FNS:
-        assert latest_definition(fn).name == NAME
+def test_the_latest_definitions() -> None:
+    """602 restated browse_map_cells (world tiles) with this file's signature and predicate
+    verbatim (tests/test_602_browse_map_cells_world_tiles_migration.py); the stats RPC is
+    still this file's."""
+    assert latest_definition("browse_stats_properties").name == NAME
+    assert latest_definition("browse_map_cells").name == "602_browse_map_cells_world_tiles.sql"
     assert latest_definition("portal_status_matches").name == "597_portal_exclusion.sql"
 
 

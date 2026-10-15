@@ -646,7 +646,7 @@ rules. Identify which one a task belongs to before you start.
   everywhere else); or a *bounded* read with an explicit `.limit()` and, where "more
   exists" matters, a communicated flag (the broker allowlist's `limit + 1` → `capped`).
   PostgREST's server clamp is itself VERSIONED config — migration 394 pins
-  `pgrst.db_max_rows = 50000` (= `MAP_CAP`) on the `authenticator` role, after the
+  `pgrst.db_max_rows = 50000` on the `authenticator` role, after the
   unversioned dashboard value shipped two silent-truncation bugs at 1,000 and was then
   lifted out-of-band; keep the dashboard "Max Rows" field agreeing with the migration.
   **A bounded read needs an `ORDER BY` to be a contract, and W6b (migration 439) is why
@@ -656,8 +656,10 @@ rules. Identify which one a task belongs to before you start.
   `ORDER BY` is a sample, and a sample chosen by the planner is not a contract*
   (Corollary F). The fix was not a bigger cap but a fourth shape, an *aggregate* read
   (`browse_map_cells`): the server answers with a result whose SIZE IS BOUNDED BY
-  CONSTRUCTION — a 20 x 13 integer-division grid over `properties_map_mv`, no `LIMIT`
-  anywhere — and reports the cohort's exact total alongside it. Reach for that shape
+  CONSTRUCTION — since migration 602 the finest world-tile level with at most 1 024
+  occupied tiles, counted index-only over `properties_map_mv`, no `LIMIT` anywhere; the
+  SPA regroups the tiles at its own zoom by the same formula (`frontend/src/lib/mapCounts.ts`,
+  `docs/design/map-counts.md`) — and reports the cohort's exact total alongside it. Reach for that shape
   whenever a surface renders a summary of many rows rather than the rows themselves;
   reach for `.limit()` + `capped` only when the rows themselves are the point AND the
   read is ordered. No lane reads the map unbounded any more (W5, merge sprint): points are

@@ -258,3 +258,19 @@ Patchwork found and removed by this sprint: the "64-px rule"; "visually the same
   selected.
 - Town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one tile; a location
   precision concern, not a map one.
+
+## Build notes
+
+**W1 (2026-10-15, PR #1812).** Built as specified, rulings 1 to 6 on their defaults; receipt in the
+PR. Frontend production ledger +354 / −330 against #1809's head; the grouping, the pill image and
+the layer spec live in `lib/mapCounts.ts`. The point read's dead `MAP_CAP` limit went with it. The
+header count above the cards is the whole cohort; the map's "X of Y mapped" names the gap (the
+properties without coordinates) and the marks always sum to X.
+
+**W2 (2026-10-15, migration 602).** Measured on production before apply (SELECT-only). Default
+rental cohort nationwide, 176 023 rows: Index Only Scan, Heap Fetches 0, 36 205 level-18 tiles,
+402 ms cold (2 332 blocks) and 223 ms warm; each coarsening level about 21 ms in memory (Batches 1,
+no temp). Worst cohort (no filter, 821 264 rows): parallel Index Only Scan, Heap Fetches 0,
+133 614 level-18 tiles, 1.37 s cold (11 144 blocks), about 90 ms per coarsening level, so about
+2.1 s for a level-11 answer; under the 8 s statement limit, no temp. Live `md5(prosrc)` of 598's
+body confirmed `8bf9e3ad…`; 602's own body `e4af9601…`.

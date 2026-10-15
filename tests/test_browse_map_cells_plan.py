@@ -73,14 +73,6 @@ pytestmark = pytest.mark.skipif(
 
 _INDEX = "properties_map_mv_cover"
 
-# The plpgsql locals the aggregate's target list closes over. Bound here to the values the
-# function itself computes for a bbox-less call (the CZ extent, 20 x 13), so the EXPLAINed
-# projection is arithmetically the production one.
-_GRID_LOCALS = {
-    "v_s": "48.5", "v_n": "51.1", "v_w": "12.0", "v_e": "18.9",
-    "v_cw": "0.345", "v_ch": "0.2",
-    "c_cols": "20", "c_rows": "13",
-}
 
 
 @pytest.fixture(scope="module")
@@ -109,15 +101,13 @@ def _functiondef(conn) -> str:
 
 
 def _aggregate_target_list(conn) -> str:
-    """The SELECT list of migration 439's grid aggregate, taken from the catalog and with
-    its plpgsql locals bound to the values a bbox-less call produces."""
+    """The SELECT list of the map's tile aggregate (migration 602), taken from the catalog.
+    It closes over no plpgsql local: the level and the latitude clamp are literals."""
     src = re.sub(r"--[^\n]*", "", _functiondef(conn))
     start = src.index("with g as (")
     sel = src.index("select", start) + len("select")
     end = src.index("from properties_map_mv l", sel)
     target = src[sel:end]
-    for name, value in _GRID_LOCALS.items():
-        target = re.sub(rf"\b{name}\b", value, target)
     assert "l.lat" in target and "l.lng" in target, (
         "the extracted target list does not look like the grid aggregate — the function "
         f"body's shape changed and this rail's extraction needs updating: {target!r}"
