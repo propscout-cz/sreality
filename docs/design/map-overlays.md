@@ -1,6 +1,7 @@
 # Map reference overlays — design and build spec
 
-Status: BUILDING (2026-10-14). Operator rulings in § Rulings. This document is the north star for
+Status: SHIPPED 2026-10-15 (#1808 feature, #1810 + #1813 production fixes, #1809 cleanup; migrations 600 + 601
+applied). Operator rulings in § Rulings. This document is the north star for
 the sprint: every decision below was taken once and is not re-litigated inside a wave.
 
 ## North star
@@ -430,4 +431,11 @@ Backend, as built (2026-10-15):
   picked size category is remembered per layer (`map.layers.variant.<key>`) so switching the rent
   map off and on brings it back, as the old `rentvk` URL key did. A Settings upload or "fetch now"
   whose overlay render was refused now says so next to "Ingested revision N" (`overlay_refused`).
+- **Production (2026-10-15):** first full ingest numbers — metro 22 tiles, flood 2,497 (3,995 zones → 114,921
+  pieces, 43 MB, ~31 min for the section), kraje 83, rent_map 2,964 (7,630 places, 45 s). Two things the first
+  runs taught: the register's Q500 layer spells its fields `Naz_tok` where the other four spell `NAZ_TOK` (fields
+  are now matched by case and handed to the mapper in the declared spelling, #1810), and a nationwide
+  `ST_UnaryUnion` per band does not finish inside the 30-minute statement budget on Supabase Large, so each zone
+  now loses only the area an earlier-inserted overlapping zone of the same band already covers (#1813; cost
+  proportional to the few confluences, each piece keeps its own watercourse name).
 

@@ -28,7 +28,7 @@ of the analytical and UI phases; runs alongside them.
   by the ingest workflow.
 
 
-### map-2: reference overlays — metro, flood zones, kraje (building 2026-10-14)
+### map-2: reference overlays — metro, flood zones, kraje (SHIPPED 2026-10-15: #1808, #1810, #1813; cleanup #1809)
 - **One tile path** (spec + rulings: `docs/design/map-overlays.md`; draft PR #1808): migration 600
   (`map_overlay_sections` / `_layers` / `_features` in 3857 / pre-rendered `_tiles` + the render
   function), `scripts/ingest_map_overlays.py` (ONE Python registry; ArcGIS REST + SQL readers;
@@ -40,8 +40,14 @@ of the analytical and UI phases; runs alongside them.
   reserves incl. the tangential corridor the press calls metro E, named planned stations) and the
   VÚV TGM / MŽP national flood-zone register (Q5/Q20/Q100/Q500 + active zone, fetched in native
   S-JTSK — the server's WGS84 output is ~10 m off). Kraje move off `rent_map_kraje_public`.
-- **Cleanup PR (building, stacked on #1808):** the MF rent choropleth onto the same path (`rent_map`
+- **Cleanup #1809 (MERGED 2026-10-15, migration 601 applied):** the MF rent choropleth onto the same path (`rent_map`
   section with VK variants; `fetch_rent_map.yml` re-renders), then migration 601 drops `rent_map_choropleth_public`,
   `rent_map_kraje_public` and the `rent_map_choropleth` matview. Named follow-ups: curated-city
   polygons and price-growth obec shapes stay on GeoJSON (dynamic values); the boundary ingest could
   move onto the same ArcGIS reader (ČÚZK RÚIAN REST) and drop the `geo` extra.
+- **Live since 2026-10-15** (first ingest from `main`): metro 22 tiles, flood 2,497 tiles (3,995 zones → 114,921
+  pieces, 43 MB, ~31 min for the section), kraje 83, rent_map 2,964 (7,630 places, 45 s). Two production fixes on
+  the way in: the register's Q500 layer spells its fields in mixed case (#1810, fields matched by case) and a
+  nationwide per-band `ST_UnaryUnion` ran past the 30-minute statement budget (#1813, per-zone overlap cutting).
+  Open follow-up: two expanded chip panels crowd the split-view map (collapse legends by default?).
+
