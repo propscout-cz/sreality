@@ -87,7 +87,7 @@ export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
   return f.bounds;
 };
 
-/* Maplibre-gl renders a GeoJSON source via WebGL with clustering, so the bottleneck is
+/* Maplibre-gl renders a GeoJSON source via WebGL, so the bottleneck is
  * wire-bytes, not DOM.
  *
  * MEASURED 2026-08-25, because the figure this comment used to carry ("50k features
@@ -512,9 +512,8 @@ export interface MapRow {
   is_active: boolean;
 }
 
-/* One grid cell from `browse_map_cells` (migration 439). `lat`/`lng` are the MEAN
- * position of the points in the cell, not the cell's centre, so a bubble sits on
- * the settlement rather than on a lattice vertex. `n` is an exact count. */
+/* One cell from `browse_map_cells`: a world tile's centre and its exact count
+ * (migration 602; lib/mapCounts regroups cells at the map's own level). */
 export interface MapCell {
   lat: number;
   lng: number;
@@ -522,25 +521,22 @@ export interface MapCell {
 }
 
 export interface MapResult {
-  /* Individual pins. Empty in cluster mode -- `cells` is populated instead, and
+  /* Individual pins. Empty in count mode -- `cells` is populated instead, and
    * the two are never both non-empty. */
   rows: MapRow[];
   /* Non-null when the cohort was too large to plot point-by-point and the server
-   * returned a bounded grid aggregate instead. `null` means "these are points". */
+   * returned a bounded tile aggregate instead. `null` means "these are points". */
   cells: MapCell[] | null;
+  /* The tile level the cells were counted at: the finest level that fits the
+   * server's bound, so the map draws them at this level or coarser. Null with
+   * points. */
+  level: number | null;
   /* The MAPPABLE cohort size — properties carrying coordinates. Deliberately
    * smaller than the header's cohortTotal, which counts coordinate-less rows
    * too (106,173 vs 104,232 on the default cohort, measured 2026-08-26). In
-   * cluster mode this is the server's exact count of the whole cohort, not of
+   * count mode this is the server's exact count of the whole cohort, not of
    * what was shipped. */
   total: number | null;
-  /* Rows inside the cohort whose coordinates fall OUTSIDE the grid extent, so
-   * they are counted but not drawn (105 of 104,232 on the default cohort: the
-   * data holds lng values from -118 to +125). Folding them into an edge cell
-   * would invent a location, and dropping them silently would repeat the defect
-   * W6b exists to fix — so they are reported. Always 0 in point mode and
-   * whenever a bbox is set (the extent is then the bbox itself). */
-  offGrid: number;
 }
 
 /* The two curated-set prefilters share ONE shape: read the membership rows
@@ -827,7 +823,8 @@ interface MapGrid {
   clustered: boolean;
   cells: MapCell[] | null;
   total: number;
-  off_grid: number;
+  /* Absent until migration 602 (the cells are then its grid's mean positions). */
+  level?: number | null;
 }
 
 /* The per-point read, run only once the server has said the cohort fits
@@ -863,7 +860,7 @@ export const fetchListingsForMap = async (
   // function's body by its first `{`, and a destructuring pattern or a `{}` default would be it.
   const signal = opts?.signal;
   const pre = await resolveBrowsePrefilters(f, signal);
-  if (pre.empty) return { rows: [], cells: null, total: 0, offGrid: 0 };
+  if (pre.empty) return { rows: [], cells: null, level: null, total: 0 };
 
   /* W6b, migration 439: the server answers first, with a bounded grid, or
    * `clustered: false` when the points fit. Same named parameters as
@@ -884,13 +881,14 @@ export const fetchListingsForMap = async (
   );
 
   if (grid.clustered) {
-    /* The cluster lane cannot truncate: the cell count is bounded by the grid
-     * (20 x 13) by construction, with no LIMIT anywhere in the function. */
+    /* The count lane cannot truncate: the cell count is bounded by construction
+     * (the finest tile level that fits the server's bound), with no LIMIT
+     * anywhere in the function. */
     return {
       rows: [],
       cells: grid.cells ?? [],
+      level: grid.level ?? null,
       total: grid.total,
-      offGrid: grid.off_grid,
     };
   }
 
@@ -903,10 +901,10 @@ export const fetchListingsForMap = async (
   return {
     rows,
     cells: null,
+    level: null,
     /* The server's count, not rows.length: it is the authority on how many of
      * the cohort are mappable, and the pill's "X of Y mapped" is built on it. */
     total: grid.total,
-    offGrid: grid.off_grid,
   };
 };
 

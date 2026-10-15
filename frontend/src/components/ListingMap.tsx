@@ -4,6 +4,16 @@ import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
 import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
+import {
+  COUNTS,
+  PIN_ZOOM,
+  addCountPillImage,
+  countLayer,
+  groupByTile,
+  toCountFeatureCollection,
+  useCountRule,
+  type CountMark,
+} from '@/lib/mapCounts';
 import type { CityIndexDefinition, CuratedCity, MapCell, MapRow } from '@/lib/queries';
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
@@ -75,30 +85,9 @@ const circlePolygonGeom = (
 ): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [circleRing(lat, lng, radiusM)] });
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 9.5 };
-/* Below this zoom only the round point dot is shown; at and above it
- * each listing's price label is also drawn. Tuned so the labels appear
- * roughly when a single city block is on screen — close enough that the
- * labels don't pile up but far enough to still see a neighbourhood.
- *
- * It is CLUSTERING, not this constant, that sets the true threshold: the
- * `listings` source clusters through `clusterMaxZoom: 13`, so at z13 every
- * feature is still inside a cluster and the label layer (which filters on
- * `!has point_count`) matches nothing. The first zoom at which any label can
- * exist is therefore 14, and both numbers are derived from one source below so
- * they cannot drift apart. This matters because the "Ceny" control bakes its
- * labels into the feature properties: at the zooms Browse OPENS at (the fit is
- * capped at 14 for a country-wide cohort and typically lands around z6-7; the
- * no-rows fallback is Prague z9.5) flipping it re-clusters up to 50 000
- * features and changes nothing on screen. The control says so rather than
- * reading as broken. */
-const CLUSTER_MAX_ZOOM = 13;
-const PRICE_LABEL_MIN_ZOOM = CLUSTER_MAX_ZOOM;
-/* The lowest zoom at which an unclustered point — and therefore a label —
- * can exist. */
-const PIN_LABEL_VISIBLE_ZOOM = CLUSTER_MAX_ZOOM + 1;
 
 /* The listing layers a click hits first, whatever lies under them. */
-const LISTING_HIT_LAYERS = ['point', 'clusters', 'cells'];
+const LISTING_HIT_LAYERS = ['point', COUNTS];
 
 const czPriceCompact = new Intl.NumberFormat('cs-CZ', {
   notation: 'compact',
@@ -183,34 +172,6 @@ const pinPrecisionArea = (
   };
 };
 
-/* W6b — SERVER-side grid cells (migration 439), used instead of `rows` when the
- * cohort is too large to plot point-by-point. They are NOT fed to the `listings`
- * source: that source has `cluster: true`, so supercluster would re-cluster the
- * cells and count CELLS rather than listings — a bubble reading "8" over 40,000
- * properties, with no error anywhere. They get their own unclustered source, and
- * the two are mutually exclusive by construction (fetchListingsForMap returns
- * points or cells, never both). */
-type CellFeatureProps = { n: number; n_label: string };
-type CellFC = GeoJSON.FeatureCollection<GeoJSON.Point, CellFeatureProps>;
-
-/* maplibre generates `point_count_abbreviated` for its own clusters; a
- * pre-aggregated cell has to bring its own. Same thresholds as supercluster's. */
-const abbreviateCount = (n: number): string =>
-  n >= 10_000 ? `${Math.round(n / 1000)}k`
-    : n >= 1_000 ? `${(n / 1000).toFixed(1)}k`
-      : String(n);
-
-const toCellFeatureCollection = (cells: MapCell[]): CellFC => ({
-  type: 'FeatureCollection',
-  features: cells.map((c) => ({
-    type: 'Feature',
-    /* No stable id: a cell is an aggregate, not a listing, so it is never a
-     * setFeatureState / hover-sync target. */
-    geometry: { type: 'Point', coordinates: [c.lng, c.lat] },
-    properties: { n: c.n, n_label: abbreviateCount(c.n) },
-  })),
-});
-
 /* Imperative "fly to this place" command. `ts` is a monotonic stamp
  * (Date.now() at the originating event) so back-to-back picks of the
  * same place still trigger a flyTo — the prop's identity changes
@@ -286,18 +247,17 @@ const CITY_NULL_COLOR = '#8c9196';
 
 interface Props {
   rows: MapRow[];
-  /* W6b — server-side grid cells instead of pins, when the cohort is larger than
+  /* Server-side tile counts instead of pins, when the cohort is larger than
    * MAP_POINT_BUDGET. Non-null and `rows` empty, or null and `rows` populated;
    * never both. Zooming in shrinks the cohort (the viewport is a filter) until it
    * fits, at which point real pins come back. */
   cells?: MapCell[] | null;
-  /* Properties in the cohort whose coordinates fall outside the grid extent, so
-   * they are counted but not drawn. Reported rather than folded onto an edge
-   * cell — see MapResult.offGrid. */
-  offGrid?: number;
+  /* The tile level the cells were counted at (MapResult.level); the map never
+   * draws them finer than that. */
+  cellsLevel?: number | null;
   /* Mappable cohort size — properties with coordinates (the map query filters
    * lat/lng NOT NULL). This is a SUBSET of cohortTotal, not a rival total.
-   * In cluster mode this is the server's exact count of the WHOLE cohort. */
+   * In count mode this is the server's exact count of the WHOLE cohort. */
   total: number | null;
   /* The full cohort total (incl. coordinate-less properties), from the one
    * canonical count. When it exceeds `total` the pill shows "X of Y mapped"
@@ -323,7 +283,7 @@ interface Props {
   onHover: (ids: ReadonlyArray<number> | null) => void;
   /* Which pane originated the current hover. The locator halo renders
    * only for 'list' hovers — echoing a map-origin hover back onto the
-   * map would just redraw under the cursor (and a cluster hover would
+   * map would just redraw under the cursor (and a count-mark hover would
    * drop dozens of halos at once). */
   hoverOrigin?: 'map' | 'list' | null;
   /* When set (i.e. the operator chose centre+radius mode in the
@@ -407,7 +367,7 @@ interface Props {
 export default function ListingMap({
   rows,
   cells = null,
-  offGrid = 0,
+  cellsLevel = null,
   total,
   cohortTotal,
   cohortTotalApprox,
@@ -495,13 +455,18 @@ export default function ListingMap({
   overlayRegistryRef.current = overlayRegistry;
   const overlayLayersRef = useRef(overlayLayers);
   overlayLayersRef.current = overlayLayers;
-  /* Whether pin labels can be on screen at all right now. Drives the "Ceny"
-   * control's hint: without it the operator clicks a toggle at the zoom Browse
-   * opens at, waits through a re-cluster of the whole cohort, and sees no
-   * pixel change anywhere — a control that reads as broken. The same zoom
-   * tells the overlay panels when to say "zoom in". */
+  /* The overlay panels read the floored zoom to say "zoom in". */
   const zoomLevel = useMapZoom(mapRef.current, ready);
-  const labelsVisible = zoomLevel != null && zoomLevel >= PIN_LABEL_VISIBLE_ZOOM;
+  /* The count rule for the current zoom (lib/mapCounts): which tile level the
+   * marks group at, and whether a point cohort is all pins. Its `pins` also
+   * drives the "Ceny" control's hint: price labels exist only on pins, so
+   * without it the operator clicks a toggle at the zoom Browse opens at and
+   * sees no pixel change anywhere — a control that reads as broken. */
+  const rule = useCountRule(mapRef.current, ready);
+  const labelsVisible = rule?.pins ?? false;
+  /* The marks on screen by feature id, for the count layer's hover handler
+   * (registered once at mount) to resolve member ids. */
+  const marksRef = useRef<Map<number, CountMark>>(new Map());
   /* The legend's counts, over the plotted rows, by the same rule that picks each
    * pin's face — so the legend also answers "how much of this is only roughly
    * placed" for the whole view at once. */
@@ -598,7 +563,7 @@ export default function ListingMap({
         });
       }
 
-      /* Listing dots and clusters always win the click. The fill layers
+      /* Listing pins and count marks always win the click. The fill layers
        * underneath (city polygons, reference-overlay areas) only open their
        * popups when nothing from the listings source sits under the cursor —
        * without this, clicking a dot inside a polygon fired BOTH handlers and
@@ -691,8 +656,9 @@ export default function ListingMap({
       /* The selected index figure, drawn at each municipality's
        * centroid. `value_label` is empty (→ no label) when no index is
        * selected or the city has no reading. Added before the listing
-       * layers so it wins placement over the cluster counts; the white
-       * halo keeps it legible where a listing cluster sits on top. */
+       * layers, so the count marks (placed later, from the top layer down)
+       * win placement over it; the white halo keeps it legible beside a
+       * pin. */
       map.addLayer({
         id: 'city-label',
         type: 'symbol',
@@ -715,126 +681,21 @@ export default function ListingMap({
         },
       });
 
+      /* The pins. Fed by the data effect below together with the count marks
+       * (lib/mapCounts): one grouping decides which property is a pin and which
+       * tile is a count, so a property is never drawn twice. */
       map.addSource('listings', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
-        cluster: true,
-        clusterMaxZoom: CLUSTER_MAX_ZOOM,
-        clusterRadius: 48,
       });
-
-      map.addLayer({
-        id: 'clusters',
-        type: 'circle',
-        source: 'listings',
-        filter: ['has', 'point_count'],
-        paint: {
-          'circle-color': [
-            'step', ['get', 'point_count'],
-            'rgba(60, 110, 99, 0.35)',  10,
-            'rgba(60, 110, 99, 0.55)',  50,
-            'rgba(47, 87, 80, 0.75)',  200,
-            'rgba(47, 87, 80, 0.90)',
-          ],
-          'circle-radius': [
-            'step', ['get', 'point_count'],
-            14, 10,
-            18, 50,
-            24, 200,
-            32,
-          ],
-          'circle-stroke-color': 'rgba(60, 110, 99, 1)',
-          'circle-stroke-width': 1,
-        },
-      });
-
-      map.addLayer({
-        id: 'cluster-count',
-        type: 'symbol',
-        source: 'listings',
-        filter: ['has', 'point_count'],
-        layout: {
-          'text-field': ['get', 'point_count_abbreviated'],
-          'text-font': ['Noto Sans Regular'],
-          'text-size': 11,
-        },
-        paint: {
-          'text-color': '#ffffff',
-        },
-      });
-
-      /* W6b — the server-aggregated grid. Its OWN source, deliberately
-       * `cluster: false`: handing pre-aggregated cells to the clustering
-       * `listings` source would make supercluster count cells, not listings.
-       * Empty whenever the map is in point mode, so the two never overlap. */
-      map.addSource('map-cells', {
+      map.addSource(COUNTS, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
-      });
-
-      /* Same step ramp as `clusters` above, read off `n` instead of
-       * `point_count`, so a server cell and a client cluster are visually the
-       * same object — which is what they are. */
-      map.addLayer({
-        id: 'cells',
-        type: 'circle',
-        source: 'map-cells',
-        paint: {
-          'circle-color': [
-            'step', ['get', 'n'],
-            'rgba(60, 110, 99, 0.35)',  10,
-            'rgba(60, 110, 99, 0.55)',  50,
-            'rgba(47, 87, 80, 0.75)',  200,
-            'rgba(47, 87, 80, 0.90)',
-          ],
-          'circle-radius': [
-            'step', ['get', 'n'],
-            14, 10,
-            18, 50,
-            24, 200,
-            32,
-          ],
-          'circle-stroke-color': 'rgba(60, 110, 99, 1)',
-          'circle-stroke-width': 1,
-        },
-      });
-
-      map.addLayer({
-        id: 'cell-count',
-        type: 'symbol',
-        source: 'map-cells',
-        layout: {
-          'text-field': ['get', 'n_label'],
-          'text-font': ['Noto Sans Regular'],
-          'text-size': 11,
-        },
-        paint: {
-          'text-color': '#ffffff',
-        },
-      });
-
-      /* A cell has no expansion zoom to ask for (there is no client-side
-       * cluster tree behind it), so clicking one zooms in two levels and lets
-       * the viewport-as-filter shrink the cohort. Enough zooming drops it under
-       * MAP_POINT_BUDGET and the pins come back on their own. */
-      map.on('click', 'cells', (e) => {
-        const geom = e.features?.[0]?.geometry;
-        if (!geom || geom.type !== 'Point') return;
-        map.easeTo({
-          center: geom.coordinates as [number, number],
-          zoom: Math.min(map.getZoom() + 2, 16),
-        });
-      });
-      map.on('mouseenter', 'cells', () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'cells', () => {
-        map.getCanvas().style.cursor = '';
       });
 
       /* HOW FAR OFF THIS PIN MAY BE — for the ONE pin whose popup is open (see
        * lib/uncertaintyCircle for why it is no longer drawn under every pin). Its
-       * own unclustered source holding zero or one point, fed by the `point`
+       * own source holding zero or one point, fed by the `point`
        * click handler and emptied when that popup closes. A `circle` layer, not
        * a polygon ring like `center-circle`: the radius interpolates on zoom with
        * an exponential base of exactly 2, which is EXACT (web-Mercator metres per
@@ -862,7 +723,7 @@ export default function ListingMap({
           /* A footprint on the ground, so it stays a circle around the pin when
              the map is pitched rather than a disc facing the camera. It is never
              a hit target: no handler binds to this layer, and listingUnderCursor
-             queries ['point','clusters','cells'] by name. */
+             queries ['point', 'counts'] by name. */
           'circle-pitch-alignment': 'map',
         },
       });
@@ -871,7 +732,6 @@ export default function ListingMap({
         id: 'point',
         type: 'circle',
         source: 'listings',
-        filter: ['!', ['has', 'point_count']],
         paint: {
           /* feature-state.hovered drives the bumped radius / ochre
            * stroke — the highlight reads as "selected", not "different
@@ -921,8 +781,8 @@ export default function ListingMap({
         id: 'point-price',
         type: 'symbol',
         source: 'listings',
-        filter: ['all', ['!', ['has', 'point_count']], ['!=', ['get', 'price_label'], '']],
-        minzoom: PRICE_LABEL_MIN_ZOOM,
+        filter: ['!=', ['get', 'price_label'], ''],
+        minzoom: PIN_ZOOM,
         layout: {
           'text-field': ['get', 'price_label'],
           'text-font': ['Noto Sans Bold'],
@@ -945,41 +805,28 @@ export default function ListingMap({
         },
       });
 
-      map.on('click', 'clusters', (e) => {
-        const features = map.queryRenderedFeatures(e.point, { layers: ['clusters'] });
-        const clusterId = features[0]?.properties?.cluster_id;
-        if (clusterId == null) return;
-        const src = map.getSource('listings') as GeoJSONSource;
-        src.getClusterExpansionZoom(clusterId).then((zoom) => {
-          const geom = features[0].geometry;
-          if (geom.type !== 'Point') return;
-          map.easeTo({
-            center: geom.coordinates as [number, number],
-            zoom,
-          });
-        });
+      /* The count marks, above the pins so a mark sits over a neighbouring lone
+       * pin. A mark is a tile, not a listing: a click zooms two levels in on it,
+       * and the click's own event rides on the ease so the moveend guard below
+       * sees a user move and re-scopes the list and stats to the new view.
+       * Hovering a mark lights its member cards (known for a point cohort). */
+      addCountPillImage(map);
+      map.addLayer(countLayer());
+      map.on('click', COUNTS, (e) => {
+        const geom = e.features?.[0]?.geometry;
+        if (!geom || geom.type !== 'Point') return;
+        map.easeTo(
+          { center: geom.coordinates as [number, number], zoom: map.getZoom() + 2 },
+          { originalEvent: e.originalEvent },
+        );
       });
-
-      map.on('mouseenter', 'clusters', (e) => {
+      map.on('mouseenter', COUNTS, (e) => {
         map.getCanvas().style.cursor = 'pointer';
-        const f = e.features?.[0];
-        const clusterId = f?.properties?.cluster_id as number | undefined;
-        if (clusterId == null) return;
-        /* Resolve every listing inside the cluster so all matching
-         * cards / rows light up together — the "if there's still a
-         * group at this zoom, highlight them all" requirement. */
-        const src = map.getSource('listings') as GeoJSONSource;
-        const pointCount = (f?.properties?.point_count as number | undefined) ?? 100;
-        src.getClusterLeaves(clusterId, pointCount, 0)
-          .then((leaves) => {
-            const ids = leaves
-              .map((leaf) => leaf.properties?.listing_id as number | undefined)
-              .filter((x): x is number => typeof x === 'number');
-            onHoverRef.current?.(ids);
-          })
-          .catch(() => { /* swallow — leaves load may race with unmount */ });
+        const key = e.features?.[0]?.id;
+        const ids = typeof key === 'number' ? marksRef.current.get(key)?.ids : undefined;
+        if (ids && ids.length > 0) onHoverRef.current?.(ids);
       });
-      map.on('mouseleave', 'clusters', () => {
+      map.on('mouseleave', COUNTS, () => {
         map.getCanvas().style.cursor = '';
         onHoverRef.current?.(null);
       });
@@ -1114,11 +961,11 @@ export default function ListingMap({
       });
 
       /* Locator halo — the card→map "where is it" answer. A separate
-       * (unclustered) source fed from the hovered rows' coordinates and
-       * drawn above every listing layer, so the highlight lands at the
-       * property's true position even when its dot is currently absorbed
-       * into a cluster bubble: the ochre pool + ring sit on top of the
-       * group and the pin-dot marks the exact spot inside it. */
+       * source fed from the hovered rows' coordinates and drawn above
+       * every listing layer, so the highlight lands at the property's
+       * true position even when its dot is currently absorbed into a
+       * count mark: the ochre pool + ring sit on top of the mark and
+       * the pin-dot marks the exact spot inside it. */
       map.addSource('hover-halo', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -1374,49 +1221,50 @@ export default function ListingMap({
     );
   }, [centerCircle, ready]);
 
-  // Push fresh rows to the source whenever the filter result changes.
-  // Only the very first non-empty result gets a fitBounds call; after
-  // that, the user's pan/zoom is preserved across filter edits.
+  /* ONE data effect for both lanes. The cohort arrives as points (`rows`) or as
+   * the server's tile cells, never both; either way the count rule
+   * (lib/mapCounts) groups it: below PIN_ZOOM a tile holding one known property
+   * shows that pin and any other tile shows its count, so `listings` carries
+   * the lone pins and `counts` the marks; from PIN_ZOOM a point cohort is all
+   * pins. Cells arrive at the finest level the server could afford, so they are
+   * regrouped at the coarser of that and the map's level. Both setData calls
+   * run every time, so switching lanes or levels can never leave a stale mark
+   * beside a pin. `priceMetric` is a dependency because the labels are BAKED
+   * into the feature properties — flipping the control has to re-run setData,
+   * not just repaint. The map fits to the first non-empty result once, whichever
+   * lane brought it; after that the operator's pan/zoom is theirs. */
   useEffect(() => {
-    if (!ready || !mapRef.current) return;
-    const src = mapRef.current.getSource('listings') as GeoJSONSource | undefined;
-    if (!src) return;
-    const fc = toFeatureCollection(rows, priceMetric);
-    src.setData(fc);
+    const map = mapRef.current;
+    if (!ready || !map || !rule) return;
+    const pinSource = map.getSource('listings') as GeoJSONSource | undefined;
+    const countSource = map.getSource(COUNTS) as GeoJSONSource | undefined;
+    if (!pinSource || !countSource) return;
 
-    if (rows.length === 0 || didInitialFitRef.current) return;
+    let pins = rows;
+    let marks: CountMark[] = [];
+    if (cells) {
+      pins = [];
+      marks = groupByTile(cells, Math.min(rule.level, cellsLevel ?? rule.level)).marks;
+    } else if (!rule.pins) {
+      const grouped = groupByTile(
+        rows.map((row) => ({ lng: row.lng, lat: row.lat, n: 1, id: row.listing_id, row })),
+        rule.level,
+      );
+      pins = grouped.lone.map((p) => p.row);
+      marks = grouped.marks;
+    }
+    marksRef.current = new Map(marks.map((m) => [m.key, m]));
+    pinSource.setData(toFeatureCollection(pins, priceMetric));
+    countSource.setData(toCountFeatureCollection(marks));
+
+    if (didInitialFitRef.current) return;
     const bounds = new maplibregl.LngLatBounds();
     for (const r of rows) bounds.extend([r.lng, r.lat]);
-    mapRef.current.fitBounds(bounds, {
-      padding: 56,
-      maxZoom: 14,
-      duration: 700,
-    });
+    for (const c of cells ?? []) bounds.extend([c.lng, c.lat]);
+    if (bounds.isEmpty()) return;
+    map.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 700 });
     didInitialFitRef.current = true;
-    /* `priceMetric` is a dependency because the labels are BAKED into the
-     * feature properties — flipping the control has to re-run setData, not just
-     * repaint. It never re-fits: the operator's viewport is theirs. */
-  }, [rows, ready, priceMetric]);
-
-  /* W6b — the same contract for the cell source. Runs unconditionally (not only
-   * when `cells` is non-null) so that switching back to point mode CLEARS the
-   * cells: leaving them would draw both layers at once and double-count the
-   * cohort on screen. */
-  useEffect(() => {
-    if (!ready || !mapRef.current) return;
-    const src = mapRef.current.getSource('map-cells') as GeoJSONSource | undefined;
-    if (!src) return;
-    src.setData(toCellFeatureCollection(cells ?? []));
-
-    if (!cells || cells.length === 0 || didInitialFitRef.current) return;
-    /* Same one-shot fit the rows effect does — it keys on the same ref, so a
-     * cohort that arrives as cells and later resolves to points is fitted once,
-     * not twice, and the operator's own pan/zoom is never overridden. */
-    const b = new maplibregl.LngLatBounds();
-    for (const c of cells) b.extend([c.lng, c.lat]);
-    mapRef.current.fitBounds(b, { padding: 56, maxZoom: 14, duration: 700 });
-    didInitialFitRef.current = true;
-  }, [cells, ready]);
+  }, [rows, cells, cellsLevel, rule, ready, priceMetric]);
 
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
@@ -1593,34 +1441,19 @@ export default function ListingMap({
             {cells != null && (
               /* Corollary F (a surface says what it shows in the cohort's own
                * terms): nothing is missing here, and the operator must not read
-               * grouped bubbles as the old truncation. Every property in the cohort is counted in
-               * exactly one bubble, so this says what changed (grain) rather than
-               * apologising for a loss that did not happen. */
+               * count marks as the old truncation. Every property in the cohort
+               * is in exactly one count, so this says what changed (grain) rather
+               * than apologising for a loss that did not happen. */
               <span
                 className="ml-2 text-[var(--color-ink-2)]"
                 title={
-                  'The cohort is larger than the map plots pin-by-pin, so the server grouped it '
-                  + `into ${cells.length.toLocaleString('cs-CZ')} cells. Every matching property is `
-                  + 'counted in exactly one of them — nothing is cut. Zoom in (the viewport is part '
-                  + 'of the filter) and individual pins return once the cohort fits.'
+                  'The cohort is larger than the map plots pin-by-pin, so it is counted by map '
+                  + 'tile: every matching property is in exactly one count — nothing is cut. Zoom '
+                  + 'in (the viewport is part of the filter) and individual pins return once the '
+                  + 'cohort fits.'
                 }
               >
-                · grouped into {cells.length.toLocaleString('cs-CZ')} cells — complete, zoom in for pins
-              </span>
-            )}
-            {offGrid > 0 && (
-              /* These rows ARE in `total` and are NOT drawn: their coordinates
-               * fall outside the grid extent (the data holds lng values from -118
-               * to +125). Placing them on an edge cell would invent a location. */
-              <span
-                className="ml-2 text-[var(--color-ochre)]"
-                title={
-                  'These properties match the filters and carry coordinates, but those coordinates '
-                  + 'fall outside the mapped extent, so they are counted and not drawn. Putting them '
-                  + 'on the edge of the map would invent a location for them.'
-                }
-              >
-                · {offGrid.toLocaleString('cs-CZ')} outside the mapped extent
+                · counted by tile, zoom in for pins
               </span>
             )}
           </Pill>
@@ -1899,8 +1732,8 @@ function PriceMetricControls({
 }: {
   priceMetric: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
-  /* False while the map is zoomed out far enough that every point is still
-   * inside a cluster. The control stays LIVE (the choice is URL state and
+  /* False while the map is zoomed out far enough that points are still
+   * grouped into count marks. The control stays LIVE (the choice is URL state and
    * survives the zoom that reveals it) but says its effect is not on screen
    * yet — disabling it would make a shareable `?pm=per_m2` link unsettable
    * from the view the link opens at. */
@@ -1917,7 +1750,7 @@ function PriceMetricControls({
   ];
   const hint = labelsVisible
     ? 'Popisky pinů: celková cena nebo cena za m²'
-    : `Popisky pinů se zobrazí po přiblížení (od úrovně ${PIN_LABEL_VISIBLE_ZOOM})`;
+    : 'Popisky pinů se zobrazí po přiblížení';
   return (
     <div className="pointer-events-auto flex flex-col gap-1 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
       <div className="flex items-center gap-2">
