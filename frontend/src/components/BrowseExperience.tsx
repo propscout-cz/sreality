@@ -887,8 +887,7 @@ export default function BrowseExperience({
                 <Suspense fallback={<MapSkeleton />}>
                   <ListingMap
                     rows={mapQuery.data?.rows ?? []}
-                    cells={mapQuery.data?.cells ?? null}
-                    cellsLevel={mapQuery.data?.level ?? null}
+                    counts={mapQuery.data?.counts ?? null}
                     total={mapQuery.data?.total ?? null}
                     cohortTotal={cohortTotal}
                     cohortTotalApprox={cohortTotalApprox}

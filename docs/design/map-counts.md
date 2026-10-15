@@ -48,8 +48,9 @@ Principles that follow:
 - **Points, not areas.** The cohort is drawn as pins and count marks. Area fills stay with the
   context layers (cities, rent map, growth, metro, flood, kraje); a fifth wash would fight them and
   repeat the 2026-09-22 lesson (overlapping area marks make the map unusable).
-- **One mark per tile, at the tile centre.** Marks cannot overlap each other, so none is ever hidden
-  and the numbers on screen always add up to the pill's total.
+- **One mark per tile, at the tile centre.** Marks cannot overlap each other and are never dropped;
+  a tile cut by the window's edge puts its mark on the part that is in view, so the marks and the
+  lone pins on screen always add up to the pill's total.
 - **One rule, one formatter, one layer.** Supercluster, the second layer pair, the second click and
   hover path, the three zoom constants, the three number formatters and the dead response fields go.
 - **Exact and reproducible.** No sampling (the 439 lesson stands), the sum of counts equals the
@@ -88,7 +89,7 @@ today's `clusterMaxZoom: 13` behaves.
 | placement | tile centre; `icon-allow-overlap` and `text-allow-overlap` true (our marks are never dropped: with one mark per tile and a 90 px minimum pitch they cannot collide); `ignore-placement` false, so basemap labels still avoid them |
 | coverage | worst instant (90 px pitch, every tile a 4-digit count) 9 %; typical 4 to 6 %; today 37 to 94 % |
 | click | eases two zoom levels in on the tile and passes the click's `originalEvent` through `easeTo`'s event data, so the existing URL guard treats it as a user move and the list and stats re-scope |
-| hover (small lane) | the member ids travel on the feature; the cards light as a cluster's leaves do today |
+| hover (small lane) | the member ids are kept beside the feature (keyed by tile and level); the cards light as a cluster's leaves did |
 
 White on `#2f5750` has a contrast ratio above 8:1. A legend is unnecessary: every mark prints its
 own number and no mark is ever hidden.
@@ -101,9 +102,10 @@ Prague); isolated pins get their price label from zoom 14 instead of 13 (one pin
 ## Architecture after the sprint
 
 **Client: one `groupByTile`.** `frontend/src/lib/mapCounts.ts` holds `tileOf(lng, lat, level)`
-(MapLibre's own Mercator formula, latitude clamped to ±85.05°), `countLevel(zoom)`, `groupByTile`
-(sums `n`, carries member ids in the small lane) and the pill image factory. Whatever the server
-returns, points or cells, is grouped the same way at `min(countLevel(zoom), server level)`;
+(MapLibre's own Mercator formula, latitude clamped to ±85.05°), `countRule(zoom)`, `groupByTile`
+(sums `n`, carries member ids in the small lane), `marksFor` (the one lane decision, pure and
+tested) and the pill image factory. Whatever the server returns, points or cells, is grouped the
+same way at `min(countRule(zoom).level, server level)`;
 re-grouping listens to the `zoom` event and calls `setData` only when the level changes, so no
 refetch is needed to zoom and marks never crowd mid-gesture. A user pan or zoom still refetches
 through the URL bbox exactly as today (the viewport is a filter; nothing changes in react-query).
@@ -150,7 +152,7 @@ of the marks are delisted history (the 2026-10-13 any-ad ruling); the mark does 
 | Where | Deleted | Added |
 |---|---|---|
 | `ListingMap.tsx` | `listings` cluster config; layers `clusters`, `cluster-count`, `cells`, `cell-count` and their two paint copies; `map-cells` source; cluster click (`getClusterExpansionZoom`) + hover (`getClusterLeaves`); cell click + hover; `abbreviateCount`, `toCellFeatureCollection`, `CellFeatureProps`, `CellFC`; `CLUSTER_MAX_ZOOM`, `PRICE_LABEL_MIN_ZOOM`, `PIN_LABEL_VISIBLE_ZOOM` + the 15-line comment; the cells data effect and second fit path; the off-grid and cell-count pill clauses | one `counts` source + one symbol layer; one click/hover pair; `PIN_ZOOM` |
-| `lib/mapCounts.ts` (new) | | `tileOf`, `countLevel`, `groupByTile`, the pill image, the layer spec (≈ 110 lines) |
+| `lib/mapCounts.ts` (new) | | `tileOf`, `countRule`, `groupByTile`, `marksFor`, `fitExtent`, the pill image, the layer spec (built: 250 lines, a third of them the WHY) |
 | `lib/queries.ts`, `BrowseExperience.tsx` | `offGrid` field, prop and plumbing; `MapGrid.off_grid` | `MapGrid.level` |
 | `lib/format.ts` | `czNumberCompact`, `fmtCountCompact` (zero consumers) | |
 | SQL body (migration 602) | CZ box constants, 20 × 13 constants, extent fallback, edge clamps, seven output keys | level-18 grouping + cascade + level pick (≈ +30 inside the body) |

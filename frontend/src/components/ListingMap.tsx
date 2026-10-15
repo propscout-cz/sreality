@@ -6,15 +6,17 @@ import { createMap } from '@/lib/basemap';
 import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
   COUNTS,
+  COUNT_INK,
   PIN_ZOOM,
   addCountPillImage,
   countLayer,
-  groupByTile,
+  fitExtent,
+  marksFor,
   toCountFeatureCollection,
   useCountRule,
   type CountMark,
 } from '@/lib/mapCounts';
-import type { CityIndexDefinition, CuratedCity, MapCell, MapRow } from '@/lib/queries';
+import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/queries';
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
@@ -248,13 +250,11 @@ const CITY_NULL_COLOR = '#8c9196';
 interface Props {
   rows: MapRow[];
   /* Server-side tile counts instead of pins, when the cohort is larger than
-   * MAP_POINT_BUDGET. Non-null and `rows` empty, or null and `rows` populated;
-   * never both. Zooming in shrinks the cohort (the viewport is a filter) until it
-   * fits, at which point real pins come back. */
-  cells?: MapCell[] | null;
-  /* The tile level the cells were counted at (MapResult.level); the map never
-   * draws them finer than that. */
-  cellsLevel?: number | null;
+   * MAP_POINT_BUDGET (MapResult.counts: the cells and the level they were counted
+   * at; the map never draws them finer). Non-null and `rows` empty, or null and
+   * `rows` populated; never both. Zooming in shrinks the cohort (the viewport is a
+   * filter) until it fits, at which point real pins come back. */
+  counts?: MapCounts | null;
   /* Mappable cohort size — properties with coordinates (the map query filters
    * lat/lng NOT NULL). This is a SUBSET of cohortTotal, not a rival total.
    * In count mode this is the server's exact count of the WHOLE cohort. */
@@ -366,8 +366,7 @@ interface Props {
 
 export default function ListingMap({
   rows,
-  cells = null,
-  cellsLevel = null,
+  counts = null,
   total,
   cohortTotal,
   cohortTotalApprox,
@@ -794,7 +793,7 @@ export default function ListingMap({
           'text-ignore-placement': false,
         },
         paint: {
-          'text-color': '#2f5750',
+          'text-color': COUNT_INK,
           'text-halo-color': '#ffffff',
           'text-halo-width': 1.4,
           'text-halo-blur': 0.2,
@@ -1240,31 +1239,24 @@ export default function ListingMap({
     const countSource = map.getSource(COUNTS) as GeoJSONSource | undefined;
     if (!pinSource || !countSource) return;
 
-    let pins = rows;
-    let marks: CountMark[] = [];
-    if (cells) {
-      pins = [];
-      marks = groupByTile(cells, Math.min(rule.level, cellsLevel ?? rule.level)).marks;
-    } else if (!rule.pins) {
-      const grouped = groupByTile(
-        rows.map((row) => ({ lng: row.lng, lat: row.lat, n: 1, id: row.listing_id, row })),
-        rule.level,
-      );
-      pins = grouped.lone.map((p) => p.row);
-      marks = grouped.marks;
-    }
+    /* The view the cohort was fetched for (the viewport is a filter), so an edge
+     * tile's mark lands on the part of the tile that is on screen. */
+    const b = map.getBounds();
+    const view = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
+    const { pins, marks } = marksFor(rows, counts, rule, view);
     marksRef.current = new Map(marks.map((m) => [m.key, m]));
     pinSource.setData(toFeatureCollection(pins, priceMetric));
     countSource.setData(toCountFeatureCollection(marks));
 
     if (didInitialFitRef.current) return;
-    const bounds = new maplibregl.LngLatBounds();
-    for (const r of rows) bounds.extend([r.lng, r.lat]);
-    for (const c of cells ?? []) bounds.extend([c.lng, c.lat]);
-    if (bounds.isEmpty()) return;
-    map.fitBounds(bounds, { padding: 56, maxZoom: 14, duration: 700 });
+    const extent = fitExtent(marks, pins);
+    if (!extent) return;
+    map.fitBounds(
+      [[extent.west, extent.south], [extent.east, extent.north]],
+      { padding: 56, maxZoom: 14, duration: 700 },
+    );
     didInitialFitRef.current = true;
-  }, [rows, cells, cellsLevel, rule, ready, priceMetric]);
+  }, [rows, counts, rule, ready, priceMetric]);
 
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
@@ -1438,7 +1430,7 @@ export default function ListingMap({
                 : cohortTotal != null && cohortTotal > total
                   ? `${total.toLocaleString('cs-CZ')} of ${cohortTotalApprox ? '~' : ''}${cohortTotal.toLocaleString('cs-CZ')} mapped`
                   : `${total.toLocaleString('cs-CZ')} ${total === 1 ? 'listing' : 'listings'}`}
-            {cells != null && (
+            {counts != null && (
               /* Corollary F (a surface says what it shows in the cohort's own
                * terms): nothing is missing here, and the operator must not read
                * count marks as the old truncation. Every property in the cohort

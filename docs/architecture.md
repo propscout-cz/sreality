@@ -3892,7 +3892,7 @@ ring and one at or above it a solid dot, so "middle of the village" and "this fr
 identical; clicking a pin draws its true-metre circle of `uncertainty_radius_m` for as long as its
 popup is open, and the popup names the rung and the radius. (W3-3 first drew that circle under every
 such pin at once — with ~87 % of active pins below building level it buried the map, 2026-09-22.)
-Clusters and server-side grid cells carry no per-pin radius, so all of this exists only in point mode.
+A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public`, and so to
 both read models — served for the street chip level, read by no filter until its RPC arm lands.
