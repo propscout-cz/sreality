@@ -523,12 +523,18 @@ def test_the_insert_makes_valid_reprojects_and_subdivides() -> None:
             "st_geomfromgeojson(%s::text)),%s),3857)),256)") in _compact(mod.INSERT_FEATURE_SQL)
 
 
-def test_a_dissolve_unions_the_layer_then_subdivides_and_names_the_pieces() -> None:
+def test_a_dissolve_cuts_overlaps_against_earlier_rows_then_subdivides_each_piece() -> None:
+    """No nationwide union (it ran past the 30-minute budget on 2026-10-15): a zone loses only
+    the area an earlier-inserted overlapping zone of the same band already covers."""
     text = _compact(mod.DISSOLVE_SQL)
-    assert "st_unaryunion(st_collect(st_collectionextract(geom,3)))" in text
-    assert "st_subdivide(casewhen%(outline)sthenst_boundary(merged)elsemergedend,256)" in text
+    assert "st_unaryunion" not in text
+    assert "st_collectionextract(geom,3)" in text
+    assert "coalesce(st_difference(s.geom,(selectst_union(o.geom)fromsourcesowhereo.id<s.id" in text
+    assert "andst_intersects(o.geom,s.geom)andnotst_touches(o.geom,s.geom)" in text
+    assert "st_subdivide(casewhen%(outline)sthenst_boundary(e.geom)elsee.geomend,256)asp(piece)" in text
+    assert "wherenotst_isempty(e.geom)" in text
     assert "deletefrommap_overlay_featureswherelayer_key=%(layer)s" in text
-    assert "st_dwithin(f.geom,pieces.anchor,0.5)" in text
+    assert "'name',pieces.props->>'name'" in text
 
 
 def test_the_kraje_source_draws_each_kraj_boundary_in_3857() -> None:
