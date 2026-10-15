@@ -6,7 +6,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { CollectionsPicker } from './Filters';
-import { TagPicker } from './filter-controls/TagPicker';
+import { AccountTagFilter } from './filter-controls/TagFilterControl';
 import * as api from '@/lib/api';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -38,10 +38,10 @@ describe('Browse sidebar curation pickers', () => {
     vi.mocked(api.listTags)
       .mockRejectedValueOnce(new Error('HTTP 500'))
       .mockResolvedValue({ data: [{ id: 3, name: 'k prohlídce', color: 'copper' }] } as never);
-    renderPicker(<TagPicker value={null} onChange={() => {}} />);
+    renderPicker(<AccountTagFilter value={{ tags: [], tagsExcluded: [] }} onChange={() => {}} />);
     const retry = await screen.findByRole('button', { name: /Štítky se nepodařilo načíst/ });
     expect(screen.queryByText(/No tags yet/)).toBeNull();
     fireEvent.click(retry);
-    expect(await screen.findByText('k prohlídce')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'k prohlídce' })).toBeInTheDocument();
   });
 });

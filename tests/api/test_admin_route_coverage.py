@@ -220,6 +220,10 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "DELETE by id on a child-grain table — migration 292 USING clause"
     ),
     "GET /properties/{property_id}/notes": "RLS-only read (migration 290 on `property_notes`)",
+    "GET /artifact-links": "RLS-only read (migration 599 on `property_artifact_links`)",
+    "DELETE /properties/{property_id}/artifact-link": (
+        "DELETE of the caller's own row by property — migration 599 USING clause"
+    ),
     "PATCH /properties/{property_id}/notes/{note_id}": "UPDATE by id — migration 290 USING clause",
     "DELETE /properties/{property_id}/notes/{note_id}": "DELETE by id — migration 290 USING clause",
     "GET /properties/{property_id}/notes/{note_id}/attachments/{attachment_id}": (

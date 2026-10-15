@@ -41,6 +41,7 @@ _CARRIED = (
     "collection_properties",
     "property_tags",
     "property_notes",
+    "property_artifact_links",
     "notification_dispatches",
     "property_pipeline",
     "property_dismissals",
@@ -249,6 +250,31 @@ def test_notes_all_move(cur, accounts):
     # written on no advert, each note goes back where its carry row says it came from
     assert _detached(cur, advert, r) == {"carry_rows": 3, "note_moves": 0}
     assert placed() == before
+
+
+def test_artifact_links_keep_the_survivors_per_account_and_stay_through_a_detach(cur, accounts):
+    """Migration 599: one link per (account, property). Where an account holds one on both sides
+    the survivor's stands; an account holding one only on R takes it to S. No carry row, so a
+    detach leaves them where they are."""
+    a, b = accounts
+    s, r, _s_advert, advert = _pair(cur)
+    for acc, pid, url in ((a, s, "https://s.example/a"), (a, r, "https://r.example/a"),
+                          (b, r, "https://r.example/b")):
+        cur.execute("INSERT INTO property_artifact_links (account_id, property_id, url) "
+                    "VALUES (%s, %s, %s)", (acc, pid, url))
+
+    def placed() -> set[tuple]:
+        cur.execute("SELECT account_id, property_id, url FROM property_artifact_links "
+                    "WHERE property_id = ANY(%s)", ([s, r],))
+        return set(cur.fetchall())
+
+    group = _merged(cur, s, r)
+    kept = {(a, s, "https://s.example/a"), (b, s, "https://r.example/b")}
+    assert placed() == kept
+    assert not [c for c in _carries(cur, group) if c[0] == "property_artifact_links"]
+
+    _detached(cur, advert, r)
+    assert placed() == kept
 
 
 # --- notification dispatches ------------------------------------------------------------

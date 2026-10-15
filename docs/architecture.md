@@ -193,15 +193,18 @@ serve delisted pages again), an off-database copy lives in R2 under
 `export_raw_pages_archive.yml`), and `tests/test_portal_raw_pages_guard.py` fails CI on
 any `DELETE`/`TRUNCATE`/`DROP` against the table. Coordinates come from the detail page's embedded Google-Maps/Mapy.cz link
 (page-wide, CZ-bbox-guarded); they are what lets cross-source dedup match bazos against
-sreality. **bazos' location TEXT is claimed from the text lane's reading since W3** (`bazos@8`, the
+sreality. **bazos' location TEXT is claimed from the text lane's reading since W3** (`bazos@9`, the
 `bzs.txt.*` entries): the one call that reads each advert (headline + description) for floor and lift
 also answers where the property itself is — town, part of town, street, house numbers — quoting its
 words (`location_data/text_reading.py`), and the claim lane mines that stored answer. It replaced two
 carriers: the town anchor's href slug, which names the POST OFFICE's town (35 of 137 sampled adverts
 sat in the wrong town, 33 of them by postcode — the PSČ entry stays), and W18's whole-headline street
 claim (`bzs.det.street_cue`, split by the resolver). Nothing in the reading is trusted on its own: V1
-the quote is verbatim in the advert, V2 the value is grounded in its quote, V3 an offered property in
-Czechia, V4 a number carries its marker — and the register decides whether a name is a place.
+the quote is verbatim in the advert (W4: or the value itself stands in it as whole words, and is then its
+quote), V2 the value is grounded in its quote (W4: or by its initials, "Č.B."), V3 an offered property
+in Czechia (W4: a `not_property` advert keeps its TOWN alone, and the prompt counts business premises
+— a shop, a bar, an office to let, sell or take over — as an offer), V4 a number carries its marker —
+and the register decides whether a name is a place.
 
 **Data source (bezrealitky.cz).** A scheduled scraper (`scraper/bezrealitky_client.py`,
 `bezrealitky_parser.py`, `bezrealitky_main.py`, workflow `scrape_bezrealitky.yml` — pilot,
@@ -2024,7 +2027,10 @@ renumber.** Navigate by area:
     `toolkit/property_carriers.py` (`PROPERTY_CARRIERS`, the one ordered list; `NOT_CARRIED` +
     the census) carries that state inside the merge transaction, in a fixed order:
     collections, tags, notes AND `notification_dispatches` as `CurationTable`s (SET tables union
-    with collision-collapse; APPEND tables move every row); the pipeline (rule #22); then
+    with collision-collapse; APPEND tables move every row), then `property_artifact_links` (migration
+    599: the operator's one "Artifact link" URL per property, a SET table on `account_id` with no
+    `at`, so the survivor's link stands on a collision, nothing is recorded, and a detach leaves
+    it where it is); the pipeline (rule #22); then
     dismissals, AFTER the pipeline so a live card lifts its account's dismissal. The private
     `_merge_pair` (one per retired property of a `merge_property_set`) is the only writer that
     retires a property, and it runs every carrier before the retire, so no operator-state row can
@@ -2112,19 +2118,39 @@ renumber.** Navigate by area:
     growing a second answer. The allowlist resolves from the SAME member map
     the glyphs render from, and "nothing selected" (no constraint, `null`) stays distinguishable
     from "a selection nothing is in" (zero rows, `[]`) all the way to the query.
-    **Both curated-set prefilters now share one shape** — membership rows reduced to a
-    property-id allowlist, AND for tags, OR for collections — and `tags` left
-    `properties_with_tags(tag_ids)` for `property_tags_public` to get there: the RPC body
-    carries `limit 5000` (migration 202) under a client comment asserting exhaustiveness, and a
-    truncated allowlist silently bleeds listings the operator asked to exclude back into the
-    cohort. The membership read is complete-or-throw (`fetchAllRows`); the RPC stays in the
-    database until the SPA deploy has rolled out. `fetchBrowseStats` was the one Browse fetcher
-    that named its prefilters by hand; it now resolves through `resolveBrowsePrefilters` like
-    every other lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
+    **Tags are collections' twin (2026-10-14).** The same five pieces, one each: ONE whole
+    member map (`fetchPropertyTagMemberSet` under `curationKeys.propertyTagMembers`, the one
+    `fetchMemberSet` reader both maps share — a per-property read and a second,
+    selection-filtered read inside Browse's prefilter were deleted with it), ONE scope module
+    (`lib/tagScope.ts`: AND over `tags`, NONE OF over `tagsExcluded`, `cycleTag` off → on → not —
+    the portal rule's shape, rendered as Browse's id lists and the board's in-memory predicate),
+    ONE revalidation (`lib/tagCache.ts`, called by attach / detach / create / rename / delete; the
+    edit popover used to invalidate a `listing-tags` key that stopped existing at migration 202,
+    so a deleted tag stayed on the property page until staleTime), ONE assign list
+    (`components/curation/TagAssignList`: rows that attach or detach, a find-or-create box, the
+    edit pencil — inline on the property page, a popover from the board card's chip row, a
+    bottom sheet from the phone card) and ONE chip (`TagChip`). The filter control is tri-state
+    (`TagFilterControl`, Browse's sidebar and the board's bar; `tags` / `tags_excluded` in the
+    URL, both inside preset identity unlike `collections`); it filters and nothing else — editing
+    a tag is the assign list's job. **Browse's exclusion is the one DENYLIST**: a property-grain
+    allowlist cannot say "not tagged X" over the market, so migration 598 gave both aggregate
+    RPCs a generic trailing `property_ids_excluded bigint[]` (597's pattern), the list reads add
+    the matching `not in`, and `BrowsePrefilters.propertyIdsExcluded` carries it — named for its
+    id space, so a future "not in collection" reuses it with no schema change. Both curated-set
+    prefilters otherwise share one shape — membership rows reduced to property-id lists, resolved
+    from the SAME member map the chips render from — and `tags` left `properties_with_tags(tag_ids)`
+    for `property_tags_public` to get there: that RPC body carried `limit 5000` (migration 202)
+    under a client comment asserting exhaustiveness (dropped in 553). The membership read is
+    complete-or-throw (`fetchAllRows`). `fetchBrowseStats` was the one Browse fetcher that named
+    its prefilters by hand; it now resolves through `resolveBrowsePrefilters` like every other
+    lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
     property-grain filter cannot narrow the list and leave the panel above it counting the whole
     market. A membership write invalidates the Browse reads only when membership IS the cohort
     (`revalidateCollections`' `cohortScoped`, passed by the Browse card alone — the mirror of
-    `pipelineRevalidation`'s knob).
+    `pipelineRevalidation`'s knob; tags have no Browse-card writer yet, so `revalidateTags` takes
+    no knob). The board offers its collection and tag chips by ONE rule (`lib/curatedSetOffer.ts`:
+    sets with a member on the board plus any selected one, shown only when they could change the
+    view).
     **Adding notes is reachable from the Chrome-extension panel too** — it lists the property's
     existing notes + an add box, writing through the SAME `POST /properties/{id}/notes` the
     `CurationBlock` uses (the viewed advert's `sreality_id` as `origin_listing_id`); notes are
@@ -3414,8 +3440,11 @@ writes is not evidence a portal published.
   terminate the parent's session. The pool is an accelerator only: one outcome per body IN ORDER, so
   a content-triggered refusal still costs one listing's page entries and a pool the OOM killer takes
   finishes its batch on the main thread.
-* *The readings half* (W3, migration 581) runs FIRST and hourly only (its full read of the readings
-  table fails the minute lane's 5 s gate cold), in the page half's budget share. It mines each listing's
+* *The readings half* (W3, migration 581) runs FIRST in the hourly run (its full read of the readings
+  table fails the minute lane's 5 s gate cold), in the page half's budget share — and since W4 also on
+  the worker right after each text-lane pass, scoped to the listings that pass read
+  (`claims_intake.mine_readings`, batch lane `location_readings_fast`, 132 ms cold for 500 listings;
+  `LOCATION_READINGS_FAST_ENABLED=0` stops it), the hourly run staying the backstop. It mines each listing's
   CURRENT reading — the successful reading of its CURRENT advert text (hashed by the text lane's SQL),
   at the lane's `extractor_version` if one exists, else the newest — unless its stamp
   (`mined_contract_version`) is the active `<source>@<version>`; readings of another text get it with
@@ -3648,7 +3677,15 @@ portal's payload or its own page, and every other stamp is class E outright.
   část obce by name; a PSČ set; the pin's obec; the nearest obec within the 250 m sliver; last the
   okres or kraj. A town name binds by the v5.5 TOWN RULE (obec/část/KÚ climbed to the obec, kept by
   the PSČ, else by okres/kraj and — when a PSČ exists or the pin is declared precise — within 40 km
-  of the pin; a tie goes to the pin's obec, else the nearest). The tail of that
+  of the pin; a tie goes to the pin's obec, else the nearest). Since v5.7 (W4) the village a town name
+  CLIMBED from is the part (`climbed_from_town_name`: "Hracholusky" is a část of Úlice; a KÚ through
+  the část its qualifier-free name spells) when ONE town survives, inheriting how it was chosen (a
+  tie-break's low confidence; the one claim's agreements), never the eponymous main part; a name that
+  is no register name retries without its " u X" tail, kept to X where X is one of the obce the base
+  climbs to, else only the PSČ may place it (`qualifier_stripped`: "Boudy u Jesenice"); a PSČ shared by
+  several obce yields to the one whose street index holds a claimed street exactly, a line that is also
+  a place of one of them excepted (`street_in_town`). A part named by several sources is ONE candidate.
+  The tail of that
   chain is what keeps a border pin or a region-only listing from having no town at all, which rule 25
   does not allow: each answers at `low` confidence, and a sliver is NOT a dispute, because a polygon
   edge is not a disagreement. **The pin BIND reverse-geocodes from is the pin the row publishes** —
@@ -3672,9 +3709,15 @@ portal's payload or its own page, and every other stamp is class E outright.
   exactly — with **both keys** (the register keeps `náměstí`/`třída`/`nábřeží` in `name_norm` while S1
   parses them off, so both are folded both ways — worth 215 titles) and **not a place** (a claim naming
   the anchoring obec or a část obce inside it is never a street — 76 register streets across 20 obce are
-  spelled exactly like a část obce of their own town). It fails CLOSED on two distinct street codes,
-  and a bound street carrying a house number reaches R1. R3 (trigram) runs only when nothing bound
-  exactly and never undoes an exact tie. W18 split bazos' whole headline on separators and kept R3 off
+  spelled exactly like a část obce of their own town) — since v5.7 such a line, or one S1 refused as a
+  place, IS the one část it names (`street_names_part`), and against a claimed part naming another, no
+  part at all (a claimed part of another level stands). It fails CLOSED on two distinct street codes —
+  except (v5.7) among accent-folded twins (14 keys in 6 obce: Hanusova/Hanušova) the one with a door in
+  the listing's one bound část (`street_part_tiebreak`), with no part bound the one a claim WITH
+  diacritics is spelled like (per claim; the two contradicting is no street) — and a bound street
+  carrying a house number reaches R1. Portal abbreviations fold on both sides (ČSA, nám., tř., nábř.,
+  gen., kpt., plk., sídl.: 0 new collisions in any obec). R3 (trigram) runs only when nothing bound
+  exactly and never undoes an exact tie or names a part. W18 split bazos' whole headline on separators and kept R3 off
   it (`claim_confidence: low`); v5.6 deleted both once W3's reading named the street itself.
 * **FILL** (`fill.py`) joins the hierarchy off the bound ids: ONE `admin_chain` read returning the
   unit itself ahead of its ancestors. Administrative names and codes are ALWAYS the registry's own

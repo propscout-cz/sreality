@@ -332,17 +332,20 @@ def test_E302_the_storey_count_alone_does_not_part_one_unit(lo: int, hi: int,
                                                              totals: tuple[int, int]) -> None:
     a, b = trial(lo), trial(hi)
     assert (a.total_floors, b.total_floors) == totals
+    # E954: each body prints the building's count, and the count answers the boxes on its own.
+    assert "total_floors" not in names(a, b, S15, GATE)
+    a, b = trial(lo, description=None), trial(hi, description=None)
     assert "total_floors" in names(a, b, S15, GATE)
     assert "total_floors" not in names(a, b, E302, GATE)
     assert "total_floors" not in names(a, b, E302)
 
 
 def test_E302_every_other_unit_fact_must_be_stated_and_agree() -> None:
-    a = trial(18721451)
-    for b in (trial(18766660, price=4_890_000.0, price_history=[]),  # 9 % apart
-              trial(18766660, floor=None),
-              trial(18766660, area_m2=64.0),
-              trial(18766660, disposition="3+1")):
+    a = trial(18721451, description=None)  # E954 would answer the boxes from the bodies
+    for b in (trial(18766660, description=None, price=4_890_000.0, price_history=[]),  # 9 %
+              trial(18766660, description=None, floor=None),
+              trial(18766660, description=None, area_m2=64.0),
+              trial(18766660, description=None, disposition="3+1")):
         assert "total_floors" in names(a, b, E302), b
 
 
@@ -722,6 +725,7 @@ def test_w29_replays_every_row_the_room_tag_cannot_move(tmp_path: Path) -> None:
     they displaced (four flat pairs on this pack), never a merge or a band."""
     from autodedup.dataset import load
     from autodedup.harness import load_must_not_link, named_model, read_pairs, run
+    from autodedup.indistinguishable import printed_storeys_prevail
 
     ds = load(TRIAL)
     ids = set(ds.listings)
@@ -738,4 +742,10 @@ def test_w29_replays_every_row_the_room_tag_cannot_move(tmp_path: Path) -> None:
                for lo, hi in now.keys() - then.keys())
     tag = {(r["lo"], r["hi"]): r["feats"].get("tag_room_clip_min2") for r in stored}
     below = {key for key, slot in tag.items() if slot and slot[1] and slot[0] < 0.90}
-    assert {key for key in then.keys() & now.keys() if now[key] != then[key]} <= below
+    moved = {key for key in then.keys() & now.keys() if now[key] != then[key]} - below
+    # E954: a total_floors demotion the bodies' printed storey count answers is lifted (seven
+    # rows on this pack: Jablonec 41 m² x4, Mozartova x2, Kolmá), and nothing else moves.
+    assert all(then[key][0] == "band" and then[key][1].endswith("d43_gate:total_floors")
+               and now[key][0] == "merge"
+               and printed_storeys_prevail(ds.listings[key[0]], ds.listings[key[1]])
+               for key in moved)

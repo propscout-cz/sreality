@@ -15,6 +15,7 @@ function Harness({ onReady }: { onReady: (s: PipelineViewState) => void }) {
       <span data-testid="status">{state.status}</span>
       <span data-testid="types">{[...state.types].join(',')}</span>
       <span data-testid="collections">{state.collectionIds.join(',')}</span>
+      <span data-testid="tags">{`${state.tagChoice.tags.join(',')}|${state.tagChoice.tagsExcluded.join(',')}`}</span>
       <span data-testid="sort">{`${state.sort.field}:${state.sort.direction}`}</span>
       <span data-testid="districts">{state.districts.map((d) => d.name).join('|')}</span>
     </div>
@@ -93,15 +94,28 @@ describe('usePipelineViewState', () => {
     expect(h.search()).toBe('');
   });
 
+  /* `tags` / `tags_excluded` are Browse's two sides of the tag rule (lib/tagScope). */
+  it('round-trips both sides of the tag choice and omits each param when empty', () => {
+    const h = mount();
+    act(() => h.state.setTagChoice({ tags: [5], tagsExcluded: [7, 9] }));
+    expect(h.search()).toBe('?tags=5&tags_excluded=7%2C9');
+    expect(h.read('tags')).toBe('5|7,9');
+    act(() => h.state.setTagChoice({ tags: [], tagsExcluded: [9] }));
+    expect(h.search()).toBe('?tags_excluded=9');
+    act(() => h.state.setTagChoice({ tags: [], tagsExcluded: [] }));
+    expect(h.search()).toBe('');
+  });
+
   it('clears every cohort param in one write, keeping the sort', () => {
     const h = mount(
-      '/pipeline?status=active&cat=byt&collections=7&districts=Beroun&districts_lvl=obec&districts_id=531057&sort=-added_at',
+      '/pipeline?status=active&cat=byt&collections=7&tags=5&tags_excluded=9&districts=Beroun&districts_lvl=obec&districts_id=531057&sort=-added_at',
     );
     act(() => h.state.reset());
     expect(h.search()).toBe('?sort=-added_at');
     expect(h.read('status')).toBe('any');
     expect(h.read('types')).toBe('');
     expect(h.read('collections')).toBe('');
+    expect(h.read('tags')).toBe('|');
     expect(h.read('districts')).toBe('');
   });
 

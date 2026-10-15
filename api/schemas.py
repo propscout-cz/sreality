@@ -8,9 +8,10 @@ out.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
 
 
 def _as_str_list(v: Any) -> Any:
@@ -569,6 +570,20 @@ class CreateNoteIn(BaseModel):
     # Surrogate twin (R2). Preferred when present; origin_listing_id is the
     # legacy handle and is NULL for a post-Gate-2 listing.
     origin_listing_ref_id: int | None = None
+
+
+class SetArtifactLinkIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _http_url(cls, v: Any) -> Any:
+        # The DB CHECK (migration 599) says the same; this turns it into a 422 the SPA can show.
+        if isinstance(v, str):
+            v = v.strip()
+            if not re.fullmatch(r"https?://\S+", v, re.IGNORECASE):
+                raise ValueError("must be an http(s) URL with no spaces")
+        return v
 
 
 class CreateTagIn(BaseModel):

@@ -8,14 +8,14 @@
  *
  * Reading order on the card:
  *   street (the card's link)  →  town  →  price + how it moved  →
- *   disposition/area + yield  →  broker  →  the municipality's civic indexes
+ *   disposition/area + yield  →  tags  →  artifact link  →  broker  →  the municipality's civic indexes
  * The street leads and carries the link because it NAMES the property, the way
  * a Browse card's title does; the price describes it. The town is ALWAYS the
  * second row, on a line of its own: folded into the street's single truncating
  * line it was the first thing clipped, and it is what the operator triages by.
  */
 
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { CSS } from '@dnd-kit/utilities';
@@ -25,9 +25,14 @@ import { ppm2BasisFromToken } from '@/lib/measure';
 import { listingKindLabel } from '@/lib/enums';
 import { propertyPath } from '@/lib/listingUrl';
 import { splitCardPlace } from '@/lib/cardPlace';
+import { useCardTags } from '@/lib/useCardTags';
 import { TrashIcon } from '@/components/icons';
 import PriceDelta from '@/components/PriceDelta';
 import CityIndexStrip from '@/components/CityIndexStrip';
+import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
+import TagChip from '@/components/curation/TagChip';
+import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
+import { TAG_ASSIGN_LABEL, TagAssignMenu } from '@/components/curation/TagAssignList';
 import type { CityQualityByObec } from '@/lib/useCityQuality';
 import { useCardHydration } from '@/lib/hydration';
 import type { ListingBroker } from '@/lib/brokers';
@@ -60,6 +65,56 @@ function CardThumb({
       loading="lazy"
       className={`${cls} object-cover ${inactive ? 'saturate-[0.4] brightness-[0.97]' : ''}`}
     />
+  );
+}
+
+/* The card's tags, as chips, and the one way to change them: the row is the
+ * trigger of the shared assign list (rule #18 — the same list the property
+ * page renders inline and the phone opens in a sheet). The reads are
+ * lib/useCardTags, the two keys every tag surface shares; a failed read is a
+ * retry, never an untagged card (MS16). */
+function CardTags({ property_id }: { property_id: number }) {
+  const { membersQ, memberIds, mine } = useCardTags(property_id);
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+
+  if (readFailed(membersQ)) {
+    return (
+      <div className="mt-1">
+        <ReadFailedMark what="Štítky" onRetry={() => void membersQ.refetch()} />
+      </div>
+    );
+  }
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={mine.length ? `${TAG_ASSIGN_LABEL}: ${mine.map((t) => t.name).join(', ')}` : 'Přidat štítek'}
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        className="mt-1 flex w-full flex-wrap items-center gap-1 text-left text-[0.68rem] leading-none"
+      >
+        {mine.length ? (
+          mine.map((t) => <TagChip key={t.id} tag={t} />)
+        ) : (
+          <span className="rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule)] px-1.5 leading-[1.5] text-[var(--color-ink-4)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink-2)]">
+            + štítek
+          </span>
+        )}
+      </button>
+      {open && (
+        <TagAssignMenu
+          id={panelId}
+          property_id={property_id}
+          memberIds={memberIds}
+          anchorRef={btnRef}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -205,6 +260,11 @@ export function CardFace({
               </span>
             )}
           </div>
+          <CardTags property_id={card.property_id} />
+          <ArtifactLinkButton
+            property_id={card.property_id}
+            className="mt-1 px-1.5 py-0.5 text-[0.68rem] leading-[1.2]"
+          />
           {/* The broker line streams in behind the card. Its height is
               reserved while the read is in flight so the column does not
               reflow when it lands; once resolved, a card with no attributed

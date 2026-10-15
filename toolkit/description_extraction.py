@@ -678,4 +678,6 @@ def run_pass(conn: Any, *, slice_size: int = PASS_SLICE,
         "model": model,
         # The backlog signal, free: a full slice means more is waiting.
         "slice_full": len(rows) >= slice_size,
+        # The listings that got a reading this pass: the worker mines exactly these (W4).
+        "listing_ids": sorted(stored),
     }

@@ -66,8 +66,10 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // predicate the plain `.in` auto-path can't express.
   'furnished',
   'ownership',
-  // Operator tags — a property-id prefilter (queries.ts resolveBrowsePrefilters).
+  // Operator tags — a property-id prefilter (queries.ts resolveBrowsePrefilters):
+  // `tags` an allowlist, `tags_excluded` the one denylist (migration 598).
   'tags',
+  'tags_excluded',
   // Merged price-history pair (migration 173): the window picks which
   // precomputed count column the threshold reads, and the signed
   // total-change predicate flips direction on sign — both hand-coded in

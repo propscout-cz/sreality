@@ -8,12 +8,12 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import Pipeline, { planMove } from './Pipeline';
-import type { Collection, PipelineBoardCard, PipelineStage, PropertySource } from '@/lib/types';
+import type { Collection, PipelineBoardCard, PipelineStage, PropertySource, Tag } from '@/lib/types';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
 import * as brokersApi from '@/lib/brokers';
@@ -30,6 +30,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     movePipelineCard: vi.fn(),
     removePipelineCard: vi.fn(),
     listCollections: vi.fn(),
+    listTags: vi.fn(),
+    attachTag: vi.fn(),
+    detachTag: vi.fn(),
+    fetchArtifactLinks: vi.fn(),
   };
 });
 
@@ -41,6 +45,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPipelineBoard: vi.fn(),
     fetchListingCovers: vi.fn(),
     fetchPropertyCollectionMemberSet: vi.fn(),
+    fetchPropertyTagMemberSet: vi.fn(),
     fetchPropertySourcesByPropertyIds: vi.fn(),
   };
 });
@@ -183,6 +188,11 @@ const collection = (id: number, name: string): Collection => ({
 // Šortlist holds a board property; Archiv holds none — only the first earns a chip.
 const COLLECTIONS = [collection(7, 'Šortlist'), collection(8, 'Archiv')];
 
+const TAGS: Tag[] = [
+  { id: 5, name: 'k prohlídce', color: 'copper', created_at: '2026-05-01T00:00:00Z', listing_count: 1 },
+  { id: 6, name: 'odmítnuto', color: 'brick', created_at: '2026-05-01T00:00:00Z', listing_count: 0 },
+];
+
 describe('planMove', () => {
   it('resolves a cross-column drop into a stage move', () => {
     expect(planMove('card:42', 'stage:3', CARDS)).toEqual({
@@ -232,6 +242,11 @@ function renderBoard(entry = '/pipeline') {
 describe('<Pipeline> board', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
+    vi.mocked(api.attachTag).mockResolvedValue({ attached: true });
+    vi.mocked(api.detachTag).mockResolvedValue({ detached: true });
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(new Map());
     vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
     vi.mocked(api.movePipelineCard).mockResolvedValue({
@@ -678,5 +693,87 @@ describe('<Pipeline> board', () => {
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
     expect(toast.pushToast).toHaveBeenCalledTimes(1);
     expect(toast.pushToast).toHaveBeenCalledWith('err', 'refused');
+  });
+
+  /* Tags on the board (rule #18, the collections' twin): the card prints its
+     tags as chips, the chips open the one assign list, and the bar's tri-state
+     chips narrow the board to a tag or to the cards without it. */
+  it('prints a card\'s tags as chips, and the chips open the assign list', async () => {
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
+    renderBoard();
+    const chips = await screen.findByRole('button', { name: 'Štítky: k prohlídce' });
+    expect(within(chips).getByText('k prohlídce')).toBeInTheDocument();
+    fireEvent.click(chips);
+    const panel = await screen.findByRole('group', { name: 'Štítky' });
+    expect(within(panel).getByRole('textbox', { name: 'Najít nebo vytvořit štítek' })).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: /k prohlídce/, pressed: true }));
+    await waitFor(() => expect(api.detachTag).toHaveBeenCalledWith(42, 5));
+    expect(await screen.findByRole('button', { name: 'Štítky: k prohlídce' })).toBeInTheDocument();
+  });
+
+  it('offers an untagged card the add verb', async () => {
+    renderBoard();
+    const add = await screen.findByRole('button', { name: 'Přidat štítek' });
+    fireEvent.click(add);
+    const panel = await screen.findByRole('group', { name: 'Štítky' });
+    fireEvent.click(within(panel).getByRole('button', { name: /odmítnuto/, pressed: false }));
+    await waitFor(() => expect(api.attachTag).toHaveBeenCalledWith(42, 6));
+  });
+
+  it('narrows the board to a tag, then to the cards without it, through one chip', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    // Only the tag with a member ON the board is offered.
+    const bar = (await screen.findByText('Štítky')).parentElement!;
+    const chip = within(bar).getByRole('button', { name: 'k prohlídce' });
+    expect(within(bar).queryByRole('button', { name: 'odmítnuto' })).toBeNull();
+
+    fireEvent.click(chip);
+    await waitFor(() => expect(screen.queryByText('Lesní')).not.toBeInTheDocument());
+    expect(screen.getByText('Sadová')).toBeInTheDocument();
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'k prohlídce' }));
+    await waitFor(() => expect(screen.queryByText('Sadová')).not.toBeInTheDocument());
+    expect(screen.getByText('Lesní')).toBeInTheDocument();
+    expect(within(bar).getByRole('button', { name: 'k prohlídce (excluded)' })).toBeInTheDocument();
+
+    fireEvent.click(within(bar).getByRole('button', { name: 'k prohlídce (excluded)' }));
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.getByText('Lesní')).toBeInTheDocument();
+  });
+
+  it('applies no tag constraint while the member map is unresolved, and offers a retry when it fails', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockRejectedValue(new Error('HTTP 500'));
+    renderBoard('/pipeline?tags=5');
+    const retries = await screen.findAllByRole('button', { name: /Štítky se nepodařilo načíst/ });
+    expect(screen.getByText('Sadová')).toBeInTheDocument();
+    expect(screen.getByText('Lesní')).toBeInTheDocument();
+    // Uncounted: the header reads the plain total while the constraint waits.
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
+    fireEvent.click(retries[0]);
+    await waitFor(() => expect(screen.queryByText('Lesní')).not.toBeInTheDocument());
+    expect(screen.getByText('Sadová')).toBeInTheDocument();
+  });
+
+  /* The property's Artifact link (migration 599) on its card: a small button to
+     the page the operator keeps about it, in a new tab, only when there is one. */
+  it('shows a card\'s artifact link as a small button that opens in a new tab', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(
+      new Map([[42, { property_id: 42, url: 'https://claude.ai/artifact/abc123', created_at: '2026-10-14T00:00:00Z', updated_at: '2026-10-14T00:00:00Z' }]]),
+    );
+    renderBoard();
+    const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
+    expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
+    expect(button).toHaveAttribute('target', '_blank');
+    expect(button).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(button).toHaveTextContent('Artifact');
+    // The card without a link offers nothing.
+    expect(screen.getAllByRole('link', { name: /^Artifact:/ })).toHaveLength(1);
   });
 });

@@ -13,6 +13,8 @@
  *
  * Per page (index_dock.ts): the bottom-left dock with the "Skrýt skryté"
  * switch — whether a dismissed property's card is drawn barely visible.
+ * And (index_promo.ts) the grid's cards that are not listings — paid ads,
+ * project promos — washed whitish.
  *
  * Sale-apartment gating of the badge: by our row's category when found; for
  * listings not yet in our DB, by the portal's URL category hint (sreality/idnes
@@ -36,6 +38,7 @@ import {
   type BadgeView,
 } from './index_cards';
 import { mountDock, onVeilChange, readVeil, writeVeil, type DockHandle } from './index_dock';
+import { createPromoWash } from './index_promo';
 import { detailRef, portalForHost, type Portal, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type { ApiMessage, ApiResult, AuthState, PortalListing } from './types';
 
@@ -291,6 +294,7 @@ export async function runIndexOverlay(
     for (const l of rows) cache.set(l.source_id, l);
   }
 
+  const promos = createPromoWash();
   const layer = createCardLayer({
     call,
     cache,
@@ -421,12 +425,16 @@ export async function runIndexOverlay(
     cardsWaiting = hits.some((h) => !cache.has(h.ref.sourceId));
     syncNotice();
 
+    // Every listing card on the page: those mounted earlier, and this pass's.
+    const cards = new Set(document.querySelectorAll<HTMLElement>(`[${PROCESSED_ATTR}]`));
     for (const hit of hits) {
       const card = cardFor(hit.anchor, hit.ref.sourceId);
+      cards.add(card);
       if (cache.has(hit.ref.sourceId)) layer.mount(card, hit.ref, hit.href);
       else unbadgeRecycled(hit, card, layer.clear);
     }
     layer.refresh();  // drops cards the portal removed; recounts the dismissed
+    promos.update(cards);
   }
 
   /* The same background-owned PKCE sign-in the panel's prompt runs (a content
@@ -493,9 +501,9 @@ export async function runIndexOverlay(
   };
 
   /* What makes a property's operator state on a card: the three things the
-   * card controls and the panel both write. */
+   * card controls and the panel both write, and the tags the panel assigns. */
   const curation = (l: PortalListing): string =>
-    JSON.stringify([l.pipeline, l.collection_ids, l.dismissed]);
+    JSON.stringify([l.pipeline, l.collection_ids, l.dismissed, l.tag_ids]);
 
   function sync(listing: PortalListing): void {
     if (stopped || !listing.found || listing.property_id == null) return;
@@ -506,6 +514,7 @@ export async function runIndexOverlay(
         ...l,
         pipeline: listing.pipeline,
         collection_ids: listing.collection_ids,
+        tag_ids: listing.tag_ids,
         dismissed: listing.dismissed,
       });
       changed = true;
@@ -545,6 +554,7 @@ export async function runIndexOverlay(
       /* The controls go with the overlay: a later run starts from an empty
        * cache, and a card still marked as mounted would be skipped by it. */
       layer.reset();
+      promos.reset();
       syncNotice();
       dock?.destroy();
       dock = null;

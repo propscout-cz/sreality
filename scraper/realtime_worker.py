@@ -494,6 +494,14 @@ TEXT_EXTRACT_INTERVAL_SECONDS = 300.0
 # cache rows they have not written yet cannot stop the next tick handing the same listings
 # to a second set of paid calls.
 _TEXT_EXTRACT_PASS_LOCK = _PassLock("text_extract")
+# W4: A READING BECOMES CLAIMS WITHIN MINUTES. The readings half ran only in the hourly GitHub
+# run (≈ 4 a day), so a fresh reading waited up to ~6 h; its full selector failed the worker's
+# gate (8.2 s cold, W3). After a pass that wrote readings, the lane mines THOSE listings only
+# (`claims_intake.mine_readings`: the selector scoped to their ids, its own batch lane); the
+# hourly run stays the backstop. `LOCATION_READINGS_FAST_ENABLED=0` is the kill switch.
+LOCATION_READINGS_FAST_ENABLED_ENV = "LOCATION_READINGS_FAST_ENABLED"
+LOCATION_READINGS_FAST_BUDGET_S = 30.0
+LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
@@ -1855,7 +1863,7 @@ def _intake_fast_pass(conn: Any) -> dict[str, Any]:
         # The run-end backlog `count(*)` is the hourly chain's signal. At a 60 s cadence
         # it would cost more than the drain it measures.
         backlog_readout=False,
-        readings=False,  # the readings half is the hourly run's (its selector's 5 s gate)
+        readings=False,  # the full readings half is hourly (5 s gate); text_extract mines its own
         pool=_intake_fast_pool(),
     )
     stats = claims_intake.run(
@@ -2050,7 +2058,8 @@ async def _sold_comps_pass(
 
 def _text_extract_sync() -> dict[str, Any]:
     """One bounded pass of THE post-publication text lane
-    (`toolkit.description_extraction.run_pass`).
+    (`toolkit.description_extraction.run_pass`), then the readings half for the listings it
+    read (`_readings_fast`, W4) — so a reading is claims within the pass, not the next hour.
 
     Lazy import: the module reaches api.llm_client and the provider registry, which no
     other lane on this worker needs on the startup path. No try/except around run_pass —
@@ -2066,12 +2075,41 @@ def _text_extract_sync() -> dict[str, Any]:
     try:
         conn = db.connect()
         try:
-            return description_extraction.run_pass(conn)
+            last = description_extraction.run_pass(conn)
+            read = last.pop("listing_ids", None) or []
+            if read and _readings_fast_enabled():
+                last["readings_fast"] = _readings_fast(conn, read)
+            return last
         finally:
             with contextlib.suppress(Exception):
                 conn.close()
     finally:
         _TEXT_EXTRACT_PASS_LOCK.release()
+
+
+def _readings_fast_enabled() -> bool:
+    return _env_flag(LOCATION_READINGS_FAST_ENABLED_ENV, default=True)
+
+
+def _readings_fast(conn: Any, listing_ids: list[int]) -> dict[str, Any]:
+    """The readings half for the listings this pass read. A failure is the hourly run's to
+    repair, never this pass's: the readings it paid for are already stored."""
+    from location_data import claims_intake
+
+    started = time.monotonic()
+    try:
+        stats = claims_intake.mine_readings(
+            conn, listing_ids, max_seconds=LOCATION_READINGS_FAST_BUDGET_S,
+            statement_timeout=LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        LOG.warning("INTAKE readings fast ids=%d failed: %s", len(listing_ids), str(exc)[:200])
+        return {"ids": len(listing_ids), "error": str(exc)[:200]}
+    seconds = time.monotonic() - started
+    LOG.info("INTAKE readings fast ids=%d mined=%d superseded=%d in %.1fs", len(listing_ids),
+             stats["readings_mined"], stats["claims_superseded"], seconds)
+    return {"ids": len(listing_ids), "mined": stats["readings_mined"],
+            "inserted": stats["claims_inserted"], "superseded": stats["claims_superseded"],
+            "seconds": round(seconds, 1)}
 
 
 async def _text_extract_pass(

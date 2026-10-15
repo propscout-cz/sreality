@@ -113,11 +113,17 @@ def proposed_splits(
         if p["zone"] in _SPLIT_ZONES:
             reasons[(p["listing_lo"], p["listing_hi"])] = ("pair", f"guard: {p['guard_veto']}"
                 if p["guard_veto"] else f"{p['zone']}: {p['decision']}")
+    refused_on: dict[tuple[int, int], tuple[int, int]] = {}
     for row in _fetch(conn, U.CLUSTER_CONFLICTS_SQL, {"cluster_key": None, "ids": scope}):
         c = dict(zip(U.CONFLICT_COLUMNS, row))
         if c["listing_lo"] is not None and (c["detail"] or {}).get("generation") in (None, generation):
-            reasons[(c["listing_lo"], c["listing_hi"])] = (
-                "conflict", f"{c['kind']}: {c['invariant'] or 'no invariant named'}")
+            edge = (c["listing_lo"], c["listing_hi"])
+            reasons[edge] = ("conflict", f"{c['kind']}: {c['invariant'] or 'no invariant named'}")
+            # The pair rides with the row whose reason is shown, never with another row's.
+            refused_on.pop(edge, None)
+            pair = (c["detail"] or {}).get("pair")
+            if pair and tuple(sorted(pair)) != edge:
+                refused_on[edge] = (min(pair), max(pair))
     if generation == GENERATION:
         for pair in apart:
             reasons.setdefault(pair, ("not_compared", NOT_COMPARED))
@@ -137,13 +143,21 @@ def proposed_splits(
         return {"listing_id": a[0], "source": a[1], "is_active": a[2],
                 **split_facts(a[0], origins, outcomes)}
 
+    def reason(pair: tuple[int, int], own: set[int]) -> tuple[str, str]:
+        """E957: a refused union names the two adverts a fact parts when they are not the
+        edge's own, and says so when one of them is not an advert of this property."""
+        source, text = reasons.get(pair, ("none", NO_STATED_FACT))
+        if pair in refused_on:
+            a, b = refused_on[pair]
+            text += f" — {a} × {b}" + ("" if {a, b} <= own else ", not this property's")
+        return source, text
+
     items = []
     for pid in sorted(splits):
         canonical, adverts = props[pid]
         by_id = {a[0]: a for a in adverts}
         split = [{"listing_lo": lo, "listing_hi": hi,
-                  **dict(zip(("reason_source", "reason"),
-                             reasons.get((lo, hi), ("none", NO_STATED_FACT)))),
+                  **dict(zip(("reason_source", "reason"), reason((lo, hi), set(by_id)))),
                   "ruling": rulings.get((lo, hi))} for lo, hi in splits[pid]]
         items.append({
             "property_id": pid, "canonical_listing_id": canonical, "proposed": bool(split),

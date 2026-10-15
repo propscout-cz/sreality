@@ -56,12 +56,17 @@ def test_an_exchange_advert_keeps_the_property_it_offers() -> None:
     assert out["street"] == {"value": "Dlouhá", "quote": "v ulici Dlouhá"}
 
 
-def test_v3_a_wanted_or_non_property_advert_yields_no_location_whatever_was_read() -> None:
+def test_v3_a_wanted_advert_yields_no_location_and_a_non_property_one_its_town_alone() -> None:
+    """W4 (2c): 18907132 sells 21 mobile homes — no real estate, but they stand in Sadová."""
     text = ad_haystack("Koupím byt", "Koupím byt v ulici Sadová ve Zlíně.")
-    for kind in ("wanted", "not_property", "garbage"):
-        out = tr.read_location(_payload(kind, street=("Sadová", "v ulici Sadová")), text)
+    cells = {"street": ("Sadová", "v ulici Sadová"), "town": ("Zlín", "ve Zlíně")}
+    for kind in ("wanted", "garbage"):
+        out = tr.read_location(_payload(kind, **cells), text)
         assert all(out[slot] == EMPTY for slot in tr.SLOTS), kind
     assert out["ad_kind"] == EMPTY
+    out = tr.read_location(_payload("not_property", **cells), text)
+    assert out["town"] == {"value": "Zlín", "quote": "ve Zlíně"}
+    assert all(out[slot] == EMPTY for slot in tr.SLOTS if slot != "town")
 
 
 def test_v3_a_property_placed_abroad_admits_no_slot_whatever_the_language() -> None:
@@ -88,10 +93,30 @@ def test_v1_a_quote_that_is_not_in_the_advert_drops_that_slot_only() -> None:
         assert all(c["value"] is None for c in tr.read_location(payload, TRIGGER).values())
 
 
+def test_v1_a_value_standing_in_the_advert_as_whole_words_is_its_own_quote() -> None:
+    """W4 (2a): 19009239 quoted "v městyse Koloveč" where the advert says "části městyse
+    Koloveč". A value that stands in the text only inside another word, or inflected, does not."""
+    text = ad_haystack("Prodej rodinného domu 186 m2 Růžová, Koloveč",
+                       "V klidné části městyse Koloveč, přibližně 10 km od Staňkova.")
+    out = tr.read_location(_payload("offer", town=("Koloveč", "v městyse Koloveč")), text)
+    assert out["town"] == {"value": "Koloveč", "quote": "Koloveč"}
+    for value in ("Kolov", "Staňkov", "Brno"):
+        assert tr.read_location(_payload("offer", town=(value, "v " + value)), text)[
+            "town"] == EMPTY, value
+
+
+def test_the_ad_kind_counts_business_premises_as_an_offer() -> None:
+    """W4 (2d): 18726990 lets a bar on Masarykovo náměstí; the prompt said not_property. The
+    edit moves `extractor_version`, so the lane re-reads every live bazos advert (~$25)."""
+    ad_kind = tx.extraction_tool(())["input_schema"]["properties"]["location"]["properties"][
+        "ad_kind"]["properties"]["value"]["description"]
+    assert "business premises at an address" in ad_kind and "are an offer" in ad_kind
+
+
 # ------------------------------------------------ the claim reader (W3): V2, V4, typed numbers
 
 def _claims(payload: dict[str, Any], text: str) -> dict[str, str]:
-    """The bazos@8 reading entries over one reading, as the claim lane runs them."""
+    """The bazos@9 reading entries over one reading, as the claim lane runs them."""
     row, reading = fx.listing("bazos", {}), tr.Reading(1, payload, text)
     out = [c for e in reading_entries(fx.entries_for("bazos"))
            for c in READERS[str(e.reader)].fn(e, row, reading)]
@@ -109,6 +134,17 @@ def test_v2_a_value_must_be_grounded_in_its_own_quote() -> None:
                          ("Aš", "Aš")):
         assert tr._grounded(value, quote), (value, quote)
     for value, quote in (("Masarykova", "v centru města"), ("Aš", "v Aši")):
+        assert not tr._grounded(value, quote), (value, quote)
+
+
+def test_v2_a_name_of_several_words_is_grounded_by_its_initials() -> None:
+    """W4 (2b): 18714030 quoted České Budějovice as "Č.B." — one token or single letters in a
+    row, never a stray letter."""
+    for value, quote in (("České Budějovice", "Č.B."), ("České Budějovice", "v Č. B."),
+                         ("Hradec Králové", "v HK"), ("Ústí nad Labem", "Ú.n.L.")):
+        assert tr._grounded(value, quote), (value, quote)
+    for value, quote in (("České Budějovice", "Č."), ("Hradec Králové", "Č.B."),
+                         ("České Budějovice", "C a B")):
         assert not tr._grounded(value, quote), (value, quote)
 
 

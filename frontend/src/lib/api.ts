@@ -34,6 +34,7 @@ import type {
   ManualRentalEstimate,
   CreateManualEstimateIn,
   UpdateManualEstimateIn,
+  ArtifactLink,
   Note,
   NoteAttachment,
   ParseResult,
@@ -2644,6 +2645,32 @@ export const deletePropertyNote = (
   note_id: number,
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/properties/${property_id}/notes/${note_id}`, {
+    method: 'DELETE',
+  });
+
+/* Artifact link (migration 599): one http(s) URL per property; PUT sets or replaces it.
+ * The read is the account's whole set in ONE call (a map by property_id, the shape every
+ * curation fact is read in — tags, collections, note counts), so a board of cards costs one
+ * request, not one per card, and the property page reads the same entry. */
+
+export const fetchArtifactLinks = async (): Promise<Map<number, ArtifactLink>> => {
+  const { data } = await request<{ data: ArtifactLink[] }>('/artifact-links');
+  return new Map(data.map((l) => [l.property_id, l]));
+};
+
+export const setPropertyArtifactLink = (
+  property_id: number,
+  url: string,
+): Promise<ArtifactLink> =>
+  request<ArtifactLink>(`/properties/${property_id}/artifact-link`, {
+    method: 'PUT',
+    json: { url },
+  });
+
+export const deletePropertyArtifactLink = (
+  property_id: number,
+): Promise<{ deleted: boolean }> =>
+  request<{ deleted: boolean }>(`/properties/${property_id}/artifact-link`, {
     method: 'DELETE',
   });
 

@@ -321,6 +321,21 @@ def test_a_curation_table_folds_what_it_collapses_and_moves_the_rest(name):
         Carried(name, 6, T2, None, 20, "moved", None)]
 
 
+def test_the_artifact_link_collapses_within_an_account_and_leaves_no_carry_row():
+    """Migration 599's one-link-per-(account, property) field: the survivor's link stands where an
+    account holds one on both sides, every join names the account, and with no `at` it writes
+    no carry row (a detach leaves it where it is)."""
+    link = _carrier("property_artifact_links")
+    collapse, move = link.sql
+    assert link.columns == (("property_artifact_links", "property_id"),)
+    assert "s.account_id IS NOT DISTINCT FROM r.account_id" in _n(collapse)
+    assert _n(collapse).startswith("DELETE FROM property_artifact_links r WHERE r.property_id")
+    assert _n(move) == ("UPDATE property_artifact_links SET property_id = %(survivor)s "
+                        "WHERE property_id = %(retired)s")
+    cur = _walk(link)
+    assert cur.carried == [] and len(cur.ran) == 2
+
+
 def test_alert_events_get_no_carry_rows_and_five_tables_get_them():
     """MS14's default: the dispatch carrier runs its four statements and hands back nothing. The
     carry record's five tables (no CHECK pins them): the three above, the card, the dismissal."""

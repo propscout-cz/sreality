@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from location_data.resolver import composite
 from location_data.resolver import core
+from location_data.resolver.types import Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
-MLADA_BOLESLAV, KLADNO, PRAHA, OSTRAVA = 535419, 532053, 554782, 554821
+MLADA_BOLESLAV, KLADNO, OSTRAVA = 535419, 532053, 554821
 
 
 def _resolve(claims, *, mirror=None):
@@ -48,18 +49,25 @@ def test_the_official_generic_word_is_matched_and_so_is_its_absence():
 
 def test_an_exact_full_name_match_wins_outright_over_the_tolerant_fold():
     """Kladno holds `náměstí Svobody` AND `Svobody`, both folding to `svobody`: on two tiers a
-    correct exact claim reads as one candidate. The abbreviation reaches both through the
-    fold and fails closed — and R3 never undoes that refusal, a tie is not a typo."""
+    correct exact claim reads as one candidate. The abbreviation is exact since v5.7 (`nám.`
+    folds to `náměstí`); a claim reaching both through the type-word fold still fails closed,
+    and R3 never undoes that refusal — a tie is not a typo."""
     assert _street("náměstí Svobody", town="Kladno").ulice_kod == 112
     assert _street("Svobody", town="Kladno").ulice_kod == 113
-    assert _bind("nám. Svobody", (KLADNO,)).reason == "ambiguous_streets"
-    assert _street("nám. Svobody", town="Kladno").street_name is None
+    assert _street("nám. Svobody", town="Kladno").ulice_kod == 112
+    assert _bind("třída Svobody", (KLADNO,)).reason == "ambiguous_streets"
+    assert _street("třída Svobody", town="Kladno").street_name is None
 
 
 def test_a_claim_naming_the_town_or_one_of_its_parts_is_never_a_street():
     """76 register streets across 20 obce are spelled exactly like a část obce of their own
-    town; the row keeps its town rather than gaining a street that may be a quarter."""
-    assert _bind("Zábřeh", (OSTRAVA,)).street is None
+    town: the line names that part (v5.7, 1c). One naming the town itself names nothing."""
+    mirror = mm.default_mirror()
+    mirror.streets.append(Street(code=116, name="Kladno", name_norm="kladno", obec_kod=KLADNO))
+    town = composite.resolve_street(["Kladno"], (KLADNO,), mirror)
+    assert (town.street, town.named_part, town.reason) == (None, None, "no_match")
+    part = composite.resolve_street(["Zábřeh"], (OSTRAVA,), mirror)
+    assert (part.street, part.named_part.code, part.reason) == (None, 554791, "street_names_part")
 
 
 def test_a_street_whose_name_IS_the_generic_word_still_binds():

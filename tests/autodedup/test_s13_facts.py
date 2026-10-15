@@ -151,11 +151,12 @@ def starovicky(listing_id: int, source: str, price: float, first: int, last: int
 
 
 def test_E282_the_body_identity_is_read_off_the_texts_where_no_feature_row_exists() -> None:
+    # Promotion's reading: in the gate and the cluster E955 answers a stated-area move first.
     a = starovicky(178589, "idnes", 225342.0, 33, 73)
     b = starovicky(15043251, "sreality", 196452.0, 101, 143)
     assert text_containment(a, b) == 1.0
-    assert "price" in names(a, b, S12)
-    assert "price" not in names(a, b, variant(d43_price_sequential_text_identity=True))
+    assert "price" in names(a, b, S12, PROMOTE)
+    assert "price" not in names(a, b, variant(d43_price_sequential_text_identity=True), PROMOTE)
 
 
 def test_E282_a_rewritten_body_does_not_demonstrate_identity() -> None:
@@ -165,20 +166,20 @@ def test_E282_a_rewritten_body_does_not_demonstrate_identity() -> None:
                  "vhodné jako investice i jako rodinné bydlení s podnikáním, klidná lokalita.")
     a = starovicky(41393, "sreality", 225342.0, 0, 30)
     b = starovicky(18850157, "realitymix", 196452.0, 101, 113, body=rewritten)
-    assert "price" in names(a, b, variant(d43_price_sequential_text_identity=True))
+    assert "price" in names(a, b, variant(d43_price_sequential_text_identity=True), PROMOTE)
 
 
 def test_E282_a_body_too_short_to_say_anything_is_no_identity() -> None:
     a = starovicky(1, "idnes", 225342.0, 33, 73, body="Pozemek Starovičky, 5 778 m².")
     b = starovicky(2, "sreality", 196452.0, 101, 143, body="Pozemek Starovičky, 5 778 m².")
     assert text_containment(a, b) is None
-    assert "price" in names(a, b, variant(d43_price_sequential_text_identity=True))
+    assert "price" in names(a, b, variant(d43_price_sequential_text_identity=True), PROMOTE)
 
 
 def test_E282_two_prices_live_together_stay_two() -> None:
     a = starovicky(178589, "idnes", 225342.0, 33, 120)
     b = starovicky(15043251, "sreality", 196452.0, 60, 143)
-    assert "price" in names(a, b, variant(d43_price_sequential_text_identity=True))
+    assert "price" in names(a, b, variant(d43_price_sequential_text_identity=True), PROMOTE)
 
 
 # --- E283: Lužice Meadows, re-posts of one plot on the honest clock --------------------------

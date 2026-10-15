@@ -153,9 +153,13 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
     assert len(re.findall(r"\bdrop\s+\w+", outside, re.I)) == 3
 
 
-def test_the_latest_definitions_are_this_file() -> None:
-    for fn in ("portal_status_matches", "browse_stats_properties", "browse_map_cells"):
-        assert latest_definition(fn).name == NAME
+def test_the_rule_is_still_this_file_and_598_builds_on_its_rpc_bodies() -> None:
+    """598 re-stated both RPCs (one denylist parameter) and md5-gates its apply on these bodies;
+    tests/test_property_ids_excluded_migration.py pins its edits. The rule is still this file's."""
+    assert latest_definition("portal_status_matches").name == NAME
+    s598 = _read("598_property_ids_excluded.sql")
+    for body in _function_bodies(SQL):
+        assert _md5(body) in s598
 
 
 def test_the_receipt_probes_the_three_functions() -> None:

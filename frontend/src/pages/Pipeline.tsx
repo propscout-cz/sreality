@@ -15,15 +15,20 @@ import {
   archivePipelineStage,
   createPipelineStage,
   listCollections,
+  listTags,
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
 import {
   curationKeys,
   fetchPropertyCollectionMemberSet,
+  fetchPropertyTagMemberSet,
   matchesDistricts,
   pipelineKeys,
 } from '@/lib/queries';
+import { matchesTags, tagChoiceActive } from '@/lib/tagScope';
+import { offerCuratedSet } from '@/lib/curatedSetOffer';
+import { TagFilterControl, tagOptionsFor } from '@/components/filter-controls/TagFilterControl';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { usePhoneShell } from '@/lib/phoneShell';
 import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
@@ -116,11 +121,13 @@ function PipelineBoardPage() {
     types,
     districts,
     collectionIds,
+    tagChoice,
     sort,
     setStatus,
     setTypes,
     setDistricts,
     setCollections,
+    setTagChoice,
     setSort,
     reset,
   } = usePipelineViewState();
@@ -137,7 +144,7 @@ function PipelineBoardPage() {
   const stagesQ = usePipelineStages();
   const boardQ = usePipelineBoard();
 
-  /* The collection lens (rule #18), on the two keys the rest of the app
+  /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
   const collectionsQ = useQuery({
     queryKey: curationKeys.collections,
@@ -149,15 +156,26 @@ function PipelineBoardPage() {
     queryFn: fetchPropertyCollectionMemberSet,
     staleTime: 30_000,
   });
+  const tagsQ = useQuery({
+    queryKey: curationKeys.tags,
+    queryFn: listTags,
+    staleTime: 60_000,
+  });
+  const tagMembersQ = useQuery({
+    queryKey: curationKeys.propertyTagMembers,
+    queryFn: fetchPropertyTagMemberSet,
+    staleTime: 30_000,
+  });
   /* Undefined while loading or errored — NOT an empty map (the fail-open
    * contract, docs/architecture.md rule #22). */
   const members = membersQ.data;
+  const tagMembers = tagMembersQ.data;
 
   const stages = stagesQ.data ?? [];
   const cards = boardQ.data ?? NO_CARDS;
 
   // Client-side (rule #22) as ONE list the board, the count and Reset share.
-  // The collection clause is skipped while the member map is unresolved.
+  // A curation clause is skipped while its member map is unresolved.
   const predicates = useMemo(() => {
     const out: Array<(c: PipelineBoardCard) => boolean> = [];
     if (types.size > 0) {
@@ -168,8 +186,11 @@ function PipelineBoardPage() {
     if (members && collectionIds.length > 0) {
       out.push((c) => matchesCollections(members.get(c.property_id), collectionIds));
     }
+    if (tagMembers && tagChoiceActive(tagChoice)) {
+      out.push((c) => matchesTags(tagMembers.get(c.property_id), tagChoice));
+    }
     return out;
-  }, [types, districts, status, members, collectionIds]);
+  }, [types, districts, status, members, collectionIds, tagMembers, tagChoice]);
 
   const filtersActive = predicates.length > 0;
   const filteredCards = useMemo(
@@ -178,44 +199,32 @@ function PipelineBoardPage() {
   );
 
   /* One pass over the board for everything the bar offers: the types on it,
-   * whether a delisted card is on it, and which collections hold one. */
+   * whether a delisted card is on it, and which collections / tags hold one
+   * (lib/curatedSetOffer — one rule for both). */
   const bar = useMemo(() => {
     const present = new Set<string>();
-    const held = new Set<number>();
     let inactive = 0;
-    let inCollection = 0;
     for (const c of cards) {
       if (c.category_main) present.add(c.category_main);
       if (!c.is_active) inactive += 1;
-      const ids = members?.get(c.property_id);
-      if (ids?.length) {
-        inCollection += 1;
-        for (const id of ids) held.add(id);
-      }
     }
-    const known = collectionsQ.data?.data ?? [];
-    /* Only collections with a member ON the board — plus any SELECTED one,
-     * whose chip has to render or the constraint is un-deselectable. */
-    const onBoard = known.filter((c) => held.has(c.id));
-    const options = onBoard.map((c) => ({ value: c.id, label: c.name }));
-    for (const id of collectionIds) {
-      if (options.some((o) => o.value === id)) continue;
-      options.push({ value: id, label: known.find((c) => c.id === id)?.name ?? `#${id}` });
-    }
+    const collections = offerCuratedSet(cards, members, collectionsQ.data?.data ?? [], collectionIds);
+    const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], [
+      ...tagChoice.tags,
+      ...tagChoice.tagsExcluded,
+    ]);
     return {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
-      collections: options,
-      /* A live constraint is always visible; otherwise the row is offered only
-       * when it could change the view. Membership is multi-valued and partial,
-       * so an option count would wrongly hide a working control — two
-       * collections can partition a board with every card inside one. */
-      showCollections:
-        !!members &&
-        (collectionIds.length > 0 ||
-          (onBoard.length > 0 && (inCollection < cards.length || onBoard.length >= 2))),
+      collections: [
+        ...collections.options.map((c) => ({ value: c.id, label: c.name })),
+        ...collections.missing.map((id) => ({ value: id, label: `#${id}` })),
+      ],
+      showCollections: collections.show,
+      tags: tagOptionsFor(tags.options, tagChoice),
+      showTags: tags.show,
     };
-  }, [cards, members, collectionsQ.data, collectionIds]);
+  }, [cards, members, collectionsQ.data, collectionIds, tagMembers, tagsQ.data, tagChoice]);
 
   /* The decoration cohort: the representative listing of every card ON the
    * board (not just the filtered view — filtering is client-side and instant,
@@ -328,6 +337,14 @@ function PipelineBoardPage() {
                   options={bar.collections}
                   onChange={setCollections}
                 />
+              </Field>
+            )}
+            {readFailed(tagMembersQ) && (
+              <ReadFailedMark what="Štítky" variant="header" onRetry={() => void tagMembersQ.refetch()} />
+            )}
+            {bar.showTags && (
+              <Field label="Štítky">
+                <TagFilterControl tags={bar.tags} value={tagChoice} onChange={setTagChoice} />
               </Field>
             )}
             <Field label="Lokalita" className="min-w-[16rem] max-w-xl flex-1">

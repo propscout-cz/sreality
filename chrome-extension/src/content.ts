@@ -41,10 +41,12 @@ import type {
   EstimationRun,
   ExtCollection,
   ExtNote,
+  ExtTag,
   PipelineCardResult,
   PipelineStage,
   PortalListing,
   RouteMessage,
+  TagWriteResult,
   YieldScenarioUpdate,
 } from './types';
 // Shared product brand — the ONE definition (frontend/src/lib/brand.ts), the
@@ -186,6 +188,17 @@ interface PanelState {
   /* The last add/remove failure, shown inside the checklist beside the row the
    * operator just clicked — not at the foot of the panel. */
   collectionError: string | null;
+  /* The caller's tags, for the tag row and its checklist (null = not loaded). */
+  tags: ExtTag[] | null;
+  /* True once every retry of the tag-list read failed with nothing to show. */
+  tagsFailed: boolean;
+  /* True while the tag checklist is open. One checklist at a time: opening it
+   * closes the collection one, and the other way round. */
+  tagsOpen: boolean;
+  /* True while a tag attach/detach is in flight (disables the checklist). */
+  tagBusy: boolean;
+  /* The last attach/detach failure, shown inside the tag checklist. */
+  tagError: string | null;
   /* True while a dismiss / undo is in flight (disables the control). */
   dismissBusy: boolean;
   /* The property's operator notes (null = not loaded). Per-property, not cached. */
@@ -302,6 +315,8 @@ function withPipeline(
 }
 
 const COLLECTION_MENU_ID = 'collection-menu';
+const TAG_MENU_ID = 'tag-menu';
+const TAGS_LABEL = 'Štítky';
 
 /* The collection list as the panel draws it — compared this way rather than as
  * whole API rows, which also carry an `updated_at` that every add/remove bumps
@@ -582,7 +597,7 @@ function mountPanel(): {
 
   let lastFocusedKey:
     | 'rent' | 'cost' | 'price' | 'renovation' | 'note' | 'note-edit'
-    | 'coll-toggle' | `coll-${number}` | null = null;
+    | 'coll-toggle' | `coll-${number}` | 'tag-toggle' | `tag-${number}` | null = null;
 
   /* The ledger header band: a small copper index-mark + product wordmark, and
    * the close control. The wordmark is the shared product brand (APP_NAME) —
@@ -886,6 +901,8 @@ function mountPanel(): {
     renderAppLink(row, state);
     if (row.childElementCount > 0) body.appendChild(row);
     renderCollectionMenu(body, state);      // the checklist opens full-width under the row
+    renderTagRow(body, state);              // the property's tags + their checklist (rule #18)
+    renderTagMenu(body, state);
   }
 
   function renderAppLink(container: HTMLElement, state: PanelState): void {
@@ -1182,6 +1199,141 @@ function mountPanel(): {
       manage.textContent = state.collections?.length === 0
         ? 'Založit kolekci v aplikaci →'
         : 'Spravovat kolekce →';
+      menu.appendChild(manage);
+    }
+
+    body.appendChild(menu);
+  }
+
+  /* The property's tags (rule #18): the SPA's TagChip per tag — the name in the
+   * tag's colour — then a button opening the checklist of every tag. The panel
+   * only assigns; creating, renaming and recolouring a tag stay in the app's
+   * assign list, as collections are managed in the app. Absent when there is
+   * no property yet, or from an API that predates `tag_ids`. */
+  function renderTagRow(body: HTMLElement, state: PanelState): void {
+    const l = state.listing;
+    if (l == null || !l.found || l.property_id == null || l.tag_ids === undefined) return;
+    const ids = l.tag_ids ?? [];
+    const row = document.createElement('div');
+    row.className = 'tag-row';
+    for (const t of (state.tags ?? []).filter((tag) => ids.includes(tag.id))) {
+      row.appendChild(tagChip(t));
+    }
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tag-toggle';
+    btn.dataset.key = 'tag-toggle';
+    btn.setAttribute('aria-expanded', String(state.tagsOpen));
+    if (state.tagsOpen) btn.setAttribute('aria-controls', TAG_MENU_ID);
+    const label = document.createElement('span');
+    label.textContent = ids.length === 0 ? 'Přidat štítek' : TAGS_LABEL;
+    btn.appendChild(label);
+    const caret = document.createElement('span');
+    caret.className = 'collection-caret';
+    caret.setAttribute('aria-hidden', 'true');
+    caret.textContent = '▾';
+    btn.appendChild(caret);
+    btn.addEventListener('focus', () => { lastFocusedKey = 'tag-toggle'; });
+    btn.addEventListener('blur', () => { if (lastFocusedKey === 'tag-toggle') lastFocusedKey = null; });
+    btn.onclick = () => onToggleTagsMenu();
+    btn.onkeydown = (e) => {
+      if (e.key !== 'Escape' || !state.tagsOpen) return;
+      e.stopPropagation();
+      onCloseTagsMenu();
+    };
+    row.appendChild(btn);
+    body.appendChild(row);
+  }
+
+  /* The checklist the tag button opens — the collection checklist's shape, each
+   * row the tag's chip; one click attaches or detaches, and it stays open. */
+  function renderTagMenu(body: HTMLElement, state: PanelState): void {
+    const l = state.listing;
+    if (!state.tagsOpen || l == null || !l.found || l.property_id == null) return;
+    const ids = new Set(l.tag_ids ?? []);
+
+    const menu = document.createElement('div');
+    menu.className = 'coll-menu';
+    menu.id = TAG_MENU_ID;
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', TAGS_LABEL);
+    menu.onkeydown = (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onCloseTagsMenu();
+    };
+
+    const eyebrow = document.createElement('p');
+    eyebrow.className = 'coll-eyebrow';
+    eyebrow.textContent = TAGS_LABEL;
+    menu.appendChild(eyebrow);
+
+    if (state.tags == null) {
+      const p = document.createElement('p');
+      p.className = 'coll-state';
+      if (state.tagsFailed) {
+        p.textContent = 'Štítky se nepodařilo načíst. ';
+        p.appendChild(retryLink(() => { void loadTags(true); }));
+      } else {
+        p.textContent = 'Načítám štítky…';
+        p.classList.add('note--loading');
+      }
+      menu.appendChild(p);
+    } else if (state.tags.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'coll-state';
+      p.textContent = 'Zatím nemáte žádný štítek.';
+      menu.appendChild(p);
+    } else {
+      const list = document.createElement('ul');
+      list.className = 'coll-list';
+      for (const t of state.tags) {
+        const member = ids.has(t.id);
+        const li = document.createElement('li');
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'coll-row' + (member ? ' coll-row--member' : '');
+        if (state.tagBusy) row.setAttribute('aria-disabled', 'true');
+        row.setAttribute('aria-pressed', String(member));
+        const key = `tag-${t.id}` as const;
+        row.dataset.key = key;
+        row.addEventListener('focus', () => { lastFocusedKey = key; });
+        row.addEventListener('blur', () => { if (lastFocusedKey === key) lastFocusedKey = null; });
+
+        const box = document.createElement('span');
+        box.className = 'coll-check';
+        box.setAttribute('aria-hidden', 'true');
+        box.textContent = '✓';
+        row.appendChild(box);
+        const chip = tagChip(t);
+        chip.title = t.name;
+        row.appendChild(chip);
+
+        row.onclick = () => { void onToggleTag(t.id); };
+        li.appendChild(row);
+        list.appendChild(li);
+      }
+      menu.appendChild(list);
+    }
+
+    if (state.tagError != null) {
+      const err = document.createElement('p');
+      err.className = 'coll-error';
+      err.setAttribute('role', 'alert');
+      err.textContent = state.tagError;
+      menu.appendChild(err);
+    }
+
+    // The app's listing page holds the assign list that also creates and edits tags.
+    if (APP_BASE_URL) {
+      const manage = document.createElement('a');
+      manage.className = 'coll-link coll-manage';
+      manage.href =
+        `${APP_BASE_URL}/listing/${encodeURIComponent(l.source)}/${encodeURIComponent(l.source_id)}`;
+      manage.target = '_blank';
+      manage.rel = 'noopener';
+      manage.textContent = 'Nový štítek v aplikaci →';
       menu.appendChild(manage);
     }
 
@@ -2043,6 +2195,88 @@ function applyCollectionWriteIf(
   };
 }
 
+/* The SPA's TagChip: the tag's name in its colour on its soft wash. The tag
+ * palette IS the stage palette (TagColor), so its accent resolves alike. */
+function tagChip(tag: ExtTag): HTMLElement {
+  const chip = document.createElement('span');
+  chip.className = 'tag-chip';
+  const accent = stageAccent(tag.color);
+  chip.style.color = accent.fg;
+  chip.style.borderColor = accent.fg;
+  chip.style.background = accent.soft;
+  chip.textContent = tag.name;
+  return chip;
+}
+
+/* applyCollectionWriteIf's twin for tags: one attach/detach applied to whatever
+ * the panel shows NOW, guarded by property. */
+function applyTagWriteIf(
+  propertyId: number,
+  tagId: number,
+  member: boolean,
+  patch: (prev: PanelState) => Partial<PanelState>,
+): (prev: PanelState) => PanelState {
+  return (prev) => {
+    const l = prev.listing;
+    if (l == null || l.property_id !== propertyId) return prev;
+    const ids = l.tag_ids ?? [];
+    const next = ids.includes(tagId) === member
+      ? ids
+      : member ? [...ids, tagId] : ids.filter((id) => id !== tagId);
+    return { ...prev, ...patch(prev), listing: { ...l, tag_ids: next } };
+  };
+}
+
+/* Bumped by every tag write, for the same reason as collectionWriteSeq. */
+let tagWriteSeq = 0;
+
+function onToggleTagsMenu(): void {
+  const opening = !state.tagsOpen;
+  setState((prev) => ({
+    ...prev, tagsOpen: opening, tagError: null,
+    ...(opening ? { collectionsOpen: false, collectionError: null } : {}),
+  }));
+  if (opening) void loadTags(true);
+}
+
+function onCloseTagsMenu(): void {
+  setState((prev) => ({ ...prev, tagsOpen: false, tagError: null }));
+  panelShadow?.querySelector<HTMLElement>('.tag-toggle')?.focus();
+}
+
+/* Attach one tag to the listing's property, or detach it (rule #18): optimistic,
+ * reconciled, undone with the reason on failure — onToggleCollection's shape,
+ * through the SAME /properties/{id}/tags routes the SPA's TagAssignList uses. */
+async function onToggleTag(tagId: number): Promise<void> {
+  const l = state.listing;
+  if (l == null || l.property_id == null || state.tagBusy) return;
+  const propertyId = l.property_id;
+  const attach = !(l.tag_ids ?? []).includes(tagId);
+  const seq = ++tagWriteSeq;
+  const settled = (): Partial<PanelState> => (seq === tagWriteSeq ? { tagBusy: false } : {});
+
+  setState(applyTagWriteIf(propertyId, tagId, attach, () => ({ tagBusy: true, tagError: null })));
+
+  const res = await call<TagWriteResult>({
+    type: attach ? 'attach_tag' : 'detach_tag', tag_id: tagId, property_id: propertyId,
+  });
+
+  if (!res.ok) {
+    const message = attach
+      ? `Přidání štítku se nepodařilo: ${friendlyDetail(res.detail)}`
+      : `Odebrání štítku se nepodařilo: ${friendlyDetail(res.detail)}`;
+    setState(applyTagWriteIf(propertyId, tagId, !attach, (prev) => ({
+      ...settled(),
+      ...(prev.tagsOpen ? { tagError: message } : { errorMessage: message }),
+    })));
+    // Likeliest cause: the tag was deleted in the app since the list loaded.
+    void loadTags(true);
+    return;
+  }
+
+  setState(applyTagWriteIf(propertyId, tagId, attach, settled));
+}
+
 /* Bumped by every collection write. collectionBusy serialises the writes of
  * one panel, but a write can outlive its panel: one landing after a re-open
  * must not clear the busy flag of a newer write it knows nothing about. */
@@ -2054,7 +2288,10 @@ let collectionWriteSeq = 0;
  * be missing until a reload. The cached rows show meanwhile. */
 function onToggleCollectionsMenu(): void {
   const opening = !state.collectionsOpen;
-  setState((prev) => ({ ...prev, collectionsOpen: opening, collectionError: null }));
+  setState((prev) => ({
+    ...prev, collectionsOpen: opening, collectionError: null,
+    ...(opening ? { tagsOpen: false, tagError: null } : {}),
+  }));
   if (opening) void loadCollections(true);
 }
 
@@ -2253,6 +2490,44 @@ async function loadCollections(refresh = false): Promise<void> {
   }
 }
 
+/* The caller's tag list — loadCollections' twin: cached at module scope across
+ * panel opens, re-read when the checklist opens, bounded retry. */
+let cachedTags: ExtTag[] | null = null;
+let tagsLoading = false;
+
+async function loadTags(refresh = false): Promise<void> {
+  if (cachedTags != null && !refresh) {
+    if (state.tags == null) setState((prev) => ({ ...prev, tags: cachedTags }));
+    return;
+  }
+  if (tagsLoading) return;
+  tagsLoading = true;
+  const gen = sessionGen;
+  if (state.tagsFailed) setState((prev) => ({ ...prev, tagsFailed: false }));
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await call<ExtTag[]>({ type: 'list_tags' });
+      if (gen !== sessionGen) return;
+      if (res.ok) {
+        const key = (list: ExtTag[]): string =>
+          JSON.stringify(list.map((t) => [t.id, t.name, t.color]));
+        const changed = cachedTags == null || key(cachedTags) !== key(res.data);
+        cachedTags = res.data;
+        // Only a real change re-renders: a rebuild under the pointer can swallow a click.
+        if (changed || state.tags == null || state.tagsFailed) {
+          setState((prev) => ({ ...prev, tags: cachedTags, tagsFailed: false }));
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+      if (gen !== sessionGen) return;
+    }
+    if (state.tags == null) setState((prev) => ({ ...prev, tagsFailed: true }));
+  } finally {
+    if (gen === sessionGen) tagsLoading = false;
+  }
+}
+
 /* Fetch the caller's agent-estimation allowance for the "(zbývá X)" counter +
  * upgrade prompt. Best-effort: a failure leaves state.quota null (counter hidden,
  * button still works). Fetched per panel open so a run that just consumed a slot
@@ -2435,12 +2710,14 @@ async function onSignOut(): Promise<void> {
   sessionGen++;
   cachedCollections = null;
   cachedStages = null;
+  cachedTags = null;
   collectionsLoading = false;
   stagesLoading = false;
+  tagsLoading = false;
   await call<undefined>({ type: 'sign_out' });
   setState((prev) => ({
     ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
-    collections: null, stages: null, collectionsOpen: false,
+    collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
   }));
   // The search-page cards under the panel were drawn for that account too.
   indexOverlay?.sessionChanged();
@@ -2468,6 +2745,7 @@ export async function openPanel(
     pipelineBusy: false, pipelineConfirmRemove: false, stages: cachedStages,
     collections: cachedCollections, collectionsFailed: false, collectionsOpen: false,
     collectionBusy: false, collectionError: null, dismissBusy: false,
+    tags: cachedTags, tagsFailed: false, tagsOpen: false, tagBusy: false, tagError: null,
     notes: null, notesFailed: false, noteBusy: false, quota: null, errorMessage: null,
     noteEditingId: null, noteConfirmDeleteId: null, noteRowBusy: false,
   };
@@ -2540,6 +2818,7 @@ export async function openPanel(
   if (listing?.found && listing.property_id != null) {
     void loadStages();
     void loadCollections();
+    void loadTags();
     void loadNotes();  // the property's existing notes (per-property, lazy)
   }
 

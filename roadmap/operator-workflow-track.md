@@ -7,6 +7,32 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
+- **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),
+  a single-valued sibling of notes: `PUT/DELETE /properties/{id}/artifact-link`, a row between
+  tags and notes on the property page and the phone page (`ArtifactLinkRow`), drawn as an anchor
+  only when it parses as http(s). Carried across a merge (the survivor's link wins a collision).
+  Read as ONE whole set (`GET /artifact-links`, `lib/useArtifactLinks`) — the shape every
+  curation fact is read in — so the pipeline board's card and the phone board's card print it as
+  a small button (`ArtifactLinkButton`, new tab) for one request, not one per card; the
+  per-property GET went with it.
+- **Next (unscheduled):** Browse cards and the Chrome-extension panel do not show it.
+
+### Phase U-TAGS: Tags unified, on the pipeline board (done, 2026-10-14)
+- **Done:** tags became collections' twin — one member map, `lib/tagScope.ts`, `lib/tagCache.ts`,
+  one `TagAssignList` (inline on the property page, a popover on the board card, a sheet on the
+  phone card), one `TagChip`, one tri-state `TagFilterControl` (Browse's sidebar + the board's
+  bar; `tags` / `tags_excluded`). The board card prints its tags and assigns from them; the board
+  and the phone board filter by tag, including "none of". Browse's exclusion rides migration 598's
+  generic `property_ids_excluded` on both aggregate RPCs. Deleted: the per-property tag read, the
+  prefilter's second read, the property page's private editor, the sidebar's include-only picker,
+  the edit popover's stale `listing-tags` invalidation. Architecture § rule 18.
+- **Next (unscheduled):**
+  - Browse cards and the Chrome-extension panel show no tag and cannot assign one; when they do,
+    `revalidateTags` grows the same `cohortScoped` knob `revalidateCollections` has.
+  - "Not in collection" on Browse: `property_ids_excluded` already carries it; only the
+    control and `collectionScope` are missing.
+
 ### Phase U-NOTE-FILES: Attachments on notes (done, 2026-10-07)
 - **Done:** files on a property's notes. Drop, paste or pick them into the Notes composer
   (staged until the note is saved) or drop them straight onto a saved note. Images show as
@@ -566,8 +592,18 @@ yield badge).
   a tag naming the collection (`chrome-extension/src/index_photo_mark.ts`).
   The photo is found by geometry, not markup; a veiled card, or a card guess
   holding several listings, gets no mark.
-- **Next (not built):** tags from the card (Browse cards have no tag control
-  either — tags are edited on the listing page); verifying the card placement
+- **Sorted cards and ads (2026-10-14):** a saved card is toned like a stage
+  (copper, bookmark + collection name) — the copper rim let a property already
+  reviewed shine like a new one; and the results grid's non-listing cards
+  (paid ads, project promos) are washed whitish (`index_promo.ts`, found by
+  structure: card-sized grid children holding no listing link).
+- **Tags (2026-10-14):** the cards print the property's tag chips over the
+  photo, and the detail panel assigns tags — a chip row under its action bar
+  and a checklist of every tag over `POST/DELETE /properties/{id}/tags`.
+  `POST /listings/lookup` returns `tag_ids`. Creating and editing tags stay in
+  the app.
+- **Next (not built):** assigning tags from a search-page card (the panel
+  does it; the card cluster has no tag control); verifying the card placement
   on sreality itself (its consent wall blocks an unattended check — idnes and
   bezrealitky were checked against live pages).
 

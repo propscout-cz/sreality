@@ -23,6 +23,7 @@ from autodedup.features import plot_reading, plot_residue
 from autodedup.floor_convention import same_camp
 from autodedup.indistinguishable import (
     CLUSTER,
+    PROMOTE,
     distinguishing_facts,
     price_paths_agree,
     selected_parcels,
@@ -451,13 +452,17 @@ def test_the_relist_rule_needs_an_area_on_BOTH_sides() -> None:
     assert "price" in names(a, bridge, S3, FEATS)
 
 
-def test_the_relist_rule_needs_the_body_or_the_photographs() -> None:
+def test_the_relist_rule_needs_the_body_or_the_photographs_only_to_promote() -> None:
+    """E955: one stated area is the identity in the gate and the cluster; promotion, a merge
+    made on the absence of a fact, still asks for the body or the photographs (E185)."""
     a = listing(1, category_main="dum", disposition=None, area_m2=280.0, price=14_500_000.0,
                 first=0, last=22, description=BODY)
     b = listing(2, source="realitymix", category_main="dum", disposition=None, area_m2=280.0,
                 price=13_700_000.0, first=23, last=60, description=BODY)
     thin = {"containment_max": (0.3, True), "phash_tight_matches": (0.0, True)}
-    assert "price" in names(a, b, S3, thin)
+    assert "price" not in names(a, b, S3, thin)
+    promoted = distinguishing_facts(a, b, thin, S3, PROMOTE)  # type: ignore[arg-type]
+    assert "price" in [f.name for f in promoted]
 
 
 def test_a_storey_apart_is_still_a_fact_between_two_live_relists() -> None:

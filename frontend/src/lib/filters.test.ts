@@ -570,6 +570,16 @@ describe('applyRegistryUpdate', () => {
     expect(f.tags).toEqual([5, 7]);
   });
 
+  it('round-trips the tag rule\'s second side through the URL (`tags_excluded`)', () => {
+    const sp = toSearchParams({ ...DEFAULT_FILTERS, tags: [5], tagsExcluded: [7, 9] });
+    expect(sp.get('tags')).toBe('5');
+    expect(sp.get('tags_excluded')).toBe('7,9');
+    expect(fromSearchParams(sp).tagsExcluded).toEqual([7, 9]);
+    expect(toSearchParams(DEFAULT_FILTERS).has('tags_excluded')).toBe(false);
+    /* The watchdog has no tag clause on either side (rule 16). */
+    expect(filtersToWatchdogSpec({ ...DEFAULT_FILTERS, tagsExcluded: [7] }).unsupported).toContain('tags');
+  });
+
   it('accepts DistrictChip[] for districts; null clears the list', () => {
     let f = { ...DEFAULT_FILTERS };
     f = applyRegistryUpdate(f, 'districts', [

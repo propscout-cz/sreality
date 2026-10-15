@@ -21,8 +21,9 @@ from __future__ import annotations
 import pytest
 
 from location_data.resolver import bind as step_bind
-from location_data.resolver import core, normalize
-from location_data.resolver.composite import resolve_locality
+from location_data.resolver import composite, core, normalize
+from location_data.resolver.composite import resolve_locality, resolve_street
+from location_data.resolver.types import Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -210,3 +211,34 @@ def test_an_unbindable_line_leaves_the_row_undetermined(registry):
     row = _resolve([mm.claim(1, "obec_name", value_text="Poruba")], registry)
     assert row.obec_name is None and row.cast_obce_name is None
     assert row.granularity == "unknown"
+
+
+# ------------------------------------------- the street matcher's v5.7 rules (W4: 1c, 1d, 1e)
+
+HARRACHOV = 577081
+
+
+@pytest.mark.parametrize(("claim", "register"), [
+    ("ČSA", "Čs. armády"), ("Československé armády", "Čs. armády"),
+    ("nám. Míru", "náměstí Míru"), ("tř. Kpt. Jaroše", "třída Kapitána Jaroše"),
+    ("nábř. Svobody", "nábřeží Svobody"), ("Gen. Svobody", "Generála Svobody"),
+    ("Plk. Švece", "Plukovníka Švece"), ("sídl. Míru", "sídliště Míru"),
+])
+def test_1e_the_abbreviation_fold_keys_both_sides_alike(claim, register):
+    """Folded on the claim AND on the register row, so either spelling on either side meets
+    the other on the EXACT tier — and the register's own key is never rewritten in the mirror."""
+    street = Street(code=1, name=register, name_norm=normalize.normalize_match_key(register),
+                       obec_kod=1)
+    exact, _ = composite.street_match_keys(claim)
+    assert exact & composite.register_street_keys(street), (claim, register)
+    assert composite.fold_abbreviations(street.name_norm) in exact
+
+
+def test_1c_a_line_s1_refused_as_a_place_names_the_one_part_of_the_town():
+    """`place_lines`: the street claims S1 refused as a place name. A line naming the town
+    itself names none; the matched-street case is `test_resolver_street_line`'s."""
+    mirror = mm.w4_mirror()
+    named = resolve_street([], (HARRACHOV,), mirror, place_lines=["Nový Svět"])
+    assert (named.street, named.named_part.code, named.reason) == (
+        None, 410845, "street_names_part")
+    assert resolve_street([], (HARRACHOV,), mirror, place_lines=["Harrachov"]).named_part is None

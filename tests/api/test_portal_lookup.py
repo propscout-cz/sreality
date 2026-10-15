@@ -64,6 +64,7 @@ def _mk_account_row(listing_id: int, **cols: Any) -> dict[str, Any]:
         # The SQL coalesces to an empty array (never NULL); the Python layer
         # nulls it for no-property rows.
         "collection_ids": [],
+        "tag_ids": [],
         "dismissed": False,
     }
     row.update(cols)
@@ -130,7 +131,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
                         estimation_yield=Decimal("5.46"),
                         in_pipeline=True, pipeline_stage_id=3,
                         pipeline_stage_key="interested", pipeline_stage_label="Zájem",
-                        collection_ids=[7, 9]),
+                        collection_ids=[7, 9], tag_ids=[3]),
         # bazos listing: nothing account-side but a dismissal
         _mk_account_row(9002, dismissed=True),
     ]
@@ -159,6 +160,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
         "stage_code": None, "stage_color": None,
     }
     assert sr["collection_ids"] == [7, 9]  # property-grain memberships
+    assert sr["tag_ids"] == [3]  # property-grain, like collections
     assert sr["dismissed"] is False
     # apartment: subtype NULL → kind_label is the disposition
     assert sr["subtype"] is None
@@ -179,6 +181,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
         "stage_code": None, "stage_color": None,
     }
     assert bz["collection_ids"] == []  # has a property, in no collection
+    assert bz["tag_ids"] == []
     assert bz["dismissed"] is True  # property-grain, like the two above
 
     idn = data[2]
@@ -188,6 +191,7 @@ def test_lookup_maps_rows_with_sreality_id_mf_and_estimation() -> None:
     assert idn["property_id"] is None
     assert idn["pipeline"] is None  # no property → nothing to bookmark
     assert idn["collection_ids"] is None  # no property → null, not []
+    assert idn["tag_ids"] is None
     assert idn["dismissed"] is None  # no property → nothing to dismiss
 
 
