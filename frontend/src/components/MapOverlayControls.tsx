@@ -8,19 +8,21 @@ import {
   OVERLAY_POINT_RADIUS,
   formatOverlayNumber,
   overlayDataDate,
-  overlayScaleUnit,
+  overlayScaleWords,
 } from '@/lib/mapOverlayDraw';
 import {
-  activeVariant,
-  layersOf,
-  parseLayers,
-  serializeLayers,
   type LayerSelection,
   type MapOverlayRegistry,
   type OverlayLayer,
   type OverlayLegendEntry,
   type OverlayScale,
   type OverlaySection,
+  activeVariant,
+  layersOf,
+  parseLayers,
+  readRememberedVariant,
+  serializeLayers,
+  writeRememberedVariant,
 } from '@/lib/mapOverlays';
 
 type Edit = (apply: (next: Map<string, string | null>) => void) => void;
@@ -91,7 +93,7 @@ function SectionControl({
         edit((next) => {
           for (const layer of section.layers) {
             if (!checked) next.delete(layer.key);
-            else if (!next.has(layer.key)) next.set(layer.key, null);
+            else if (!next.has(layer.key)) next.set(layer.key, readRememberedVariant(layer));
           }
         })
       }
@@ -120,10 +122,10 @@ function SectionPanel({
   const multi = section.layers.length > 1;
   const blocks: { key: string; node: ReactNode }[] = [];
   if (multi) {
-    const toggle = (key: string, checked: boolean) =>
+    const toggle = (layer: OverlayLayer, checked: boolean) =>
       edit((next) => {
-        if (checked) next.set(key, null);
-        else next.delete(key);
+        if (checked) next.set(layer.key, readRememberedVariant(layer));
+        else next.delete(layer.key);
       });
     blocks.push({
       key: 'layers',
@@ -134,7 +136,7 @@ function SectionPanel({
               key={layer.key}
               layer={layer}
               checked={sel.has(layer.key)}
-              onChange={(checked) => toggle(layer.key, checked)}
+              onChange={(checked) => toggle(layer, checked)}
             />
           ))}
         </div>
@@ -144,10 +146,12 @@ function SectionPanel({
   for (const layer of section.layers) {
     if (!sel.has(layer.key)) continue;
     if ((layer.variants?.length ?? 0) > 1) {
-      const pick = (variant: string) =>
+      const pick = (variant: string) => {
+        writeRememberedVariant(layer.key, variant);
         edit((next) => {
           next.set(layer.key, variant);
         });
+      };
       blocks.push({
         key: `variants-${layer.key}`,
         node: (
@@ -284,14 +288,16 @@ function ClassLegend({ legend }: { legend: readonly OverlayLegendEntry[] }) {
   );
 }
 
+/* A scale's key: what it measures, the gradient, and the two ends of the
+ * scale — for the rent map, word for word the legend it has always had. */
 function ScaleLegend({ scale }: { scale: OverlayScale }) {
   const stops = [...scale.stops].sort((a, b) => a[0] - b[0]);
   if (stops.length === 0) return null;
   const colors = stops.map(([, color]) => color);
-  const unit = overlayScaleUnit(scale.unit);
+  const { caption } = overlayScaleWords(scale.unit);
   return (
     <div className="flex flex-col gap-1">
-      {unit && <span className="text-[0.65rem] text-[var(--color-ink-3)]">{unit}</span>}
+      {caption && <span className="text-[0.65rem] text-[var(--color-ink-3)]">{caption}</span>}
       <div
         aria-hidden="true"
         className="h-1.5 rounded-sm"
@@ -303,14 +309,6 @@ function ScaleLegend({ scale }: { scale: OverlayScale }) {
         <span>{formatOverlayNumber(stops[0][0])}</span>
         <span>{formatOverlayNumber(stops[stops.length - 1][0])}</span>
       </div>
-      <span className="inline-flex items-center gap-1 text-[0.62rem] text-[var(--color-ink-3)]">
-        <span
-          aria-hidden="true"
-          className="inline-block h-2 w-2 rounded-[2px]"
-          style={{ background: scale.null_color }}
-        />
-        bez dat
-      </span>
     </div>
   );
 }

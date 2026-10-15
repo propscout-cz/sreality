@@ -4,13 +4,7 @@ import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
 import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
-import type {
-  CityIndexDefinition,
-  CuratedCity,
-  MapCell,
-  MapRow,
-  RentMapPolygon,
-} from '@/lib/queries';
+import type { CityIndexDefinition, CuratedCity, MapCell, MapRow } from '@/lib/queries';
 import type { CenterRadius, MapBounds } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
@@ -37,7 +31,7 @@ import { circleRing } from '@/lib/geoRing';
 import { propertyPath } from '@/lib/listingUrl';
 import {
   overlayFillIds,
-  overlayFillOwner,
+  overlayClickOwner,
   overlayPopupHtml,
   useMapOverlays,
   useMapZoom,
@@ -51,6 +45,11 @@ import {
 } from '@/lib/uncertaintyCircle';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
+
+/* The reference overlays sit under the growth choropleth's first layer — so
+ * under the city polygons and the listings too — where the MF rent map and the
+ * kraj borders were always drawn. */
+const OVERLAY_BEFORE_ID = psgLayerId(GROWTH_METRIC_ORDER[0]);
 
 const centerRadiusPolygon = (
   cr: CenterRadius,
@@ -285,112 +284,6 @@ type CityFC = GeoJSON.FeatureCollection<
  * average" — and is further separated by the lower fill-opacity below. */
 const CITY_NULL_COLOR = '#8c9196';
 
-/* -------------------------------------------------------------------------- */
-/* MF rent-price choropleth ("Cenová mapa nájemného"). One polygon per Czech  */
-/* obec / katastrální území, coloured by the selected size category's         */
-/* reference rent (Kč/m²). VK1..VK4 is a SINGLE-select; switching VK does not */
-/* refetch — it re-derives the `rent` property on each feature and re-setData.*/
-/* -------------------------------------------------------------------------- */
-
-export type RentVk = 1 | 2 | 3 | 4;
-
-/* Radio labels mirror the official MF map exactly. */
-const RENT_VK_LABELS: Record<RentVk, string> = {
-  1: '1+kk, 1+1',
-  2: '2+kk, 2+1',
-  3: '3+kk, 3+1',
-  4: '4+kk, 4+1',
-};
-
-/* Light-blue → indigo continuous ramp (Kč/m²), reproducing the MF scale.
- * The same stops feed both the MapLibre fill `interpolate` expression and
- * the inline legend gradient so the two never drift. */
-const RENT_RAMP: ReadonlyArray<readonly [number, string]> = [
-  [150, '#eaf0f6'],
-  [250, '#9ec3e6'],
-  [350, '#5a7fd6'],
-  [450, '#3b4fb5'],
-  [550, '#2a2a8a'],
-  [600, '#1a1a5e'],
-];
-
-/* NULL rent → neutral grey (no reference value for that territory). */
-const RENT_NULL_COLOR = 'rgba(140, 140, 140, 0.35)';
-
-/* -1 sentinel for "no rent" — MapLibre paint expressions can't compare
- * against literal null, so the fill expression gates on `< 0`. */
-const rentForVk = (p: RentMapPolygon, vk: RentVk): number | null => {
-  switch (vk) {
-    case 1: return p.vk1_per_m2;
-    case 2: return p.vk2_per_m2;
-    case 3: return p.vk3_per_m2;
-    case 4: return p.vk4_per_m2;
-  }
-};
-
-const czIntFmt = new Intl.NumberFormat('cs-CZ', { maximumFractionDigits: 0 });
-
-type RentFeatureProps = {
-  ruian_code: number;
-  name: string;
-  kraj: string;
-  /* -1 sentinel for "no reference rent" (see rentForVk). */
-  rent: number;
-};
-
-type RentFC = GeoJSON.FeatureCollection<
-  GeoJSON.Polygon | GeoJSON.MultiPolygon,
-  RentFeatureProps
->;
-
-/* Parse each row's ST_AsGeoJSON geometry string once, attach the
- * selected-VK rent as a flat `rent` property, and build one
- * FeatureCollection. Rows whose geometry fails to parse are skipped
- * rather than crashing the whole layer. */
-const toRentFC = (polygons: RentMapPolygon[], vk: RentVk): RentFC => ({
-  type: 'FeatureCollection',
-  features: polygons.flatMap((p) => {
-    let geometry: GeoJSON.Geometry;
-    try {
-      geometry = JSON.parse(p.geojson) as GeoJSON.Geometry;
-    } catch {
-      return [];
-    }
-    if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') {
-      return [];
-    }
-    const rent = rentForVk(p, vk);
-    return [{
-      type: 'Feature' as const,
-      id: p.ruian_code,
-      geometry,
-      properties: {
-        ruian_code: p.ruian_code,
-        name: p.name,
-        kraj: p.kraj ?? '',
-        rent: typeof rent === 'number' && Number.isFinite(rent) ? rent : -1,
-      },
-    }];
-  }),
-});
-
-const rentPopupHtml = (p: RentFeatureProps): string => {
-  /* The MF rent map stores rent_monthly_czk_m2 — the same basis token migration
-   * 425 gives a monthly rent — but this popup labelled it with the CAPITAL unit,
-   * so a reference rent read as a purchase price per m². */
-  const rentText = p.rent >= 0 ? `${czIntFmt.format(p.rent)} ${PPM2_UNIT.rent}` : '—';
-  const place = p.kraj ? `${p.name}, ${p.kraj}` : p.name;
-  return `
-    <div class="lp">
-      <p class="lp-kicker">Cenová mapa nájemného</p>
-      <div class="lp-row">
-        <p class="lp-price">${escapeHtml(p.name)}</p>
-      </div>
-      <p class="lp-meta">Obec: ${escapeHtml(place)}, Nájemné referenčního bytu: ${escapeHtml(rentText)}</p>
-    </div>
-  `;
-};
-
 interface Props {
   rows: MapRow[];
   /* W6b — server-side grid cells instead of pins, when the cohort is larger than
@@ -480,26 +373,17 @@ interface Props {
    * itself is MapOverlayState.priceMetric, URL key `pm`. */
   priceMetric?: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
-  /* MF rent-price choropleth ("Cenová mapa nájemného"). The Browse page
-   * hands in the full ~7.6K territory polygons (fetched once, cached
-   * forever) when the layer is enabled. The fill sits BELOW the listing
-   * markers and city pins so those stay clickable on top. `rentVk` selects
-   * which size category's reference rent colours the choropleth. */
-  rentMapPolygons?: RentMapPolygon[];
-  showRentMap?: boolean;
-  rentVk?: RentVk;
-  onToggleShowRentMap?: (next: boolean) => void;
-  onRentVkChange?: (vk: RentVk) => void;
-  /* Reference overlays (lib/mapOverlays): the registry, the canonical
-   * `layers` selection, and where a change goes (the URL + the remembered
-   * selection — MapOverlayState.layers). Drawn under the city polygons. */
+  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them:
+   * the registry, the canonical `layers` selection, and where a change goes
+   * (the URL + the remembered selection — MapOverlayState.layers). Drawn under
+   * the growth choropleth, the city polygons and the listings. */
   overlayRegistry?: MapOverlayRegistry;
   overlayLayers?: string;
   onOverlayLayersChange?: (next: string) => void;
   /* Price-stats growth overlay ("Růst cen a nájmů"). The Browse page hands in
    * the per-obec growth rows for the chosen dataset + window (price_stat_growth
    * RPC), the dataset list for the picker, and the active metric. Fill sits
-   * BELOW the listing markers + city pins. Mirrors the rent-map overlay. */
+   * BELOW the listing markers + city pins. */
   growthRows?: PriceStatGrowthRow[];
   /* Window-invariant polygons (W10b) — fetched once per dataset and cached
    * forever by the caller, joined to growthRows by obec_id here. */
@@ -547,11 +431,6 @@ export default function ListingMap({
   cityIndexDefinitions,
   onToggleShowCities,
   onColorByIndexChange,
-  rentMapPolygons,
-  showRentMap = false,
-  rentVk = 1,
-  onToggleShowRentMap,
-  onRentVkChange,
   overlayRegistry,
   overlayLayers = '',
   onOverlayLayersChange,
@@ -661,49 +540,10 @@ export default function ListingMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      /* MF rent-price choropleth. Added FIRST of all overlays so it sits
-       * UNDER the city pins and listing dots — it's a background layer.
-       * Initially empty; the rent-map-data effect below populates the
-       * GeoJSON when props arrive. Switching VK re-derives the per-feature
-       * `rent` and re-setsData (no refetch). */
-      map.addSource('rent-map', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      });
-      map.addLayer({
-        id: 'rent-map-fill',
-        type: 'fill',
-        source: 'rent-map',
-        layout: { visibility: 'none' },
-        paint: {
-          /* -1 sentinel → neutral grey; otherwise interpolate the shared
-           * RENT_RAMP. Inline literal, matching the other paint
-           * expressions in this file. */
-          'fill-color': [
-            'case',
-            ['<', ['get', 'rent'], 0], RENT_NULL_COLOR,
-            [
-              'interpolate', ['linear'], ['get', 'rent'],
-              ...RENT_RAMP.flatMap(([stop, color]) => [stop, color]),
-            ],
-          ],
-          'fill-opacity': 0.62,
-        },
-      });
-      map.addLayer({
-        id: 'rent-map-line',
-        type: 'line',
-        source: 'rent-map',
-        layout: { visibility: 'none' },
-        paint: {
-          'line-color': 'rgba(60, 60, 90, 0.25)',
-          'line-width': 0.4,
-        },
-      });
-
       /* Price-stats growth overlay — one fill layer per metric, all hidden
-       * until the data-effect flips the active one on. Same background slot as
-       * the rent-map choropleth (below the listing dots + city pins). */
+       * until the data-effect flips the active one on. Added FIRST: a
+       * background layer, below the listing dots + city pins; the reference
+       * overlays (the MF rent choropleth among them) are inserted under it. */
       map.addSource('ps-growth', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -758,40 +598,14 @@ export default function ListingMap({
         });
       }
 
-      /* Hover popup for the choropleth. The fill is the hit target;
-       * mirrors the city-pin popup approach. Only wired here — the layer
-       * visibility toggle handles whether it's actually reachable. */
       /* Listing dots and clusters always win the click. The fill layers
-       * underneath (rent map, city polygons) only open their popups when
-       * nothing from the listings source sits under the cursor — without
-       * this, clicking a dot inside a polygon fired BOTH handlers and the
-       * later-registered one replaced the listing popup with the city /
-       * rent popup ("I clicked a listing and got city info"). */
+       * underneath (city polygons, reference-overlay areas) only open their
+       * popups when nothing from the listings source sits under the cursor —
+       * without this, clicking a dot inside a polygon fired BOTH handlers and
+       * the later-registered one replaced the listing popup with the city
+       * popup ("I clicked a listing and got city info"). */
       const listingUnderCursor = (p: maplibregl.PointLike): boolean =>
         map.queryRenderedFeatures(p, { layers: LISTING_HIT_LAYERS }).length > 0;
-
-      map.on('mouseenter', 'rent-map-fill', () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'rent-map-fill', () => {
-        map.getCanvas().style.cursor = '';
-      });
-      map.on('click', 'rent-map-fill', (e) => {
-        if (listingUnderCursor(e.point)) return;
-        const f = e.features?.[0];
-        if (!f) return;
-        const props = f.properties as unknown as RentFeatureProps;
-        popupRef.current?.remove();
-        popupRef.current = new maplibregl.Popup({
-          closeButton: true,
-          closeOnClick: true,
-          maxWidth: '300px',
-          className: 'listing-popup rent-map-popup',
-        })
-          .setLngLat(e.lngLat)
-          .setHTML(rentPopupHtml(props))
-          .addTo(map);
-      });
 
       /* Phase QUAL — curated city overlay, drawn as municipality
        * boundary polygons. Added FIRST (and the value label LAST, just
@@ -805,8 +619,7 @@ export default function ListingMap({
        * `interpolate` expression colours the fill (translucent) and the
        * outline (thicker, opaque) with the SAME tone, gating on `< 0`
        * for the neutral grey. Inlined in both layers (rather than shared
-       * via a const) so each gets the layer's contextual paint typing —
-       * the proven rent-map-fill pattern. */
+       * via a const) so each gets the layer's contextual paint typing. */
       map.addSource('cities', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -1265,11 +1078,14 @@ export default function ListingMap({
           .addTo(map);
       });
 
-      /* Reference-overlay areas (flood zones, …) answer a click unless a listing
-       * is hit — the topmost rendered feature decides. The city polygon is NOT
-       * in the list: 'Show cities' is on by default and Praha is a curated city,
-       * so it would swallow every flood click in Prague. Registered after the
-       * rent-map and city handlers, so this popup replaces theirs inside an area. */
+      /* Reference-overlay areas (flood zones, the rent map, …) answer a click
+       * unless a listing is hit — the topmost rendered feature decides. The city
+       * polygon is NOT in the list: 'Show cities' is on by default and Praha is
+       * a curated city, so it would swallow every flood click in Prague. A
+       * choropleth (a scale layer) covers every place, though, so inside a
+       * curated city it leaves the click to the city's card, as the rent map
+       * always has. Registered after the city handler, so this popup replaces
+       * the city's inside any other area. */
       map.on('click', (e) => {
         const registry = overlayRegistryRef.current;
         if (!registry) return;
@@ -1278,7 +1094,11 @@ export default function ListingMap({
         const top = map.queryRenderedFeatures(e.point, {
           layers: [...LISTING_HIT_LAYERS, ...fills],
         })[0];
-        const owner = top ? overlayFillOwner(registry, top.layer.id) : null;
+        const owner = overlayClickOwner(
+          registry,
+          top?.layer.id ?? null,
+          () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
+        );
         if (!top || !owner) return;
         const variant = parseLayers(overlayLayersRef.current).get(owner.layer.key) ?? null;
         popupRef.current?.remove();
@@ -1413,29 +1233,6 @@ export default function ListingMap({
       mapRef.current = null;
     };
   }, []);
-
-  /* MF rent choropleth — rebuild the `rent-map` FeatureCollection when
-   * the polygons, the selected VK, or the enabled flag changes. Switching
-   * VK re-derives the flat `rent` property and re-setsData; the data is
-   * already loaded so this never refetches. Visibility toggling keeps the
-   * source loaded so flipping the layer on/off is instant. */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-    const src = map.getSource('rent-map') as GeoJSONSource | undefined;
-    if (!src) return;
-    const polygons = rentMapPolygons ?? [];
-    if (showRentMap && polygons.length > 0) {
-      src.setData(toRentFC(polygons, rentVk));
-    }
-    const vis = showRentMap && polygons.length > 0 ? 'visible' : 'none';
-    if (map.getLayer('rent-map-fill')) {
-      map.setLayoutProperty('rent-map-fill', 'visibility', vis);
-    }
-    if (map.getLayer('rent-map-line')) {
-      map.setLayoutProperty('rent-map-line', 'visibility', vis);
-    }
-  }, [rentMapPolygons, rentVk, showRentMap, ready]);
 
   /* Price-stats growth overlay — rebuild the FeatureCollection on data change,
    * and show only the active-metric fill layer when the overlay is enabled. */
@@ -1668,7 +1465,29 @@ export default function ListingMap({
    * state after the source data is replaced. */
   useMapFeatureHover(mapRef.current, ready, 'listings', hoveredIds, rows);
 
-  useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, 'city-fill');
+  useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, OVERLAY_BEFORE_ID);
+
+  /* A reference area answers a click (the popup above), so it shows the
+   * pointer — over the whole country while the rent map is on, as it always
+   * has. MapLibre skips the ids of sections not drawn yet. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !overlayRegistry) return;
+    const ids = overlayFillIds(overlayRegistry);
+    if (ids.length === 0) return;
+    const enter = () => {
+      map.getCanvas().style.cursor = 'pointer';
+    };
+    const leave = () => {
+      map.getCanvas().style.cursor = '';
+    };
+    map.on('mouseenter', ids, enter);
+    map.on('mouseleave', ids, leave);
+    return () => {
+      map.off('mouseenter', ids, enter);
+      map.off('mouseleave', ids, leave);
+    };
+  }, [ready, overlayRegistry]);
 
   /* Locator halo data: list-origin hovers project the hovered rows'
    * coordinates into the halo source; everything else clears it (a
@@ -1840,8 +1659,8 @@ export default function ListingMap({
           />
         )}
       </div>
-      {/* Bottom-right overlay stack: growth control above the rent-map control
-          above the reference overlays. Flex children, so they never overlap. */}
+      {/* Bottom-right overlay stack: growth control above the reference
+          overlays (the rent map among them). Flex children, so they never overlap. */}
       <div className="pointer-events-none absolute bottom-10 right-3 flex flex-col gap-2 items-end">
         <GrowthMapControls
           showGrowth={showGrowth}
@@ -1858,13 +1677,6 @@ export default function ListingMap({
           onToChange={onGrowthToChange}
           chartOnHover={growthChartOnHover}
           onToggleChartOnHover={onToggleGrowthChartOnHover}
-        />
-        <RentMapControls
-          showRentMap={showRentMap}
-          rentVk={rentVk}
-          polygonCount={rentMapPolygons?.length ?? 0}
-          onToggleShowRentMap={onToggleShowRentMap}
-          onRentVkChange={onRentVkChange}
         />
         {onOverlayLayersChange && (
           <MapOverlayControls
@@ -1959,73 +1771,6 @@ function GrowthMapControls({
               </span>
             </div>
             {rowCount === 0 && <span className="text-[0.65rem] text-[var(--color-ink-3)]">Načítání…</span>}
-          </div>
-        </OverlayPanel>
-      )}
-    </div>
-  );
-}
-
-function RentMapControls({
-  showRentMap,
-  rentVk,
-  polygonCount,
-  onToggleShowRentMap,
-  onRentVkChange,
-}: {
-  showRentMap: boolean;
-  rentVk: RentVk;
-  polygonCount: number;
-  onToggleShowRentMap?: (next: boolean) => void;
-  onRentVkChange?: (vk: RentVk) => void;
-}) {
-  const vkName = useId();
-  const rampGradient = `linear-gradient(to right, ${RENT_RAMP
-    .map(([, color]) => color)
-    .join(', ')})`;
-  return (
-    <div className="flex flex-col gap-2 items-end">
-      <OverlayChip
-        label="Cenová mapa nájemného"
-        checked={showRentMap}
-        onChange={(next) => onToggleShowRentMap?.(next)}
-      />
-      {showRentMap && (
-        <OverlayPanel className="min-w-[180px]">
-          <div className="flex flex-col gap-1">
-            {([1, 2, 3, 4] as RentVk[]).map((vk) => (
-              <label
-                key={vk}
-                className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer"
-              >
-                <input
-                  type="radio"
-                  name={vkName}
-                  checked={rentVk === vk}
-                  onChange={() => onRentVkChange?.(vk)}
-                />
-                <span>{RENT_VK_LABELS[vk]}</span>
-              </label>
-            ))}
-          </div>
-          <div className="flex flex-col gap-1 border-t border-[var(--color-rule)] pt-1.5">
-            <span className="text-[0.65rem] text-[var(--color-ink-3)]">
-              {/* Same correction as the popup: this ramp is monthly. */}
-              Nájemné ({PPM2_UNIT.rent})
-            </span>
-            <div
-              className="h-1.5 rounded-sm"
-              style={{ background: rampGradient }}
-            />
-            <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-              <span>{czIntFmt.format(RENT_RAMP[0][0])}</span>
-              <span>{czIntFmt.format(RENT_RAMP[RENT_RAMP.length - 1][0])}</span>
-            </div>
-            {polygonCount === 0 && (
-              <span className="text-[0.65rem] text-[var(--color-ink-3)]">
-                Načítání…
-              </span>
-            )}
           </div>
         </OverlayPanel>
       )}

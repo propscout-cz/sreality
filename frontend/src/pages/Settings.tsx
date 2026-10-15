@@ -1068,6 +1068,11 @@ function RentMapSection() {
                 : `No change — this file (sha ${result.file_sha256.slice(0, 8)}) was already ingested.`}
             </p>
           )}
+          {result?.overlay_refused && (
+            <p className="mt-1 text-sm text-[var(--color-brick)]">
+              {`The map's rent choropleth was not re-rendered (${result.overlay_refused}); Browse still colours by the previous revision. Fix the source or re-run the rent-map workflow.`}
+            </p>
+          )}
           {error && <p className="mt-2 text-sm text-[var(--color-brick)]">{error}</p>}
         </div>
       </div>

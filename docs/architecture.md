@@ -567,9 +567,12 @@ one unless `--accept-shrink`). The legend states what the data is: the legally d
 indicative, ignoring flood defences (Karlín shows as Q100 although the city protects it), Q500 mapped
 only locally, bands nested so overlaps render darker. The selection is one URL knob (`layers=`, a
 sorted `key[:variant]` list, `lib/mapOverlays`) remembered per browser (`map.layers`); the Browse/Explore map, the listing-detail header map and the comparables map mount the
-same hook and chip control. The MF rent choropleth moves onto this path in the follow-up cleanup
-(section `rent_map`, VK variants) — then `rent_map_choropleth_public`, `rent_map_kraje_public` and the
-`rent_map_choropleth` matview are dropped.
+same hook and chip control. The MF rent choropleth is the `rent_map` section (one layer, the four VK
+size categories as variants; an SQL source over `admin_boundaries` × the latest `rent_map_values`
+revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
+transaction; a refused guard keeps the revision and the previous tiles) and by `fetch_rent_map.yml`'s
+last step; migration 601 drops `rent_map_choropleth_public`, `rent_map_kraje_public` and the
+`rent_map_choropleth` matview it replaced.
 
 ## Territories — deep rationale
 

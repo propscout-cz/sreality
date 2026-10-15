@@ -2373,6 +2373,9 @@ export interface RentMapIngestResult {
   file_sha256: string;
   territory_count: number;
   adjustment_count: number;
+  /* Set when the revision landed but the map's rent choropleth could not be
+   * re-rendered under its guards — Browse then still colours by the previous one. */
+  overlay_refused: string | null;
 }
 
 export const getRentMapStatus = (): Promise<{ current: RentMapRevision | null }> =>

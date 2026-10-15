@@ -2049,7 +2049,7 @@
     {
       "filename": "fetch_rent_map.yml",
       "name": "Jobs: fetch MF rent map (monthly)",
-      "description": "Auto-grab the Ministry of Finance \"Cenová mapa nájemného\" (rent price map) from the MF infografika page, parse it, and append a new rent_map revision — unless the file's sha256 already exists (then it's a no-op). The MF data updates 4×/year (published within 45 days of each quarter end), so a monthly cron mostly no-ops and catches the new release within ~30 days. The same data also lands via manual upload from the Settings page; both share api.rent_map.ingest_bytes, so the latest revision always wins.",
+      "description": "Auto-grab the Ministry of Finance \"Cenová mapa nájemného\" (rent price map) from the MF infografika page, parse it, and append a new rent_map revision — unless the file's sha256 already exists (then it's a no-op). The MF data updates 4×/year (published within 45 days of each quarter end), so a monthly cron mostly no-ops and catches the new release within ~30 days. The same data also lands via manual upload from the Settings page; both share api.rent_map.ingest_bytes, so the latest revision always wins. Every run then re-renders the map's rent choropleth (the `rent_map` reference overlay).",
       "portal": null,
       "manual": true,
       "schedules": [
@@ -2478,7 +2478,7 @@
     {
       "filename": "ingest_map_overlays.yml",
       "name": "Data: ingest map overlays",
-      "description": "Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán, the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries) into map_overlay_* and renders each section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand after a publisher revises its data.",
+      "description": "Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán, the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries, the MF rent map from rent_map_values × admin_boundaries) into map_overlay_* and renders each section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand after a publisher revises its data.",
       "portal": null,
       "manual": true,
       "schedules": [
@@ -2493,7 +2493,7 @@
       "inputs": [
         {
           "name": "sections",
-          "description": "Sections to ingest (comma-separated: metro,flood,kraje). Empty = all.",
+          "description": "Sections to ingest (comma-separated: metro,flood,kraje,rent_map). Empty = all.",
           "required": false,
           "type": "string",
           "default": "",

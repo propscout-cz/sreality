@@ -3,8 +3,9 @@
  * selection this browser remembers. Drawing — the `overlay://` protocol, the
  * style layers, the hook and the popup — is lib/mapOverlayDraw.ts, imported
  * only by the lazily loaded maps, so neither it nor maplibre-gl reaches the
- * first-visit bundle (scripts/bundle-budget.mjs). Nothing here names a layer:
- * adding one is a registry row and an ingest run. */
+ * first-visit bundle (scripts/bundle-budget.mjs). Nothing here names a layer
+ * but the legacy URL keys it still reads: adding one is a registry row and an
+ * ingest run. */
 
 import { useSyncExternalStore } from 'react';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
@@ -29,6 +30,12 @@ export interface OverlayScale {
   stops: [number, string][];
   null_color: string;
   unit?: string | null;
+  /* The fill's opacity; absent, the overlay default. */
+  opacity?: number;
+  /* Each place's border, drawn from its own polygon's rings — so only for a
+   * layer whose polygons are stored whole: a polygon cut into pieces would
+   * show its cuts as borders. */
+  outline?: { color: string; width: number } | null;
 }
 
 export interface OverlayVariant {
@@ -157,13 +164,20 @@ export function activeVariant(
 }
 
 /* The URL's selection, or null when the URL says nothing and the remembered
- * one applies. `layers` present — even empty — is explicit; the legacy
- * `kraje=1` (the rent-map panel's old checkbox) reads as `kraje`. */
+ * one applies. `layers` present — even empty — is explicit. Two legacy
+ * spellings still read until a layer change rewrites the URL: `kraje=1` (the
+ * rent-map panel's old checkbox) as `kraje` when `layers` is absent, and
+ * `rentmap=1` + `rentvk=N` (the rent map before it was a registry layer) as
+ * `rent_map:vkN`, added to whatever else the URL selects — a link from the
+ * weeks the two knobs lived side by side carries both (a `rent_map` that
+ * `layers` names itself wins: the later token of a selection does). */
 export function layersFromSearchParams(sp: URLSearchParams): string | null {
   const explicit = sp.get('layers');
-  if (explicit != null) return canonicalLayers(explicit);
-  if (sp.get('kraje') === '1') return 'kraje';
-  return null;
+  const layers = explicit ?? (sp.get('kraje') === '1' ? 'kraje' : null);
+  if (sp.get('rentmap') !== '1') return layers == null ? null : canonicalLayers(layers);
+  const vk = sp.get('rentvk') ?? '';
+  const rent = /^[1-4]$/.test(vk) ? `rent_map:vk${vk}` : 'rent_map';
+  return canonicalLayers(layers ? `${rent},${layers}` : rent);
 }
 
 const REMEMBERED_LAYERS_KEY = 'map.layers';
@@ -187,6 +201,20 @@ export const writeRememberedLayers = (layers: string): void => {
   writeValue(REMEMBERED_LAYERS_KEY, canonical);
   listeners.forEach((listener) => listener());
 };
+
+/* The last size category picked for a layer, so switching it off and on brings it back
+ * (the old `rentvk` URL key survived a `rentmap` toggle the same way). Unknown or first
+ * variant reads as null, the grammar's spelling of "the first one". */
+const variantMemoryKey = (layerKey: string): string => `map.layers.variant.${layerKey}`;
+
+export const readRememberedVariant = (layer: OverlayLayer): string | null => {
+  const key = readValue(variantMemoryKey(layer.key), '');
+  const index = (layer.variants ?? []).findIndex((v) => v.key === key);
+  return index > 0 ? key : null;
+};
+
+export const writeRememberedVariant = (layerKey: string, variant: string): void =>
+  writeValue(variantMemoryKey(layerKey), variant);
 
 /* The remembered selection as live React state; `set` writes it for every subscriber. */
 export function useRememberedLayers(): [string, (next: string) => void] {
