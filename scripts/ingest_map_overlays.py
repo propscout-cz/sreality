@@ -315,6 +315,7 @@ class ArcGis:
         self.http = http
         self._services: dict[str, dict[str, Any]] = {}
         self._layers: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+        self._renames: dict[tuple[str, str], dict[str, str]] = {}
 
     def layer(self, src: ArcGisLayer) -> tuple[str, dict[str, Any]]:
         """The layer's URL and its ?f=json, after asserting its geometry type and fields."""
@@ -332,9 +333,16 @@ class ArcGis:
             if info.get("geometryType") != src.geometry_type:
                 raise Refused(f"{url}: geometryType {info.get('geometryType')!r}, "
                               f"expected {src.geometry_type!r}")
-            missing = set(src.fields) - {f.get("name") for f in info.get("fields") or []}
+            # Field names are matched by case: the register spells one layer's fields
+            # differently (Q500: `Naz_tok`, the others `NAZ_TOK`). The mapper always
+            # sees the declared spelling.
+            by_lower = {str(f.get("name")).lower(): str(f.get("name"))
+                        for f in info.get("fields") or [] if f.get("name")}
+            missing = [name for name in src.fields if name.lower() not in by_lower]
             if missing:
                 raise Refused(f"{url}: missing fields {sorted(missing)}")
+            self._renames[key] = {by_lower[name.lower()]: name for name in src.fields
+                                  if by_lower[name.lower()] != name}
             self._layers[key] = (url, info)
         return self._layers[key]
 
@@ -367,9 +375,11 @@ class ArcGis:
             if any(f.get("geometry") is None for f in rows):
                 raise Refused(f"{url}: a feature came back without geometry")
             fetched += len(rows)
+            rename = self._renames.get((src.service_url, src.layer_name), {})
             for fid in chunk:
                 feature = by_id[fid]
-                props = src.props(feature.get("properties") or {})
+                raw = feature.get("properties") or {}
+                props = src.props({rename.get(k, k): v for k, v in raw.items()})
                 if props is not None:
                     yield Feature(str(fid), props, json.dumps(feature["geometry"]), src.out_sr)
         if fetched != count:
