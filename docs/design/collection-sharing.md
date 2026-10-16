@@ -55,7 +55,7 @@ the note's own `shared` mark and the database's read policies as the ONLY places
 
 ## 3. The design
 
-### 3.1 Data model — migration `607_collection_shares.sql` (additive)
+### 3.1 Data model — migration `NNN_collection_shares.sql` (additive; the next free number at merge, 609+)
 
 ```sql
 begin;
@@ -390,22 +390,22 @@ the in-app row is the house pattern · pending invites, an acceptance step: off 
 | Sharing block + viewer branches | `CurationBlock` CollectionsRow + CollectionToggle (~120 lines, ruling 6); 4 `SectionLabel` copies; a duplicated bell SVG | `CurationBlock.tsx:123-250`; `CollectionDetail.tsx`; `Collections.tsx` ≈ `CollectionSaveMenu.tsx` |
 | the 23rd registry entry | the two mirrored registries become one `tests/_tenant_registry.py` imported by both tests | lists are identical today (22 each); the docstrings still say "20" |
 | new share-route tests | the duplicated scripted-connection fake → `tests/api/_script_conn.py` | `test_artifact_link.py` `_Tx`/`_ScriptCur` ≈ `test_curation.py` |
-| — | the NULL-owner variant on 6 curation tables (SET NOT NULL, W2; note #2 attributed first) | live: 0 NULLs except `property_notes` id 2 |
+| — | the NULL-owner variant on `collections` and `tags` (SET NOT NULL, W2; `filter_presets` and `notification_subscriptions` were already NOT NULL; `manual_rental_estimates` stays nullable as provenance; `property_notes` waits on a ruling — its one NULL row, id 2, is attributed by PR #1829) | live: 0 NULLs except `property_notes` id 2 |
 | — | dead `if TYPE_CHECKING: pass`, stale "service role"/"anon key" prose | `curation.py:14-20, 43-44`; `main.py:1420-1424`; `CurationBlock.tsx:10-14` |
 
 **Net, plainly.** ≤ 0 on read paths (0 new), client special cases (one "is it mine" rule in one
 place instead of 16), rules (one consent predicate instead of a time rule + two anchors) and the
 Note / ExtNote / ExtCollection field counts. **Not ≤ 0:** Collection fields +2 (`is_system` would
 have paid for them; its removal is visible and deferred); database objects +1 table, +1 column, +5
-policies, +2 functions, +1 trigger branch against −2 views and −6 nullable variants; test lines
+policies, +2 functions, +1 trigger branch against −2 views and −2 nullable variants (a third, `property_notes`, pending a ruling); test lines
 (the three-tenant proof). These are irreducible — the share is a genuinely new fact, the Sharing
 control is what was asked for, and proving isolation is the price of putting sharing in the
 database. Each PR body reports its measured diff.
 
 ## 6. Waves (one PR each; Opus subagents; CI is the gate; Railway status checked after each merge)
 
-Migration numbers: 604 is the highest on disk and 603 is unclaimed by any open PR; 605+ is used
-here. Renumber to the next free at merge time.
+Migration numbers: W2 took 607/608 (605/606 landed with #1832 and are also claimed by #1829/#1830,
+which must renumber); W4 takes the next free number at merge time.
 
 - **W1 `cleanup/curation-write-gate`** (backend, no migration, no behaviour change today). The
   write-is-the-gate rewrites (collections ×3, `update_note` as one UPDATE, 422 on an empty patch);
@@ -414,18 +414,21 @@ here. Renumber to the next free at merge time.
   back; the empty patch 422s; `_fetch_note` gone), `test_note_attachments.py` (probe before
   `upload_bytes`), new `tests/api/_script_conn.py` adopted by `test_artifact_link.py`. Docs:
   tenancy.md names the write-is-the-gate rule under shape 1.
-- **W2 `cleanup/curation-schema-and-registry`.** `605_drop_dead_curation_views.sql` (ruling 7;
-  the definitions live in 202/211, no data), `606_curation_account_id_not_null.sql` (per table an
-  aggregate NULL check that raises on anything but the known note #2, which is attributed to the
-  single account that holds notes before the `SET NOT NULL`). `tests/_tenant_registry.py`; the view
-  entries and fixture lines removed from the live lane. Apply via `apply_migration.yml`, one
-  `execute_sql` check, then CI.
+- **W2 `cleanup/curation-schema-and-registry`.** `607_drop_dead_curation_views.sql` (ruling 7;
+  the definitions live in 025/202/211/316/319, no data), `608_curation_account_id_not_null.sql`
+  (`collections` + `tags` only: a NULL check that raises, then SET NOT NULL; `filter_presets` and
+  `notification_subscriptions` already were; `manual_rental_estimates` is provenance by design;
+  `property_notes` holds one pre-tenancy NULL row that PR #1829 attributes and its NOT NULL waits
+  on the operator's ruling about the split preview's bare-note case). `tests/_tenant_registry.py`;
+  the view entries and fixture lines removed from the live lane. Merge first, then apply each
+  file via `apply_migration.yml` (dry run, then `confirm=APPLY`), then one `execute_sql` check
+  (`to_regclass` of both views NULL; `is_nullable = 'NO'` on both columns), then CI.
 - **W3 `cleanup/curation-client-seams`** (SPA + extension + the API note surface; no visible
   change except ruling 6). The 3 hooks replace the 16 copies; CollectionsRow deleted; the legacy
   note origin removed across API, SPA, extension; `SectionLabel` + bell dedup. Tests:
   `collectionCache.test.ts`, `CurationBlock.test.tsx`, `test_curation.py`; extension `npm run
   type-check && npm run build`. Verify: vite status + a read-only production check.
-- **W4 `feature/collection-shares`** (database + API + doctrine). `607_collection_shares.sql`; CI
+- **W4 `feature/collection-shares`** (database + API + doctrine). the `collection_shares` migration (next free number); CI
   stub column; `account_for_email`; projections (Collection, Note); both routes with the share
   notification; `SourceKind`; entitlements on `account_email`; FilterDef description + regenerated
   file. Tests: new `tests/test_collection_shares_live.py` (three tenants A/B/C: B reads A's shared

@@ -29,13 +29,21 @@ Every table below follows: `revoke all on <table> from anon, authenticated` →
 set where the table is genuinely add/remove-only) → a `for all using (...) with check
 (...)` policy testing `account_id in (select current_account_ids())` → (if the table has
 a `bigserial`/`serial` PK) an explicit `grant usage on sequence <seq> to authenticated`,
-since `grant insert` on the table does not cover the sequence.
+since `grant insert` on the table does not cover the sequence. Every such table is listed
+once, in `tests/_tenant_registry.py`, which both tenancy gates read (the offline grant scan
+`tests/test_migration_rls_grants.py` and the live lane `tests/test_tenant_isolation_live.py`):
+a new tenant table is added there.
 
 **Migration 290 — curation tables**, `account_id` on the row directly (not
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
 `notification_subscriptions`, `manual_rental_estimates`. Later siblings: `property_dismissals`
 (536) and `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
-caller-supplied account, API-only reads and writes).
+caller-supplied account, API-only reads and writes). The column was added nullable (the tables
+already held rows); it is NOT NULL on four of the six since `notification_subscriptions` 364,
+`filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
+about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row);
+`manual_rental_estimates` stays nullable by design: its account is provenance on platform-wide
+reference data (`ON DELETE SET NULL`).
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
@@ -165,7 +173,7 @@ see the row takes `SELECT … FOR UPDATE`, which applies the UPDATE policy. Exam
 **2. Writes carry exactly ONE account, resolved once at the route edge.**
 `tenant_pool.require_account_id` (FastAPI dependency) resolves it and raises
 `400 "no account for caller"` when there is none. Never a silent `None` (the account columns
-are `NOT NULL` since migrations 290/295, so a forwarded NULL is an empty result set or an
+are `NOT NULL`, see the per-table section, so a forwarded NULL is an empty result set or an
 opaque 500) and never a `SYSTEM` fallback (migration 290's `WITH CHECK` has no SYSTEM arm to
 accept it, so that fallback could only ever 500). The single best shape is the one where the
 route names no account at all because a **BEFORE INSERT trigger derives it from the parent
