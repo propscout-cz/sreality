@@ -1418,10 +1418,7 @@ def post_estimate_yield(
 
 
 # --- curation -------------------------------------------------------------
-# Operator-curated lists of listings, editable journal notes, and free-form
-# coloured tags. Reads also flow through the *_public views in
-# migration 025 (used by the SPA via the anon key); writes always
-# come through these endpoints.
+# Collections, notes, tags, artifact links: tenant connection, RLS-scoped; all writes land here.
 
 
 @app.post("/collections")
@@ -1561,6 +1558,9 @@ def get_price_stat_city_series(
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
     return price_stats_module.dataset_city_series(conn, dataset_id, entity_type, entity_id)
+
+
+# --- curation (cont.): notes, artifact links, attachments, tags -----------
 
 
 @app.get("/properties/{property_id}/notes")
