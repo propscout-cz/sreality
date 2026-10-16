@@ -2532,10 +2532,7 @@ onAccountChange((user) => {
   cachedStages = cachedCollections = cachedTags = null;
   stagesLoading = collectionsLoading = tagsLoading = false;
   if (panelRef == null || document.getElementById(HOST_ELEMENT_ID) == null) return;
-  if (user != null) {
-    void openPanel(panelRef, panelUrl);
-    return;
-  }
+  if (user != null) return void openPanel(panelRef, panelUrl);
   renderEpoch++;
   setState((prev) => ({
     ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,

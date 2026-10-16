@@ -7,8 +7,6 @@ export interface StoredSession {
   refresh_token: string;
   /* Epoch seconds. */
   expires_at: number;
-  /* The access token's `sub`; absent on a session stored before it was kept. */
-  user_id?: string;
 }
 
 /* Best-effort JWT payload decode for display and cache identity only (the email
@@ -38,10 +36,10 @@ export function onStoredChange(
   return () => { try { chrome.storage.onChanged.removeListener(listener); } catch { /* orphaned */ } };
 }
 
-/* Whose session it is: null signed out, else the token's `sub` ('' if unreadable). */
+/* Whose session: the token's `sub`, stored nowhere else; null signed out, '' unreadable (one unknown account). */
 function userOf(s?: StoredSession): string | null {
   if (s == null) return null;
-  const sub = s.user_id ?? decodeJwtPayload(s.access_token)?.sub;
+  const sub = decodeJwtPayload(s.access_token)?.sub;
   return typeof sub === 'string' ? sub : '';
 }
 

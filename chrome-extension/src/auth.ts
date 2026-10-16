@@ -114,12 +114,10 @@ async function getStoredSession(): Promise<StoredSession | null> {
 async function storeSession(token: GoTrueTokenResponse): Promise<void> {
   const expires_at = token.expires_at
     ?? Math.floor(Date.now() / 1000) + token.expires_in;
-  const sub = decodeJwtPayload(token.access_token)?.sub;
   const session: StoredSession = {
     access_token: token.access_token,
     refresh_token: token.refresh_token,
     expires_at,
-    user_id: typeof sub === 'string' ? sub : undefined,
   };
   await chrome.storage.local.set({ [SESSION_KEY]: session });
 }
