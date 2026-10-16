@@ -1,6 +1,6 @@
 # Collection sharing, view-only — spec + open rulings
 
-Status: **proposal, 2026-10-16** — awaiting the operator's rulings (§8). Written from a seven-reader
+Status: **proposal, 2026-10-16; rulings 2026-10-17 in §8** — notes model and share notification being revised to the rulings. Written from a seven-reader
 code map, three independent designs and a three-lens judge panel (Opus), then verified by hand
 against the code and the live database. Rulings are recorded in §8 as they land; the waves in §6
 are the build order.
@@ -417,7 +417,25 @@ here. Renumber to the next free at merge time.
 | owner-only columns readable raw through supabase-js on a shared row | RLS hides rows, not columns; not secrets; the API masks them |
 | migration number collisions with long drafts | next free number at merge |
 
-## 8. Open rulings (bold = recommended default)
+## 8. Rulings
+
+Recorded 2026-10-17 from the operator's answers to the eight questions below. Settled: **3** (same
+Kolekce picker, "Shared with me" group), **4** (plain "No account uses this email"), **5 a–d, f, g**
+(leave; recipients unseen to each other; no alerts for recipients; no re-share; revoke deletes the
+row; the system collection is shareable), **7** (drop the two views — verified zero readers outside
+tests, so no user impact), **8** (follow each page's language). **Revised, awaiting one-word
+confirmation:** **1 + 2** — the operator wants to mark THEIR OWN notes as shared so recipients see
+them, unmarked notes staying private; proposed as ONE symmetric rule, "a note crosses a share only
+when its author marks it shared" (both directions, default private, files follow the note), which
+replaces the time rule and the two server-stamped anchors. **5 e** — the operator WANTS a
+notification on share: proposed as an in-app `notification_dispatches` row for the recipient
+(`source_kind='collection_share'`, `change_kind='shared'`, the collection as subject, written in
+the share route's transaction; no email, since per-account external channels are not built — the
+outbox resolves ONE operator-wide address). **6** — needs a clearer description before ruling (the
+property page's "Collections" chip row under the description vs the header's "Uložit do kolekce"
+button: two editors of the same membership).
+
+### The questions as asked (bold = the recommended default at the time)
 
 1. **Notes direction + time rule.** **One-way, time-scoped**: a recipient's notes written after
    the share (and after the property joined) reach the owner, marked with the recipient's email;
