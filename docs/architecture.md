@@ -808,12 +808,12 @@ rules. Identify which one a task belongs to before you start.
   open across #1775's deploy kept choosing the static token). No session → no header; the server's
   401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
   History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
-- **`Mapy.cz`-powered location search.** The Region/Browse pages call `GET /maps/suggest`
-  and `POST /maps/resolve` on the FastAPI service for autocomplete + admin-unit
-  resolution. The `MAPY_CZ_API_KEY` is server-side only — never inlined into the browser
-  bundle. When the API returns 503 (key unset), the search box renders a graceful
-  fallback hint and auto-opens the Advanced disclosure with the legacy district / radius
-  pickers.
+- **`Mapy.cz`-powered location search.** Every location typeahead calls `GET /maps/suggest`
+  (Mapy `type=regional`: no POIs) and, on a pick, `POST /maps/resolve` `{lat, lng, type, name,
+  regional_structure}` → ONE shape `{level, id, name, context}`: the RÚIAN unit at the picked
+  level (an address binds its street), its register name, and `context` = the register obec
+  name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
+  `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions.
 - Frontend conventions live in `frontend/README.md`. Design tokens are in
   `frontend/src/styles/globals.css` under a single `@theme` block; **never tweak these
   tokens without operator approval** — they encode the agreed visual direction
@@ -1923,31 +1923,26 @@ renumber.** Navigate by area:
     from its first seen shows both (`effectiveSort`, never in a URL). A redundant
     `newest_ad_at_<P> is not null` conjunct rides on the list, cards and count alike, so the
     portal's partial index serves the page and the count from ONE filter chain.
-    **PLACE is the same rule (W3 S3, migration 504): ONE code predicate,
+    **PLACE is the same rule (W3 S3, migration 504; the street since 605): ONE code predicate,
     `<level>_id = any(codes)`, plain equality per level.** A location chip is a LEVEL plus a
-    RÚIAN CODE at four levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` — and
-    `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
+    RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
+    `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
     (Browse's PostgREST string and the pipeline board's in-memory twin) and the two RPC bodies
     (`browse_stats_properties`, `browse_map_cells`) all compile the same plan; the shared table
     `tests/fixtures/district_chip_plan.json` is read by BOTH `tests/test_one_place_predicate.py`
     and `districtCodes.test.ts`, so a divergence is a red test rather than a support ticket.
-    What this replaced was **five** predicates in **six** copies: obec/okres/region equality, a
-    `locality` pair (obec equality AND `place_search_text ILIKE`), and a legacy name fallback
-    ILIKE-ing across `district` / `place_search_text` / `okres` / `region` AND-ed with an
-    optional parent-`context` narrow. Equality is enough because `listing_location`
-    (migration 501) answers every listing with RÚIAN codes and `browse_list.obec_id` /
-    `okres_id` / `region_id` already WERE those codes (`admin_boundaries.id` IS the RÚIAN code),
-    so the swap is value-identical for a resolved row. Two consequences worth knowing: a
-    street / POI / address chip now filters at its CONTAINING OBEC (there is no street-grain
-    code to narrow with, and no text column left to ILIKE), and **a chip that carries no code
-    matches NOTHING** — `NO_MATCH_CODE` (-1), which no positive RÚIAN code can equal. That is
-    deliberate and fail-CLOSED: an include chip we cannot resolve must not widen a saved
-    watchdog to the whole country. Chips saved before codes existed are resolved ONCE at read
-    time against the RÚIAN name index (`api/maps.resolve_names`, shared by the matcher in
-    process and by the SPA over `POST /maps/resolve-names`) — the stored blob is never
-    rewritten, because a preset stores the operator's own full blob. The chip producer
-    `/maps/resolve` PIPs the RÚIAN mirror for obec/okres/kraj; `cast_obce` has no polygon at
-    any registry version, so the point places the obec and the NAME places the part inside it.
+    What this replaced was **five** predicates in **six** copies (obec/okres/region equality, a
+    `locality` obec-AND-ILIKE pair, a name fallback ILIKE-ing four text columns). Equality is
+    enough because `listing_location` (migration 501) answers every listing with RÚIAN codes.
+    **A chip is the unit it names** (operator rulings 2026-10-02 / 2026-10-16): a street chip is
+    its street code (until 605 a street / address pick was a pseudo-level `locality` that filtered
+    its whole TOWN), and **a chip without a (level, code) cannot exist** — the typeahead never
+    makes one, `DistrictChip` refuses one (422), the SPA's URL parser drops one, and migration
+    606 deleted the four stored filters that held them. No read-time name reader exists: a name
+    is not a unit ("Jihlava" is an obec AND an okres), so re-reading one could only widen a chip.
+    The chip producer `/maps/resolve` PIPs the RÚIAN mirror for obec/okres/kraj; `cast_obce` and
+    `ulice` have no polygon, so the point places the obec and the NAME binds the part or street
+    inside it — a street only on one exact register name near its doors, else no chip.
     Deleted with the ILIKE arms: the sreality-only `locality_district_id` /
     `locality_region_id` filters (registry, comparables, watchdog spec, API schemas, SPA filter
     types) — one portal out of nine could answer them, and `districts` at the obec / okres level
@@ -1955,11 +1950,8 @@ renumber.** Navigate by area:
     request models ignore unknown fields (Pydantic's default), so an old watchdog filtering on
     `locality_district_id` silently loses that narrowing rather than erroring — deliberate (a 422
     on every save of a pre-W3 watchdog is worse), and the reason `districts` is the one place
-    filter left to re-pick. Two smaller asymmetries are recorded rather than fixed here: the
-    Watchdog reads its four codes off `properties_public` (trigger-289-sourced) while Browse reads
-    them off `browse_list` (`listing_location`-sourced) — identical values by construction, but
-    **W4 owes a row-level parity measurement** before it re-sources the first; and an EXCLUDE chip
-    keeps rows whose code at that level is NULL (`NOT COALESCE(…, false)` in SQL,
+    filter left to re-pick. Every relation reads its five codes off `listing_location`; an
+    EXCLUDE chip keeps rows whose code at that level is NULL (`NOT COALESCE(…, false)` in SQL,
     `or(col.is.null,col.not.in.(…))` in PostgREST), because an exclude subtracts what it MATCHES
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
     `notification_dispatches` is the **unified notification event table** (migration 206 —
@@ -3216,7 +3208,7 @@ renumber.** Navigate by area:
     resolver (bind → fill → grade → check); ONE claim shape in `location_claims`, written by TWO
     producers, both fingerprinted in SQL — the hourly `claims_intake` lane (over the stored payload,
     the stored page body and the text lane's stored reading) and `operator_corrections`; TWELVE claim types, at most one contract entry per
-    type, the town entry mandatory and naming a reader; ONE label function and ONE four-level code
+    type, the town entry mandatory and naming a reader; ONE label function and ONE five-level code
     predicate for every place display and filter; no serving flags, no granularity floors, no
     second store — `listings` and `properties` carry no place column, so a reader joins `ll on
     ll.listing_id = l.id` and casts `ll.geom::geography` for anything measured in metres. The reason the answer is graded rather
@@ -3886,16 +3878,17 @@ while `listing_location` is revoked from `authenticated`), and the API's raw-SQL
 same function with the same columns — where eleven sites used to compose a place string out of five
 legacy columns in five different assemblies, the SPA and the extension falling back in opposite
 orders, so one listing could be labelled two ways at once. Every place FILTER is
-`<level>_id = any(codes)`, plain equality at four levels (`region_id` / `okres_id` / `obec_id` /
-`cast_obce_id`), compiled in exactly two places (`api/location_filter.py` and
+`<level>_id = any(codes)`, plain equality at five levels (`region_id` / `okres_id` / `obec_id` /
+`cast_obce_id` / `ulice_id`), compiled in exactly two places (`api/location_filter.py` and
 `frontend/src/lib/districtCodes.ts`) plus two SQL bodies (`browse_stats_properties`,
 `browse_map_cells`), all four tested against ONE table, `tests/fixtures/district_chip_plan.json`.
-A street / POI / address chip filters at its CONTAINING OBEC; a chip with no code matches NOTHING
-(`NO_MATCH_CODE = -1`, fail closed); chips saved before codes existed are resolved once at read time
-against `ruian_name_index` — in-process for the watchdog matcher, over `POST /maps/resolve-names` for
-the SPA (`frontend/src/lib/useLegacyChipUpgrade.ts`, still called by Browse and the pipeline board) —
-without ever rewriting the stored blob. Because RÚIAN draws no polygon for `cast_obce` or `momc`, a
-POINT resolves only to obec / okres / kraj and the quarter is placed BY NAME inside the PIP'd obec.
+A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
+the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
+draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj
+and the quarter or street is bound BY NAME inside the PIP'd obec. The street is indexed twice
+(migration 605: `browse_list_ulice_idx` via the rebuild, `listing_location_ulice_kod_idx` for the
+feed lane) because without them one street read its whole category band and the feed seq-scanned
+`listing_location` for 4.97 s; `cast_obce` on the feed lane has the same shape and is not indexed.
 
 `browse_projection` re-sources `obec_id` / `okres_id` / `region_id` from
 `ll.obec_kod` / `okres_kod` / `kraj_kod` and `lat` / `lng` from `ST_Y/ST_X(ll.geom)`, and appends

@@ -5,6 +5,7 @@ import { listBrokerMergeCandidates } from '../lib/api';
 import { useAuth } from '@/lib/auth';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import {
+  GEO_UNSERVED_HINT,
   chipsToGeoArrays,
   contactState,
   fetchBrokerLeaderboard,
@@ -12,6 +13,7 @@ import {
   prettyPhone,
   searchBrokerFirms,
   searchBrokersByName,
+  geoUnserved,
   type BrokerFirmOption,
   type BrokerLeaderRow,
   type LeaderMetric,
@@ -136,7 +138,7 @@ function BrokersDesktop() {
   const reviewCount = Object.values(reviewQ.data?.reason_counts ?? {})
     .reduce((a, b) => a + b, 0);
 
-  const boardQ = useQuery<{ rows: BrokerLeaderRow[]; placeLabel: string }>({
+  const boardQ = useQuery<{ rows: BrokerLeaderRow[]; placeLabel: string | null }>({
     queryKey: [
       'broker-leaderboard',
       geo.regionIds, geo.okresIds, geo.obecIds,
@@ -163,9 +165,11 @@ function BrokersDesktop() {
   });
 
   const rows = boardQ.data?.rows ?? [];
-  const resolved = districts.filter((d) => d.id != null && !d.excluded);
-  const placeLabel =
-    resolved.length === 0 ? 'Celá ČR' : resolved.map((d) => d.name).join(' + ');
+  // A served selection is include chips at kraj / okres / obec only, so every
+  // chip names the place; an unserved one selects nothing and gets no caption.
+  const placeLabel = geoUnserved(geo)
+    ? null
+    : districts.length === 0 ? 'Celá ČR' : districts.map((d) => d.name).join(' + ');
   // What the rows on screen were fetched under; falls back to the live label
   // only when there is nothing on screen yet (first load, error, empty).
   const shownPlaceLabel = boardQ.data?.placeLabel ?? placeLabel;
@@ -205,6 +209,9 @@ function BrokersDesktop() {
               value={districts}
               onChange={(next) => setDistricts(next ?? [])}
             />
+            {geoUnserved(geo) && (
+              <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">{GEO_UNSERVED_HINT}</p>
+            )}
           </Field>
           <Field label="Typ">
             <Segmented options={CATEGORY_OPTIONS} value={categoryMain} onChange={handleCategoryMainChange} />
@@ -476,7 +483,7 @@ function Ledger({
 }: {
   rows: BrokerLeaderRow[];
   metric: LeaderMetric;
-  placeLabel: string;
+  placeLabel: string | null;
   capped: boolean;
 }) {
   return (
@@ -609,7 +616,7 @@ function Empty({
   hasValueFilter,
   hasSubtypeFilter,
 }: {
-  placeLabel: string;
+  placeLabel: string | null;
   hasFirmFilter: boolean;
   hasValueFilter: boolean;
   hasSubtypeFilter: boolean;
@@ -625,7 +632,7 @@ function Empty({
   return (
     <div className="mt-6 border border-dashed border-[var(--color-rule-strong)] rounded-[var(--radius-md)] p-8 text-center">
       <p className="text-sm text-[var(--color-ink-2)]">
-        Žádní makléři pro tento výběr v {placeLabel}.
+        Žádní makléři pro tento výběr{placeLabel != null ? ` v ${placeLabel}` : ''}.
       </p>
       <p className="mt-1 text-xs text-[var(--color-ink-3)]">{hint}</p>
     </div>

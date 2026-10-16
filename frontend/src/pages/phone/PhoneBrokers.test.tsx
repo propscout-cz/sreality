@@ -148,7 +148,7 @@ describe('<Brokers> on the phone', () => {
 });
 
 describe('phone broker helpers', () => {
-  it('labels only the chips that scope the board, compactly', () => {
+  it('labels the picked chips compactly, dropping none', () => {
     expect(placeLabelOf([])).toBe('Celá ČR');
     expect(placeLabelOf([{ name: 'Praha', context: null, level: 'obec', id: 554782 }])).toBe('Praha');
     expect(
@@ -157,7 +157,7 @@ describe('phone broker helpers', () => {
         { name: 'Brno', context: null, level: 'obec', id: 582786 },
         { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 1 },
       ]),
-    ).toBe('Praha +1');
+    ).toBe('Praha +2');
   });
 
   it('draws initials from the first and last word of the name, degrees aside', () => {

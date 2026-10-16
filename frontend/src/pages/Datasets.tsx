@@ -42,7 +42,7 @@ import { YmPicker, YM_PARTS } from '@/components/YmPicker';
 import CityPicker from '@/components/CityPicker';
 import { buildHoverData } from '@/lib/growthChoropleth';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
-import { chipsToGeoArrays } from '@/lib/brokers';
+import { GEO_UNSERVED_HINT, chipsToGeoArrays, geoUnserved } from '@/lib/brokers';
 import type { DistrictChip } from '@/lib/filters';
 
 const METRIC_ORDER: DatasetMetric[] = ['rent_cagr_pct', 'sale_cagr_pct', 'yield_change_pp_pa'];
@@ -273,14 +273,11 @@ export default function Datasets() {
     return { okresId, krajId };
   }, [obecTreeQ.data]);
 
-  // The same shared helper Browse/Brokers use: split the chips into per-level
-  // stable-id sets, then keep an obec iff it (or its okres/kraj ancestor) is
-  // selected. Empty selection ⇒ keep everything (no filter). Datasets is
-  // obec-id-keyed: it matches ONLY by stable admin id via the picker tree, with
-  // no name-ILIKE fallback (Browse/Watchdog have one on place_search_text). So an
-  // unresolved chip (id==null — e.g. /maps/resolve down, or a pick Mapy can't PIP)
-  // can't narrow here and is a deliberate fail-open no-op, surfaced by the hint
-  // under the Location box rather than silently showing the whole dataset.
+  // The projection Brokers/Outreach use: the chips' kraj/okres/obec codes, then
+  // keep an obec iff it (or its okres/kraj ancestor) is selected. Empty
+  // selection ⇒ keep everything. Datasets has per-obec rows only, so a selection
+  // holding a chip it cannot serve (část obce, ulice, excluded) selects nothing
+  // here, and the hint under the Location box says so.
   const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
   const loc = useMemo(() => ({
     obec: new Set(geo.obecIds),
@@ -562,11 +559,8 @@ export default function Datasets() {
               <span className="mt-2 shrink-0 text-xs uppercase tracking-[0.14em] text-[var(--color-ink-3)]">Location</span>
               <div className="w-full sm:max-w-sm">
                 <LocationTypeahead label="Location" value={districts} onChange={(n) => setDistricts(n ?? [])} />
-                {districts.length > 0 && !loc.active && (
-                  <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">
-                    Couldn’t resolve this location, so the filter isn’t applied. Datasets matches
-                    by municipality — try picking a town, district, or region.
-                  </p>
+                {geoUnserved(geo) && (
+                  <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">{GEO_UNSERVED_HINT}</p>
                 )}
               </div>
             </div>

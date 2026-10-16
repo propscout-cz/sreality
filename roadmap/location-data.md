@@ -1139,13 +1139,18 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `html_regex` keeps its locatable-match gate, narrowed from `find_span` to `ScopedDocument.shows`;
   `json_regex` (no live entry) loses its. Also gone: the `scope_version` pass-throughs and
   `ArchivedPayload.source/source_id_native` (nothing read them). Net −1,067 lines.
-- **Street filter sprint 2026-10-02 — in progress** (operator rulings Q1–Q6): a location chip is ONE
-  RÚIAN unit at the level picked, the street the fifth level. PR-A (migration 584, DB only, no behaviour
-  change): `ulice_id` (= `listing_location.ulice_kod`) served last on browse_projection /
-  properties_public / pipeline_board_public / listing_feed_public and both read models. Next: measure
-  the read paths; then 585 (the street chip arm + the resolver's street binder); then 586 (the 10
-  name-only preset chips stamped with their kraj codes; the two inactive watchdogs removed after a
-  backup); then the Brokers / Outreach / Datasets region-search parity (587).
+- **Street chip — DONE 2026-10-16** (operator rulings 2026-10-02 Q1–Q6 and 2026-10-16; migrations 584,
+  605, 606): a location chip is ONE RÚIAN unit at the level picked — kraj, okres, obec, cast_obce, ulice —
+  and a chip without a (level, code) cannot exist. 584 served `ulice_id` (= `listing_location.ulice_kod`);
+  605 swapped both aggregate RPCs' `locality` arms (a street filtered its whole TOWN) for `ulice` and added
+  `browse_list_ulice_idx` (via the rebuild) + `listing_location_ulice_kod_idx` (measured 2026-10-03: one
+  street read its whole category band, 13,330 buffers; the feed seq-scanned 943k rows, 4.97 s of an 8 s
+  cap); 606 deleted, after `backup_606`, the only code-less chips stored — 2 presets (5 name-only kraj
+  chips each) and 2 inactive watchdogs (8 chips, 778 dispatches). The read-time name reader is deleted.
+  Recall: 162,562 of 378,380 active CZ listings (43 %) carry a street code.
+- **Next — region-search parity (migration 607)**: Brokers / phone Brokers / Outreach / Datasets take the
+  same chips (`broker_leaderboard` gets the five-arm CASE over `ll.*_kod`; Outreach stores chips); until
+  then those pages fail closed on a street, a quarter or an excluded place.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the
