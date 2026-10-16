@@ -496,6 +496,14 @@ describe('<Pipeline> board', () => {
     expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
   });
 
+  it('holds the skeleton, with the stages drawn, while the board is in flight', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    for (const s of STAGES) expect(await screen.findByText(s.label)).toBeInTheDocument();
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('— nemovitostí');
+  });
+
   it('filters the board by property type', async () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
     renderBoard();
