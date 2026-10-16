@@ -2577,8 +2577,8 @@ async function loadNotes(): Promise<void> {
   setState((prev) => (mine(prev) ? { ...prev, notesFailed: true } : prev));
 }
 
-/* Save the draft as a note on the listing's property. `origin_listing_id` is the
- * viewed advert's sreality_id (display provenance, rule #18). The new note is
+/* Save the draft as a note on the listing's property. `origin_listing_ref_id` is
+ * the viewed advert's surrogate id (display provenance, rule #18). The new note is
  * prepended (the list is most-recent-first); the draft clears. Identity-guarded
  * like the other writes; reuses the SAME POST the SPA's CurationBlock uses. */
 async function onAddNote(): Promise<void> {
@@ -2589,9 +2589,6 @@ async function onAddNote(): Promise<void> {
   const propertyId = l.property_id;
   setState((prev) => ({ ...prev, noteBusy: true, errorMessage: null }));
   const res = await call<ExtNote>({
-    // Send the surrogate: property_notes.origin_listing_id is the legacy handle
-    // and is NULL for a post-Gate-2 listing, which would silently drop the
-    // note's provenance. The API derives the legacy value from this.
     type: 'add_note', property_id: propertyId, body,
     origin_listing_ref_id: l.listing_id ?? null,
   });

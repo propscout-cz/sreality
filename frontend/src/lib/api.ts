@@ -2617,18 +2617,13 @@ export const listPropertyNotes = (
 export const createPropertyNote = (
   property_id: number,
   body: string,
-  origin_listing_id?: number,
-  // Surrogate twin (migration 323/R2). origin_listing_id is the legacy
-  // sreality_id, NULL for a post-Gate-2 listing — pass the surrogate too so
-  // the note's provenance survives even when the legacy id is unavailable
-  // (api.create_note COALESCEs one from the other server-side).
+  // The viewed listing's surrogate id — the note's provenance.
   origin_listing_ref_id?: number,
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     json: {
       body,
-      ...(origin_listing_id != null ? { origin_listing_id } : {}),
       ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
     },
   });

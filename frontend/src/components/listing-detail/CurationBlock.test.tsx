@@ -15,7 +15,6 @@ import type { ArtifactLink, Note, Tag } from '@/lib/types';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
-  listCollections: vi.fn(),
   listTags: vi.fn(),
   listPropertyNotes: vi.fn(),
   createPropertyNote: vi.fn(),
@@ -26,12 +25,13 @@ vi.mock('@/lib/api', async (orig) => ({
   uploadNoteAttachment: vi.fn(),
   fetchNoteAttachmentBlob: vi.fn(),
   deleteNoteAttachment: vi.fn(),
+  listCollections: vi.fn(),
 }));
 
 vi.mock('@/lib/queries', async (orig) => ({
   ...(await orig<typeof import('@/lib/queries')>()),
-  fetchPropertyCollectionMemberSet: vi.fn(),
   fetchPropertyTagMemberSet: vi.fn(),
+  fetchPropertyCollectionMemberSet: vi.fn(),
 }));
 
 import {
@@ -47,7 +47,11 @@ import {
   setPropertyArtifactLink,
   uploadNoteAttachment,
 } from '@/lib/api';
-import { curationKeys, fetchPropertyCollectionMemberSet, fetchPropertyTagMemberSet } from '@/lib/queries';
+import {
+  curationKeys,
+  fetchPropertyCollectionMemberSet,
+  fetchPropertyTagMemberSet,
+} from '@/lib/queries';
 import CurationBlock from './CurationBlock';
 
 const TAG: Tag = {
@@ -56,7 +60,7 @@ const TAG: Tag = {
 };
 
 const NOTE: Note = {
-  id: 11, property_id: 42, body: 'Sousedi jsou hlučni.', origin_listing_id: 900,
+  id: 11, property_id: 42, body: 'Sousedi jsou hlučni.',
   created_at: '2026-05-02T00:00:00+00:00', updated_at: null,
 };
 
@@ -67,10 +71,8 @@ const LINK: ArtifactLink = {
 
 function mockReads() {
   vi.mocked(fetchArtifactLinks).mockResolvedValue(new Map());
-  vi.mocked(listCollections).mockResolvedValue({ data: [] } as never);
   vi.mocked(listTags).mockResolvedValue({ data: [TAG] } as never);
   vi.mocked(listPropertyNotes).mockResolvedValue({ data: [NOTE] } as never);
-  vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
   vi.mocked(fetchPropertyTagMemberSet).mockResolvedValue(new Map());
 }
 
@@ -86,12 +88,26 @@ function renderWithReads() {
   const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
-        <CurationBlock property_id={42} sreality_id={900} listing_id={900} />
+        <CurationBlock property_id={42} listing_id={900} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
   return { ...view, invalidate };
 }
+
+/* Ruling 6 (docs/design/collection-sharing.md): the header's "Uložit do kolekce"
+ * is the property page's one collection editor; this block has no second one. */
+describe('<CurationBlock> collections', () => {
+  it('renders no collection row', async () => {
+    renderBlock();
+    await screen.findByRole('textbox', { name: 'Notes' });
+    expect(screen.queryByText('Collections')).toBeNull();
+    expect(screen.queryByRole('link', { name: /Manage/ })).toBeNull();
+    // The block reads no collection data at all, whatever a row would be labelled.
+    expect(listCollections).not.toHaveBeenCalled();
+    expect(fetchPropertyCollectionMemberSet).not.toHaveBeenCalled();
+  });
+});
 
 describe('<CurationBlock> control names', () => {
   it('names the note composer by the visible Notes heading', async () => {
@@ -138,8 +154,8 @@ describe('<CurationBlock> note counts', () => {
   });
 });
 
-/* MS16: a failed read says so and reads again; it is never drawn as "no notes",
- * "no tags" or a row of unticked collections. */
+/* MS16: a failed read says so and reads again; it is never drawn as "no notes"
+ * or "no tags". */
 describe('<CurationBlock> failed reads', () => {
   const banner = (subject: string) =>
     screen.findByText(subject, { selector: 'strong' }).then((s) => s.parentElement as HTMLElement);
@@ -166,19 +182,6 @@ describe('<CurationBlock> failed reads', () => {
     expect(screen.queryByRole('textbox', { name: 'Najít nebo vytvořit štítek' })).toBeNull();
     fireEvent.click(within(tags).getByRole('button', { name: 'Zkusit znovu' }));
     expect(await screen.findByRole('textbox', { name: 'Najít nebo vytvořit štítek' })).toBeInTheDocument();
-  });
-
-  it('says the collection memberships failed instead of unticking every toggle', async () => {
-    mockReads();
-    vi.mocked(listCollections).mockResolvedValue({ data: [{ id: 7, name: 'Šortlist' }] } as never);
-    vi.mocked(fetchPropertyCollectionMemberSet).mockRejectedValueOnce(new Error('HTTP 500'));
-    renderWithReads();
-
-    const collections = await banner('Kolekce');
-    expect(screen.queryByRole('button', { name: /Šortlist/ })).toBeNull();
-    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
-    fireEvent.click(within(collections).getByRole('button', { name: 'Zkusit znovu' }));
-    expect(await screen.findByRole('button', { name: /Šortlist/ })).toHaveAttribute('aria-pressed', 'true');
   });
 });
 
@@ -217,7 +220,7 @@ describe('<CurationBlock> note attachments', () => {
     await user.type(box, 'Půdorys od makléře.');
     await user.click(screen.getByRole('button', { name: 'Save note' }));
     await waitFor(() => expect(uploadNoteAttachment).toHaveBeenCalledWith(42, 12, file));
-    expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900, 900);
+    expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900);
     await waitFor(() => expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull());
   });
 
@@ -232,7 +235,7 @@ describe('<CurationBlock> note attachments', () => {
     await user.upload(screen.getAllByTestId('attach-input')[0], pdf());
     await user.click(screen.getByRole('button', { name: 'Save note' }));
     await waitFor(() => expect(createPropertyNote).toHaveBeenCalledWith(
-      42, 'Attached: plan.pdf', 900, 900));
+      42, 'Attached: plan.pdf', 900));
   });
 
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {

@@ -163,10 +163,10 @@ def store(monkeypatch):
             "id": nid,
             "property_id": pid,
             "body": body.body,
-            "origin_listing_id": body.origin_listing_id,
             "created_at": f"2026-05-10T00:00:0{nid}+00:00",
         }
         state["notes"][nid] = note
+        state.setdefault("note_origins", {})[nid] = body.origin_listing_ref_id
         return note
 
     def fake_list_tags(conn):
@@ -386,16 +386,20 @@ def test_create_note_round_trip(client, store):
     assert bodies == ["second", "first"]  # newest first
 
 
-def test_create_note_records_origin_listing(client, store):
+def test_create_note_passes_the_surrogate_origin_only(client, store):
     res = client.post(
         "/properties/12345/notes",
-        json={"body": "from the bazos ad", "origin_listing_id": 777},
+        json={"body": "from the bazos ad", "origin_listing_ref_id": 777},
     )
     assert res.status_code == 200
-    assert res.json()["origin_listing_id"] == 777
-    # Omitting it defaults to null.
-    res = client.post("/properties/12345/notes", json={"body": "no origin"})
-    assert res.json()["origin_listing_id"] is None
+    assert store["note_origins"][res.json()["id"]] == 777
+    # The legacy field is no longer part of the body: an old client's copy is ignored.
+    res = client.post(
+        "/properties/12345/notes", json={"body": "old client", "origin_listing_id": 5},
+    )
+    assert res.status_code == 200
+    assert store["note_origins"][res.json()["id"]] is None
+    assert set(_s.CreateNoteIn.model_fields) == {"body", "origin_listing_ref_id"}
 
 
 def test_create_note_blank_body_422(client, store):
@@ -712,7 +716,7 @@ def test_update_note_is_one_update_and_no_probe():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("UPDATE property_notes"),
-         [(5, 42, "edited", None, _T0, _T0)]),
+         [(5, 42, "edited", _T0, _T0)]),
     ])
     out = curation.update_note(conn, 42, 5, _s.UpdateNoteIn(body="edited"))
     assert out["body"] == "edited"
@@ -734,14 +738,31 @@ def test_list_notes_helper_orders_newest_first():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: "FROM property_notes" in q, [
-            (2, 42, "second", None, "2026-05-10T00:00:02+00:00", None),
-            (1, 42, "first",  777,  "2026-05-10T00:00:01+00:00", None),
+            (2, 42, "second", "2026-05-10T00:00:02+00:00", None),
+            (1, 42, "first",  "2026-05-10T00:00:01+00:00", None),
         ]),
     ])
     out = curation.list_notes(conn, property_id=42)
     assert [n["body"] for n in out["data"]] == ["second", "first"]
-    assert out["data"][1]["origin_listing_id"] == 777
     assert "ORDER BY created_at DESC" in conn.executed[1][0]
+
+
+def test_create_note_derives_the_legacy_origin_from_the_surrogate_only():
+    conn = ScriptConn([
+        (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
+        (lambda q: q.startswith("INSERT INTO property_notes"), [(5, 42, "hi", _T0, None)]),
+    ])
+    note = curation.create_note(
+        conn, 42, _s.CreateNoteIn(body="hi", origin_listing_ref_id=777), "acct",
+    )
+    sql, params = conn.executed[-1]
+    assert "COALESCE" not in sql.upper()
+    assert "(SELECT sreality_id FROM listing_natural_key_public WHERE id = %s)" in sql
+    assert params == (42, "hi", 777, 777, "acct")
+    assert note == {
+        "id": 5, "property_id": 42, "body": "hi",
+        "created_at": "2026-05-10T00:00:00", "updated_at": None,
+    }
 
 
 # --- merged-away redirect --------------------------------------------------
@@ -831,7 +852,7 @@ def test_update_note_redirects_merged_away_to_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "UPDATE property_notes" in q,
-         [(5, 42, "edited", None, datetime(2026, 1, 1), datetime(2026, 1, 2))]),
+         [(5, 42, "edited", datetime(2026, 1, 1), datetime(2026, 1, 2))]),
     ])
     out = curation.update_note(conn, 99, 5, _s.UpdateNoteIn(body="edited"))
     assert out["property_id"] == 42
@@ -845,7 +866,7 @@ def test_list_notes_follows_a_merged_away_id_to_the_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "FROM property_notes" in q,
-         [(5, 42, "on the survivor", None, datetime(2026, 1, 1), None)]),
+         [(5, 42, "on the survivor", datetime(2026, 1, 1), None)]),
     ])
     out = curation.list_notes(conn, 99)
     assert [n["property_id"] for n in out["data"]] == [42]

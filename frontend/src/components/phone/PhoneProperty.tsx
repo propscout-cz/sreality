@@ -248,7 +248,7 @@ export default function PhoneProperty({
         )}
         <section id={NOTES_SECTION_ID} aria-label="Štítky a poznámky" className={`scroll-mt-16 ${BLOCK}`}>
           <Suspense fallback={<Skeleton height={140} />}>
-            <PhoneTagsAndNotes property_id={propertyId} sreality_id={property.sreality_id} listing_id={property.id} />
+            <PhoneTagsAndNotes property_id={propertyId} listing_id={property.id} />
           </Suspense>
         </section>
         <div className="px-4 py-4">

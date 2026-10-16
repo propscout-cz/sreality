@@ -3,26 +3,24 @@
  * count and the founding day under it, a quiet "sledováno" mark on a monitored
  * one — and "Nová sbírka" as the one action, a name in a bottom sheet.
  *
- * Reads and writes are the desktop page's own: `listCollections` under
- * `curationKeys.collections`, `createCollection` (monitoring off — monitoring
- * and its channels are set on the desktop, Q11), then `revalidateCollections`
- * so every collection glyph on every card hears about the new list. Rename,
- * delete and monitoring have no control here on purpose; the footer says where
- * they live. */
+ * Reads and writes are the desktop page's own: `useCollections`,
+ * `createCollection` (monitoring off — monitoring and its channels are set on
+ * the desktop, Q11), then `revalidateCollections` so every collection glyph on
+ * every card hears about the new list. Rename, delete and monitoring have no
+ * control here on purpose; the footer says where they live. */
 
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import BottomSheet from '@/components/phone/BottomSheet';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import { RollEmpty } from '@/components/phone/RollParts';
 import { BellIcon, ChevronIcon, PlusIcon } from '@/components/phone/phoneIcons';
-import { createCollection, listCollections } from '@/lib/api';
-import { revalidateCollections } from '@/lib/collectionCache';
+import { createCollection } from '@/lib/api';
+import { revalidateCollections, useCollections } from '@/lib/collectionCache';
 import { dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import { czPlural, fmtCount } from '@/lib/format';
-import { curationKeys } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
 import { pushToast } from '@/lib/toast';
 import type { Collection } from '@/lib/types';
@@ -54,12 +52,7 @@ export function MonitoredMark() {
 
 export default function PhoneCollections() {
   const [creating, setCreating] = useState(false);
-  const listQ = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-  const items = listQ.data?.data ?? [];
+  const { collections: items, query: listQ } = useCollections();
   const total = listQ.data?.total ?? null;
 
   usePhoneHeaderAside(

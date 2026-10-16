@@ -33,7 +33,7 @@ import type {
   CollectionPropertyRow,
   CollectionWithProperties,
 } from '@/lib/types';
-import { Hairline } from '@/components/section';
+import { Hairline, SectionLabel } from '@/components/section';
 import { Th } from '@/components/table';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { PhoneSuspense } from '@/components/phone/RollParts';
@@ -204,9 +204,7 @@ function EditBlock({ collection }: { collection: Collection }) {
 
   return (
     <div>
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-        Edit
-      </p>
+      <SectionLabel>Edit</SectionLabel>
       <div className="mt-3 flex flex-col gap-2.5 max-w-2xl">
         <Field label="Name" as="control">
           <input
@@ -312,12 +310,9 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
 
   return (
     <div>
-      <p
-        id={labelId}
-        className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium"
-      >
-        Monitoring
-      </p>
+      <SectionLabel>
+        <span id={labelId}>Monitoring</span>
+      </SectionLabel>
       <div className="mt-3 flex items-start gap-3 max-w-2xl">
         <button
           type="button"
@@ -352,9 +347,7 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
       </div>
       {on && (
         <div className="mt-4 max-w-2xl">
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-            Delivery
-          </p>
+          <SectionLabel>Delivery</SectionLabel>
           <div className="mt-2">
             <DeliveryChannelsPicker
               value={collection.notify_channels ?? []}
@@ -384,9 +377,7 @@ function PropertiesBlock({
 }) {
   return (
     <div>
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-        Properties
-      </p>
+      <SectionLabel>Properties</SectionLabel>
       {properties.length === 0 ? (
         <p className="mt-3 text-sm text-[var(--color-ink-3)]">
           No properties yet. Use the "Add to collection" picker on a listing's

@@ -14,14 +14,13 @@ import {
 import {
   archivePipelineStage,
   createPipelineStage,
-  listCollections,
   listTags,
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
+import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
   curationKeys,
-  fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
   matchesDistricts,
   pipelineKeys,
@@ -139,16 +138,8 @@ function PipelineBoardPage() {
 
   /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-  const membersQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const { collections } = useCollections();
+  const membersQ = useCollectionMembers();
   const tagsQ = useQuery({
     queryKey: curationKeys.tags,
     queryFn: listTags,
@@ -201,7 +192,7 @@ function PipelineBoardPage() {
       if (c.category_main) present.add(c.category_main);
       if (!c.is_active) inactive += 1;
     }
-    const collections = offerCuratedSet(cards, members, collectionsQ.data?.data ?? [], collectionIds);
+    const offered = offerCuratedSet(cards, members, collections, collectionIds);
     const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], [
       ...tagChoice.tags,
       ...tagChoice.tagsExcluded,
@@ -210,14 +201,14 @@ function PipelineBoardPage() {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
       collections: [
-        ...collections.options.map((c) => ({ value: c.id, label: c.name })),
-        ...collections.missing.map((id) => ({ value: id, label: `#${id}` })),
+        ...offered.options.map((c) => ({ value: c.id, label: c.name })),
+        ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
       ],
-      showCollections: collections.show,
+      showCollections: offered.show,
       tags: tagOptionsFor(tags.options, tagChoice),
       showTags: tags.show,
     };
-  }, [cards, members, collectionsQ.data, collectionIds, tagMembers, tagsQ.data, tagChoice]);
+  }, [cards, members, collections, collectionIds, tagMembers, tagsQ.data, tagChoice]);
 
   /* The decoration cohort: the representative listing of every card ON the
    * board (not just the filtered view — filtering is client-side and instant,

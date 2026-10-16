@@ -261,7 +261,7 @@ def remove_property_from_collection(
 # --- notes -----------------------------------------------------------------
 
 
-_NOTE_PROJECTION = "id, property_id, body, origin_listing_id, created_at, updated_at"
+_NOTE_PROJECTION = "id, property_id, body, created_at, updated_at"
 
 _UPDATE_NOTE_SQL = (
     "UPDATE property_notes SET body = coalesce(%s::text, body), "
@@ -295,11 +295,9 @@ def create_note(
     body: s.CreateNoteIn,
     account_id: str,
 ) -> dict[str, Any]:
-    # origin_listing_ref_id is the surrogate; origin_listing_id holds the legacy
-    # sreality_id. Prefer a caller-supplied surrogate and derive the legacy handle
-    # FROM it; only fall back to resolving legacy -> surrogate for a caller that
-    # still sends the old field (post-Gate-2 that lookup returns NULL, which is
-    # precisely why the surrogate has to be the driving value).
+    # origin_listing_ref_id (the surrogate) is the only provenance a caller sends;
+    # the legacy origin_listing_id column (an R2-era carrier a split's note copy
+    # still writes) is derived FROM it and never leaves the API.
     #
     # account_id: property_notes has no owning-parent to derive it from (unlike
     # collection_properties/property_tags, mig 292) and no DEFAULT (unlike
@@ -307,7 +305,7 @@ def create_note(
     # the table's WITH CHECK closed, so it is REQUIRED (no default): the route
     # resolves exactly one via tenant_pool.require_account_id, or 400s.
     #
-    # The id<->sreality_id map reads through listing_natural_key_public, NOT base
+    # The id -> sreality_id map reads through listing_natural_key_public, NOT base
     # `listings`: on the tenant conn (SET LOCAL ROLE authenticated) `listings` is
     # RLS deny-all, so `(SELECT sreality_id FROM listings ...)` folds to NULL and
     # silently drops the note's provenance. The identity view is owner-bypass +
@@ -316,9 +314,8 @@ def create_note(
         "INSERT INTO property_notes "
         "  (property_id, body, origin_listing_id, origin_listing_ref_id, account_id) "
         "VALUES (%s, %s, "
-        "  COALESCE(%s, (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s)), "
-        "  COALESCE(%s, (SELECT id FROM listing_natural_key_public WHERE sreality_id = %s)), "
-        "  %s) "
+        "  (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s), "
+        "  %s, %s) "
         f"RETURNING {_NOTE_PROJECTION}"
     )
     try:
@@ -328,8 +325,7 @@ def create_note(
                 raise HTTPException(404, "property not found")
             cur.execute(sql, (
                 pid, body.body,
-                body.origin_listing_id, body.origin_listing_ref_id,
-                body.origin_listing_ref_id, body.origin_listing_id,
+                body.origin_listing_ref_id, body.origin_listing_ref_id,
                 account_id,
             ))
             row = cur.fetchone()
@@ -588,12 +584,11 @@ def _to_collection(row: tuple[Any, ...]) -> dict[str, Any]:
 
 def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
-        "id":                int(row[0]),
-        "property_id":       int(row[1]),
-        "body":              row[2],
-        "origin_listing_id": int(row[3]) if row[3] is not None else None,
-        "created_at":        _iso(row[4]),
-        "updated_at":        _iso(row[5]),
+        "id":          int(row[0]),
+        "property_id": int(row[1]),
+        "body":        row[2],
+        "created_at":  _iso(row[3]),
+        "updated_at":  _iso(row[4]),
     }
 
 

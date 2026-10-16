@@ -489,8 +489,9 @@ def test_a5_properties_readable_listings_still_deny_all(
                     "A5 policy: authenticated must read base properties"
                 )
                 # The PII-free identity view resolves the id<->sreality_id map
-                # create_note depends on (owner-bypass, no broker columns). Both
-                # directions the INSERT subselects use must round-trip.
+                # create_note depends on (owner-bypass, no broker columns). The
+                # sreality_id -> id lookup only finds this test's listing; the
+                # id -> sreality_id lookup is the one create_note's INSERT uses.
                 cur.execute(
                     "SELECT id FROM listing_natural_key_public WHERE sreality_id = %s",
                     (srid,),
