@@ -403,7 +403,7 @@ def health() -> dict[str, str]:
 @app.get("/maps/suggest")
 def get_maps_suggest(
     query: str = Query(..., min_length=1, max_length=200),
-    limit: int = Query(default=10, ge=1, le=20),
+    limit: int = Query(default=10, ge=1, le=15),
     lang: str = Query(default="cs", min_length=2, max_length=8),
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
@@ -431,43 +431,12 @@ def post_maps_resolve(
 ) -> dict[str, Any]:
     return maps.resolve(
         conn,
-        label=body.label,
         lat=body.lat,
         lng=body.lng,
         type_=body.type,
-        regional_structure=body.regional_structure,
-        raw=body.raw,
         name=body.name,
+        regional_structure=[e.model_dump() for e in body.regional_structure],
     )
-
-
-@app.post("/maps/resolve-names")
-def post_maps_resolve_names(
-    body: s.ResolveChipNamesIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Resolve stored name-only chips to RÚIAN codes at read time (W3 S3).
-
-    The SPA calls this once when a URL / preset hands it a chip written before
-    codes existed; the Watchdog calls `maps.resolve_names` in-process for the
-    same reason. One resolution rule, so Browse and the matcher cannot read the
-    same saved filter differently (rule 16)."""
-    pairs = [(c.name, c.context) for c in body.chips]
-    resolved = maps.resolve_names(conn, pairs)
-    return {
-        "chips": [
-            {
-                "name": name,
-                "context": context,
-                "matches": [
-                    {"level": lvl, "id": code}
-                    for lvl, code in resolved.get((name, context), [])
-                ],
-            }
-            for name, context in pairs
-        ]
-    }
 
 
 @app.post("/tools/find_comparables")

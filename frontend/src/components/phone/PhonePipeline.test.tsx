@@ -82,6 +82,7 @@ const base: PipelineBoardCard = {
   price_change_count: 1,
   obec_id: 554782,
   cast_obce_id: null,
+  ulice_id: null,
   okres_id: null,
   region_id: 19,
   obec: 'Praha',

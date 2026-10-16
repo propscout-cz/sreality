@@ -229,6 +229,44 @@ def test_update_preset_replaces_spec(client, store):
     assert res.json()["filter_spec"] == new_spec
 
 
+_STREET = {"name": "Na Rybníčkách", "context": "Pardubice", "level": "ulice", "id": 666742}
+
+
+@pytest.mark.parametrize("spec", [
+    {"filters": {**SPEC, "districts": [{"name": "Brno", "context": None}]}, "sort": None},
+    {"filters": {**SPEC, "districts": [_STREET, {"name": "Lipová", "level": "locality",
+                                                  "id": 554782}]}},
+    {"filters": {"districts": [{"name": "Praha", "level": "obec", "id": -1}]}},
+    {**SPEC, "districts": [{"name": "Brno"}]},
+], ids=["name only", "stale locality beside a coded chip", "the old sentinel", "legacy bare blob"])
+def test_a_preset_holding_a_chip_without_a_code_is_a_422_and_writes_nothing(client, store, spec):
+    """A chip is a level plus a RÚIAN code or it cannot exist — on a preset too,
+    whose blob is otherwise stored verbatim. Checked where the SPA reads the
+    chips (`readPresetSpec`), so the legacy bare shape cannot bypass it."""
+    assert client.post("/filter-presets", json={"name": "p", "filter_spec": spec}).status_code == 422
+    assert store["presets"] == {}
+    client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
+    assert client.put("/filter-presets/1", json={"filter_spec": spec}).status_code == 422
+    assert store["presets"]["1"]["filter_spec"] == SPEC
+
+
+def test_a_preset_with_coded_chips_is_stored_unchanged(client, store):
+    spec = {"filters": {**SPEC, "districts": [_STREET, {**_STREET, "id": 447358,
+                                                        "excluded": True}]}, "sort": "-price_czk"}
+    res = client.post("/filter-presets", json={"name": "p", "filter_spec": spec})
+    assert res.status_code == 200
+    assert res.json()["filter_spec"] == spec
+    assert client.put("/filter-presets/1", json={"filter_spec": spec}).json()["filter_spec"] == spec
+
+
+@pytest.mark.parametrize("spec", [SPEC, {"filters": SPEC, "sort": None},
+                                  {"filters": {**SPEC, "districts": None}}])
+def test_a_preset_without_chips_is_untouched(client, store, spec):
+    res = client.post("/filter-presets", json={"name": "p", "filter_spec": spec})
+    assert res.status_code == 200
+    assert res.json()["filter_spec"] == spec
+
+
 def test_update_preset_404_when_missing(client, store):
     assert client.put("/filter-presets/999", json={"name": "x"}).status_code == 404
 

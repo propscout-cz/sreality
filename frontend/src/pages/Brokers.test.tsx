@@ -8,11 +8,13 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
 
 import Brokers from './Brokers';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
+import * as maps from '@/lib/maps';
 import type { BrokerLeaderRow } from '@/lib/brokers';
 import { ROUTES } from '@/lib/routes';
 
@@ -29,6 +31,11 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
   fetchBrokerLeaderboard: vi.fn(),
   searchBrokerFirms: vi.fn(),
   searchBrokersByName: vi.fn(),
+}));
+vi.mock('@/lib/maps', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/maps')>()),
+  fetchSuggest: vi.fn(),
+  resolveSuggestion: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -90,6 +97,39 @@ function leaderRow(broker_id: number, display_name: string): BrokerLeaderRow {
     listing_count: 1, property_count: 1, active_listing_count: 1, active_property_count: 1,
   };
 }
+
+/* Until the leaderboard serves the finer levels (PR 2), a street chip selects
+ * NOTHING here — the whole selection becomes the no-match code — and the page
+ * says why instead of captioning an empty board with the street's name. */
+describe('<Brokers> a location the page cannot serve', () => {
+  it('selects nothing for a street chip, says why, and captions no place', async () => {
+    asUser(false);
+    vi.mocked(maps.fetchSuggest).mockResolvedValue([{
+      name: 'Na Rybníčkách', label: 'Ulice', type: 'regional.street',
+      position: { lon: 15.77, lat: 50.03 },
+    }]);
+    vi.mocked(maps.resolveSuggestion).mockResolvedValue({
+      level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice',
+    });
+    renderPage();
+    expect(await screen.findByText('Žádní makléři pro tento výběr v Celá ČR.')).toBeInTheDocument();
+    expect(screen.queryByText(brokers.GEO_UNSERVED_HINT)).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: 'Lokalita' }), 'Na Ryb');
+    await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
+
+    await waitFor(() =>
+      expect(brokers.fetchBrokerLeaderboard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ regionIds: [], okresIds: [], obecIds: [-1] }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(screen.getByText(brokers.GEO_UNSERVED_HINT)).toBeInTheDocument();
+    expect(await screen.findByText('Žádní makléři pro tento výběr.')).toBeInTheDocument();
+    expect(screen.queryByText(/v Na Rybníčkách/)).not.toBeInTheDocument();
+  });
+});
 
 describe('<Brokers> W10a: keepPreviousData', () => {
   it('keeps the previous ledger on screen (not the loading text) while a filter change refetches', async () => {

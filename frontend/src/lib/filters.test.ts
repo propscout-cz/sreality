@@ -202,135 +202,79 @@ describe('URL round-trip', () => {
     expect(sp.has('center')).toBe(false);
   });
 
-  it('parses a legacy ?districts=Praha URL into a single context-less chip', () => {
-    const sp = new URLSearchParams({ districts: 'Praha' });
-    const round = fromSearchParams(sp);
-    expect(round.districts).toEqual([{ name: 'Praha', context: null }]);
-  });
+  const JIHLAVA = { name: 'Jihlava', context: null, level: 'obec' as const, id: 586846 };
+  const BENESE_PLZEN = {
+    name: 'Edvarda Beneše', context: 'Plzeň', level: 'ulice' as const, id: 700101,
+  };
 
-  it('round-trips a single chip without context (no districts_ctx in URL)', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [{ name: 'okres Jihlava', context: null }],
-    };
-    const sp = toSearchParams(f);
-    expect(sp.get('districts')).toBe('okres%20Jihlava');
-    expect(sp.has('districts_ctx')).toBe(false); // clean URL — no ctx needed
-    expect(fromSearchParams(sp).districts).toEqual(f.districts);
-  });
-
-  it('round-trips a chip with parent-municipality context', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [{ name: 'Edvarda Beneše', context: 'Plzeň' }],
-    };
-    const sp = toSearchParams(f);
-    expect(sp.get('districts')).toBe('Edvarda%20Bene%C5%A1e');
-    expect(sp.get('districts_ctx')).toBe('Plze%C5%88');
-    expect(fromSearchParams(sp).districts).toEqual(f.districts);
-  });
-
-  it('round-trips a mix of chips (some with context, some without)', () => {
+  it('round-trips a chip at each of the five levels, coarsest first', () => {
     const f = {
       ...DEFAULT_FILTERS,
       districts: [
-        { name: 'Praha', context: null },
-        { name: 'Edvarda Beneše', context: 'Plzeň' },
+        { name: 'Kraj Vysočina', context: null, level: 'kraj' as const, id: 108 },
+        { name: 'Jihlava', context: null, level: 'okres' as const, id: 3707 },
+        JIHLAVA,
+        { name: 'Žižkov', context: 'Praha', level: 'cast_obce' as const, id: 490067 },
+        BENESE_PLZEN,
       ],
-    };
-    const round = fromSearchParams(toSearchParams(f));
-    expect(round.districts).toEqual(f.districts);
-  });
-
-  it('lifts two same-name chips with different contexts as two entries', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [
-        { name: 'Edvarda Beneše', context: 'Plzeň' },
-        { name: 'Edvarda Beneše', context: 'Olomouc' },
-      ],
-    };
-    const round = fromSearchParams(toSearchParams(f));
-    expect(round.districts).toEqual(f.districts);
-  });
-
-  it('round-trips an excluded chip (districts_excl=1)', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [{ name: 'Praha', context: null, excluded: true }],
     };
     const sp = toSearchParams(f);
-    expect(sp.get('districts')).toBe('Praha');
-    expect(sp.get('districts_excl')).toBe('1');
+    expect(sp.get('districts_lvl')).toBe('kraj,okres,obec,cast_obce,ulice');
+    expect(sp.get('districts_id')).toBe('108,3707,586846,490067,700101');
     expect(fromSearchParams(sp).districts).toEqual(f.districts);
   });
 
-  it('omits districts_excl when no chip is excluded (clean URL)', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [{ name: 'Praha', context: null }],
-    };
-    expect(toSearchParams(f).has('districts_excl')).toBe(false);
+  it('always writes the level and code; context and exclude flags only when a chip needs them', () => {
+    const sp = toSearchParams({ ...DEFAULT_FILTERS, districts: [JIHLAVA] });
+    expect(sp.get('districts_lvl')).toBe('obec');
+    expect(sp.get('districts_id')).toBe('586846');
+    expect(sp.has('districts_ctx')).toBe(false);
+    expect(sp.has('districts_excl')).toBe(false);
   });
 
-  it('treats a legacy URL with no districts_excl as all-include', () => {
-    const round = fromSearchParams(
-      new URLSearchParams({ districts: 'Praha,Brno' }),
-    );
-    expect(round.districts).toEqual([
-      { name: 'Praha', context: null },
-      { name: 'Brno', context: null },
-    ]);
-    expect(round.districts.every((d) => !d.excluded)).toBe(true);
-  });
-
-  it('round-trips a mix of include and exclude chips (parallel flags)', () => {
+  it('keeps two same-name streets of two towns as two chips, with their contexts', () => {
     const f = {
       ...DEFAULT_FILTERS,
       districts: [
-        { name: 'Praha', context: null, excluded: true },
-        { name: 'Brno', context: null },
+        BENESE_PLZEN,
+        { ...BENESE_PLZEN, context: 'Olomouc', id: 700202 },
+        JIHLAVA,
       ],
+    };
+    const sp = toSearchParams(f);
+    expect(sp.get('districts_ctx')).toBe('Plze%C5%88,Olomouc,');
+    expect(fromSearchParams(sp).districts).toEqual(f.districts);
+  });
+
+  it('round-trips include and exclude chips through the parallel flags', () => {
+    const f = {
+      ...DEFAULT_FILTERS,
+      districts: [{ ...JIHLAVA, excluded: true }, BENESE_PLZEN],
     };
     const sp = toSearchParams(f);
     expect(sp.get('districts_excl')).toBe('1,0');
     expect(fromSearchParams(sp).districts).toEqual(f.districts);
   });
 
-  it('round-trips a resolved admin chip (level + id)', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [{ name: 'Jihlava', context: null, level: 'obec' as const, id: 586846 }],
-    };
-    const sp = toSearchParams(f);
-    expect(sp.get('districts_lvl')).toBe('obec');
-    expect(sp.get('districts_id')).toBe('586846');
-    expect(fromSearchParams(sp).districts).toEqual(f.districts);
+  /* A chip without a (level, code) cannot exist: an old bookmark carries no unit
+   * to filter on, so the parser drops it rather than guessing one by name. */
+  it.each([
+    ['a name-only chip', 'districts=Brno'],
+    ['an unknown level', 'districts=Brno&districts_lvl=toString&districts_id=582786'],
+    ['a missing code', 'districts=Brno&districts_lvl=obec'],
+    ['the old no-match code', 'districts=Brno&districts_lvl=obec&districts_id=-1'],
+    ['a zero code', 'districts=Brno&districts_lvl=obec&districts_id=0'],
+    ['a fractional code', 'districts=Brno&districts_lvl=obec&districts_id=1.5'],
+    ['a non-numeric code', 'districts=Brno&districts_lvl=obec&districts_id=abc'],
+  ])('drops %s from a URL', (_label, qs) => {
+    expect(fromSearchParams(new URLSearchParams(qs)).districts).toEqual([]);
   });
 
-  it('round-trips a mix of resolved + legacy chips with aligned parallel CSVs', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [
-        { name: 'Jihlava', context: null, level: 'okres' as const, id: 3707 },
-        { name: 'Brno', context: null },
-      ],
-    };
-    const sp = toSearchParams(f);
-    // Full-length parallel arrays — the legacy chip has empty level/id slots.
-    expect(sp.get('districts_lvl')).toBe('okres,');
-    expect(sp.get('districts_id')).toBe('3707,');
-    expect(fromSearchParams(sp).districts).toEqual(f.districts);
-  });
-
-  it('omits districts_lvl/id entirely for a pre-resolution (legacy) filter', () => {
-    const f = {
-      ...DEFAULT_FILTERS,
-      districts: [{ name: 'Praha', context: null }],
-    };
-    const sp = toSearchParams(f);
-    expect(sp.has('districts_lvl')).toBe(false);
-    expect(sp.has('districts_id')).toBe(false);
+  it('drops only the code-less chip and keeps its neighbours aligned', () => {
+    const sp = new URLSearchParams(
+      'districts=Brno,Jihlava&districts_ctx=,&districts_excl=1,0&districts_lvl=,obec&districts_id=,586846',
+    );
+    expect(fromSearchParams(sp).districts).toEqual([JIHLAVA]);
   });
 });
 
@@ -582,10 +526,9 @@ describe('applyRegistryUpdate', () => {
 
   it('accepts DistrictChip[] for districts; null clears the list', () => {
     let f = { ...DEFAULT_FILTERS };
-    f = applyRegistryUpdate(f, 'districts', [
-      { name: 'Edvarda Beneše', context: 'Plzeň' },
-    ]);
-    expect(f.districts).toEqual([{ name: 'Edvarda Beneše', context: 'Plzeň' }]);
+    const chip = { name: 'Edvarda Beneše', context: 'Plzeň', level: 'ulice', id: 700101 };
+    f = applyRegistryUpdate(f, 'districts', [chip]);
+    expect(f.districts).toEqual([chip]);
 
     f = applyRegistryUpdate(f, 'districts', null);
     expect(f.districts).toEqual([]);
@@ -657,13 +600,13 @@ describe('filtersToWatchdogSpec', () => {
       categoryMain: ['byt', 'dum'],
       categoryType: 'prodej',
       dispositions: ['2+kk', '2+1'],
-      districts: [{ name: 'Jihlava', context: null }],
+      districts: [{ name: 'Jihlava', context: null, level: 'obec', id: 586846 }],
     };
     const { spec } = filtersToWatchdogSpec(f);
     expect(spec.category_main_in).toEqual(['byt', 'dum']);
     expect(spec.category_type).toBe('prodej');
     expect(spec.dispositions).toEqual(['2+kk', '2+1']);
-    expect(spec.districts).toEqual([{ name: 'Jihlava', context: null }]);
+    expect(spec.districts).toEqual(f.districts);
   });
 
   it('empty multi-selects become null (matcher "no constraint" sentinel)', () => {
@@ -808,8 +751,8 @@ describe('watchdogNameSuggestion', () => {
         categoryType: 'prodej',
         dispositions: ['2+kk', '2+1'],
         districts: [
-          { name: 'Jihlava', context: null },
-          { name: 'Havlíčkův Brod', context: null },
+          { name: 'Jihlava', context: null, level: 'obec', id: 586846 },
+          { name: 'Havlíčkův Brod', context: null, level: 'obec', id: 568414 },
         ],
       }),
     ).toBe('byt+dum prodej · 2+kk, 2+1 · Jihlava, Havlíčkův Brod');

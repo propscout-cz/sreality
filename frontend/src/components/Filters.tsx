@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { Suspense, useRef } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import {
   type CenterRadius,
@@ -294,6 +294,10 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
   // already use. The adapter in lib/filters bridges both directions
   // (tri-state amenities pivot bool|null ↔ 'any'|'yes'|'no' inside it).
   const registryView = listingFiltersToRegistryView(filters);
+  // A location pick lands only after `/maps/resolve` answers, so it merges into
+  // the LATEST filters, never the ones the click closed over.
+  const latestFilters = useRef(filters);
+  latestFilters.current = filters;
   // The unit the Kč/m² bound is authored IN, resolved from the cohort the
   // operator is currently looking at. A cohort spanning bases has no single
   // unit, so the hint says so rather than picking one.
@@ -445,9 +449,10 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
               <LocationTypeahead
                 label="District"
                 value={filters.districts}
-                onChange={(next) =>
-                  onChange({ ...filters, districts: next ?? [] })
-                }
+                onChange={(next) => {
+                  latestFilters.current = { ...latestFilters.current, districts: next ?? [] };
+                  onChange(latestFilters.current);
+                }}
                 onPick={onLocationPick}
               />
             </Section>

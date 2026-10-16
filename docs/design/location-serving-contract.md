@@ -133,13 +133,14 @@ test. W3 S4 deleted it, the same way and for the same reason W2-b deleted `servi
 rail that nothing evaluates reads as enforcement and is not. A floor now lives where its consumer
 does, in the code that would violate it.
 
-Two survive as code, because they are the two that were ever reached:
+One survives as code, because it is the one that was ever reached:
 
 * **path C's town floor** — `obec`, any confidence — is `toolkit/dedup_candidates.PATHS["C"]`
   itself (`block_key="obec_kod"`, `district_key="cast_obce_kod"`). The path definition IS the floor:
   it cannot block on anything finer than the column it blocks on.
-* **the filter default** — operator action A5's `FILTER_DEFAULT_SEMANTICS = "include_and_badge"` —
-  is a constant in `api/location_filter.py`, next to the predicate it governs.
+* *(superseded 2026-10-02, operator ruling Q2)* operator action A5's filter default
+  `include_and_badge`: a chip is strict code equality at its level; the badge half was never built
+  and the unread constant was deleted with the street chip (migration 605).
 
 `dedup_rung_0a` / `dedup_tier_1` / `dedup_tier_2` described a dedup engine that does not exist: the
 2026-08 cutoff removed it wholesale and the rebuild is path C alone. `dedup_rung_0b` (building) and

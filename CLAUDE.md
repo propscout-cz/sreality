@@ -246,7 +246,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     (uncast = DEGREES). TWO producers write `location_claims`, both fingerprinted in SQL: the `claims_intake` lane
     (payload, page body, the text lane's reading) and `operator_corrections`; ONE four-step resolver writes the
     answer table; TWELVE claim types, ≤ 1 contract entry each, the `obec_name` entry mandatory and live; every
-    display is `location_display_label`, every place filter `<level>_id = any(codes)` at four levels. CONSUMERS
+    display is `location_display_label`, every place filter `<level>_id = any(codes)` at five levels. CONSUMERS
     (browse/map/feed/watchdog/dedup) serve a listing only when its location is resolved or determined foreign — ONE
     predicate (`claims_common.SERVED_LOCATION_PREDICATE`, mig 514); detail-by-id surfaces stay reachable. Invariant:
     **every served listing has a row, every active Czech listing has a town** (`location_town_coverage` red until

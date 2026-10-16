@@ -965,13 +965,14 @@ export interface PipelineBoardCard {
    * children. Distinguishes "observed twice, never moved" (0) from "moved and
    * came back" (>0) when total_price_change_pct is exactly 0. */
   price_change_count: number | null;
-  /* The four RÚIAN codes the ONE place predicate tests (W3 S3,
-   * lib/districtCodes) — the board filters its cards in the browser, so it
-   * carries the same codes the server-side predicate uses. `obec_id` doubles
-   * as the join key to the curated-city index strip
-   * (= curated_cities.admin_boundary_id; see lib/useCityQuality). */
+  /* The five RÚIAN codes the ONE place predicate tests (lib/districtCodes) —
+   * the board filters its cards in the browser, so it carries the same codes
+   * the server-side predicate uses. `obec_id` doubles as the join key to the
+   * curated-city index strip (= curated_cities.admin_boundary_id; see
+   * lib/useCityQuality). */
   obec_id: number | null;
   cast_obce_id: number | null;
+  ulice_id: number | null;
   okres_id: number | null;
   region_id: number | null;
   /* The municipality NAME, and the only place text left on a card (W3 S4,
@@ -1373,12 +1374,6 @@ export interface WatchdogSubscription {
    * in_app is always implicit. */
   channels: string[];
   dispatch_count: number;
-  /* Place chips this watchdog matches NOTHING on, by name (W3 S3). A chip is a
-   * level plus a RÚIAN code; one saved before codes existed is resolved by name
-   * at read time, and whatever the RÚIAN name index still cannot place is named
-   * here. Empty for every healthy filter — non-empty means this watchdog's
-   * place filter is dead, which is otherwise invisible until it stops firing. */
-  unresolved_places: string[];
 }
 
 /* Saved Browse filter preset (filter_presets table, migration 151).

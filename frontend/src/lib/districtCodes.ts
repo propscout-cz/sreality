@@ -1,4 +1,4 @@
-/* The ONE place predicate, browser side (W3 S3).
+/* The ONE place predicate, browser side.
  *
  * A location chip is a LEVEL plus a RÚIAN CODE, and every surface compiles it
  * the same way:
@@ -7,99 +7,55 @@
  *
  * plain equality per level, nothing else. This module owns that compilation for
  * the SPA; `api/location_filter.py` owns it for the API and the Watchdog; the
- * two RPC bodies (migration 504) own it in SQL. All three produce the same PLAN
- * for the same chips — `districtCodePlan` here and `district_code_plan` there
- * return the same object, and `tests/fixtures/district_chip_plan.json` is the
- * table both are tested against.
- *
- * WHAT IT REPLACES: five predicates (obec/okres/region equality, a `locality`
- * pair of obec-equality AND `place_search_text ILIKE`, and a legacy name
- * fallback ILIKE-ing across district/place_search_text/okres/region AND-ed with
- * an optional `context` narrow), written out six times across the SPA, the API
- * and two RPC bodies. `listing_location` (migration 501) answers every listing
- * with RÚIAN codes and migration 503 published them, so equality is now enough:
- * `browse_list.obec_id` / `okres_id` / `region_id` already WERE those codes
- * (`admin_boundaries.id` IS the RÚIAN code), and `cast_obce_id` is new.
- *
- * THE SENTINEL. A chip with no code — an old saved preset, or a name the RÚIAN
- * name index cannot place — compiles to `NO_MATCH_CODE` at the obec level.
- * RÚIAN codes are positive, so that arm is false for every row: an unresolvable
- * INCLUDE chip contributes nothing (fail CLOSED — a place filter that quietly
- * becomes "the whole country" is the failure that matters), an unresolvable
- * EXCLUDE chip subtracts nothing. No surface needs an "unmatched chip" branch. */
+ * two RPC bodies (latest: migration 605) own it in SQL. All three produce the
+ * same PLAN for the same chips — `districtCodePlan` here and
+ * `district_code_plan` there return the same object, and
+ * `tests/fixtures/district_chip_plan.json` is the table both are tested against.
+ * `browse_list.obec_id` / `okres_id` / `region_id` ARE RÚIAN codes
+ * (`admin_boundaries.id` IS the code); `cast_obce_id` (migration 503) and
+ * `ulice_id` (migration 584) are the two finer levels. */
 
 import type { DistrictChip, LocationLevel } from './filters';
 
-/* level → the code column, on every place-filterable relation: `browse_list`
- * and `properties_map_mv` (codes from `listing_location` since migration 503),
- * `properties_public` (the Watchdog) and `pipeline_board_public` (the board). */
-export const DISTRICT_LEVEL_COLUMN = {
+/* THE level list: level → the code column, on every place-filterable relation:
+ * `browse_list` and `properties_map_mv`, `properties_public` (the Watchdog),
+ * `listing_feed_public` and `pipeline_board_public` (the board). */
+const DISTRICT_LEVEL_COLUMN = {
   kraj: 'region_id',
   okres: 'okres_id',
   obec: 'obec_id',
   cast_obce: 'cast_obce_id',
-} as const;
-
-export type CodeLevel = keyof typeof DISTRICT_LEVEL_COLUMN;
+  ulice: 'ulice_id',
+} as const satisfies Record<LocationLevel, string>;
 
 /* Coarsest first, and DETERMINISTIC: the compiled predicate has to be
  * byte-stable so the SPA, the API and the RPC bodies can be diffed. */
-export const DISTRICT_LEVEL_ORDER: ReadonlyArray<CodeLevel> = [
-  'kraj', 'okres', 'obec', 'cast_obce',
+export const DISTRICT_LEVEL_ORDER: ReadonlyArray<LocationLevel> = [
+  'kraj', 'okres', 'obec', 'cast_obce', 'ulice',
 ];
 
-/* A street / address / POI pick has no code of its own; `/maps/resolve` stamps
- * it with its CONTAINING obec, so it filters at the obec level. The retired
- * half of that predicate was a `place_search_text` ILIKE; a street chip now
- * means its municipality, nothing narrower, until a street-grain code exists. */
-const LEVEL_ALIAS: Partial<Record<LocationLevel, CodeLevel>> = { locality: 'obec' };
+/* A level string from outside (a URL, a stored blob, an API answer). */
+export const isLocationLevel = (level: unknown): level is LocationLevel =>
+  (DISTRICT_LEVEL_ORDER as ReadonlyArray<unknown>).includes(level);
 
-/* Positive RÚIAN codes only, so this matches no row at any level. */
-export const NO_MATCH_CODE = -1;
-
-export const codeLevel = (level: LocationLevel | null | undefined): CodeLevel | null => {
-  if (level == null) return null;
-  if (level in DISTRICT_LEVEL_COLUMN) return level as CodeLevel;
-  return LEVEL_ALIAS[level] ?? null;
-};
-
-/* RÚIAN codes are positive. Anything else — a hand-typed `districts_id=-1` in a
- * URL, a stored 0 — is NOT a resolved chip, and must never be able to spell the
- * sentinel from outside. */
-export const isValidCode = (code: number | null | undefined): code is number =>
-  code != null && Number.isFinite(code) && code > 0;
-
-export interface DistrictCodePlan {
-  include: Partial<Record<CodeLevel, number[]>>;
-  exclude: Partial<Record<CodeLevel, number[]>>;
-  /* Names of chips that carried no code and fell back to the sentinel. */
-  unresolved: string[];
-}
+type CodesByLevel = Partial<Record<LocationLevel, number[]>>;
 
 export const districtCodePlan = (
   chips: ReadonlyArray<DistrictChip>,
-): DistrictCodePlan => {
-  const plan: DistrictCodePlan = { include: {}, exclude: {}, unresolved: [] };
+): { include: CodesByLevel; exclude: CodesByLevel } => {
+  const include: CodesByLevel = {};
+  const exclude: CodesByLevel = {};
   for (const chip of chips) {
-    let level = codeLevel(chip.level);
-    let code = chip.id ?? null;
-    if (level == null || !isValidCode(code)) {
-      level = 'obec';
-      code = NO_MATCH_CODE;
-      plan.unresolved.push(chip.name);
-    }
-    const side = chip.excluded === true ? plan.exclude : plan.include;
-    const codes = (side[level] ??= []);
-    if (!codes.includes(code)) codes.push(code);
+    const codes = ((chip.excluded === true ? exclude : include)[chip.level] ??= []);
+    if (!codes.includes(chip.id)) codes.push(chip.id);
   }
-  return plan;
+  return { include, exclude };
 };
 
-const levelsWithCodes = (
-  side: Partial<Record<CodeLevel, number[]>>,
-): CodeLevel[] => DISTRICT_LEVEL_ORDER.filter((l) => (side[l]?.length ?? 0) > 0);
+const levelsWithCodes = (side: CodesByLevel): LocationLevel[] =>
+  DISTRICT_LEVEL_ORDER.filter((l) => (side[l]?.length ?? 0) > 0);
 
-const includeArms = (side: Partial<Record<CodeLevel, number[]>>): string[] =>
+const includeArms = (side: CodesByLevel): string[] =>
   levelsWithCodes(side).map(
     (level) => `${DISTRICT_LEVEL_COLUMN[level]}.in.(${side[level]!.join(',')})`,
   );
@@ -112,7 +68,7 @@ const includeArms = (side: Partial<Record<CodeLevel, number[]>>): string[] =>
  * "did not match" — exactly what the RPC's `not exists(... case ...)` and the
  * in-memory `!hits` already do. Without it "not Prague" silently also meant
  * "and located", and the four renderings of one predicate disagreed. */
-const excludeArms = (side: Partial<Record<CodeLevel, number[]>>): string[] =>
+const excludeArms = (side: CodesByLevel): string[] =>
   levelsWithCodes(side).map((level) => {
     const col = DISTRICT_LEVEL_COLUMN[level];
     return `or(${col}.is.null,${col}.not.in.(${side[level]!.join(',')}))`;
@@ -143,6 +99,7 @@ export interface DistrictMatchRow {
   okres_id: number | null;
   region_id: number | null;
   cast_obce_id: number | null;
+  ulice_id: number | null;
 }
 
 export const matchesDistricts = (
@@ -151,7 +108,7 @@ export const matchesDistricts = (
 ): boolean => {
   if (!districts.length) return true;
   const plan = districtCodePlan(districts);
-  const hits = (side: Partial<Record<CodeLevel, number[]>>): boolean =>
+  const hits = (side: CodesByLevel): boolean =>
     DISTRICT_LEVEL_ORDER.some((level) => {
       const codes = side[level];
       if (!codes || !codes.length) return false;
@@ -164,25 +121,19 @@ export const matchesDistricts = (
 };
 
 /* Czech level names for the chip badge — a chip shows WHAT it selected, not
- * just a string, so "Žižkov" (část obce) reads differently from "Žižkov" the
- * POI that resolved to Praha. */
-export const DISTRICT_LEVEL_LABEL: Record<LocationLevel, string> = {
+ * just a string, so okres "Jihlava" reads differently from obec "Jihlava". */
+const DISTRICT_LEVEL_LABEL: Record<LocationLevel, string> = {
   kraj: 'Kraj',
   okres: 'Okres',
   obec: 'Obec',
   cast_obce: 'Část obce',
-  locality: 'Obec',
+  ulice: 'Ulice',
 };
 
 export const districtChipBadge = (chip: DistrictChip): string =>
-  chip.level != null && isValidCode(chip.id)
-    ? DISTRICT_LEVEL_LABEL[chip.level]
-    : 'Nerozpoznáno';
+  DISTRICT_LEVEL_LABEL[chip.level];
 
-/* Chip identity. A resolved chip IS its (level, code) — two picks that resolve
- * to the same unit are the same chip however Mapy spelled them; an unresolved
- * one falls back to name+context. Used for dedupe, remove and the React key. */
+/* Chip identity IS its (level, code) — two picks of the same unit are the same
+ * chip however Mapy spelled them. Used for dedupe, remove and the React key. */
 export const districtChipKey = (chip: DistrictChip): string =>
-  chip.level != null && isValidCode(chip.id)
-    ? `${chip.level}:${chip.id}`
-    : `name:${chip.name}::${chip.context ?? ''}`;
+  `${chip.level}:${chip.id}`;

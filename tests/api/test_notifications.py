@@ -13,11 +13,11 @@ import pytest
 
 pytest.importorskip("pydantic")
 
-from api.location_filter import NO_MATCH_CODE
+from pydantic import ValidationError
+
 from api.notifications import (
     WatchdogFilterSpec,
     _build_match_clauses,
-    _resolve_stored_chips,
 )
 
 
@@ -288,6 +288,7 @@ def test_build_clauses_place_chips_are_one_code_predicate() -> None:
             {"name": "okres Jihlava", "level": "okres", "id": 3707},
             {"name": "Kraj Vysočina", "level": "kraj", "id": 108},
             {"name": "Žižkov", "level": "cast_obce", "id": 490067},
+            {"name": "Na Rybníčkách", "context": "Pardubice", "level": "ulice", "id": 666742},
         ],
     )
     where, params = _build_match_clauses(spec)
@@ -296,19 +297,21 @@ def test_build_clauses_place_chips_are_one_code_predicate() -> None:
         "(l.region_id = ANY(%(district_codes_kraj)s) "
         "OR l.okres_id = ANY(%(district_codes_okres)s) "
         "OR l.obec_id = ANY(%(district_codes_obec)s) "
-        "OR l.cast_obce_id = ANY(%(district_codes_cast_obce)s))"
+        "OR l.cast_obce_id = ANY(%(district_codes_cast_obce)s) "
+        "OR l.ulice_id = ANY(%(district_codes_ulice)s))"
     )
     assert params["district_codes_obec"] == [586846]
     assert params["district_codes_okres"] == [3707]
     assert params["district_codes_kraj"] == [108]
     assert params["district_codes_cast_obce"] == [490067]
+    assert params["district_codes_ulice"] == [666742]
 
 
 def test_build_clauses_place_chips_read_no_text_column() -> None:
     spec = WatchdogFilterSpec(
         districts=[
-            {"name": "Pezinská", "level": "locality", "id": 535419},
-            {"name": "Brno", "context": "Jihomoravský kraj"},
+            {"name": "Na Rybníčkách", "context": "Pardubice", "level": "ulice", "id": 666742},
+            {"name": "Brno", "context": None, "level": "obec", "id": 582786},
         ],
     )
     where, _params = _build_match_clauses(spec)
@@ -319,17 +322,15 @@ def test_build_clauses_place_chips_read_no_text_column() -> None:
         assert "'%'" not in clause
 
 
-def test_build_clauses_locality_chip_filters_at_its_containing_obec() -> None:
-    """A street / POI pick carries the obec that contains it, and that is the
-    whole predicate now — the `place_search_text ILIKE` half is gone with the
-    column it read."""
+def test_build_clauses_a_street_chip_filters_at_its_street_never_its_town() -> None:
     spec = WatchdogFilterSpec(
-        districts=[{"name": "Edvarda Beneše", "level": "locality", "id": 554791}],
+        districts=[{"name": "Na Rybníčkách", "context": "Pardubice", "level": "ulice", "id": 666742}],
     )
     where, params = _build_match_clauses(spec)
     clause = next(w for w in where if "district_codes" in w)
-    assert clause == "(l.obec_id = ANY(%(district_codes_obec)s))"
-    assert params["district_codes_obec"] == [554791]
+    assert clause == "(l.ulice_id = ANY(%(district_codes_ulice)s))"
+    assert params["district_codes_ulice"] == [666742]
+    assert "district_codes_obec" not in params
 
 
 def test_build_clauses_excluded_chip_is_negated() -> None:
@@ -362,100 +363,49 @@ def test_build_clauses_mixed_include_exclude() -> None:
     assert params["district_codes_excl_cast_obce"] == [490017]
 
 
-def test_build_clauses_a_chip_with_no_code_matches_nothing() -> None:
-    """A stored chip the name index could not place must not widen the cohort:
-    a watchdog whose place filter quietly became "the whole country" mails the
-    operator about the whole country. The sentinel is negative and RÚIAN codes
-    are not, so the arm is false for every row."""
-    spec = WatchdogFilterSpec(districts=[{"name": "Brno", "context": None}])
-    where, params = _build_match_clauses(spec)
-    clause = next(w for w in where if "district_codes" in w)
-    assert clause == "(l.obec_id = ANY(%(district_codes_obec)s))"
-    assert params["district_codes_obec"] == [NO_MATCH_CODE]
-    assert NO_MATCH_CODE < 0
+@pytest.mark.parametrize("chips", [
+    [{"name": "Brno", "context": None}],
+    ["Praha"],
+    [{"name": "Lipová", "context": "Praha", "level": "locality", "id": 554782}],
+    [{"name": "Praha", "level": "obec", "id": -1}],
+    [{"name": "Praha", "level": "obec", "id": 554782}, {"name": "Jihlava"}],
+], ids=["name only", "legacy string", "stale locality", "the old sentinel", "one bad of two"])
+def test_a_spec_with_a_chip_without_a_code_is_refused(chips) -> None:
+    """A chip is its (level, code) or nothing: a watchdog that silently matched
+    nothing (the old sentinel) or the whole country (a widened guess) is no
+    longer expressible, so it never reaches the matcher."""
+    with pytest.raises(ValidationError):
+        WatchdogFilterSpec(districts=chips)
 
 
-def test_match_once_resolves_stored_name_only_chips_before_matching() -> None:
-    """The compatibility reader runs INSIDE the matcher, not in a migration.
+@pytest.mark.parametrize("method,path", [
+    ("post", "/notifications/subscriptions"),
+    ("put", "/notifications/subscriptions/46a6005f-dc32-4d94-9ced-4d262b57ef6b"),
+])
+def test_the_routes_answer_a_chip_without_a_code_with_a_422(method, path, monkeypatch) -> None:
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
 
-    A watchdog saved before chips carried codes keeps working: its names are
-    resolved once, at read time, against the RÚIAN name index — the same index
-    `/maps/resolve-names` serves the SPA from, so Browse and the matcher read
-    one saved filter the same way (rule 16). The stored blob is untouched."""
-    from unittest.mock import patch
+    from api import main as api_main
+    from api import notifications as nf
+    from api import tenant_pool
 
-    spec = WatchdogFilterSpec(districts=[{"name": "Jihlava", "context": None}])
-    with patch(
-        "api.maps.resolve_names",
-        return_value={("Jihlava", None): [("obec", 586846), ("okres", 3707)]},
-    ):
-        _resolve_stored_chips(object(), spec, "test")
-    assert [(c.level, c.id) for c in spec.districts] == [
-        ("obec", 586846), ("okres", 3707),
-    ]
-    _where, params = _build_match_clauses(spec)
-    assert params["district_codes_obec"] == [586846]
-    assert params["district_codes_okres"] == [3707]
+    def never(*_a: Any, **_kw: Any) -> None:
+        raise AssertionError("a refused spec must not be written")
 
-
-def test_a_dead_place_filter_is_visible_without_opening_the_watchdog() -> None:
-    """`unresolved_places` runs the SAME read-time upgrade the matcher runs, so
-    it names only the chips that really match nothing.
-
-    A watchdog whose place filter is dead does not error — it goes quiet, which
-    reads exactly like a quiet market. The list endpoint says so instead."""
-    from unittest.mock import patch
-
-    from api.notifications import unresolved_places
-
-    spec = {
-        "districts": [
-            {"name": "Praha", "level": "obec", "id": 554782},  # healthy
-            {"name": "Jihlava"},                               # resolvable by name
-            {"name": "U Kulaťáku"},                            # not in the index
-        ]
-    }
-    with patch(
-        "api.maps.resolve_names",
-        return_value={("Jihlava", None): [("obec", 586846)]},
-    ):
-        assert unresolved_places(object(), spec) == ["U Kulaťáku"]
-
-
-def test_a_healthy_place_filter_says_nothing() -> None:
-    from api.notifications import unresolved_places
-
-    spec = {"districts": [{"name": "Praha", "level": "obec", "id": 554782}]}
-    # No chip needs upgrading, so no resolver call is made at all.
-    assert unresolved_places(object(), spec) == []
-    assert unresolved_places(object(), {}) == []
-    assert unresolved_places(object(), None) == []
-
-
-def test_one_malformed_chip_does_not_break_the_list() -> None:
-    """A list endpoint must survive a blob the matcher would reject."""
-    from unittest.mock import patch
-
-    from api.notifications import unresolved_places
-
-    spec = {"districts": [{"level": "obec"}, 42, {"name": "Brno"}]}
-    with patch("api.maps.resolve_names", return_value={}):
-        assert unresolved_places(object(), spec) == ["Brno"]
-
-
-def test_filter_spec_lifts_legacy_string_districts() -> None:
-    """Pre-migration-070 request bodies passing `districts: ["Praha"]`
-    still validate — the field_validator lifts each string to a
-    `{name, context: None}` chip so the matcher only sees the new
-    shape. Covers the deploy window between the API redeploy and the
-    backfill running."""
-    spec = WatchdogFilterSpec(districts=["Praha", "okres Jihlava"])
-    assert spec.districts is not None
-    assert len(spec.districts) == 2
-    assert spec.districts[0].name == "Praha"
-    assert spec.districts[0].context is None
-    assert spec.districts[1].name == "okres Jihlava"
-    assert spec.districts[1].context is None
+    monkeypatch.setattr(nf, "create_subscription", never)
+    monkeypatch.setattr(nf, "update_subscription", never)
+    api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
+    api_main.app.dependency_overrides[tenant_pool.require_account_id] = (
+        lambda: UUID("11111111-1111-1111-1111-111111111111")
+    )
+    try:
+        body = {"name": "x", "filter_spec": {"districts": [{"name": "Brno", "context": None}]}}
+        res = getattr(TestClient(api_main.app), method)(path, json=body)
+    finally:
+        api_main.app.dependency_overrides.clear()
+    assert res.status_code == 422, res.text
+    assert "districts" in res.text
 
 
 def test_build_clauses_enumerated_columns() -> None:
@@ -660,6 +610,25 @@ def test_matcher_lease_cas_acquires_and_yields() -> None:
     assert _try_matcher_lease(held, "matcher:me") is False
 
 
+def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> None:
+    """Fail CLOSED: a stored row the model now refuses is counted as failed and
+    dispatches nothing — never a cohort widened to the whole country. Migration
+    606 deleted the last such rows; this is the rail if one ever reappears."""
+    sub_id = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
+    conn = _FakeConn([
+        (lambda s: "FROM app_settings" in s, [], 0),
+        (
+            lambda s: "FROM notification_subscriptions WHERE is_active" in s,
+            [(sub_id, {"districts": [{"name": "Jihlava"}]}, None, ["in_app"])],
+            1,
+        ),
+    ])
+    stats = match_once(conn)  # type: ignore[arg-type]
+    assert stats["subscriptions_failed"] == 1
+    assert stats["matches_inserted"] == 0
+    assert not [sql for sql, _ in conn.executed if "INSERT INTO notification_dispatches" in sql]
+
+
 def test_match_once_uses_per_subscription_cursor() -> None:
     """The matcher reads `last_matched_first_seen_at` per subscription
     and injects it as the `cursor` clause — proves the per-subscription
@@ -674,7 +643,9 @@ def test_match_once_uses_per_subscription_cursor() -> None:
         # Active subscriptions query
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {"category_main": "byt", "category_type": "pronajem", "districts": ["Praha"]}, cursor_ts, ["email", "in_app"])],
+            [(sub_id, {"category_main": "byt", "category_type": "pronajem",
+                       "districts": [{"name": "Praha", "level": "obec", "id": 554782}]},
+              cursor_ts, ["email", "in_app"])],
             1,
         ),
         # Window upper-bound query (first_seen_at-keyed; the publication gate is gone)
@@ -715,16 +686,12 @@ def test_match_once_uses_per_subscription_cursor() -> None:
     assert "l.first_seen_at > %(cursor)s" in sql
     assert isinstance(params, dict) and params["cursor"] == cursor_ts
 
-    # And that the filter spec made it through too. The stored chip is a legacy
-    # STRING, lifted to a chip by `_lift_legacy_districts` and then run through
-    # the read-time name upgrade; this fake connection resolves no name, so it
-    # compiles to the sentinel that matches nothing (fail closed) rather than to
-    # a cohort-widening no-op.
-    # The stored spec carries a legacy scalar category_main; the before-validator
-    # lifts it to category_main_in and the matcher emits an = ANY membership.
+    # And that the filter spec made it through too. The stored spec carries a
+    # legacy scalar category_main; the before-validator lifts it to
+    # category_main_in and the matcher emits an = ANY membership.
     assert params["category_main_in"] == ["byt"]
     assert params["category_type"] == "pronajem"
-    assert params["district_codes_obec"] == [NO_MATCH_CODE]
+    assert params["district_codes_obec"] == [554782]
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql
 
     # The 'new' dispatch INSERT writes the unified event shape: source_kind,
