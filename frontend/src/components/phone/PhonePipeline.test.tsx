@@ -217,7 +217,8 @@ describe('phone pipeline', () => {
     /* The header's title and count are the phone frame's. */
     const header = screen.getByRole('banner');
     expect(within(header).getByRole('heading', { name: 'Pipeline' })).toBeInTheDocument();
-    expect(within(header).getByText(/^3\s+karty$/)).toBeInTheDocument();
+    /* The aside is set by an effect after the pages render, so it is awaited. */
+    expect(await within(header).findByText(/^3\s+karty$/)).toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: 'Spravovat fáze' })).toBeNull();
     expect(screen.queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();
