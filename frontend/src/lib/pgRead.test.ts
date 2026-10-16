@@ -138,23 +138,30 @@ describe('pgRead — failures are ApiErrors the one retry rule can read', () => 
   });
 });
 
+/* The 20 s deadline runs 1000x faster here. */
+const fastDeadline = () => {
+  const real = AbortSignal.timeout.bind(AbortSignal);
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => real(ms / 1000));
+};
+
 describe('pgRead — deadline and abort', () => {
   it('fails a stalled read at its deadline, not phrased as a statement timeout', async () => {
+    fastDeadline();
     stubFetch(hang);
-    const err = await pgRead(supabase.from('t').select('id'), { deadlineMs: 20 }).catch(
-      (e: unknown) => e,
-    );
+    const err = await pgRead(supabase.from('t').select('id')).catch((e: unknown) => e);
     expect(err).toMatchObject({ name: 'ApiError', kind: 'timeout', status: 0 });
     expect((err as Error).message).not.toMatch(/statement timeout|57014/i);
     expect(isTransientApiError(err)).toBe(false);
   });
 
   it('bounds the token acquisition that runs before fetch, too', async () => {
+    fastDeadline();
     vi.spyOn(supabase.auth, 'getSession').mockReturnValue(new Promise(() => {}));
     const f = stubFetch(async () => reply(200, []));
-    await expect(
-      pgRead(supabase.from('t').select('id'), { deadlineMs: 20 }),
-    ).rejects.toMatchObject({ name: 'ApiError', kind: 'timeout' });
+    await expect(pgRead(supabase.from('t').select('id'))).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'timeout',
+    });
     expect(f).not.toHaveBeenCalled();
   });
 

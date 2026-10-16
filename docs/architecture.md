@@ -543,7 +543,7 @@ match of the register are on screen; and the headline median holds out the 0–3
 Kč/m² is a denominator defect rather than a market fact. The reas.cz and Cenová-mapa outbound chips both stay beside it: the
 table holds only reas.cz's anonymous 24-month window. Waves and sequencing: `roadmap/sold-comps.md`.
 
-### Reference overlays — metro, flood zones, kraje (migration 600; spec `docs/design/map-overlays.md`)
+### Reference overlays — metro, flood zones, kraje, universities (migration 600; spec `docs/design/map-overlays.md`)
 
 Static geometry from outside publishers, drawn as toggleable map layers. ONE path: a Python registry
 in `scripts/ingest_map_overlays.py` (sections → layers, each with its legend, note, attribution and
@@ -558,8 +558,12 @@ frontend code. The four tables are a MIRROR (rules 10/11's class): service-role 
 quarterly `ingest_map_overlays.yml` (dispatch `--sections kraje` after a boundaries ingest).
 Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
 reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
-it — and named stations, in service and planned; CC BY) and the VÚV TGM / MŽP national flood-zone register
-(Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly). Two facts the ingest enforces: the VÚV
+it — and named stations, in service and planned; CC BY), the VÚV TGM / MŽP national flood-zone register
+(Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly) and, since 2026-10-16, IPR's planning-analysis layer
+of Prague's 289 university sites (`universities` section: teaching and service sites in one toggle, dorms in
+another; a site is PRIMARY and labelled when MŠMT's F21 table counts 2 000+ present-form students at it,
+through the ingest's curated faculty → site table `UNIVERSITY_SEATS`; the F21 workbook is read live each
+run). Two facts the ingest enforces: the VÚV
 service is fetched in its NATIVE S-JTSK (its own WGS84 output applies a 3-parameter datum shift about
 10 m off; a PID stop with both coordinate systems is the control point, > 1 m fails the run), and a
 layer is replaced only when every requested id came back and the count holds (≥ 90 % of the previous

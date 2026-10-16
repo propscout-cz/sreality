@@ -13,6 +13,8 @@ rent-map ingest (api/rent_map.py) re-renders `rent_map` with it inside its own t
 from __future__ import annotations
 
 import argparse
+import functools
+import io
 import itertools
 import json
 import logging
@@ -20,8 +22,9 @@ import re
 import sys
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from typing import Any, Literal
 
@@ -55,6 +58,8 @@ POINT = "esriGeometryPoint"
 
 IPR_HOSTED = "https://mp.iprpraha.cz/arcgis/rest/services/Hosted"
 IPR_REFERENCED = "https://mp.iprpraha.cz/arcgis/rest/services/ReferencedServices"
+IPR_UNIVERSITIES = "FSV_CUR_OV_SKOLYVS_B"
+MSMT_F21_URL = "https://dsia.msmt.cz/vystupy/f2/f21.xlsx"
 VUV_MAPSERVER = "https://ags2.vuv.cz/arcgis/rest/services/isvs_voda/isvs_voda/MapServer"
 VUV_ISO_RECORD = "https://heis.vuv.cz/xmicka/record/xml/CZ-VUV-MD-ZaplavUzemi"
 RUIAN_ATOM = (
@@ -269,7 +274,7 @@ class Layer:
     label: str
     sort: int
     legend: tuple[dict[str, Any], ...]
-    readers: tuple[ArcGisLayer | SqlSource, ...]
+    readers: tuple[ArcGisLayer | SqlSource | UniversitySites, ...]
     store: Literal["plain", "whole", "dissolve", "outline"] = "plain"
     scale: dict[str, Any] | None = None
     variants: tuple[dict[str, Any], ...] | None = None
@@ -503,6 +508,168 @@ def metro_existing_station_props(a: dict[str, Any]) -> dict[str, Any] | None:
     return _flat({"class": letter, "name": name, "label": name.removeprefix(STATION_PREFIX)})
 
 
+# --- universities: IPR's sites, classed by the students MŠMT counts there -----------------
+
+UNIVERSITY_FIELDS = ("id_zar", "nazev_zar", "typ_uap")
+TEACHING_SITES_WHERE = "typ_uap in ('02_01','02_02')"
+DORMS_WHERE = "typ_uap = '02_03'"
+PRIMARY_STUDENTS = 2_000
+
+# Where each Prague faculty's students study: MŠMT's F21 school/faculty code(s) → the IPR site
+# (id_zar) of its main teaching building, and the label the site wears when it is primary. A
+# faculty seated outside Prague (ČVUT FBMI in Kladno, VŠE FM in Jindřichův Hradec, UK's Plzeň
+# and Hradec faculties) has no site here; a school seated outside Prague (ŠKODA AUTO VŠ) is a
+# secondary site like any unmapped one; a private school's count is the whole school's.
+UNIVERSITY_SEATS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
+    ("FF UK", 280001, ("11210",)),
+    ("FSV UK", 280020, ("11230",)),
+    ("PedF UK", 280014, ("11410",)),
+    ("PřF UK", 280056, ("11310",)),
+    ("1. LF UK", 280028, ("11110",)),
+    ("PF UK", 280013, ("11220",)),
+    ("MFF UK", 280081, ("11320",)),
+    ("FHS UK", 280303, ("11240",)),
+    ("3. LF UK", 280046, ("11120",)),
+    ("2. LF UK", 280040, ("11130",)),
+    ("FTVS UK", 280068, ("11510",)),
+    ("KTF UK", 280086, ("11260",)),
+    ("ETF UK", 280087, ("11270",)),
+    ("HTF UK", 280088, ("11280",)),
+    ("FSv ČVUT", 270118, ("21110",)),
+    ("FS ČVUT", 270081, ("21220",)),
+    ("FEL ČVUT", 270085, ("21230",)),
+    ("FIT + FA ČVUT", 270203, ("21240", "21450")),
+    ("FD ČVUT", 270130, ("21260",)),
+    ("FJFI ČVUT", 270111, ("21340",)),
+    ("MÚVS ČVUT", 270205, ("21900",)),
+    ("VŠCHT", 210001, ("22310", "22320", "22330", "22340", "22900")),
+    ("VŠE", 220001, ("31110", "31120", "31130", "31140", "31150")),
+    ("PEF ČZU", 260006, ("41110",)),
+    ("FAPPZ ČZU", 260003, ("41210",)),
+    ("TF ČZU", 260025, ("41310",)),
+    ("FLD + FŽP ČZU", 260104, ("41320", "41330")),
+    ("FTZ ČZU", 260103, ("41340",)),
+    ("HAMU", 250007, ("51110",)),
+    ("DAMU", 250002, ("51210",)),
+    ("FAMU", 250004, ("51310",)),
+    ("AVU", 240001, ("52000",)),
+    ("UMPRUM", 200001, ("53000",)),
+    ("AMBIS", 10001, ("61000",)),
+    ("UCP", 20001, ("63000",)),
+    ("UNYP", 160001, ("6D000",)),
+    ("Palestra", 190001, ("6P000",)),
+    ("VŠZ", 370001, ("6S000",)),
+    ("AAU", 120001, ("6U000",)),
+    ("MUP", 300101, ("75000",)),
+    ("PVŠPS", 130001, ("79000",)),
+    ("CEVRO", 350001, ("7D000",)),
+    ("Unicorn", 340101, ("7E000",)),
+    ("Archip", 380001, ("7M000",)),
+    ("ADI", 390001, ("7R000",)),
+    ("PEUNI", 170002, ("7S000",)),
+    ("VŠKK", 360001, ("7T000",)),
+    ("VŠFS", 30003, ("7U000",)),
+    ("VŠEM", 150001, ("7V000",)),
+)
+
+_XLSX_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_XLSX_REL_ID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+_XLSX_RELATIONSHIP = "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+_F21_CODE = re.compile(r"[0-9A-Z]{5}")
+_F21_COUNT = re.compile(r"\d+(\.0+)?")
+
+
+def _xlsx_rows(sheet: bytes, shared: list[str]) -> Iterator[dict[str, str]]:
+    """Each row of a worksheet as {column letters: cell text}."""
+    for row in ET.fromstring(sheet).iter(f"{_XLSX_MAIN}row"):
+        cells: dict[str, str] = {}
+        for cell in row.iter(f"{_XLSX_MAIN}c"):
+            value = cell.find(f"{_XLSX_MAIN}v")
+            if value is None or value.text is None:
+                continue
+            column = "".join(ch for ch in cell.get("r", "") if ch.isalpha())
+            cells[column] = shared[int(value.text)] if cell.get("t") == "s" else value.text
+        yield cells
+
+
+def parse_f21(document: bytes) -> tuple[int, dict[str, int]]:
+    """MŠMT's F21 workbook (students by school and faculty, one sheet per year): the latest
+    year and {code: students in present-form study}. Column B is the code, H that total."""
+    with zipfile.ZipFile(io.BytesIO(document)) as book:
+        targets = {rel.get("Id"): str(rel.get("Target")) for rel in
+                   ET.fromstring(book.read("xl/_rels/workbook.xml.rels")).iter(_XLSX_RELATIONSHIP)}
+        sheets = {int(str(sheet.get("name"))): targets[str(sheet.get(_XLSX_REL_ID))]
+                  for sheet in ET.fromstring(book.read("xl/workbook.xml")).iter(f"{_XLSX_MAIN}sheet")
+                  if str(sheet.get("name")).isdigit()}
+        if not sheets:
+            raise Refused(f"{MSMT_F21_URL}: no sheet named by a year")
+        year = max(sheets)
+        shared = ["".join(t.text or "" for t in si.iter(f"{_XLSX_MAIN}t")) for si in
+                  ET.fromstring(book.read("xl/sharedStrings.xml")).iter(f"{_XLSX_MAIN}si")]
+        rows = list(_xlsx_rows(book.read("xl/" + sheets[year].removeprefix("/xl/")), shared))
+    students = {row["B"]: int(float(row["H"])) for row in rows
+                if _F21_CODE.fullmatch(row.get("B", "")) and _F21_COUNT.fullmatch(row.get("H", ""))}
+    if not students:
+        raise Refused(f"{MSMT_F21_URL}: sheet {year} holds no code/count rows")
+    return year, students
+
+
+def students_on_site(students: dict[str, int]) -> dict[int, tuple[str, int]]:
+    """Each curated site's label and present-form students (its faculties summed). A code the
+    table no longer carries refuses the run: a stale join is never a silently smaller campus."""
+    on_site: dict[int, tuple[str, int]] = {}
+    for label, id_zar, codes in UNIVERSITY_SEATS:
+        missing = [code for code in codes if code not in students]
+        if missing:
+            raise Refused(f"MŠMT F21 lacks code(s) {missing} for {label!r}")
+        on_site[id_zar] = (label, sum(students[code] for code in codes))
+    return on_site
+
+
+def _site_name(a: dict[str, Any], kinds: tuple[str, ...]) -> str:
+    name = re.sub(r"\s+", " ", a.get("nazev_zar") or "").strip()
+    if a.get("typ_uap") not in kinds or not name:
+        raise Refused(f"university site outside typ_uap {kinds} or unnamed: {a!r}")
+    return name
+
+
+def university_site_props(on_site: dict[int, tuple[str, int]], a: dict[str, Any]) -> dict[str, Any]:
+    """A teaching (02_01) or service (02_02) site: primary and labelled when PRIMARY_STUDENTS
+    or more study there by MŠMT's count, secondary otherwise."""
+    name = _site_name(a, ("02_01", "02_02"))
+    seat = on_site.get(a.get("id_zar"))
+    if seat is None or seat[1] < PRIMARY_STUDENTS:
+        return {"class": "secondary", "name": name}
+    return {"class": "primary", "name": name, "label": seat[0]}
+
+
+def dorm_props(a: dict[str, Any]) -> dict[str, Any]:
+    return {"class": "dorm", "name": _site_name(a, ("02_03",))}
+
+
+@dataclass(frozen=True)
+class UniversitySites:
+    """IPR's university teaching and service sites, classed by the students MŠMT counts there:
+    the F21 workbook is read once, its counts bound into the props mapper, then the ArcGIS
+    pager runs as for any layer. A primary seat that matched no IPR point refuses the run."""
+    where: str
+
+    def read(self, ctx: Context) -> Iterator[Feature]:
+        year, students = parse_f21(ctx.http.content(MSMT_F21_URL))
+        on_site = students_on_site(students)
+        primary = {label for label, count in on_site.values() if count >= PRIMARY_STUDENTS}
+        LOG.info("MSMT F21 year=%d codes=%d sites=%d primary=%d: %s",
+                 year, len(students), len(on_site), len(primary), ", ".join(sorted(primary)))
+        sites = _ipr(IPR_UNIVERSITIES, self.where, POINT,
+                     functools.partial(university_site_props, on_site), UNIVERSITY_FIELDS)
+        labelled: set[str] = set()
+        for feature in ctx.arcgis.features(sites):
+            labelled.add(feature.props.get("label", ""))
+            yield feature
+        if missing := primary - labelled:
+            raise Refused(f"primary site(s) without an IPR point: {sorted(missing)}")
+
+
 def flood_props(cls: str) -> Props:
     def props(a: dict[str, Any]) -> dict[str, Any] | None:
         return _flat({"class": cls, "name": (a.get("NAZ_TOK") or "").strip() or None})
@@ -582,9 +749,9 @@ def _entry(cls: str, label: str, color: str, *, dash: bool = False,
             **({"dash": True} if dash else {}), **({"geom": geom} if geom else {})}
 
 
-def _ipr(service: str, where: str, geometry_type: str, props: Props,
-         fields: tuple[str, ...]) -> ArcGisLayer:
-    return ArcGisLayer(f"{IPR_HOSTED}/{service}/FeatureServer", service, where, 3857,
+def _ipr(service: str, where: str, geometry_type: str, props: Props, fields: tuple[str, ...],
+         *, base: str = IPR_HOSTED, out_sr: int = 3857) -> ArcGisLayer:
+    return ArcGisLayer(f"{base}/{service}/FeatureServer", service, where, out_sr,
                        props, geometry_type, fields)
 
 
@@ -625,9 +792,8 @@ SOURCES: dict[str, Section] = {
                     # Stations in service, named, with their line letter: the plan's own
                     # existing-station points carry no names. Native S-JTSK, like the flood
                     # register: this server's WGS84 output is the same ~10 m datum shift off.
-                    ArcGisLayer(f"{IPR_REFERENCED}/DOP_MetroZarizeni_b/FeatureServer",
-                                "DOP_MetroZarizeni_b", "DRUH=1", 5514,
-                                metro_existing_station_props, POINT, ("DRUH", "NAZEV", "TRASA")),
+                    _ipr("DOP_MetroZarizeni_b", "DRUH=1", POINT, metro_existing_station_props,
+                         ("DRUH", "NAZEV", "TRASA"), base=IPR_REFERENCED, out_sr=5514),
                 ),
             ),
         ),
@@ -663,6 +829,31 @@ SOURCES: dict[str, Section] = {
         layers=(
             Layer("kraje", "Kraje", 1, (_entry("kraj", "Hranice krajů", "rgba(40,40,70,0.55)", geom="line"),),
                   (SqlSource(KRAJE_SQL),)),
+        ),
+    ),
+    # Prague's university sites from IPR's planning-analysis layer, each teaching or service
+    # site classed by the present-form students MŠMT counts there (UNIVERSITY_SEATS); dorms a
+    # toggle of their own. From z9 like the metro: Browse's whole-of-Prague view sits just
+    # under z10 in the split view's map column, and MapLibre loads no tile below a source's
+    # minzoom (the chip then says "Přibližte mapu").
+    "universities": Section(
+        label="Vysoké školy", sort=4, minzoom=9, maxzoom=12,
+        attribution="datový podklad © IPR Praha; počty studentů MŠMT", licence="CC BY 4.0 (IPR Praha)",
+        source_url=f"{IPR_HOSTED}/{IPR_UNIVERSITIES}/FeatureServer",
+        note="Místa vysokých škol v Praze podle ÚAP IPR Praha. Hlavní místo výuky = budova "
+             "fakulty nebo školy, kde podle MŠMT (SIMS, poslední zveřejněný rok) studuje 2 000 "
+             "a více studentů prezenčního studia; u škol s pobočkami mimo Prahu jde o počet za "
+             "celou školu. Další pracoviště: ostatní budovy, kliniky, rektoráty, menzy, "
+             "sportoviště.",
+        revised_at=arcgis_revised_at,
+        layers=(
+            Layer("universities", "Výuka a pracoviště", 1,
+                  legend=(_entry("primary", "Hlavní místo výuky (2 000+ studentů)", "#5E35B1",
+                                 geom="point"),
+                          _entry("secondary", "Další pracoviště VŠ", "#B39DDB", geom="point")),
+                  readers=(UniversitySites(TEACHING_SITES_WHERE),)),
+            Layer("dorms", "Koleje", 2, legend=(_entry("dorm", "Kolej", "#F57C00", geom="point"),),
+                  readers=(_ipr(IPR_UNIVERSITIES, DORMS_WHERE, POINT, dorm_props, UNIVERSITY_FIELDS),)),
         ),
     ),
     # The choropleth the Browse map drew from rent_map_choropleth_public until migration 601:

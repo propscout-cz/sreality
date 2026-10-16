@@ -291,7 +291,7 @@ const HIDING_DISMISSED: Record<string, string> = {
 };
 
 interface CountOption {
-  count?: 'exact' | 'planned';
+  count?: 'exact';
   head?: boolean;
 }
 
@@ -972,71 +972,34 @@ export const fetchListingsForTable = async (
   };
 };
 
-export interface CohortCount {
-  /* The cohort size — exact when an exact count fit the budget, otherwise the
-   * query planner's estimate. */
-  value: number;
-  /* False when `value` is the planner estimate (the exact count would exceed
-   * the anon statement_timeout). The UI renders an approximate value as "~N". */
-  precise: boolean;
-}
-
-/* The ONE cohort total — header, tab badge, and the infinite-scroll progress
- * labels. EXACT FIRST on the compact browse_list read model: a one-category
- * exact count is an index-only scan (measured 201 ms fully cold for the
- * broadest single cohort — 68k rows, zero heap fetches); a cohort with no
- * category is a sequential scan (~2.4 s cold, 2026-10-13), so precision is the
- * norm, not the exception. The pre-read-model planner-estimate-first
- * hybrid existed because an exact count on the churned live table could not
- * finish under the anon 3s budget; that constraint is gone. `count=planned`
- * stays as the graceful FALLBACK when the exact count exceeds the abort budget
- * (a pathological filter combination or a saturated instance) — rendered as
- * "~N". The planned estimate depends on the rebuild's ANALYZE-before-swap
- * (pinned by tests/test_browse_read_path_guardrail.py). Shares the exact
- * filter chain (resolveBrowsePrefilters + applyFilters) with the Table/Cards
- * fetchers, so the total can never disagree with the listed rows. */
-const EXACT_COUNT_BUDGET_MS = 2500;
+/* The ONE cohort total — header, tab badge, the cards/table "of N" labels and
+ * the map pill's denominator: PostgREST's exact count (a HEAD with
+ * `count=exact`) over the same filter chain (resolveBrowsePrefilters +
+ * applyFilters) the Table/Cards fetchers read, so the total can never disagree
+ * with the listed rows. Exact or nothing: the planner-estimate fallback of
+ * 2026-10-13 answered a slow count with a figure that could sit below the
+ * cards already on screen ("72 of ~15", 2026-10-16), so it is gone — a slow
+ * count shows as loading, a failed one as the header's error with its retry.
+ * Cost on the compact browse_list read model (2026-10-16, cold cache): 226 ms
+ * market-wide (index-only), ~3 s for a one-category cohort with price and
+ * disposition predicates (heap filter over 177k rows), ~1.4 s for a
+ * no-category seq scan — all under the 8 s statement_timeout. */
 export const fetchBrowseCount = async (
   f: ListingFilters,
   { signal }: PgReadOptions = {},
-): Promise<CohortCount> => {
+): Promise<number> => {
   const pre = await resolveBrowsePrefilters(f, signal);
-  if (pre.empty) return { value: 0, precise: true };
-  /* The estimate reads the PLAIN relation, never the dismissal-aware function:
-   * PostgREST plans a count only for a table or view, so a function call answers
-   * `Content-Range: 0-N/*` and the client parses the `*` to NaN (the "~NaN"
-   * header, 2026-09-25). The plain relation also counts dismissed properties;
-   * the "~" already says the figure is not exact. */
-  const build = (mode: 'exact' | 'planned') =>
+  if (pre.empty) return 0;
+  const { count } = await pgRead(
     applyPrefilters(
-      applyFilters(
-        listSource(
-          mode === 'planned' ? { ...f, showDismissed: true } : f,
-          'property_id',
-          { count: mode, head: true },
-        ),
-        f,
-      ),
+      applyFilters(listSource(f, 'property_id', { count: 'exact', head: true }), f),
       pre,
-    );
-  try {
-    const { count } = await pgRead(build('exact'), { signal, deadlineMs: EXACT_COUNT_BUDGET_MS });
-    if (count != null && Number.isFinite(count)) return { value: count, precise: true };
-  } catch (e) {
-    /* Only our 2.5 s client budget earns the estimate. The server's 57014
-     * cannot: a count is a HEAD, whose error has no body, so it arrives as a
-     * plain 500 (harmless while the 8 s statement_timeout outlasts the budget).
-     * Anything else (a 400 filter, a revoked grant, a caller abort) is not
-     * "too slow", and answering it with a different relation's estimate would
-     * hide it. */
-    if (!(e instanceof ApiError && e.kind === 'timeout')) throw e;
-  }
-  const { count: estimate } = await pgRead(build('planned'), { signal });
+    ),
+    { signal },
+  );
   /* No number is an error the header shows as one (dimmed + retry), never a NaN. */
-  if (estimate == null || !Number.isFinite(estimate)) {
-    throw new Error('Browse count unavailable: no exact count within budget and no estimate');
-  }
-  return { value: estimate, precise: estimate === 0 };
+  if (count == null || !Number.isFinite(count)) throw new Error('Browse count unavailable');
+  return count;
 };
 
 /* -------------------------------------------------------------------------- */

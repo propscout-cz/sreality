@@ -54,6 +54,12 @@ of the analytical and UI phases; runs alongside them.
   fourth reader on the `metro` layer, IPR's named `ReferencedServices/DOP_MetroZarizeni_b`
   (`DRUH=1`, native S-JTSK), class = the line letter so each of the 61 dots wears its line's colour
   (transfer stations once per line); no SPA change, no migration, re-ingest `--sections metro`.
+- **Universities (2026-10-16, ruling 5 of the spec):** a `universities` section — IPR's 289
+  Prague university sites, teaching/service sites in one toggle and dorms in another; a site is
+  primary and labelled ("FF UK", "FEL ČVUT") when MŠMT's F21 table counts 2 000+ present-form
+  students at it (22 sites), through a curated faculty → site table in the ingest; F21 read live
+  each run with two refusal rails (stale code, primary seat without a point). No SPA change, no
+  migration; ingest `--sections universities`.
 
 ### map-3: count marks — one count rule on world tiles (built 2026-10-15)
 - **Why:** the count discs hid the basemap on any dense cohort (232 discs at a 55 px median spacing
