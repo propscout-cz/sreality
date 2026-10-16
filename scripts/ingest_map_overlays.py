@@ -833,9 +833,11 @@ SOURCES: dict[str, Section] = {
     ),
     # Prague's university sites from IPR's planning-analysis layer, each teaching or service
     # site classed by the present-form students MŠMT counts there (UNIVERSITY_SEATS); dorms a
-    # toggle of their own. Prague only, so from z10 like the flood zones.
+    # toggle of their own. From z9 like the metro: Browse's whole-of-Prague view sits just
+    # under z10 in the split view's map column, and MapLibre loads no tile below a source's
+    # minzoom (the chip then says "Přibližte mapu").
     "universities": Section(
-        label="Vysoké školy", sort=4, minzoom=10, maxzoom=12,
+        label="Vysoké školy", sort=4, minzoom=9, maxzoom=12,
         attribution="datový podklad © IPR Praha; počty studentů MŠMT", licence="CC BY 4.0 (IPR Praha)",
         source_url=f"{IPR_HOSTED}/{IPR_UNIVERSITIES}/FeatureServer",
         note="Místa vysokých škol v Praze podle ÚAP IPR Praha. Hlavní místo výuky = budova "

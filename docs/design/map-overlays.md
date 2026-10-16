@@ -122,7 +122,10 @@ regression). Re-rendered at the end of `ingest_boundaries.yml`.
   secondary. Rails: a code F21 no longer carries refuses the run (stale join); a primary seat that
   matched no IPR point refuses the run; the unit test pins every seat id to the 289 real ids
   (`tests/fixtures/map_overlays/ipr_universities_ids.json`).
-- Result (2026-10-16): 223 teaching/service sites of which **22 primary**, 66 dorms.
+- Result (2026-10-16): 223 teaching/service sites of which **22 primary**, 66 dorms; 17 tiles at z10–12
+  on the first ingest. Tiled from **z9** since the same day: Browse's whole-of-Prague view (the 0.45°
+  city bbox fitted into the split view's map column) lands at z≈9.9, where a z10 floor shows nothing
+  but the chip's "Přibližte mapu".
 
 ### Datum control point (both coordinate systems from PID open data, stop Florenc M1B, id 689/101)
 
@@ -239,7 +242,7 @@ Registry values:
 | metro | Metro | 9–12 | metro (1) | A #00A562, B #FCC400, C #CF003D, D #1F77D0 dash ("Metro D – návrh"), reserve #8C9196 dash ("Územní rezerva"), station #1F77D0 ("Plánovaná stanice") |
 | flood | Záplavová území | 10–12 | flood_q5 (1) #1D4F91, flood_q20 (2) #3B7DD8, flood_q100 (3) #7FB3E6, flood_q500 (4) #C6DCF2, flood_az (5) line #B3261E dash | one class per layer: q5 "Q5 – pětiletá voda", q20, q100 "Q100 – stoletá voda", q500 "Q500 – mapováno jen místy", az "Aktivní zóna" |
 | kraje | Kraje | 3–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
-| universities | Vysoké školy | 10–12 | universities (1), dorms (2) | primary #5E35B1 ("Hlavní místo výuky (2 000+ studentů)", point, labelled), secondary #B39DDB ("Další pracoviště VŠ", point); dorm #F57C00 ("Kolej", point) |
+| universities | Vysoké školy | 9–12 | universities (1), dorms (2) | primary #5E35B1 ("Hlavní místo výuky (2 000+ studentů)", point, labelled), secondary #B39DDB ("Další pracoviště VŠ", point); dorm #F57C00 ("Kolej", point) |
 
 Notes (Czech, shown in the chip): metro — "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026):
 stav, návrh a územní rezervy. Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E)
