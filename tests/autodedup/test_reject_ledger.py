@@ -180,7 +180,8 @@ def scored(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
 
 def _lockstep(today: _Engine, ledger: _Engine, ds: Dataset, calibration: Calibration,
               scored: list[tuple[int, int]], claims: list[int] | None = None,
-              twin_is_sql: bool = True) -> tuple[PassResult, PassResult, set, set, set]:
+              twin_is_sql: bool = True, limits: Limits | None = None
+              ) -> tuple[PassResult, PassResult, set, set, set]:
     """One pass of each engine over the same claim (the drain's next, or `claims`); asserts
     the two databases are equal, and the twins' storable subsets with each other and with the
     store. A twin keeps every pair, so it never re-decides a reject whose digests stand: where
@@ -188,8 +189,8 @@ def _lockstep(today: _Engine, ledger: _Engine, ds: Dataset, calibration: Calibra
     only the two twins are held equal. Returns both results, both scored sets and what was
     stored before the pass."""
     def works() -> dict[str, Any]:
-        return {} if claims is None else {"work": Schedule(claims),
-                                          "twin_work": Schedule(claims)}
+        return {"limits": limits, **({} if claims is None else {
+            "work": Schedule(claims), "twin_work": Schedule(claims)})}
 
     stored_before = {(lo, hi) for _g, lo, hi in ledger.db.pairs}
     scored.clear()
@@ -327,8 +328,9 @@ def test_a_vector_arriving_after_its_tags_reopens_the_rejects(
     """The CLIP job writes the tags, then the vector, then `clip_tagged_at`, and a vector write
     that failed leaves the tags without a vector until its next run. Drained with tags and no
     vectors; then the vectors land with their stamp, the tags unchanged (one vector a frame
-    position across the cohort, so the photographs now agree): every wanted reject is re-scored,
-    as today's engine re-scores it."""
+    position across the cohort, so the photographs now agree), and the evidence sweep claims
+    every advert whose photographs moved (E92; a side is seen as the lane last read it, E960):
+    every wanted reject is re-scored, as today's engine re-scores it."""
     ds = _mixed_dataset()
     for listing_id, images in ds.images_by_listing.items():
         ds.images_by_listing[listing_id] = [
@@ -347,9 +349,44 @@ def test_a_vector_arriving_after_its_tags_reopens_the_rejects(
                     clip_tagged_at="2026-10-12T10:00:00+00:00") for image in images]
     randoms = sorted(i for i in ds.listings if i >= 7000)
     ds.listings[randoms[0]].price = (ds.listings[randoms[0]].price or 0) + 10_000
+    claims = [randoms[0], *sorted(set(ds.listings) - {randoms[0]})]
     _ref, out, ref_scored, led_scored, _stored = _lockstep(
-        today, ledger, ds, calibration, scored, [randoms[0], randoms[7]], twin_is_sql=False)
+        today, ledger, ds, calibration, scored, claims, twin_is_sql=False,
+        limits=Limits(max_listings=len(claims), max_pairs=10 ** 9))
     assert (out.ledger_skipped, led_scored) == (0, ref_scored)
+
+
+def test_an_unclaimed_advert_s_arriving_vector_reaches_its_rejects_through_the_sweep(
+        tmp_path) -> None:
+    """E943 (f)'s vector-after-tags case for an advert NO other feed claims (E960 reads such a
+    side as its row stored it): its tags landed and its vector did not, so its row records an
+    incomplete gallery (`ev_clip` < `ev_images`) and the evidence sweep keeps probing it; when
+    the vector and its `clip_tagged_at` land, the sweep claims it (`redecide`), its decision
+    digest moves and its ledgered rejects are re-decided under the new one."""
+    world = _seeded_reject_world(tmp_path)
+    assert not incremental_lane.run_incremental(lambda: world)["aborted"]
+    target = 4006
+    row = world.rt_fp[(GEN, target)]
+    assert row["ev_clip"] < row["ev_images"] and row["ev_complete"] is False
+    before = {key: (r["dd_lo"], r["dd_hi"]) for key, r in world.reject_ledger.items()
+              if target in key[1:]}
+    assert before, "the stranger's rejects are ledgered"
+    for image in world.image_rows:
+        if image["listing_id"] == target:
+            rnd = random.Random(int(image["image_id"]))
+            world.clip_vectors[int(image["image_id"])] = (
+                "[" + ",".join(f"{rnd.uniform(-0.1, 0.1):.4f}" for _ in range(512)) + "]")
+            image["clip_tagged_at"] = world.now
+    out = incremental_lane.run_incremental(lambda: world)
+    assert out["feeds"].get("evidence", 0) >= 1 and out["evidence"]["moved"] >= 1
+    row = world.rt_fp[(GEN, target)]
+    assert row["ev_clip"] == row["ev_images"] > 0, "the refresh recorded the vectors"
+    after = {key: (r["dd_lo"], r["dd_hi"]) for key, r in world.reject_ledger.items()
+             if key in before}
+    side = {key: (0 if key[1] == target else 1) for key in before}
+    assert after and all(after[key][side[key]] != before[key][side[key]] for key in after), (
+        "every ledgered reject of the advert was re-decided under its new digest")
+    assert all(after[key][side[key]] == row["dd"] for key in after)
 
 
 def _churn_dataset() -> Dataset:

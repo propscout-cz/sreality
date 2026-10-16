@@ -426,7 +426,8 @@ nothing else.
   `details.autodedup.last` = `{ran, claimed, scored (pairs), grouped (groups written), merged
   (production merges the reconcile made), reconcile (ran / its skip or stop reason) +
   reconcile_reason, reconcile_groups, reconcile_seconds, reconcile_refused, reconcile_failed,
-  reconcile_waiting (a block not fully read), reconcile_skipped_at_apply, reconcile_quarantined,
+  reconcile_waiting (a block not fully read), reconcile_stale (E960: groups waiting for a moving
+  member refreshed within 12 h and under this engine), reconcile_skipped_at_apply, reconcile_quarantined,
   reconcile_deferred (the run cap), must_link_dissolved (operator `same` closures the pass
   dissolved, E926), skipped (0/1) + reason, errors (0/1) + refused/aborted,
   deadline_exceeded, seconds, held, retired, latency_p50_s, latency_p95_s, bound_by, claim_cap
@@ -440,13 +441,17 @@ nothing else.
   rss_at_start_mb shows what the raised one left), pairs_to_decide + pairs_to_decide_by_attempt
   (E943: what the pair budget counts, the last claim's and each claim's), ledger_skipped +
   ledger_written (the wanted below-floor rejects the reject ledger answered instead of a re-score,
-  and the rejects the pass ledgered)}`; an absent store (migrations 539/540/596) =
-  `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
+  and the rejects the pass ledgered), dirty + reads (E960: the probe-key neighbourhood the last
+  attempt re-retrieved from the store's keys and guard rows, and the adverts whose facts the pass
+  read, by why — claim, order, digest, decided, cluster, rail — summed over its attempts)}`; an
+  absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
   E73), and a photo-dependent merge waits until every photograph carries its pHash, CLIP vector
   and tags (E908; CLIP p50 2.5 h). So a text-certified duplicate merges in ~6–7 minutes and a
-  photo-certified one after CLIP; sub-hour photo merges need the vision producer moved inline, which
+  photo-certified one after CLIP; a merge whose moved advert was last refreshed more than 12 h
+  ago (or before the current engine) waits one more pass, which re-claims it (E960) — an
+  arrival is refreshed in its own pass, so arrival merges do not wait; sub-hour photo merges need the vision producer moved inline, which
   is an operator decision (D901, rule 7).
 
 **Liveness — the worker cannot freeze silently (2026-09-30).** From 2026-09-29 23:42 to 07:22 UTC
