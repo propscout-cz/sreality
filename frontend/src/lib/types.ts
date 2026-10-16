@@ -878,9 +878,6 @@ export interface Note {
   id: number;
   property_id: number;
   body: string;
-  /* The advert the operator was viewing when the note was written, kept for
-   * provenance. Null on notes created outside a specific listing context. */
-  origin_listing_id: number | null;
   created_at: string;
   /* Null until the operator edits the note; stamped on every PATCH. */
   updated_at: string | null;

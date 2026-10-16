@@ -11,27 +11,25 @@
  * and the anchor scrolling out of view.
  *
  * Membership is a PROP, not a read: every surface answers it from the one
- * shared member map (curationKeys.propertyCollectionMembers). Writes are here,
- * so both surfaces issue the same call and revalidate through the one helper —
- * which is what keeps a save made in the header visible on the card grid (and
- * in the block below it) without a reload.
+ * shared member map (lib/collectionCache `useCollectionMembership`). Writes are
+ * here, so both surfaces issue the same call and revalidate through the one
+ * helper — which is what keeps a save made in the header visible on the card
+ * grid without a reload.
  *
  * The phone feed (#1766) opens the same list in a bottom sheet
  * (`CollectionSaveList size="sheet"`): one set of writes, two containers.
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import type { RefObject } from 'react';
 
 import AnchoredPopover from '@/components/AnchoredPopover';
 import {
   addPropertiesToCollection,
-  listCollections,
   removePropertyFromCollection,
 } from '@/lib/api';
-import { revalidateCollections } from '@/lib/collectionCache';
-import { curationKeys } from '@/lib/queries';
+import { revalidateCollections, useCollections } from '@/lib/collectionCache';
 import { ROUTES } from '@/lib/routes';
 
 /* The trigger's accessible name, and the panel's — one string so a test that
@@ -107,11 +105,7 @@ export function CollectionSaveList({
   const cls = SIZES[size];
   const words = WORDS[size];
   const qc = useQueryClient();
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
+  const { collections, query: collectionsQ } = useCollections();
 
   const add = useMutation({
     mutationFn: (cid: number) => addPropertiesToCollection(cid, [property_id]),
@@ -126,7 +120,7 @@ export function CollectionSaveList({
   const pending = add.isPending || remove.isPending;
 
   // Monitored collections first, then alphabetical.
-  const sorted = [...(collectionsQ.data?.data ?? [])].sort(
+  const sorted = [...collections].sort(
     (a, b) =>
       (b.monitoring_enabled ? 1 : 0) - (a.monitoring_enabled ? 1 : 0) ||
       a.name.localeCompare(b.name),
@@ -202,7 +196,9 @@ export function CollectionSaveList({
   );
 }
 
-function BellGlyph() {
+/* The monitored-collection bell: this list's rows and the Collections page's
+ * "Monitoring" pill. */
+export function BellGlyph() {
   return (
     <svg
       width="9"

@@ -1,24 +1,20 @@
-/* Collections + tags + artifact link + notes for a single PROPERTY. Wired into PropertyDetail.
+/* Tags + artifact link + notes for a single PROPERTY. Wired into PropertyDetail
+ * (and, as PhoneTagsAndNotes, into the phone property page).
  *
- * Curation is property-grain (migration 202): a tag / collection membership /
- * note describes the real-world property, so this block operates on the
- * listing's `property_id`. The viewed listing is recorded as a note's
- * `origin_listing_id` + `origin_listing_ref_id` (display provenance —
- * "written while viewing this advert"); both are sent since the legacy id
- * is NULL for a post-Gate-2 listing (migration 323).
+ * Curation is property-grain (migration 202): a tag / note describes the
+ * real-world property, so this block operates on the listing's `property_id`.
+ * The viewed listing is recorded as a note's `origin_listing_ref_id` (display
+ * provenance — "written while viewing this advert"). Collection membership is
+ * the header's "Uložit do kolekce" (CollectionSaveToggle), not a row here.
  *
- * Reads come from two places by design:
- *   - The "which collections / tags exist" indices use the bearer-gated
- *     FastAPI service so listing_count + ordering live in one place.
- *   - The "does THIS property belong to X" reverse-index reads pull from the
- *     *_public Supabase views via the anon key. Writes always go through the API.
- * A failed read is said out loud with a retry and never drawn as an empty list
- * or an unticked toggle (MS16).
+ * Reads run as the signed-in user: the tag index and the notes through the
+ * JWT-gated API, the "does THIS property carry tag X" map from
+ * `property_tags_public`, a security_invoker view over the account-scoped RLS.
+ * Writes always go through the API. A failed read is said out loud with a
+ * retry and never drawn as an empty list or an unticked toggle (MS16).
  */
 
 import { useId, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ROUTES } from '@/lib/routes';
 import {
   useMutation,
   useQuery,
@@ -26,23 +22,15 @@ import {
 } from '@tanstack/react-query';
 import {
   ApiError,
-  addPropertiesToCollection,
   createPropertyNote,
   deletePropertyNote,
-  listCollections,
   listPropertyNotes,
-  removePropertyFromCollection,
   updatePropertyNote,
   uploadNoteAttachment,
 } from '@/lib/api';
-import { revalidateCollections } from '@/lib/collectionCache';
-import {
-  curationKeys,
-  fetchPropertyCollectionMemberSet,
-  fetchPropertyTagMemberSet,
-} from '@/lib/queries';
+import { curationKeys, fetchPropertyTagMemberSet } from '@/lib/queries';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
-import type { Collection, Note } from '@/lib/types';
+import type { Note } from '@/lib/types';
 import ErrorBanner from '@/components/ErrorBanner';
 import { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
@@ -62,29 +50,21 @@ import {
 
 export default function CurationBlock({
   property_id,
-  sreality_id,
   listing_id,
 }: {
   property_id: number;
-  // NULL for a post-Gate-2 non-sreality listing. Curation is PROPERTY-grain
-  // (rule 18) so this block keeps working either way; the note-provenance API
-  // already COALESCEs the surrogate when the legacy id is absent.
-  sreality_id: number | null;
-  // The viewed listing's SURROGATE id — always present, unlike sreality_id
-  // (NULL for a post-Gate-2 listing). Passed through to NotesRow so a note's
-  // provenance survives even when the legacy id is unavailable.
+  /* The viewed listing's surrogate id: a new note's provenance. */
   listing_id: number;
 }) {
   return (
     <div className="space-y-7">
-      {/* The pipeline bookmark moved to the listing-detail header action bar
-          (PipelineToggle) — a deal-stage verb belongs at the top, next to
-          "New estimation", not buried below the estimates. This block keeps
-          the secondary curation: collections, tags, artifact link, notes. */}
-      <CollectionsRow property_id={property_id} />
+      {/* The pipeline bookmark and the collection save live in the header
+          action bar (PipelineToggle, CollectionSaveToggle) — a verb belongs at
+          the top, next to "New estimation", not buried below the estimates.
+          This block keeps the secondary curation: tags, artifact link, notes. */}
       <TagsRow property_id={property_id} />
       <ArtifactLinkRow property_id={property_id} />
-      <NotesRow property_id={property_id} sreality_id={sreality_id} listing_id={listing_id} />
+      <NotesRow property_id={property_id} listing_id={listing_id} />
     </div>
   );
 }
@@ -94,11 +74,9 @@ export default function CurationBlock({
  * there (the collection sheet), so they are not repeated. */
 export function PhoneTagsAndNotes({
   property_id,
-  sreality_id,
   listing_id,
 }: {
   property_id: number;
-  sreality_id: number | null;
   listing_id: number;
 }) {
   return (
@@ -107,138 +85,11 @@ export function PhoneTagsAndNotes({
       <ArtifactLinkRow property_id={property_id} label="Odkaz na artefakt" />
       <NotesRow
         property_id={property_id}
-        sreality_id={sreality_id}
         listing_id={listing_id}
         label="Poznámky"
         alwaysOpen
       />
     </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Collections                                                                */
-/* -------------------------------------------------------------------------- */
-
-function CollectionsRow({ property_id }: { property_id: number }) {
-  const qc = useQueryClient();
-
-  const allQ = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-
-  const membershipQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
-
-  const memberIds = useMemo(
-    () => new Set(membershipQ.data?.get(property_id) ?? []),
-    [membershipQ.data, property_id],
-  );
-
-  const collections = allQ.data?.data ?? [];
-
-  const add = useMutation({
-    mutationFn: (collection_id: number) =>
-      addPropertiesToCollection(collection_id, [property_id]),
-    onSuccess: (_, collection_id) => revalidateCollections(qc, { collection_id }),
-  });
-
-  const remove = useMutation({
-    mutationFn: (collection_id: number) =>
-      removePropertyFromCollection(collection_id, property_id),
-    onSuccess: (_, collection_id) => revalidateCollections(qc, { collection_id }),
-  });
-
-  return (
-    <div>
-      <div className="flex items-baseline justify-between">
-        <SectionLabel>Collections</SectionLabel>
-        <Link
-          to={ROUTES.collections.build()}
-          className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
-        >
-          Manage →
-        </Link>
-      </div>
-
-      {readFailed(allQ) || readFailed(membershipQ) ? (
-        <ErrorBanner
-          title="Kolekce"
-          message="se nepodařilo načíst."
-          onRetry={() => {
-            if (readFailed(allQ)) void allQ.refetch();
-            if (readFailed(membershipQ)) void membershipQ.refetch();
-          }}
-        />
-      ) : allQ.isLoading ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">Loading…</p>
-      ) : collections.length === 0 ? (
-        <p className="mt-3 text-sm text-[var(--color-ink-3)]">
-          No collections yet.{' '}
-          <Link
-            to={ROUTES.collections.build()}
-            className="text-[var(--color-copper)] hover:underline"
-          >
-            Start one
-          </Link>
-          .
-        </p>
-      ) : (
-        <ul className="mt-3 flex flex-wrap gap-1.5">
-          {collections.map((c) => (
-            <li key={c.id}>
-              <CollectionToggle
-                c={c}
-                member={memberIds.has(c.id)}
-                pending={add.isPending || remove.isPending}
-                onAdd={() => add.mutate(c.id)}
-                onRemove={() => remove.mutate(c.id)}
-              />
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function CollectionToggle({
-  c,
-  member,
-  pending,
-  onAdd,
-  onRemove,
-}: {
-  c: Collection;
-  member: boolean;
-  pending: boolean;
-  onAdd: () => void;
-  onRemove: () => void;
-}) {
-  const cls = member
-    ? 'bg-[var(--color-copper-soft)] text-[var(--color-copper)] border-[var(--color-copper)]/40'
-    : 'bg-[var(--color-paper-2)] text-[var(--color-ink-3)] border-[var(--color-rule)] hover:text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)]';
-  return (
-    <button
-      type="button"
-      onClick={member ? onRemove : onAdd}
-      disabled={pending}
-      aria-pressed={member}
-      className={[
-        'inline-flex items-center gap-1.5 px-2.5 py-1 text-[0.78rem] rounded-[var(--radius-sm)] border transition-colors disabled:opacity-60',
-        cls,
-      ].join(' ')}
-    >
-      <span aria-hidden className="text-[0.65rem] leading-none">
-        {member ? '✓' : '+'}
-      </span>
-      <span className="truncate max-w-[14rem]">{c.name}</span>
-    </button>
   );
 }
 
@@ -289,15 +140,11 @@ function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?:
 
 function NotesRow({
   property_id,
-  sreality_id,
   listing_id,
   label = 'Notes',
   alwaysOpen = false,
 }: {
   property_id: number;
-  // NULL for a non-sreality listing; createPropertyNote already omits the field
-  // when absent and the server COALESCEs provenance from listing_id.
-  sreality_id: number | null;
   listing_id: number;
   label?: string;
   /* The phone keeps the composer in view: its curation row's "Poznámka" scrolls here. */
@@ -325,7 +172,7 @@ function NotesRow({
     /* The note first, then its files one by one; a file that fails leaves the note saved and
      * is reported by name (drop it onto the note to try again). */
     mutationFn: async ({ text, files }: { text: string; files: File[] }) => {
-      const note = await createPropertyNote(property_id, text, sreality_id ?? undefined, listing_id);
+      const note = await createPropertyNote(property_id, text, listing_id);
       const failed: string[] = [];
       for (const [i, file] of files.entries()) {
         setProgress({ done: i, total: files.length });

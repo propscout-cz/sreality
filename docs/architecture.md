@@ -870,7 +870,7 @@ rules. Identify which one a task belongs to before you start.
   + a save-to-collection control (rule #18 — the SPA header's "Uložit do kolekce": a checklist of
   every collection, monitored first) + **operator notes** (list existing + add a new
   one via `GET`/`POST /properties/{id}/notes`, property-grain, the viewed advert recorded as
-  the note's `origin_listing_id`) + an "Otevřít v aplikaci" deep-link to the SPA
+  the note's `origin_listing_ref_id`) + an "Otevřít v aplikaci" deep-link to the SPA
   (`{VITE_APP_BASE_URL}/listing/{source}/{native}` — an advert alias that lands on the
   property page with that advert's row open) + subject facts; for a flat it shows the
   property's MF result by SHAPE (value + "Výnos MF" on a sale flat, range + (i) note, note,
@@ -2132,15 +2132,19 @@ renumber.** Navigate by area:
     `target_channels`); a protected default "monitoring" collection (`is_system=true`, can't be
     renamed or deleted) ships monitoring on. The "add to collection" affordance lives on the
     Browse card (a layers control ADJACENT to the pipeline funnel — rule #22 keeps the funnel the
-    sole pipeline affordance), the listing-detail `CurationBlock`, and the Chrome-extension panel.**
+    sole pipeline affordance), the listing-detail header (`CollectionSaveToggle`; the page's second
+    editor, a chip row in `CurationBlock`, was deleted 2026-10), the phone curation row and margin
+    marks, and the Chrome-extension panel.**
     The panel's control is the SPA header's `CollectionSaveToggle` + `CollectionSaveMenu` reproduced
     by value (a bookmark button opening a checklist of EVERY collection, monitored ones first and
     bell-marked); it replaced a one-click "Sledovat" bell that could only reach the single
     monitoring collection, so the panel and the app now offer the same verb over the same set.
-    In the SPA those affordances share ONE membership read (`fetchPropertyCollectionMemberSet`
-    under `curationKeys.propertyCollectionMembers`; one property's ids are `members.get(id)`) and
-    ONE revalidation — `lib/collectionCache.ts`, called by every writer: the menu, the
-    `CurationBlock` row, the collection page's row-remove, BOTH collection DELETEs (migration 202
+    In the SPA those affordances share ONE membership read and ONE collection list, each behind a
+    hook in `lib/collectionCache.ts` (`useCollections`, `useCollectionMembers` — the whole-set map,
+    `fetchPropertyCollectionMemberSet` under `curationKeys.propertyCollectionMembers` — and
+    `useCollectionMembership(property_id)`; no surface hand-types a `useQuery` over either key),
+    and ONE revalidation in the same file, called by every writer: the menu, the collection page's
+    row-remove, BOTH collection DELETEs (migration 202
     cascades memberships away) and the merge (operator state re-points `collection_properties`, so
     the map's keys change). The hand-typed key lists it replaced had drifted — every one but the
     menu forgot the shared map — the same failure `lib/browseInvalidation.ts` records for Browse. The
@@ -2194,7 +2198,7 @@ renumber.** Navigate by area:
     view).
     **Adding notes is reachable from the Chrome-extension panel too** — it lists the property's
     existing notes + an add box, writing through the SAME `POST /properties/{id}/notes` the
-    `CurationBlock` uses (the viewed advert's `sreality_id` as `origin_listing_id`); notes are
+    `CurationBlock` uses (the viewed advert's surrogate id as `origin_listing_ref_id`); notes are
     NOT batched into `POST /listings/lookup` (too heavy per index card) — the panel fetches them
     lazily via `GET /properties/{id}/notes` on open. Tags are the one curation surface the
     extension does not yet expose, and a note's files the one part of a note (it shows the text).

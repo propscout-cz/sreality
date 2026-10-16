@@ -15,14 +15,13 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { pgRead } from '@/lib/pgRead';
 import {
-  curationKeys,
   dismissalKeys,
   fetchBrowseCount,
   fetchDismissedCount,
   fetchNoPriceCount,
 } from '@/lib/queries';
-import { listCollections } from '@/lib/api';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
+import { useCollections } from '@/lib/collectionCache';
 import { browseKeys } from '@/lib/browseKeys';
 import { FilterForm } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
@@ -196,12 +195,7 @@ export function CollectionsPicker({
   value: ReadonlyArray<number> | null;
   onChange: (next: number[] | null) => void;
 }) {
-  const q = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-  const collections = q.data?.data ?? [];
+  const { collections, query: q } = useCollections();
 
   if (q.isLoading) {
     return (

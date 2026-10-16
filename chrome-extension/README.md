@@ -20,9 +20,9 @@ maxima, remax, mmreality, ceskereality).
   - The **notes** are property-grain (rule #18), the same notes the SPA's
     listing-detail `CurationBlock` shows. The panel lists the property's existing
     notes (most-recent-first) and an add box ("Přidat poznámku…" → **Uložit
-    poznámku**). Writes go through the same bearer-gated `POST /properties/{id}/notes`
-    the SPA uses, recording the viewed advert's `sreality_id` as the note's
-    `origin_listing_id` ("written while viewing this advert"); the panel fetches
+    poznámku**). Writes go through the same JWT-gated `POST /properties/{id}/notes`
+    the SPA uses, recording the viewed advert's surrogate id as the note's
+    `origin_listing_ref_id` ("written while viewing this advert"); the panel fetches
     existing notes lazily via `GET /properties/{id}/notes` on open, and a read that
     fails every try says so with **Zkusit znovu**, never as "no notes" (MS16).
   - The **pipeline control** is property-grain (the deal pipeline, rule #22),
