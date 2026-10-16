@@ -208,9 +208,9 @@ Per-table RLS pattern, repeated across migrations 290 (6 curation tables: `colle
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
-using/with check (account_id in (select current_account_ids()))` policy. **Grant the id
-sequence's `USAGE` too** — `GRANT INSERT` on the table does not cover it, and a `bigserial` PK
-fails every `authenticated` insert until it is added (a real bug the CI lane caught pre-deploy).
+using/with check (account_id in (select current_account_ids()))` policy. **The id is `generated
+always as identity`, never `bigserial`** (606): a browser-chosen id pre-claims the sequence and breaks
+every account's inserts; ALWAYS refuses it and needs no sequence grant (`references/tenancy.md`).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly
