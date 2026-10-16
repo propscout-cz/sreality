@@ -27,9 +27,9 @@ shape for each grain.
 Every table below follows: `revoke all on <table> from anon, authenticated` →
 `grant select, insert, update, delete on <table> to authenticated` (or a narrower verb
 set where the table is genuinely add/remove-only) → a `for all using (...) with check
-(...)` policy testing `account_id in (select current_account_ids())`. A surrogate id is `bigint generated
-always as identity` (606), never `bigserial`: WITH CHECK tests only `account_id`, so a caller-chosen id
-could pre-claim the sequence and break every account's inserts; ALWAYS refuses it, needing no USAGE grant.
+(...)` policy testing `account_id in (select current_account_ids())`. An integer surrogate id is `bigint
+generated always as identity` (606), never `bigserial`: ALWAYS refuses, with no USAGE grant, the caller-chosen id
+that would pre-claim the sequence; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is.
 
 **Migration 290 — curation tables**, `account_id` on the row directly (not
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,

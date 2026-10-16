@@ -5,7 +5,7 @@
 -- most also UPDATE) the whole row, `id` included. RLS's WITH CHECK tests only account_id, so a
 -- signed-in caller could write rows with ids just above the sequence, and every account's next
 -- inserts would draw a claimed id and fail on the primary key (HTTP 500) until the range was burned.
--- Not exploited: max(id) equals the sequence on every table today.
+-- Not exploited: no table holds an id above its sequence today (max(id) <= last_value on all twelve).
 --
 -- WHAT. Each id becomes GENERATED ALWAYS AS IDENTITY, continuing past both max(id) and the old
 -- sequence. ALWAYS refuses a caller's id: an INSERT needs OVERRIDING SYSTEM VALUE, which PostgREST
