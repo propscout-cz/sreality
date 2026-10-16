@@ -7,6 +7,14 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-SHARE: Collection sharing, view-only (proposal, 2026-10-16)
+- **Proposed:** share a collection with another account by email, read-only; the recipient filters
+  Browse by it and reads its properties on every collection surface; their notes on those properties
+  reach the owner, labelled with their email. Spec + open rulings: `docs/design/collection-sharing.md`
+  (north star: a share is one row that widens READS only; `owner_email` is the one "mine vs shared"
+  marker; no new filter, view, flag or role). Six waves W1–W6; the cleanups W1–W3 pay for the
+  additions. Starts on the operator's rulings (§8 of the spec).
+
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
 - **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),
   a single-valued sibling of notes: `PUT/DELETE /properties/{id}/artifact-link`, a row between
