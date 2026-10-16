@@ -198,11 +198,20 @@ _UNIT_NOUN: str = (
 _UNIT_MARKER: str = (
     r"(?:\d\s?\+\s?(?:kk|\d)\s+)?(?:s\s+)?(?:oznacen\w{0,4}\s+)?(?:c\.?\s*|cislo\s+)?"
 )
+# E958: `byt 3+kk B.3.7` — the building letter, a dot, then floor and flat. One letter and two
+# or three numbers, dots only, and no space after the letter's dot: `č. 298/4` folds to
+# `c. 298/4` and `č.p.123/4` to `c.p.123/4`, and neither may become a code. `č.2.3` stays the
+# marker's, as before.
 _UNIT_CODE_BODY: str = (
-    r"([a-z]{1,2}\s?\d{1,3}(?:\s?[.\-/]\s?\d{1,3}){1,3}|\d{1,3}(?:\.\d{1,3}){1,3})"
+    r"([a-z]{1,2}\s?\d{1,3}(?:\s?[.\-/]\s?\d{1,3}){1,3}"
+    r"|[a-z]\.\d{1,3}(?:\.\d{1,3}){1,2}(?!\.\d)"
+    r"|\d{1,3}(?:\.\d{1,3}){1,3})"
 )
 _PRINTED_UNIT_CODE = re.compile(_UNIT_NOUN + r"\s+" + _UNIT_MARKER + _UNIT_CODE_BODY
                                 + r"(?![\d+]|\s*m2)")
+# `B.3.7` and `B3.7` are one code written two ways (Pískovna's idnes `dům 5+kk A.7.2` is
+# sreality's `A7.2`), so the letter's own dot is dropped.
+_LETTER_DOT = re.compile(r"^([a-z])\.(?=\d)")
 # The three forms the segment reader cannot see. Each needs an EXPLICIT marker, because a bare
 # letter or numeral after a noun is Czech grammar: `dům i zahrada` is a house and a garden, not
 # unit I, and `byt a garáž` is a flat and a garage.
@@ -216,8 +225,11 @@ _PRINTED_UNIT_WORD = re.compile(
     _UNIT_NOUN + r"\s+(?:s\s+)?(?:oznacen\w{0,4}\s+)?(?:c\.?\s*|cislo\s+)"
     r"(" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")\b"
 )
+# `jednotky č. B.3.03` is one code, read whole above; its head `B` read again as a letter would
+# meet the next flat's `B` and hide the conflict (E958).
 _PRINTED_UNIT_LETTER = re.compile(
-    _UNIT_NOUN + r"\s+(?:s\s+)?(?:oznacen\w{0,4}\s+|c\.?\s*|cislo\s+)([a-z])\b(?!\s*m2)"
+    _UNIT_NOUN + r"\s+(?:s\s+)?(?:oznacen\w{0,4}\s+|c\.?\s*|cislo\s+)([a-z])\b"
+    r"(?!\s*m2|\.\d{1,3}\.\d)"
 )
 # More than this many distinct codes in one body is a developer's price list, not this unit's
 # identity — and a price list must never refuse anything (an empty set is not a conflict).
@@ -236,7 +248,7 @@ def printed_unit_codes(text: str | None, wide: bool = False) -> frozenset[str]:
 def _printed_unit_codes(text: str, wide: bool) -> frozenset[str]:
     folded = fold(text)
     out: set[str] = {
-        re.sub(r"\s+", "", match.group(1)).upper().strip(".-/")
+        _LETTER_DOT.sub(r"\1", re.sub(r"\s+", "", match.group(1))).upper().strip(".-/")
         for match in _PRINTED_UNIT_CODE.finditer(folded)
     }
     if wide:
