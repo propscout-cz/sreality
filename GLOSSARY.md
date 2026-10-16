@@ -172,7 +172,7 @@ _Avoid_: PWA (in prose), mobile app, native app, companion app
 
 **Reference overlay**:
 A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF
-rent map — that a user switches on or off; it changes what the map shows around properties, never
+rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never
 which properties.
 _Avoid_: data layer, overlay data, map data, GIS layer
 

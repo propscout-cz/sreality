@@ -37,6 +37,15 @@ the boundary ingest onto the ArcGIS reader.
    (operator ruling: a property's distance to a station must be readable), from IPR's named
    metro-equipment layer `ReferencedServices/DOP_MetroZarizeni_b` (`DRUH=1`, fetched in native
    S-JTSK), each dot in its line's colour, a transfer station once per line.
+5. **Universities (2026-10-16, four rulings):** a `universities` section of Prague's university sites
+   from IPR's planning-analysis layer. (a) A site is **primary** when 2 000 or more students in
+   present-form study are counted there: MŠMT's per-faculty counts (F21) tied to each faculty's main
+   teaching building by a curated table in the ingest (`UNIVERSITY_SEATS`), summed per site; every
+   other teaching or service site is secondary. (b) Dorms are a toggle of their own (`dorms`) beside
+   the teaching sites. (c) Service sites — rectorates, canteens, sport halls, libraries, hospital
+   clinics where the medical faculties teach — all show as secondary; no filtering rule. (d) Primary
+   sites carry the conventional short label ("FF UK", "FEL ČVUT", "PEF ČZU", "VŠE"); secondary sites
+   and dorms show their IPR name on click only.
 
 ## Sources (verified live 2026-10-14)
 
@@ -88,6 +97,32 @@ from the water authority. Resolve layers BY NAME from `?f=json`, never by numeri
 
 SQL source: `ST_Boundary` of each kraj polygon (shared borders are drawn twice today as well; no
 regression). Re-rendered at the end of `ingest_boundaries.yml`.
+
+### Universities — IPR Praha ÚAP `Hosted/FSV_CUR_OV_SKOLYVS_B` (CC BY) + MŠMT F21 (verified live 2026-10-16)
+
+- IPR's point layer of university facilities: 289 sites, stored in 3857, fields `id_zar` (stable
+  site id), `nazev_zar` (the facility name, e.g. "UK - F filosofická", "ČVUT - FIT, F architektury",
+  "UK - kolej 17. listopadu"), `nazev_vs`, `druh_vs` (VVS public 248 / SVS private 39 / STS state
+  2), `typ_prac_hl` (F faculty 111, CEL whole school 31, KAT, U, M, A, R, S…), `typ_uap` — `02_01`
+  teaching 168, `02_02` other facility 55, `02_03` dorm 66. No student numbers; the typed flag
+  columns (`fakulta`, `dekanat`…) are unpopulated except `kolej`. Layer `editingInfo.lastEditDate`
+  = 2026-01-20 (the section's `source_revised_at`).
+- MŠMT, Výkonové ukazatele VŠ, table **F21** "studenti podle vysoké školy/fakulty"
+  (`https://dsia.msmt.cz/vystupy/f2/f21.xlsx`): one sheet per year 2000–2025, column B the SIMS
+  code (`11210` = UK Filozofická fakulta, `6D000` = UNYP, `21900` = ČVUT celoškolská pracoviště),
+  column G all students, **column H students in present-form study** (the ones on site daily — the
+  count the rule uses); state of SIMS as of 2026-01-20 for 2025. Read with the stdlib (zip + XML),
+  the newest year sheet wins. 2025: UK FF 5 757, FSV 5 652, PřF 5 189, 1. LF 4 556, PedF 3 861, PF
+  3 636, MFF 3 173, FHS 2 725, 3. LF 2 517, 2. LF 2 093, FTVS 2 046; ČVUT FSv 4 066, FEL 3 398,
+  FIT 2 406 + FA 1 750 (one building), FS 1 616; VŠCHT 4 070; VŠE 13 694 (Prague faculties); ČZU
+  PEF 7 811, FLD + FŽP 3 096, FAPPZ 2 884; AMBIS 3 712, MUP 2 751, VŠFS 2 274 (whole schools).
+- The join, `UNIVERSITY_SEATS` (49 rows): faculty code(s) → the IPR `id_zar` of the main teaching
+  building + the short label. Faculties outside Prague (ČVUT FBMI Kladno, VŠE FM Jindřichův Hradec,
+  UK Plzeň/Hradec) and schools seated elsewhere (ŠKODA AUTO VŠ) have no row; an unmapped site is
+  secondary. Rails: a code F21 no longer carries refuses the run (stale join); a primary seat that
+  matched no IPR point refuses the run; the unit test pins every seat id to the 289 real ids
+  (`tests/fixtures/map_overlays/ipr_universities_ids.json`).
+- Result (2026-10-16): 223 teaching/service sites of which **22 primary**, 66 dorms.
 
 ### Datum control point (both coordinate systems from PID open data, stop Florenc M1B, id 689/101)
 
@@ -204,13 +239,24 @@ Registry values:
 | metro | Metro | 9–12 | metro (1) | A #00A562, B #FCC400, C #CF003D, D #1F77D0 dash ("Metro D – návrh"), reserve #8C9196 dash ("Územní rezerva"), station #1F77D0 ("Plánovaná stanice") |
 | flood | Záplavová území | 10–12 | flood_q5 (1) #1D4F91, flood_q20 (2) #3B7DD8, flood_q100 (3) #7FB3E6, flood_q500 (4) #C6DCF2, flood_az (5) line #B3261E dash | one class per layer: q5 "Q5 – pětiletá voda", q20, q100 "Q100 – stoletá voda", q500 "Q500 – mapováno jen místy", az "Aktivní zóna" |
 | kraje | Kraje | 3–9 | kraje (1) | kraj rgba(40,40,70,0.55) |
+| universities | Vysoké školy | 10–12 | universities (1), dorms (2) | primary #5E35B1 ("Hlavní místo výuky (2 000+ studentů)", point, labelled), secondary #B39DDB ("Další pracoviště VŠ", point); dorm #F57C00 ("Kolej", point) |
 
 Notes (Czech, shown in the chip): metro — "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026):
 stav, návrh a územní rezervy. Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E)
 nemá rozhodnutou trasu ani technologii."; flood — "Stanovená záplavová území (zákonný rozsah,
 orientační). Nezohledňují protipovodňová opatření (např. Karlín), Q500 je vymezeno jen místy,
 překryv pásem je tmavší, přívalové povodně nejsou zahrnuty. Závazné informace: vodoprávní úřad.";
-kraje — none.
+kraje — none; universities — "Místa vysokých škol v Praze podle ÚAP IPR Praha. Hlavní místo výuky =
+budova fakulty nebo školy, kde podle MŠMT (SIMS, poslední zveřejněný rok) studuje 2 000 a více
+studentů prezenčního studia; u škol s pobočkami mimo Prahu jde o počet za celou školu. Další
+pracoviště: ostatní budovy, kliniky, rektoráty, menzy, sportoviště."
+
+A third reader kind serves the universities layer: `UniversitySites(where)` reads F21 once per run
+(`Http.content`, `parse_f21`), sums the counts per seat (`students_on_site`) and then runs the ArcGIS
+pager with the counts bound into the props mapper (`functools.partial(university_site_props,
+on_site)`), so the pager, its guards and the datum check are the same code path as every other
+layer. The dorms layer is a plain `_ipr(...)` reader on the same service, which also supplies the
+section's revision date.
 
 ## API — `api/routes/map_overlays.py` (both `require_token`, service-role connection)
 
@@ -446,4 +492,11 @@ Backend, as built (2026-10-15):
   `ST_UnaryUnion` per band does not finish inside the 30-minute statement budget on Supabase Large, so each zone
   now loses only the area an earlier-inserted overlapping zone of the same band already covers (#1813; cost
   proportional to the few confluences, each piece keeps its own watercourse name).
+- **Universities (2026-10-16, ruling 5):** no SPA change and no migration — a section with two
+  layers, both drawn by the existing point + label rules (a primary site = a labelled dark dot, the
+  same shape as a metro station). The live readers' first run: F21 2025 read (205 codes), 49 seats,
+  22 primary sites (all matched an IPR point), 201 secondary, 66 dorms. Present-form students (F21
+  column H) rather than all students: the combined-form students of the private schools come in
+  blocks, so VŠEM (3 266 all / 1 505 present) and Panevropská (2 704 / 1 874) are secondary while
+  AMBIS, MUP and VŠFS stay primary.
 
