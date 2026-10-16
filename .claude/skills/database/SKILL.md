@@ -243,10 +243,11 @@ above) — whoever signs up first wins and claims every pre-tenancy NULL-`accoun
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week
 outage: `references/tenancy.md`. (1) **Reads on a tenant connection are scoped by RLS alone** —
 `current_account_ids()` is the ONE definition of who the caller is (PLURAL, because membership
-is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too (its policy's
-USING clause is the scope). (2) **Writes carry exactly ONE account, resolved once at the route
-edge** by `tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a
-silent NULL nor a SYSTEM fallback 290's WITH CHECK has no arm to accept. (3) **An explicit
+is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
+ownership gate (rowcount 0 → 404, never a SELECT probe: that proves visibility, not ownership).
+(2) **Writes carry exactly ONE account, resolved once at the route edge** by
+`tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a silent NULL nor
+a SYSTEM fallback. (3) **An explicit
 `account_id = %s` predicate appears ONLY on a service-role connection**
 (`toolkit/pipeline_identity.py`, `api/estimation_runs.py`, the Stripe webhook), where RLS is off
 and the predicate is the SOLE gate. (4) **`deps.account_scope` returns `[account_id, SYSTEM]`**

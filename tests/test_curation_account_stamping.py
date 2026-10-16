@@ -15,47 +15,19 @@ import pytest
 
 from api import curation
 from api import schemas as s
+from tests.api._script_conn import ScriptConn
 
 
-class _Ctx:
-    def __enter__(self) -> "_Ctx":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
+_NOTE_ROW = (7, 99, "note body", None, "2026-07-21T00:00:00Z", None)
 
 
-class _Cur:
-    def __init__(self, conn: "_FakeConn") -> None:
-        self._conn = conn
-
-    def __enter__(self) -> "_Cur":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self._conn.executed.append((" ".join(sql.split()), params))
-
-    def fetchone(self) -> Any:
-        return (7, 99, "note body", None, "2026-07-21T00:00:00Z", None)
-
-
-class _FakeConn:
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, Any]] = []
-
-    def transaction(self) -> _Ctx:
-        return _Ctx()
-
-    def cursor(self) -> _Cur:
-        return _Cur(self)
+def _conn() -> ScriptConn:
+    return ScriptConn([(lambda q: q.startswith("INSERT INTO property_notes"), [_NOTE_ROW])])
 
 
 def test_create_note_stamps_explicit_account_id(monkeypatch: Any) -> None:
     monkeypatch.setattr(curation, "resolve_active_property_id", lambda conn, pid: pid)
-    conn = _FakeConn()
+    conn = _conn()
     tenant_id = "22222222-2222-2222-2222-222222222222"
     curation.create_note(
         conn, 99, s.CreateNoteIn(body="hello"), account_id=tenant_id,
@@ -71,6 +43,6 @@ def test_create_note_without_account_id_is_a_type_error(monkeypatch: Any) -> Non
     one-line revert on post_property_note raises here instead of writing a row
     that migration 290's WITH CHECK (no SYSTEM arm) would reject."""
     monkeypatch.setattr(curation, "resolve_active_property_id", lambda conn, pid: pid)
-    conn = _FakeConn()
+    conn = _conn()
     with pytest.raises(TypeError, match="account_id"):
         curation.create_note(conn, 99, s.CreateNoteIn(body="hello"))

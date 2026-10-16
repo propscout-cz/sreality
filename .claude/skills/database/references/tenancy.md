@@ -152,6 +152,16 @@ and its SQL carries **no account predicate**. An `UPDATE`/`DELETE` *by id* is th
 the policy's `USING` clause is the row set, so supplying an account would be a second
 definition of it, not a gate.
 
+**The write is the gate.** On a tenant connection, ownership is proven by the `UPDATE`/`DELETE`
+itself — rowcount 0 (or no `RETURNING` row) → 404, before any side effect — never by a `SELECT`
+probe first: a `SELECT` proves only visibility, and once collections can be shared
+(`docs/design/collection-sharing.md`, W4) visibility is wider than ownership, so a probe would pass
+and the write would 500 on `WITH CHECK` or report a false success. A refusal that depends on the row (the system
+collection's 409) is raised inside the transaction so it rolls back; a pre-write check that must
+see the row takes `SELECT … FOR UPDATE`, which applies the UPDATE policy. Example:
+`api/curation.py` (`update_collection`, `delete_collection`, `add_properties_to_collection`,
+`update_note`) and `api/note_attachments.add_attachment`.
+
 **2. Writes carry exactly ONE account, resolved once at the route edge.**
 `tenant_pool.require_account_id` (FastAPI dependency) resolves it and raises
 `400 "no account for caller"` when there is none. Never a silent `None` (the account columns
