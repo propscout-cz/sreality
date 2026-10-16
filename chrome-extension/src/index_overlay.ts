@@ -83,11 +83,11 @@ const MAX_LOOKUP_PER_PASS = 50;
  * visible while one is out. Only the current generation decides the notice:
  * an older ask's FAILURE is dropped (an old 401 landing after a sign-in would
  * raise a false notice), but an older ask's OK answer still fills the cache
- * and badges — rows are rows, unless the account changed since (they were the
- * previous account's). A lookup unanswered after LOOKUP_TIMEOUT_MS is SHOWN as
- * failed so a hung one can't leave the page silent, and its answer, whenever
- * it lands, still counts: the deadline decides what the notice says, not what
- * the cache holds.
+ * and badges — rows are rows (an answer asked before an account change never
+ * arrives: content.ts's call drops it). A lookup unanswered after
+ * LOOKUP_TIMEOUT_MS is SHOWN as failed so a hung one can't leave the page
+ * silent, and its answer, whenever it lands, still counts: the deadline
+ * decides what the notice says, not what the cache holds.
  *
  * Teardown: stop() removes the notice, and everything that awaits re-checks
  * `stopped` — a sign-in or lookup resolving after a route change must not
@@ -237,7 +237,6 @@ export async function runIndexOverlay(
   let signInError: string | null = null;
   let notice: NoticeHandle | null = null;
   let gen = 0;  // bumped by an account change or a retry: answers to older asks are stale
-  let accountGen = 0;  // the generation the account last changed at: older rows are not ours
   let inFlightGen: number | null = null;  // generation of the lookup that is out
   let rescan = false;  // a pass skipped its lookup because this generation's was out
 
@@ -288,8 +287,7 @@ export async function runIndexOverlay(
     });
   }
 
-  function keep(rows: PortalListing[], asked = gen): void {
-    if (asked < accountGen) return;
+  function keep(rows: PortalListing[]): void {
     for (const l of rows) cache.set(l.source_id, l);
   }
 
@@ -391,13 +389,13 @@ export async function runIndexOverlay(
       void answer.then((eventual) => {
         if (stopped || !eventual.ok) return;
         if (asked === gen) settle(eventual);
-        else keep(eventual.data, asked);
+        else keep(eventual.data);
         schedule();
       });
     } else if (current) {
       settle(res);
     } else if (res.ok) {
-      keep(res.data, asked);
+      keep(res.data);
       schedule();
     }
     if (current && rescan) {
@@ -516,7 +514,7 @@ export async function runIndexOverlay(
    * drop them and ask again (a signed-out answer raises the notice). */
   const unsubscribeAccount = onAccountChange(() => {
     if (stopped) return;
-    accountGen = ++gen;
+    gen++;
     cache.clear();
     layer.reset();
     failure = null;

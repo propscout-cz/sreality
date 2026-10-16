@@ -236,16 +236,21 @@ function runtimeDetail(message: string | undefined): string {
   return message ?? 'runtime error';
 }
 
+/* Bumped by an account change (onAccountChange below, subscribed before any overlay's): a
+ * reply to anything asked earlier was authorised as the account that left, so call() never
+ * delivers it — nothing is painted with its rows. The auth messages always answer. */
+let sessionGen = 0;
+const ALWAYS_ANSWERED = new Set<ApiMessage['type']>(['get_auth_state', 'sign_in', 'sign_out']);
+
 export function call<T>(message: ApiMessage): Promise<ApiResult<T>> {
+  const gen = sessionGen;
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendMessage(message, (response: ApiResult<T>) => {
-        if (chrome.runtime.lastError) {
-          resolve({
-            ok: false,
-            status: 0,
-            detail: runtimeDetail(chrome.runtime.lastError.message),
-          });
+        const error = chrome.runtime.lastError;  // read even when dropped: Chrome logs it unchecked
+        if (gen !== sessionGen && !ALWAYS_ANSWERED.has(message.type)) return;
+        if (error) {
+          resolve({ ok: false, status: 0, detail: runtimeDetail(error.message) });
           return;
         }
         resolve(response);
@@ -1843,8 +1848,8 @@ let panelShadow: ShadowRoot | null = null;
  * On a detail page it's location.href; opened from an index card it's that
  * card's detail href (NOT the search page). */
 let panelUrl = '';
-/* The same listing's portal ref, kept alongside panelUrl so onSignIn can
- * re-run openPanel() once a session lands, without the caller re-supplying it. */
+/* The same listing's portal ref, kept alongside panelUrl so an account change
+ * can re-run openPanel() without the caller re-supplying it. */
 let panelRef: PortalRef | null = null;
 let patchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2411,11 +2416,6 @@ async function onMoveStage(stageId: number): Promise<void> {
 let cachedStages: PipelineStage[] | null = null;
 let stagesLoading = false;
 
-/* Bumped by an account change (below): a list read still in flight was
- * authorised as the account that left, so it must neither refill a cache nor
- * hold the loading flag that would turn the next account's own read away. */
-let sessionGen = 0;
-
 async function loadStages(): Promise<void> {
   if (cachedStages != null) {
     if (state.stages == null) setState((prev) => ({ ...prev, stages: cachedStages }));
@@ -2427,7 +2427,6 @@ async function loadStages(): Promise<void> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await call<PipelineStage[]>({ type: 'list_pipeline_stages' });
-      if (gen !== sessionGen) return;
       if (res.ok) {
         cachedStages = res.data;
         setState((prev) => ({ ...prev, stages: cachedStages }));
@@ -2465,7 +2464,6 @@ async function loadCollections(refresh = false): Promise<void> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await call<ExtCollection[]>({ type: 'list_collections' });
-      if (gen !== sessionGen) return;
       if (res.ok) {
         const changed = cachedCollections == null
           || collectionsKey(cachedCollections) !== collectionsKey(res.data);
@@ -2507,7 +2505,6 @@ async function loadTags(refresh = false): Promise<void> {
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const res = await call<ExtTag[]>({ type: 'list_tags' });
-      if (gen !== sessionGen) return;
       if (res.ok) {
         const key = (list: ExtTag[]): string =>
           JSON.stringify(list.map((t) => [t.id, t.name, t.color]));
@@ -2528,12 +2525,22 @@ async function loadTags(refresh = false): Promise<void> {
   }
 }
 
-/* The three lists belong to the account that read them: a sign-in or sign-out
- * here or in any tab, or a failed refresh, drops them; the next open re-reads. */
-onAccountChange(() => {
+/* The lists and the open panel belong to the account that read them: an account change
+ * drops the lists (the next open re-reads them) and puts the panel on the prompt or re-reads it. */
+onAccountChange((user) => {
   sessionGen++;
   cachedStages = cachedCollections = cachedTags = null;
   stagesLoading = collectionsLoading = tagsLoading = false;
+  if (panelRef == null || document.getElementById(HOST_ELEMENT_ID) == null) return;
+  if (user != null) {
+    void openPanel(panelRef, panelUrl);
+    return;
+  }
+  renderEpoch++;
+  setState((prev) => ({
+    ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
+    collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
+  }));
 });
 
 /* Fetch the caller's agent-estimation allowance for the "(zbývá X)" counter +
@@ -2693,11 +2700,9 @@ async function onDeleteNoteConfirm(noteId: number): Promise<void> {
 
 /* Trigger the extension's own PKCE sign-in (Wave 1) — the background worker
  * owns chrome.identity (a content script can't call it directly), so this
- * just relays a message and re-runs openPanel() on success to reload
- * whatever the signed-out prompt was blocking. */
+ * just relays a message; the session landing is an account change, which
+ * re-opens the panel (onAccountChange). */
 async function onSignIn(): Promise<void> {
-  if (panelRef == null) return;
-  const ref = panelRef;
   setState((prev) => ({ ...prev, busy: true, errorMessage: null }));
   const res = await call<undefined>({ type: 'sign_in' });
   if (!res.ok) {
@@ -2705,17 +2710,13 @@ async function onSignIn(): Promise<void> {
       ...prev, busy: false, phase: 'signed_out',
       errorMessage: `Přihlášení selhalo: ${res.detail}`,
     }));
-    return;
   }
-  await openPanel(ref, panelUrl);
 }
 
+/* The session going is an account change, which puts the panel on the prompt. */
 async function onSignOut(): Promise<void> {
-  await call<undefined>({ type: 'sign_out' });
-  setState((prev) => ({
-    ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
-    collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
-  }));
+  const res = await call<undefined>({ type: 'sign_out' });
+  if (!res.ok) setState((prev) => ({ ...prev, errorMessage: friendlyDetail(res.detail) }));
 }
 
 /* Mounts/refreshes the floating panel for one listing. Used by the detail-page

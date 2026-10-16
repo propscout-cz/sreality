@@ -432,8 +432,8 @@ service must allow that origin or every request will be blocked.
 click it, complete the Google consent screen in the popup window that
 opens, and the panel reloads signed in. A compact "you@example.com ·
 Odhlásit" line then appears at the top of the panel on every listing; click
-**Odhlásit** to sign out again, in every tab: search pages drop their cards
-and offer sign-in, and a panel open elsewhere prompts when next opened.
+**Odhlásit** to sign out again, in every tab: search pages drop their badges
+and card controls and offer sign-in, and every open panel shows the prompt.
 
 **On a listing detail page** (any supported portal):
 

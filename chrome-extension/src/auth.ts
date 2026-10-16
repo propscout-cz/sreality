@@ -6,7 +6,7 @@
  * reuse-detection, so a token shared between two independently-refreshing
  * sessions would eventually revoke both. This is a fully separate sign-in. */
 
-import { SESSION_KEY, type StoredSession } from './session';
+import { SESSION_KEY, decodeJwtPayload, type StoredSession } from './session';
 import type { AuthState } from './types';
 
 function normalizeBaseUrl(raw: string): string {
@@ -62,22 +62,6 @@ function randomVerifier(): string {
 
 async function challengeFor(verifier: string): Promise<string> {
   return base64UrlEncode(await sha256(verifier));
-}
-
-/* Best-effort JWT payload decode for display and cache identity only (the email
- * in the sign-in strip, the `sub` tabs key their cached lists by) — never used
- * for authorization, the API independently verifies the token via JWKS. */
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const [, payload] = token.split('.');
-    if (payload == null) return null;
-    const padded = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(
-      payload.length + ((4 - (payload.length % 4)) % 4), '=',
-    );
-    return JSON.parse(atob(padded)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 /* GoTrue error responses come in two shapes depending on the project's Auth
