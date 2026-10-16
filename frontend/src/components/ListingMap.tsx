@@ -7,14 +7,12 @@ import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
   COUNTS,
   COUNT_INK,
-  PIN_ZOOM,
   addCountPillImage,
   countLayer,
   fitExtent,
   marksFor,
   toCountFeatureCollection,
-  useCountRule,
-  type CountMark,
+  useCountLevel,
 } from '@/lib/mapCounts';
 import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/queries';
 import type { CenterRadius, MapBounds } from '@/lib/filters';
@@ -22,7 +20,7 @@ import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
 import { fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
 import { PPM2_UNIT, areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
-import type { PriceMetric } from '@/lib/browseState';
+import { PIN_LIMIT_MAX, PIN_LIMIT_MIN, parsePinLimit, type PriceMetric } from '@/lib/browseState';
 import { listingKindLabel } from '@/lib/enums';
 import type { PriceStatDataset, PriceStatGrowthRow, PriceStatGrowthShape } from '@/lib/priceStats';
 import {
@@ -250,7 +248,7 @@ const CITY_NULL_COLOR = '#8c9196';
 interface Props {
   rows: MapRow[];
   /* Server-side tile counts instead of pins, when the cohort is larger than
-   * MAP_POINT_BUDGET (MapResult.counts: the cells and the level they were counted
+   * the pin limit (MapResult.counts: the cells and the level they were counted
    * at; the map never draws them finer). Non-null and `rows` empty, or null and
    * `rows` populated; never both. Zooming in shrinks the cohort (the viewport is a
    * filter) until it fits, at which point real pins come back. */
@@ -333,6 +331,15 @@ interface Props {
    * itself is MapOverlayState.priceMetric, URL key `pm`. */
   priceMetric?: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
+  /* Whether the pins print their price label (MapOverlayState.priceLabels, URL key
+   * `labels`). */
+  priceLabels?: boolean;
+  onPriceLabelsChange?: (next: boolean) => void;
+  /* Up to this many properties in view every one is a pin; above it the server
+   * counts by tile (MapOverlayState.pinLimit, URL key `pins`; it is the point
+   * budget the map query was fetched with). */
+  pinLimit: number;
+  onPinLimitChange?: (next: number) => void;
   /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them:
    * the registry, the canonical `layers` selection, and where a change goes
    * (the URL + the remembered selection — MapOverlayState.layers). Drawn under
@@ -384,6 +391,10 @@ export default function ListingMap({
   showCities = true,
   priceMetric = 'total',
   onPriceMetricChange,
+  priceLabels = true,
+  onPriceLabelsChange,
+  pinLimit,
+  onPinLimitChange,
   colorByIndex,
   cityIndexValues,
   cityIndexValuesAll,
@@ -456,16 +467,8 @@ export default function ListingMap({
   overlayLayersRef.current = overlayLayers;
   /* The overlay panels read the floored zoom to say "zoom in". */
   const zoomLevel = useMapZoom(mapRef.current, ready);
-  /* The count rule for the current zoom (lib/mapCounts): which tile level the
-   * marks group at, and whether a point cohort is all pins. Its `pins` also
-   * drives the "Ceny" control's hint: price labels exist only on pins, so
-   * without it the operator clicks a toggle at the zoom Browse opens at and
-   * sees no pixel change anywhere — a control that reads as broken. */
-  const rule = useCountRule(mapRef.current, ready);
-  const labelsVisible = rule?.pins ?? false;
-  /* The marks on screen by feature id, for the count layer's hover handler
-   * (registered once at mount) to resolve member ids. */
-  const marksRef = useRef<Map<number, CountMark>>(new Map());
+  /* The tile level the count marks group at for the current zoom (lib/mapCounts). */
+  const level = useCountLevel(mapRef.current, ready);
   /* The legend's counts, over the plotted rows, by the same rule that picks each
    * pin's face — so the legend also answers "how much of this is only roughly
    * placed" for the whole view at once. */
@@ -781,7 +784,6 @@ export default function ListingMap({
         type: 'symbol',
         source: 'listings',
         filter: ['!=', ['get', 'price_label'], ''],
-        minzoom: PIN_ZOOM,
         layout: {
           'text-field': ['get', 'price_label'],
           'text-font': ['Noto Sans Bold'],
@@ -804,11 +806,10 @@ export default function ListingMap({
         },
       });
 
-      /* The count marks, above the pins so a mark sits over a neighbouring lone
-       * pin. A mark is a tile, not a listing: a click zooms two levels in on it,
-       * and the click's own event rides on the ease so the moveend guard below
-       * sees a user move and re-scopes the list and stats to the new view.
-       * Hovering a mark lights its member cards (known for a point cohort). */
+      /* The count marks, above the pins. A mark is a tile, not a listing: a click
+       * zooms two levels in on it, and the click's own event rides on the ease so
+       * the moveend guard below sees a user move and re-scopes the list and stats
+       * to the new view. */
       addCountPillImage(map);
       map.addLayer(countLayer());
       map.on('click', COUNTS, (e) => {
@@ -819,15 +820,11 @@ export default function ListingMap({
           { originalEvent: e.originalEvent },
         );
       });
-      map.on('mouseenter', COUNTS, (e) => {
+      map.on('mouseenter', COUNTS, () => {
         map.getCanvas().style.cursor = 'pointer';
-        const key = e.features?.[0]?.id;
-        const ids = typeof key === 'number' ? marksRef.current.get(key)?.ids : undefined;
-        if (ids && ids.length > 0) onHoverRef.current?.(ids);
       });
       map.on('mouseleave', COUNTS, () => {
         map.getCanvas().style.cursor = '';
-        onHoverRef.current?.(null);
       });
       map.on('mouseenter', 'point', (e) => {
         map.getCanvas().style.cursor = 'pointer';
@@ -1220,21 +1217,19 @@ export default function ListingMap({
     );
   }, [centerCircle, ready]);
 
-  /* ONE data effect for both lanes. The cohort arrives as points (`rows`) or as
-   * the server's tile cells, never both; either way the count rule
-   * (lib/mapCounts) groups it: below PIN_ZOOM a tile holding one known property
-   * shows that pin and any other tile shows its count, so `listings` carries
-   * the lone pins and `counts` the marks; from PIN_ZOOM a point cohort is all
-   * pins. Cells arrive at the finest level the server could afford, so they are
-   * regrouped at the coarser of that and the map's level. Both setData calls
-   * run every time, so switching lanes or levels can never leave a stale mark
-   * beside a pin. `priceMetric` is a dependency because the labels are BAKED
-   * into the feature properties — flipping the control has to re-run setData,
-   * not just repaint. The map fits to the first non-empty result once, whichever
-   * lane brought it; after that the operator's pan/zoom is theirs. */
+  /* ONE data effect for both lanes. The cohort arrives as points (`rows`, up to
+   * the pin limit, every one a pin at any zoom) or as the server's tile cells
+   * (above it), never both. Cells arrive at the finest level the server could
+   * afford, so they are regrouped at the coarser of that and the map's level
+   * (lib/mapCounts). Both setData calls run every time, so switching lanes or
+   * levels can never leave a stale mark beside a pin. `priceMetric` is a
+   * dependency because the labels are BAKED into the feature properties —
+   * flipping the control has to re-run setData, not just repaint. The map fits
+   * to the first non-empty result once, whichever lane brought it; after that
+   * the operator's pan/zoom is theirs. */
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || !rule) return;
+    if (!ready || !map || level == null) return;
     const pinSource = map.getSource('listings') as GeoJSONSource | undefined;
     const countSource = map.getSource(COUNTS) as GeoJSONSource | undefined;
     if (!pinSource || !countSource) return;
@@ -1243,8 +1238,7 @@ export default function ListingMap({
      * tile's mark lands on the part of the tile that is on screen. */
     const b = map.getBounds();
     const view = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
-    const { pins, marks } = marksFor(rows, counts, rule, view);
-    marksRef.current = new Map(marks.map((m) => [m.key, m]));
+    const { pins, marks } = marksFor(rows, counts, level, view);
     pinSource.setData(toFeatureCollection(pins, priceMetric));
     countSource.setData(toCountFeatureCollection(marks));
 
@@ -1256,7 +1250,15 @@ export default function ListingMap({
       { padding: 56, maxZoom: 14, duration: 700 },
     );
     didInitialFitRef.current = true;
-  }, [rows, counts, rule, ready, priceMetric]);
+  }, [rows, counts, level, ready, priceMetric]);
+
+  /* The price labels are a layout toggle, not a zoom rule: the tick box above the
+   * map shows or hides them; MapLibre thins the ones that collide. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map?.getLayer('point-price')) return;
+    map.setLayoutProperty('point-price', 'visibility', priceLabels ? 'visible' : 'none');
+  }, [priceLabels, ready]);
 
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
@@ -1439,17 +1441,23 @@ export default function ListingMap({
               <span
                 className="ml-2 text-[var(--color-ink-2)]"
                 title={
-                  'The cohort is larger than the map plots pin-by-pin, so it is counted by map '
-                  + 'tile: every matching property is in exactly one count — nothing is cut. Zoom '
-                  + 'in (the viewport is part of the filter) and individual pins return once the '
-                  + 'cohort fits.'
+                  `More than ${pinLimit.toLocaleString('cs-CZ')} properties are in view, so they are counted `
+                  + 'by map tile: every matching property is in exactly one count — nothing is cut. '
+                  + 'Zoom in (the viewport is part of the filter), or raise the pin limit, and '
+                  + 'individual pins return.'
                 }
               >
-                · counted by tile, zoom in for pins
+                · over {pinLimit.toLocaleString('cs-CZ')} in view, counted by tile
               </span>
             )}
           </Pill>
           {rows.length > 0 && <PinPrecisionLegend exact={pinFaces.exact} approx={pinFaces.approx} />}
+          <MapViewControls
+            pinLimit={pinLimit}
+            onPinLimitChange={onPinLimitChange}
+            priceLabels={priceLabels}
+            onPriceLabelsChange={onPriceLabelsChange}
+          />
         </div>
         {bounds && (
           <button
@@ -1469,7 +1477,6 @@ export default function ListingMap({
         <PriceMetricControls
           priceMetric={priceMetric}
           onPriceMetricChange={onPriceMetricChange}
-          labelsVisible={labelsVisible}
         />
         {cities && cities.length > 0 && (
           <CityMapControls
@@ -1720,16 +1727,9 @@ function CityMapControls({
 function PriceMetricControls({
   priceMetric,
   onPriceMetricChange,
-  labelsVisible,
 }: {
   priceMetric: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
-  /* False while the map is zoomed out far enough that points are still
-   * grouped into count marks. The control stays LIVE (the choice is URL state and
-   * survives the zoom that reveals it) but says its effect is not on screen
-   * yet — disabling it would make a shareable `?pm=per_m2` link unsettable
-   * from the view the link opens at. */
-  labelsVisible: boolean;
 }) {
   const opts: ReadonlyArray<{ value: PriceMetric; label: string }> = [
     { value: 'total', label: 'Celkem' },
@@ -1740,9 +1740,7 @@ function PriceMetricControls({
        editing that string later would silently rewrite this label. */
     { value: 'per_m2', label: 'Za m²' },
   ];
-  const hint = labelsVisible
-    ? 'Popisky pinů: celková cena nebo cena za m²'
-    : 'Popisky pinů se zobrazí po přiblížení';
+  const hint = 'Popisky pinů: celková cena nebo cena za m²';
   return (
     <div className="pointer-events-auto flex flex-col gap-1 px-2.5 py-1.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] text-[0.75rem]">
       <div className="flex items-center gap-2">
@@ -1771,12 +1769,62 @@ function PriceMetricControls({
           ))}
         </div>
       </div>
-      {!labelsVisible && (
-        <span className="text-[0.65rem] text-[var(--color-ink-4)]">
-          Přibližte pro popisky
-        </span>
-      )}
     </div>
+  );
+}
+
+/* The two view knobs above the map: how many properties in view are drawn pin
+ * by pin before the map counts them by tile (it IS the server's point budget, so
+ * changing it refetches), and whether pins print their price label. Both are URL
+ * state (`pins`, `labels`). The number commits on blur or Enter so a half-typed
+ * value never fires a fetch; the state's parser clamps it into range. */
+function MapViewControls({
+  pinLimit,
+  onPinLimitChange,
+  priceLabels,
+  onPriceLabelsChange,
+}: {
+  pinLimit: number;
+  onPinLimitChange?: (next: number) => void;
+  priceLabels: boolean;
+  onPriceLabelsChange?: (next: boolean) => void;
+}) {
+  const [draft, setDraft] = useState(String(pinLimit));
+  useEffect(() => setDraft(String(pinLimit)), [pinLimit]);
+  const commit = () => {
+    const next = parsePinLimit(draft);
+    setDraft(String(next));
+    if (next !== pinLimit) onPinLimitChange?.(next);
+  };
+  const inputId = useId();
+  return (
+    <span className="pointer-events-auto inline-flex items-center gap-2 px-2.5 py-1 text-[0.72rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums">
+      <label htmlFor={inputId} className="inline-flex items-center gap-1" title={`Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích (${PIN_LIMIT_MIN} až ${PIN_LIMIT_MAX}).`}>
+        <span>Piny do</span>
+        <input
+          id={inputId}
+          type="number"
+          inputMode="numeric"
+          min={PIN_LIMIT_MIN}
+          max={PIN_LIMIT_MAX}
+          step={10}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          className="w-14 px-1 py-0 text-right bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[var(--color-ink)]"
+        />
+      </label>
+      <label className="inline-flex items-center gap-1 cursor-pointer" title="Vypsat u pinů cenu">
+        <input
+          type="checkbox"
+          checked={priceLabels}
+          onChange={(e) => onPriceLabelsChange?.(e.target.checked)}
+          className="accent-[var(--color-ink)]"
+        />
+        <span>Popisky</span>
+      </label>
+    </span>
   );
 }
 

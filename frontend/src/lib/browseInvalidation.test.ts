@@ -44,7 +44,7 @@ describe('browse key factories', () => {
   const readers: QueryKey[] = [
     browseKeys.cards(f, DEFAULT_SORT),
     browseKeys.table(f, DEFAULT_SORT),
-    browseKeys.map(f),
+    browseKeys.map(f, 200),
     browseKeys.stats(f),
     browseKeys.count(f),
     browseKeys.noPriceCount(f),

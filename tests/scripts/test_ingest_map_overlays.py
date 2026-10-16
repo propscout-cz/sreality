@@ -97,7 +97,8 @@ def test_the_notes_attribution_and_licences() -> None:
     assert mod.SOURCES["metro"].note == (
         "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026): stav, návrh a územní rezervy. "
         "Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E) nemá rozhodnutou "
-        "trasu ani technologii."
+        "trasu ani technologii. Stanice v provozu v barvě své linky; přestupní stanice má bod "
+        "za každou linku."
     )
     assert mod.SOURCES["flood"].note == (
         "Stanovená záplavová území (zákonný rozsah, orientační). Nezohledňují protipovodňová "
@@ -123,8 +124,13 @@ def test_the_readers_ask_each_publisher_for_its_native_crs() -> None:
         ("MPP_CUR_MPP_STAV_600_DI_TRASY_L", "kapitola=621", 3857, mod.POLYLINE),
         ("MPP_CUR_MPP_600_DI_TRASY_L", "kapitola=621", 3857, mod.POLYLINE),
         ("MPP_CUR_MPP_600_DI_ZARIZENI_B", "kapitola=621 and druh=2", 3857, mod.POINT),
+        # Stations in service come from IPR's referenced (not hosted) named layer, in its
+        # native S-JTSK: its WGS84 output carries the same ~10 m datum shift as the VÚV server.
+        ("DOP_MetroZarizeni_b", "DRUH=1", 5514, mod.POINT),
     ]
-    assert all(r.service_url == f"{mod.IPR_HOSTED}/{r.layer_name}/FeatureServer" for r in metro)
+    assert all(r.service_url == f"{mod.IPR_HOSTED}/{r.layer_name}/FeatureServer" for r in metro[:3])
+    assert metro[3].service_url == f"{mod.IPR_REFERENCED}/DOP_MetroZarizeni_b/FeatureServer"
+    assert metro[3].fields == ("DRUH", "NAZEV", "TRASA")
     assert [(lyr.key, lyr.readers[0].layer_name, lyr.readers[0].out_sr)
             for lyr in mod.SOURCES["flood"].layers] == [
         ("flood_q5", "ZaplavUzemi_Q5", 5514), ("flood_q20", "ZaplavUzemi_Q20", 5514),
@@ -238,6 +244,28 @@ def test_cancelled_rows_vestibules_and_depots_are_skipped() -> None:
     # Reserve-stage (stav 3) and existing (stav 1) station points are not "planned stations".
     assert mod.metro_station_props({"druh": 2, "stav": 3, "nazev": "Stanice metra Labe"}) is None
     assert mod.metro_station_props({"druh": 2, "stav": 1, "nazev": "Stanice metra Florenc"}) is None
+
+
+def test_stations_in_service_wear_their_line_letter() -> None:
+    """IPR's named metro-equipment layer: DRUH 1 = station, TRASA = the line. The class IS
+    the letter, so the dot takes the line's legend colour and a transfer station has one
+    point per line; the label drops the plan's prefix if it ever appears."""
+    assert mod.metro_existing_station_props({"DRUH": 1, "NAZEV": "Muzeum", "TRASA": "A"}) == {
+        "class": "A", "name": "Muzeum", "label": "Muzeum"}
+    assert mod.metro_existing_station_props({"DRUH": 1, "NAZEV": "Muzeum", "TRASA": "C"}) == {
+        "class": "C", "name": "Muzeum", "label": "Muzeum"}
+    assert mod.metro_existing_station_props(
+        {"DRUH": 1, "NAZEV": "Stanice metra Florenc", "TRASA": " b "}
+    ) == {"class": "B", "name": "Stanice metra Florenc", "label": "Florenc"}
+    # Vestibules (2) and depots (3) are not stations.
+    assert mod.metro_existing_station_props({"DRUH": 2, "NAZEV": "Muzeum", "TRASA": "A"}) is None
+    assert mod.metro_existing_station_props({"DRUH": 3, "NAZEV": "Depo Hostivař", "TRASA": "A"}) is None
+    # A station the layer cannot place on a line, or cannot name, refuses the run (nothing partial).
+    for attrs in ({"DRUH": 1, "NAZEV": "Muzeum", "TRASA": "D"},
+                  {"DRUH": 1, "NAZEV": "Muzeum", "TRASA": None},
+                  {"DRUH": 1, "NAZEV": " ", "TRASA": "A"}):
+        with pytest.raises(mod.Refused):
+            mod.metro_existing_station_props(attrs)
 
 
 @pytest.mark.parametrize("attrs", [
