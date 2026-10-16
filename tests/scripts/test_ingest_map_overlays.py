@@ -56,7 +56,7 @@ def test_the_registry_holds_the_five_sections_in_order() -> None:
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
         "kraje": ("Kraje", 3, 3, 9),
-        "universities": ("Vysoké školy", 4, 10, 12),
+        "universities": ("Vysoké školy", 4, 9, 12),
         "rent_map": ("Cenová mapa nájemného", 0, 3, 12),
     }
     assert list(mod.SOURCES) == ["metro", "flood", "kraje", "universities", "rent_map"]
