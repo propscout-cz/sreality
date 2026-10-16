@@ -73,8 +73,6 @@ const CARD_IMAGE_MIN = { sm: '11.5rem', lg: '23rem' } as const;
 interface Props {
   rows: CardRow[] | null;
   total: number | null;
-  /* `total` is an approximate (planner-estimate) cohort size — render "~N". */
-  totalApprox?: boolean;
   sort: SortSpec;
   /* The portal whose newest ad orders the cards (queries.ts orderPortal), or
    * null: a card whose date there differs from its own first seen shows both. */
@@ -147,7 +145,6 @@ interface Props {
 export default function ListingCards({
   rows,
   total,
-  totalApprox = false,
   sort,
   orderPortal = null,
   imageLarge,
@@ -215,7 +212,7 @@ export default function ListingCards({
               ? '—'
               : total === 0
                 ? '0 listings'
-                : `${loaded.toLocaleString('cs-CZ')} of ${totalApprox ? '~' : ''}${total.toLocaleString('cs-CZ')}`}
+                : `${loaded.toLocaleString('cs-CZ')} of ${total.toLocaleString('cs-CZ')}`}
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <CoverDropdown coverTag={coverTag} onChange={onCoverTag} />

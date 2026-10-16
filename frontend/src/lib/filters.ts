@@ -1009,15 +1009,10 @@ const fmtDaysRange = (lo: number | null, hi: number | null): string => {
   return `≤ ${hi} d`;
 };
 
-export const summarise = (
-  f: ListingFilters,
-  count: number | null,
-  approx = false,
-): string => {
+export const summarise = (f: ListingFilters, count: number | null): string => {
   const bits: string[] = [];
   bits.push(f.status === 'active' ? 'active' : f.status === 'inactive' ? 'inactive' : 'all');
-  const countStr =
-    count == null ? '…' : `${approx ? '~' : ''}${count.toLocaleString('cs-CZ')}`;
+  const countStr = count == null ? '…' : count.toLocaleString('cs-CZ');
   bits.push(`${countStr} ${categoryMainLabel(f.categoryMain)}`);
   const dealLabel = categoryTypeLabel(f.categoryType);
   if (dealLabel) bits.push(dealLabel);

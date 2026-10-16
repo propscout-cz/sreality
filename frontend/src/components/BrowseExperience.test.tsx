@@ -21,7 +21,7 @@ import type { ImagePublic } from '@/lib/types';
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
   fetchListingsForCards: vi.fn(),
-  fetchBrowseCount: vi.fn(async () => ({ value: 1, precise: true })),
+  fetchBrowseCount: vi.fn(async () => 1),
   fetchImagesForListingIds: vi.fn(async () => new Map()),
   fetchListingCovers: vi.fn(async () => new Map()),
   fetchPropertyCollectionMemberSet: vi.fn(async () => new Map()),
