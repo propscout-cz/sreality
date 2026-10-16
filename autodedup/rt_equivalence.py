@@ -633,7 +633,7 @@ def run_equivalence(
 
     conn = conn_factory()
     try:
-        rows = _rows(conn, RT_CALIBRATION_READ_SQL, {"generation": generation})
+        rows = _rows(conn, RT_CALIBRATION_READ_SQL, {"generation": generation, "held": None})
         if not rows:
             raise SystemExit(
                 f"generation {generation!r} has no frozen calibration — this mode compares the "

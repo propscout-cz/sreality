@@ -345,6 +345,10 @@ class Calibration:
     block_attr_df: dict[str, dict[str, int]] = field(default_factory=dict)
     pin_pop: dict[str, int] = field(default_factory=dict)
     certifying_codes: list[str] = field(default_factory=list)
+    # E944: `digest()` hashed once. A pass hashes it three to seven times and the lane keeps one
+    # calibration across passes; nothing writes into one after it is built (`replace` makes a
+    # new one, with no digest yet).
+    _digest: str | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def build(
@@ -392,11 +396,13 @@ class Calibration:
         `built_at` is excluded deliberately: it says WHEN the calibration was cut, not what it
         contains, and a digest that moved every time the same cohort was re-cut would certify
         nothing. Two identical calibrations must hash identically or E70's stamp is decoration."""
-        payload = dict(self.to_json())
-        payload.pop("built_at", None)
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()[:16]
+        if self._digest is None:
+            payload = dict(self.to_json())
+            payload.pop("built_at", None)
+            self._digest = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()[:16]
+        return self._digest
 
     def to_json(self) -> dict[str, Any]:
         return {

@@ -2259,7 +2259,8 @@ def test_a_skip_filed_at_apply_is_fenced_too() -> None:
 def test_the_pass_hands_its_reconcile_and_its_re_cut_the_lease_check(tmp_path,
                                                                       monkeypatch) -> None:
     """The fence the reconcile gets is the pass's own: its holder's live row. And the re-cut —
-    the calibration rewritten after the pass committed — ends its transaction with it too."""
+    the calibration rewritten in the tick after the pass (E944) — ends its transaction with it
+    too."""
     from autodedup import incremental_lane, rt_lease
     from autodedup.incremental import bootstrap_key
     from autodedup.incremental_lane import run_incremental
@@ -2295,14 +2296,17 @@ def test_the_pass_hands_its_reconcile_and_its_re_cut_the_lease_check(tmp_path,
     monkeypatch.setattr(incremental_lane, "RECUT_MIN_AGE_H", 0.0)
     digest = world.calibration["rt"]["digest"]
 
+    assert run_incremental(lambda: world, holder="worker:1:1")["population"]["recut_due"]
+    assert seen == {"fenced": True}
+    from autodedup.incremental_lane import STORAGE_WATERMARK, recut_key
+
+    world.settings.pop(STORAGE_WATERMARK)
     out = run_incremental(lambda: world, holder="worker:1:1")
 
-    assert seen == {"fenced": True}
     assert out["recut"]["skipped"].startswith("LeaseLost"), out.get("recut")
     assert world.calibration["rt"]["digest"] == digest, "the re-cut rolled back"
-    from autodedup.incremental_lane import STORAGE_WATERMARK
-
     assert STORAGE_WATERMARK not in world.settings, "and no watermark under a lost lease"
+    assert world.settings[recut_key("rt")]["due"], "still due: the next holder re-cuts"
 
 
 def test_a_reconcile_that_lost_the_lease_ends_the_passs_writes(tmp_path, monkeypatch) -> None:
@@ -2444,9 +2448,9 @@ def test_after_the_signal_a_raise_or_a_refusal_writes_no_rate(tmp_path, monkeypa
 
 
 def test_a_re_cut_reads_the_shutdown_at_its_checkpoints(tmp_path) -> None:
-    """The re-cut runs after the pass committed, inside what is left of its time, on the
-    `phash_pop` and `rt_calibration` rows: once the worker is stopping it stops at its next
-    checkpoint and its transaction rolls back, instead of running to SIGKILL."""
+    """The re-cut runs in a tick of its own (E944), on the `phash_pop` and `rt_calibration`
+    rows: once the worker is stopping it stops at its next checkpoint and its transaction rolls
+    back, instead of running to SIGKILL."""
     import time as clock_module
 
     from autodedup.incremental import PassStopped

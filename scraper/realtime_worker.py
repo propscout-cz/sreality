@@ -2278,6 +2278,21 @@ def _autodedup_outcome(
             ledger_skipped=counts.get("ledger_skipped"),
             ledger_written=counts.get("ledger_written"),
         )
+
+    if summary is not None:
+        # E944, on every path a skip's included: the last re-cut (a failed one is an error), the
+        # calibration's age and the process's memory.
+        recut = summary.get("recut")
+        if recut is not None:
+            last["recut"] = recut
+            if recut.get("failed"):
+                last.update(errors=1, recut_failed=str(recut.get("skipped") or "")
+                            [:AUTODEDUP_REASON_CHARS])
+        last["calibration_built_age_days"] = (summary.get("calibration") or {}).get(
+            "built_age_days")
+        for key in ("peak_rss_mb", "rss_mb"):
+            last.setdefault(key, summary.get(key))
+        last.setdefault("memory_limit_mb", memory_limit_mb)
     return last
 
 
@@ -2438,7 +2453,8 @@ def _autodedup_note(last: dict[str, Any]) -> None:
     global _AUTODEDUP_LAST_OUTCOME
 
     if last.get("errors"):
-        key = "error:" + str(last.get("refused") or last.get("aborted") or "")
+        key = "error:" + str(last.get("refused") or last.get("aborted")
+                             or last.get("recut_failed") or "")
     elif last.get("skipped"):
         key = "skipped:" + str(last.get("reason"))
     else:
@@ -2448,7 +2464,7 @@ def _autodedup_note(last: dict[str, Any]) -> None:
     _AUTODEDUP_LAST_OUTCOME = key
     if last.get("errors"):
         LOG.warning("AUTODEDUP lane pass stopped: %s",
-                    last.get("refused") or last.get("aborted"))
+                    last.get("refused") or last.get("aborted") or last.get("recut_failed"))
     elif last.get("skipped"):
         LOG.info("AUTODEDUP lane skipping: %s %s", last.get("reason"), last.get("detail") or "")
     else:
@@ -2478,7 +2494,13 @@ async def _autodedup_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> N
         _record_pass_failed(state, "autodedup", float(last["seconds"]))
         state["lanes"]["autodedup"]["last"] = last
         return
+    # E944: the lane's last re-cut, kept on its heartbeat (`recut`) through the passes after it.
+    recut = last.get("recut") or state["lanes"].get("autodedup", {}).get("recut")
+    if last.get("recut"):
+        LOG.info("AUTODEDUP lane re-cut: %s", last["recut"])
     _record_pass(state, "autodedup", last)
+    if recut is not None:
+        state["lanes"]["autodedup"]["recut"] = recut
 
 
 def _lane_snapshot(lanes: dict[str, Any]) -> dict[str, Any]:
