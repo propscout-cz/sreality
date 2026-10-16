@@ -437,7 +437,10 @@ nothing else.
   empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
   before the pass and at its end; E949: on every path but `previous_pass_running`, and a raised
   pass writes no `last`, so the heartbeat keeps the previous pass's until the next pass's
-  rss_at_start_mb shows what the raised one left), pairs_to_decide + pairs_to_decide_by_attempt
+  rss_at_start_mb shows what the raised one left), chunks + chunk_rss_mb + chunk_vectored (E950:
+  the chunks the pass scored its decided pairs in, the RSS as each was written and the listings
+  then holding their CLIP vectors — the rows follow the chunk, a side's vectors are held from its
+  first decided pair to its last), pairs_to_decide + pairs_to_decide_by_attempt
   (E943: what the pair budget counts, the last claim's and each claim's), ledger_skipped +
   ledger_written (the wanted below-floor rejects the reject ledger answered instead of a re-score,
   and the rejects the pass ledgered)}`; an absent store (migrations 539/540/596) =
