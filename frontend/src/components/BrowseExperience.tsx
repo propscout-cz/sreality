@@ -293,8 +293,8 @@ export default function BrowseExperience({
   /* Map tab fetches the map cohort (points, or counted by tile above the point
    * budget) + the paginated card slice. */
   const mapQuery = useQuery<MapResult, Error>({
-    queryKey: browseKeys.map(filters),
-    queryFn: ({ signal }) => fetchListingsForMap(filters, { signal }),
+    queryKey: browseKeys.map(filters, overlay.pinLimit),
+    queryFn: ({ signal }) => fetchListingsForMap(filters, overlay.pinLimit, { signal }),
     placeholderData: (prev) => prev,
     enabled: mapVisible,
   });
@@ -910,6 +910,10 @@ export default function BrowseExperience({
                     onToggleShowCities={(next) => view.setOverlay({ showCities: next })}
                     priceMetric={overlay.priceMetric}
                     onPriceMetricChange={(next) => view.setOverlay({ priceMetric: next })}
+                    priceLabels={overlay.priceLabels}
+                    onPriceLabelsChange={(next) => view.setOverlay({ priceLabels: next })}
+                    pinLimit={overlay.pinLimit}
+                    onPinLimitChange={(next) => view.setOverlay({ pinLimit: next })}
                     colorByIndex={cityOverlay.colorByIndex}
                     cityIndexValues={cityOverlay.cityIndexValues}
                     cityIndexValuesAll={cityOverlay.cityIndexValuesAll}

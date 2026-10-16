@@ -741,10 +741,12 @@ describe('dismissed properties are hidden at the source', () => {
 
   it('tells the map cells and reads the map pins through the same twin', async () => {
     const s = stubReads();
-    await fetchListingsForMap(DEFAULT_FILTERS);
+    await fetchListingsForMap(DEFAULT_FILTERS, 200);
     const [cells, pins] = s.rpc.mock.calls;
     expect(cells[0]).toBe('browse_map_cells');
     expect((cells[1] as Record<string, unknown>).hide_dismissed).toBe(true);
+    /* The pin limit IS the server's point budget: one number end to end. */
+    expect((cells[1] as Record<string, unknown>).point_budget).toBe(200);
     expect(pins[0]).toBe('properties_map_visible');
   });
 
@@ -944,9 +946,9 @@ describe('Browse Stats resolves through the one prefilter path', () => {
 
   it('never names the retired listing_ids_filter on the map, and carries the broker', async () => {
     const { rpcArgs } = stubReads();
-    await fetchListingsForMap({ ...DEFAULT_FILTERS, brokerId: 527 });
+    await fetchListingsForMap({ ...DEFAULT_FILTERS, brokerId: 527 }, 200);
     expect(rpcArgs[0]).not.toHaveProperty('listing_ids_filter');
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
-    expect(rpcArgs[0].point_budget).toBe(2000);
+    expect(rpcArgs[0].point_budget).toBe(200);
   });
 });

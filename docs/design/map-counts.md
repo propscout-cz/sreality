@@ -70,13 +70,15 @@ on a 1350 × 1250 px map that is 52 to 210 marks, on a 390 px phone width 2 to 4
 | Country z5–7 | 50 to 12 km | count marks |
 | Region z8–10 | 6.3 to 1.6 km | count marks |
 | City z11–13 | 780 to 200 m | count marks (Prague: ≈ 100 to 210 marks) |
-| District z14–15 | 100 to 50 m | pins with prices when the view holds ≤ 2 000 properties, else count marks (the Prague rental cohort is still counts here) |
-| Street z16+ | pins | pins (Prague rental cohort drops under 2 000 at ≈ z16) |
+| District z14–15 | 100 to 50 m | pins when the view holds at most the pin limit, else count marks |
+| Street z16+ | pins | pins once the view holds at most the pin limit |
 
-**Small cohorts (≤ 2 000: collections, brokers, narrow filters).** Below zoom 14 a tile holding one
-property shows that property's pin (popup, hover to its card); a tile holding two or more shows a
-count mark whose hover lights its members' cards. From zoom 14 every property is a pin, exactly as
-today's `clusterMaxZoom: 13` behaves.
+**The pin limit (ruling 7, 2026-10-16).** Up to N properties in view (default 200, range 20 to
+2 000, the number input above the map, URL `pins=`) every property is its own pin at ANY zoom; above
+N the server counts by tile. N IS the server's point budget: one number end to end, part of the map
+query's key, so the browser never groups points itself and there is no zoom gate on pins. Price
+labels are a tick box above the map (ruling 8; URL `labels=0` hides), thinned by MapLibre's collision
+where they crowd; the "Ceny" control keeps choosing the metric.
 
 **The mark** (one symbol layer, `counts`; replaces `clusters`, `cluster-count`, `cells`, `cell-count`):
 
@@ -96,8 +98,8 @@ own number and no mark is ever hidden.
 
 **Also changed, deliberately:** the header pill loses "· grouped into N cells" and "· N outside the
 mapped extent" (the server's grid is an implementation detail and the off-grid bucket no longer
-exists: every row is in exactly one tile); the "Ceny" hint loses "(od úrovně 14)" (it was false in
-Prague); isolated pins get their price label from zoom 14 instead of 13 (one pin zoom constant).
+exists: every row is in exactly one tile); the "Ceny" hint is gone with the zoom gate (ruling 8: the
+labels are a tick box, not a zoom).
 
 ## Architecture after the sprint
 
@@ -226,6 +228,14 @@ migration 603 restates 598's body, md5-gated on 602.
 6. **Tile pitch 90 to 181 px** (default: 52 to 210 marks on a laptop split map) · 64 to 128 px
    (100 to 400 marks, denser, more numbers to read).
 
+Rulings 1 to 6 were taken on their defaults on 2026-10-15. Two more on 2026-10-16, after the
+operator saw a 125-property cohort grouped into counts at the 1 km scale:
+
+7. **Pins up to a user-set limit, at any zoom.** The limit (default 200, range 20 to 2 000, an input
+   above the map) is the server's point budget: one number end to end. The zoom-14 pin rule and the
+   browser-side tile grouping of points are deleted.
+8. **Price labels are a tick box above the map**, not a zoom rule.
+
 ## Risks and how each is caught
 
 - Count marks displace some basemap labels (they are placed first, as today's discs are). Measured
@@ -282,3 +292,12 @@ statement limit, no temp. Live `md5(prosrc)` of 598's body confirmed `8bf9e3ad�
 five test files (the new static rail is 125 of the additions, the live rail +156 / −123); docs and the
 CI comment +69 / −19; the SQL body replaces 45 lines of grid arithmetic and seven output keys with
 35 lines of tile arithmetic and four keys.
+
+**W4 (2026-10-16, rulings 7 and 8).** `MapOverlayState` gains `pinLimit` (URL `pins`, default 200,
+clamped 20 to 2 000) and `priceLabels` (URL `labels`); the limit is passed to `browse_map_cells` as
+`point_budget` and sits in the map query's key. Deleted: `PIN_ZOOM`, the `pins` half of the count
+rule, the browser-side grouping of points (`lone`, member ids, the mark hover that lit cards),
+`MAP_POINT_BUDGET`, the price labels' `minzoom`, the "Ceny" hint and its "Přibližte pro popisky"
+line. Added: one `MapViewControls` above the map (the number input commits on blur or Enter, the
+tick box toggles the label layer's visibility). No migration: the function's `point_budget` default
+stays 2 000 and the SPA always passes the limit.
