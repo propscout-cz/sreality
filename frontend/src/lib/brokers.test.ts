@@ -284,6 +284,8 @@ describe('chipsToGeoArrays', () => {
     ['a street', { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice' as const, id: 666742 }],
     ['a part of a town', { name: 'Žižkov', context: 'Praha', level: 'cast_obce' as const, id: 490067 }],
     ['an excluded town', { ...PRAHA, id: 582786, excluded: true }],
+    ['a level it does not know', { ...PRAHA, level: 'stat' as never }],
+    ['a chip without a code', { ...PRAHA, id: 0 }],
   ])('selects nothing when the selection holds %s, even beside a served chip', async (_l, chip) => {
     const { chipsToGeoArrays, geoUnserved } = await loadBrokers();
     const geo = chipsToGeoArrays([VYSOCINA, chip]);

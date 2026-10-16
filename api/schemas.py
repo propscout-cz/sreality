@@ -435,21 +435,15 @@ class ScenarioUpdateIn(BaseModel):
     renovation_czk: float | None = None
 
 
+# Typed so a malformed entry is a 422 at the boundary, never a 500 in the binder.
 class RegionalEntry(BaseModel):
-    """One entry of a Mapy.cz suggestion's `regionalStructure`. Typed so a
-    malformed entry is a 422 at the boundary, never a 500 in the binder; any
-    other key Mapy sends is ignored."""
+    """One entry of a Mapy.cz suggestion's `regionalStructure` (other keys ignored)."""
     name: str | None = None
     type: str | None = None
 
 
 class ResolveLocationIn(BaseModel):
-    """A Mapy.cz suggestion item picked by the user (`api.maps.resolve`).
-
-    The point places the obec and its chain; `type` picks the level; `name`
-    binds the two levels RÚIAN draws no polygon for — a část obce or a street —
-    inside that obec. An address binds the street its `regional.street` entry
-    names."""
+    """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
     lat: float
     lng: float
     type: str

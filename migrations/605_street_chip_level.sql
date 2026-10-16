@@ -30,8 +30,8 @@
 -- write waits on it), then waits for every transaction older than its snapshot -- a pg_cron list
 -- rebuild holds one up to its 1800 s cap -- so it runs with lock_timeout 0 under a 1900 s budget. At
 -- the house 5 s every attempt made during a rebuild would cancel, and each cancel leaves an INVALID
--- index that the retried attempt's IF NOT EXISTS silently keeps. Step 3a drops such a leftover on a
--- re-run; the post-condition refuses an invalid index.
+-- index that the retried attempt's IF NOT EXISTS silently keeps. Step 3a moves such a leftover aside and
+-- drops it CONCURRENTLY on a re-run; the post-condition refuses an invalid index.
 -- ROLLBACK: forward only (rule 1). A re-run is a no-op: the preconditions accept this file's bodies.
 
 set lock_timeout = '5s';
@@ -722,25 +722,29 @@ end
 $function$;
 
 -- ---------------------------------------------------------------------------
--- 3a. An INVALID listing_location_ulice_kod_idx can only be a cancelled step 3 of an earlier attempt;
---     IF NOT EXISTS would keep it, so drop it (an instant ACCESS EXCLUSIVE under the 5 s rule).
+-- 3a. An INVALID listing_location_ulice_kod_idx can only be a cancelled step 3 of an earlier attempt,
+--     and IF NOT EXISTS would keep it. A DO block is a transaction, where DROP INDEX CONCURRENTLY
+--     cannot run, so the block only RENAMES it aside (SHARE UPDATE EXCLUSIVE since PostgreSQL 12: no
+--     read or write waits on it) and the drop below, at top level, is CONCURRENTLY.
 -- ---------------------------------------------------------------------------
 do $invalid$
 begin
   if exists (select 1 from pg_index i
               where i.indexrelid = to_regclass('public.listing_location_ulice_kod_idx')
                 and not i.indisvalid) then
-    drop index public.listing_location_ulice_kod_idx;
-    raise notice '605: dropped an INVALID listing_location_ulice_kod_idx left by a cancelled build';
+    alter index public.listing_location_ulice_kod_idx rename to listing_location_ulice_kod_idx_invalid;
+    raise notice '605: an INVALID listing_location_ulice_kod_idx from a cancelled build moved aside';
   end if;
 end
 $invalid$;
 
 -- ---------------------------------------------------------------------------
--- 3. The feed lane's street index (see the header for the budget).
+-- 3. The feed lane's street index (see the header for the budget; the drop waits like the build).
 -- ---------------------------------------------------------------------------
 set lock_timeout = 0;
 set statement_timeout = '1900s';
+
+drop index concurrently if exists public.listing_location_ulice_kod_idx_invalid;
 
 create index concurrently if not exists listing_location_ulice_kod_idx
   on public.listing_location (ulice_kod) where ulice_kod is not null;

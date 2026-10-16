@@ -519,13 +519,15 @@ def test_an_okres_pick_that_does_not_name_its_okres_binds_nothing(client):
     assert body == {"level": "okres", **_NO_CODE, "context": None}
 
 
-def test_a_prague_district_typed_as_a_municipality_binds_nothing(client):
-    """D5 on the obec. Mapy types "Praha 2" `regional.municipality` (the shape
-    `_MOCK_SUGGEST` mirrors); it is a městská část, which no chip serves, and the
-    point alone would bind ALL of Praha."""
+def test_a_prague_district_typed_as_a_municipality_binds_nothing(client, caplog):
+    """Mapy types "Praha 2" `regional.municipality` (the shape `_MOCK_SUGGEST`
+    mirrors); it is a městská část, which no chip serves, and no unit of Praha's
+    chain has its name — the point alone would bind ALL of Praha."""
     pick = {"name": "Praha 2", "lat": 50.075, "lng": 14.437, "type": "regional.municipality"}
-    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
+    with caplog.at_level("INFO", logger="api.maps"):
+        body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
+    assert len([r for r in caplog.records if "no code" in r.getMessage()]) == 1
 
 
 def test_a_municipality_whose_point_lies_in_another_obec_binds_nothing(client):
@@ -535,11 +537,27 @@ def test_a_municipality_whose_point_lies_in_another_obec_binds_nothing(client):
     assert body == {"level": "obec", **_NO_CODE, "context": None}
 
 
-def test_an_okres_pick_where_the_register_has_no_okres_binds_nothing(client):
-    """Praha's obec hangs straight off its kraj."""
-    pick = {**_OKRES_SUGGESTION, "name": "okres Hlavní město Praha", "lat": 50.08, "lng": 14.43}
-    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, _PRAHA)])
-    assert body == {"level": "okres", **_NO_CODE, "context": None}
+@pytest.mark.parametrize("type_,name,chain,bound", [
+    ("regional.region", "okres Jihlava", _JIHLAVA, ("okres", 3707, "Jihlava")),
+    ("regional.municipality", "Jihlava", _JIHLAVA, ("obec", 586846, "Jihlava")),
+    ("regional.region.district", "Jihlava", _JIHLAVA, ("okres", 3707, "Jihlava")),
+    ("regional.region", "Hlavní město Praha", _PRAHA, ("kraj", 19, "Hlavní město Praha")),
+    ("regional.region.district", "Praha", _PRAHA, ("obec", 554782, "Praha")),
+    ("regional.region.district", "okres Hlavní město Praha", _PRAHA,
+     ("kraj", 19, "Hlavní město Praha")),
+], ids=["okres typed region", "obec+okres namesake typed municipality",
+        "obec+okres namesake typed okres", "kraj", "Praha has no okres: its obec",
+        "Praha's okres name is its kraj's"])
+def test_the_name_picks_the_unit_and_the_type_only_breaks_a_tie(client, type_, name, chain,
+                                                                 bound):
+    """D5 as a rule: the units of the point's chain that the pick NAMES are the
+    candidates; one binds at its own level, whatever Mapy typed (its enum has no
+    okres type); a namesake pair goes to the typed level, or to Mapy's "okres "
+    prefix, which names the level outright."""
+    pick = {"name": name, "lat": 49.40, "lng": 15.60, "type": type_}
+    body = _resolve(client, pick, [*_MIRROR_PRESENT, _chain(pick, chain)])
+    level, code, register_name = bound
+    assert body == {"level": level, "id": code, "name": register_name, "context": None}
 
 
 def test_a_region_pick_binds_the_kraj_it_names(client):
@@ -549,10 +567,10 @@ def test_a_region_pick_binds_the_kraj_it_names(client):
     assert body == {"level": "kraj", "id": 108, "name": "Kraj Vysočina", "context": None}
 
 
-@pytest.mark.parametrize("name", ["Jihlava", "okres Jihlava", "Vysočina", "   "])
-def test_a_region_pick_that_does_not_name_its_kraj_binds_nothing(client, name):
-    """D5. Mapy's published type enum has no okres type: an okres arriving typed
-    `regional.region` must fail closed, never widen to the kraj around it."""
+@pytest.mark.parametrize("name", ["Jihlava", "Vysočina", "   "])
+def test_a_region_pick_that_names_no_single_unit_binds_nothing(client, name):
+    """"Jihlava" names the obec AND the okres and the type (kraj) is neither: no
+    guess. "Vysočina" is not the register's name; a blank names nothing."""
     body = _resolve(client, {**_REGION_SUGGESTION, "name": name}, [
         *_MIRROR_PRESENT, _chain(_REGION_SUGGESTION, _JIHLAVA),
     ])
@@ -661,6 +679,15 @@ def test_two_rows_spelled_alike_are_refused(client):
     body = _street_resolve(client, _street_pick("Husova", HUSOVA), _PARDUBICE,
                            (HUSOVA, twin), None)
     assert body == _unbound("Pardubice")
+
+
+def test_two_current_rows_of_one_code_are_one_street(client):
+    """Keyed by the street CODE, as `match_streets` keys its tiers: two current
+    register rows of one code (a re-versioned obec) are one street, not two."""
+    twin = _Row(NA_RYBNICKACH.code, NA_RYBNICKACH.name, 50656, 555134)
+    body = _street_resolve(client, _STREET_SUGGESTION, _PARDUBICE,
+                           (NA_RYBNICKACH, twin, HUSOVA), NA_RYBNICKACH)
+    assert body == _bound(NA_RYBNICKACH, "Pardubice")
 
 
 @pytest.mark.parametrize("row", [NAM_SVOBODY, SVOBODY], ids=["náměstí Svobody", "Svobody"])
@@ -806,6 +833,24 @@ def test_resolve_no_current_registry_version_binds_nothing(client):
         _MIRROR_PRESENT[0], _Expect(maps._CURRENT_VERSION_SQL, None, None),
     ])
     assert body == {"level": "obec", **_NO_CODE, "context": None}
+
+
+def test_a_registry_read_error_is_a_500_never_no_code(client):
+    """A DB error must reach the SPA as a failure ("couldn't verify this place"),
+    never as `id: None`, which it would show as "RÚIAN doesn't know this place"."""
+    class _Broken(_FakeCursor):
+        def execute(self, sql: str, params: Any = None) -> None:
+            raise RuntimeError("connection reset")
+
+    class _BrokenConn(_FakeConn):
+        def cursor(self) -> _FakeCursor:
+            return _Broken([], [])
+
+    api_main.app.dependency_overrides[deps.get_db_conn] = lambda: _BrokenConn([])
+    res = TestClient(api_main.app, raise_server_exceptions=False).post(
+        "/maps/resolve", json=_OBEC_SUGGESTION,
+    )
+    assert res.status_code == 500
 
 
 def test_resolve_foreign_point_binds_nothing(client):

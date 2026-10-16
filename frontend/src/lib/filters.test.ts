@@ -36,6 +36,7 @@ import {
   toSearchParams,
   watchdogNameSuggestion,
 } from './filters';
+import { districtsFilterClause } from './districtCodes';
 import { BUILDING_MATERIAL_BUCKETS, filterById } from './filterRegistry.generated';
 import type { Disposition } from './types';
 
@@ -268,6 +269,23 @@ describe('URL round-trip', () => {
     ['a non-numeric code', 'districts=Brno&districts_lvl=obec&districts_id=abc'],
   ])('drops %s from a URL', (_label, qs) => {
     expect(fromSearchParams(new URLSearchParams(qs)).districts).toEqual([]);
+  });
+
+  /* A stored preset is read without a URL in between (the Feed reads it straight
+   * into a query), so it passes the same chip guard the URL parser does. */
+  it('drops a stored preset chip without a level and code, and the clause ignores it', () => {
+    const { filters } = readPresetSpec({
+      filters: {
+        ...DEFAULT_FILTERS,
+        districts: [
+          { name: 'Brno', context: null },
+          { name: 'Sadová', context: 'Praha', level: 'locality', id: 554782 },
+          JIHLAVA,
+        ],
+      } as unknown as ListingFilters,
+    });
+    expect(filters.districts).toEqual([JIHLAVA]);
+    expect(districtsFilterClause(filters.districts)).toBe('and(or(obec_id.in.(586846)))');
   });
 
   it('drops only the code-less chip and keeps its neighbours aligned', () => {

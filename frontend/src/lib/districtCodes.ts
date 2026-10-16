@@ -15,10 +15,15 @@
  * (`admin_boundaries.id` IS the code); `cast_obce_id` (migration 503) and
  * `ulice_id` (migration 584) are the two finer levels. */
 
-import type { DistrictChip, LocationLevel } from './filters';
+import type { DistrictChip } from './filters';
 
-/* THE level list: level → the code column, on every place-filterable relation:
- * `browse_list` and `properties_map_mv`, `properties_public` (the Watchdog),
+/* THE level list, coarsest first, and DETERMINISTIC: the compiled predicate has
+ * to be byte-stable so the SPA, the API and the RPC bodies can be diffed. */
+export const DISTRICT_LEVEL_ORDER = ['kraj', 'okres', 'obec', 'cast_obce', 'ulice'] as const;
+export type LocationLevel = (typeof DISTRICT_LEVEL_ORDER)[number];
+
+/* level → the code column, on every place-filterable relation: `browse_list`
+ * and `properties_map_mv`, `properties_public` (the Watchdog),
  * `listing_feed_public` and `pipeline_board_public` (the board). */
 const DISTRICT_LEVEL_COLUMN = {
   kraj: 'region_id',
@@ -28,15 +33,21 @@ const DISTRICT_LEVEL_COLUMN = {
   ulice: 'ulice_id',
 } as const satisfies Record<LocationLevel, string>;
 
-/* Coarsest first, and DETERMINISTIC: the compiled predicate has to be
- * byte-stable so the SPA, the API and the RPC bodies can be diffed. */
-export const DISTRICT_LEVEL_ORDER: ReadonlyArray<LocationLevel> = [
-  'kraj', 'okres', 'obec', 'cast_obce', 'ulice',
-];
-
-/* A level string from outside (a URL, a stored blob, an API answer). */
 export const isLocationLevel = (level: unknown): level is LocationLevel =>
   (DISTRICT_LEVEL_ORDER as ReadonlyArray<unknown>).includes(level);
+
+/* THE chip guard, for every chip that arrives from outside — a URL, a stored
+ * preset, a resolve answer: one of the five levels and a positive integer code.
+ * Anything else names no unit to filter on and is never a chip. */
+export const isDistrictChip = (x: unknown): x is DistrictChip => {
+  if (x == null || typeof x !== 'object') return false;
+  const c = x as Record<string, unknown>;
+  return typeof c.name === 'string'
+    && (c.context == null || typeof c.context === 'string')
+    && (c.excluded === undefined || typeof c.excluded === 'boolean')
+    && isLocationLevel(c.level)
+    && Number.isInteger(c.id) && (c.id as number) > 0;
+};
 
 type CodesByLevel = Partial<Record<LocationLevel, number[]>>;
 

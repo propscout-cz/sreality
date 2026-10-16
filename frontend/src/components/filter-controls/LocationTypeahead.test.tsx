@@ -43,8 +43,9 @@ const street = (name: string): MapySuggestion => ({
 const ulice = (name: string, id: number): LocationResolution => ({
   level: 'ulice', id, name, context: PARDUBICE,
 });
-/* A pick the register cannot bind: the level it was picked at, nothing else. */
-const UNBOUND: LocationResolution = { level: 'ulice', id: null, name: null, context: null };
+/* A street the register cannot bind inside the town it lies in: the level it
+ * was picked at and the town, no code and no unit name. */
+const UNBOUND: LocationResolution = { level: 'ulice', id: null, name: null, context: PARDUBICE };
 
 const RYBNICKY: DistrictChip = {
   name: 'Na Rybníčkách', context: PARDUBICE, level: 'ulice', id: 666742,
@@ -173,9 +174,7 @@ describe('<LocationTypeahead> a pick that makes no chip says why', () => {
     await pick(user, 'Nádra', street('Nádražní'));
 
     await waitFor(() =>
-      expect(notice()).toHaveTextContent(
-        'Not a filterable place — pick a region, district, town, part of town or street',
-      ),
+      expect(notice()).toHaveTextContent("Nádražní can't be used as a filter — nothing was added"),
     );
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
@@ -212,7 +211,7 @@ describe('<LocationTypeahead> a pick that makes no chip says why', () => {
     const user = renderHost();
     resolveSuggestion.mockResolvedValue(UNBOUND);
     await pick(user, 'Nádra', street('Nádražní'));
-    await waitFor(() => expect(notice()).toHaveTextContent(/Not a filterable place/));
+    await waitFor(() => expect(notice()).toHaveTextContent(/nothing was added/));
 
     await user.type(input(), 'x');
     expect(notice()).toHaveTextContent('');
@@ -229,7 +228,7 @@ describe('<LocationTypeahead> a pick that makes no chip says why', () => {
     await user.type(input(), 'Na Ryb');
     const listbox = await screen.findByRole('listbox');
     await act(async () => unbound.resolve(UNBOUND));
-    expect(notice()).toHaveTextContent(/Not a filterable place/);
+    expect(notice()).toHaveTextContent("Nádražní can't be used as a filter — nothing was added");
 
     resolveSuggestion.mockResolvedValueOnce(ulice('Na Rybníčkách', 666742));
     await user.click(within(listbox).getByRole('button'));
@@ -288,6 +287,29 @@ describe('<LocationTypeahead> picks resolve against the latest chips', () => {
     await user.click(screen.getByRole('button', { name: 'Exclude Nádražní · Pardubice (Ulice)' }));
     await act(async () => pending.resolve(ulice('Na Rybníčkách', 666742)));
     expect(lastValue()).toEqual([{ ...NADRAZNI, excluded: true }, RYBNICKY]);
+  });
+});
+
+describe('<LocationTypeahead> unmounted while a pick resolves', () => {
+  it('emits nothing and throws nothing when the answer lands', async () => {
+    const pending = deferred<LocationResolution>();
+    resolveSuggestion.mockReturnValueOnce(pending.promise);
+    fetchSuggest.mockResolvedValue([street('Na Rybníčkách')]);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { unmount } = render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <LocationTypeahead label="Lokalita" value={null} onChange={onChange} />
+      </QueryClientProvider>,
+    );
+    const user = userEvent.setup();
+    await user.type(input(), 'Na Ryb');
+    await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
+
+    unmount();
+    await act(async () => pending.resolve(ulice('Na Rybníčkách', 666742)));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 });
 

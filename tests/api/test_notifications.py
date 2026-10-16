@@ -612,21 +612,40 @@ def test_matcher_lease_cas_acquires_and_yields() -> None:
 
 def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> None:
     """Fail CLOSED: a stored row the model now refuses is counted as failed and
-    dispatches nothing — never a cohort widened to the whole country. Migration
-    606 deleted the last such rows; this is the rail if one ever reappears."""
-    sub_id = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
+    dispatches nothing — never a cohort widened to the whole country — while the
+    healthy watchdog in the same pass still matches. Migration 606 deleted the
+    last such rows; this is the rail if one ever reappears."""
+    dead = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
+    healthy = UUID("5b1e4c8e-0d1f-4a77-9c3e-2a6f1d0b9e10")
+    cursor_ts = datetime(2026, 10, 16, 12, 0, 0, tzinfo=timezone.utc)
     conn = _FakeConn([
         (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {"districts": [{"name": "Jihlava"}]}, None, ["in_app"])],
-            1,
+            [
+                (dead, {"districts": [{"name": "Jihlava"}]}, cursor_ts, ["in_app"]),
+                (healthy, {"districts": [{"name": "Na Rybníčkách", "context": "Pardubice",
+                                          "level": "ulice", "id": 666742}]},
+                 cursor_ts, ["in_app"]),
+            ],
+            2,
         ),
+        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s,
+         [(datetime(2026, 10, 16, 13, 0, 0, tzinfo=timezone.utc), 4)], 0),
+        (lambda s: "INSERT INTO notification_dispatches" in s
+         and "image_lookback_minutes" in s, [], 0),
+        (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
+        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s,
+         [], 1),
     ])
     stats = match_once(conn)  # type: ignore[arg-type]
+    assert stats["subscriptions_evaluated"] == 2
     assert stats["subscriptions_failed"] == 1
-    assert stats["matches_inserted"] == 0
-    assert not [sql for sql, _ in conn.executed if "INSERT INTO notification_dispatches" in sql]
+    assert stats["matches_inserted"] == 2
+    inserts = [p for sql, p in conn.executed
+               if "INSERT INTO notification_dispatches" in sql and isinstance(p, dict)]
+    assert inserts and {p.get("subscription_id") for p in inserts} == {str(healthy)}
+    assert all(p["district_codes_ulice"] == [666742] for p in inserts)
 
 
 def test_match_once_uses_per_subscription_cursor() -> None:

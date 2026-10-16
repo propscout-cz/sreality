@@ -238,11 +238,15 @@ _STREET = {"name": "Na Rybníčkách", "context": "Pardubice", "level": "ulice",
                                                   "id": 554782}]}},
     {"filters": {"districts": [{"name": "Praha", "level": "obec", "id": -1}]}},
     {**SPEC, "districts": [{"name": "Brno"}]},
-], ids=["name only", "stale locality beside a coded chip", "the old sentinel", "legacy bare blob"])
+    {"filters": {"districts": [{**_STREET, "id": "666742"}]}},
+    {"filters": {"districts": [{**_STREET, "id": True}]}},
+    {"filters": {"districts": [{**_STREET, "excluded": "true"}]}},
+], ids=["name only", "stale locality beside a coded chip", "the old sentinel", "legacy bare blob",
+        "id as a string", "id as a bool", "excluded as a string"])
 def test_a_preset_holding_a_chip_without_a_code_is_a_422_and_writes_nothing(client, store, spec):
     """A chip is a level plus a RÚIAN code or it cannot exist — on a preset too,
-    whose blob is otherwise stored verbatim. Checked where the SPA reads the
-    chips (`readPresetSpec`), so the legacy bare shape cannot bypass it."""
+    whose blob is stored verbatim, so strictly: a coercible "666742" or `true`
+    would be stored as written. The legacy bare shape cannot bypass it."""
     assert client.post("/filter-presets", json={"name": "p", "filter_spec": spec}).status_code == 422
     assert store["presets"] == {}
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})

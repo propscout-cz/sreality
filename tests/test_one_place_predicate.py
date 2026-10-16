@@ -308,16 +308,22 @@ def test_605_builds_the_feed_index_concurrently_outside_the_transaction() -> Non
     code = re.sub(r"--[^\n]*", "", (MIGRATIONS / _S605).read_text(encoding="utf-8"))
     at = code.index
     assert code.count("begin;") == code.count("commit;") == 1
-    assert (at("do $guard$") < at("begin;") < at("commit;")
+    assert (at("do $guard$") < at("begin;") < at("commit;") < at("do $invalid$")
             < at("set lock_timeout = 0;\nset statement_timeout = '1900s';")
+            < at("drop index concurrently if exists public.listing_location_ulice_kod_idx_invalid;")
             < at("create index concurrently if not exists listing_location_ulice_kod_idx")
             < at("do $post$") < at("select pg_notify('pgrst', 'reload schema');"))
+    invalid = code[at("do $invalid$"): at("$invalid$;")]
+    assert "rename to listing_location_ulice_kod_idx_invalid" in invalid and "drop index" not in invalid
 
 
 def test_606_backs_up_every_row_it_deletes_in_the_same_transaction() -> None:
     code = re.sub(r"--[^\n]*", "", (MIGRATIONS / "606_chip_rows_without_codes_deleted.sql")
                   .read_text(encoding="utf-8"))
     at = code.index
+    post = " ".join(code[at("do $post$"):].split())
+    assert ("(case when jsonb_typeof(p.filter_spec->'filters') = 'object' then p.filter_spec->'filters' "
+            "else p.filter_spec end)->'districts'") in post, "a bare legacy preset escapes the guard"
     assert (at("begin;") < at("create table if not exists backup_606.filter_presets")
             < at("create table if not exists backup_606.notification_dispatches") < at("do $gate$")
             < at("delete from public.filter_presets") < at("delete from public.notification_subscriptions")

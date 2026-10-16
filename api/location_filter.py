@@ -34,23 +34,19 @@ ChipLevel = Literal["kraj", "okres", "obec", "cast_obce", "ulice"]
 # Coarsest first, and DETERMINISTIC: the compiled predicate must be byte-stable
 # so the SPA, the API and the RPC bodies can be diffed.
 LEVEL_ORDER: tuple[ChipLevel, ...] = get_args(ChipLevel)
-# level -> the code column on every place-filterable relation (`browse_list`,
-# `properties_map_mv`, `properties_public`, `pipeline_board_public`).
-LEVEL_COLUMN: dict[ChipLevel, str] = dict(
-    zip(LEVEL_ORDER, ("region_id", "okres_id", "obec_id", "cast_obce_id", "ulice_id"))
-)
+# level -> the code column on every chip-filtered relation: `browse_projection`
+# (materialized as `browse_list` and `properties_map_mv`), `properties_public`,
+# `pipeline_board_public` and `listing_feed_public`.
+LEVEL_COLUMN: dict[ChipLevel, str] = dict(zip(
+    LEVEL_ORDER, ("region_id", "okres_id", "obec_id", "cast_obce_id", "ulice_id"), strict=True,
+))
 
 
 class DistrictChip(BaseModel):
-    """One entry in a location filter. Mirrors the frontend's `DistrictChip`
-    (`frontend/src/lib/filters.ts`) and its URL encoding (the parallel
-    `districts` / `districts_ctx` / `districts_excl` / `districts_lvl` /
-    `districts_id` query params).
-
-    `context` is display only: the register name of the obec a část obce or a
-    street sits in, so two same-named chips read apart. It is never a predicate."""
+    """One location-filter entry: the SPA's `DistrictChip` and its `districts*` URL params."""
 
     name: str
+    # Display only: the obec a část obce or a street sits in. Never a predicate.
     context: str | None = None
     excluded: bool = False
     level: ChipLevel
@@ -59,12 +55,7 @@ class DistrictChip(BaseModel):
 
 @dataclass(frozen=True)
 class DistrictCodePlan:
-    """The compiled chip set: codes per level, include and exclude.
-
-    This dataclass IS the shared definition — `districtCodePlan` in
-    `frontend/src/lib/districtCodes.ts` returns the same object for the same
-    chips, and `tests/fixtures/district_chip_plan.json` is the table both are
-    tested against."""
+    """Codes per level, include and exclude — what the SPA's `districtCodePlan` returns too."""
 
     include: dict[str, list[int]] = field(default_factory=dict)
     exclude: dict[str, list[int]] = field(default_factory=dict)

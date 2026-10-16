@@ -1,4 +1,5 @@
 import { ApiError, apiGet, apiPost } from './api';
+import { isDistrictChip } from './districtCodes';
 import type { DistrictChip } from './filters';
 import type { ListingStatus } from './filters';
 
@@ -224,18 +225,20 @@ export function contactState(
 }
 
 // The location chips as the leaderboard RPC's three code arrays. The RPC serves
-// only INCLUDE chips at kraj / okres / obec; if ANY chip is one it cannot serve
-// (část obce, ulice, or excluded) the WHOLE selection projects to a no-match
-// obec code alone, because dropping that chip would widen the page. The page
-// says why (GEO_UNSERVED_HINT); a write route must never receive it.
+// only INCLUDE chips at kraj / okres / obec; if ANY chip is not one of those
+// (část obce, ulice, excluded, or no valid chip at all) the WHOLE selection
+// projects to a no-match obec code alone, because dropping that chip would widen
+// the page. The page says why (GEO_UNSERVED_HINT); a write route must never
+// receive it.
 const UNSERVED_OBEC_ID = -1;
+const SERVED_LEVELS: ReadonlyArray<string> = ['kraj', 'okres', 'obec'];
 
 export function chipsToGeoArrays(chips: ReadonlyArray<DistrictChip>): {
   regionIds: number[];
   okresIds: number[];
   obecIds: number[];
 } {
-  if (chips.some((c) => c.excluded || c.level === 'cast_obce' || c.level === 'ulice')) {
+  if (chips.some((c) => !isDistrictChip(c) || c.excluded || !SERVED_LEVELS.includes(c.level))) {
     return { regionIds: [], okresIds: [], obecIds: [UNSERVED_OBEC_ID] };
   }
   const at = (level: DistrictChip['level']) => chips.filter((c) => c.level === level).map((c) => c.id);

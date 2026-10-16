@@ -102,7 +102,9 @@ delete from public.notification_subscriptions
 
 -- ---------------------------------------------------------------------------
 -- 4. Post-conditions: no stored chip lacks a level (one of the five) and a positive integer code, and
---    nothing is left of the four rows.
+--    nothing is left of the four rows. A preset's chips are read the way its readers read them
+--    (`api/routes/filter_presets._coded_chips`, the SPA's `readPresetSpec`): `filters`, else a legacy
+--    bare filter set. A stored `"filters": null` is jsonb null, not SQL NULL, hence no coalesce.
 -- ---------------------------------------------------------------------------
 do $post$
 declare
@@ -110,7 +112,9 @@ declare
   n_left bigint;
 begin
   select count(*) into n_bad
-    from (select p.filter_spec->'filters'->'districts' as chips from public.filter_presets p
+    from (select (case when jsonb_typeof(p.filter_spec->'filters') = 'object'
+                       then p.filter_spec->'filters' else p.filter_spec end)->'districts' as chips
+            from public.filter_presets p
           union all
           select s.filter_spec->'districts' from public.notification_subscriptions s) f
    cross join lateral jsonb_array_elements(

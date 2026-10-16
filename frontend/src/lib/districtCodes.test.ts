@@ -15,6 +15,7 @@ import {
   districtChipBadge,
   districtChipKey,
   districtsFilterClause,
+  isDistrictChip,
   isLocationLevel,
   matchesDistricts,
   type DistrictMatchRow,
@@ -142,6 +143,20 @@ describe('chip identity and badge', () => {
     expect(
       districtChipBadge({ name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 }),
     ).toBe('Ulice');
+  });
+
+  it('guards a chip from outside: a known level, a positive integer code, the right field types', () => {
+    const ok = { name: 'Jihlava', context: null, level: 'obec', id: 586846 };
+    expect(isDistrictChip(ok)).toBe(true);
+    expect(isDistrictChip({ name: 'Žižkov', level: 'cast_obce', id: 490067, excluded: true })).toBe(true);
+    for (const bad of [
+      null, 'Jihlava', { name: 'Brno', context: null },
+      { ...ok, level: 'stat' }, { ...ok, level: undefined },
+      { ...ok, id: null }, { ...ok, id: 0 }, { ...ok, id: -1 }, { ...ok, id: 1.5 }, { ...ok, id: '586846' },
+      { ...ok, name: 5 }, { ...ok, context: 5 }, { ...ok, excluded: 'yes' },
+    ]) {
+      expect(isDistrictChip(bad)).toBe(false);
+    }
   });
 
   it('knows the five levels and nothing else', () => {

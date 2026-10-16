@@ -34,13 +34,15 @@ router = APIRouter(prefix="/filter-presets", tags=["filter-presets"])
 _CHIPS = TypeAdapter(list[DistrictChip])
 
 
+# The blob is stored VERBATIM, so its chips are checked strictly (a "582786" or a
+# `true` id would be stored as written), where the SPA reads them (`readPresetSpec`:
+# `spec.filters`, else a legacy bare filter set). `strict=` at validation time: a
+# `ConfigDict(strict=True)` on the adapter does not reach the nested model.
 def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
-    """The blob is stored verbatim, but a place chip in it is a level plus a
-    RÚIAN code or the write is a 422. Checked where the SPA reads them
-    (`readPresetSpec`: `spec.filters`, else a legacy bare filter set)."""
+    """Every place chip in the blob is a level plus a RÚIAN code, or the write is a 422."""
     filters = spec["filters"] if spec.get("filters") is not None else spec
     if isinstance(filters, dict) and filters.get("districts") is not None:
-        _CHIPS.validate_python(filters["districts"])
+        _CHIPS.validate_python(filters["districts"], strict=True)
     return spec
 
 

@@ -22,7 +22,8 @@ for `cast_obce` or a street (`location_data/ruian_boundaries.LAYERS`), so:
 
   * obec / okres / kraj -> point-in-polygon, the resolver's own containing-obec
     statement (`resolve_db.CONTAINING_OBEC_SQL`) run verbatim, and its chain; the
-    pick must also carry that unit's register name (`_names_unit`);
+    pick's NAME picks the unit of that chain, its type only breaks a tie
+    (`_named_unit`);
   * cast_obce -> BY NAME against the mirror's name index, inside the PIP'd obec;
   * ulice -> BY NAME inside the PIP'd obec (`_bind_street`), then the border
     guard. An address pick binds the street its `regionalStructure` names.
@@ -60,8 +61,9 @@ from scraper.geocoding import KEY_LEVEL_STATUS, mapy_api_keys
 
 LOG = logging.getLogger(__name__)
 
-# Mapy.cz suggestion `type` → the level the chip is picked at. An address
-# filters at its street. regional.country (and any other type) narrows nothing.
+# Mapy.cz suggestion `type` → the level it is TYPED at: the level itself for a část
+# obce or a street (an address filters at its street), a tie-break for the point-bound
+# levels (`_named_unit`). regional.country (and any other type) narrows nothing.
 _TYPE_LEVEL: dict[str, ChipLevel] = {
     "regional.region": "kraj",
     "regional.region.district": "okres",
@@ -70,8 +72,8 @@ _TYPE_LEVEL: dict[str, ChipLevel] = {
     "regional.street": "ulice",
     "regional.address": "ulice",
 }
-# The levels below the obec carry that obec's register name as their `context`.
-_BELOW_OBEC: frozenset[str] = frozenset({"cast_obce", "ulice"})
+# The levels a point binds through its containing-obec chain, finest first.
+_POINT_LEVELS: tuple[ChipLevel, ...] = ("obec", "okres", "kraj")
 # The border guard's slack beyond a street's own extent: the street point is the
 # centroid of its doors and `extent_m` the farthest door, so a pick ON the street
 # lies within the extent; 200 m absorbs a doorless stretch past it.
@@ -148,9 +150,8 @@ def _fetch_suggest(
                 )
                 continue
             # A rejected key / throttle / outage from Mapy must NOT surface as a raw
-            # 500 — the frontend only degrades gracefully (fallback district pickers)
-            # on 503, so a 500 leaves a silent empty dropdown. Log the real upstream
-            # status for diagnosis and return 503.
+            # 500: the typeahead says "Place search is unavailable" only on a 503, and
+            # a 500 leaves a silent empty dropdown. Log the real upstream status.
             LOG.warning("Mapy suggest upstream failure status=%s: %s", status, exc)
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
@@ -196,24 +197,19 @@ SELECT DISTINCT u.code, u.name
 """
 
 
+# Not memoised: resolve is a low-frequency endpoint and a fresh registry load must
+# light up at once. A query error RAISES (a 500, which the SPA shows as "couldn't
+# verify"): read as "no registry" it would tell the operator RÚIAN has no such place.
 def _registry_version(conn: Any) -> int | None:
-    """The current registry version, or None when the mirror is not loaded.
-
-    Not memoised across requests: resolve is a low-frequency endpoint and a
-    fresh registry load must light up immediately."""
-    if conn is None:
-        return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('public.ruian_admin_units') IS NOT NULL")
-            row = cur.fetchone()
-            if not row or not row[0]:
-                return None
-            cur.execute(_CURRENT_VERSION_SQL)
-            row = cur.fetchone()
-            return int(row[0]) if row and row[0] is not None else None
-    except Exception:
-        return None
+    """The current registry version, or None when the mirror is not loaded."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.ruian_admin_units') IS NOT NULL")
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        cur.execute(_CURRENT_VERSION_SQL)
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
 
 
 def _containing_chain(
@@ -233,9 +229,8 @@ def _containing_chain(
 def containing_obec_kod(conn: Any, *, lat: float | None, lng: float | None) -> int | None:
     """The RÚIAN code of the obec covering a point, or None (outside every obec / no current
     registry) -- the one containing-obec statement, for subjects with no stored location
-    (an estimation of a URL-parsed advert or a typed point). Any query error raises, unlike
-    `_registry_version`: read as "no obec" it would become a confident `location_unknown`
-    frozen into a run."""
+    (an estimation of a URL-parsed advert or a typed point). Any query error raises: read
+    as "no obec" it would become a confident `location_unknown` frozen into a run."""
     if lat is None or lng is None:
         return None
     with conn.cursor() as cur:
@@ -322,9 +317,14 @@ def _bind_street(
 ) -> tuple[Street | None, str]:
     """-> (the ONE street a chip may bind, its tier) or (None, why not)."""
     wanted = case_fold(name)
-    verbatim = [s for s in registry.streets_in_obec(obec_code) if case_fold(s.name) == wanted]
+    verbatim: dict[int, Street] = {}
+    for street in registry.streets_in_obec(obec_code):
+        if case_fold(street.name) == wanted:
+            verbatim.setdefault(street.code, street)  # one code is one street, as in match_streets
     if verbatim:
-        return (verbatim[0], "verbatim") if len(verbatim) == 1 else (None, "verbatim homonym")
+        if len(verbatim) > 1:
+            return None, "verbatim homonym"
+        return next(iter(verbatim.values())), "verbatim"
     if split_street_and_number(name)[1]:
         return None, "trailing number"
     streets, tier = match_streets(name, [obec_code], registry)
@@ -382,47 +382,52 @@ def _street_of(type_: str, name: str, regional_structure: Sequence[Any]) -> str 
     )
 
 
-# THE NAME GUARD (D5). The point alone binds whatever unit covers it: an okres typed
-# `regional.region` (Mapy's enum has no okres type) would bind its kraj, "Praha 2"
-# typed `regional.municipality` (a městská část no chip serves) all of Praha, and a
-# point over a border the neighbour.
-def _names_unit(level: ChipLevel, name: str, register_name: str) -> bool:
-    """Does the pick name the unit its point lies in (Mapy's "okres " prefix dropped)?"""
-    if level == "okres":
-        name = _OKRES_PREFIX.sub("", name)
-    return normalize_match_key(name) == normalize_match_key(register_name)
+# THE NAME RULE (D5). The point places the chain; the pick's NAME picks the unit in
+# it, and the Mapy type is a hint: its enum has no okres type, so an okres arrives
+# typed `regional.region`, and "Praha 2" typed `regional.municipality` (a městská
+# část no chip serves) names no unit of its chain. One named unit binds at ITS level;
+# obec and okres "Jihlava" share a name, and then the typed level decides — or Mapy's
+# own "okres " prefix, which names the level outright.
+def _named_unit(
+    chain: dict[str, tuple[int, int, str]], typed: ChipLevel, name: str,
+) -> tuple[ChipLevel, int, str] | None:
+    """The chain unit the pick names, as (level, code, register name), or None."""
+    bare = _OKRES_PREFIX.sub("", name)
+    if bare != name:
+        typed = "okres"
+    wanted = normalize_match_key(bare)
+    named = [(level, chain[level][1], chain[level][2]) for level in _POINT_LEVELS
+             if level in chain and normalize_match_key(chain[level][2]) == wanted]
+    if len(named) == 1:
+        return named[0]
+    return next((unit for unit in named if unit[0] == typed), None)
 
 
 def _resolve_admin(
     conn: Any, *, version: int, lat: float, lng: float, level: ChipLevel,
     name: str | None,
-) -> tuple[tuple[int, str] | None, str | None]:
-    """(the picked unit's (code, register name) or None, its obec's name when
-    the level sits below the obec). obec polygons tile the country, so a
-    foreign point binds nothing at any level."""
+) -> tuple[ChipLevel, tuple[int, str] | None, str | None]:
+    """(bound level, its unit's (code, register name) or None, obec name below the obec)."""
     chain = _containing_chain(conn, version=version, lat=lat, lng=lng)
     obec = chain.get("obec")
     if obec is None:
-        return None, None
+        return level, None, None
     obec_unit_id, obec_code, obec_name = obec
-    context = obec_name if level in _BELOW_OBEC else None
     if level == "cast_obce":
-        unit = _resolve_cast_obce(
+        return level, _resolve_cast_obce(
             conn, version=version, name=name or "",
             obec_unit_id=obec_unit_id, obec_code=obec_code,
-        )
-        return unit, context
+        ), obec_name
     if level == "ulice":
-        return _resolve_street(
+        return level, _resolve_street(
             conn, version=version, name=name, obec_code=obec_code, lat=lat, lng=lng,
-        ), context
-    hit = chain.get(level)
-    if hit is None:
-        return None, context
-    if not _names_unit(level, name or "", hit[2]):
-        LOG.info("maps.resolve: %s pick %r is not %r — no code", level, name, hit[2])
-        return None, context
-    return (hit[1], hit[2]), context
+        ), obec_name
+    unit = _named_unit(chain, level, name or "")
+    if unit is None:
+        LOG.info("maps.resolve: %s pick %r names no single unit of its chain — no code",
+                 level, name)
+        return level, None, None
+    return unit[0], (unit[1], unit[2]), None
 
 
 def resolve(
@@ -434,12 +439,7 @@ def resolve(
     name: str,
     regional_structure: Sequence[Any],
 ) -> dict[str, Any]:
-    """A picked Mapy.cz suggestion -> `{level, id, name, context}`.
-
-    `level` is the level the pick was made at (None for a country or an unknown
-    type, which narrow nothing); `id` and `name` are the bound RÚIAN unit's code
-    and register name, both None when the register cannot bind it; `context` is
-    the register name of the containing obec for a část obce or a street."""
+    """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level."""
     level = _TYPE_LEVEL.get(type_)
     out: dict[str, Any] = {"level": level, "id": None, "name": None, "context": None}
     if level is None:
@@ -447,7 +447,7 @@ def resolve(
     version = _registry_version(conn)
     if version is None:
         return out
-    unit, out["context"] = _resolve_admin(
+    out["level"], unit, out["context"] = _resolve_admin(
         conn, version=version, lat=lat, lng=lng, level=level,
         name=_street_of(type_, name, regional_structure),
     )

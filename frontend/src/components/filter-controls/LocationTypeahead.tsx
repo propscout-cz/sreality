@@ -13,8 +13,8 @@
  * `<level>_id = any(codes)` (lib/districtCodes). A pick the server cannot
  * bind to one unit adds NO chip and says why under the input; no Mapy string is
  * ever stored. INCLUDE chips OR'd, then AND NOT-(OR of EXCLUDE chips); the per-chip
- * `−`/`+` button toggles `excluded`. The same component renders in Browse and
- * the Watchdog through `customWidgets={{districts: LocationTypeahead}}`.
+ * `−`/`+` button toggles `excluded`. The same component renders on every surface
+ * with a location box.
  *
  * onPick fires once per pick, before it resolves, so the Browse map can fly to
  * the picked place — also for a pick that adds no chip. */
@@ -31,14 +31,15 @@ import {
   typeBadge,
 } from '@/lib/maps';
 import type { DistrictChip } from '@/lib/filters';
-import { districtChipBadge, districtChipKey, isLocationLevel } from '@/lib/districtCodes';
+import { districtChipBadge, districtChipKey, isDistrictChip } from '@/lib/districtCodes';
 
 const QUERY_DEBOUNCE_MS = 150;
 const MIN_QUERY_LEN = 2;
 
-/* Why a pick added no chip, shown under the input until the next keystroke or pick. */
+/* Why a pick added no chip, shown under the input until the next keystroke or
+ * pick. A refusal names the pick, so a notice that lands late is unambiguous. */
 const PICK_NOTICE = {
-  unbound: 'Not a filterable place — pick a region, district, town, part of town or street',
+  refused: (name: string) => `${name} can't be used as a filter — nothing was added`,
   country: "A country can't be used as a filter",
   failed: "Couldn't verify this place — try again",
   duplicate: 'Already selected',
@@ -55,10 +56,8 @@ const chipFromResolve = (
 ): DistrictChip | string => {
   if (res == null) return PICK_NOTICE.failed;
   if (res.level == null && pick.type === 'regional.country') return PICK_NOTICE.country;
-  if (!isLocationLevel(res.level) || res.id == null || res.id <= 0 || !res.name) {
-    return PICK_NOTICE.unbound;
-  }
-  return { name: res.name, context: res.context, level: res.level, id: res.id };
+  const chip = { name: res.name, context: res.context, level: res.level, id: res.id };
+  return isDistrictChip(chip) ? chip : PICK_NOTICE.refused(pick.name);
 };
 
 export function LocationTypeahead({

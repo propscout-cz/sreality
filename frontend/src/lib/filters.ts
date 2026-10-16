@@ -11,8 +11,8 @@ import {
 } from './types';
 import { fmtArea } from './format';
 /* Value import, but not a runtime cycle: districtCodes imports only TYPES from
- * this file, and the level list must have ONE definition. */
-import { isLocationLevel } from './districtCodes';
+ * this file, and the level list and the chip guard must have ONE definition. */
+import { isDistrictChip, type LocationLevel } from './districtCodes';
 import { portalScopeLabel } from './portals';
 
 export type TriState = 'any' | 'yes' | 'no';
@@ -96,8 +96,6 @@ export interface CityIndexRule {
  * shape is sent to the watchdog matcher
  * (`api/notifications.WatchdogFilterSpec.districts`) so Browse and
  * Watchdog stay aligned via the shared filter registry. */
-export type LocationLevel = 'kraj' | 'okres' | 'obec' | 'cast_obce' | 'ulice';
-
 export interface DistrictChip {
   name: string;
   context: string | null;
@@ -465,12 +463,11 @@ export const parseDistrictChips = (
   const lvls = splitCsv(lvlRaw);
   const ids = splitCsv(idRaw);
   return splitCsv(namesRaw).flatMap((name, i) => {
-    const level = lvls[i];
-    const id = Number(ids[i]);
-    if (!isLocationLevel(level) || !Number.isInteger(id) || id <= 0) return [];
-    const chip: DistrictChip = { name, context: ctxs[i] || null, level, id };
-    if (excls[i] === '1') chip.excluded = true;
-    return [chip];
+    const chip = {
+      name, context: ctxs[i] || null, level: lvls[i], id: Number(ids[i]),
+      ...(excls[i] === '1' ? { excluded: true } : {}),
+    };
+    return isDistrictChip(chip) ? [chip] : [];
   });
 };
 
@@ -1195,7 +1192,8 @@ const coerceStoredFilters = (stored: unknown): ListingFilters => {
         k === 'categoryMain' && typeof vRaw === 'string' ? [vRaw] : vRaw;
       // Array-vs-scalar mismatch ⇒ the field's type evolved; keep the default.
       if (Array.isArray(def[k]) !== Array.isArray(v)) continue;
-      out[k] = v;
+      // A stored chip passes the same guard a URL chip does (parseDistrictChips).
+      out[k] = k === 'districts' ? (v as unknown[]).filter(isDistrictChip) : v;
     }
   }
   return out as unknown as ListingFilters;
