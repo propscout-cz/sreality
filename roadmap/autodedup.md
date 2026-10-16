@@ -53,7 +53,7 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   S0 rails (#1692, E940 the paged walk, E941) → S1 Nusle + Libeň scanned with #1709's re-seed
   (~15.2k ads, shadow) → S2 they merge under E942's brakes → S3 facts only for scored pairs, the
   re-cut out of the pass, street keys for the 36k no-quarter ads (E943–E945) → S4 one Prague block
-  (`obec:554782`, 5,000 MB, E946), a 3–6-day build with merging paused everywhere → S5 the apply
+  (the 157 quarters as blocks beside the eight towns, 6,000 MB, E946; the ~36k no-quarter ads a week later, E940 + E945), a 3–6-day build with merging paused everywhere → S5 the apply
   scope widens a batch of quarters at a time, `town:554782` last. Brake: interval 0, the area out
   of the apply scope, then `unapply blocks=`. Open: D905–D910 (the operator's).
 - **E941 (2026-10-09, S0 rails for the widened S1, ~38k ads):** the seed re-checks storage after its

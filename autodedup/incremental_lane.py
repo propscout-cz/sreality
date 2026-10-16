@@ -426,25 +426,21 @@ MAX_RETIRE_FRACTION: float = 0.05
 # double it. `rt_scope = all` is gated by `CORPUS_PROJECTION_MB` (17,000) through
 # `guard_agrees`, and this budget stays far below it, so raising it never enables the corpus.
 #
-# 1,500 MB since E941 (2026-10-09; 800 since E916, 400 before that; MB here are MiB, as the
-# guard computes them), sized for the S1 scope the operator widened on 2026-10-09: the trial
-# blocks plus Praha-Nusle, Praha-Libeň and six towns (Beroun, Pardubice, Hradec Králové,
-# Jihlava, Humpolec, Havlíčkův Brod), ~38,000 located adverts against 7,298 in the store.
-# Measured and recorded (2026-10-09, read-only):
-#   * the schema reads 464.3 MB; generation `rt` holds 129.2 MB of it (`generation_bytes`, the
-#     share a fresh reset frees);
-#   * the walk and the cut add ~60 MB at that scope (the snapshot and the pHash population,
-#     scaled from today's 2.2 and 9.4 MB for 7,295 adverts);
-#   * the build writes BUILD_BYTES_PER_LISTING an advert, ~668 MB for 38,000.
-# So the seed's second check (E941) projects 464 + 60 - 129 + 668 = ~1,063 MB (~1,190 MB were
-# none of the reset's space reused), and 1,500 leaves ~310-440 MB: about three months of the
-# widened scope's arrivals (~95-135 MB a month: E939's Prague rate scaled to 38,000 adverts, or
-# E79's ~20 % of the store a month at 18 KiB), not a second widening. E943's reject ledger
-# adds ~2 KiB an advert (20 KiB): ~1,137 MB projected, ~360 MB left, about two and a half
-# months. The whole town is E946's (5,000 MB, once the operator has read the database's disk,
-# D907). 800 rested on E916's trial measurements; a DELETE never shrinks a file, so the
-# schema's size is a high-water mark that pruned generations leave behind.
-MAX_SCHEMA_MB: float = 1500.0
+# 6,000 MB since E946 (2026-10-16; 1,500 since E941, 800 since E916, 400 before that; MB here
+# are MiB, as the guard computes them), sized for the Prague seeds of S4 (E939, D907): the eight
+# towns of S1 plus all 157 Prague quarters, ~170,000 located adverts against 39,838 in the
+# store, then a second seed with Prague's ~36,000 no-quarter adverts (E940 + E945), ~206,000.
+# Measured and recorded (2026-10-16, read-only): the schema reads 996 MB after S1's second build
+# (pairs 630, the reject ledger 118, fp_key 108), generation `rt` ~750 MB of it (the share a
+# fresh reset frees); the build writes BUILD_BYTES_PER_LISTING an advert, ~3,400 MB for 170,000.
+# So the seed's second check (E941) projects ~996 - ~750 + ~60 + 3,400 = ~3,700 MB; the second
+# seed, on files the first left at that high-water mark, ~4,500 MB; arrivals at E79's ~20 % of
+# the store a month are ~800 MB a month at that size. 6,000 holds the two seeds and about two
+# months of arrivals, not a third widening, and stays far under CORPUS_PROJECTION_MB. E941's
+# 1,500 was sized the same way for S1's 38,000 (464 + 60 - 129 + 668 = ~1,063 projected, ~1,137
+# with the ledger; the second build measured 996 for 39,838). A DELETE never shrinks a file, so
+# the schema's size is a high-water mark that pruned generations leave behind.
+MAX_SCHEMA_MB: float = 6000.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
