@@ -1043,6 +1043,17 @@ class FeatureContext:
         self._tags[key] = gallery
         return gallery
 
+    def forget(self, listing_ids: Iterable[int]) -> None:
+        """Drop everything this context derived of these listings (E950), the galleries and
+        their CLIP vectors included: a pass gives it back once it decides none of their pairs."""
+        ids = set(listing_ids)
+        for derived in (self.tfidf, self.tfidf_corpus, self.rare, self.codes, self._events):
+            for listing_id in ids:
+                derived.pop(listing_id, None)
+        for cache in (self._clip, self._phash, self._live, self._tags):
+            for key in [key for key in cache if key[0] in ids]:
+                del cache[key]
+
 
 def _block_of(fp: "Fingerprint") -> str:
     return str(fp.block_key) if fp.block_key is not None else "(none)"

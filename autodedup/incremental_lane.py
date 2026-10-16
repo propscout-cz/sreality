@@ -98,6 +98,7 @@ from autodedup.incremental import (
     bootstrap_key,
     engine_digest,
     key_token,
+    rss_mb,
     run_pass_bounded,
     seed_current,
     seed_version_key,
@@ -2499,16 +2500,6 @@ def peak_rss_mb() -> float | None:
         return None
     peak = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return round(peak / (1_048_576.0 if sys.platform == "darwin" else 1024.0), 1)
-
-
-def rss_mb(statm: str = "/proc/self/statm") -> float | None:
-    """The process's resident memory now in MiB: resident pages x the page size (E948)."""
-    try:
-        with open(statm, encoding="ascii") as handle:
-            pages = int(handle.read().split()[1])
-        return round(pages * os.sysconf("SC_PAGE_SIZE") / 1_048_576.0, 1)
-    except Exception:  # noqa: BLE001 — observability only: None, never a failed pass
-        return None
 
 
 def memo_entries() -> dict[str, int]:

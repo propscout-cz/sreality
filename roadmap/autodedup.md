@@ -82,8 +82,15 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   arenas (`env MALLOC_ARENA_MAX=2`); the engine counts and empties its body and token memos after
   every pass (`memo_entries`; the shingle memo keyed on the body itself); and the CLIP top-up is
   encoded a slice at a time. Decisions are a fresh process's and `SEED_VERSION` is unchanged; the
-  claim cap stays at 25 until a seed or, E948b, a bigger container. Next: Part 2, chunked scoring,
-  so the pair budget bounds a pass's memory.
+  claim cap stays at 25 until a seed or, E948b, a bigger container. Part 2 is E950.
+- **E950 (2026-10-16, chunked scoring):** a pass scores the pairs it decides 5,000 at a time and
+  writes each chunk's rows before the next, so the rows it holds follow the chunk; a side's CLIP
+  vectors stay from its first decided pair to its last (most sides in a dense pass; the heartbeat's
+  `chunk_vectored` shows it). On the dense worst case (every wanted pair scored, as after a deploy
+  that moves the engine digest) the pass's peak falls 37 %, its time within 3 %; at the 39.5k build's
+  passes 2–5 %. Decisions identical (cohort 18 and the trial export, every pair field and group).
+  Prague's memory case is the working set, E960's. It moves the engine digest: it lands with E960
+  and E944 as one train in one deploy before the Prague seed.
 - **E951 (2026-10-12, a build stuck at small passes):** in a build a pass's time budget is three
   quarters of the 1,050 s deadline (787.5 s, was 525 s), and a pass the clock cut that claimed its
   whole share and finished inside half the deadline (525 s) stores at least twice its starting rate
