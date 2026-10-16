@@ -7,8 +7,11 @@ reconcile (A9, E911) and the in-DB calibration (A10, E912) have their own sectio
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import replace
+from datetime import datetime, timedelta
+from typing import Any
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +28,8 @@ from autodedup.incremental_sql import (
     RT_CURSOR_SET_SQL,
     RT_LOCK_GUARD_SQL,
     RT_SCOPE_SCAN_SEEN_SQL,
+    RT_SETTING_WRITE_SQL,
+    RT_STALE_SQL,
     RT_STATEMENT_GUARD_SQL,
 )
 from autodedup.incremental_store import MemoryStore
@@ -494,6 +499,10 @@ class LaneDb(FakeDb):
         self.snapshot: dict[int, str] = {}
         self.read: set[int] = set()
         self.guards: list[dict] = []
+        # E960: each member's last refresh (absent: refreshed now) and what the reconcile handed
+        # the next pass to re-claim.
+        self.refreshed: dict[int, datetime] = {}
+        self.lane_settings: dict[str, Any] = {}
 
     def dispatch(self, sql: str, p: dict) -> list[tuple]:  # noqa: C901
         if sql == RT_CURSOR_READ_SQL:
@@ -539,6 +548,19 @@ class LaneDb(FakeDb):
         if sql in (RT_STATEMENT_GUARD_SQL, RT_LOCK_GUARD_SQL):
             self.guards.append(dict(p))
             return [("set",)]
+        if sql == RT_STALE_SQL:
+            # `refreshed` absent: refreshed now; None: no fingerprint row (fail closed).
+            bound = self.now - timedelta(seconds=float(p["fresh_s"]))
+            since = datetime.fromisoformat(p["engine_since"]) if p["engine_since"] else None
+            out = []
+            for lid in sorted(set(p["listing_ids"])):
+                at = self.refreshed.get(lid, self.now)
+                out.append((lid, at, at is None or at < bound
+                            or (since is not None and at < since)))
+            return out
+        if sql == RT_SETTING_WRITE_SQL:
+            self.lane_settings[p["key"]] = json.loads(p["value"])
+            return []
         return super().dispatch(sql, p)
 
 
@@ -659,6 +681,100 @@ def test_the_reconcile_waits_on_a_block_it_has_not_fully_read() -> None:
     assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 0
     db.read.add(99)
     assert _lane(db)["counts"]["applied"] == 1
+
+
+def test_the_reconcile_applies_a_merge_only_on_members_refreshed_lately() -> None:
+    """E960: a group waits (`stale_decision`) while a member its merge would move was last
+    refreshed more than FRESH_DECISION_HOURS ago or before the engine the lane runs under; that
+    member is handed to the next pass to re-claim, and the group applies once it is fresh."""
+    db = LaneDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
+    _read(db, 10, 11)
+    old = db.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    db.refreshed = {10: old, 11: old}
+
+    out = _lane(db)
+
+    assert out["counts"][reconcile.STALE] == 1 and out["counts"]["applied"] == 0
+    handed = db.lane_settings[reconcile.redecide_key(RT)]
+    assert len(handed) == 1 and handed[0] and set(handed[0]) <= {10, 11}, (
+        "one group, as the members the merge would move")
+    assert not [r for r in db.ledger if r["member_ids"] == [10, 11]], "a wait files no row"
+    db.refreshed = {10: db.now, 11: db.now}
+    since = (db.now + timedelta(minutes=1)).isoformat()
+    deployed = reconcile.run(db, RT, [], run_id="rt:test", deadline=10 ** 9, blocks=[BLOCK],
+                             merge=db.merge([]), clock=lambda: 0.0, now=lambda: db.now,
+                             engine_since=since)
+    assert deployed["counts"][reconcile.STALE] == 1, "refreshed under the engine before"
+    out = _lane(db)
+    assert out["counts"][reconcile.STALE] == 0 and out["counts"]["applied"] == 1
+    assert db.lane_settings[reconcile.redecide_key(RT)] == []
+
+
+def test_a_member_with_no_fingerprint_row_holds_its_group_and_is_never_claimed() -> None:
+    """Fail closed (E960): a moved member the store holds no row for is stale — its group waits
+    and is handed on — but no claim can refresh it, so the feed takes none of it."""
+    db = LaneDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
+    _read(db, 10, 11)
+    db.refreshed = {10: None, 11: None}
+
+    out = _lane(db)
+
+    assert out["counts"][reconcile.STALE] == 1 and out["counts"]["applied"] == 0
+    handed = db.lane_settings[reconcile.redecide_key(RT)]
+    ages = reconcile.refreshed(db, RT, [i for g in handed for i in g],
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+    assert handed and reconcile.claims(handed, ages, 100) == []
+
+
+def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The review's livelock (E960): seventy three-advert groups, each with two moved members,
+    every member refreshed 13 h ago, a sweep of ONE group a pass (a cycle of 14 h, longer than
+    the 12 h window, as Prague's ~35k groups at 200 a pass are), passes 12 minutes apart and a
+    budget of ONE advert (the floor cut to 1, a share of 1). Members claimed lowest id first, one
+    a pass, from a list each reconcile overwrote, merged none of them in 48 h: a group's movers
+    were never fresh together inside the window. Whole groups, oldest wait first, from a list
+    the reconcile re-plans every pass: every group merges, one a pass."""
+    monkeypatch.setattr(reconcile, "STALE_FLOOR", 1)
+    monkeypatch.setattr(reconcile, "SWEEP_SLICE", 1)
+    db = LaneDb()
+    db.live_scope()
+    groups = []
+    for index in range(70):
+        key = 1000 + index * 10
+        ids = [key, key + 1, key + 2]
+        _pair_group(db, key, ids, [key * 10, key * 10 + 1, key * 10 + 2], gen=RT)
+        _read(db, *ids)
+        groups.append(ids)
+    stale = db.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    db.refreshed = {i: stale for ids in groups for i in ids}
+    handed: list[list[int]] = []
+    merged_at: dict[tuple[int, ...], int] = {}
+    for n in range(240):                                    # 48 h of passes
+        ages = reconcile.refreshed(db, RT, [i for g in handed for i in g],
+                                   fresh_hours=reconcile.FRESH_DECISION_HOURS,
+                                   engine_since=None)
+        taken = reconcile.claims(handed, ages, max(1, reconcile.STALE_FLOOR))
+        assert not taken or any(set(taken) == set(i for i in g if ages[i][1])
+                                for g in handed), "a whole group a pass"
+        for listing_id in taken:
+            db.refreshed[listing_id] = db.now
+        reconcile.run(db, RT, [], run_id=f"rt:{n}", deadline=10 ** 9, blocks=[BLOCK],
+                      merge=db.merge([]), clock=lambda: 0.0, now=lambda: db.now,
+                      waiting=handed)
+        handed = db.lane_settings.get(reconcile.redecide_key(RT), [])
+        for row in db.ledger:
+            if row["outcome"] == "applied":
+                merged_at.setdefault(tuple(row["member_ids"]), n)
+        db.now += timedelta(minutes=12)
+        if len(merged_at) == len(groups):
+            break
+    assert len(merged_at) == len(groups), f"{len(groups) - len(merged_at)} groups starved"
+    assert max(merged_at.values()) <= len(groups) + 1, "one group a pass, as the sweep finds it"
 
 
 def test_the_reconcile_stops_between_groups_when_the_pass_time_is_spent() -> None:

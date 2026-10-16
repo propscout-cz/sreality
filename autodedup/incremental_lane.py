@@ -40,7 +40,7 @@ import socket
 import sys
 import time
 from contextlib import nullcontext, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterable, Iterator, Mapping, Sequence
@@ -143,12 +143,15 @@ from autodedup.incremental_sql import (
     RT_FRESH_CURSORS_SQL,
     RT_FRESH_FP_KEY_SQL,
     RT_FRESH_LEASE_SQL,
+    RT_FRESH_SETTINGS_SQL,
     RT_FRESH_PAIRS_SQL,
     RT_FRESH_REJECT_LEDGER_SQL,
     RT_FRESH_RETIRE_EVENT_SQL,
     RT_FRESH_RT_FP_SQL,
     RT_FRESH_SCOPE_IDS_SQL,
     RT_FRESH_SCOPE_SCAN_SQL,
+    RT_ENGINE_WRITE_SQL,
+    RT_FP_DD_SQL,
     RT_FP_READ_SQL,
     RT_FP_UPSERT_SQL,
     RT_GENERATION_BYTES_SQL,
@@ -175,6 +178,7 @@ from autodedup.incremental_sql import (
     RT_PAIRS_TOUCHING_SQL,
     RT_PAIRS_WITHIN_SQL,
     RT_REJECT_LEDGER_DELETE_SQL,
+    RT_REJECT_LEDGER_KEYED_SQL,
     RT_REJECT_LEDGER_LOOKUP_SQL,
     RT_REJECT_LEDGER_UPSERT_SQL,
     RT_REVIVED_SQL,
@@ -200,6 +204,7 @@ from autodedup.incremental_sql import (
     RT_SETTING_WRITE_SQL,
     RT_SETTINGS_MANY_SQL,
     RT_STAMPED_MERGES_SQL,
+    RT_STALE_SQL,
     RT_STATEMENT_GUARD_SQL,
     RT_STORE_PRESENT_SQL,
 )
@@ -255,6 +260,7 @@ SCOPE_SETTING: str = "rt_scope"
 RECUT_SETTING: str = "rt_recut"
 PASS_RATE_SETTING: str = "rt_pass_rate_per_s"
 CLAIM_CAP_SETTING: str = "rt_claim_cap"
+ENGINE_SETTING: str = "rt_engine"
 # The reconcile's skip over a generation no seed of this design built.
 SEED_MISMATCH: str = "seed_version"
 # E941: a pass that sees the worker shutting down, and one whose lease ended under it.
@@ -566,6 +572,7 @@ class SqlStore:
         self._cells_dirty: set[tuple[str, str]] = set()
         # This pass's start, as `rulings_changed` read it: the `rt_rulings` cursor `flush` writes.
         self._rulings_read_at: Any = None
+        self._ledger_keyed: bool | None = None
 
     # ------------------------------------------------------------------ plumbing
     def _query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[tuple]:
@@ -618,6 +625,7 @@ class SqlStore:
                 "ev_clip": pending[listing_id][0].evidence.n_clip,
                 "ev_tags": pending[listing_id][0].evidence.n_tags,
                 "ev_complete": pending[listing_id][0].evidence.complete,
+                "dd": pending[listing_id][0].dd or None,
             }
             for listing_id in ids
         ])
@@ -646,6 +654,17 @@ class SqlStore:
                     keys: Sequence[tuple[str, str]]) -> None:
         self._pending[int(listing_id)] = (row, list(keys))
         self._fp[int(listing_id)] = row
+
+    def put_decision_digests(self, dds: Mapping[int, str]) -> None:
+        ids = sorted(int(i) for i in dds)
+        if not ids:
+            return
+        self._run(RT_FP_DD_SQL, {"generation": self.generation, "ids": ids,
+                                 "dds": [dds[i] for i in ids]})
+        for listing_id in ids:
+            row = self._fp.get(listing_id)
+            if row is not None:
+                self._fp[listing_id] = replace(row, dd=dds[listing_id])
 
     def drop_listing(self, listing_id: int) -> None:
         self._pending.pop(int(listing_id), None)
@@ -680,6 +699,7 @@ class SqlStore:
                 Evidence(int(row[10] or 0), int(row[11] or 0), int(row[12] or 0),
                          int(row[13] or 0)),
                 float(row[14]) if row[14] is not None else None,
+                str(row[15] or ""),
             ) for row in self._query(RT_FP_READ_SQL,
                                      {"generation": self.generation, "ids": missing})}
             for listing_id in missing:
@@ -825,6 +845,14 @@ class SqlStore:
                     "calibration_digest": self.calibration_digest,
                     "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest}))
         return out
+
+    def ledger_keyed(self) -> bool:
+        if self._ledger_keyed is None:
+            self._ledger_keyed = bool(self._query(RT_REJECT_LEDGER_KEYED_SQL, {
+                "generation": self.generation, "calibration_digest": self.calibration_digest,
+                "feature_version": FEATURE_VERSION,
+                "engine_digest": self.engine_digest})[0][0])
+        return self._ledger_keyed
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         self._run_many(RT_PAIR_DELETE_SQL, [
@@ -1237,7 +1265,9 @@ class SqlWork:
                  bootstrap: bool = False,
                  pass_budget_s: float = PASS_BUDGET_S,
                  rate_per_s: float = PASS_RATE_PER_S,
-                 claim_cap: int | None = None) -> None:
+                 claim_cap: int | None = None,
+                 redecide_groups: Sequence[Sequence[int]] = (),
+                 engine_since: str | None = None) -> None:
         self.conn = conn
         self.scope = scope
         self.generation = generation
@@ -1256,6 +1286,10 @@ class SqlWork:
         self.pass_budget_s = float(pass_budget_s)
         self.rate_per_s = float(rate_per_s)
         self.claim_cap = claim_cap
+        # E960: the groups the last reconcile handed on (their moved members), and since when
+        # the lane runs under its engine.
+        self.redecide_groups = [list(group) for group in redecide_groups]
+        self.engine_since = engine_since
         # Set by `claim` while the phase is on: the entrant backlog it measured, and whether
         # this pass is the one that empties it (E98).
         self.bootstrap_done = False
@@ -1423,6 +1457,23 @@ class SqlWork:
             # longer holds it, so there is nothing to re-decide it into.
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
+        # E960: the groups a merge waits on, re-claimed WHOLE, oldest wait first, so their pairs
+        # are re-decided on facts read now and the group merges in this pass's reconcile; at
+        # least `STALE_FLOOR` adverts, whatever the time-bound share.
+        if self.redecide_groups:
+            retiring = {item.listing_id for item in items if item.retire}
+            ages = {int(row[0]): (row[1], bool(row[2])) for row in self._query(RT_STALE_SQL, {
+                "generation": self.generation,
+                "listing_ids": sorted({i for group in self.redecide_groups for i in group}),
+                "fresh_s": reconcile.FRESH_DECISION_HOURS * 3600.0,
+                "engine_since": self.engine_since}) if int(row[0]) not in retiring}
+            taken = reconcile.claims(self.redecide_groups, ages,
+                                     max(share, reconcile.STALE_FLOOR))
+            self.evidence = {**self.evidence,
+                             "stale": sum(1 for _at, stale in ages.values() if stale),
+                             "stale_claimed": len(taken)}
+            items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
+                         for listing_id in taken)
         for item in items:
             self._claimed.setdefault(item.feed, set()).add(item.listing_id)
         return items
@@ -1839,6 +1890,12 @@ def pass_rate_key(generation: str) -> str:
     return f"{PASS_RATE_SETTING}:{generation}"
 
 
+def engine_key(generation: str) -> str:
+    """`rt_engine:<generation>` — the engine digest the lane runs under and since when (E960):
+    the reconcile applies a merge only on members refreshed after it."""
+    return f"{ENGINE_SETTING}:{generation}"
+
+
 def claim_cap_key(generation: str) -> str:
     """`rt_claim_cap:<generation>` — the claim size THIS generation's passes survive (E948)."""
     return f"{CLAIM_CAP_SETTING}:{generation}"
@@ -2070,6 +2127,9 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
         deleted[name] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_CURSORS_SQL, {"names": list(RESET_CURSORS)})
     deleted["scan_cursor"] = int(rows[0][0] or 0) if rows else 0
+    rows = _rows(conn, RT_FRESH_SETTINGS_SQL, {
+        "keys": [engine_key(generation), reconcile.redecide_key(generation)]})
+    deleted["settings"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
     deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
     return deleted
@@ -2404,6 +2464,19 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     return round(blended, 6), False
 
 
+def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str:
+    """Since when the lane has run under `digest` (E960): the recorded instant while the digest
+    is the recorded one, else the database's now, written in a commit of its own (the clock
+    `rt_fp.updated_at` is stamped by). A deploy overlapping a pass of the previous engine can
+    leave this a pass early or late; the next pass's digest check settles it."""
+    if isinstance(recorded, Mapping) and recorded.get("digest") == digest and recorded.get(
+            "since"):
+        return str(recorded["since"])
+    return str(_rows(conn, RT_ENGINE_WRITE_SQL, {
+        "key": engine_key(generation), "digest": digest,
+        "updated_by": f"{LANE_NAME}:engine"})[0][0])
+
+
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
     _exec(conn, RT_SETTING_WRITE_SQL, {
         "key": pass_rate_key(generation), "value": json.dumps(round(max(1e-6, rate), 6)),
@@ -2642,7 +2715,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596 or 604 "
+                             "not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
@@ -2653,7 +2727,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                        bootstrap_setting_key(generation),
                                        pass_rate_key(generation),
                                        seed_version_key(generation),
-                                       claim_cap_key(generation)])
+                                       claim_cap_key(generation),
+                                       engine_key(generation),
+                                       reconcile.redecide_key(generation)])
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
@@ -2723,10 +2799,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                          engine_digest=engine_digest(settings, model),
                          store_floor=settings.store_floor, model_version=model.version)
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
+        engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
+                                     store.engine_digest)
+        handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
-                       rate_per_s=rate_per_s, claim_cap=int(cap["cap"]))
+                       rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
+                       redecide_groups=handed, engine_since=engine_since)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2847,7 +2927,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 clock=_pass_clock(shutting_down),
                 # E941: every group's transaction ends with the pass's lease check, so a lease
                 # released after the pass committed stops the merges at the next group.
-                fence=lambda group_conn: rt_lease.hold(group_conn, holder))
+                fence=lambda group_conn: rt_lease.hold(group_conn, holder),
+                engine_since=engine_since, waiting=handed)
             # What the reconcile cost inside the pass, so G2's rate is read with it in (B3).
             summary["reconcile"]["seconds"] = round(time.perf_counter() - reconcile_started, 3)
         elapsed = time.perf_counter() - started
@@ -3011,7 +3092,8 @@ def run_rt_seed(
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596 or 604 "
+                             "not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
         if existing and not fresh:
             raise SystemExit(

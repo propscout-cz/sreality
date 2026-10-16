@@ -132,7 +132,8 @@ def _summary(**over: Any) -> dict[str, Any]:
                    "chunks": 2,
                    "retired": 0, "wanted_pairs": 52, "attempts": 1, "wanted_by_attempt": [52],
                    "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
-                   "ledger_skipped": 31, "ledger_written": 6},
+                   "ledger_skipped": 31, "ledger_written": 6, "dirty": 30,
+                   "reads": {"claim": 12, "decided": 9}},
         "aborted": "",
         "latency_s": {"n": 12, "p50": 310.2, "p95": 355.0},
         "claim_bound": {"bound_by": "count", "limit": 100},
@@ -289,6 +290,7 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # E951: the budget the claim was cut from (a build's 787.5 s), and the doubled rate
         "pass_budget_s": 787.5, "rate_doubled": True,
         "reconcile_refused": 0, "reconcile_failed": 0, "reconcile_waiting": 0,
+        "reconcile_stale": 0,
         "reconcile_skipped_at_apply": 0, "reconcile_quarantined": 0, "reconcile_deferred": 0,
         "must_link_dissolved": 0,
         # the plan's silent outcomes (2026-10-07): settled groups and standing refusals by reason
@@ -316,6 +318,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # the reject ledger answered, and the rejects the pass ledgered
         "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
         "ledger_skipped": 31, "ledger_written": 6,
+        # E960: the neighbourhood re-retrieved from the store, and the adverts read, by why
+        "dirty": 30, "reads": {"claim": 12, "decided": 9},
     }
     for gone in ("AUTODEDUP_PASS_DEADLINE_SECONDS", "AUTODEDUP_PASS_BUDGET_SECONDS",
                  "_AUTODEDUP_BACKOFF", "_DeadlineConnection", "_AutodedupDeadline"):
@@ -341,7 +345,7 @@ def test_an_absent_store_skips_every_tick_with_one_warning(
     assert first["errors"] == 0 and first["ran"] is False
     assert second["reason"] == "store_absent"
     assert conn.closed
-    assert sum("store (migrations 539/540/596) is absent" in r.message
+    assert sum("store (migrations 539/540/596/604) is absent" in r.message
                for r in caplog.records) == 1
 
 

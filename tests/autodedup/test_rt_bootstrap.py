@@ -110,12 +110,17 @@ def _populated(db: FakePg) -> FakePg:
 
 def test_the_reset_empties_this_generation_and_nothing_else() -> None:
     db = _populated(FakePg())
+    # E960: the engine's since and the reconcile's hand-on list go with the generation.
+    db.settings.update({f"rt_engine:{GEN}": {"digest": "e", "since": "x"},
+                        f"rt_redecide:{GEN}": [[1, 2]], "rt_engine:other": {"digest": "o"}})
     deleted = reset_generation(db, GEN, holder=SEED_HOLDER)
 
     assert deleted == {"pairs": 1, "cluster_members": 2, "cluster_conflicts": 1,
                        "clusters": 1, "rt_fp": 2, "fp_key": 1, "rt_block_cell": 1,
                        "rt_scope_ids": 1, "rt_scope_scan": 1, "rt_retire_event": 1,
-                       "rt_reject_ledger": 1, "scan_cursor": len(RESET_CURSORS), "rt_lease": 1}
+                       "rt_reject_ledger": 1, "scan_cursor": len(RESET_CURSORS),
+                       "settings": 2, "rt_lease": 1}
+    assert set(db.settings) >= {"rt_engine:other"} and f"rt_redecide:{GEN}" not in db.settings
     assert not [key for key in db.pairs if key[0] == GEN]
     assert not [key for key in db.rt_fp if key[0] == GEN]
     assert not [key for key in db.reject_ledger if key[0] == GEN], "E943: a seed empties it"

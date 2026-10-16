@@ -2213,6 +2213,8 @@ def _autodedup_outcome(
             reconcile_refused=int(merged.get("refused") or 0),
             reconcile_failed=int(merged.get("failed") or 0),
             reconcile_waiting=int(merged.get("block_not_fully_read") or 0),
+            # E960: groups waiting for a member refreshed lately, under this engine.
+            reconcile_stale=int(merged.get("stale_decision") or 0),
             reconcile_skipped_at_apply=int(merged.get("skipped_at_apply") or 0),
             reconcile_quarantined=int(merged.get("quarantined") or 0),
             reconcile_deferred=int(merged.get("deferred_run_cap") or 0),
@@ -2284,6 +2286,11 @@ def _autodedup_outcome(
             pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
             ledger_skipped=counts.get("ledger_skipped"),
             ledger_written=counts.get("ledger_written"),
+            # E960: the probe-key neighbourhood the last attempt re-retrieved from the store's
+            # keys and guard rows, and the adverts whose facts the pass read, by why (claim,
+            # order, digest, decided, cluster, rail), summed over every attempt.
+            dirty=counts.get("dirty"),
+            reads=counts.get("reads"),
         )
 
     if summary is not None:
@@ -2347,7 +2354,7 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596) is "
+                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604) is "
                     "absent on this database; the lane skips every tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False
