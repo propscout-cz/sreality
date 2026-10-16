@@ -622,6 +622,15 @@ select s.key, s.value
 # The growth readout's own watermark. An OBSERVATION row rather than a knob: the lane writes
 # it, nothing reads it but the next pass's summary, and it lives in `autodedup.settings`
 # because a new key there needs no migration (528).
+# E944: a re-cut stopped by the shutdown or its fence puts the row back as it was — only while
+# the stamp is still its own; a next holder that stamped its own attempt keeps it.
+RT_RECUT_PUT_BACK_SQL = """
+update autodedup.settings
+   set value = %(value)s::jsonb, updated_at = now(), updated_by = %(updated_by)s::text
+ where key = %(key)s::text
+   and value->>'cutting' = %(holder)s::text
+"""
+
 RT_SETTING_WRITE_SQL = """
 insert into autodedup.settings (key, value, updated_at, updated_by)
 values (%(key)s::text, %(value)s::jsonb, now(), %(updated_by)s::text)
@@ -1154,9 +1163,13 @@ select c.generation, c.digest, c.built_at
  where c.generation = %(generation)s::text
 """
 
+# E944: `held` is the digest of the calibration the caller already holds; the payload (5.7 MB
+# of text at 39.5k adverts) comes back NULL while it is still the stored one, so a pass reads it
+# once per digest. NULL `held` reads it always.
 RT_CALIBRATION_READ_SQL = """
-select c.generation, c.digest, c.n_listings, c.payload, c.artifact_url, c.settings,
-       c.model_version, c.built_at
+select c.generation, c.digest, c.n_listings,
+       case when c.digest = %(held)s::text then null else c.payload end as payload,
+       c.artifact_url, c.settings, c.model_version, c.built_at
   from autodedup.rt_calibration c
  where c.generation = %(generation)s::text
 """

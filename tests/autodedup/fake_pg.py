@@ -346,6 +346,12 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                 ("pairs", len(db.pairs)), ("rt_block_cell", len(db.cells))]
     if sql == S.RT_SETTINGS_MANY_SQL:
         return [(key, db.settings[key]) for key in p["keys"] if key in db.settings]
+    if sql == S.RT_RECUT_PUT_BACK_SQL:
+        held = db.settings.get(str(p["key"]))
+        if isinstance(held, dict) and held.get("cutting") == p["holder"]:
+            db.settings[str(p["key"])] = _jsonb(p["value"])
+            db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
+        return []
     if sql == S.RT_SETTING_WRITE_SQL:
         db.settings[str(p["key"])] = _jsonb(p["value"])
         db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
@@ -855,15 +861,17 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     # ---------------------------------------------------------------- calibration
     if sql == S.RT_CALIBRATION_PRESENT_SQL:
         row = db.calibration.get(gen)
-        return [] if row is None else [(gen, row["digest"], db.now)]
+        return [] if row is None else [(gen, row["digest"], row.get("built_at", db.now))]
     if sql == S.RT_CALIBRATION_READ_SQL:
         row = db.calibration.get(gen)
+        held = p["held"]
         return [] if row is None else [(gen, row["digest"], row["n_listings"],
-                                        _jsonb(row["payload"]), row["artifact_url"],
+                                        None if held is not None and held == row["digest"]
+                                        else _jsonb(row["payload"]), row["artifact_url"],
                                         _jsonb(row["settings"]), row["model_version"],
-                                        db.now)]
+                                        row.get("built_at", db.now))]
     if sql == S.RT_CALIBRATION_WRITE_SQL:
-        db.calibration[gen] = dict(p)
+        db.calibration[gen] = {**p, "built_at": db.now}
         return []
 
     # ---------------------------------------------------------------- cursors

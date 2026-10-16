@@ -667,14 +667,11 @@ def test_a_pass_is_bounded_in_statements() -> None:
 
 def test_the_lease_outlives_the_longest_pass() -> None:
     """A lease that expires while its holder still runs invites a second writer: the pass's own
-    deadline, one statement past it and the re-cut reserve all fit inside it (E913)."""
-    from autodedup.incremental_lane import (
-        PASS_DEADLINE_S,
-        RECUT_RESERVE_S,
-        STATEMENT_TIMEOUT_MS,
-    )
+    deadline and one statement past it fit inside it (E913), and so does a re-cut, a tick of its
+    own under the same deadline (E944)."""
+    from autodedup.incremental_lane import PASS_DEADLINE_S, STATEMENT_TIMEOUT_MS
 
-    assert LEASE_TTL_S > PASS_DEADLINE_S + STATEMENT_TIMEOUT_MS / 1000 + RECUT_RESERVE_S
+    assert LEASE_TTL_S > PASS_DEADLINE_S + STATEMENT_TIMEOUT_MS / 1000
 
 
 def test_the_store_serves_a_fingerprint_row_it_has_not_flushed_yet() -> None:
