@@ -24,6 +24,7 @@ import DayRule from '@/components/phone/DayRule';
 import { ChevronIcon } from '@/components/phone/phoneIcons';
 import { ApiError, getCollection } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
+import { useCollectionMembers } from '@/lib/collectionCache';
 import { listingKindLabel } from '@/lib/enums';
 import { FEED_ALL_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
@@ -36,7 +37,6 @@ import {
   DEFAULT_SORT,
   curationKeys,
   fetchListingsForCards,
-  fetchPropertyCollectionMemberSet,
   type CardRow,
 } from '@/lib/queries';
 import { ROUTES } from '@/lib/routes';
@@ -149,12 +149,7 @@ function Members({ collection, members }: { collection: Collection; members: Col
   /* The member map every collection glyph paints from; a remove in the sheet
    * revalidates it, and the card leaves this roll with it. A failed read hides
    * nothing (the roll's own read already scoped the cohort). */
-  const memberMapQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
-  const memberMap = memberMapQ.data;
+  const memberMap = useCollectionMembers().data;
   const stillHere = (property_id: number): boolean =>
     memberMap == null || (memberMap.get(property_id) ?? []).includes(collection.id);
 

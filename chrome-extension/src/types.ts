@@ -133,14 +133,12 @@ export interface TagWriteResult {
   detached?: boolean;
 }
 
-/* One operator note about a PROPERTY (rule #18). `origin_listing_id` is the
- * advert the operator was viewing when they wrote it — display provenance only,
- * not a grouping key. Read via GET /properties/{id}/notes (most-recent-first). */
+/* One operator note about a PROPERTY (rule #18). Read via
+ * GET /properties/{id}/notes (most-recent-first). */
 export interface ExtNote {
   id: number;
   property_id: number;
   body: string;
-  origin_listing_id: number | null;
   created_at: string;
   /* Null until the operator edits the note; stamped on every PATCH. */
   updated_at: string | null;

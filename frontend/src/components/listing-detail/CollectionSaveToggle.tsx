@@ -8,20 +8,19 @@
  * pipeline's accent — out of every collection this button is neutral, and only
  * the SAVED state borrows the soft copper tint the card glyph already uses.
  *
- * Membership reads the ONE shared member map (the CurationBlock under the
- * description and every Browse card glyph subscribe to the same key), so a save made in
- * any of them is immediately true in the others.
+ * Membership reads the ONE shared member map (every Browse card glyph and the
+ * phone marks subscribe to the same key), so a save made in any of them is
+ * immediately true in the others.
  */
 
 import { useCallback, useId, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 
 import CollectionMark from '@/components/CollectionMark';
 import CollectionSaveMenu, {
   COLLECTION_SAVE_LABEL,
 } from '@/components/CollectionSaveMenu';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
-import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
+import { useCollectionMembership } from '@/lib/collectionCache';
 
 export default function CollectionSaveToggle({
   property_id,
@@ -34,12 +33,7 @@ export default function CollectionSaveToggle({
   /* Stable so the popover's positioning effect doesn't re-subscribe each render. */
   const close = useCallback(() => setOpen(false), []);
 
-  const membershipQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
-  const memberIds = new Set(membershipQ.data?.get(property_id) ?? []);
+  const { ids: memberIds, query: membershipQ } = useCollectionMembership(property_id);
   const count = memberIds.size;
 
   /* Matches PipelineToggle's skeleton so the two never jump relative to each

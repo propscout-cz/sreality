@@ -193,7 +193,7 @@ def test_a_delete_removes_the_row_scoped_to_note_and_property(client, conn, r2):
 
 
 def test_the_notes_list_carries_each_notes_attachments(conn):
-    conn.notes = [(8, 5, "druhá", None, _WHEN, None), (7, 5, "první", None, _WHEN, None)]
+    conn.notes = [(8, 5, "druhá", _WHEN, None), (7, 5, "první", _WHEN, None)]
     conn.files = [(41, 7, "plan.pdf", "application/pdf", 10, _WHEN)]
     data = curation.list_notes(conn, 5)["data"]
     assert [(n["id"], [f["id"] for f in n["attachments"]]) for n in data] == [(8, []), (7, [41])]

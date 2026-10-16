@@ -543,11 +543,9 @@ class AddPropertiesToCollectionIn(BaseModel):
 
 class CreateNoteIn(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
-    # The advert the operator was viewing when they wrote the note — display
-    # provenance only ("written while viewing this advert"), not a grouping key.
-    origin_listing_id: int | None = None
-    # Surrogate twin (R2). Preferred when present; origin_listing_id is the
-    # legacy handle and is NULL for a post-Gate-2 listing.
+    # The advert's surrogate id the operator was viewing when they wrote the note —
+    # display provenance ("written while viewing this advert") and a split's routing
+    # key, never a grouping key. The legacy origin_listing_id column is derived from it.
     origin_listing_ref_id: int | None = None
 
 

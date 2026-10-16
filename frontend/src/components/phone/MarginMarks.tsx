@@ -20,11 +20,10 @@ import { useQuery } from '@tanstack/react-query';
 import CollectionMark from '@/components/CollectionMark';
 import { readFailed } from '@/components/ReadFailedMark';
 import { AlertIcon, EyeOffIcon, FunnelIcon } from '@/components/icons';
+import { useCollectionMembership } from '@/lib/collectionCache';
 import {
-  curationKeys,
   fetchPipelineMembers,
   fetchPipelineStages,
-  fetchPropertyCollectionMemberSet,
   pipelineKeys,
 } from '@/lib/queries';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
@@ -92,18 +91,15 @@ export default function MarginMarks({ subject, photoCount }: MarginMarksProps) {
   const [sheet, setSheet] = useState<'stage' | 'collections' | 'location' | null>(null);
 
   const { membersQ, member, badge, accent } = usePipelineLook(property_id);
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const {
+    ids: collectionIds,
+    saved,
+    query: collectionsQ,
+  } = useCollectionMembership(property_id);
   const { add, pending: pipelinePendingFor } = usePipelineCard();
   const { dismissed, dismiss, restore, pending: dismissPending } = useDismissal(property_id);
 
   const pipelinePending = pipelinePendingFor(property_id);
-
-  const collectionIds = new Set(collectionsQ.data?.get(property_id) ?? []);
-  const saved = collectionIds.size > 0;
 
   /* A live deal and a dismissal never coexist (the API refuses it); a deal closed
    * into a terminal stage is history and can be hidden (DismissButton's rule). */

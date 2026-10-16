@@ -1,17 +1,68 @@
-/* The single source of truth for "which caches a collection write must refresh"
- * — the curation analogue of lib/browseInvalidation, and it exists for the same
- * reason its header records: the key list was hand-typed per call site and
- * drifted. Every writer but the menu had lost the shared member map — the
- * CurationBlock row, the collection page's row-remove, both collection DELETEs,
- * and the merge, which invalidated no curation key at all — so a membership
- * change left every Browse card glyph painting the old state until the query
- * went stale on its own.
- * Import and call this instead of re-typing the list. */
+/* The one home of the collection READS and of "which caches a collection WRITE
+ * must refresh"; import from here instead of re-typing either.
+ *
+ * Reads: every surface takes the collection list and the whole-set member map
+ * from the three hooks below — fourteen hand-typed useQuery copies over the two
+ * keys had grown in twelve files, each re-deriving one property's Set.
+ *
+ * Writes: the curation analogue of lib/browseInvalidation, for the reason its
+ * header records — the key list was hand-typed per call site and drifted. Every
+ * writer but the menu had lost the shared member map (a property-page chip row
+ * since deleted, the collection page's row-remove, both collection DELETEs, and
+ * the merge, which invalidated no curation key at all), so a membership change
+ * left every Browse card glyph painting the old state until the query went
+ * stale on its own. */
 
-import type { QueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 
-import { curationKeys } from '@/lib/queries';
+import { listCollections } from '@/lib/api';
+import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
 import { invalidateBrowseQueries } from '@/lib/browseInvalidation';
+import type { Collection } from '@/lib/types';
+
+const NO_COLLECTIONS: Collection[] = [];
+
+/* The caller's collections (GET /collections). A failed read is a retry, never
+ * "No collections yet" (MS16): callers branch on `query`, not on an empty list.
+ * No keepPreviousData: the key is constant, so its only effect would be painting
+ * the previous account's list after auth.tsx's identity-change clear(). */
+export function useCollections() {
+  const query = useQuery({
+    queryKey: curationKeys.collections,
+    queryFn: listCollections,
+    staleTime: 30_000,
+  });
+  const collections = query.data?.data ?? NO_COLLECTIONS;
+  const byId = useMemo(
+    () => new Map(collections.map((c) => [c.id, c] as const)),
+    [collections],
+  );
+  return { collections, byId, query };
+}
+
+/* The whole-set member map (property_id -> collection ids), one read for every
+ * glyph. Returned as the query itself: cohort readers need `data` undefined
+ * while it is unresolved (fail-open, rule #22) and every mark needs refetch. */
+export function useCollectionMembers() {
+  return useQuery({
+    queryKey: curationKeys.propertyCollectionMembers,
+    queryFn: fetchPropertyCollectionMemberSet,
+    staleTime: 30_000,
+  });
+}
+
+/* One property's collections. `ready` is true once the member map resolved.
+ * Sharing (W5) splits `ids` into mine/shared here once owner_email exists, and
+ * `ready` then waits on useCollections too (the split needs its owners). */
+export function useCollectionMembership(property_id: number) {
+  const query = useCollectionMembers();
+  const ids = useMemo(
+    () => new Set(query.data?.get(property_id) ?? []),
+    [query.data, property_id],
+  );
+  return { ids, saved: ids.size > 0, ready: query.data !== undefined, query };
+}
 
 /** Re-read collections after ANY collection write — one idiom per call site,
  * metadata included. The member map is in the list because a property-grain

@@ -12,13 +12,12 @@ import NoteMark from '@/components/NoteMark';
 import PipelineMark from '@/components/PipelineMark';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
+import { useCollectionMembership } from '@/lib/collectionCache';
 import {
-  curationKeys,
   dismissalKeys,
   fetchIsDismissed,
   fetchPipelineMembers,
   fetchPipelineStages,
-  fetchPropertyCollectionMemberSet,
   pipelineKeys,
 } from '@/lib/queries';
 
@@ -50,11 +49,7 @@ export default function CurationMarks({ property_id }: { property_id: number }) 
     queryFn: fetchPipelineStages,
     staleTime: 60_000,
   });
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const { ids: collectionIds, query: collectionsQ } = useCollectionMembership(property_id);
   const dismissedQ = useQuery({
     queryKey: dismissalKeys.state(property_id),
     queryFn: () => fetchIsDismissed(property_id),
@@ -62,7 +57,7 @@ export default function CurationMarks({ property_id }: { property_id: number }) 
   });
   const card = membersQ.data?.get(property_id);
   const look = card && { id: card.stage_id, color: card.stage_color, code: card.stage_code };
-  const collections = collectionsQ.data?.get(property_id)?.length ?? 0;
+  const collections = collectionIds.size;
 
   return (
     <span className="flex items-center gap-1">
