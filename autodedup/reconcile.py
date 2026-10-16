@@ -24,7 +24,14 @@ What it adds is WHICH groups and WHEN:
   * each group's transaction runs under its own local statement and lock timeouts;
   * it spends what is left of the pass's time and stops BETWEEN groups, never inside one, and
     merges at most the scope row's `max_clusters_per_run` groups a pass (the rest wait for the
-    next pass, which re-plans them from fresh state).
+    next pass, which re-plans them from fresh state);
+  * a group waits (`stale_decision`) while a member not yet on its property was last refreshed
+    more than `FRESH_DECISION_HOURS` ago, under another engine, or never (E960): a pass reads a
+    neighbour as its row stored it, so a stored merge can rest on facts a sighting, a location
+    correction or a reparse has since moved. Every group owed a merge and not merged this pass
+    (waiting, past the run cap, out of time) is handed on (`rt_redecide`), oldest moved member
+    first; the next pass re-claims whole groups of it, at least `STALE_FLOOR` adverts, and the
+    reconcile re-plans every group handed on, so a group refreshed whole merges at once.
 
 The rollout control is unchanged until W6: `app_settings.autodedup_apply_scope` must admit the
 group, and the WHOLE row is re-read before every group (blocks, deal types) and handed to the
@@ -34,6 +41,7 @@ the lane interval (0 = stop), then `mode=unapply`.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
@@ -42,6 +50,8 @@ from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import rt_lease
 from autodedup.incremental_sql import (
+    RT_SETTING_WRITE_SQL,
+    RT_STALE_SQL,
     RT_CURSOR_READ_SQL,
     RT_CURSOR_SET_SQL,
     RT_LOCK_GUARD_SQL,
@@ -69,6 +79,27 @@ QUARANTINE_AFTER: int = 3
 QUARANTINE_RETRY_H: float = 24.0
 MAX_ERRORS: int = 3
 WAITING = "block_not_fully_read"
+# E960: a merge is applied only on facts at most this old. Half the sighting cycle (the walks
+# see an active advert about once a day: 12,920 of 13,281 active within the store's first day),
+# so an applied decision's clock features are off by at most half a day; a heal, a correction
+# or a population move waits at most this long; and the groups a pass applies are mostly the
+# ones it just re-clustered around a refreshed member, so the rule costs a pass of latency only
+# where a member's facts are older.
+# A policy window, for the operator to rule on.
+FRESH_DECISION_HOURS: float = 12.0
+STALE = "stale_decision"
+REDECIDE_SETTING: str = "rt_redecide"
+# The adverts the handed-on groups may name in all, whole groups, oldest wait first.
+REDECIDE_CAP: int = 5000
+# The adverts a pass re-claims for waiting groups at the least, whatever its time-bound share: a
+# re-claim costs an advert's pairs (~36 decided at 39.7k), and a share of 1 (a pass of 9 adverts)
+# would leave a backlog of thousands for days. A share is at most 500 // 5, so this is the
+# arm's budget.
+STALE_FLOOR: int = 100
+# A group the lane tried to re-claim is not tried again for this long, whatever came of it: a
+# re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
+TRIED_SETTING: str = "rt_redecide_tried"
+TRIED_BACKOFF_HOURS: float = 6.0
 QUARANTINED = "quarantined"
 SUMMARY_CAP: int = 50
 
@@ -114,6 +145,99 @@ def _unread(conn: Any, generation: str, listing_ids: Sequence[int],
         "generation": generation, "listing_ids": sorted(listing_ids)}) if block in unread}
 
 
+def redecide_key(generation: str) -> str:
+    """`rt_redecide:<generation>` — the members the reconcile hands the next pass (E960)."""
+    return f"{REDECIDE_SETTING}:{generation}"
+
+
+def tried_key(generation: str) -> str:
+    """`rt_redecide_tried:<generation>` — {a group's first advert: when the lane tried it}."""
+    return f"{TRIED_SETTING}:{generation}"
+
+
+def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_hours: float,
+              engine_since: str | None) -> dict[int, tuple[Any, bool]]:
+    """Each advert's last refresh and whether a merge may NOT rest on it (E960): refreshed longer
+    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed)."""
+    if not listing_ids:
+        return {}
+    return {int(row[0]): (row[1], bool(row[2])) for row in _rows(conn, RT_STALE_SQL, {
+        "generation": generation, "listing_ids": sorted({int(i) for i in listing_ids}),
+        "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since})}
+
+
+def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
+                  fresh_hours: float, engine_since: str | None) -> set[int]:
+    """The adverts among `listing_ids` a merge may not rest on (E960)."""
+    return {listing_id for listing_id, (_at, stale) in refreshed(
+        conn, generation, listing_ids, fresh_hours=fresh_hours,
+        engine_since=engine_since).items() if stale}
+
+
+def _oldest(members: Sequence[int], ages: Mapping[int, tuple[Any, bool]]) -> tuple[int, Any]:
+    """A group's place in the queue: the oldest refresh first; a group holding an advert with no
+    row (no claim can refresh it) last."""
+    stamps = [ages[i][0] for i in members if i in ages]
+    if not stamps or any(at is None for at in stamps):
+        return (2, "")
+    return (1, min(stamps))
+
+
+def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]],
+           budget: int) -> list[int]:
+    """The adverts a pass re-claims for the groups handed on (E960): WHOLE groups — every stale
+    member a claim can refresh (it has a row) — oldest wait first, until `budget` adverts; the
+    first group is taken whatever its size, so no group is ever cut across passes."""
+    queue = []
+    for members in groups:
+        stale = sorted({int(i) for i in members if int(i) in ages and ages[int(i)][1]
+                        and ages[int(i)][0] is not None})
+        if stale:
+            queue.append((_oldest(stale, ages), stale))
+    queue.sort()
+    out: list[int] = []
+    for _rank, stale in queue:
+        if out and len(out) + len(stale) > budget:
+            break
+        out.extend(i for i in stale if i not in out)
+    return out
+
+
+def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]],
+                  tried: Mapping[str, str], now: datetime) -> tuple[list[int], dict[str, str]]:
+    """The adverts the next pass re-claims (`claims` at `STALE_FLOOR`) over the groups not tried
+    within `TRIED_BACKOFF_HOURS`, and the back-off map with those groups stamped `now` and the
+    expired or forgotten stamps dropped (E960). Keyed by a group's first advert."""
+    now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    cutoff = now.timestamp() - TRIED_BACKOFF_HOURS * 3600.0
+    queued = {str(min(group)) for group in groups if group}
+    recent = {head: at for head, at in tried.items()
+              if head in queued and _epoch(at) is not None and _epoch(at) > cutoff}
+    open_groups = [group for group in groups if group and str(min(group)) not in recent]
+    taken = claims(open_groups, ages, STALE_FLOOR)
+    chosen = set(taken)
+    for group in open_groups:
+        if chosen & set(group):
+            recent[str(min(group))] = now.isoformat()
+    return taken, recent
+
+
+def _epoch(value: Any) -> float | None:
+    try:
+        stamp = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def handed_groups(value: Any) -> list[list[int]]:
+    """`rt_redecide:<generation>` as written: lists of advert ids."""
+    if not isinstance(value, list):
+        return []
+    return [[int(i) for i in group] for group in value
+            if isinstance(group, list) and all(isinstance(i, int) for i in group)]
+
+
 def _history(conn: Any, generation: str, listing_ids: Sequence[int]
              ) -> dict[frozenset[int], list[tuple[str, str | None, Any]]]:
     """Per member set, its newest outcomes (newest first): (outcome, error, at)."""
@@ -151,6 +275,9 @@ def run(
     clock: Callable[[], float] = time.perf_counter,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     fence: Callable[[Any], None] | None = None,
+    fresh_hours: float = FRESH_DECISION_HOURS,
+    engine_since: str | None = None,
+    waiting: Sequence[Sequence[int]] = (),
 ) -> dict[str, Any]:
     """Reconcile the pass's groups onto production. Returns the readout the pass summary and
     the worker's heartbeat carry; writes only through `apply.apply_group` and the ledger.
@@ -160,6 +287,9 @@ def run(
     rolls that group back and stops the run (`stopped` = `lease_lost`)."""
     scope, closed = read_scope(conn)
     if scope is None:
+        # E960: no merge can follow a re-claim, so the queue goes too (no pass re-claims it).
+        if waiting:
+            _hand_on(conn, generation, run_id, [], {})
         return {"skipped": "scope_closed", "reason": closed}
     after = _cursor(conn)
     swept = [int(row[0]) for row in _rows(conn, S.RC_SWEEP_SQL, {
@@ -168,13 +298,23 @@ def run(
     _exec(conn, RT_CURSOR_SET_SQL, {
         "name": CURSOR,
         "last_listing_id": swept[-1] if len(swept) >= SWEEP_SLICE else 0})
-    keys = sorted({int(k) for k in touched} | set(swept))
+    def group_of(listing_ids: set[int]) -> dict[int, int]:
+        return {int(lid): int(key) for lid, key in _rows(conn, S.RC_GROUP_OF_SQL, {
+            "generation": generation, "listing_ids": sorted(listing_ids)})}
+
+    # E960: every group handed on is re-planned, so one refreshed whole merges in this pass.
+    handed = (set(group_of({int(i) for group in waiting for i in group}).values())
+              if waiting else set())
+    keys = sorted({int(k) for k in touched} | set(swept) | handed)
     counts: dict[str, Any] = {"groups": len(keys), "touched": len(set(touched)),
-                              "swept": len(swept)}
+                              "swept": len(swept), "handed_replanned": len(handed)}
     out: dict[str, Any] = {"run_id": run_id, "counts": counts, "applied": [],
                            "skipped_at_apply": [], "refused": [], "failed": [],
                            QUARANTINED: []}
     if not keys:
+        if waiting:
+            counts["handed_on"], counts["handed_on_dropped"] = _hand_on(
+                conn, generation, run_id, [], {})
         return out
     cluster_rows = [dict(zip(("cluster_key", "size", "status", "min_edge_score",
                               "model_version", "feature_version"), row))
@@ -191,13 +331,10 @@ def run(
         counts[WAITING] = len(waiting)
         cluster_rows = [row for row in cluster_rows if int(row["cluster_key"]) not in waiting]
 
-    def group_of(listing_ids: set[int]) -> dict[int, int]:
-        return {int(lid): int(key) for lid, key in _rows(conn, S.RC_GROUP_OF_SQL, {
-            "generation": generation, "listing_ids": sorted(listing_ids)})}
-
-    # The scope row's run cap holds here too: at most `max_clusters_per_run` merges a pass;
-    # the groups past it are re-planned by a later pass (touched again, or by the sweep).
-    plan = A.plan_groups(conn, generation, cluster_rows, members_by, scope, group_of=group_of)
+    # The scope row's run cap holds here too, at most `max_clusters_per_run` merges a pass, but
+    # over the groups that may merge NOW (E960): it is applied below, after the freshness rule.
+    plan = A.plan_groups(conn, generation, cluster_rows, members_by, scope, group_of=group_of,
+                         cap=False)
     counts.update(plan.counts)
 
     history = _history(conn, generation, sorted({lid for g in plan.groups
@@ -213,10 +350,23 @@ def run(
     out[A.RULED_AFTER_MERGE] = [A.ruled_brief(g) for g in plan.skipped
                                 if g.ruled_after_merge][:SUMMARY_CAP]
 
-    todo = plan.to_apply
+    # E960: every member a merge would move must have been refreshed lately, under this engine;
+    # the run cap then counts only the groups that may merge now.
+    owed = {group.cluster_key: sorted(m.listing_id for m in members_by.get(group.cluster_key, ())
+                                      if m.property_id != group.survivor_id)
+            for group in plan.to_apply}
+    ages = refreshed(conn, generation, sorted({i for ids in owed.values() for i in ids}),
+                     fresh_hours=fresh_hours, engine_since=engine_since)
+    fresh = [group for group in plan.to_apply
+             if not any(ages.get(i, (None, True))[1] for i in owed[group.cluster_key])]
+    counts[STALE] = len(plan.to_apply) - len(fresh)
+    todo = fresh[:scope.max_clusters_per_run]
+    counts["deferred_run_cap"] = len(fresh) - len(todo)
+    counts["planned"] = len(todo)
     for key in ("applied", "skipped_at_apply", "refused", "failed", QUARANTINED):
         counts[key] = 0
     counts["listings_moved"] = 0
+    attempted: set[int] = set()
     errors = 0
     guards = ((RT_STATEMENT_GUARD_SQL, {"statement_timeout_ms": GROUP_STATEMENT_TIMEOUT_MS}),
               (RT_LOCK_GUARD_SQL, {"lock_timeout_ms": GROUP_LOCK_TIMEOUT_MS}))
@@ -232,6 +382,7 @@ def run(
             out["stopped"] = f"app_settings.{A.SCOPE_SETTING} admits no live merge: {closed}"
             counts["not_attempted"] = len(todo) - index
             break
+        attempted.add(group.cluster_key)
         past = history.get(frozenset(group.member_ids), [])
         if _quarantined(past, now()):
             counts[QUARANTINED] += 1
@@ -262,4 +413,25 @@ def run(
             counts["listings_moved"] += int(brief["listings_moved"])
         if len(out[outcome]) < SUMMARY_CAP:
             out[outcome].append(brief)
+    counts["handed_on"], counts["handed_on_dropped"] = _hand_on(
+        conn, generation, run_id,
+        [owed[g.cluster_key] for g in plan.to_apply
+         if g.cluster_key not in attempted and owed[g.cluster_key]], ages)
     return out
+
+
+def _hand_on(conn: Any, generation: str, run_id: str, groups: Sequence[Sequence[int]],
+             ages: Mapping[int, tuple[Any, bool]]) -> tuple[int, int]:
+    """Every group owed a merge and not attempted (waiting, past the run cap, out of time), as its
+    moved members, oldest wait first, whole groups up to `REDECIDE_CAP` adverts (E960). It
+    REPLACES the list: every group on it was re-planned this pass, so what stays owed is here."""
+    kept: list[list[int]] = []
+    total = 0
+    for _rank, members in sorted((_oldest(m, ages), list(m)) for m in groups):
+        if total + len(members) > REDECIDE_CAP:
+            break
+        kept.append(members)
+        total += len(members)
+    _exec(conn, RT_SETTING_WRITE_SQL, {"key": redecide_key(generation),
+                                       "value": json.dumps(kept), "updated_by": run_id})
+    return len(kept), len(groups) - len(kept)

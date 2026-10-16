@@ -104,6 +104,11 @@ class MemoryStore:
                 position -= 1
             bucket.insert(position, listing_id)
 
+    def put_decision_digests(self, dds: Mapping[int, str]) -> None:
+        for listing_id, dd in dds.items():
+            if listing_id in self.fp:
+                self.fp[listing_id] = replace(self.fp[listing_id], dd=dd)
+
     def _drop_keys(self, listing_id: int) -> None:
         for key in self.keys.pop(listing_id, ()):
             bucket = self.postings.get(key)
@@ -161,6 +166,10 @@ class MemoryStore:
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
         return {(lo, hi) for lo, hi, dd_lo, dd_hi in keys
                 if self.ledger.get((lo, hi)) == (dd_lo, dd_hi, *self._ledger_key())}
+
+    def ledger_keyed(self) -> bool:
+        key = self._ledger_key()
+        return any(row[2:] == key for row in self.ledger.values())
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         for key in keys:
