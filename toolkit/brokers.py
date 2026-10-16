@@ -26,7 +26,7 @@ _VALID_METRICS = {
     "active_property_count", "property_count", "listing_count", "active_listing_count",
 }
 GEO_LEVELS = ("region", "okres")
-# The chip levels broker_region_type_stats has cells for: migration 607's fast gate.
+# The chip levels broker_region_type_stats has cells for: migration 609's fast gate.
 _COUNT_BOOK_LEVELS = frozenset({"kraj", "okres", "obec"})
 MAX_BATCH = 1000
 _REDACTED = "[redacted]"
@@ -161,7 +161,7 @@ def leaderboard(conn: Any, *, districts: Sequence[DistrictChip] | None = None,
                 include_unpriced: bool = False, subtypes: list[str] | None = None,
                 include_unknown_subtype: bool = False) -> dict[str, Any]:
     """Top brokers by a chosen metric, optionally scoped to location chips (Browse's
-    five-level predicate, migration 607) + category + one or more companies
+    five-level predicate, migration 609) + category + one or more companies
     (firm_ids, migration 410) + a minimum property value (min_price_czk, migration
     448) + property subtypes (subtypes, migration 469).
 

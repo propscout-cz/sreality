@@ -1928,7 +1928,7 @@ renumber.** Navigate by area:
     RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
     `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
     (Browse's PostgREST string and the pipeline board's in-memory twin) and the three RPC bodies
-    (`browse_stats_properties`, `browse_map_cells`, and since 607 `broker_leaderboard` — Brokers and
+    (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard` — Brokers and
     Outreach, the same blocks over `listing_location`'s `*_kod`) all compile the same plan; the shared table
     `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py`,
     `districtCodes.test.ts` and `tests/test_broker_leaderboard_chip_parity.py`, so a divergence is a red
@@ -3885,7 +3885,7 @@ orders, so one listing could be labelled two ways at once. Every place FILTER is
 `<level>_id = any(codes)`, plain equality at five levels (`region_id` / `okres_id` / `obec_id` /
 `cast_obce_id` / `ulice_id`), compiled in exactly two places (`api/location_filter.py` and
 `frontend/src/lib/districtCodes.ts`) plus three SQL bodies (`browse_stats_properties`,
-`browse_map_cells`, `broker_leaderboard` — 607, over `listing_location`'s five codes), all five
+`browse_map_cells`, `broker_leaderboard` — 609, over `listing_location`'s five codes), all five
 tested against ONE table, `tests/fixtures/district_chip_plan.json`.
 A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN

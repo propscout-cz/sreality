@@ -61,7 +61,7 @@ def test_create_campaign_without_a_target_stores_the_national_shape(client, monk
     {"region_ids": [27]},
 ], ids=["no level or code", "not one of the five levels", "no code", "the deleted id lists"])
 def test_a_campaign_target_refuses_a_chip_without_a_level_and_code(client, monkeypatch, target):
-    """Migration 607: a target is chips or nothing — a stale client's `region_ids` would
+    """Migration 609: a target is chips or nothing — a stale client's `region_ids` would
     otherwise be dropped and the campaign silently aimed at the whole country."""
     calls = []
     monkeypatch.setattr(outreach_routes.outreach, "create_campaign",

@@ -1,4 +1,4 @@
--- 607_broker_leaderboard_chip_arrays.sql -- the broker leaderboard takes Browse's location chips.
+-- 609_broker_leaderboard_chip_arrays.sql -- the broker leaderboard takes Browse's location chips.
 --
 -- WHY. Operator ruling 2026-10-16 ("what you pick is what you filter"): a location chip is ONE
 -- RUIAN unit at the level picked -- kraj, okres, obec, cast_obce, ulice -- tested as plain code
@@ -50,13 +50,13 @@ begin
   select count(*) = 100000 into populated
     from (select 1 from public.properties limit 100000) probe;
   if not populated then
-    raise notice '607: replay container (corpus < 100k properties), precondition skipped';
+    raise notice '609: replay container (corpus < 100k properties), precondition skipped';
     return;
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'broker_leaderboard'), '')
      not in ('aabd5828e6bed3be596ae07a74c11216', '48616df4b1010a91bf2b923c446ff6ed') then
-    raise exception '607 refused: broker_leaderboard is not 580''s body nor this file''s (or has two overloads)';
+    raise exception '609 refused: broker_leaderboard is not 580''s body nor this file''s (or has two overloads)';
   end if;
 end
 $pre$;
@@ -98,7 +98,7 @@ as $function$
 
   -- FAST BRANCH: exact precomputed cells (W4), for the shapes the count book has cells for:
   -- no live-only filter, and every chip an include at kraj / okres / obec, one level per name
-  -- (607). `g` derives 580's three id lists from those chips, so the cell arms and the
+  -- (609). `g` derives 580's three id lists from those chips, so the cell arms and the
   -- nested-chip suppression read as they did; "no chips" stays a parameter test, so the
   -- planner still drops the national arm from a chip call (an InitPlan count would not).
   fast_raw as (
@@ -165,7 +165,7 @@ as $function$
   ),
 
   -- LIVE BRANCH: reads `listings` directly, for the filters the matview cannot
-  -- express (price since 448, subtype since 469, and since 607 a chip it has no cell
+  -- express (price since 448, subtype since 469, and since 609 a chip it has no cell
   -- for: a cast_obce, a street, an exclude). 580's body, except the place predicate.
   live_priced as (
     select l.broker_identity_id,
@@ -364,32 +364,32 @@ declare
 begin
   if v_fn is null or (select count(*) from pg_proc where pronamespace = 'public'::regnamespace
                                                      and proname = 'broker_leaderboard') <> 1 then
-    raise exception '607: expected exactly one broker_leaderboard, the chip-array signature';
+    raise exception '609: expected exactly one broker_leaderboard, the chip-array signature';
   end if;
   select prosrc, proargnames into v_src, v_names from pg_proc where oid = v_fn;
   if v_names[1:4] is distinct from
      array['districts_filter', 'districts_excluded_filter', 'districts_levels', 'districts_ids'] then
-    raise exception '607: broker_leaderboard''s chip parameters are %', v_names[1:4];
+    raise exception '609: broker_leaderboard''s chip parameters are %', v_names[1:4];
   end if;
   foreach v_lvl in array array['kraj', 'okres', 'obec', 'cast_obce', 'ulice'] loop
     if (length(v_src) - length(replace(v_src, format('then ll.%s_kod', v_lvl), '')))
        / length(format('then ll.%s_kod', v_lvl)) <> 2 then
-      raise exception '607: the % arm is not in both chip blocks', v_lvl;
+      raise exception '609: the % arm is not in both chip blocks', v_lvl;
     end if;
   end loop;
   if has_function_privilege('anon', v_fn, 'execute')
      or has_function_privilege('authenticated', v_fn, 'execute') then
-    raise exception '607: a browser role can execute broker_leaderboard';
+    raise exception '609: a browser role can execute broker_leaderboard';
   end if;
   if exists (select 1 from public.outreach_campaigns
               where target ?| array['region_ids', 'okres_ids', 'obec_ids']
                  or jsonb_typeof(target -> 'districts') is distinct from 'array') then
-    raise exception '607: an Outreach target still holds an id list, or no chip list';
+    raise exception '609: an Outreach target still holds an id list, or no chip list';
   end if;
   if exists (select 1 from public.outreach_campaigns c, jsonb_array_elements(c.target -> 'districts') d
               where coalesce(d ->> 'level', '') not in ('kraj', 'okres', 'obec', 'cast_obce', 'ulice')
                  or coalesce((d ->> 'id')::bigint, 0) <= 0) then
-    raise exception '607: an Outreach chip without a (level, code)';
+    raise exception '609: an Outreach chip without a (level, code)';
   end if;
 end
 $post$;

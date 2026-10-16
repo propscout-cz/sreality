@@ -1,4 +1,4 @@
-"""The leaderboard tests a location chip with Browse's predicate (migration 607, rule 25).
+"""The leaderboard tests a location chip with Browse's predicate (migration 609, rule 25).
 
 `broker_leaderboard`'s live branch carries the include + exclude chip blocks of
 `browse_stats_properties` (605), over `listing_location`'s five codes instead of the read
@@ -61,7 +61,7 @@ def _tokens(sql: str) -> list[str]:
 def test_the_leaderboard_carries_605s_chip_blocks_over_listing_location() -> None:
     """RED by: any edit to one copy of the predicate and not the other — an arm, the NULL
     guard, the `coalesce(excl, false)` that keeps an unresolved row under an exclude."""
-    assert latest_definition("broker_leaderboard").name == "607_broker_leaderboard_chip_arrays.sql"
+    assert latest_definition("broker_leaderboard").name == "609_broker_leaderboard_chip_arrays.sql"
     browse = _chip_blocks("browse_stats_properties")
     for level, column in LEVEL_COLUMN.items():
         browse = browse.replace(f"l.{column} ", f"ll.{_LL_COLUMN[level]} ")

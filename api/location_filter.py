@@ -3,7 +3,7 @@
 Every surface that lets the operator narrow by place — Browse's list
 (`districtsFilterClause`), Browse's Stats and map (`browse_stats_properties` /
 `browse_map_cells`), the pipeline board's in-memory predicate, the Watchdog
-matcher and the broker leaderboard (`broker_leaderboard`, migration 607: Brokers
+matcher and the broker leaderboard (`broker_leaderboard`, migration 609: Brokers
 and Outreach) — tests a chip the same way:
 
     <level>_id = any(<codes at that level>)

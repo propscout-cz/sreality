@@ -55,7 +55,7 @@ def test_leaderboard_threads_firm_ids_into_the_rpc_call() -> None:
 
 
 def test_leaderboard_passes_the_chips_as_browses_four_arrays() -> None:
-    """Migration 607: one entry per chip in each array, names first (they drive the
+    """Migration 609: one entry per chip in each array, names first (they drive the
     RPC's unnest), in the order Browse's RPCs take them; the envelope echoes the chips."""
     chips = [DistrictChip(name="Praha", level="obec", id=554782),
              DistrictChip(name="Na Rybníčkách", context="Pardubice", level="ulice", id=666742),
@@ -75,7 +75,7 @@ def test_leaderboard_passes_the_chips_as_browses_four_arrays() -> None:
     (DistrictChip(name="Praha", level="obec", id=554782, excluded=True), False),
 ])
 def test_leaderboard_stamps_freshness_only_when_the_count_book_answers(chip, stamped) -> None:
-    """A street or an exclude reads `listings` live (607's gate), so it is "as of now",
+    """A street or an exclude reads `listings` live (609's gate), so it is "as of now",
     not as of the matview's last build."""
     conn = _Conn([{"broker_id": 1}])
     brokers.leaderboard(conn, districts=[chip])

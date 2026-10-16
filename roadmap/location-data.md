@@ -1148,14 +1148,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   cap); 606 deleted, after `backup_606`, the only code-less chips stored — 2 presets (5 name-only kraj
   chips each) and 2 inactive watchdogs (8 chips, 778 dispatches). The read-time name reader is deleted.
   Recall: 162,562 of 378,380 active CZ listings (43 %) carry a street code.
-- **Region-search parity — DONE 2026-10-17** (migration 607): Brokers / phone Brokers / Outreach / Datasets
+- **Region-search parity — DONE 2026-10-17** (migration 609): Brokers / phone Brokers / Outreach / Datasets
   take the same chips. `broker_leaderboard` takes Browse's four chip arrays (its three id lists deleted)
   and its live branch carries 605's include + exclude blocks over `listing_location`'s five codes
   (`tests/test_broker_leaderboard_chip_parity.py` runs them over the shared chip table); the count book
   answers only includes at kraj / okres / obec — a quarter, a street or an exclude reads `listings`
   live (measured: one street 1.77 s, the listings-per-broker loop every price filter already pays; a
   kraj + obec pair reads the count book exactly as before, 44 ms). Outreach stores chips in
-  `target.districts` (607 rewrote the stored id lists; 0 campaigns existed) and the API refuses the old
+  `target.districts` (609 rewrote the stored id lists; 0 campaigns existed) and the API refuses the old
   id lists with a 422. No index: the chip CASE is a per-row filter.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on

@@ -95,8 +95,8 @@ def test_leaderboard_defaults_firm_ids_and_chips_to_empty(client, monkeypatch):
 ], ids=["a list short", "not one of the five levels", "no code", "a name for a code",
         "the deleted id lists"])
 def test_leaderboard_refuses_a_chip_without_a_level_and_code(client, monkeypatch, params):
-    """A chip is a (level, code) or it cannot exist (605/607): every malformed shape is a
-    422 before the toolkit runs — and so is a pre-607 bundle's `region_ids`, which ignored
+    """A chip is a (level, code) or it cannot exist (605/609): every malformed shape is a
+    422 before the toolkit runs — and so is a pre-609 bundle's `region_ids`, which ignored
     would answer its "Praha" board with the country's brokers."""
     calls = []
     monkeypatch.setattr(broker_routes.brokers, "leaderboard",

@@ -58,7 +58,7 @@ def _districts(
     districts_excl: list[bool] = Query(default=[]),
 ) -> list[DistrictChip]:
     """The location chips as four parallel repeated params, one entry per chip each."""
-    # A bundle from before 607 still sends the id lists; ignored, its "Praha" board would
+    # A bundle from before 609 still sends the id lists; ignored, its "Praha" board would
     # silently be the country's.
     if {"region_ids", "okres_ids", "obec_ids"} & request.query_params.keys():
         raise HTTPException(status_code=422, detail="region_ids / okres_ids / obec_ids are "

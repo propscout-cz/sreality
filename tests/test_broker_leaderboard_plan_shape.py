@@ -72,7 +72,7 @@ def conn():
 
 def _explain(conn, *, min_price_czk=None, subtypes=None, category_main="byt", chip=None):
     """`chip` = (name, level, code): ONE include chip, bound like toolkit/brokers.py binds
-    them (607); without one the four chip arrays are literal NULLs."""
+    them (609); without one the four chip arrays are literal NULLs."""
     chips, chip_params = "null, null, null, null", ()
     if chip is not None:
         name, level, code = chip
@@ -118,7 +118,7 @@ def plan_subtyped(conn):
 
 @pytest.fixture(scope="module")
 def plan_street(conn):
-    """A street chip, no value filter (607): the count book has no street cells, so the
+    """A street chip, no value filter (609): the count book has no street cells, so the
     chip alone must route the call to the live branch."""
     return _explain(conn, chip=("Na Rybníčkách", "ulice", 666742))
 
@@ -341,7 +341,7 @@ def test_the_subtype_only_plan_keeps_deferred_hydration(plan_subtyped):
     )
 
 
-# --- migration 607: a chip routes by whether the count book has its cells -----------
+# --- migration 609: a chip routes by whether the count book has its cells -----------
 
 
 def test_a_street_chip_reaches_listings_and_prunes_the_matview(plan_street):

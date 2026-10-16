@@ -1,4 +1,4 @@
-"""Offline contracts W4 must not break (migrations 435, 469, 607).
+"""Offline contracts W4 must not break (migrations 435, 469, 609).
 
 Load-bearing things about the broker leaderboard, invisible in the normal test suite, and
 each would fail only in production:
@@ -7,7 +7,7 @@ each would fail only in production:
     arrays, the two categories, the metric and its 2000 cap — however many parameters it
     has grown to. That is legal only because every parameter after those (410's
     `p_firm_ids`, 448's `p_min_price_czk`/`p_include_unpriced`, 469's
-    `p_subtypes`/`p_include_unknown_subtype`) is TRAILING and carries a DEFAULT. 607 is the
+    `p_subtypes`/`p_include_unknown_subtype`) is TRAILING and carries a DEFAULT. 609 is the
     one re-signing that touched the leading positions (three id lists became four chip
     arrays), so it moved this call from seven to eight in the same change; dropping a
     default, or inserting a parameter anywhere but the end, breaks the call at runtime with
@@ -110,7 +110,7 @@ def test_every_function_parameter_carries_a_default():
     signature it is retiring) — `body.index("broker_leaderboard(")` alone would find that
     DROP first and silently check the wrong parameter list.
 
-    RED by: un-defaulting any parameter in 607.
+    RED by: un-defaulting any parameter in 609.
     """
     body = _sql(_FN_MIGRATION)
     create_at = body.index("create or replace function public.broker_leaderboard(")
@@ -407,7 +407,7 @@ def test_combined_hydrates_from_the_ranked_top_cte_not_the_raw_aggregate():
 # exact logical complements over the SAME parameters: if a call could satisfy both, its
 # rows are double-counted; if it could satisfy neither, the leaderboard comes back empty.
 # Adding a live-path filter means updating both spellings AND this pair — which is the
-# point of pinning the literal text rather than a loose substring. 607 added the chips:
+# point of pinning the literal text rather than a loose substring. 609 added the chips:
 # the count book has cells for an INCLUDE at kraj / okres / obec only, one level per name.
 _FAST_GATE = (
     "p_min_price_czk is null and p_subtypes is null\n"

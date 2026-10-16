@@ -1,4 +1,4 @@
-"""The broker leaderboard's behaviour, executed (migrations 434, 435, 607).
+"""The broker leaderboard's behaviour, executed (migrations 434, 435, 609).
 
 Two properties nothing else in CI can see, because both are about which rows come BACK:
 
@@ -278,7 +278,7 @@ def test_a_chip_nested_under_a_selected_parent_counts_once(conn):
     "districts_filter => '{kraj-1}', districts_ids => '{1}'",
 ], ids=["a street", "an excluded kraj", "a name with no level"])
 def test_a_chip_the_count_book_has_no_cell_for_never_reads_it(conn, chips):
-    """607: the count book holds include cells at kraj / okres / obec only. Any other chip
+    """609: the count book holds include cells at kraj / okres / obec only. Any other chip
     must route to the live branch (here: no listings seeded, so no rows) — never fall
     through to the national cell or to the kraj cell it names.
 
