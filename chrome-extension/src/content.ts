@@ -30,6 +30,7 @@ import {
   runIndexOverlay,
   type IndexOverlayHandle,
 } from './index_overlay';
+import { onAccountChange } from './session';
 import type {
   AgentQuota,
   ApiMessage,
@@ -2401,19 +2402,18 @@ async function onMoveStage(stageId: number): Promise<void> {
   if (target != null && !target.is_terminal) setState(applyDismissedIf(propertyId, false, {}));
 }
 
-/* The operator-curated stage list, loaded once per page and cached at module
- * scope (stages change rarely — same staleness posture as the SPA's 60s cache).
- * Reused across panel re-opens so changing cards never re-fetches. A transient
- * failure retries a few times (bounded) so a single network blip can't strip
- * stage-changing for the page view; a persistent failure leaves the select on its
- * current-stage fallback and self-heals on the next panel open. */
+/* The operator-curated stage list, cached at module scope for the life of the
+ * tab until the account changes (unlike the SPA's 60 s cache; stages change
+ * rarely). Reused across panel re-opens so changing cards never re-fetches. A
+ * transient failure retries a few times (bounded) so a single network blip
+ * can't strip stage-changing for the page view; a persistent failure leaves the
+ * select on its current-stage fallback and self-heals on the next panel open. */
 let cachedStages: PipelineStage[] | null = null;
 let stagesLoading = false;
 
-/* Bumped on sign-out. A list read still in flight then was authorised as the
- * account that just left: it must neither refill a cache the next account
- * starts from, nor keep holding the loading flag that would turn that
- * account's own read away as a duplicate. */
+/* Bumped by an account change (below): a list read still in flight was
+ * authorised as the account that left, so it must neither refill a cache nor
+ * hold the loading flag that would turn the next account's own read away. */
 let sessionGen = 0;
 
 async function loadStages(): Promise<void> {
@@ -2527,6 +2527,14 @@ async function loadTags(refresh = false): Promise<void> {
     if (gen === sessionGen) tagsLoading = false;
   }
 }
+
+/* The three lists belong to the account that read them: a sign-in or sign-out
+ * here or in any tab, or a failed refresh, drops them; the next open re-reads. */
+onAccountChange(() => {
+  sessionGen++;
+  cachedStages = cachedCollections = cachedTags = null;
+  stagesLoading = collectionsLoading = tagsLoading = false;
+});
 
 /* Fetch the caller's agent-estimation allowance for the "(zbývá X)" counter +
  * upgrade prompt. Best-effort: a failure leaves state.quota null (counter hidden,
@@ -2699,28 +2707,15 @@ async function onSignIn(): Promise<void> {
     }));
     return;
   }
-  indexOverlay?.sessionChanged();
   await openPanel(ref, panelUrl);
 }
 
 async function onSignOut(): Promise<void> {
-  /* Both lists belong to the account that is leaving. The next sign-in on this
-   * tab may be a different account, which must not be offered these rows —
-   * nor have them refilled by a read still in flight (see sessionGen). */
-  sessionGen++;
-  cachedCollections = null;
-  cachedStages = null;
-  cachedTags = null;
-  collectionsLoading = false;
-  stagesLoading = false;
-  tagsLoading = false;
   await call<undefined>({ type: 'sign_out' });
   setState((prev) => ({
     ...prev, phase: 'signed_out', authEmail: null, listing: null, errorMessage: null,
     collections: null, stages: null, collectionsOpen: false, tags: null, tagsOpen: false,
   }));
-  // The search-page cards under the panel were drawn for that account too.
-  indexOverlay?.sessionChanged();
 }
 
 /* Mounts/refreshes the floating panel for one listing. Used by the detail-page

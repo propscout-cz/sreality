@@ -6,6 +6,9 @@
  * reuse-detection, so a token shared between two independently-refreshing
  * sessions would eventually revoke both. This is a fully separate sign-in. */
 
+import { SESSION_KEY, type StoredSession } from './session';
+import type { AuthState } from './types';
+
 function normalizeBaseUrl(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed === '') return '';
@@ -27,18 +30,10 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   );
 }
 
-const SESSION_KEY = 'authSession';
 const VERIFIER_KEY = 'pkceVerifier';
 /* Refresh a little before actual expiry so a request never races a token
  * that's valid-on-read but expired-on-arrival at the API. */
 const EXPIRY_SKEW_SECONDS = 60;
-
-interface StoredSession {
-  access_token: string;
-  refresh_token: string;
-  /* Epoch seconds. */
-  expires_at: number;
-}
 
 interface GoTrueTokenResponse {
   access_token: string;
@@ -46,11 +41,6 @@ interface GoTrueTokenResponse {
   expires_in: number;
   expires_at?: number;
   token_type: string;
-}
-
-export interface AuthState {
-  signedIn: boolean;
-  email: string | null;
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -74,9 +64,9 @@ async function challengeFor(verifier: string): Promise<string> {
   return base64UrlEncode(await sha256(verifier));
 }
 
-/* Best-effort JWT payload decode for display only (email in the sign-in
- * strip) — never used for authorization, the API independently verifies
- * the token via JWKS. */
+/* Best-effort JWT payload decode for display and cache identity only (the email
+ * in the sign-in strip, the `sub` tabs key their cached lists by) — never used
+ * for authorization, the API independently verifies the token via JWKS. */
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const [, payload] = token.split('.');
@@ -140,10 +130,12 @@ async function getStoredSession(): Promise<StoredSession | null> {
 async function storeSession(token: GoTrueTokenResponse): Promise<void> {
   const expires_at = token.expires_at
     ?? Math.floor(Date.now() / 1000) + token.expires_in;
+  const sub = decodeJwtPayload(token.access_token)?.sub;
   const session: StoredSession = {
     access_token: token.access_token,
     refresh_token: token.refresh_token,
     expires_at,
+    user_id: typeof sub === 'string' ? sub : undefined,
   };
   await chrome.storage.local.set({ [SESSION_KEY]: session });
 }
