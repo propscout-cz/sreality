@@ -18,6 +18,8 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
+from api.location_filter import DistrictChip, district_arrays
+
 _DRAFT_MODEL_KEY = "outreach_draft_model"
 _DRAFT_PROMPT_KEY = "outreach_draft_system_prompt"
 _CALLED_FOR = "outreach_draft"
@@ -113,21 +115,19 @@ def select_targets(conn: Any, target: dict[str, Any], *, campaign_id: int | None
                    limit: int = 25) -> list[dict[str, Any]]:
     """Brokers matching the campaign criteria that are reachable (have an email),
     not suppressed, and not already drafted for this campaign."""
-    region_ids = target.get("region_ids") or None
-    okres_ids = target.get("okres_ids") or None
-    obec_ids = target.get("obec_ids") or None
+    chips = [DistrictChip(**c) for c in target.get("districts") or []]
     metric = target.get("metric") or "active_property_count"
     limit = max(1, min(int(limit), 500))
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT lb.* FROM broker_leaderboard(%s, %s, %s, %s, %s, %s, %s) lb "
+            "SELECT lb.* FROM broker_leaderboard(%s, %s, %s, %s, %s, %s, %s, %s) lb "
             "WHERE lb.primary_email IS NOT NULL "
             "  AND NOT EXISTS (SELECT 1 FROM broker_outreach_suppression s WHERE s.broker_id = lb.broker_id) "
             "  AND (%s::bigint IS NULL OR NOT EXISTS ("
             "        SELECT 1 FROM outreach_messages m "
             "        WHERE m.campaign_id = %s::bigint AND m.broker_id = lb.broker_id)) "
             "LIMIT %s",
-            (region_ids, okres_ids, obec_ids, target.get("category_main"),
+            (*district_arrays(chips), target.get("category_main"),
              target.get("category_type"), metric, 2000,
              campaign_id, campaign_id, limit))
         return cur.fetchall()

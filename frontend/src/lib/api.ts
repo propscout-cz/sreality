@@ -52,7 +52,7 @@ import type {
   WatchdogSubscription,
   FilterPreset,
 } from './types';
-import type { PresetSpec } from './filters';
+import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
 import { supabase } from './supabase';
 
@@ -3526,9 +3526,7 @@ export const runPriceStatDataset = (
  * All endpoints are bearer-gated (PII). */
 
 export interface OutreachTargetSpec {
-  region_ids?: number[];
-  okres_ids?: number[];
-  obec_ids?: number[];
+  districts?: DistrictChip[];
   category_main?: string | null;
   category_type?: string | null;
   metric?: string;

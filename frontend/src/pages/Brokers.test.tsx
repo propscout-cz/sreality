@@ -98,36 +98,57 @@ function leaderRow(broker_id: number, display_name: string): BrokerLeaderRow {
   };
 }
 
-/* Until the leaderboard serves the finer levels (PR 2), a street chip selects
- * NOTHING here — the whole selection becomes the no-match code — and the page
- * says why instead of captioning an empty board with the street's name. */
-describe('<Brokers> a location the page cannot serve', () => {
-  it('selects nothing for a street chip, says why, and captions no place', async () => {
-    asUser(false);
-    vi.mocked(maps.fetchSuggest).mockResolvedValue([{
-      name: 'Na Rybníčkách', label: 'Ulice', type: 'regional.street',
-      position: { lon: 15.77, lat: 50.03 },
-    }]);
-    vi.mocked(maps.resolveSuggestion).mockResolvedValue({
-      level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice',
-    });
-    renderPage();
-    expect(await screen.findByText('Žádní makléři pro tento výběr v Celá ČR.')).toBeInTheDocument();
-    expect(screen.queryByText(brokers.GEO_UNSERVED_HINT)).not.toBeInTheDocument();
+/* What you pick is what you filter: every chip reaches the leaderboard as a chip
+ * — a street too — and the caption names every chip, an excluded one with a minus. */
+describe('<Brokers> location chips', () => {
+  const PARDUBICE = { level: 'obec', id: 555134, name: 'Pardubice', context: null };
+  const STREET = { level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice' };
 
+  const pick = async (typed: string, res: maps.LocationResolution, type: string) => {
+    vi.mocked(maps.fetchSuggest).mockResolvedValue([
+      { name: res.name ?? '', label: '', type, position: { lon: 15.77, lat: 50.03 } },
+    ]);
+    vi.mocked(maps.resolveSuggestion).mockResolvedValue(res);
     const user = userEvent.setup();
-    await user.type(screen.getByRole('textbox', { name: 'Lokalita' }), 'Na Ryb');
+    await user.type(screen.getByRole('textbox', { name: 'Lokalita' }), typed);
     await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
+  };
 
+  it('sends a street chip as a chip and captions the board with its name', async () => {
+    asUser(false);
+    vi.mocked(brokers.fetchBrokerLeaderboard).mockResolvedValue([leaderRow(1, 'První Makléř')]);
+    renderPage();
+    expect(await screen.findByText('Celá ČR')).toBeInTheDocument();
+
+    await pick('Na Ryb', STREET, 'regional.street');
     await waitFor(() =>
       expect(brokers.fetchBrokerLeaderboard).toHaveBeenLastCalledWith(
-        expect.objectContaining({ regionIds: [], okresIds: [], obecIds: [-1] }),
+        expect.objectContaining({ districts: [STREET] }),
         expect.any(AbortSignal),
       ),
     );
-    expect(screen.getByText(brokers.GEO_UNSERVED_HINT)).toBeInTheDocument();
-    expect(await screen.findByText('Žádní makléři pro tento výběr.')).toBeInTheDocument();
-    expect(screen.queryByText(/v Na Rybníčkách/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Na Rybníčkách')).toBeInTheDocument();
+  });
+
+  it('names every chip in the caption, an excluded one with a minus', async () => {
+    asUser(false);
+    renderPage();
+    await pick('Pard', PARDUBICE, 'regional.municipality');
+    await screen.findByRole('button', { name: 'Remove Pardubice (Obec)' });
+    await pick('Na Ryb', STREET, 'regional.street');
+    await userEvent.setup().click(
+      await screen.findByRole('button', { name: 'Exclude Na Rybníčkách · Pardubice (Ulice)' }),
+    );
+
+    await waitFor(() =>
+      expect(brokers.fetchBrokerLeaderboard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ districts: [PARDUBICE, { ...STREET, excluded: true }] }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      await screen.findByText('Žádní makléři pro tento výběr v Pardubice + − Na Rybníčkách.'),
+    ).toBeInTheDocument();
   });
 });
 

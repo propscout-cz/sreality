@@ -2,8 +2,9 @@
 
 Every surface that lets the operator narrow by place — Browse's list
 (`districtsFilterClause`), Browse's Stats and map (`browse_stats_properties` /
-`browse_map_cells`), the pipeline board's in-memory predicate and the Watchdog
-matcher — tests a chip the same way:
+`browse_map_cells`), the pipeline board's in-memory predicate, the Watchdog
+matcher and the broker leaderboard (`broker_leaderboard`, migration 607: Brokers
+and Outreach) — tests a chip the same way:
 
     <level>_id = any(<codes at that level>)
 
@@ -68,6 +69,18 @@ def district_code_plan(chips: Sequence[DistrictChip] | None) -> DistrictCodePlan
         if chip.id not in codes:
             codes.append(chip.id)
     return plan
+
+
+def district_arrays(
+    chips: Sequence[DistrictChip] | None,
+) -> tuple[list[str] | None, list[bool] | None, list[str] | None, list[int] | None]:
+    """The four parallel chip arguments of a chip-taking RPC — names (which drive
+    its unnest), excluded flags, levels, codes — one entry per chip, all NULL for
+    none: what the SPA's `buildBrowseStatsArgs` sends Browse's two RPCs."""
+    if not chips:
+        return None, None, None, None
+    return ([c.name for c in chips], [c.excluded for c in chips],
+            [c.level for c in chips], [c.id for c in chips])
 
 
 def _arms(plan_side: dict[str, list[int]], alias: str, prefix: str,

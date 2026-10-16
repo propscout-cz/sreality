@@ -75,6 +75,8 @@ double count enshrined by a test, and two disagreeing CZ-count books (19/100 top
   shifts for 2 brokers (±4 properties), "Vše" top-100 for 35 (≤4 each) — the fixes
   are semantic (nested chips, one book), not a re-ranking earthquake. The `==17`
   double-count test retired for a count-once pin + a disjoint-additivity pin.
+  607: chips — the three id lists became Browse's four chip arrays (five levels,
+  excludes); the count book answers kraj/okres/obec includes, anything else reads live.
 
 ## Next
 

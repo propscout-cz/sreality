@@ -12,19 +12,32 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from api import dependencies as deps
 from api import outreach
+from api.location_filter import DistrictChip
 
 router = APIRouter(prefix="/outreach", tags=["outreach"])
+
+
+class CampaignTarget(BaseModel):
+    """What `outreach.select_targets` ranks by. Unknown keys are refused, so a stale
+    client's `region_ids` is a 422, never a campaign silently widened to the country."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    districts: list[DistrictChip] = Field(default_factory=list)
+    category_main: str | None = None
+    category_type: str | None = None
+    metric: str | None = None
 
 
 class CampaignCreate(BaseModel):
     name: str
     goal: str | None = None
     guidance: str | None = None
-    target: dict[str, Any] | None = None
+    target: CampaignTarget = Field(default_factory=CampaignTarget)
 
 
 class CampaignUpdate(BaseModel):
@@ -32,7 +45,7 @@ class CampaignUpdate(BaseModel):
     goal: str | None = None
     guidance: str | None = None
     status: str | None = None
-    target: dict[str, Any] | None = None
+    target: CampaignTarget | None = None
 
 
 class MessageUpdate(BaseModel):
@@ -54,7 +67,8 @@ def create_campaign(
     _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return outreach.create_campaign(
-        conn, name=body.name, goal=body.goal, guidance=body.guidance, target=body.target)
+        conn, name=body.name, goal=body.goal, guidance=body.guidance,
+        target=body.target.model_dump())
 
 
 @router.get("/campaigns")
@@ -86,7 +100,7 @@ def update_campaign(
 ) -> dict[str, Any]:
     result = outreach.update_campaign(
         conn, campaign_id, name=body.name, goal=body.goal, guidance=body.guidance,
-        status=body.status, target=body.target)
+        status=body.status, target=body.target.model_dump() if body.target else None)
     if result is None:
         raise HTTPException(status_code=404, detail="campaign not found")
     return result

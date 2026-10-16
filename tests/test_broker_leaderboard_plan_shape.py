@@ -70,16 +70,23 @@ def conn():
         yield c
 
 
-def _explain(conn, *, min_price_czk=None, subtypes=None, category_main="byt"):
+def _explain(conn, *, min_price_czk=None, subtypes=None, category_main="byt", chip=None):
+    """`chip` = (name, level, code): ONE include chip, bound like toolkit/brokers.py binds
+    them (607); without one the four chip arrays are literal NULLs."""
+    chips, chip_params = "null, null, null, null", ()
+    if chip is not None:
+        name, level, code = chip
+        chips = "%s::text[], %s::boolean[], %s::text[], %s::bigint[]"
+        chip_params = ([name], [False], [level], [code])
     with conn.cursor() as cur:
         # Plain SET, not SET LOCAL: this connection is autocommit, and outside a
         # transaction SET LOCAL is a silent no-op (the trap migration 429's rail hit).
         cur.execute("set enable_seqscan = off")
         cur.execute(
             "explain (format json) select * from public.broker_leaderboard("
-            "null, null, null, %s, 'prodej', 'active_property_count', 100, "
+            f"{chips}, %s, 'prodej', 'active_property_count', 100, "
             "null, %s, false, %s, false)",
-            (category_main, min_price_czk, subtypes),
+            (*chip_params, category_main, min_price_czk, subtypes),
         )
         return cur.fetchone()[0][0]["Plan"]
 
@@ -107,6 +114,19 @@ def plan_subtyped(conn):
     matview — which cannot express subtype at all, so it would have answered with
     silently UNFILTERED counts."""
     return _explain(conn, subtypes=["kancelar", "sklad"], category_main="komercni")
+
+
+@pytest.fixture(scope="module")
+def plan_street(conn):
+    """A street chip, no value filter (607): the count book has no street cells, so the
+    chip alone must route the call to the live branch."""
+    return _explain(conn, chip=("Na Rybníčkách", "ulice", 666742))
+
+
+@pytest.fixture(scope="module")
+def plan_kraj(conn):
+    """A kraj chip, no value filter: the count book has kraj cells, so it stays fast."""
+    return _explain(conn, chip=("Kraj Vysočina", "kraj", 108))
 
 
 def _nodes(node):
@@ -318,4 +338,27 @@ def test_the_subtype_only_plan_keeps_deferred_hydration(plan_subtyped):
     above = {n.get("Relation Name") for n in _nodes(plan_subtyped) if id(n) not in below_ids}
     assert "firms" in above, (
         f"`firms` is not joined above the Limit — hydration is missing entirely: {above}"
+    )
+
+
+# --- migration 607: a chip routes by whether the count book has its cells -----------
+
+
+def test_a_street_chip_reaches_listings_and_prunes_the_matview(plan_street):
+    """RED by: a fast gate that ignores the chip levels — the street call would then be
+    answered from cells the matview does not have (its town's, or none)."""
+    names = _relation_names(plan_street)
+    assert "listings" in names and "broker_region_type_stats" not in names, (
+        f"a street chip must read listings live and prune the count book: {names}\n"
+        + json.dumps(plan_street, indent=2)
+    )
+
+
+def test_a_kraj_chip_stays_on_the_count_book_and_prunes_listings(plan_kraj):
+    """RED by: a live gate that fires on any chip — every geo call would pay the live
+    scan the count book exists to avoid."""
+    names = _relation_names(plan_kraj)
+    assert "broker_region_type_stats" in names and "listings" not in names, (
+        f"a kraj chip must read the count book and prune listings: {names}\n"
+        + json.dumps(plan_kraj, indent=2)
     )

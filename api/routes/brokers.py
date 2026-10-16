@@ -16,10 +16,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, ValidationError
 
 from api import dependencies as deps
+from api.location_filter import DistrictChip
 from toolkit import brokers
 from toolkit.filter_registry import PORTAL_OPTIONS
 
@@ -49,11 +50,33 @@ def get_brokers_by_ids(
     return _policy(brokers.brokers_by_ids(conn, ids), claims)
 
 
+def _districts(
+    request: Request,
+    districts: list[str] = Query(default=[]),
+    districts_lvl: list[str] = Query(default=[]),
+    districts_id: list[int] = Query(default=[]),
+    districts_excl: list[bool] = Query(default=[]),
+) -> list[DistrictChip]:
+    """The location chips as four parallel repeated params, one entry per chip each."""
+    # A bundle from before 607 still sends the id lists; ignored, its "Praha" board would
+    # silently be the country's.
+    if {"region_ids", "okres_ids", "obec_ids"} & request.query_params.keys():
+        raise HTTPException(status_code=422, detail="region_ids / okres_ids / obec_ids are "
+                            "replaced by the districts chips; reload the page")
+    if not len(districts) == len(districts_lvl) == len(districts_id) == len(districts_excl):
+        raise HTTPException(status_code=422, detail=(
+            "districts, districts_lvl, districts_id and districts_excl need one entry per chip"))
+    try:
+        return [DistrictChip(name=n, level=lvl, id=code, excluded=excl) for n, lvl, code, excl
+                in zip(districts, districts_lvl, districts_id, districts_excl)]
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=[
+            {"loc": e["loc"], "msg": e["msg"]} for e in exc.errors()]) from exc
+
+
 @router.get("/leaderboard")
 def get_leaderboard(
-    region_ids: list[int] = Query(default=[]),
-    okres_ids: list[int] = Query(default=[]),
-    obec_ids: list[int] = Query(default=[]),
+    districts: list[DistrictChip] = Depends(_districts),
     category_main: str | None = None,
     category_type: str | None = None,
     metric: str = "active_property_count",
@@ -67,8 +90,7 @@ def get_leaderboard(
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     return _policy(brokers.leaderboard(
-        conn, region_ids=region_ids, okres_ids=okres_ids, obec_ids=obec_ids,
-        category_main=category_main, category_type=category_type,
+        conn, districts=districts, category_main=category_main, category_type=category_type,
         metric=metric, limit=limit, firm_ids=firm_ids,
         min_price_czk=min_price_czk, include_unpriced=include_unpriced,
         subtypes=subtypes, include_unknown_subtype=include_unknown_subtype), claims)

@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from api.location_filter import DistrictChip
 from toolkit import brokers
 
 
@@ -47,17 +48,48 @@ def test_leaderboard_threads_firm_ids_into_the_rpc_call() -> None:
     brokers.leaderboard(conn, firm_ids=[5, 9])
     sql, params = conn.cur.seen[0]
     assert ("broker_leaderboard("
-            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)") in sql
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)") in sql
     assert params == (
-        None, None, None, None, None, "active_property_count", 100, [5, 9], None,
+        None, None, None, None, None, None, "active_property_count", 100, [5, 9], None,
         False, None, False)
+
+
+def test_leaderboard_passes_the_chips_as_browses_four_arrays() -> None:
+    """Migration 607: one entry per chip in each array, names first (they drive the
+    RPC's unnest), in the order Browse's RPCs take them; the envelope echoes the chips."""
+    chips = [DistrictChip(name="Praha", level="obec", id=554782),
+             DistrictChip(name="Na Rybníčkách", context="Pardubice", level="ulice", id=666742),
+             DistrictChip(name="Kraj Vysočina", level="kraj", id=108, excluded=True)]
+    conn = _Conn([{"broker_id": 1}])
+    out = brokers.leaderboard(conn, districts=chips)
+    _, params = conn.cur.seen[0]
+    assert params[:4] == (
+        ["Praha", "Na Rybníčkách", "Kraj Vysočina"], [False, False, True],
+        ["obec", "ulice", "kraj"], [554782, 666742, 108])
+    assert out["metadata"]["filters_used"]["districts"] == [c.model_dump() for c in chips]
+
+
+@pytest.mark.parametrize("chip,stamped", [
+    (DistrictChip(name="Kraj Vysočina", level="kraj", id=108), True),
+    (DistrictChip(name="Na Rybníčkách", level="ulice", id=666742), False),
+    (DistrictChip(name="Praha", level="obec", id=554782, excluded=True), False),
+])
+def test_leaderboard_stamps_freshness_only_when_the_count_book_answers(chip, stamped) -> None:
+    """A street or an exclude reads `listings` live (607's gate), so it is "as of now",
+    not as of the matview's last build."""
+    conn = _Conn([{"broker_id": 1}])
+    brokers.leaderboard(conn, districts=[chip])
+    asked = any("derived_artifacts" in sql for sql, _ in conn.cur.seen)
+    assert asked is stamped
 
 
 def test_leaderboard_omits_firm_ids_when_not_given() -> None:
     conn = _Conn([{"broker_id": 1}])
     out = brokers.leaderboard(conn)
     _, params = conn.cur.seen[0]
-    assert params[7] is None  # firm_ids position
+    assert params[:4] == (None, None, None, None)  # no chips = national
+    assert out["metadata"]["filters_used"]["districts"] == []
+    assert params[8] is None  # firm_ids position
     assert out["metadata"]["filters_used"]["firm_ids"] == []
 
 
@@ -65,7 +97,7 @@ def test_leaderboard_threads_min_price_czk_and_include_unpriced() -> None:
     conn = _Conn([{"broker_id": 1}])
     out = brokers.leaderboard(conn, min_price_czk=5_000_000, include_unpriced=True)
     _, params = conn.cur.seen[0]
-    assert params[8:10] == (5_000_000, True)
+    assert params[9:11] == (5_000_000, True)
     assert out["metadata"]["filters_used"]["min_price_czk"] == 5_000_000
     assert out["metadata"]["filters_used"]["include_unpriced"] is True
 
@@ -74,7 +106,7 @@ def test_leaderboard_defaults_min_price_czk_none_and_include_unpriced_false() ->
     conn = _Conn([{"broker_id": 1}])
     out = brokers.leaderboard(conn)
     _, params = conn.cur.seen[0]
-    assert params[8:10] == (None, False)
+    assert params[9:11] == (None, False)
     assert out["metadata"]["filters_used"]["min_price_czk"] is None
     assert out["metadata"]["filters_used"]["include_unpriced"] is False
 

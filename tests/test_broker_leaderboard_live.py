@@ -1,4 +1,4 @@
-"""The broker leaderboard's behaviour, executed (migrations 434, 435).
+"""The broker leaderboard's behaviour, executed (migrations 434, 435, 607).
 
 Two properties nothing else in CI can see, because both are about which rows come BACK:
 
@@ -219,7 +219,8 @@ def test_disjoint_geo_levels_still_sum_through_one_group_by(conn):
 
         cur.execute(
             "select broker_id, active_property_count from public.broker_leaderboard("
-            "  p_region_ids => '{1}', p_okres_ids => '{2}',"
+            "  districts_filter => '{kraj-1,okres-2}', districts_excluded_filter => '{f,f}',"
+            "  districts_levels => '{kraj,okres}', districts_ids => '{1,2}',"
             "  p_category_main => 'byt', p_category_type => 'prodej')"
         )
         rows = cur.fetchall()
@@ -255,7 +256,9 @@ def test_a_chip_nested_under_a_selected_parent_counts_once(conn):
 
         cur.execute(
             "select broker_id, active_property_count from public.broker_leaderboard("
-            "  p_region_ids => '{1}', p_okres_ids => '{2}', p_obec_ids => '{3}',"
+            "  districts_filter => '{kraj-1,okres-2,obec-3}',"
+            "  districts_excluded_filter => '{f,f,f}',"
+            "  districts_levels => '{kraj,okres,obec}', districts_ids => '{1,2,3}',"
             "  p_category_main => 'byt', p_category_type => 'prodej')"
         )
         rows = cur.fetchall()
@@ -265,3 +268,34 @@ def test_a_chip_nested_under_a_selected_parent_counts_once(conn):
         f"kraj + nested okres + nested obec must count the kraj's inventory once "
         f"(10), got {rows[0][1]} — a nested chip escaped suppression"
     )
+
+
+@pytest.mark.parametrize("chips", [
+    "districts_filter => '{Na Rybníčkách}', districts_excluded_filter => '{f}',"
+    " districts_levels => '{ulice}', districts_ids => '{666742}'",
+    "districts_filter => '{kraj-1}', districts_excluded_filter => '{t}',"
+    " districts_levels => '{kraj}', districts_ids => '{1}'",
+    "districts_filter => '{kraj-1}', districts_ids => '{1}'",
+], ids=["a street", "an excluded kraj", "a name with no level"])
+def test_a_chip_the_count_book_has_no_cell_for_never_reads_it(conn, chips):
+    """607: the count book holds include cells at kraj / okres / obec only. Any other chip
+    must route to the live branch (here: no listings seeded, so no rows) — never fall
+    through to the national cell or to the kraj cell it names.
+
+    RED by: a fast gate that ignores the chip levels, the exclude flags, or a level array
+    shorter than the names (each would return broker 1 with 10 or 7).
+    """
+    with conn.cursor() as cur:
+        _park(cur)
+        _seed_broker(cur, 1)
+        _seed_stats(cur, 1, 10)
+        _seed_stats(cur, 1, 7, geo_level="region", geo_id=1)
+        cur.execute("analyze brokers; analyze broker_region_type_stats;")
+
+        cur.execute(
+            "select broker_id, active_property_count from public.broker_leaderboard("
+            f"  {chips}, p_category_main => 'byt', p_category_type => 'prodej')"
+        )
+        rows = cur.fetchall()
+
+    assert rows == [], f"a chip the count book cannot serve was answered from it: {rows}"
