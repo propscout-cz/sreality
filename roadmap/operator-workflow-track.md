@@ -10,8 +10,13 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 ### Phase U-PIPE-SIGNUP: Every account starts on the default board (done, 2026-10-16)
 - **Done:** migration 605 — one signup path (account, owner membership, the 10-stage default board with codes from
   `seed_default_pipeline`, the monitoring collection, the 7-day trial), functions born private, the event ledger's stage FKs
-  account-qualified. Own PRs, same sprint: the SPA draws an empty board's columns, migration 606 (tenant serial ids →
-  identity), the extension resets its caches on an identity change.
+  account-qualified. Own PRs, same sprint (merge separately): #1828 the SPA draws an empty board's columns, #1830
+  migration 606 (tenant serial ids → identity; apply it BEFORE 605), #1831 the extension resets its caches on an
+  identity change.
+- **Next (unscheduled):** `property_notes.account_id` NOT NULL waits on a ruling about the split preview's bare-note
+  test; `notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is browser-writable);
+  the 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a census arm);
+  dropping `legacy_backfill_claim` (operator's call).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
 - **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),

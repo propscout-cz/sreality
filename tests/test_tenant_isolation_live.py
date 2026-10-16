@@ -392,25 +392,27 @@ def test_signup_seeds_the_default_board(
 ) -> None:
     """Migration 605: a signup is born with the default board, the monitoring
     collection and the trial. Invariants only, never the literal — the board's
-    one definition is seed_default_pipeline, and a copy here would be a second."""
+    one definition is seed_default_pipeline, and a copy here would be a second.
+    Read on account B, which no fixture in this module touches (seeded_tenant_rows
+    adds an extra column to A's board)."""
     with svc.cursor() as cur:
         cur.execute(
             "SELECT position, is_entry, is_terminal, code, color, key, label "
             "FROM pipeline_stages WHERE account_id = %s AND archived_at IS NULL "
             "ORDER BY position",
-            (tenants["a_acc"],),
+            (tenants["b_acc"],),
         )
         stages = cur.fetchall()
         cur.execute(
             "SELECT count(*) FROM collections "
             "WHERE account_id = %s AND name = 'monitoring' AND is_system",
-            (tenants["a_acc"],),
+            (tenants["b_acc"],),
         )
         monitoring = cur.fetchone()[0]
         cur.execute(
             "SELECT plan, status, current_period_end > now() FROM entitlements "
             "WHERE account_id = %s",
-            (tenants["a_acc"],),
+            (tenants["b_acc"],),
         )
         trial = cur.fetchone()
     positions = [s[0] for s in stages]
@@ -455,6 +457,40 @@ def test_pipeline_event_cannot_name_a_foreign_stage(
                         "  (property_id, to_stage_id, reason, account_id) "
                         "VALUES (1, %s, 'operator', %s)",
                         (b_entry, tenants["a_acc"]),
+                    )
+
+
+def test_cross_tenant_pipeline_writes_match_nothing(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """The write half of the two-account check at the DB level: as A, every
+    rename, archive, reorder or delete aimed at B's stages matches no row, and a
+    card planted on B's board is refused by RLS's WITH CHECK."""
+    import psycopg
+
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry",
+            (tenants["b_acc"],),
+        )
+        b_entry = cur.fetchone()[0]
+    with _scoped(tenants["a_user"]) as conn:
+        with conn.cursor() as cur:
+            for sql in (
+                "UPDATE pipeline_stages SET label = 'taken' WHERE id = %s",
+                "UPDATE pipeline_stages SET archived_at = now() WHERE id = %s",
+                "UPDATE pipeline_stages SET position = 99 WHERE id = %s",
+                "DELETE FROM pipeline_stages WHERE id = %s",
+            ):
+                cur.execute(sql, (b_entry,))
+                assert cur.rowcount == 0, f"A reached B's stage via: {sql}"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO property_pipeline (account_id, property_id, stage_id) "
+                        "VALUES (%s, 1, %s)",
+                        (tenants["b_acc"], b_entry),
                     )
 
 
@@ -909,10 +945,10 @@ def seeded_tenant_rows(
         cleanup.insert(0, ("DELETE FROM property_dismissals WHERE property_id = %s", (prop,)))
         where["property_dismissals_public"] = ("property_id = %s", (prop,))
 
-        # A fresh account has no stages; a lone non-entry/non-terminal stage trivially
-        # satisfies both the app-layer rule and the DB CHECK (migration 357) that a
-        # stage can't be entry and terminal at once. The view filters
-        # archived_at IS NULL, so leave it NULL.
+        # The account already has the seeded board (migration 605); one more
+        # non-entry/non-terminal stage trivially satisfies both the app-layer rule
+        # and the DB CHECK (migration 357) that a stage can't be entry and terminal
+        # at once. The view filters archived_at IS NULL, so leave it NULL.
         cur.execute(
             "INSERT INTO pipeline_stages (account_id, key, label, position) "
             "VALUES (%s, %s, 'iso', 1) RETURNING id",

@@ -56,13 +56,15 @@ their parent lookups see every row.
 `property_pipeline_events`, plus the signup trigger:
 - **Signup** (`handle_new_user` on `auth.users`, one path since migration 605): it creates the
   account, the owner membership, the default board (`seed_default_pipeline`: 10 stages with
-  codes, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
+  codes from the label numbers, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
   free trial. A new default is a new migration replacing that function's literal; this prints
-  one from a live board (keys as `api/pipeline.py` `_slugify` mints them from an ASCII label):
+  one from a live board (keys as `api/pipeline.py` `_slugify` mints them from an ASCII label; the code
+  from the label number, the ruled default; drop the comma on the last row):
   ```sql
   select format('(target_account_id, %L, %L, %s, %L, %L, %s, %s),',
            trim(both '_' from lower(regexp_replace(label, '[^A-Za-z0-9]+', '_', 'g'))), label,
-           row_number() over (order by position, id), color, code, is_entry::text, is_terminal::text)
+           row_number() over (order by position, id), color,
+           coalesce(substring(label from '^\s*([0-9]{1,3})'), code), is_entry::text, is_terminal::text)
     from pipeline_stages
    where account_id = '<account uuid>' and archived_at is null
    order by position, id;

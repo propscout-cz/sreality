@@ -124,7 +124,8 @@ common to all. Full plan, sequencing, and gates: `docs/design/public-release-pro
   increment 3 + Wave 1 (item 9 below) — the connection-swap, the account-partitioned reconciler,
   and the composite FK all predate this wave being picked up; only a DB-level invariant, an
   index, and a concurrency fix were genuinely left, shipped this pass. Its launch gate: an external
-  re-audit + a two-account pen-test, whose isolation half runs in CI since migration 605. **Wave 3
+  re-audit + a two-account pen-test, whose DB-level half runs in CI since migration 605 (the manual
+  SPA/API/extension half with real JWTs stays open). **Wave 3
   (watchdogs & notifications) is now in progress** (item 10 below); Wave 4 is unstarted
   (`docs/design/waves-1-4-public-features.md`).
 
@@ -509,8 +510,11 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      inheritance vector is closed, but *whether public signup should be open at all pre-launch* is
      a product decision (invite/allowlist gate), not a code fix.
    - **Two-account pen-test half of the launch gate** ("A can't see/move/archive/reorder/inject into
-     B's board"): six accounts exist live (2026-10-16), and CI's `tests/test_tenant_isolation_live.py`
-     runs on two accounts born through the real signup trigger (migration 605). Still open: registering `property_pipeline`/`property_pipeline_events`
+     B's board"): six accounts exist live (2026-10-16); CI's `tests/test_tenant_isolation_live.py` covers the
+     DB level on two accounts born through the real signup trigger (migration 605): reads both ways, A's
+     rename/archive/reorder/delete of B's stages matching nothing, a card planted on B's board refused, an event
+     naming B's stage refused, and the anon-definer census. **Still open:** the manual pass through the SPA,
+     the API and the extension with real JWTs, and registering `property_pipeline`/`property_pipeline_events`
      in a future GDPR export/deletion surface (the `on delete cascade` from `accounts` already
      scrubs them on account deletion; there's just no self-service surface yet — a Phase-1-wide gap).
 
