@@ -54,6 +54,7 @@ POLYLINE = "esriGeometryPolyline"
 POINT = "esriGeometryPoint"
 
 IPR_HOSTED = "https://mp.iprpraha.cz/arcgis/rest/services/Hosted"
+IPR_REFERENCED = "https://mp.iprpraha.cz/arcgis/rest/services/ReferencedServices"
 VUV_MAPSERVER = "https://ags2.vuv.cz/arcgis/rest/services/isvs_voda/isvs_voda/MapServer"
 VUV_ISO_RECORD = "https://heis.vuv.cz/xmicka/record/xml/CZ-VUV-MD-ZaplavUzemi"
 RUIAN_ATOM = (
@@ -486,6 +487,22 @@ def metro_station_props(a: dict[str, Any]) -> dict[str, Any] | None:
     return _flat({"class": "station", "name": name, "label": label})
 
 
+METRO_LETTERS = ("A", "B", "C")
+
+
+def metro_existing_station_props(a: dict[str, Any]) -> dict[str, Any] | None:
+    """Stations in service (DRUH 1) from IPR's named metro-equipment layer. The class is the
+    line letter, so the dot wears its line's colour and no legend row is added; a transfer
+    station comes once per line. Vestibules (2) and depots (3) are skipped."""
+    if a.get("DRUH") != 1:
+        return None
+    letter = (a.get("TRASA") or "").strip().upper()
+    name = (a.get("NAZEV") or "").strip() or None
+    if letter not in METRO_LETTERS or name is None:
+        raise Refused(f"metro station without a line letter in A/B/C or a name: {a!r}")
+    return _flat({"class": letter, "name": name, "label": name.removeprefix(STATION_PREFIX)})
+
+
 def flood_props(cls: str) -> Props:
     def props(a: dict[str, Any]) -> dict[str, Any] | None:
         return _flat({"class": cls, "name": (a.get("NAZ_TOK") or "").strip() or None})
@@ -584,7 +601,8 @@ SOURCES: dict[str, Section] = {
         attribution="datový podklad © IPR Praha", licence="CC BY 4.0", source_url=IPR_HOSTED,
         note="Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026): stav, návrh a územní "
              "rezervy. Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E) "
-             "nemá rozhodnutou trasu ani technologii.",
+             "nemá rozhodnutou trasu ani technologii. Stanice v provozu v barvě své linky; "
+             "přestupní stanice má bod za každou linku.",
         revised_at=arcgis_revised_at,
         layers=(
             Layer(
@@ -604,6 +622,12 @@ SOURCES: dict[str, Section] = {
                          metro_line_props, _METRO_LINE_FIELDS),
                     _ipr("MPP_CUR_MPP_600_DI_ZARIZENI_B", "kapitola=621 and druh=2", POINT,
                          metro_station_props, ("kapitola", "druh", "stav", "nazev")),
+                    # Stations in service, named, with their line letter: the plan's own
+                    # existing-station points carry no names. Native S-JTSK, like the flood
+                    # register: this server's WGS84 output is the same ~10 m datum shift off.
+                    ArcGisLayer(f"{IPR_REFERENCED}/DOP_MetroZarizeni_b/FeatureServer",
+                                "DOP_MetroZarizeni_b", "DRUH=1", 5514,
+                                metro_existing_station_props, POINT, ("DRUH", "NAZEV", "TRASA")),
                 ),
             ),
         ),

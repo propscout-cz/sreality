@@ -558,7 +558,7 @@ frontend code. The four tables are a MIRROR (rules 10/11's class): service-role 
 quarterly `ingest_map_overlays.yml` (dispatch `--sections kraje` after a boundaries ingest).
 Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
 reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
-it — and named planned stations; CC BY) and the VÚV TGM / MŽP national flood-zone register
+it — and named stations, in service and planned; CC BY) and the VÚV TGM / MŽP national flood-zone register
 (Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly). Two facts the ingest enforces: the VÚV
 service is fetched in its NATIVE S-JTSK (its own WGS84 output applies a 3-parameter datum shift about
 10 m off; a PID stop with both coordinate systems is the control point, > 1 m fails the run), and a

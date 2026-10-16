@@ -50,6 +50,10 @@ of the analytical and UI phases; runs alongside them.
   the way in: the register's Q500 layer spells its fields in mixed case (#1810, fields matched by case) and a
   nationwide per-band `ST_UnaryUnion` ran past the 30-minute statement budget (#1813, per-zone overlap cutting).
   Open follow-up: two expanded chip panels crowd the split-view map (collapse legends by default?).
+- **Stations in service (2026-10-16, operator ruling: station proximity must be readable):** a
+  fourth reader on the `metro` layer, IPR's named `ReferencedServices/DOP_MetroZarizeni_b`
+  (`DRUH=1`, native S-JTSK), class = the line letter so each of the 61 dots wears its line's colour
+  (transfer stations once per line); no SPA change, no migration, re-ingest `--sections metro`.
 
 ### map-3: count marks — one count rule on world tiles (built 2026-10-15)
 - **Why:** the count discs hid the basemap on any dense cohort (232 discs at a 55 px median spacing

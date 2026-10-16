@@ -32,8 +32,11 @@ the boundary ingest onto the ArcGIS reader.
 3. Layer toggles on every MapLibre surface (Browse/Explore, listing-detail header map, comparables
    map), the selection remembered per browser; a Browse URL carrying `layers=` wins.
 4. Metro = lines (A/B/C existing, D proposal, territorial reserves including the tangential corridor
-   labelled exactly as the plan labels it) plus the named planned stations. Existing stations are not
-   drawn (the basemap labels them; the plan's points carry no names).
+   labelled exactly as the plan labels it) plus the named planned stations. Existing stations were
+   not drawn at first (the plan's own station points carry no names); **since 2026-10-16 they are**
+   (operator ruling: a property's distance to a station must be readable), from IPR's named
+   metro-equipment layer `ReferencedServices/DOP_MetroZarizeni_b` (`DRUH=1`, fetched in native
+   S-JTSK), each dot in its line's colour, a transfer station once per line.
 
 ## Sources (verified live 2026-10-14)
 
@@ -54,6 +57,11 @@ reprojection). Base `https://mp.iprpraha.cz/arcgis/rest/services/Hosted/`:
 - `MPP_CUR_MPP_600_DI_ZARIZENI_B/FeatureServer/0` where `kapitola=621 and druh=2` → planned
   stations, named ("Stanice metra Olbrachtova"); class `station`, `label` = name without the
   "Stanice metra " prefix. Points only; vestibules (`druh=3`) and depots (`druh=1`) are skipped.
+- `ReferencedServices/DOP_MetroZarizeni_b/FeatureServer/0` where `DRUH=1` (2026-10-16) → the 61
+  stations in service, named (`NAZEV`), with their line letter (`TRASA`: A 17, B 24, C 20; Muzeum,
+  Můstek and Florenc once per line). Class = the letter, so the point wears its line's legend colour
+  and adds no legend row; `label` = the name. Fetched in native S-JTSK (5514): the server's WGS84
+  output is the same ~10 m datum shift off as the VÚV register's. Field names are upper case.
 - Fields: kapitola, druh, id, nazev, charakter (1 surface / 2 tunnel), stav (1 stav / 2 návrh /
   3 územní rezerva / 4 ke zrušení), parametr. Rows with `stav=4` are skipped.
 
