@@ -37,8 +37,9 @@
 -- 6. Data. Seeded boards born after 377 carry NULL codes; live rows take the
 --    label's number (377's own rule; operator-approved 2026-10-16), never a
 --    code the operator set. property_notes id 2 and its carry row predate
---    tenancy and belong to the account that claimed the legacy data; with no
---    NULL left, account_id becomes NOT NULL.
+--    tenancy and belong to the account that claimed the legacy data (the
+--    column stays nullable: the split preview models an admin's bare note
+--    that way, tests/test_property_split_live.py).
 --
 -- legacy_backfill_claim stays: read by nothing after this, and dropping a table
 -- is the operator's call (not ruled on 2026-10-16).
@@ -129,7 +130,6 @@ update property_merge_carries m
   from legacy_backfill_claim c
  where c.claim_key = 'legacy_backfill_v1'
    and m.table_name = 'property_notes' and m.account_id is null;
-alter table property_notes alter column account_id set not null;
 
 do $$
 begin
