@@ -19,8 +19,8 @@ Three invariant families, all deterministic and offline (no database):
 
 2. REBUILD INVARIANTS — the pg_cron rebuild functions (migration 277) must
    ANALYZE the replacement relation BEFORE swapping it live (autovacuum never
-   analyzes a fresh relation in time; the frontend's count=planned reads
-   pg_statistic — no stats = garbage counts), and must pg_notify PostgREST
+   analyzes a fresh relation in time; every Browse read's plan comes from
+   pg_statistic — no stats = seq scans and bad plans), and must pg_notify PostgREST
    after the swap (the OID changed).
 
 3. READ CONTRACT — every column the Browse frontend can select, filter, or
@@ -172,8 +172,8 @@ def _rebuild_invariants(fn: str, next_rel: str, rename_stmt: str) -> None:
     rename_at = sql.find(rename_stmt)
     assert analyze_at != -1, (
         f"{src.name}: {fn} must `analyze {next_rel}` before the swap — "
-        f"autovacuum never analyzes it in time and count=planned reads "
-        f"pg_statistic (no stats = garbage counts)."
+        f"autovacuum never analyzes it in time and every Browse read's plan comes "
+        f"from pg_statistic (no stats = seq scans and bad plans)."
     )
     assert rename_at != -1, f"{src.name}: {fn} lost its swap ({rename_stmt!r})"
     assert analyze_at < rename_at, (

@@ -278,6 +278,19 @@ validation — recorded here so the doc matches reality:
 Also implemented from the follow-ups section: exact-first counting (measured
 201 ms fully cold, index-only, for the broadest cohort — "~N" is now the rare
 fallback), and the default sort switched to `first_seen_at DESC` (operator
-decision). Still open: live-table index retirement (≥7-day
+decision). **Since 2026-10-16 the count is exact ONLY** (operator ruling: the header
+must say how many cards a scroll to the end would show): the planner-estimate
+fallback answered a cold 3 s count — a one-category cohort with price and
+disposition predicates is an index scan with a heap filter over 177k rows — with a
+figure below the cards already on screen ("72 of ~15"), so `count=planned`,
+`CohortCount.precise`, the "~" rendering and `pgRead`'s per-call `deadlineMs` are
+deleted; a slow count shows as loading (the previous cohort's figure dimmed), a
+failed one as the header's error with its retry; PostgREST's 8 s
+`statement_timeout` is the only ceiling. Measured cold on 2026-10-16: 226 ms
+market-wide (index-only on the PK), ~3 s byt+prodej+active+price+disposition,
+~1.4 s for a no-category seq scan. Named follow-up if the wait hurts: INCLUDE
+`is_active, price_czk, disposition, area_m2, subtype` on
+`browse_list_cat_first_seen_idx` so the common nationwide count is index-only
+(rebuild-function DDL — a migration). Still open: live-table index retirement (≥7-day
 `pg_stat_user_indexes` observation window, then a forward migration with
 operator OK) and the row-comparison keyset cursor (blocked on PostgREST).

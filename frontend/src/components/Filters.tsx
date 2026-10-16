@@ -261,10 +261,7 @@ function ShowDismissedToggle({
   };
   const hiddenQ = useQuery(totalWith(false));
   const shownQ = useQuery(totalWith(true));
-  const count =
-    hiddenQ.data?.precise && shownQ.data?.precise
-      ? shownQ.data.value - hiddenQ.data.value
-      : null;
+  const count = hiddenQ.data != null && shownQ.data != null ? shownQ.data - hiddenQ.data : null;
   const fmt = (n: number) => n.toLocaleString('cs-CZ');
   return (
     <div className="flex flex-col gap-1">
