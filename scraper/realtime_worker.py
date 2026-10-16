@@ -2213,8 +2213,11 @@ def _autodedup_outcome(
             reconcile_refused=int(merged.get("refused") or 0),
             reconcile_failed=int(merged.get("failed") or 0),
             reconcile_waiting=int(merged.get("block_not_fully_read") or 0),
-            # E960: groups waiting for a member refreshed lately, under this engine.
+            # E960: groups waiting for a member refreshed lately, under this engine; the groups
+            # handed to the next pass and those the queue's 5,000-advert cap dropped.
             reconcile_stale=int(merged.get("stale_decision") or 0),
+            reconcile_handed_on=int(merged.get("handed_on") or 0),
+            reconcile_handed_on_dropped=int(merged.get("handed_on_dropped") or 0),
             reconcile_skipped_at_apply=int(merged.get("skipped_at_apply") or 0),
             reconcile_quarantined=int(merged.get("quarantined") or 0),
             reconcile_deferred=int(merged.get("deferred_run_cap") or 0),
@@ -2291,6 +2294,8 @@ def _autodedup_outcome(
             # order, digest, decided, cluster, rail), summed over every attempt.
             dirty=counts.get("dirty"),
             reads=counts.get("reads"),
+            # E960: the waiting groups' adverts the committed attempt re-claimed.
+            stale_claimed=(summary.get("evidence") or {}).get("stale_claimed"),
         )
 
     if summary is not None:

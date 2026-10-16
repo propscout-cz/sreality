@@ -441,7 +441,10 @@ nothing else.
   (production merges the reconcile made), reconcile (ran / its skip or stop reason) +
   reconcile_reason, reconcile_groups, reconcile_seconds, reconcile_refused, reconcile_failed,
   reconcile_waiting (a block not fully read), reconcile_stale (E960: groups waiting for a moving
-  member refreshed within 12 h and under this engine), reconcile_skipped_at_apply, reconcile_quarantined,
+  member refreshed within 12 h and under this engine) + reconcile_handed_on and
+  reconcile_handed_on_dropped (the groups queued for the next pass's re-claim, and those the
+  queue's 5,000-advert cap left out) + stale_claimed (the queue's adverts the committed attempt
+  re-claimed), reconcile_skipped_at_apply, reconcile_quarantined,
   reconcile_deferred (the run cap), must_link_dissolved (operator `same` closures the pass
   dissolved, E926), skipped (0/1) + reason (`recut` on a re-cut tick, E944), errors (0/1) +
   refused/aborted/recut_failed, recut (E944: the cut's outcome on a re-cut tick, or a death or an

@@ -93,8 +93,13 @@ REDECIDE_SETTING: str = "rt_redecide"
 REDECIDE_CAP: int = 5000
 # The adverts a pass re-claims for waiting groups at the least, whatever its time-bound share: a
 # re-claim costs an advert's pairs (~36 decided at 39.7k), and a share of 1 (a pass of 9 adverts)
-# would leave a backlog of thousands for days.
+# would leave a backlog of thousands for days. A share is at most 500 // 5, so this is the
+# arm's budget.
 STALE_FLOOR: int = 100
+# A group the lane tried to re-claim is not tried again for this long, whatever came of it: a
+# re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
+TRIED_SETTING: str = "rt_redecide_tried"
+TRIED_BACKOFF_HOURS: float = 6.0
 QUARANTINED = "quarantined"
 SUMMARY_CAP: int = 50
 
@@ -145,6 +150,11 @@ def redecide_key(generation: str) -> str:
     return f"{REDECIDE_SETTING}:{generation}"
 
 
+def tried_key(generation: str) -> str:
+    """`rt_redecide_tried:<generation>` — {a group's first advert: when the lane tried it}."""
+    return f"{TRIED_SETTING}:{generation}"
+
+
 def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_hours: float,
               engine_since: str | None) -> dict[int, tuple[Any, bool]]:
     """Each advert's last refresh and whether a merge may NOT rest on it (E960): refreshed longer
@@ -165,10 +175,11 @@ def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
 
 
 def _oldest(members: Sequence[int], ages: Mapping[int, tuple[Any, bool]]) -> tuple[int, Any]:
-    """A group's place in the queue: never refreshed first, then the oldest refresh."""
+    """A group's place in the queue: the oldest refresh first; a group holding an advert with no
+    row (no claim can refresh it) last."""
     stamps = [ages[i][0] for i in members if i in ages]
     if not stamps or any(at is None for at in stamps):
-        return (0, "")
+        return (2, "")
     return (1, min(stamps))
 
 
@@ -190,6 +201,33 @@ def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]]
             break
         out.extend(i for i in stale if i not in out)
     return out
+
+
+def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]],
+                  tried: Mapping[str, str], now: datetime) -> tuple[list[int], dict[str, str]]:
+    """The adverts the next pass re-claims (`claims` at `STALE_FLOOR`) over the groups not tried
+    within `TRIED_BACKOFF_HOURS`, and the back-off map with those groups stamped `now` and the
+    expired or forgotten stamps dropped (E960). Keyed by a group's first advert."""
+    now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    cutoff = now.timestamp() - TRIED_BACKOFF_HOURS * 3600.0
+    queued = {str(min(group)) for group in groups if group}
+    recent = {head: at for head, at in tried.items()
+              if head in queued and _epoch(at) is not None and _epoch(at) > cutoff}
+    open_groups = [group for group in groups if group and str(min(group)) not in recent]
+    taken = claims(open_groups, ages, STALE_FLOOR)
+    chosen = set(taken)
+    for group in open_groups:
+        if chosen & set(group):
+            recent[str(min(group))] = now.isoformat()
+    return taken, recent
+
+
+def _epoch(value: Any) -> float | None:
+    try:
+        stamp = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).timestamp()
 
 
 def handed_groups(value: Any) -> list[list[int]]:
@@ -249,6 +287,9 @@ def run(
     rolls that group back and stops the run (`stopped` = `lease_lost`)."""
     scope, closed = read_scope(conn)
     if scope is None:
+        # E960: no merge can follow a re-claim, so the queue goes too (no pass re-claims it).
+        if waiting:
+            _hand_on(conn, generation, run_id, [], {})
         return {"skipped": "scope_closed", "reason": closed}
     after = _cursor(conn)
     swept = [int(row[0]) for row in _rows(conn, S.RC_SWEEP_SQL, {
@@ -266,13 +307,14 @@ def run(
               if waiting else set())
     keys = sorted({int(k) for k in touched} | set(swept) | handed)
     counts: dict[str, Any] = {"groups": len(keys), "touched": len(set(touched)),
-                              "swept": len(swept), "handed_on": len(handed)}
+                              "swept": len(swept), "handed_replanned": len(handed)}
     out: dict[str, Any] = {"run_id": run_id, "counts": counts, "applied": [],
                            "skipped_at_apply": [], "refused": [], "failed": [],
                            QUARANTINED: []}
     if not keys:
         if waiting:
-            _hand_on(conn, generation, run_id, [], {})
+            counts["handed_on"], counts["handed_on_dropped"] = _hand_on(
+                conn, generation, run_id, [], {})
         return out
     cluster_rows = [dict(zip(("cluster_key", "size", "status", "min_edge_score",
                               "model_version", "feature_version"), row))
@@ -371,14 +413,15 @@ def run(
             counts["listings_moved"] += int(brief["listings_moved"])
         if len(out[outcome]) < SUMMARY_CAP:
             out[outcome].append(brief)
-    _hand_on(conn, generation, run_id,
-             [owed[g.cluster_key] for g in plan.to_apply
-              if g.cluster_key not in attempted and owed[g.cluster_key]], ages)
+    counts["handed_on"], counts["handed_on_dropped"] = _hand_on(
+        conn, generation, run_id,
+        [owed[g.cluster_key] for g in plan.to_apply
+         if g.cluster_key not in attempted and owed[g.cluster_key]], ages)
     return out
 
 
 def _hand_on(conn: Any, generation: str, run_id: str, groups: Sequence[Sequence[int]],
-             ages: Mapping[int, tuple[Any, bool]]) -> None:
+             ages: Mapping[int, tuple[Any, bool]]) -> tuple[int, int]:
     """Every group owed a merge and not attempted (waiting, past the run cap, out of time), as its
     moved members, oldest wait first, whole groups up to `REDECIDE_CAP` adverts (E960). It
     REPLACES the list: every group on it was re-planned this pass, so what stays owed is here."""
@@ -391,3 +434,4 @@ def _hand_on(conn: Any, generation: str, run_id: str, groups: Sequence[Sequence[
         total += len(members)
     _exec(conn, RT_SETTING_WRITE_SQL, {"key": redecide_key(generation),
                                        "value": json.dumps(kept), "updated_by": run_id})
+    return len(kept), len(groups) - len(kept)

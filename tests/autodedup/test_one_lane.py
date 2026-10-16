@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from types import SimpleNamespace
 
@@ -728,6 +728,22 @@ def test_a_member_with_no_fingerprint_row_holds_its_group_and_is_never_claimed()
     ages = reconcile.refreshed(db, RT, [i for g in handed for i in g],
                                fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
     assert handed and reconcile.claims(handed, ages, 100) == []
+
+
+def test_a_group_tried_lately_is_not_offered_again_and_old_stamps_expire() -> None:
+    """E960's back-off: a group stamped tried within TRIED_BACKOFF_HOURS waits whatever came of
+    the try; an older stamp, or one for a group no longer queued, is dropped."""
+    now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
+    old, recent = (now - timedelta(hours=reconcile.TRIED_BACKOFF_HOURS + 1)).isoformat(), (
+        now - timedelta(hours=1)).isoformat()
+    ages = {1: (now - timedelta(hours=30), True), 2: (now - timedelta(hours=20), True),
+            3: (now - timedelta(hours=15), True)}
+    taken, stamps = reconcile.select_claims([[1], [2], [3]], ages,
+                                            {"1": recent, "2": old, "9": recent}, now)
+    assert taken == [2, 3], "1 backed off; 2's stamp expired; oldest first"
+    assert set(stamps) == {"1", "2", "3"} and stamps["2"] == now.isoformat()
+    assert reconcile._oldest([5], {5: (None, True)}) > reconcile._oldest([1], ages), (
+        "a group no claim can refresh sorts last")
 
 
 def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(

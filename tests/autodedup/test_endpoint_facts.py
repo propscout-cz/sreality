@@ -387,13 +387,31 @@ def test_a_healed_storey_s_merge_waits_for_its_re_claim_and_is_dropped(
                                        engine_since=None), "both refreshed now"
 
 
-def test_the_next_pass_re_claims_what_the_reconcile_handed_it(tmp_path) -> None:
+def _open_scope(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """An apply scope that admits merges, with the reconcile itself stubbed (the FakePg serves
+    the store, not the apply path): the lane re-claims only for a reconcile that will run."""
+    from autodedup import apply, reconcile
+
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(reconcile, "read_scope", lambda conn: (apply.Scope(), None))
+
+    def stub(conn, generation, touched, **kwargs):
+        seen.append(kwargs)
+        return {"counts": {}}
+
+    monkeypatch.setattr(reconcile, "run", stub)
+    return seen
+
+
+def test_the_next_pass_re_claims_what_the_reconcile_handed_it(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The members a waiting group names (`rt_redecide:<generation>`) are claimed by the next
     pass as `stale` with `redecide`, only while they are still stale, and refreshed."""
     from autodedup import incremental_lane, reconcile
     from tests.autodedup.test_reject_ledger import _seeded_reject_world
 
     world = _seeded_reject_world(tmp_path)
+    _open_scope(monkeypatch)
     assert not incremental_lane.run_incremental(lambda: world)["aborted"]
     target, fresh = 4006, 4007
     world.rt_fp[(GEN, target)]["updated_at"] = world.now - timedelta(
@@ -410,12 +428,14 @@ def test_the_next_pass_re_claims_what_the_reconcile_handed_it(tmp_path) -> None:
     assert out["counts"]["redecided"] >= 1
 
 
-def test_the_re_claim_has_its_own_floor_whatever_the_share(tmp_path) -> None:
+def test_the_re_claim_has_its_own_floor_whatever_the_share(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pass the clock or the claim cap cut to one advert (a share of 1) still re-claims up to
     `STALE_FLOOR` adverts of the groups handed on, whole groups, oldest wait first."""
     from autodedup import incremental_lane, reconcile
 
     world = _seeded_reject_world_for_floor(tmp_path)
+    _open_scope(monkeypatch)
     ids = sorted(i for _g, i in world.rt_fp)
     for hours, listing_id in enumerate(ids, start=13):
         world.rt_fp[(GEN, listing_id)]["updated_at"] = world.now - timedelta(hours=hours)
@@ -428,6 +448,83 @@ def test_the_re_claim_has_its_own_floor_whatever_the_share(tmp_path) -> None:
     assert reconcile.claims([[4007], [4005], [4006]], {
         4005: (1, True), 4006: (2, True), 4007: (3, True)}, 2) == [4005, 4006], (
         "oldest wait first, whole groups, up to the budget")
+
+
+def _built_world(path):
+    from autodedup import incremental_lane
+    from tests.autodedup.test_reject_ledger import _seeded_reject_world
+
+    world = _seeded_reject_world(path)
+    for _ in range(4):
+        incremental_lane.run_incremental(lambda: world)
+    return world
+
+
+def _arrive(world: FakePg, listing_id: int = 4100) -> None:
+    from tests.autodedup import lane_world
+
+    lane_world._listing_row(world, listing_id, "sreality", [123_456_789, 987_654_321])
+    world.listings[listing_id]["first_seen_at"] = world.now - timedelta(hours=1)
+
+
+def test_a_queued_backlog_that_cannot_fit_never_keeps_an_arrival_from_committing(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The review of #1822's probe: nine adverts queued as two stale groups whose re-claim
+    exceeds the pair budget an arrival alone fits. The re-claim rides the pass's FIRST attempt
+    only, so the refused attempt's retry is the normal feeds alone and the arrival commits; both
+    groups were stamped tried ahead of the pass, so the next pass does not offer them again."""
+    from autodedup import incremental_lane, reconcile
+
+    monkeypatch.setattr(incremental_lane.SqlWork, "_evidence_feed", lambda self, *a, **k: [])
+    _open_scope(monkeypatch)
+    alone = _built_world(tmp_path / "alone")
+    _arrive(alone)
+    out = incremental_lane.run_incremental(lambda: alone)
+    assert not out["aborted"] and (GEN, 4100) in alone.rt_fp
+    budget = int(out["counts"]["pairs_to_decide"])
+
+    queued = _built_world(tmp_path / "queued")
+    ids = sorted(i for (_g, i) in queued.rt_fp)
+    for row in queued.rt_fp.values():
+        row["updated_at"] = queued.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    queued.settings[reconcile.redecide_key(GEN)] = [ids[:4], ids[4:]]
+    _arrive(queued)
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS",
+                        replace(incremental_lane.PASS_LIMITS, max_pairs=budget))
+    out = incremental_lane.run_incremental(lambda: queued)
+    assert not out["aborted"], "the retry is the normal feeds alone (E75)"
+    assert out["counts"]["attempts"] >= 2
+    assert out["counts"]["pairs_to_decide_by_attempt"][0] > budget
+    assert (GEN, 4100) in queued.rt_fp, "the arrival is decided and stored"
+    assert out["evidence"]["stale_claimed"] == 0, "the committed attempt re-claimed none"
+    assert set(queued.settings[reconcile.tried_key(GEN)]) == {str(ids[0]), str(ids[4])}
+    again = incremental_lane.run_incremental(lambda: queued)
+    assert not again["aborted"] and again["counts"]["attempts"] == 1
+    assert not again["feeds"].get("stale"), "both groups backed off for TRIED_BACKOFF_HOURS"
+
+
+@pytest.mark.parametrize("why", ["scope_closed", "ledger_inert"])
+def test_the_re_claim_waits_while_no_merge_can_follow_it(
+        why: str, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No re-claim while the apply scope is closed (the reconcile then also empties the queue)
+    or while the reject ledger holds no row under the store's key (after a deploy that moved
+    it, a re-claim would re-score every neighbour's reject)."""
+    from autodedup import incremental_lane, reconcile
+
+    if why == "ledger_inert":
+        _open_scope(monkeypatch)
+        monkeypatch.setattr(incremental_lane.SqlStore, "ledger_keyed", lambda self: False)
+    world = _built_world(tmp_path)
+    ids = sorted(i for (_g, i) in world.rt_fp)
+    for row in world.rt_fp.values():
+        row["updated_at"] = world.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    world.settings[reconcile.redecide_key(GEN)] = [ids[:4], ids[4:]]
+    out = incremental_lane.run_incremental(lambda: world)
+    assert not out["feeds"].get("stale")
+    assert reconcile.tried_key(GEN) not in world.settings, "nothing stamped tried"
+    if why == "scope_closed":
+        assert out["reconcile"]["skipped"] == "scope_closed"
+        assert world.settings[reconcile.redecide_key(GEN)] == [], "the queue goes with it"
 
 
 def _seeded_reject_world_for_floor(tmp_path):

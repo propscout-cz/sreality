@@ -290,7 +290,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # E951: the budget the claim was cut from (a build's 787.5 s), and the doubled rate
         "pass_budget_s": 787.5, "rate_doubled": True,
         "reconcile_refused": 0, "reconcile_failed": 0, "reconcile_waiting": 0,
-        "reconcile_stale": 0,
+        "reconcile_stale": 0, "reconcile_handed_on": 0, "reconcile_handed_on_dropped": 0,
+        "stale_claimed": None,
         "reconcile_skipped_at_apply": 0, "reconcile_quarantined": 0, "reconcile_deferred": 0,
         "must_link_dissolved": 0,
         # the plan's silent outcomes (2026-10-07): settled groups and standing refusals by reason

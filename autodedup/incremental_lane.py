@@ -204,7 +204,6 @@ from autodedup.incremental_sql import (
     RT_SETTING_WRITE_SQL,
     RT_SETTINGS_MANY_SQL,
     RT_STAMPED_MERGES_SQL,
-    RT_STALE_SQL,
     RT_STATEMENT_GUARD_SQL,
     RT_STORE_PRESENT_SQL,
 )
@@ -1266,8 +1265,8 @@ class SqlWork:
                  pass_budget_s: float = PASS_BUDGET_S,
                  rate_per_s: float = PASS_RATE_PER_S,
                  claim_cap: int | None = None,
-                 redecide_groups: Sequence[Sequence[int]] = (),
-                 engine_since: str | None = None) -> None:
+                 stale_claims: Sequence[int] = (),
+                 stale_waiting: int = 0) -> None:
         self.conn = conn
         self.scope = scope
         self.generation = generation
@@ -1286,10 +1285,12 @@ class SqlWork:
         self.pass_budget_s = float(pass_budget_s)
         self.rate_per_s = float(rate_per_s)
         self.claim_cap = claim_cap
-        # E960: the groups the last reconcile handed on (their moved members), and since when
-        # the lane runs under its engine.
-        self.redecide_groups = [list(group) for group in redecide_groups]
-        self.engine_since = engine_since
+        # E960: the adverts of the groups the last reconcile handed on that this pass re-claims
+        # (chosen and stamped ahead of the pass), offered on its FIRST claim only, so a retry
+        # after the pair budget refused is the normal feeds alone (E75); and how many wait.
+        self.stale_claims = [int(i) for i in stale_claims]
+        self.stale_waiting = int(stale_waiting)
+        self.attempt = 0
         # Set by `claim` while the phase is on: the entrant backlog it measured, and whether
         # this pass is the one that empties it (E98).
         self.bootstrap_done = False
@@ -1458,19 +1459,14 @@ class SqlWork:
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
         # E960: the groups a merge waits on, re-claimed WHOLE, oldest wait first, so their pairs
-        # are re-decided on facts read now and the group merges in this pass's reconcile; at
-        # least `STALE_FLOOR` adverts, whatever the time-bound share.
-        if self.redecide_groups:
+        # are re-decided on facts read now and the group merges in this pass's reconcile — on
+        # the pass's first claim only.
+        self.attempt += 1
+        if self.stale_claims or self.stale_waiting:
             retiring = {item.listing_id for item in items if item.retire}
-            ages = {int(row[0]): (row[1], bool(row[2])) for row in self._query(RT_STALE_SQL, {
-                "generation": self.generation,
-                "listing_ids": sorted({i for group in self.redecide_groups for i in group}),
-                "fresh_s": reconcile.FRESH_DECISION_HOURS * 3600.0,
-                "engine_since": self.engine_since}) if int(row[0]) not in retiring}
-            taken = reconcile.claims(self.redecide_groups, ages,
-                                     max(share, reconcile.STALE_FLOOR))
-            self.evidence = {**self.evidence,
-                             "stale": sum(1 for _at, stale in ages.values() if stale),
+            taken = ([i for i in self.stale_claims if i not in retiring]
+                     if self.attempt == 1 else [])
+            self.evidence = {**self.evidence, "stale": self.stale_waiting,
                              "stale_claimed": len(taken)}
             items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
                          for listing_id in taken)
@@ -2128,7 +2124,8 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
     rows = _rows(conn, RT_FRESH_CURSORS_SQL, {"names": list(RESET_CURSORS)})
     deleted["scan_cursor"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_SETTINGS_SQL, {
-        "keys": [engine_key(generation), reconcile.redecide_key(generation)]})
+        "keys": [engine_key(generation), reconcile.redecide_key(generation),
+                 reconcile.tried_key(generation)]})
     deleted["settings"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
     deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
@@ -2477,6 +2474,33 @@ def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str
         "updated_by": f"{LANE_NAME}:engine"})[0][0])
 
 
+def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
+                  handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
+                  engine_since: str) -> tuple[list[int], int]:
+    """What this pass re-claims for the groups the reconcile handed on (E960), chosen BEFORE the
+    pass and stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
+    refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
+    the head of the queue. None while no reconcile follows the pass (the build, a seed of
+    another version, a closed apply scope) or while the reject ledger holds no row under this
+    store's key (after a deploy that moved it, every neighbour's reject would be re-scored).
+    Returns the adverts and how many of the queue's adverts are stale."""
+    if not handed or bootstrap or not seed_current(control, generation):
+        return [], 0
+    if reconcile.read_scope(conn)[0] is None or not store.ledger_keyed():
+        return [], 0
+    ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS,
+                               engine_since=engine_since)
+    tried = control.get(reconcile.tried_key(generation))
+    taken, stamps = reconcile.select_claims(handed, ages,
+                                            tried if isinstance(tried, Mapping) else {},
+                                            datetime.now(timezone.utc))
+    _exec(conn, RT_SETTING_WRITE_SQL, {
+        "key": reconcile.tried_key(generation), "value": json.dumps(stamps),
+        "updated_by": f"{LANE_NAME}:redecide"})
+    return taken, sum(1 for _at, stale in ages.values() if stale)
+
+
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
     _exec(conn, RT_SETTING_WRITE_SQL, {
         "key": pass_rate_key(generation), "value": json.dumps(round(max(1e-6, rate), 6)),
@@ -2729,7 +2753,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                        seed_version_key(generation),
                                        claim_cap_key(generation),
                                        engine_key(generation),
-                                       reconcile.redecide_key(generation)])
+                                       reconcile.redecide_key(generation),
+                                       reconcile.tried_key(generation)])
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
@@ -2802,11 +2827,13 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
                                      store.engine_digest)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
+        stale_claims, stale_waiting = _stale_claims(conn, generation, control, handed, bootstrap,
+                                                    store, engine_since)
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
-                       redecide_groups=handed, engine_since=engine_since)
+                       stale_claims=stale_claims, stale_waiting=stale_waiting)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
