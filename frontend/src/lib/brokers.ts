@@ -1,4 +1,5 @@
 import { ApiError, apiGet, apiPost } from './api';
+import { isDistrictChip } from './districtCodes';
 import type { DistrictChip } from './filters';
 import type { ListingStatus } from './filters';
 
@@ -223,32 +224,33 @@ export function contactState(
   return has ? { state: 'masked' } : { state: 'none' };
 }
 
-// Split Browse location chips into per-level RÚIAN-code arrays for the
-// leaderboard RPC. Only chips that carry a code, and only includes, contribute;
-// a 'locality' chip's code is its containing obec.
-//
-// The leaderboard RPC takes THREE levels, not the four the place predicate has
-// (lib/districtCodes): a `cast_obce` chip is skipped here rather than widened to
-// its town, because a broker leaderboard silently scoped to the whole of Prague
-// when the operator picked Žižkov is worse than one that ignores the chip. W4
-// gives the RPC the fourth level.
-export function chipsToGeoArrays(chips: DistrictChip[]): {
+// The location chips as the leaderboard RPC's three code arrays. The RPC serves
+// only INCLUDE chips at kraj / okres / obec; if ANY chip is not one of those
+// (část obce, ulice, excluded, or no valid chip at all) the WHOLE selection
+// projects to a no-match obec code alone, because dropping that chip would widen
+// the page. The page says why (GEO_UNSERVED_HINT); a write route must never
+// receive it.
+const UNSERVED_OBEC_ID = -1;
+const SERVED_LEVELS: ReadonlyArray<string> = ['kraj', 'okres', 'obec'];
+
+export function chipsToGeoArrays(chips: ReadonlyArray<DistrictChip>): {
   regionIds: number[];
   okresIds: number[];
   obecIds: number[];
 } {
-  const regionIds: number[] = [];
-  const okresIds: number[] = [];
-  const obecIds: number[] = [];
-  for (const c of chips) {
-    if (c.excluded || c.id == null) continue;
-    if (c.level === 'kraj') regionIds.push(c.id);
-    else if (c.level === 'okres') okresIds.push(c.id);
-    else if (c.level === 'obec' || c.level === 'locality') obecIds.push(c.id);
-    // c.level === 'cast_obce' — no arm on this RPC; see the note above.
+  if (chips.some((c) => !isDistrictChip(c) || c.excluded || !SERVED_LEVELS.includes(c.level))) {
+    return { regionIds: [], okresIds: [], obecIds: [UNSERVED_OBEC_ID] };
   }
-  return { regionIds, okresIds, obecIds };
+  const at = (level: DistrictChip['level']) => chips.filter((c) => c.level === level).map((c) => c.id);
+  return { regionIds: at('kraj'), okresIds: at('okres'), obecIds: at('obec') };
 }
+
+export const geoUnserved = (geo: { obecIds: ReadonlyArray<number> }): boolean =>
+  geo.obecIds.includes(UNSERVED_OBEC_ID);
+
+export const GEO_UNSERVED_HINT =
+  'This page filters by region, district or town only — a street, a part of a town '
+  + 'or an excluded place selects nothing here';
 
 /* The standard toolkit envelope. `pii_masked` is stamped on every /brokers
  * response, masked or not. `capped` is stamped only by broker_property_ids. */

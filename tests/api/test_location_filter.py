@@ -3,9 +3,9 @@
 W3 S3 replaced five chip predicates — obec/okres/region equality, a `locality`
 pair of obec-equality AND a `place_search_text` ILIKE, and a legacy name
 fallback ILIKE-ing across four text columns AND-ed with a `context` narrow —
-with `<level>_id = any(codes)`. These tests pin the compiled shape, the sentinel
-that makes an unresolvable chip fail CLOSED, and the read-time name upgrade that
-keeps a pre-code saved filter working without rewriting its stored blob.
+with `<level>_id = any(codes)` over five code columns. These tests pin the
+compiled shape and the model that makes a chip without a (level, code)
+impossible to construct.
 
 The cross-surface table (this predicate compiles identically in the SPA, the API
 and the two RPC bodies) lives in `tests/test_one_place_predicate.py`.
@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import pytest
 
+from pydantic import ValidationError
+
 from api.location_filter import (
-    NO_MATCH_CODE,
+    LEVEL_COLUMN,
+    LEVEL_ORDER,
     DistrictChip,
-    district_code_plan,
     district_where,
-    needs_upgrade,
-    upgrade_district_chips,
 )
 
 
@@ -75,28 +75,39 @@ def test_levels_or_together_coarsest_first() -> None:
     }
 
 
-def test_a_locality_chip_filters_at_the_obec_level() -> None:
-    """A street / POI / address pick carries its CONTAINING obec code. The
-    `place_search_text ILIKE` half of the old locality predicate is gone: a
-    street chip means its municipality until a street-grain code exists."""
+def test_a_street_chip_filters_at_its_street_never_its_town() -> None:
+    """The defect of 2026-10-02: a street pick filtered its whole obec. It is the
+    fifth level now — strict equality on the RÚIAN street code."""
     where, params = district_where(
-        [DistrictChip(name="Pezinská", level="locality", id=535419)], alias="l",
+        [DistrictChip(name="Na Rybníčkách", context="Pardubice", level="ulice", id=666742)],
+        alias="l",
     )
-    assert where == ["(l.obec_id = ANY(%(district_codes_obec)s))"]
-    assert params == {"district_codes_obec": [535419]}
-    for clause in where:
-        assert "ILIKE" not in clause.upper()
-        assert "place_search_text" not in clause
+    assert where == ["(l.ulice_id = ANY(%(district_codes_ulice)s))"]
+    assert params == {"district_codes_ulice": [666742]}
 
 
-def test_a_chip_with_no_code_matches_nothing() -> None:
-    """Fail CLOSED. An include chip we cannot resolve must not widen the cohort
-    — a Watchdog whose place filter silently becomes "the whole country" mails
-    the operator about the whole country."""
-    where, params = district_where([DistrictChip(name="Brno")], alias="l")
-    assert where == ["(l.obec_id = ANY(%(district_codes_obec)s))"]
-    assert params == {"district_codes_obec": [NO_MATCH_CODE]}
-    assert NO_MATCH_CODE < 0, "RÚIAN codes are positive; the sentinel must not be one"
+def test_five_levels_one_list_finest_last() -> None:
+    assert LEVEL_ORDER == ("kraj", "okres", "obec", "cast_obce", "ulice")
+    assert tuple(LEVEL_COLUMN) == LEVEL_ORDER
+    assert LEVEL_COLUMN["ulice"] == "ulice_id"
+
+
+@pytest.mark.parametrize("chip", [
+    {"name": "Brno"},
+    {"name": "Brno", "context": "Jihomoravský kraj"},
+    {"name": "Brno", "level": "obec"},
+    {"name": "Brno", "level": "obec", "id": None},
+    {"name": "Brno", "id": 582786},
+    {"name": "Lipová", "context": "Praha", "level": "locality", "id": 554782},
+    {"name": "Praha", "level": "obec", "id": -1},
+    {"name": "Praha", "level": "obec", "id": 0},
+], ids=["name only", "name+context", "level no id", "id null", "id no level",
+        "stale locality", "the old sentinel", "zero"])
+def test_a_chip_without_a_level_and_a_positive_code_cannot_exist(chip) -> None:
+    """A code-less chip used to compile to a no-match sentinel; now it is refused
+    where it enters (a 422 on every write), so no compiler needs a branch for it."""
+    with pytest.raises(ValidationError):
+        DistrictChip(**chip)
 
 
 def test_excluded_chips_are_negated_separately() -> None:
@@ -143,7 +154,7 @@ def test_an_exclude_subtracts_only_what_it_matches() -> None:
 def test_no_text_column_is_read_any_more() -> None:
     chips = [
         DistrictChip(name="Praha", level="obec", id=554782),
-        DistrictChip(name="Brno", context="Jihomoravský kraj"),
+        DistrictChip(name="Žižkov", context="Praha", level="cast_obce", id=490067),
         DistrictChip(name="Ostrava", level="okres", id=3811, excluded=True),
     ]
     where, _ = district_where(chips, alias="l")
@@ -154,81 +165,4 @@ def test_no_text_column_is_read_any_more() -> None:
 
 def test_empty_alias_raises() -> None:
     with pytest.raises(ValueError):
-        district_where([DistrictChip(name="Praha")], alias="")
-
-
-# --- the read-time compatibility reader ------------------------------------
-
-
-def test_needs_upgrade_only_for_chips_without_a_code() -> None:
-    assert needs_upgrade([DistrictChip(name="Brno")])
-    assert needs_upgrade([DistrictChip(name="Brno", level="obec")])
-    assert not needs_upgrade([DistrictChip(name="Brno", level="obec", id=582786)])
-    assert not needs_upgrade([DistrictChip(name="X", level="locality", id=1)])
-    assert not needs_upgrade([])
-
-
-def test_a_name_only_chip_is_resolved_once_at_read_time() -> None:
-    """The stored blob is NOT migrated (a preset stores the operator's full
-    blob); it is resolved on the way into the predicate."""
-    stored = [DistrictChip(name="Jihlava", context=None, excluded=False)]
-
-    def resolve(pairs):
-        assert list(pairs) == [("Jihlava", None)]
-        return {("Jihlava", None): [("obec", 586846), ("okres", 3707)]}
-
-    upgraded = upgrade_district_chips(stored, resolve)
-    # One name legitimately answers at two levels — the ILIKE this replaces
-    # matched both, so both are kept.
-    assert [(c.level, c.id) for c in upgraded] == [("obec", 586846), ("okres", 3707)]
-    where, params = district_where(upgraded, alias="l")
-    assert params == {"district_codes_okres": [3707], "district_codes_obec": [586846]}
-    assert stored[0].level is None, "the stored chip must not be mutated"
-
-
-def test_an_upgraded_exclude_chip_stays_an_exclude() -> None:
-    upgraded = upgrade_district_chips(
-        [DistrictChip(name="Modřany", context="Praha", excluded=True)],
-        lambda _pairs: {("Modřany", "Praha"): [("cast_obce", 490017)]},
-    )
-    assert [(c.level, c.id, c.excluded) for c in upgraded] == [
-        ("cast_obce", 490017, True)
-    ]
-
-
-def test_an_unresolvable_chip_is_kept_and_matches_nothing() -> None:
-    upgraded = upgrade_district_chips(
-        [DistrictChip(name="U Kulaťáku")], lambda _pairs: {},
-    )
-    assert [(c.name, c.level, c.id) for c in upgraded] == [("U Kulaťáku", None, None)]
-    _where, params = district_where(upgraded, alias="l")
-    assert params == {"district_codes_obec": [NO_MATCH_CODE]}
-
-
-def test_a_failing_resolver_never_drops_the_filter() -> None:
-    def boom(_pairs):
-        raise RuntimeError("name index unavailable")
-
-    upgraded = upgrade_district_chips([DistrictChip(name="Brno")], boom)
-    assert [(c.name, c.id) for c in upgraded] == [("Brno", None)]
-    _where, params = district_where(upgraded, alias="l")
-    assert params == {"district_codes_obec": [NO_MATCH_CODE]}
-
-
-def test_already_resolved_chips_skip_the_resolver_entirely() -> None:
-    def never(_pairs):
-        raise AssertionError("resolver called for an already-coded chip")
-
-    chips = [DistrictChip(name="Brno", level="obec", id=582786)]
-    assert upgrade_district_chips(chips, never) == chips
-
-
-def test_a_non_positive_id_is_not_a_resolved_chip() -> None:
-    """RÚIAN codes are positive. A chip carrying the no-match sentinel or zero is
-    simply a chip with no code, and it says so (`unresolved`)."""
-    for bad in (NO_MATCH_CODE, 0):
-        assert district_code_plan(
-            [DistrictChip(name="Praha", level="obec", id=bad)]
-        ).unresolved == ["Praha"]
-
-
+        district_where([DistrictChip(name="Praha", level="obec", id=554782)], alias="")

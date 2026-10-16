@@ -263,6 +263,37 @@ describe('searchBrokerFirms', () => {
   });
 });
 
+/* D7, until the leaderboard takes the chip set (PR 2): the page serves include
+ * chips at kraj / okres / obec only, and ANY other chip makes the whole selection
+ * select nothing — never a page widened to the town, or to "kraj minus nothing". */
+describe('chipsToGeoArrays', () => {
+  const PRAHA = { name: 'Praha', context: null, level: 'obec' as const, id: 554782 };
+  const JIHLAVA_OKRES = { name: 'Jihlava', context: null, level: 'okres' as const, id: 3707 };
+  const VYSOCINA = { name: 'Kraj Vysočina', context: null, level: 'kraj' as const, id: 108 };
+  const UNSERVED = { regionIds: [], okresIds: [], obecIds: [-1] };
+
+  it('projects include chips at the three served levels', async () => {
+    const { chipsToGeoArrays, geoUnserved } = await loadBrokers();
+    const geo = chipsToGeoArrays([PRAHA, JIHLAVA_OKRES, VYSOCINA]);
+    expect(geo).toEqual({ regionIds: [108], okresIds: [3707], obecIds: [554782] });
+    expect(geoUnserved(geo)).toBe(false);
+    expect(chipsToGeoArrays([])).toEqual({ regionIds: [], okresIds: [], obecIds: [] });
+  });
+
+  it.each([
+    ['a street', { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice' as const, id: 666742 }],
+    ['a part of a town', { name: 'Žižkov', context: 'Praha', level: 'cast_obce' as const, id: 490067 }],
+    ['an excluded town', { ...PRAHA, id: 582786, excluded: true }],
+    ['a level it does not know', { ...PRAHA, level: 'stat' as never }],
+    ['a chip without a code', { ...PRAHA, id: 0 }],
+  ])('selects nothing when the selection holds %s, even beside a served chip', async (_l, chip) => {
+    const { chipsToGeoArrays, geoUnserved } = await loadBrokers();
+    const geo = chipsToGeoArrays([VYSOCINA, chip]);
+    expect(geo).toEqual(UNSERVED);
+    expect(geoUnserved(geo)).toBe(true);
+  });
+});
+
 /* MS7: a property's brokers are a list over its ads, and nothing stores it. */
 describe('propertyBrokers', () => {
   const broker = (listing_id: number, broker_id: number) => ({

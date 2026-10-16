@@ -7,8 +7,8 @@ rule, `<level>_id = any(codes)`, compiled by:
   * `api/location_filter.py`            — the API + the Watchdog matcher
   * `frontend/src/lib/districtCodes.ts` — the SPA (PostgREST string + the
                                           in-memory row predicate)
-  * `browse_stats_properties`           — migration 504 (537), the Stats cohort
-  * `browse_map_cells`                  — migration 504 (537), the map cohort
+  * `browse_stats_properties`           — migration 605, the Stats cohort
+  * `browse_map_cells`                  — migration 605, the map cohort
 
 This file holds the API half of the shared table (`tests/fixtures/
 district_chip_plan.json`, read by `districtCodes.test.ts` for the SPA half) plus
@@ -19,6 +19,7 @@ Offline; the shipped SQL's behaviour is the DB lane's subject.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -28,7 +29,6 @@ import pytest
 from api.location_filter import (
     LEVEL_COLUMN,
     LEVEL_ORDER,
-    NO_MATCH_CODE,
     DistrictChip,
     district_code_plan,
     district_where,
@@ -55,16 +55,10 @@ def test_the_api_compiles_the_table(case: dict) -> None:
     plan = district_code_plan(_chips(case))
     assert plan.include == {k: list(v) for k, v in case["plan"]["include"].items()}
     assert plan.exclude == {k: list(v) for k, v in case["plan"]["exclude"].items()}
-    assert plan.unresolved == case["plan"]["unresolved"]
 
     where, params = district_where(_chips(case), alias="l")
     assert where == case["sql_where"]
     assert params == {k: list(v) for k, v in case["sql_params"].items()}
-
-
-def test_the_sentinel_agrees_across_the_table() -> None:
-    assert NO_MATCH_CODE == _TABLE["no_match_code"]
-    assert NO_MATCH_CODE < 0, "RÚIAN codes are positive; the sentinel must not be one"
 
 
 def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
@@ -72,35 +66,25 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
     differently the two cohorts diverge with no error anywhere — PostgREST would
     happily filter on a column that exists."""
     ts = TS_MODULE.read_text(encoding="utf-8")
-    block = ts[ts.index("export const DISTRICT_LEVEL_COLUMN"):]
-    block = block[: block.index("} as const;")]
+    block = ts[ts.index("const DISTRICT_LEVEL_COLUMN = {"):]
+    block = block[: block.index("}")]
     pairs = dict(re.findall(r"(\w+):\s*'([a-z_]+)'", block))
     assert pairs == LEVEL_COLUMN
 
-    order_block = ts[ts.index("export const DISTRICT_LEVEL_ORDER"):]
+    order_block = ts[ts.index("const DISTRICT_LEVEL_ORDER"):]
     order_block = order_block[: order_block.index("];")]
     assert tuple(re.findall(r"'([a-z_]+)'", order_block)) == LEVEL_ORDER
-
-    assert f"export const NO_MATCH_CODE = {NO_MATCH_CODE};" in ts
 
 
 # --- the two RPC bodies -----------------------------------------------------
 
-_W3_S3 = "504_location_w3_one_code_predicate.sql"
-# The latest definition of both RPCs. 537 carried 504's bodies forward verbatim
-# plus one `hide_dismissed` clause; 547 carried 537's forward verbatim except the
-# two estate-area predicates, which now read the plot MEASURE column; 549 carries
-# 547's forward verbatim except the ownership `__unknown__` array, which gained
-# `jine`; 590 carries 549's forward verbatim except the status and portal arms,
-# which became one portal_status_matches() call (MS19); 597 carries 590's forward
-# verbatim except the dead parameters' arms and the two exclusion arguments of
-# that call; 598 carries 597's forward verbatim plus one property-id denylist
-# conjunct after the allowlist arm; 602 restates the MAP RPC's aggregate (world
-# tiles) with 598's signature and predicate byte for byte. Re-read the chip arms
+# The latest definition of both RPCs: 605 carries 598's stats body and 602's map
+# body forward byte for byte except the four chip arms, where `locality` (a street
+# pick filtered at its TOWN) became `ulice` (tests below). Re-read the chip arms
 # when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "598_property_ids_excluded.sql",
-    "browse_map_cells": "602_browse_map_cells_world_tiles.sql",
+    "browse_stats_properties": "605_street_chip_level.sql",
+    "browse_map_cells": "605_street_chip_level.sql",
 }
 
 
@@ -171,8 +155,7 @@ def test_the_rpc_bodies_compile_the_same_level_map(func: str) -> None:
     would then answer for different cohorts under the same chips."""
     assert latest_definition(func).name == _LATEST_RPC_DEFINITION[func]
     for arms in _chip_case_arms(func):
-        # `locality` is compiled, not stored: a street pick filters at its obec.
-        assert arms == {**LEVEL_COLUMN, "locality": LEVEL_COLUMN["obec"]}
+        assert arms == LEVEL_COLUMN
 
 
 @pytest.mark.parametrize("func", ["browse_stats_properties", "browse_map_cells"])
@@ -247,16 +230,105 @@ def _params_of(sql: str, func: str) -> list[str]:
     return re.findall(r"(?:^|,)\s*([a-z][a-z0-9_]*)\s+[a-z]", args)
 
 
-def test_the_fourth_level_exists_on_every_relation_the_predicate_runs_on() -> None:
-    """`cast_obce_id` is only a filter if the relation publishes it: browse_list
-    and properties_map_mv inherit it from browse_projection (migration 503),
-    properties_public (the Watchdog) and pipeline_board_public (the board's
-    in-memory copy) get it in 504."""
-    s503 = (MIGRATIONS / "503_location_w3_serving_views.sql").read_text(encoding="utf-8")
-    assert "ll.cast_obce_kod as cast_obce_id" in s503  # browse_projection
-    s504 = (MIGRATIONS / _W3_S3).read_text(encoding="utf-8")
-    assert "ll.cast_obce_kod as cast_obce_id" in s504  # properties_public
-    assert "p.cast_obce_id" in s504  # pipeline_board_public
+def _latest_view_definition(view: str) -> str:
+    pat = re.compile(rf"create\s+(or\s+replace\s+)?view\s+(public\.)?{view}\b", re.IGNORECASE)
+    hits = [p for p in MIGRATIONS.glob("*.sql") if pat.search(p.read_text(encoding="utf-8"))]
+    return max(hits, key=lambda p: int(p.name.split("_", 1)[0])).name
+
+
+@pytest.mark.parametrize(
+    "view", ["browse_projection", "properties_public", "pipeline_board_public", "listing_feed_public"],
+)
+def test_every_level_column_exists_on_every_chip_filtered_relation(view: str) -> None:
+    """A level is only a filter where the relation publishes its column: browse_list and
+    properties_map_mv inherit browse_projection's, properties_public is the Watchdog's,
+    pipeline_board_public the board's in-memory copy, listing_feed_public the portal-mirror
+    lane's. RED by: a re-definition that drops one, or a level with no served column."""
+    from tests.test_location_w3_projection import _columns, _sql
+
+    columns = _columns(_sql(_latest_view_definition(view)), view)
+    assert set(LEVEL_COLUMN.values()) <= set(columns)
+
+
+# --- migration 605: the street arm, and 606: the rows without codes ---------
+
+_S605 = "605_street_chip_level.sql"
+_LOCALITY_ARM = (
+    "              -- a street / POI / address pick carries its containing obec code\n"
+    "              when lvl = 'locality'                  then l.obec_id      = admin_id\n"
+)
+_ULICE_ARM = "              when lvl = 'ulice'                     then l.ulice_id     = admin_id\n"
+_ULICE_INDEX = (
+    "  execute 'create index browse_list_next_ulice_idx on browse_list_next (ulice_id) "
+    "where ulice_id is not null';\n"
+)
+_ULICE_RENAME = "  execute 'alter index browse_list_next_ulice_idx rename to browse_list_ulice_idx';\n"
+_SOURCES = {
+    "browse_stats_properties": "598_property_ids_excluded.sql",
+    "browse_map_cells": "602_browse_map_cells_world_tiles.sql",
+    "rebuild_browse_list": "590_read_model_portal_rule.sql",
+}
+
+
+def _statement(name: str, func: str) -> str:
+    sql = (MIGRATIONS / name).read_text(encoding="utf-8")
+    at = re.search(rf"create or replace function public\.{func}\s*\(", sql).start()
+    return sql[at: sql.index("$function$;", at)]
+
+
+def _md5_of_body(statement: str) -> str:
+    return hashlib.md5(statement.split("$function$")[1].encode()).hexdigest()
+
+
+@pytest.mark.parametrize("func", ["browse_stats_properties", "browse_map_cells"])
+def test_605_restates_each_rpc_with_only_its_two_chip_arms_swapped(func: str) -> None:
+    old = _statement(_SOURCES[func], func)
+    assert old.count(_LOCALITY_ARM) == 2
+    assert _statement(_S605, func) == old.replace(_LOCALITY_ARM, _ULICE_ARM)
+
+
+def test_605_rebuilds_browse_list_with_590s_body_plus_the_street_index() -> None:
+    new = _statement(_S605, "rebuild_browse_list")
+    assert new.count(_ULICE_INDEX) == new.count(_ULICE_RENAME) == 1
+    assert new.replace(_ULICE_INDEX, "").replace(_ULICE_RENAME, "") == _statement(
+        _SOURCES["rebuild_browse_list"], "rebuild_browse_list")
+    assert new.index(_ULICE_INDEX) < new.index("analyze browse_list_next") < new.index(_ULICE_RENAME)
+
+
+def test_605_preconditions_skip_the_replay_and_name_the_live_bodies_and_its_own() -> None:
+    sql = (MIGRATIONS / _S605).read_text(encoding="utf-8")
+    pre = sql[sql.index("do $pre$"): sql.index("$pre$;")]
+    assert pre.index("into populated") < pre.index("return;") < pre.index("pg_proc")
+    for func, source in _SOURCES.items():
+        assert _md5_of_body(_statement(source, func)) in pre, f"{func}: not the live body"
+        assert _md5_of_body(_statement(_S605, func)) in pre, f"{func}: a re-run must pass"
+
+
+def test_605_builds_the_feed_index_concurrently_outside_the_transaction() -> None:
+    code = re.sub(r"--[^\n]*", "", (MIGRATIONS / _S605).read_text(encoding="utf-8"))
+    at = code.index
+    assert code.count("begin;") == code.count("commit;") == 1
+    assert (at("do $guard$") < at("begin;") < at("commit;") < at("do $invalid$")
+            < at("set lock_timeout = 0;\nset statement_timeout = '1900s';")
+            < at("drop index concurrently if exists public.listing_location_ulice_kod_idx_invalid;")
+            < at("create index concurrently if not exists listing_location_ulice_kod_idx")
+            < at("do $post$") < at("select pg_notify('pgrst', 'reload schema');"))
+    invalid = code[at("do $invalid$"): at("$invalid$;")]
+    assert "rename to listing_location_ulice_kod_idx_invalid" in invalid and "drop index" not in invalid
+
+
+def test_606_backs_up_every_row_it_deletes_in_the_same_transaction() -> None:
+    code = re.sub(r"--[^\n]*", "", (MIGRATIONS / "606_chip_rows_without_codes_deleted.sql")
+                  .read_text(encoding="utf-8"))
+    at = code.index
+    post = " ".join(code[at("do $post$"):].split())
+    assert ("(case when jsonb_typeof(p.filter_spec->'filters') = 'object' then p.filter_spec->'filters' "
+            "else p.filter_spec end)->'districts'") in post, "a bare legacy preset escapes the guard"
+    assert (at("begin;") < at("create table if not exists backup_606.filter_presets")
+            < at("create table if not exists backup_606.notification_dispatches") < at("do $gate$")
+            < at("delete from public.filter_presets") < at("delete from public.notification_subscriptions")
+            < at("do $post$") < at("commit;"))
+    assert len(set(re.findall(r"'([0-9a-f]{8}-[0-9a-f-]{27})'", code))) == 4
 
 
 # --- the deletion ledger ----------------------------------------------------

@@ -243,10 +243,11 @@ above) — whoever signs up first wins and claims every pre-tenancy NULL-`accoun
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week
 outage: `references/tenancy.md`. (1) **Reads on a tenant connection are scoped by RLS alone** —
 `current_account_ids()` is the ONE definition of who the caller is (PLURAL, because membership
-is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too (its policy's
-USING clause is the scope). (2) **Writes carry exactly ONE account, resolved once at the route
-edge** by `tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a
-silent NULL nor a SYSTEM fallback 290's WITH CHECK has no arm to accept. (3) **An explicit
+is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
+ownership gate (rowcount 0 → 404, never a SELECT probe: that proves visibility, not ownership).
+(2) **Writes carry exactly ONE account, resolved once at the route edge** by
+`tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a silent NULL nor
+a SYSTEM fallback. (3) **An explicit
 `account_id = %s` predicate appears ONLY on a service-role connection**
 (`toolkit/pipeline_identity.py`, `api/estimation_runs.py`, the Stripe webhook), where RLS is off
 and the predicate is the SOLE gate. (4) **`deps.account_scope` returns `[account_id, SYSTEM]`**
@@ -459,12 +460,12 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `listings` and `properties` carry NO place column at all: read a listing's place by joining
   `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.repr_listing_ref_id`
   — a property's place is its representative listing's). The codes are `ll.obec_kod` /
-  `okres_kod` / `kraj_kod` / `cast_obce_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
+  `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
   labels `ll.obec_name` / `okres_name` / `street_name`. One trap: `ll.geom` IS
   `geometry(Point,4326)`, so a metre-based `ST_DWithin`/`ST_Distance` must cast
   `ll.geom::geography` (index `listing_location_geog_gist`, migration 507) or it silently
   measures degrees. The place STRING every surface renders is `location_display_label(...)`
-  (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`.
+  (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`, five levels.
   `admin_boundaries` survives for price stats / the rent map / city proximity / the kraje overlay only — it is no
   longer a location path. `scraper/street.py` still extracts a street from a portal page; that
   extraction is now a CLAIM the resolver arbitrates, not a column — and since W18

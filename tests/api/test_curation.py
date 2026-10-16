@@ -12,6 +12,7 @@ test path against a real Postgres (out of scope for this file).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -23,7 +24,9 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from api import curation
 from api import dependencies as deps
 from api import main as api_main
+from api import schemas as _s
 from api import tenant_pool
+from tests.api._script_conn import ScriptConn
 
 _SUB = "11111111-1111-1111-1111-111111111111"
 _ACCT = "22222222-2222-2222-2222-222222222222"
@@ -528,65 +531,39 @@ def test_patch_tag_invalid_color_422(client, store):
     assert res.status_code == 422
 
 
-# --- direct unit coverage of curation helpers (no FastAPI) -----------------
+# --- the REAL helpers, against a predicate-scripted connection ---------------
+# (route tests above stub the handlers; these exercise the persistence functions.)
 
-class _Cur:
-    def __init__(self, conn):
-        self._conn = conn
-        self.rowcount = 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return None
-
-    def execute(self, sql, params=()):
-        self._conn.executions.append((sql, params))
-        self.rowcount = self._conn._rowcounts.pop(0) if self._conn._rowcounts else 0
-
-    def fetchone(self):
-        return self._conn._results.pop(0) if self._conn._results else None
-
-    def fetchall(self):
-        return self._conn._results.pop(0) if self._conn._results else []
+_T0 = datetime(2026, 5, 10)
+# _COLLECTION_PROJECTION: id, name, description, created_at, updated_at, listing_count,
+# monitoring_enabled, notify_channels, is_system.
+_COLL = (1, "x", None, _T0, _T0, 0, False, [], False)
+_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, ["in_app"], True)
+_COLL_PAYLOAD = {
+    "id": 1, "name": "x", "description": None,
+    "created_at": "2026-05-10T00:00:00", "updated_at": "2026-05-10T00:00:00",
+    "listing_count": 0, "monitoring_enabled": False, "notify_channels": [], "is_system": False,
+}
 
 
-class _Tx:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return None
+def _probes(conn: ScriptConn) -> list[str]:
+    """Plain SELECTs that touch a curation table (the visibility probes W1 deleted)."""
+    return [q for q, _ in conn.executed
+            if q.startswith("SELECT") and ("collections" in q or "property_notes" in q)]
 
 
-class _FakeConn:
-    def __init__(self, results=None, rowcounts=None):
-        self.executions: list[tuple[Any, Any]] = []
-        self._results: list[Any] = list(results or [])
-        self._rowcounts: list[int] = list(rowcounts or [])
-
-    def cursor(self):
-        return _Cur(self)
-
-    def transaction(self):
-        return _Tx()
+def test_create_collection_returns_the_one_collection_shape():
+    conn = ScriptConn([(lambda q: "INSERT INTO collections" in q, [_COLL])])
+    out = curation.create_collection(conn, _s.CreateCollectionIn(name="x"), account_id=_ACCT)
+    assert out == _COLL_PAYLOAD
+    sql = conn.executed[0][0]
+    assert "RETURNING c.id, c.name" in sql and "AS listing_count" in sql
 
 
-def test_create_collection_helper_inserts_and_returns():
-    from api import schemas as s
-    conn = _FakeConn(results=[
-        (1, "x", None, "2026-05-10T00:00:00+00:00", "2026-05-10T00:00:00+00:00",
-         False, [], False),
-    ])
-    out = curation.create_collection(
-        conn, s.CreateCollectionIn(name="x"), account_id=_ACCT,
-    )
-    assert out["id"] == 1
-    assert out["listing_count"] == 0
-    assert out["monitoring_enabled"] is False
-    assert out["is_system"] is False
-    assert "INSERT INTO collections" in conn.executions[0][0]
+def test_list_and_get_map_the_same_shape_as_create():
+    conn = ScriptConn([(lambda q: "FROM collections c" in q, [_COLL])])
+    assert curation.list_collections(conn) == {"data": [_COLL_PAYLOAD], "total": 1}
+    assert curation.get_collection(conn, 1)["collection"] == _COLL_PAYLOAD
 
 
 # --- account stamping (W-1c) ----------------------------------------------
@@ -598,144 +575,181 @@ def test_create_collection_helper_inserts_and_returns():
 # regression here is silent (rows land unreachable, or worse, unscoped).
 
 def test_create_collection_stamps_account_id():
-    from api import schemas as s
-    conn = _FakeConn(results=[
-        (1, "x", None, "2026-05-10T00:00:00+00:00", "2026-05-10T00:00:00+00:00",
-         False, [], False),
-    ])
-    curation.create_collection(
-        conn, s.CreateCollectionIn(name="x"), account_id="acct-1",
-    )
-    sql, params = conn.executions[0]
+    conn = ScriptConn([(lambda q: "INSERT INTO collections" in q, [_COLL])])
+    curation.create_collection(conn, _s.CreateCollectionIn(name="x"), account_id="acct-1")
+    sql, params = conn.executed[0]
     assert "account_id" in sql
     assert "acct-1" in params
 
 
-def test_create_tag_stamps_account_id():
-    from api import schemas as s
-    conn = _FakeConn(results=[(1, "t", "sage", "2026-05-10T00:00:00+00:00")])
-    curation.create_tag(
-        conn, s.CreateTagIn(name="t", color="sage"), account_id="acct-1",
-    )
-    sql, params = conn.executions[0]
+def test_create_tag_stamps_account_id_and_returns_the_one_tag_shape():
+    conn = ScriptConn([(lambda q: "INSERT INTO tags" in q, [(1, "t", "sage", _T0, 0)])])
+    out = curation.create_tag(conn, _s.CreateTagIn(name="t", color="sage"), account_id="acct-1")
+    assert out == {"id": 1, "name": "t", "color": "sage",
+                   "created_at": "2026-05-10T00:00:00", "listing_count": 0}
+    sql, params = conn.executed[0]
     assert "account_id" in sql
     assert "acct-1" in params
-
-
-def test_delete_system_collection_is_refused_409():
-    from fastapi import HTTPException
-    conn = _FakeConn(results=[(True,)])  # SELECT is_system -> system collection
-    with pytest.raises(HTTPException) as exc:
-        curation.delete_collection(conn, collection_id=1)
-    assert exc.value.status_code == 409
-
-
-def test_rename_system_collection_is_refused_409():
-    from api import schemas as s
-    from fastapi import HTTPException
-    # _fetch_collection returns the full projection (9 cols); is_system is True.
-    full = (1, "monitoring", None,
-            "2026-05-10T00:00:00+00:00", "2026-05-10T00:00:00+00:00",
-            0, True, [], True)
-    conn = _FakeConn(results=[full])
-    with pytest.raises(HTTPException) as exc:
-        curation.update_collection(
-            conn, collection_id=1, body=s.UpdateCollectionIn(name="renamed"),
-        )
-    assert exc.value.status_code == 409
 
 
 def test_create_tag_helper_409_on_unique_violation():
-    from api import schemas as s
-    from fastapi import HTTPException
-
-    class _BoomCur(_Cur):
-        def execute(self, sql, params=()):
-            raise psycopg.errors.UniqueViolation("dup")
-
-    class _BoomConn(_FakeConn):
-        def cursor(self):
-            return _BoomCur(self)
-
-    with pytest.raises(HTTPException) as exc:
-        curation.create_tag(
-            _BoomConn(), s.CreateTagIn(name="hot", color="brick"), account_id=_ACCT,
-        )
+    conn = ScriptConn([(lambda q: "INSERT INTO tags" in q, psycopg.errors.UniqueViolation("dup"))])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.create_tag(conn, _s.CreateTagIn(name="hot", color="brick"), account_id=_ACCT)
     assert exc.value.status_code == 409
 
 
+# --- the write is the gate -------------------------------------------------
+# A SELECT proves only that a row is VISIBLE; once collections can be shared (W4) visibility is
+# wider than ownership, so each write is its own gate: rowcount 0 -> 404 before any side effect, and a
+# refusal raised inside the transaction rolls the statement back.
+
+
+def test_update_collection_is_one_update_returning_the_collection():
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"), [_COLL])])
+    out = curation.update_collection(conn, 1, _s.UpdateCollectionIn(name="x", description="d"))
+    assert out == _COLL_PAYLOAD
+    [(sql, params)] = conn.executed
+    assert "name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END" in sql
+    assert "RETURNING c.id, c.name" in sql
+    assert params == ("x", "d", None, None, 1)
+    assert conn.tx == ["commit"]
+
+
+def test_update_collection_not_owned_is_404_without_a_probe():
+    conn = ScriptConn([])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_collection(conn, 1, _s.UpdateCollectionIn(description="d"))
+    assert exc.value.status_code == 404
+    assert len(conn.executed) == 1 and conn.executed[0][0].startswith("UPDATE collections")
+    assert _probes(conn) == []
+    assert conn.tx == ["rollback"]
+
+
+def test_rename_system_collection_is_refused_409_and_rolled_back():
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"), [_SYSTEM])])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_collection(conn, 6, _s.UpdateCollectionIn(name="renamed"))
+    assert exc.value.status_code == 409
+    assert len(conn.executed) == 1 and _probes(conn) == []
+    # The SET keeps a system name, so the RETURNING row (not the request) decides the 409.
+    assert "CASE WHEN c.is_system THEN c.name" in conn.executed[0][0]
+    assert conn.tx == ["rollback"]
+
+
+def test_system_collection_keeps_its_name_and_takes_other_fields():
+    """The SPA's edit form always resends the name; an unchanged one is no rename."""
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"), [_SYSTEM])])
+    out = curation.update_collection(
+        conn, 6, _s.UpdateCollectionIn(name="monitoring", monitoring_enabled=True))
+    assert out["name"] == "monitoring" and out["is_system"] is True
+    assert conn.tx == ["commit"]
+
+
+def test_update_collection_duplicate_name_is_409():
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"),
+                        psycopg.errors.UniqueViolation("dup"))])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_collection(conn, 1, _s.UpdateCollectionIn(name="taken"))
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "collection name already exists"
+
+
+def test_update_collection_empty_patch_is_422_and_touches_nothing():
+    conn = ScriptConn([])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_collection(conn, 1, _s.UpdateCollectionIn())
+    assert exc.value.status_code == 422
+    assert conn.executed == []
+
+
+def test_delete_collection_is_one_delete():
+    conn = ScriptConn([(lambda q: q.startswith("DELETE FROM collections"), [(False,)])])
+    assert curation.delete_collection(conn, 1) == {"deleted": True}
+    [(sql, params)] = conn.executed
+    assert "RETURNING is_system" in sql and params == (1,)
+    assert conn.tx == ["commit"]
+
+
+def test_delete_collection_not_owned_is_404_not_a_false_deleted():
+    conn = ScriptConn([])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.delete_collection(conn, 1)
+    assert exc.value.status_code == 404
+    assert len(conn.executed) == 1 and _probes(conn) == []
+    assert conn.executed[0][0].startswith("DELETE FROM collections")
+
+
+def test_delete_system_collection_is_refused_409_and_rolled_back():
+    conn = ScriptConn([(lambda q: q.startswith("DELETE FROM collections"), [(True,)])])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.delete_collection(conn, 6)
+    assert exc.value.status_code == 409
+    assert len(conn.executed) == 1
+    assert conn.tx == ["rollback"]
+
+
+def test_add_properties_not_owned_is_404_before_any_insert():
+    conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [(10, 10)])])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.add_properties_to_collection(
+            conn, 1, _s.AddPropertiesToCollectionIn(property_ids=[10]))
+    assert exc.value.status_code == 404
+    assert [q for q, _ in conn.executed] == [
+        "UPDATE collections SET updated_at = now() WHERE id = %s"]
+    assert conn.tx == ["rollback"]
+
+
+def test_update_note_empty_patch_is_422_and_touches_nothing():
+    conn = ScriptConn([])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_note(conn, 42, 5, _s.UpdateNoteIn())
+    assert exc.value.status_code == 422
+    assert conn.executed == []
+
+
+def test_update_note_is_one_update_and_no_probe():
+    conn = ScriptConn([
+        (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
+        (lambda q: q.startswith("UPDATE property_notes"),
+         [(5, 42, "edited", None, _T0, _T0)]),
+    ])
+    out = curation.update_note(conn, 42, 5, _s.UpdateNoteIn(body="edited"))
+    assert out["body"] == "edited"
+    ups = [q for q, _ in conn.executed if q.startswith("UPDATE property_notes")]
+    assert len(ups) == 1 and "WHERE id = %s AND property_id = %s RETURNING" in ups[0]
+    assert _probes(conn) == []
+
+
+def test_update_note_not_owned_is_404():
+    conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [(42, 42)])])
+    with pytest.raises(fastapi.HTTPException) as exc:
+        curation.update_note(conn, 42, 5, _s.UpdateNoteIn(body="edited"))
+    assert exc.value.status_code == 404
+    assert _probes(conn) == []
+    assert sum(q.startswith("UPDATE property_notes") for q, _ in conn.executed) == 1
+
+
 def test_list_notes_helper_orders_newest_first():
-    conn = _FakeConn(results=[
-        [(42, 42)],
-        [
+    conn = ScriptConn([
+        (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
+        (lambda q: "FROM property_notes" in q, [
             (2, 42, "second", None, "2026-05-10T00:00:02+00:00", None),
             (1, 42, "first",  777,  "2026-05-10T00:00:01+00:00", None),
-        ],
+        ]),
     ])
     out = curation.list_notes(conn, property_id=42)
     assert [n["body"] for n in out["data"]] == ["second", "first"]
     assert out["data"][1]["origin_listing_id"] == 777
-    assert "ORDER BY created_at DESC" in conn.executions[1][0]
+    assert "ORDER BY created_at DESC" in conn.executed[1][0]
 
 
-# --- merged-away redirect against a predicate-scripted fake connection -------
-# (route tests above stub the handlers; these exercise the REAL functions so the
-# survivor-redirect wiring — resolve_active_property_id — is actually covered.)
-
-from datetime import datetime  # noqa: E402
-
-import fastapi  # noqa: E402
-
-from api import schemas as _s  # noqa: E402
-
-
-class _ScriptCur:
-    def __init__(self, conn: "_ScriptConn") -> None:
-        self._conn, self._rows, self.rowcount = conn, [], 0
-
-    def __enter__(self) -> "_ScriptCur":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        q = " ".join(sql.split())
-        self._conn.executed.append((q, params))
-        for predicate, rows in self._conn.script:
-            if predicate(q):
-                self._rows, self.rowcount = list(rows), len(rows)
-                return
-        self._rows, self.rowcount = [], 0
-
-    def fetchone(self) -> Any:
-        return self._rows[0] if self._rows else None
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return list(self._rows)
-
-
-class _ScriptTx:
-    def __enter__(self) -> "_ScriptTx":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-
-class _ScriptConn:
-    def __init__(self, script: list[tuple[Any, list[tuple[Any, ...]]]]) -> None:
-        self.script, self.executed = script, []
-
-    def transaction(self) -> _ScriptTx:
-        return _ScriptTx()
-
-    def cursor(self) -> _ScriptCur:
-        return _ScriptCur(self)
+# --- merged-away redirect --------------------------------------------------
+# (the survivor-redirect wiring — resolve_active_property_id — on the real functions.)
 
 
 def test_create_note_redirects_merged_away_to_survivor():
-    conn = _ScriptConn([
+    conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # 99 merged into active 42
         (lambda q: "INSERT INTO property_notes" in q,
          [(1, 42, "hi", None, datetime(2026, 1, 1), None)]),
@@ -747,18 +761,17 @@ def test_create_note_redirects_merged_away_to_survivor():
 
 
 def test_create_note_no_survivor_is_404():
-    conn = _ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
+    conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
     with pytest.raises(fastapi.HTTPException) as ei:
         curation.create_note(conn, 7, _s.CreateNoteIn(body="x"), account_id=_ACCT)
     assert ei.value.status_code == 404
 
 
 def test_add_properties_redirects_merged_away_to_survivor():
-    conn = _ScriptConn([
-        (lambda q: "FROM collections WHERE id" in q, [(1,)]),
+    conn = ScriptConn([
+        (lambda q: "UPDATE collections SET updated_at" in q, [(1,)]),  # the owner's gate
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # input 99 -> survivor 42
         (lambda q: "INSERT INTO collection_properties" in q, [(1,)]),  # rowcount 1
-        (lambda q: "UPDATE collections SET updated_at" in q, []),
     ])
     out = curation.add_properties_to_collection(
         conn, 1, _s.AddPropertiesToCollectionIn(property_ids=[99]),
@@ -766,6 +779,8 @@ def test_add_properties_redirects_merged_away_to_survivor():
     assert out["added"] == 1
     ins = [p for q, p in conn.executed if "INSERT INTO collection_properties" in q]
     assert ins and ins[0][1] == [42]  # survivor id inserted, not 99
+    bumps = [q for q, _ in conn.executed if q.startswith("UPDATE collections")]
+    assert len(bumps) == 1 and conn.executed[0][0] == bumps[0]  # one bump, and it is the gate
 
 
 # --- the REMOVE half of each affordance resolves too -----------------------
@@ -777,7 +792,7 @@ def test_add_properties_redirects_merged_away_to_survivor():
 
 
 def test_remove_property_from_collection_redirects_merged_away_to_survivor():
-    conn = _ScriptConn([
+    conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # 99 merged into active 42
         (lambda q: "DELETE FROM collection_properties" in q, [(1,)]),  # rowcount 1
         (lambda q: "UPDATE collections SET updated_at" in q, []),
@@ -796,14 +811,14 @@ def test_remove_property_from_collection_unresolvable_id_stays_idempotent():
     (CollectionSaveMenu only invalidates), so a new 4xx would be a contract change
     for a case that already means "nothing to remove".
     """
-    conn = _ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
+    conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
     assert curation.remove_property_from_collection(conn, 1, 7) == {"removed": False}
     dels = [p for q, p in conn.executed if "DELETE FROM collection_properties" in q]
     assert dels and dels[0] == (1, 7)  # falls through to the raw id, still runs
 
 
 def test_detach_tag_redirects_merged_away_to_survivor():
-    conn = _ScriptConn([
+    conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "DELETE FROM property_tags" in q, [(1,)]),
     ])
@@ -813,7 +828,7 @@ def test_detach_tag_redirects_merged_away_to_survivor():
 
 
 def test_update_note_redirects_merged_away_to_survivor():
-    conn = _ScriptConn([
+    conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "UPDATE property_notes" in q,
          [(5, 42, "edited", None, datetime(2026, 1, 1), datetime(2026, 1, 2))]),
@@ -821,13 +836,13 @@ def test_update_note_redirects_merged_away_to_survivor():
     out = curation.update_note(conn, 99, 5, _s.UpdateNoteIn(body="edited"))
     assert out["property_id"] == 42
     ups = [p for q, p in conn.executed if "UPDATE property_notes" in q]
-    assert ups and ups[0] == ("edited", 5, 42)
+    assert ups and ups[0] == ("edited", "edited", 5, 42)
 
 
 def test_list_notes_follows_a_merged_away_id_to_the_survivor():
     """A tab opened before a merge reads the survivor's notes, not an empty list:
     the merge moved them there, and every note write already follows the id."""
-    conn = _ScriptConn([
+    conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "FROM property_notes" in q,
          [(5, 42, "on the survivor", None, datetime(2026, 1, 1), None)]),
@@ -839,7 +854,7 @@ def test_list_notes_follows_a_merged_away_id_to_the_survivor():
 
 
 def test_list_notes_unresolvable_id_reads_its_own_id():
-    conn = _ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
+    conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
     assert curation.list_notes(conn, 7) == {"data": []}
     reads = [p for q, p in conn.executed if "FROM property_notes" in q]
     assert reads == [(7,)]
@@ -848,7 +863,7 @@ def test_list_notes_unresolvable_id_reads_its_own_id():
 def test_delete_note_redirects_merged_away_to_survivor():
     """The 404 this used to raise was the misleading kind: the note was alive on
     the survivor, and only the (id, property_id) pair was unsatisfiable."""
-    conn = _ScriptConn([
+    conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "DELETE FROM property_notes" in q, [(1,)]),
     ])
@@ -867,7 +882,7 @@ def test_get_collection_properties_repr_join_uses_the_surrogate(monkeypatch):
     monkeypatch.setattr(
         curation, "_fetch_collection", lambda conn, cid: {"id": cid, "name": "x"},
     )
-    conn = _ScriptConn([])
+    conn = ScriptConn([])
     out = curation.get_collection(conn, 1)
     assert out["properties"] == []
     props_sql = next(q for q, _ in conn.executed if "collection_properties cp" in q)

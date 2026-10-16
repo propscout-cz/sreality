@@ -20,9 +20,11 @@ import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/com
 import { ChevronIcon, ClearIcon, PinIcon, SearchIcon } from '@/components/phone/phoneIcons';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import {
+  GEO_UNSERVED_HINT,
   LEADER_METRIC_OPTIONS,
   chipsToGeoArrays,
   fetchBrokerLeaderboard,
+  geoUnserved,
   searchBrokersByName,
   type BrokerLeaderRow,
   type LeaderMetric,
@@ -47,16 +49,10 @@ const LIMIT = 100;
 const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
 const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
 
-/* The chips that actually scope the board: coded includes at the three levels
- * the leaderboard takes (`chipsToGeoArrays` skips a city-quarter chip). */
-export const scopingChips = (chips: ReadonlyArray<DistrictChip>): DistrictChip[] =>
-  chips.filter((d) => d.id != null && !d.excluded && d.level !== 'cast_obce');
-
 /* "Celá ČR", "Praha", "Praha +2" — short enough for a chip and a rule. */
 export function placeLabelOf(chips: ReadonlyArray<DistrictChip>): string {
-  const scoped = scopingChips(chips);
-  if (scoped.length === 0) return 'Celá ČR';
-  return scoped.length === 1 ? scoped[0].name : `${scoped[0].name} +${scoped.length - 1}`;
+  if (chips.length === 0) return 'Celá ČR';
+  return chips.length === 1 ? chips[0].name : `${chips[0].name} +${chips.length - 1}`;
 }
 
 /* The ranked figure and its noun: active properties, or every ad ever. */
@@ -203,7 +199,8 @@ function Leaderboard() {
      * filter's rows (kept on screen while the next load runs) are never labelled
      * with the new filter's words. */
     queryFn: ({ signal }) => {
-      const caption = [placeLabel, categoryMain && CATEGORY_WORD[categoryMain], categoryType && OFFER_WORD[categoryType]]
+      /* An unserved place selects nothing (GEO_UNSERVED_HINT), so it captions nothing. */
+      const caption = [!geoUnserved(geo) && placeLabel, categoryMain && CATEGORY_WORD[categoryMain], categoryType && OFFER_WORD[categoryType]]
         .filter(Boolean)
         .join(' · ');
       return fetchBrokerLeaderboard({ ...geo, categoryMain, categoryType, metric, limit: LIMIT }, signal).then(
@@ -216,7 +213,7 @@ function Leaderboard() {
   const rows = boardQ.data?.rows ?? [];
 
   const pill = (on: boolean) => `${CHIP} ${CHIP_MD} ${chipState(on)}`;
-  const placeOn = scopingChips(districts).length > 0;
+  const placeOn = districts.length > 0;
 
   return (
     <>
@@ -286,7 +283,7 @@ function Leaderboard() {
       ) : rows.length === 0 ? (
         <RollEmpty
           title="Pro tento výběr nikdo."
-          detail="Zkuste jiné místo, nebo typ či nabídku pusťte."
+          detail={geoUnserved(geo) ? GEO_UNSERVED_HINT : 'Zkuste jiné místo, nebo typ či nabídku pusťte.'}
         />
       ) : (
         <ol
@@ -324,7 +321,8 @@ function Leaderboard() {
           <div className="min-h-[70dvh] px-4 pt-3">
             <LocationTypeahead label="Místo" value={districts} onChange={(next) => setDistricts(next ?? [])} />
             <p className="mt-3 text-[12px] text-[var(--color-ink-3)]">
-              Kraj, okres nebo obec; bez místa platí celá ČR. Městská část se v žebříčku zatím nepočítá.
+              Kraj, okres nebo obec; bez místa platí celá ČR.
+              {geoUnserved(geo) && ` ${GEO_UNSERVED_HINT}.`}
             </p>
           </div>
         </BottomSheet>

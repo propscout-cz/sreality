@@ -12,6 +12,8 @@ const chip = (name: string, excluded = false): DistrictChip => ({
   name,
   context: null,
   excluded,
+  level: 'obec',
+  id: 1,
 });
 
 const withFilters = (over: Partial<ListingFilters>): ListingFilters => ({

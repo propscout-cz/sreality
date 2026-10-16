@@ -338,7 +338,7 @@ export const effectiveSort = (f: ListingFilters, sort: SortSpec): SortSpec => {
  * keeps working. What used to live in this file — a PostgREST string builder
  * and a hand-kept in-memory twin, five predicates each, ILIKE patterns and all
  * — is now two renderings of one plan. See districtCodes.ts for the why. */
-import { districtsFilterClause, isValidCode } from './districtCodes';
+import { districtsFilterClause } from './districtCodes';
 
 export {
   districtsFilterClause,
@@ -1243,17 +1243,12 @@ export const buildBrowseStatsArgs = (
     districts_excluded_filter: f.districts.length
       ? f.districts.map((d) => d.excluded === true)
       : null,
-    /* The level + RÚIAN code parallel to the names — the ONE code predicate the
-     * two RPCs compile (migration 504, lib/districtCodes). A NULL entry is a
-     * chip with no code, which matches NOTHING there exactly as it does here;
+    /* The raw level + RÚIAN code parallel to the names — the ONE code predicate
+     * the two RPCs compile (latest: migration 605, lib/districtCodes);
      * `districts_filter` (the names) is now only the array that drives the
      * unnest. */
-    districts_levels: f.districts.length
-      ? f.districts.map((d) => d.level ?? null)
-      : null,
-    districts_ids: f.districts.length
-      ? f.districts.map((d) => (isValidCode(d.id) ? d.id : null))
-      : null,
+    districts_levels: f.districts.length ? f.districts.map((d) => d.level) : null,
+    districts_ids: f.districts.length ? f.districts.map((d) => d.id) : null,
     dispositions_filter:     f.dispositions.length ? f.dispositions : null,
     price_min_filter:        f.priceMin,
     price_max_filter:        f.priceMax,

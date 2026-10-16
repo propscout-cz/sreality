@@ -435,41 +435,20 @@ class ScenarioUpdateIn(BaseModel):
     renovation_czk: float | None = None
 
 
-class ResolveLocationIn(BaseModel):
-    """A Mapy.cz suggestion item picked by the user.
-
-    Field names mirror Mapy.cz's `/v1/suggest` item shape so the frontend
-    can pass through the relevant subset without re-mapping. `position`
-    is collapsed into `lat`/`lng`. `regional_structure` is the
-    `regionalStructure` array used to match admin polygons. `raw` is
-    optional and round-tripped to the response for debugging.
-    """
-    label: str
-    lat: float | None = None
-    lng: float | None = None
-    type: str | None = None
-    regional_structure: list[dict[str, Any]] | None = None
-    raw: dict[str, Any] | None = None
-    # The pick's own name (Mapy's `name`, e.g. "Žižkov"). Read for the one
-    # level RÚIAN draws no polygon for — `cast_obce` — where the point places
-    # the obec and the name places the part inside it. Optional: an older
-    # frontend that omits it still resolves obec / okres / kraj.
+# Typed so a malformed entry is a 422 at the boundary, never a 500 in the binder.
+class RegionalEntry(BaseModel):
+    """One entry of a Mapy.cz suggestion's `regionalStructure` (other keys ignored)."""
     name: str | None = None
+    type: str | None = None
 
 
-class ResolveChipNameIn(BaseModel):
-    """One stored chip to resolve at read time (W3 S3).
-
-    Chips saved before migration 172 carry a name and an optional parent
-    `context` and no code. `api.location_filter.upgrade_district_chips` resolves
-    them ONCE on the way into the predicate; the stored blob is never rewritten."""
-
+class ResolveLocationIn(BaseModel):
+    """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
+    lat: float
+    lng: float
+    type: str
     name: str
-    context: str | None = None
-
-
-class ResolveChipNamesIn(BaseModel):
-    chips: list[ResolveChipNameIn] = Field(default_factory=list, max_length=50)
+    regional_structure: list[RegionalEntry] = Field(default_factory=list)
 
 
 class EstimateYieldIn(BaseModel):

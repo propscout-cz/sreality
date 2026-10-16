@@ -35,7 +35,6 @@ import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import { CardHydrationProvider } from '@/lib/hydration';
-import { useLegacyChipUpgrade } from '@/lib/useLegacyChipUpgrade';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import { MultiselectChips } from '@/components/filter-controls/MultiselectChips';
 import { type EnumOptionLite } from '@/components/filter-controls/types';
@@ -131,12 +130,6 @@ function PipelineBoardPage() {
     setSort,
     reset,
   } = usePipelineViewState();
-  /* The board filters its cards in the browser (matchesDistricts), so a chip
-   * with no code matches nothing here exactly as it does server-side — which
-   * means a URL carrying a pre-code chip has to be upgraded on THIS surface
-   * too. Without it the same link shows a cohort on /browse and an empty board
-   * here, and the kanban looks broken rather than unfiltered. */
-  useLegacyChipUpgrade(districts, setDistricts);
   /* Card size is a workspace preference, NOT part of the URL view state above:
    * a shared link carries which deals to look at, not how this browser likes
    * its photos. Same split Browse draws for its own image-size switch. */

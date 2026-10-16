@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from api.location_filter import LEVEL_COLUMN
 from toolkit.filter_registry import REGISTRY, Agenda
 
 REPO = Path(__file__).resolve().parents[1]
@@ -328,12 +329,12 @@ def _sortable_fields() -> set[str]:
 # only genuinely hand-wired columns belong here.
 HAND_CODED_FILTER_COLUMNS = {
     "is_active", "last_seen_at", "first_seen_at", "last_change_at",
-    # districtsFilterClause — the ONE code predicate's four levels (W3 S3,
+    # districtsFilterClause — the ONE code predicate's five levels (W3 S3,
     # lib/districtCodes), and now the WHOLE of it: S4 (migration 506) dropped
     # `district` / `place_search_text` / `okres` / `region` from the projection,
     # so a chip predicate that reintroduced an ILIKE arm would fail the
     # subset check below rather than 400 in production.
-    "obec_id", "okres_id", "region_id", "cast_obce_id",
+    *LEVEL_COLUMN.values(),
     # material / enums / price
     "building_type", "furnished", "ownership", "price_czk",
     # price-change windows (priceChangeCountColumn)
