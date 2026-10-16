@@ -503,6 +503,47 @@ def test_a_queued_backlog_that_cannot_fit_never_keeps_an_arrival_from_committing
     assert not again["feeds"].get("stale"), "both groups backed off for TRIED_BACKOFF_HOURS"
 
 
+def test_a_pass_that_dies_with_re_claims_pauses_them_once_and_halves_them(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The re-claim's budget is kept like the rate (E941): a pass carrying re-claims that dies
+    (here its deadline) leaves its count in flight; the next pass offers none and halves the
+    budget, the one after offers the half, and a pass that commits with its re-claims makes the
+    budget whole again. Here the budget starts at four so the nine-advert world shows it."""
+    from autodedup import incremental_lane, reconcile
+    from autodedup.incremental import PassDeadline
+
+    monkeypatch.setattr(incremental_lane.SqlWork, "_evidence_feed", lambda self, *a, **k: [])
+    _open_scope(monkeypatch)
+    world = _built_world(tmp_path)
+    ids = sorted(i for (_g, i) in world.rt_fp)
+    for row in world.rt_fp.values():
+        row["updated_at"] = world.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    world.settings[reconcile.redecide_key(GEN)] = [[i] for i in ids]
+    world.settings[reconcile.budget_key(GEN)] = {"budget": 4}
+    real = incremental_lane.run_pass_bounded
+
+    def deadline(*args, **kwargs):
+        raise PassDeadline("the pass ran past its deadline")
+
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", deadline)
+    died = incremental_lane.run_incremental(lambda: world)
+    assert died["aborted"] == "deadline"
+    assert world.settings[reconcile.budget_key(GEN)] == {"budget": 4, "inflight": 4}
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", real)
+
+    paused = incremental_lane.run_incremental(lambda: world)
+    assert not paused["aborted"] and not paused["feeds"].get("stale"), "none after a death"
+    assert world.settings[reconcile.budget_key(GEN)] == {"budget": 2}
+
+    halved = incremental_lane.run_incremental(lambda: world)
+    assert not halved["aborted"] and halved["feeds"].get("stale") == 2
+    assert halved["evidence"]["stale_budget"] == 2
+    assert world.settings[reconcile.budget_key(GEN)] == {"budget": reconcile.STALE_FLOOR}, (
+        "committed with its re-claims: whole again")
+    whole = incremental_lane.run_incremental(lambda: world)
+    assert whole["feeds"].get("stale") == len(ids) - 6, "the rest, untried, at the full budget"
+
+
 @pytest.mark.parametrize("why", ["scope_closed", "ledger_inert"])
 def test_the_re_claim_waits_while_no_merge_can_follow_it(
         why: str, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

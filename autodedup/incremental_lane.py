@@ -1266,7 +1266,8 @@ class SqlWork:
                  rate_per_s: float = PASS_RATE_PER_S,
                  claim_cap: int | None = None,
                  stale_claims: Sequence[int] = (),
-                 stale_waiting: int = 0) -> None:
+                 stale_waiting: int = 0,
+                 stale_budget: int = reconcile.STALE_FLOOR) -> None:
         self.conn = conn
         self.scope = scope
         self.generation = generation
@@ -1290,6 +1291,7 @@ class SqlWork:
         # after the pair budget refused is the normal feeds alone (E75); and how many wait.
         self.stale_claims = [int(i) for i in stale_claims]
         self.stale_waiting = int(stale_waiting)
+        self.stale_budget = int(stale_budget)
         self.attempt = 0
         # Set by `claim` while the phase is on: the entrant backlog it measured, and whether
         # this pass is the one that empties it (E98).
@@ -1467,7 +1469,7 @@ class SqlWork:
             taken = ([i for i in self.stale_claims if i not in retiring]
                      if self.attempt == 1 else [])
             self.evidence = {**self.evidence, "stale": self.stale_waiting,
-                             "stale_claimed": len(taken)}
+                             "stale_claimed": len(taken), "stale_budget": self.stale_budget}
             items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
                          for listing_id in taken)
         for item in items:
@@ -2125,7 +2127,7 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
     deleted["scan_cursor"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_SETTINGS_SQL, {
         "keys": [engine_key(generation), reconcile.redecide_key(generation),
-                 reconcile.tried_key(generation)]})
+                 reconcile.tried_key(generation), reconcile.budget_key(generation)]})
     deleted["settings"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
     deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
@@ -2474,31 +2476,50 @@ def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str
         "updated_by": f"{LANE_NAME}:engine"})[0][0])
 
 
+def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: str) -> None:
+    _exec(conn, RT_SETTING_WRITE_SQL, {
+        "key": reconcile.budget_key(generation), "value": json.dumps(dict(record)),
+        "updated_by": f"{LANE_NAME}:{why}"})
+
+
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
                   handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
-                  engine_since: str) -> tuple[list[int], int]:
+                  engine_since: str) -> tuple[list[int], int, int]:
     """What this pass re-claims for the groups the reconcile handed on (E960), chosen BEFORE the
     pass and stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
     refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
     the head of the queue. None while no reconcile follows the pass (the build, a seed of
     another version, a closed apply scope) or while the reject ledger holds no row under this
     store's key (after a deploy that moved it, every neighbour's reject would be re-scored).
-    Returns the adverts and how many of the queue's adverts are stale."""
+    The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
+    pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
+    one offers none and halves the budget. Returns the adverts, how many of the queue's adverts
+    are stale, and the budget."""
+    record = control.get(reconcile.budget_key(generation))
+    record = dict(record) if isinstance(record, Mapping) else {}
+    budget = max(1, int(record.get("budget") or reconcile.STALE_FLOOR))
+    if record.get("inflight"):
+        budget = max(1, int(record["inflight"]) // 2)
+        _stale_budget(conn, generation, {"budget": budget}, "redecide_halved")
+        return [], 0, budget
     if not handed or bootstrap or not seed_current(control, generation):
-        return [], 0
+        return [], 0, budget
     if reconcile.read_scope(conn)[0] is None or not store.ledger_keyed():
-        return [], 0
+        return [], 0, budget
     ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
                                fresh_hours=reconcile.FRESH_DECISION_HOURS,
                                engine_since=engine_since)
     tried = control.get(reconcile.tried_key(generation))
     taken, stamps = reconcile.select_claims(handed, ages,
                                             tried if isinstance(tried, Mapping) else {},
-                                            datetime.now(timezone.utc))
+                                            datetime.now(timezone.utc), budget)
     _exec(conn, RT_SETTING_WRITE_SQL, {
         "key": reconcile.tried_key(generation), "value": json.dumps(stamps),
         "updated_by": f"{LANE_NAME}:redecide"})
-    return taken, sum(1 for _at, stale in ages.values() if stale)
+    if taken:
+        _stale_budget(conn, generation, {"budget": budget, "inflight": len(taken)},
+                      "redecide_ahead")
+    return taken, sum(1 for _at, stale in ages.values() if stale), budget
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
@@ -2754,7 +2775,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                        claim_cap_key(generation),
                                        engine_key(generation),
                                        reconcile.redecide_key(generation),
-                                       reconcile.tried_key(generation)])
+                                       reconcile.tried_key(generation),
+                                       reconcile.budget_key(generation)])
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
@@ -2827,13 +2849,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
                                      store.engine_digest)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
-        stale_claims, stale_waiting = _stale_claims(conn, generation, control, handed, bootstrap,
-                                                    store, engine_since)
+        stale_claims, stale_waiting, stale_budget = _stale_claims(
+            conn, generation, control, handed, bootstrap, store, engine_since)
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
                        rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
-                       stale_claims=stale_claims, stale_waiting=stale_waiting)
+                       stale_claims=stale_claims, stale_waiting=stale_waiting,
+                       stale_budget=stale_budget)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2923,6 +2946,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             # eight such passes take the claim to one advert. The measurement below, once the
             # reconcile has run, still overwrites it.
             _write_rate(conn, generation, rate_per_s, "restored")
+        if stale_claims and not shutting_down() and (
+                stopped == "pair_budget" or (not stopped and result is not None)):
+            # E960: the pass carrying the re-claims did not die. Committed WITH them (its first
+            # attempt), the budget is whole again; refused or retried without them, it stands.
+            committed = not stopped and result is not None and result.attempts == 1
+            _stale_budget(conn, generation,
+                          {"budget": reconcile.STALE_FLOOR if committed else stale_budget},
+                          "redecide_committed" if committed else "redecide_refused")
         summary: dict[str, Any] = (result.to_json() if result is not None
                                    else {"counts": {}, "aborted": stopped})
         summary["aborted"] = stopped

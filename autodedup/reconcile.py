@@ -100,6 +100,11 @@ STALE_FLOOR: int = 100
 # re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
 TRIED_SETTING: str = "rt_redecide_tried"
 TRIED_BACKOFF_HOURS: float = 6.0
+# The re-claim's own budget, kept like the rate (E941): `{budget, inflight}`, the count a pass
+# re-claims written AHEAD of it; a pass that finds a count still in flight (the last pass that
+# carried re-claims died: its deadline, a kill, a raise) offers none and halves the budget, and
+# a pass that commits with re-claims restores `STALE_FLOOR`.
+BUDGET_SETTING: str = "rt_redecide_budget"
 QUARANTINED = "quarantined"
 SUMMARY_CAP: int = 50
 
@@ -148,6 +153,11 @@ def _unread(conn: Any, generation: str, listing_ids: Sequence[int],
 def redecide_key(generation: str) -> str:
     """`rt_redecide:<generation>` — the members the reconcile hands the next pass (E960)."""
     return f"{REDECIDE_SETTING}:{generation}"
+
+
+def budget_key(generation: str) -> str:
+    """`rt_redecide_budget:<generation>` — the re-claim's budget and its count in flight."""
+    return f"{BUDGET_SETTING}:{generation}"
 
 
 def tried_key(generation: str) -> str:
@@ -204,8 +214,9 @@ def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]]
 
 
 def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]],
-                  tried: Mapping[str, str], now: datetime) -> tuple[list[int], dict[str, str]]:
-    """The adverts the next pass re-claims (`claims` at `STALE_FLOOR`) over the groups not tried
+                  tried: Mapping[str, str], now: datetime, budget: int = STALE_FLOOR
+                  ) -> tuple[list[int], dict[str, str]]:
+    """The adverts the next pass re-claims (`claims` at `budget`) over the groups not tried
     within `TRIED_BACKOFF_HOURS`, and the back-off map with those groups stamped `now` and the
     expired or forgotten stamps dropped (E960). Keyed by a group's first advert."""
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
@@ -214,7 +225,7 @@ def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any,
     recent = {head: at for head, at in tried.items()
               if head in queued and _epoch(at) is not None and _epoch(at) > cutoff}
     open_groups = [group for group in groups if group and str(min(group)) not in recent]
-    taken = claims(open_groups, ages, STALE_FLOOR)
+    taken = claims(open_groups, ages, budget)
     chosen = set(taken)
     for group in open_groups:
         if chosen & set(group):
