@@ -98,6 +98,10 @@ _Avoid_: operator state, user-defined information, user-created state, carried s
 A property's place in one account's deal pipeline. At most one per property per account.
 _Avoid_: deal, card (alone)
 
+**Stage**:
+One step of one account's pipeline, drawn as a board column; every account gets its own copy of the default board at signup.
+_Avoid_: fáze (in code), column
+
 **Collection**:
 A named set of properties an account keeps, optionally watched for changes.
 _Avoid_: list, folder, favourites, saved list

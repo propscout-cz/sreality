@@ -11,7 +11,7 @@
  *   - The "which collections / tags exist" indices use the bearer-gated
  *     FastAPI service so listing_count + ordering live in one place.
  *   - The "does THIS property belong to X" reverse-index reads pull from the
- *     *_public Supabase views via the anon key. Writes always go through the API.
+ *     *_public Supabase views, RLS-scoped as authenticated. Writes always go through the API.
  * A failed read is said out loud with a retry and never drawn as an empty list
  * or an unticked toggle (MS16).
  */

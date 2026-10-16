@@ -214,7 +214,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     (touch every sighted known row, enqueue new + repriced; CI rail). The parser emits `source_url` (stored, never rebuilt;
     sreality: `scraper/sreality_url.py`). An unproven walk nominates nothing; its listings close only via gone fetches (rule #3);
     `supports_complete_walk` is posture. A per-portal need is a `Portal` seam, never an `if source ==`; seams + owed: `docs/architecture.md` § rule 21.
-22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property at one
+22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property per account at one
     `pipeline_stages` stage (a TABLE, not an enum); "bookmark" == presence of a row at the entry stage. It has its OWN carrier in `PROPERTY_CARRIERS` (over
     `toolkit/pipeline_identity.py`; TERMINAL-AWARE — a live stage always beats a closed one); the losing card is folded into the carry record (rule #18).
     Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards/rows, listing header, kanban drag + trash) is ONE hook,
@@ -222,9 +222,9 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
     one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
-    stage. Stages operator-curated (API-enforced). The badge is `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's
-    pipeline scope (`?pipeline=any|<stage ids>`) is a property-id prefilter mirrored into
-    `browse_stats_properties.property_ids_filter` (migration 378) and OUTSIDE preset identity; the chip LOADS
+    stage. Stages are per account: signup seeds the default board (migration 605), the account curates it via the API. The badge is
+    `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline=any|<stage ids>`) is a
+    property-id prefilter mirrored into `browse_stats_properties.property_ids_filter` (migration 378) and OUTSIDE preset identity; the chip LOADS
     A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable
     (`?deal=any`, the "Vše" pill, `FilterDef.nullable`) — NULL has always meant "no constraint" to comparables,
     the watchdog matcher and browse_stats; never an `any` enum member (it would reach the estimation agent).

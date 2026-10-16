@@ -15,12 +15,9 @@ shape for each grain.
 - `current_account_ids()` — `LANGUAGE sql STABLE SECURITY DEFINER`, returns the caller's
   `account_members.account_id` set keyed off `auth.jwt() ->> 'sub'`.
 - `is_platform_admin()` — same shape against `admins`.
-- Migration 287 had to explicitly `revoke execute ... from anon, authenticated` on all
-  three functions — this project's default privileges auto-grant EXECUTE on new
-  functions, the same default-ACL issue the Phase-0 table audit found (see the skill
-  body's "default privileges" callout). `handle_new_user()` (trigger-only) gets no grant
-  at all; the other two get `authenticated` back since RLS policies invoke them under the
-  querying role.
+- Grants follow the skill body's "Default privileges" recipe: `handle_new_user()`
+  (trigger-only) is executable by no client role; the other two grant `authenticated`
+  EXECUTE, since RLS policies invoke them under the querying role.
 
 ## Per-table RLS, by migration
 
@@ -56,18 +53,20 @@ Service-role writers bypass RLS entirely but still get correctly-stamped rows be
 their parent lookups see every row.
 
 **Migration 294 — pipeline tables**: `property_pipeline`, `pipeline_stages`,
-`property_pipeline_events`, plus:
-- `seed_default_pipeline` / `seed_default_collections` — run on every signup **after**
-  the first, giving each new account its own starter stages/collections.
-- `backfill_legacy_account_id` — claims every pre-tenancy NULL-`account_id` row for
-  whichever account wins the first-signup race.
-- `legacy_backfill_claim` — a one-row table claimed by an atomic
-  `INSERT ... ON CONFLICT DO NOTHING`-style CAS (same shape as the lease-row pattern in
-  migration 279), so a signup race can't double-claim the legacy data.
-- The signup trigger branches on whether `legacy_backfill_claim` is already claimed: the
-  winner runs the backfill, everyone else gets fresh seed data. The migration comment
-  flags this as unsafe once signup is public (non-operator) — the "first signup wins"
-  assumption only holds while signup is effectively single-operator.
+`property_pipeline_events`, plus the signup trigger:
+- **Signup** (`handle_new_user` on `auth.users`, one path since migration 605): it creates the
+  account, the owner membership, the default board (`seed_default_pipeline`: 10 stages with
+  codes, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
+  free trial. A new default is a new migration replacing that function's literal; this prints
+  one from a live board (keys as `api/pipeline.py` `_slugify` mints them from an ASCII label):
+  ```sql
+  select format('(target_account_id, %L, %L, %s, %L, %L, %s, %s),',
+           trim(both '_' from lower(regexp_replace(label, '[^A-Za-z0-9]+', '_', 'g'))), label,
+           row_number() over (order by position, id), color, code, is_entry::text, is_terminal::text)
+    from pipeline_stages
+   where account_id = '<account uuid>' and archived_at is null
+   order by position, id;
+  ```
 
 **Migration 536 — `property_dismissals`**, `account_id` on the row directly (the route
 names it, shape 2 below). Append-only: `grant select, insert` plus a COLUMN-scoped
@@ -103,7 +102,8 @@ bypass RLS: `pipeline_stages` gets a `unique (account_id, id)` index, and
 `property_pipeline.stage_id` becomes a composite FK `(account_id, stage_id) references
 pipeline_stages (account_id, id)`. Without this, a cross-account `stage_id` write would
 make the account-partitioned reconciler's keep-most-advanced step silently no-op and then
-drop the retired card — a correctness bug, not just an isolation one.
+drop the retired card — a correctness bug, not just an isolation one; since migration 605 the
+event ledger's `from_stage_id` / `to_stage_id` are account-qualified the same way.
 
 ## Tenant role and pool
 
@@ -131,10 +131,10 @@ silently degrading to an RLS-off connection (that silent degradation is exactly 
 2026-07 bad-DSN incident stayed invisible for weeks); and `current_account_ids()` is the
 one definition of who the caller is, so a tenant-connection read is scoped by RLS alone.
 
-**`legacy_backfill_claim` the TABLE stays — do NOT propose a DROP.** Only the Python read
-of it was dead. The table is the atomic first-signup CAS inside `handle_new_user`
-(migrations 294/362, swept by 299): the first user to sign up claims the pre-tenancy
-backfill exactly once. That claim is made in SQL, not in `api/tenant_pool.py`.
+**`legacy_backfill_claim` stays, read by nothing.** It was the first-signup CAS that handed
+the pre-tenancy rows to the operator's account (claimed 2026-07-11); migration 605 removed that
+branch from `handle_new_user`. Dropping the table is a destructive migration the operator has
+not ruled on.
 
 ## The tenancy doctrine — four shapes, and only four
 
@@ -239,7 +239,3 @@ an assertion, and outlived the behaviour it described. A comment is not a rail.
 - `tests/api/test_account_scope_census.py` — the ACCOUNT-SCOPE CENSUS, one layer down: no
   `account_id`/`account_ids` parameter in `api/` defaults to `None`, and every hand-rolled
   `resolve_account_id` call is enumerated with a reason. Both arms declare their blind spots.
-
-Neither gate can protect `main` on its own: they run in CI, and CI is only a merge gate while
-branch protection is ON. It is currently OFF (an operator decision) — so today they protect a
-PR, not the branch.

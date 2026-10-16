@@ -622,8 +622,10 @@ rules. Identify which one a task belongs to before you start.
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
   account, migration 595).
-- Every PostgREST read runs as `authenticated`; `anon` is granted nothing (Phase 0,
-  migrations 299/331). The SPA reads the `*_public` views; the Browse/map read models
+- Every PostgREST read runs as `authenticated`; `anon` is granted no relation (Phase 0,
+  migrations 299/331), functions are born private since migration 605, and a CI census
+  (`tests/test_tenant_isolation_live.py`) keeps every `SECURITY DEFINER` function in `public`
+  out of `anon`'s reach. The SPA reads the `*_public` views; the Browse/map read models
   `browse_list` (an UNLOGGED table rebuilt blue-green) and `properties_map_mv` — plain
   SELECT grants to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through their `*_visible` INVOKER twins (migration 537); the location-audit
@@ -2572,9 +2574,13 @@ renumber.** Navigate by area:
     `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
 
 22. **The deal pipeline is single-valued, property-grain operator state (migration 205).**
-    `property_pipeline` holds at most ONE card per property (PK on `property_id`) at one
-    `stage_id` (`pipeline_stages`, a TABLE not an enum so the operator can rename/reorder/add
-    columns with no migration — the curated-index precedent). **A "bookmark / interested" is
+    `property_pipeline` holds at most ONE card per property per account (PK
+    `(account_id, property_id)` since migration 295) at one `stage_id` (`pipeline_stages`, a
+    TABLE not an enum so an account can rename/reorder/add columns with no migration — the
+    curated-index precedent). Every account gets its own copy of the default board at signup
+    (`seed_default_pipeline`, migration 605), and every stage reference — the card's and the
+    event ledger's `from_stage_id` / `to_stage_id` — is account-qualified (a composite FK onto
+    `pipeline_stages (account_id, id)`). **A "bookmark / interested" is
     just the entry stage** (`pipeline_stages.is_entry`), not a separate flag: presence of a
     `property_pipeline` row == the property is in the pipeline. Single-valued-ness is why it
     can't live at advert grain (unlike the m2m curation of rule #18) — so it gets its OWN
@@ -2697,10 +2703,9 @@ renumber.** Navigate by area:
     The rule going forward: if the board cannot filter, sort or place a card without a field, it is a
     decoration and does not belong in that queryFn.
     **The badge is `pipeline_stages.code` (migration 377), not an ordinal and never a parse of
-    the label.** The live board numbers its stages inside the display text ("1. For Review" …
-    "9. Passed", "9. Bought", "9. Lost"), so the number is operator data: three stages
-    deliberately share "9" while their `position` runs 5/6/7, and a badge derived from ordering
-    would contradict the labels the operator reads. `code` is nullable and NOT unique; when it is
+    the label.** Boards number their stages inside the label, so the number is operator data:
+    several closed stages deliberately share a code, which a badge derived from ordering would
+    contradict. `code` is nullable and NOT unique; when it is
     NULL the funnel falls back to the stage's 1-based ordinal among the live stages
     (`lib/pipelineStage.ts:stageBadge`) — computed where it renders, so nothing guessed is ever
     written back. `stageAccent` in the same module is the one answer to "what colour is this

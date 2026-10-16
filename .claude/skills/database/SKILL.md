@@ -93,7 +93,7 @@ tenant-scoped:
   the row just written. `verify_jwt` is authentication; `tenant_conn` (via RLS) is
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
-  `TENANT_POOL_DB_URL` raises. The `legacy_backfill_claim` TABLE stays (signup CAS).
+  `TENANT_POOL_DB_URL` raises. `legacy_backfill_claim` stays, read by nothing (a drop is the operator's call).
   `tenant_transaction(claims)` is the same block as a context manager, for one named
   exception (`references/tenancy.md`): it commits before slow service-role work.
 
@@ -132,13 +132,14 @@ already exist on disk (`276_browse_read_model.sql` / `276_listings_geo_cell_key.
 both pairs coexist harmlessly because the runner orders by filename, not the numeric
 prefix alone, but don't count on that.
 
-**This Supabase project's default privileges auto-GRANT, not just on tables.** New
-tables get `anon`/`authenticated` grants by default (the Phase-0 hardening's root
-cause); migration 287 found the **same default ACL applies to new functions** — a
-freshly created `SECURITY DEFINER` function is directly callable by `anon` via PostgREST
-RPC until explicitly revoked (`revoke execute on function ... from anon, authenticated`),
-even though `revoke ... from public` is a no-op against an explicit ACL entry. Revoke
-explicitly on every new function; grant back only the roles that need it.
+**Default privileges: a new table reaches `authenticated` read-only; a new function is born
+private (migration 605).** Tables: 299 stripped `anon` and the write verbs, and the table's
+deny-all RLS (CI-enforced) is the backstop. Functions: 605 removed the built-in PUBLIC EXECUTE
+(the global form; 299's per-schema form could not) and the per-schema grant to `authenticated`,
+so a new function reaches only `postgres` + `service_role`; `CREATE OR REPLACE` keeps the ACL a
+function already has. Recipe, on every function you write: `revoke all on function <sig> from
+public, anon, authenticated;`, then `grant execute` to `authenticated` (or `service_role`) only
+where a caller needs it.
 
 ## Migration safety policy (under autopilot)
 
@@ -232,12 +233,7 @@ PostgREST); read a listing's identity on the tenant conn through `listing_natura
 and market facts through a service-role connection (as `portal_lookup` does). Don't add a
 `USING (true)` policy to `listings`.
 
-**First-signup backfill race**: the on-signup trigger (migration 294) does an atomic
-INSERT-with-`ON CONFLICT` CAS into `legacy_backfill_claim` (mirrors the lease-row CAS pattern
-above) — whoever signs up first wins and claims every pre-tenancy NULL-`account_id` row via
-`backfill_legacy_account_id`; every later signup instead gets `seed_default_pipeline` /
-`seed_default_collections`. The migration comment flags this as unsafe once public
-(non-operator) signup ships — revisit before then.
+**Signup** (`handle_new_user`, one path since migration 605): the Signup bullet in `references/tenancy.md`.
 
 **THE TENANCY DOCTRINE — four shapes, only four.** Full version, the table-by-table migration
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week

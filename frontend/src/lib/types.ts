@@ -1500,7 +1500,7 @@ export type WatchdogSeenFilter = 'all' | 'seen' | 'unseen';
 
 /* Manual rental estimates (Phase U-ME).
  * Operator-recorded point-estimate rentals attached to a listing.
- * Read path: manual_rental_estimates_public view via anon key. */
+ * Read path: manual_rental_estimates_public view, RLS-scoped as authenticated. */
 
 export type ManualEstimateSourceKind =
   | 'broker'

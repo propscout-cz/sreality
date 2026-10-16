@@ -1420,8 +1420,8 @@ def post_estimate_yield(
 # --- curation -------------------------------------------------------------
 # Operator-curated lists of listings, editable journal notes, and free-form
 # coloured tags. Reads also flow through the *_public views in
-# migration 025 (used by the SPA via the anon key); writes always
-# come through these endpoints.
+# migration 025 (read by the SPA as authenticated, RLS-scoped); writes
+# always come through these endpoints.
 
 
 @app.post("/collections")
@@ -1720,10 +1720,8 @@ def delete_property_tag(
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Phase 0: bookmark a property into the pipeline (entry stage) / remove it.
-# Membership reads go through property_pipeline_public via the anon key.
-# tenant_conn replaces get_db_conn + require_token: its verify_jwt fails
-# closed and every caller gets an RLS-scoped one-transaction connection.
+# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")
 def get_pipeline_stages(
