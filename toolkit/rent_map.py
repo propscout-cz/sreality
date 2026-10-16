@@ -35,6 +35,14 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("rent_map")
 
+# The MF page listing every published XLSX (the newest is the current map): the fetch
+# (api/rent_map.py) scrapes its link, and the map overlay (scripts/ingest_map_overlays.py)
+# cites it as the source.
+MF_INFOGRAPHIC_URL = (
+    "https://mf.gov.cz/cs/rozpoctova-politika/podpora-projektoveho-rizeni/"
+    "cenova-mapa/cenova-mapa-infografika"
+)
+
 _NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _RNS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 

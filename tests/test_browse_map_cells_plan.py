@@ -1,4 +1,4 @@
-"""The map grid must stay an INDEX-ONLY aggregate (migration 439).
+"""The map's tile aggregate must stay INDEX-ONLY (migration 602; the shape W6b/439 set).
 
 W6b's whole claim is that the map can count its entire cohort for less than it used to
 cost to ship half of it. Measured live 2026-08-26 on the default cohort
@@ -73,14 +73,6 @@ pytestmark = pytest.mark.skipif(
 
 _INDEX = "properties_map_mv_cover"
 
-# The plpgsql locals the aggregate's target list closes over. Bound here to the values the
-# function itself computes for a bbox-less call (the CZ extent, 20 x 13), so the EXPLAINed
-# projection is arithmetically the production one.
-_GRID_LOCALS = {
-    "v_s": "48.5", "v_n": "51.1", "v_w": "12.0", "v_e": "18.9",
-    "v_cw": "0.345", "v_ch": "0.2",
-    "c_cols": "20", "c_rows": "13",
-}
 
 
 @pytest.fixture(scope="module")
@@ -104,20 +96,18 @@ def _functiondef(conn) -> str:
             "where n.nspname = 'public' and p.proname = 'browse_map_cells'"
         )
         row = cur.fetchone()
-    assert row, "public.browse_map_cells is not in the catalog — migration 439 did not apply"
+    assert row, "public.browse_map_cells is not in the catalog — migration 602 did not apply"
     return row[0]
 
 
 def _aggregate_target_list(conn) -> str:
-    """The SELECT list of migration 439's grid aggregate, taken from the catalog and with
-    its plpgsql locals bound to the values a bbox-less call produces."""
+    """The SELECT list of the map's tile aggregate (migration 602), taken from the catalog.
+    It closes over no plpgsql local: the level and the latitude clamp are literals."""
     src = re.sub(r"--[^\n]*", "", _functiondef(conn))
     start = src.index("with g as (")
     sel = src.index("select", start) + len("select")
     end = src.index("from properties_map_mv l", sel)
     target = src[sel:end]
-    for name, value in _GRID_LOCALS.items():
-        target = re.sub(rf"\b{name}\b", value, target)
     assert "l.lat" in target and "l.lng" in target, (
         "the extracted target list does not look like the grid aggregate — the function "
         f"body's shape changed and this rail's extraction needs updating: {target!r}"
@@ -144,11 +134,11 @@ def test_the_grid_aggregate_projects_only_index_resident_columns(conn):
     """No column outside the cover index may appear in the grid aggregate's projection.
 
     This is what makes `Heap Fetches: 0` reachable, and it is the whole basis of the
-    1,627-block figure against a 433 MB matview. `obec_id`, `property_id`, `source` and
+    2,332-block figure (2026-10-15, the whole default cohort) against a 433 MB matview. `obec_id`, `property_id`, `source` and
     `listing_id` are the four an editor is most likely to reach for; none is in the index.
 
     RED by: adding `l.obec_id` (or any other off-index column) to the aggregate's target
-    list in migration 439 — verified against production, where doing so turns the
+    list in migration 602 — verified against production, where doing so turns the
     Index Only Scan into a plain Index Scan.
     """
     target = _aggregate_target_list(conn)
@@ -157,9 +147,9 @@ def test_the_grid_aggregate_projects_only_index_resident_columns(conn):
     resident = _cover_index_columns(conn)
     off_index = sorted(projected - resident)
     assert off_index == [], (
-        "migration 439's grid aggregate projects column(s) that are not in "
+        "migration 602's tile aggregate projects column(s) that are not in "
         f"{_INDEX}'s key or INCLUDE list: {off_index}. The scan can no longer be served "
-        "without the heap, so W6b's 1,627-block claim no longer holds. Index serves: "
+        "without the heap, so the index-only claim no longer holds. Index serves: "
         f"{sorted(resident)}"
     )
 

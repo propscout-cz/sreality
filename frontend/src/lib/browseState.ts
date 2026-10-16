@@ -15,7 +15,6 @@
 import { ROUTES } from './routes';
 import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { RentVk } from '@/components/ListingMap';
 import {
   DEFAULT_FILTERS,
   bboxAround,
@@ -33,19 +32,30 @@ import {
   type SortSpec,
 } from '@/lib/queries';
 import type { ImageRef } from '@/lib/imageUrl';
+import {
+  canonicalLayers,
+  layersFromSearchParams,
+  readRememberedLayers,
+  useRememberedLayers,
+  writeRememberedLayers,
+} from '@/lib/mapOverlays';
 import type { Disposition, FilterPreset, ListingPublic } from '@/lib/types';
 
 export type TabKey = 'map' | 'table' | 'stats';
 
 /* Map-overlay UI knobs. NOT part of the cohort filter spec — they paint
- * layers (city pins, MF rent / price-growth choropleths). On the Browse page
- * they live in the URL (shareable view); in the modal they're in-memory. */
+ * layers (city pins, the price-growth choropleth, reference overlays).
+ * On the Browse page they live in the URL (shareable view); in the modal
+ * they're in-memory. */
 export interface MapOverlayState {
   showCities: boolean;
   colorByIndexName: string | null;
-  showRentMap: boolean;
-  rentVk: RentVk;
-  showKraje: boolean;
+  /* The reference overlays drawn — the MF rent map among them, its size
+   * category the variant (`rent_map:vk2`) — in lib/mapOverlays grammar,
+   * canonical; '' = none. URL key `layers` — present, even empty, it wins;
+   * absent, the selection this browser remembers applies. Every change
+   * writes both. */
+  layers: string;
   /* What the pin LABEL shows: the total price or the per-m² measure. A view
    * knob, not a cohort filter — it belongs here for the three properties this
    * interface guarantees: it is URL-serialised (so a Kč/m² map is a shareable
@@ -62,9 +72,7 @@ export type PriceMetric = 'total' | 'per_m2';
 export const DEFAULT_OVERLAY: MapOverlayState = {
   showCities: true,
   colorByIndexName: null,
-  showRentMap: false,
-  rentVk: 1,
-  showKraje: false,
+  layers: '',
   priceMetric: 'total',
 };
 
@@ -94,7 +102,11 @@ export interface BrowseViewState {
   loadPipelineView: () => void;
 }
 
-const OVERLAY_URL_KEYS = ['tab', 'sort', 'cities', 'colorby', 'rentmap', 'rentvk', 'kraje', 'preset', 'pm'];
+/* The legacy spellings of a `layers` selection — `kraje` and the rent map's
+ * `rentmap` + `rentvk` (layersFromSearchParams) — carried until a layer change
+ * rewrites them, so an old link keeps its layers through filtering. */
+const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
+const OVERLAY_URL_KEYS = ['tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm'];
 
 /* The Browse page adapter. Lifted verbatim from the page so its behaviour —
  * the dual serialization (filters via toSearchParams + overlay knobs carried by
@@ -104,17 +116,18 @@ export function useUrlBrowseState(): BrowseViewState {
   const filters = useMemo(() => fromSearchParams(searchParams), [searchParams]);
   const sort = useMemo(() => parseSort(searchParams.get('sort')), [searchParams]);
   const tab = (searchParams.get('tab') ?? 'map') as TabKey;
+  /* The live remembered selection: a bare /browse shows what the operator last
+   * chose on any map, and this page's own writes survive a navigation that drops
+   * the `layers` key. */
+  const [rememberedLayers] = useRememberedLayers();
   const overlay = useMemo<MapOverlayState>(() => {
-    const rentVkParam = parseInt(searchParams.get('rentvk') ?? '1', 10);
     return {
       showCities: searchParams.get('cities') !== '0',
       colorByIndexName: searchParams.get('colorby') ?? null,
-      showRentMap: searchParams.get('rentmap') === '1',
-      rentVk: ([1, 2, 3, 4].includes(rentVkParam) ? rentVkParam : 1) as RentVk,
-      showKraje: searchParams.get('kraje') === '1',
+      layers: layersFromSearchParams(searchParams) ?? rememberedLayers,
       priceMetric: searchParams.get('pm') === 'per_m2' ? 'per_m2' : 'total',
     };
-  }, [searchParams]);
+  }, [searchParams, rememberedLayers]);
   const activePresetId = searchParams.get('preset');
 
   const preserveExtras = useCallback(
@@ -169,9 +182,12 @@ export function useUrlBrowseState(): BrowseViewState {
       if ('showCities' in patch) patch.showCities ? sp.delete('cities') : sp.set('cities', '0');
       if ('colorByIndexName' in patch)
         patch.colorByIndexName ? sp.set('colorby', patch.colorByIndexName) : sp.delete('colorby');
-      if ('showRentMap' in patch) patch.showRentMap ? sp.set('rentmap', '1') : sp.delete('rentmap');
-      if ('rentVk' in patch) patch.rentVk === 1 ? sp.delete('rentvk') : sp.set('rentvk', String(patch.rentVk));
-      if ('showKraje' in patch) patch.showKraje ? sp.set('kraje', '1') : sp.delete('kraje');
+      if ('layers' in patch) {
+        const layers = canonicalLayers(patch.layers);
+        sp.set('layers', layers);
+        for (const key of LEGACY_LAYER_KEYS) sp.delete(key);
+        writeRememberedLayers(layers);
+      }
       /* Default ('total') deletes the key, like every other knob here — a
        * default-state map must serialise to the plain /browse URL. */
       if ('priceMetric' in patch)
@@ -232,7 +248,9 @@ export function useMemoryBrowseState(init: {
   const [filters, setFiltersState] = useState<ListingFilters>(init.filters);
   const [sort, setSortState] = useState<SortSpec>(init.sort ?? DEFAULT_SORT);
   const [tab, setTabState] = useState<TabKey>(init.tab ?? 'map');
-  const [overlay, setOverlayState] = useState<MapOverlayState>(init.overlay ?? DEFAULT_OVERLAY);
+  const [overlay, setOverlayState] = useState<MapOverlayState>(
+    () => init.overlay ?? { ...DEFAULT_OVERLAY, layers: readRememberedLayers() },
+  );
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
 
   return useMemo<BrowseViewState>(
@@ -242,7 +260,11 @@ export function useMemoryBrowseState(init: {
       setBounds: (b) => setFiltersState((f) => ({ ...f, bounds: b })),
       setSort: (next) => setSortState(next),
       setTab: (next) => setTabState(next),
-      setOverlay: (patch) => setOverlayState((o) => ({ ...o, ...patch })),
+      setOverlay: (patch) => {
+        const next = 'layers' in patch ? { ...patch, layers: canonicalLayers(patch.layers) } : patch;
+        if (next.layers != null) writeRememberedLayers(next.layers);
+        setOverlayState((o) => ({ ...o, ...next }));
+      },
       setActivePresetId,
       loadPreset: (p) => {
         const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
@@ -359,9 +381,7 @@ export const browseUrlFromState = (s: {
   if (s.tab !== 'map') sp.set('tab', s.tab);
   if (!s.overlay.showCities) sp.set('cities', '0');
   if (s.overlay.colorByIndexName) sp.set('colorby', s.overlay.colorByIndexName);
-  if (s.overlay.showRentMap) sp.set('rentmap', '1');
-  if (s.overlay.rentVk !== 1) sp.set('rentvk', String(s.overlay.rentVk));
-  if (s.overlay.showKraje) sp.set('kraje', '1');
+  if (s.overlay.layers) sp.set('layers', s.overlay.layers);
   if (s.overlay.priceMetric === 'per_m2') sp.set('pm', 'per_m2');
   const qs = sp.toString();
   // Concatenated rather than withQuery(): `sp` is built here key by key and may

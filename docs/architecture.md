@@ -543,6 +543,37 @@ match of the register are on screen; and the headline median holds out the 0–3
 Kč/m² is a denominator defect rather than a market fact. The reas.cz and Cenová-mapa outbound chips both stay beside it: the
 table holds only reas.cz's anonymous 24-month window. Waves and sequencing: `roadmap/sold-comps.md`.
 
+### Reference overlays — metro, flood zones, kraje (migration 600; spec `docs/design/map-overlays.md`)
+
+Static geometry from outside publishers, drawn as toggleable map layers. ONE path: a Python registry
+in `scripts/ingest_map_overlays.py` (sections → layers, each with its legend, note, attribution and
+reader) fills `map_overlay_sections` / `map_overlay_layers` / `map_overlay_features` (made valid,
+dissolved per layer, `ST_Subdivide`d, Web Mercator) and renders `map_overlay_tiles` once per ingest
+(`map_overlay_render_section`, z = the section's `minzoom`..`maxzoom`, MapLibre overzooms past 12);
+the API serves the registry (`GET /map-overlays`) and the tile bytes (`GET
+/map-overlays/{section}/{z}/{x}/{y}.mvt`, immutable, versioned by `fetched_at`) under
+`require_token`; the SPA's `lib/mapOverlayDraw` (lazy, map chunks only) registers one `overlay://` MapLibre protocol over
+`apiGetBlob` and one hook that builds the style layers from the registry's legend — no per-layer
+frontend code. The four tables are a MIRROR (rules 10/11's class): service-role only, rebuilt by the
+quarterly `ingest_map_overlays.yml` (dispatch `--sections kraje` after a boundaries ingest).
+Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
+reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
+it — and named planned stations; CC BY) and the VÚV TGM / MŽP national flood-zone register
+(Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly). Two facts the ingest enforces: the VÚV
+service is fetched in its NATIVE S-JTSK (its own WGS84 output applies a 3-parameter datum shift about
+10 m off; a PID stop with both coordinate systems is the control point, > 1 m fails the run), and a
+layer is replaced only when every requested id came back and the count holds (≥ 90 % of the previous
+one unless `--accept-shrink`). The legend states what the data is: the legally designated extent,
+indicative, ignoring flood defences (Karlín shows as Q100 although the city protects it), Q500 mapped
+only locally, bands nested so overlaps render darker. The selection is one URL knob (`layers=`, a
+sorted `key[:variant]` list, `lib/mapOverlays`) remembered per browser (`map.layers`); the Browse/Explore map, the listing-detail header map and the comparables map mount the
+same hook and chip control. The MF rent choropleth is the `rent_map` section (one layer, the four VK
+size categories as variants; an SQL source over `admin_boundaries` × the latest `rent_map_values`
+revision), re-rendered inside every rent-map ingest (`api/rent_map.py`, a savepoint of its
+transaction; a refused guard keeps the revision and the previous tiles) and by `fetch_rent_map.yml`'s
+last step; migration 601 drops `rent_map_choropleth_public`, `rent_map_kraje_public` and the
+`rent_map_choropleth` matview it replaced.
+
 ## Territories — deep rationale
 
 The three-territory summary is in `CLAUDE.md`; the full per-territory rules and rationale
@@ -615,7 +646,7 @@ rules. Identify which one a task belongs to before you start.
   everywhere else); or a *bounded* read with an explicit `.limit()` and, where "more
   exists" matters, a communicated flag (the broker allowlist's `limit + 1` → `capped`).
   PostgREST's server clamp is itself VERSIONED config — migration 394 pins
-  `pgrst.db_max_rows = 50000` (= `MAP_CAP`) on the `authenticator` role, after the
+  `pgrst.db_max_rows = 50000` on the `authenticator` role, after the
   unversioned dashboard value shipped two silent-truncation bugs at 1,000 and was then
   lifted out-of-band; keep the dashboard "Max Rows" field agreeing with the migration.
   **A bounded read needs an `ORDER BY` to be a contract, and W6b (migration 439) is why
@@ -625,8 +656,10 @@ rules. Identify which one a task belongs to before you start.
   `ORDER BY` is a sample, and a sample chosen by the planner is not a contract*
   (Corollary F). The fix was not a bigger cap but a fourth shape, an *aggregate* read
   (`browse_map_cells`): the server answers with a result whose SIZE IS BOUNDED BY
-  CONSTRUCTION — a 20 x 13 integer-division grid over `properties_map_mv`, no `LIMIT`
-  anywhere — and reports the cohort's exact total alongside it. Reach for that shape
+  CONSTRUCTION — since migration 602 the finest world-tile level with at most 1 024
+  occupied tiles, counted index-only over `properties_map_mv`, no `LIMIT` anywhere; the
+  SPA regroups the tiles at its own zoom by the same formula (`frontend/src/lib/mapCounts.ts`,
+  `docs/design/map-counts.md`) — and reports the cohort's exact total alongside it. Reach for that shape
   whenever a surface renders a summary of many rows rather than the rows themselves;
   reach for `.limit()` + `capped` only when the rows themselves are the point AND the
   read is ordered. No lane reads the map unbounded any more (W5, merge sprint): points are
@@ -1463,9 +1496,9 @@ renumber.** Navigate by area:
     **Standing rule: the removed code, its comments and its design docs are never consulted
     again for any purpose.** They survive in git history and on branch
     `backup/pre-new-dedup-2026-08` for forensic recovery only. The removed engine's OUTPUT, the
-    `source='auto'` rows of `property_merge_events`, is selected BY SOURCE by one piece of code only, until W8: the
+    `source='auto'` rows of `property_merge_events`, is selected BY SOURCE by one piece of code only: the
     AUTODEDUP legacy-retire lane (`autodedup/legacy_retire.py`, `mode=apply` with
-    `retire_legacy=1`; the autodedup PROGRAM.md D7 carve-out), which reads them only to find
+    `retire_legacy=1`; since W8 (E953, 2026-10-14) per area under the live generation, `generation=rt,blocks=<area>`, dry run first; the autodedup PROGRAM.md D7 carve-out), which reads them only to find
     which of those merges to undo and feeds nothing it reads to the engine. The other ledger
     reads (`detach_listings`, `GET /properties/{id}/origins`, which returns the `source` for
     display) are source-blind link mechanics. The operator owns all merge/no-merge logic in the rebuild; thresholds, weights and
@@ -1682,13 +1715,15 @@ renumber.** Navigate by area:
     deadline rolls back and halves its rate. The
     batch `apply` and `unapply` modes stay until the lane has run three live days and checkpoint
     C2 passes (the undo path after that is an open operator decision, `roadmap/autodedup.md`);
-    `legacy_retire` until W8. **The engine's only detaches** are two `detach_listings` callers, one
+    `legacy_retire` per area under the live generation since W8 (E953). **The engine's only detaches** are two `detach_listings` callers, one
     call per group, that write no ruling: `mode=unapply` over its own groups (below), and `retire_legacy=1`
     (`autodedup/legacy_retire.py`), which, in the same dispatch and under the same `dry_run` as
     an apply, first undoes the removed engine's still-intact `source='auto'` merges whose adverts
     all sit in the scope's blocks and deal types (or whose merge mixed deal types), unless an
     operator ruling or the engine's own grouping holds one back, stamping
-    `undone_by='autodedup-legacy-retire:<run>'`. Both are group-scoped, so neither can move a
+    `undone_by='autodedup-legacy-retire:<run>'`; with `generation=rt` and `blocks=` (W8, E953) it
+    runs alone against the live stream's groups, over blocks the lane has fully read, and the lane
+    re-merges after the brake lifts. Both are group-scoped, so neither can move a
     native advert: only the operator splits one.
     **AUTODEDUP apply path.** Merges may now ALSO be ordered by the AUTODEDUP engine
     (`docs/design/autodedup/PROGRAM.md` E900–E906) — through the same chokepoint, never around
@@ -3856,7 +3891,7 @@ ring and one at or above it a solid dot, so "middle of the village" and "this fr
 identical; clicking a pin draws its true-metre circle of `uncertainty_radius_m` for as long as its
 popup is open, and the popup names the rung and the radius. (W3-3 first drew that circle under every
 such pin at once — with ~87 % of active pins below building level it buried the map, 2026-09-22.)
-Clusters and server-side grid cells carry no per-pin radius, so all of this exists only in point mode.
+A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public` (gone
 since 593), and so to both read models — served for the street chip level, read by no filter
@@ -4149,6 +4184,7 @@ rendered blank in production.
 | Running/debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Location-data program (claim spine, RÚIAN mirror, contracts) | `roadmap/location-data.md` + the operator-held design corpus |
 | Roadmap / sequencing | `ROADMAP.md` + `roadmap/<track>.md` |
+| Map reference overlays (metro, flood zones, kraje; the tile path) | `docs/design/map-overlays.md` |
 
 **Two "skills" namespaces (don't conflate):** repo-root `skills/` holds **agent** skills
 seeded into the `skills` DB table (architectural rule #10). `.claude/skills/` holds the

@@ -861,9 +861,19 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         hits=1,
         measure="ppm2",
         kind=KIND_LABELS,
-        why="Map pins and the rent-map legend label the server's published "
-        "figure with the server's published basis token; the map never divides "
-        "anything itself.",
+        why="Map pins label the server's published figure with the server's "
+        "published basis token; the map never divides anything itself.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/mapOverlayDraw.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_LABELS,
+        why="A reference-overlay scale whose unit token is `rent_per_m2` (the "
+        "MF rent choropleth) is labelled with the shared monthly-rent unit in "
+        "its legend caption and click popup; the figure is the stored MF "
+        "reference rent carried in the vector tile, never a client-side ratio.",
     ),
     RegisteredSite(
         path="frontend/src/components/estimation/RunPanel.tsx",
@@ -913,6 +923,25 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         kind=KIND_GUARDS,
         why="The vocabulary's own pinning test; it consumes every table in the "
         "module in order to assert their exact contents.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/mapOverlays.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="Pins that the overlay popup labels a `rent_per_m2` scale with the "
+        "shared monthly-rent unit rather than a spelled-out or capital one.",
+    ),
+    RegisteredSite(
+        path="frontend/src/components/MapOverlayControls.test.tsx",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="Pins that the overlay legend captions a `rent_per_m2` scale with the "
+        "shared monthly-rent unit — the rent map's own 'Nájemné (…)' caption — "
+        "rather than a local copy of it.",
     ),
     RegisteredSite(
         path="frontend/src/lib/growthChoropleth.test.ts",

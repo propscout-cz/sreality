@@ -37,6 +37,7 @@ import type { AnchorPoint, MapFlyToCommand } from '@/components/ListingMap';
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
+import { useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   summarise,
   isDefault,
@@ -78,8 +79,6 @@ import {
   fetchListingsForTable,
   fetchBrowseCount,
   fetchBrowseStats,
-  fetchRentMapChoropleth,
-  fetchRentMapKraje,
   orderPortal,
   sortToParam,
   CARD_PAGE_SIZE,
@@ -92,8 +91,6 @@ import {
   type CityPolygon,
   type CuratedCity,
   type MapResult,
-  type RentMapKraj,
-  type RentMapPolygon,
   type SortDirection,
   type SortField,
   type TableRow,
@@ -293,7 +290,8 @@ export default function BrowseExperience({
     [mapSplit],
   );
 
-  /* Map tab fetches the map cohort (capped) + the paginated card slice. */
+  /* Map tab fetches the map cohort (points, or counted by tile above the point
+   * budget) + the paginated card slice. */
   const mapQuery = useQuery<MapResult, Error>({
     queryKey: browseKeys.map(filters),
     queryFn: ({ signal }) => fetchListingsForMap(filters, { signal }),
@@ -302,7 +300,7 @@ export default function BrowseExperience({
   });
 
   /* All three feed cityOverlay below, which only the map (ListingMap) reads —
-   * same gate as the sibling cityPolygons/rentMap queries just below. */
+   * same gate as the sibling cityPolygons query just below. */
   const citiesQuery = useQuery<CuratedCity[], Error>({
     queryKey: cityQualityKeys.cities,
     queryFn: fetchCuratedCities,
@@ -338,20 +336,17 @@ export default function BrowseExperience({
     return m;
   }, [cityPolygonsQuery.data]);
 
-  const rentMapQuery = useQuery<RentMapPolygon[], Error>({
-    queryKey: ['rent_map_choropleth'],
-    queryFn: fetchRentMapChoropleth,
-    enabled: mapVisible && overlay.showRentMap,
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
-  const rentKrajeQuery = useQuery<RentMapKraj[], Error>({
-    queryKey: ['rent_map_kraje'],
-    queryFn: fetchRentMapKraje,
-    enabled: mapVisible && overlay.showRentMap,
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
+  /* The reference-overlay registry (metro, flood zones, kraje, the rent map,
+   * …): tiny, and the same cache entry the listing-detail and comparables maps
+   * read. */
+  const overlayRegistryQuery = useMapOverlayRegistry(mapVisible);
+  /* Only worth a toast when layers are selected: they would silently not draw. */
+  const overlayRegistryFailed = overlayRegistryQuery.isError && overlay.layers !== '';
+  useEffect(() => {
+    if (overlayRegistryFailed) {
+      pushToast('err', 'Referenční vrstvy mapy se nepodařilo načíst — zůstanou skryté.');
+    }
+  }, [overlayRegistryFailed]);
 
   const psDatasetsQuery = useQuery({
     queryKey: priceStatsKeys.datasets,
@@ -892,8 +887,7 @@ export default function BrowseExperience({
                 <Suspense fallback={<MapSkeleton />}>
                   <ListingMap
                     rows={mapQuery.data?.rows ?? []}
-                    cells={mapQuery.data?.cells ?? null}
-                    offGrid={mapQuery.data?.offGrid ?? 0}
+                    counts={mapQuery.data?.counts ?? null}
                     total={mapQuery.data?.total ?? null}
                     cohortTotal={cohortTotal}
                     cohortTotalApprox={cohortTotalApprox}
@@ -921,14 +915,9 @@ export default function BrowseExperience({
                     cityIndexValuesAll={cityOverlay.cityIndexValuesAll}
                     cityIndexDefinitions={cityDefsQuery.data ?? []}
                     onColorByIndexChange={(name) => view.setOverlay({ colorByIndexName: name })}
-                    rentMapPolygons={rentMapQuery.data ?? []}
-                    rentMapKraje={rentKrajeQuery.data ?? []}
-                    showRentMap={overlay.showRentMap}
-                    rentVk={overlay.rentVk}
-                    showKraje={overlay.showKraje}
-                    onToggleShowRentMap={(next) => view.setOverlay({ showRentMap: next })}
-                    onRentVkChange={(vk) => view.setOverlay({ rentVk: vk })}
-                    onToggleShowKraje={(next) => view.setOverlay({ showKraje: next })}
+                    overlayRegistry={overlayRegistryQuery.data}
+                    overlayLayers={overlay.layers}
+                    onOverlayLayersChange={(layers) => view.setOverlay({ layers })}
                     growthRows={psGrowthQuery.data ?? []}
                     growthShapes={psShapesQuery.data ?? []}
                     growthDatasets={psDatasetsQuery.data ?? []}

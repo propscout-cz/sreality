@@ -7,10 +7,6 @@ const NBSP = ' ';
 const THIN_SPACE = ' ';
 
 const czNumber = new Intl.NumberFormat('cs-CZ');
-const czNumberCompact = new Intl.NumberFormat('cs-CZ', {
-  notation: 'compact',
-  maximumFractionDigits: 1,
-});
 
 const czShortDate = new Intl.DateTimeFormat('cs-CZ', {
   day: 'numeric',
@@ -39,9 +35,6 @@ export const fmtTomDays = (n: number | null | undefined): string => {
 
 export const fmtCount = (n: number | null | undefined): string =>
   n == null ? '—' : czNumber.format(n);
-
-export const fmtCountCompact = (n: number | null | undefined): string =>
-  n == null ? '—' : czNumberCompact.format(n);
 
 export const fmtCzk = (n: number | null | undefined): string =>
   n == null ? '—' : `${czNumber.format(n)}${NBSP}Kč`;

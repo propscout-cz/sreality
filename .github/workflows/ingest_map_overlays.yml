@@ -1,0 +1,72 @@
+name: "Data: ingest map overlays"
+
+# Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán,
+# the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries, the
+# MF rent map from rent_map_values × admin_boundaries) into map_overlay_* and renders each
+# section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand
+# after a publisher revises its data.
+#
+# Every layer is fetched under completeness guards and a shrink guard (a layer below
+# 90 % of its previous feature count is refused unless accept_shrink is set); a refused
+# section keeps its previous data. dry_run fetches and checks everything, writes nothing.
+# The kraje section is also re-rendered by the last step of ingest_boundaries.yml, and
+# rent_map by every rent-map ingest (api/rent_map.py) and fetch_rent_map.yml's last step.
+#
+# Required GitHub secret:
+#   SUPABASE_DB_URL  -- same one used by every other workflow.
+
+on:
+  schedule:
+    - cron: "0 4 2 1,4,7,10 *"
+  workflow_dispatch:
+    inputs:
+      sections:
+        description: "Sections to ingest (comma-separated: metro,flood,kraje,rent_map). Empty = all."
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Fetch and check every layer; write nothing."
+        required: false
+        type: boolean
+        default: false
+      accept_shrink:
+        description: "Accept a layer that came back below 90 % of its previous feature count."
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ingest-map-overlays
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Ingest map overlays
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SECTIONS: ${{ inputs.sections }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          ACCEPT_SHRINK: ${{ inputs.accept_shrink }}
+        run: |
+          ARGS=()
+          if [ -n "$SECTIONS" ]; then ARGS+=(--sections "$SECTIONS"); fi
+          if [ "$DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          if [ "$ACCEPT_SHRINK" = "true" ]; then ARGS+=(--accept-shrink); fi
+          python -m scripts.ingest_map_overlays "${ARGS[@]}"

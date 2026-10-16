@@ -160,6 +160,8 @@ jobs:
       # gone page is stamped 410, and only a real schema can answer that. The registry
       # publish check joins for the same reason: carry-forward equality and the
       # completeness read are PostGIS and anti-join answers, not SQL shapes; so W3's readings half.
+      # test_map_overlays_live joins because migration 600's tile renderer is plpgsql: its
+      # PostGIS calls resolve only when it runs, and only real tiles show the layers it writes.
       - name: PREPARE every SQL statement against the replayed schema
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -168,6 +170,7 @@ jobs:
                  tests/location_data/test_location_w10_gone_bodies_live.py \
                  tests/location_data/test_readings_half_live.py \
                  tests/location_data/test_registry_publish_live.py \
+                 tests/test_map_overlays_live.py \
                  tests/toolkit/test_dedup_candidates_sql.py -q
 
       - name: Tenant-isolation sweep (RLS cross-tenant denial, Phase 1)
@@ -222,22 +225,22 @@ jobs:
           pytest tests/test_broker_leaderboard_plan_shape.py \
                  tests/test_broker_leaderboard_live.py -q
 
-      # W6b's map RPC makes two claims a real schema is the only thing that can check.
+      # The map RPC makes two claims a real schema is the only thing that can check.
       #
-      # PLAN: the grid aggregate reads properties_map_mv INDEX-ONLY (1,627 blocks for the
-      # whole default cohort, against 3,938 to ship half of it). That rests entirely on
-      # every aggregated column being inside properties_map_mv_cover — adding obec_id,
-      # property_id or source turns it into an Index Scan over a 433 MB matview and
-      # changes no result anywhere, so nothing else goes red. The rail reads the target
-      # list OUT of the shipped function and EXPLAINs it.
+      # PLAN: the tile aggregate reads properties_map_mv INDEX-ONLY (2,332 blocks for the
+      # whole default cohort, 2026-10-15). That rests entirely on every aggregated column
+      # being inside properties_map_mv_cover — adding obec_id, property_id or source turns
+      # it into an Index Scan over a 433 MB matview and changes no result anywhere, so
+      # nothing else goes red. The rail reads the target list OUT of the shipped function.
       #
-      # BEHAVIOUR: the cell count is bounded BY CONSTRUCTION (there is no LIMIT in the
-      # function — a LIMIT is what W6b exists to remove), and every mappable row is
-      # counted exactly once, in a cell or in off_grid. Deleting the edge clamp or the
-      # extent guard leaves every count correct and only unbounds the payload. The
+      # BEHAVIOUR: the cell count is bounded BY CONSTRUCTION (migration 602: the finest
+      # world-tile level with at most 1,024 occupied tiles; there is no LIMIT in the
+      # function), every mappable row is counted exactly once in one tile, the tile
+      # centres are the ones tests/fixtures/map_tile_lattice.json pins (the SPA's formula),
+      # interior tiles are stable under a pan and children sum to their parent. The
       # behavioural rail parks the matview and substitutes a real table -- you cannot
       # INSERT into a materialized view, and CI's replayed copy is empty.
-      - name: The map grid stays index-only and bounded (migration 439)
+      - name: The map tiles stay index-only and bounded (migration 602)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"

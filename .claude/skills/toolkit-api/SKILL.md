@@ -119,7 +119,7 @@ it (`api/`). They do not apply to the scraper.
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   the manual-estimate read, estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   the manual-estimate read, estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for

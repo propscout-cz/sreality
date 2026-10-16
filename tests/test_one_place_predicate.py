@@ -95,8 +95,13 @@ _W3_S3 = "504_location_w3_one_code_predicate.sql"
 # which became one portal_status_matches() call (MS19); 597 carries 590's forward
 # verbatim except the dead parameters' arms and the two exclusion arguments of
 # that call; 598 carries 597's forward verbatim plus one property-id denylist
-# conjunct after the allowlist arm. Re-read the chip arms when this moves again.
-_LATEST_RPC_DEFINITION = "598_property_ids_excluded.sql"
+# conjunct after the allowlist arm; 602 restates the MAP RPC's aggregate (world
+# tiles) with 598's signature and predicate byte for byte. Re-read the chip arms
+# when this moves again.
+_LATEST_RPC_DEFINITION = {
+    "browse_stats_properties": "598_property_ids_excluded.sql",
+    "browse_map_cells": "602_browse_map_cells_world_tiles.sql",
+}
 
 
 def _function_body(func: str) -> str:
@@ -164,7 +169,7 @@ def test_the_rpc_bodies_compile_the_same_level_map(func: str) -> None:
     """RED by: an RPC arm pointed at a different column than the API/SPA use, or
     a level served in one RPC and not the other — the Stats tab and the map
     would then answer for different cohorts under the same chips."""
-    assert latest_definition(func).name == _LATEST_RPC_DEFINITION
+    assert latest_definition(func).name == _LATEST_RPC_DEFINITION[func]
     for arms in _chip_case_arms(func):
         # `locality` is compiled, not stored: a street pick filters at its obec.
         assert arms == {**LEVEL_COLUMN, "locality": LEVEL_COLUMN["obec"]}

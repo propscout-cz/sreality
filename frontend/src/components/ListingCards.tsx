@@ -191,7 +191,7 @@ export default function ListingCards({
 
   /* Map-origin hover: dim the rest of the grid only when the map is
    * pointing at something actually on this page — otherwise a far-off
-   * cluster hover would grey the whole grid with nothing lit. */
+   * count-mark hover would grey the whole grid with nothing lit. */
   const hoveredOnPage =
     hoverOrigin === 'map' && rows != null
       ? rows.filter((r) => hoveredIds.has(r.listing_id))

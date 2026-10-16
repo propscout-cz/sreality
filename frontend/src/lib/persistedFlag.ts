@@ -24,8 +24,24 @@ export function readFlag(key: string, fallback: boolean): boolean {
 }
 
 function writeFlag(key: string, value: boolean): void {
+  writeValue(key, value ? '1' : '0');
+}
+
+/* The same guard for a free-form string preference (the map's remembered
+ * overlay selection): `fallback` when unset or unreadable. */
+export function readValue(key: string, fallback: string): string {
   try {
-    localStorage.setItem(key, value ? '1' : '0');
+    const raw = localStorage.getItem(key);
+    if (raw != null) return raw;
+  } catch {
+    /* localStorage may be unavailable (SSR, private mode lockdown) — fall through */
+  }
+  return fallback;
+}
+
+export function writeValue(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
   } catch {
     /* ignore */
   }
@@ -69,13 +85,8 @@ export function readChoice<T extends string>(
   allowed: readonly T[],
   fallback: T,
 ): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw != null && (allowed as readonly string[]).includes(raw)) return raw as T;
-  } catch {
-    /* localStorage may be unavailable (SSR, private mode lockdown) — fall through */
-  }
-  return fallback;
+  const raw = readValue(key, fallback);
+  return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
 }
 
 export interface PersistedChoice<T extends string> {
@@ -92,11 +103,7 @@ export function usePersistedChoice<T extends string>(
   const set = useCallback(
     (v: T) => {
       setValue(v);
-      try {
-        localStorage.setItem(key, v);
-      } catch {
-        /* ignore */
-      }
+      writeValue(key, v);
     },
     [key],
   );

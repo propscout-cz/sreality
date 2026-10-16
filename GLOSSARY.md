@@ -170,6 +170,19 @@ _Avoid_: connector, extension, integration
 The platform's web app installed on a phone's home screen: the same app in a phone-sized shell.
 _Avoid_: PWA (in prose), mobile app, native app, companion app
 
+**Reference overlay**:
+A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF
+rent map — that a user switches on or off; it changes what the map shows around properties, never
+which properties.
+_Avoid_: data layer, overlay data, map data, GIS layer
+
+**Count mark**:
+The number a map shows for one world tile holding two or more matching properties (or any tile the
+server counted): exactly that many, in a pill at the tile's centre. A tile holding one known property
+shows its pin instead. One tile holds one mark; the marks and the lone pins on a map together add up
+to the mapped total.
+_Avoid_: cluster, bubble, cell, bin, group
+
 ### A property's working files
 
 **Workbook**:

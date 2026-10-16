@@ -4,8 +4,11 @@ import { createMap } from '@/lib/basemap';
 import { fmtArea, fmtCzk } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
 import { imageSrc, type ImageRef } from '@/lib/imageUrl';
+import { useMapOverlays } from '@/lib/mapOverlayDraw';
+import { useMapOverlayRegistry, useRememberedLayers } from '@/lib/mapOverlays';
 import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import MapImagePreview from '../MapImagePreview';
+import MapOverlayControls from '../MapOverlayControls';
 
 export interface ComparablePoint {
   /* Marker identity — the comparable's surrogate listing_id (preferred) or
@@ -70,6 +73,8 @@ export default function ComparablesMap({
    * appears for a map-origin hover, never when a table row is hovered. */
   const [pinHover, setPinHover] = useState<ComparablePoint | null>(null);
   const [previewPos, setPreviewPos] = useState<{ x: number; y: number } | null>(null);
+  const overlayRegistry = useMapOverlayRegistry().data;
+  const [overlayLayers, setOverlayLayers] = useRememberedLayers();
 
   useEffect(() => {
     onPickRef.current = onPick;
@@ -228,10 +233,14 @@ export default function ComparablesMap({
 
     return () => {
       clearCloseTimer();
+      /* `ready` means THIS map has loaded; a replacement map must earn it again. */
+      setReady(false);
       map.remove();
       mapRef.current = null;
     };
   }, [subject.lat, subject.lng, clearCloseTimer, scheduleClose]);
+
+  useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, 'comparables-point');
 
   useEffect(() => {
     if (!ready || !mapRef.current) return;
@@ -322,6 +331,14 @@ export default function ComparablesMap({
         className="absolute inset-0"
         style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
       />
+      <div className="pointer-events-none absolute top-2 left-2 right-12">
+        <MapOverlayControls
+          compact
+          registry={overlayRegistry}
+          selection={overlayLayers}
+          onChange={setOverlayLayers}
+        />
+      </div>
       {pinHover && cardStyle && (
         <div className="absolute z-30" style={cardStyle}>
           <MapImagePreview

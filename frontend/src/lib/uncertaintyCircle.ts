@@ -20,8 +20,8 @@
  * Granularity is compared by RANK and never by enum text or enum ordinality
  * (migration 380's `location_granularity_rank` is the only legal comparator);
  * the projection publishes the rank as an int precisely so this file can hold a
- * number. Clusters and server-side grid cells carry no per-pin identity or
- * radius, so none of this applies above the point budget. */
+ * number. A count mark (lib/mapCounts) carries no per-pin identity or radius, so
+ * none of this applies to a tile drawn as a count. */
 
 /* location_granularity_rank: building = 90, address_point = 100. Everything
  * below (street 60, cast_obce 50, obec 40, okres 30 …) is a
