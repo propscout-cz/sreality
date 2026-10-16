@@ -1704,7 +1704,13 @@ renumber.** Navigate by area:
     go through the apply path below (`apply.plan_groups` / `apply.apply_group`, the same
     refusals, the same chokepoint, `source='autodedup'`, ledger rows `generation='rt'`,
     `run_id='rt:<holder>'`), only inside `autodedup_apply_scope` and never as a split — a
-    grouping the stream no longer supports is a proposal. It reconciles only a generation a
+    grouping the stream no longer supports is a proposal. A pass reads an advert it does not
+    claim as its row stored it (E960), so a merge is applied only when every advert it moves was
+    refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
+    engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
+    pass re-claims waiting groups whole, oldest first, 100 adverts on its first attempt, each
+    group at most once in 6 h, and none while the apply scope is closed or the reject ledger is
+    inert. It reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) whose build
     phase ended, and review pages default to `rt` under the same condition (else the newest batch
     pass). The brake is the interval (0), then `mode=unapply` — a live apply or unapply refuses
