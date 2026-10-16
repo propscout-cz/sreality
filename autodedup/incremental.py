@@ -44,10 +44,11 @@ import bisect
 import hashlib
 import json
 import math
+import os
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Container, Iterable, Mapping, Protocol, Sequence
 
 from autodedup.blocking import BlockIndex
 from autodedup.cluster import cluster_pairs, cluster_rows
@@ -715,6 +716,11 @@ class Limits:
     # read costs anyway; 150k scored is ~480 s beside ~450 s of fixed cost, inside 1,050 s.
     max_pairs: int = 150_000
     max_component: int = 400
+    # E950: the decided pairs are scored this many at a time, each chunk's rows written before
+    # the next, so the rows a pass holds follow the chunk and not `max_pairs`. A side's CLIP
+    # vectors and feature context are held from its first decided pair to its last, which in a
+    # dense pass is most sides. A scheduling bound as well: the rows are the same.
+    score_chunk: int = 5_000
 
 
 @dataclass(slots=True)
@@ -731,6 +737,11 @@ class PassResult:
     ledger_skipped: int = 0
     pairs_to_decide: int = 0
     ledger_written: int = 0
+    # E950: the process's resident memory (MiB) as each scoring chunk was written, before it gave
+    # its vectors and features back: one reading a chunk, so their number is the chunks'. Beside
+    # it, the listings holding their CLIP vectors at that moment: the share no chunk bounds.
+    chunk_rss_mb: list[float | None] = field(default_factory=list)
+    chunk_vectored: list[int] = field(default_factory=list)
     components: int = 0
     clusters_written: int = 0
     clusters_dropped: int = 0
@@ -778,6 +789,7 @@ class PassResult:
                 "ledger_skipped": self.ledger_skipped,
                 "pairs_to_decide": self.pairs_to_decide,
                 "ledger_written": self.ledger_written,
+                "chunks": len(self.chunk_rss_mb),
                 "components": self.components,
                 "clusters_written": self.clusters_written,
                 "clusters_dropped": self.clusters_dropped,
@@ -798,6 +810,8 @@ class PassResult:
             "rail": dict(self.rail),
             "latency_s": _latency(self.latency_s),
             "timings": {k: round(v, 4) for k, v in self.timings.items()},
+            "chunk_rss_mb": list(self.chunk_rss_mb),
+            "chunk_vectored": list(self.chunk_vectored),
             # D19: no LLM judge has merge authority on the band, and this lane runs none.
             "spent_usd": self.spent_usd,
             "oversized_components": self.oversized_components,
@@ -827,6 +841,16 @@ def _now() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def rss_mb(statm: str = "/proc/self/statm") -> float | None:
+    """The process's resident memory now in MiB: resident pages x the page size (E948)."""
+    try:
+        with open(statm, encoding="ascii") as handle:
+            pages = int(handle.read().split()[1])
+        return round(pages * os.sysconf("SC_PAGE_SIZE") / 1_048_576.0, 1)
+    except Exception:  # noqa: BLE001 — observability only: None, never a failed pass
+        return None
 
 
 def fp_digest(fp: Fingerprint, images: Sequence[Image]) -> str:
@@ -942,6 +966,16 @@ class _Working:
                 if image.image_id in vectors else image
                 for image in self.images.get(listing_id, ())]
             self.vectored.add(listing_id)
+
+    def release(self, ids: Iterable[int]) -> None:
+        """Give back these listings' CLIP vectors, decoded ones included (E950): their galleries
+        as the bare read holds them, so a later `ensure(clip=True)` reads the vectors again."""
+        for listing_id in ids:
+            if listing_id in self.vectored:
+                self.vectored.discard(listing_id)
+                self.images[listing_id] = [
+                    replace(image, clip=None) if image.clip is not None else image
+                    for image in self.images.get(listing_id, ())]
 
 
 class _Overlay:
@@ -1370,18 +1404,29 @@ def run_pass(
         store.delete_pairs(dropped)
         result.pairs_deleted = len(dropped)
 
-    working.ensure({i for pair in decide for i in pair}, clip=True)
+    # Bare: the decided sides' CLIP vectors are read a chunk at a time (E950), below.
+    working.ensure({i for pair in decide for i in pair})
     ctx = context_for(calibration, settings, working.fps, working.listings)
     census = _census(store, working.listings, working.images)
     # E93's two inputs, batched for the whole pass: what each endpoint's photographs ARE right
     # now (off the facts this pass read) and when this generation first decided it.
     decided_at = ({i: row.first_decided_at for i, row in view.rows(sorted(endpoints)).items()}
                   if hold is not None else {})
+    # E950: the decided pairs are scored `score_chunk` at a time, in key order. A chunk's sides
+    # read their CLIP vectors as it opens; as it closes its rows are written and every side no
+    # later chunk decides gives its vectors and its feature context back (in a dense pass most
+    # sides are decided again by a later chunk). Every pair is decided on the facts the unchunked
+    # pass decided it on, so only WHEN a row reaches the store moves.
+    ordered = sorted(wanted)
+    opens, closes = _score_chunks(ordered, decide, working.fps, max(1, caps.score_chunk))
     rows: list[PairRow] = []
+    moved: set[int] = set()
     result.redecided = len(redecide)
-    for index, (lo, hi) in enumerate(sorted(wanted)):
+    for index, (lo, hi) in enumerate(ordered):
         if index % 256 == 255:
             _in_time(deadline, stopping)
+        if index in opens:
+            working.ensure(opens[index], clip=True)
         entry = wanted[(lo, hi)]
         if lo not in working.fps or hi not in working.fps:
             continue
@@ -1401,6 +1446,11 @@ def run_pass(
             continue
         fa, fb = working.fps[lo], working.fps[hi]
         la, lb = working.listings[lo], working.listings[hi]
+        if lo not in working.vectored or hi not in working.vectored:
+            # E950: a side given back too early would score with no CLIP gallery, no tfidf and
+            # no vectors in its evidence, which E93's hold covers only while the side is young.
+            raise RuntimeError(f"pair ({lo}, {hi}) reached scoring without its sides' CLIP "
+                               "vectors (E950)")
         feats: Feats = pair_features(fa, fb, la, lb, working.images.get(lo, ()),
                                      working.images.get(hi, ()), ctx, settings)
         decision = decide_pair(fa, fb, la, lb, feats, entry["probes"], model, settings, census)
@@ -1442,8 +1492,13 @@ def run_pass(
             slots={name: feats[name] for name in FEATURE_SLOTS if name in feats},
             dd_lo=dds[lo], dd_hi=dds[hi],
         ))
-    result.ledger_written = store.upsert_pairs(rows)
-    result.pairs_written = len(rows)
+        if index in closes:
+            moved |= _write_rows(store, rows, stored, result)
+            result.chunk_rss_mb.append(rss_mb())
+            result.chunk_vectored.append(len(working.vectored))
+            working.release(closes[index])
+            ctx.forget(closes[index])
+    moved |= _write_rows(store, rows, stored, result)
     result.timings["score_s"] = time.perf_counter() - clock
 
     # --- 6. E72: re-cluster the touched components ----------------------------------------
@@ -1451,12 +1506,7 @@ def run_pass(
     # that scores a thousand rejects re-clusters nothing. A pair that merely changed its
     # probes or its band score leaves the component's edge set alone.
     clock = time.perf_counter()
-    seeds: set[int] = set()
-    for row in rows:
-        previous = stored.get((row.lo, row.hi))
-        was = previous.zone if previous is not None else None
-        if row.zone == "merge" or was == "merge" or row.veto == UNIT_DESIGNATOR_VETO:
-            seeds |= {row.lo, row.hi}
+    seeds: set[int] = set(moved)
     for key in dropped:
         previous = stored.get(key)
         if previous is not None and previous.zone == "merge":
@@ -1488,6 +1538,50 @@ def run_pass(
         value for key, value in result.timings.items() if key.endswith("_s")
     )
     return result
+
+
+def _score_chunks(ordered: Sequence[tuple[int, int]], decide: set[tuple[int, int]],
+                  known: Container[int], size: int
+                  ) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
+    """E950: the scoring chunks of `ordered`, each at most `size` of the pairs a pass scores (the
+    decided ones whose sides it holds). `opens` maps the index of a chunk's first such pair to
+    the sides they read, `closes` the index of its last to the sides no later chunk reads,
+    which it gives back once written."""
+    opens: dict[int, set[int]] = {}
+    ends: list[int] = []
+    last: dict[int, int] = {}
+    sides: set[int] = set()
+    taken = 0
+    for index, pair in enumerate(ordered):
+        if pair not in decide or pair[0] not in known or pair[1] not in known:
+            continue
+        if taken % size == 0:
+            sides = opens[index] = set()
+            ends.append(index)
+        taken += 1
+        sides.update(pair)
+        ends[-1] = index
+        last[pair[0]] = last[pair[1]] = len(ends) - 1
+    closes: dict[int, set[int]] = {index: set() for index in ends}
+    for side, chunk in last.items():
+        closes[ends[chunk]].add(side)
+    return opens, closes
+
+
+def _write_rows(store: Store, rows: list[PairRow], stored: Mapping[tuple[int, int], PairRow],
+                result: PassResult) -> set[int]:
+    """Write one chunk's rows and empty the list (E950); return the listings whose merge edges or
+    vetoes they moved, which step 6 re-clusters from."""
+    result.ledger_written += store.upsert_pairs(rows)
+    result.pairs_written += len(rows)
+    moved: set[int] = set()
+    for row in rows:
+        previous = stored.get((row.lo, row.hi))
+        was = previous.zone if previous is not None else None
+        if row.zone == "merge" or was == "merge" or row.veto == UNIT_DESIGNATOR_VETO:
+            moved |= {row.lo, row.hi}
+    rows.clear()
+    return moved
 
 
 def run_pass_bounded(

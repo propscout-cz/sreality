@@ -129,6 +129,7 @@ def _stub_engine(monkeypatch: pytest.MonkeyPatch, result: Any) -> dict[str, Any]
 def _summary(**over: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "counts": {"claimed": 12, "pairs_scored": 40, "clusters_written": 3, "held": 1,
+                   "chunks": 2,
                    "retired": 0, "wanted_pairs": 52, "attempts": 1, "wanted_by_attempt": [52],
                    "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
                    "ledger_skipped": 31, "ledger_written": 6},
@@ -138,6 +139,8 @@ def _summary(**over: Any) -> dict[str, Any]:
         "reconcile": {"counts": {"applied": 2}},
         "peak_rss_mb": 412.5,
         "rss_mb": 388.0,
+        "chunk_rss_mb": [395.0, 401.5],
+        "chunk_vectored": [61, 58],
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "claim_cap": {"cap": 500, "reason": "rt_seed", "limit_mb": 8192.0},
         "predecessor_released": None,
@@ -302,6 +305,9 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # memory was handed back, before the pass began and as it ended
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "rss_at_start_mb": 290.0, "rss_after_trim_mb": 301.5,
+        # E950: the chunks the decided pairs were scored in, the RSS as each was written and the
+        # listings then holding their CLIP vectors
+        "chunks": 2, "chunk_rss_mb": [395.0, 401.5], "chunk_vectored": [61, 58],
         # E952: the claims the pass made, each one's wanted pair set and the last's, no refusal
         "attempts": 1, "wanted_pairs": 52, "wanted_by_attempt": [52], "aborted": None,
         # E943: what the budget counted (the last claim's and each claim's), the wanted pairs

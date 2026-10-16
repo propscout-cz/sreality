@@ -2263,6 +2263,13 @@ def _autodedup_outcome(
             # E949: what the engine's body and token memos held at the pass's end, before it
             # emptied them.
             memo_entries=summary.get("memo_entries"),
+            # E950: the chunks the pass scored its decided pairs in, the process's resident
+            # memory as each was written, before it gave its vectors and features back, and the
+            # listings then holding their CLIP vectors (held from a side's first decided pair to
+            # its last: the share no chunk bounds).
+            chunks=counts.get("chunks"),
+            chunk_rss_mb=summary.get("chunk_rss_mb"),
+            chunk_vectored=summary.get("chunk_vectored"),
             # E952: the claims the pass made (each the pair budget refused re-claims a quarter
             # of the claim made, E75), each one's wanted pair set and the last's, and why the
             # pass stopped (None: committed).
