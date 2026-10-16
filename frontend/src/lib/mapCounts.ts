@@ -1,35 +1,25 @@
 import { useEffect, useState } from 'react';
 import type maplibregl from 'maplibre-gl';
 import type { MapBounds } from '@/lib/filters';
-import type { MapCounts, MapRow } from '@/lib/queries';
+import type { MapCell, MapCounts, MapRow } from '@/lib/queries';
 
-/* ONE count rule for the Browse map (docs/design/map-counts.md). A count belongs to a
- * world tile (level L cuts the world into 2^L x 2^L squares; MapLibre's world is 512 px
- * wide at zoom 0, so a level-L tile is 512 * 2^(zoom - L) px). The same formula groups a
- * point cohort in the browser and the server's cells (migration 602, tile centres at the
- * finest level that fits 1 024 tiles); tests/fixtures/map_tile_lattice.json pins both. */
+/* ONE count rule for the Browse map (docs/design/map-counts.md). Up to the pin limit
+ * (MapOverlayState.pinLimit, the server's point budget) every property in view is its
+ * own pin at any zoom; above it the server answers in WORLD TILES (level L cuts the
+ * world into 2^L x 2^L squares; MapLibre's world is 512 px wide at zoom 0, so a
+ * level-L tile is 512 * 2^(zoom - L) px) at the finest level that fits 1 024 tiles,
+ * and the map regroups them at its own level with the same formula.
+ * tests/fixtures/map_tile_lattice.json pins the formula for SQL and TypeScript alike. */
 
 const MAX_LAT = 85.05112878;
 
-/* At this zoom and above every property of a point cohort is its own pin (with its price
- * label); below it, tiles holding two or more share one count mark. */
-export const PIN_ZOOM = 14;
 /* The source and layer id of the count marks. */
 export const COUNTS = 'counts';
 /* The data ink: the count pill's fill and the price labels' text. */
 export const COUNT_INK = '#2f5750';
 
-export interface CountRule {
-  /* The tile level marks are grouped at: round(zoom) + 2, a 90 to 181 px pitch. */
-  level: number;
-  /* Whether a point cohort is drawn pin by pin (zoom >= PIN_ZOOM). */
-  pins: boolean;
-}
-
-export const countRule = (zoom: number): CountRule => ({
-  level: Math.round(zoom) + 2,
-  pins: zoom >= PIN_ZOOM,
-});
+/* The tile level marks are grouped at: round(zoom) + 2, a 90 to 181 px pitch. */
+export const countLevel = (zoom: number): number => Math.round(zoom) + 2;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 const round5 = (v: number): number => Math.round(v * 1e5) / 1e5;
@@ -78,76 +68,40 @@ const markPosition = (t: Tile, level: number, view: MapBounds | null): [number, 
  * reaches, times 32 levels), so a stale feature from another level never resolves. */
 const tileKey = (t: Tile, level: number): number => (t.x * 2 ** level + t.y) * 32 + level;
 
-interface CountInput {
-  lng: number;
-  lat: number;
-  /* Properties this input stands for: 1 for a point, the cell's count for a cell. */
-  n: number;
-  /* The property's id when the input IS one property; absent for a cell. */
-  id?: number;
-}
-
 export interface CountMark {
   key: number;
   lng: number;
   lat: number;
   n: number;
-  /* Member property ids, known only when the inputs were points. */
-  ids: number[];
 }
 
-/* The one rule: a tile holding exactly one known property shows that property (`lone`);
- * any other tile shows its count. Totals are conserved (marks' n + lone == inputs' n) and
- * tiles nest, so regrouping a result at a coarser level equals grouping the inputs there. */
-export function groupByTile<T extends CountInput>(
-  inputs: readonly T[],
-  level: number,
-  view: MapBounds | null = null,
-): { marks: CountMark[]; lone: T[] } {
-  const byKey = new Map<number, { tile: Tile; n: number; ids: number[]; members: T[] }>();
-  for (const p of inputs) {
-    const tile = tileOf(p.lng, p.lat, level);
+/* Regroups the server's cells at `level`: counts sum, tiles nest, so regrouping a result
+ * at a coarser level equals grouping the cells there, and the total is conserved. */
+export function groupByTile(cells: readonly MapCell[], level: number, view: MapBounds | null = null): CountMark[] {
+  const byKey = new Map<number, { tile: Tile; n: number }>();
+  for (const c of cells) {
+    const tile = tileOf(c.lng, c.lat, level);
     const key = tileKey(tile, level);
-    let g = byKey.get(key);
-    if (!g) {
-      g = { tile, n: 0, ids: [], members: [] };
-      byKey.set(key, g);
-    }
-    g.n += p.n;
-    if (p.id != null) g.ids.push(p.id);
-    g.members.push(p);
+    const g = byKey.get(key);
+    if (g) g.n += c.n;
+    else byKey.set(key, { tile, n: c.n });
   }
-  const marks: CountMark[] = [];
-  const lone: T[] = [];
-  for (const [key, g] of byKey) {
-    if (g.n === 1 && g.members.length === 1 && g.members[0].id != null) {
-      lone.push(g.members[0]);
-      continue;
-    }
+  return [...byKey].map(([key, g]) => {
     const [lng, lat] = markPosition(g.tile, level, view);
-    marks.push({ key, lng, lat, n: g.n, ids: g.ids });
-  }
-  return { marks, lone };
+    return { key, lng, lat, n: g.n };
+  });
 }
 
-/* What the map draws: a point cohort is pins from PIN_ZOOM and grouped below it; the
- * server's cells are regrouped at the coarser of their level and the map's. */
+/* What the map draws: points are pins, every one of them; the server's cells (above the
+ * pin limit) are counts, never regrouped finer than the level they were counted at. */
 export function marksFor(
   rows: readonly MapRow[],
   counts: MapCounts | null,
-  rule: CountRule,
+  level: number,
   view: MapBounds | null,
 ): { pins: MapRow[]; marks: CountMark[] } {
-  if (counts) {
-    return { pins: [], marks: groupByTile(counts.cells, Math.min(rule.level, counts.level), view).marks };
-  }
-  if (rule.pins) return { pins: [...rows], marks: [] };
-  const grouped = groupByTile(
-    rows.map((row) => ({ lng: row.lng, lat: row.lat, n: 1, id: row.listing_id, row })),
-    rule.level,
-    view,
-  );
-  return { pins: grouped.lone.map((p) => p.row), marks: grouped.marks };
+  if (counts) return { pins: [], marks: groupByTile(counts.cells, Math.min(level, counts.level), view) };
+  return { pins: [...rows], marks: [] };
 }
 
 /* The extent the map fits to on its first result: the marks that hold 99 % of the count,
@@ -183,23 +137,20 @@ export const toCountFeatureCollection = (
   })),
 });
 
-/* The rule for the map's current zoom, re-evaluated on every 'zoom' event (not only
- * zoomend) so marks regroup mid-gesture; the state changes only when the answer does. */
-export function useCountRule(map: maplibregl.Map | null, ready: boolean): CountRule | null {
-  const [rule, setRule] = useState<CountRule | null>(null);
+/* The map's count level, re-evaluated on every 'zoom' event (not only zoomend) so marks
+ * regroup mid-gesture; the state changes only when the level does. Null until ready. */
+export function useCountLevel(map: maplibregl.Map | null, ready: boolean): number | null {
+  const [level, setLevel] = useState<number | null>(null);
   useEffect(() => {
     if (!ready || !map) return;
-    const sync = () => {
-      const next = countRule(map.getZoom());
-      setRule((prev) => (prev && prev.level === next.level && prev.pins === next.pins ? prev : next));
-    };
+    const sync = () => setLevel(countLevel(map.getZoom()));
     sync();
     map.on('zoom', sync);
     return () => {
       map.off('zoom', sync);
     };
   }, [map, ready]);
-  return rule;
+  return level;
 }
 
 /* The mark: the count inside a dark pill, ONE symbol so the number and its background are

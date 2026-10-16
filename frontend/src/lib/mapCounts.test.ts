@@ -11,9 +11,8 @@ import type { MapRow } from './queries';
 import {
   COUNTS,
   PILL_PADDING,
-  PIN_ZOOM,
   countLayer,
-  countRule,
+  countLevel,
   fitExtent,
   groupByTile,
   marksFor,
@@ -21,7 +20,7 @@ import {
   tileCentre,
   tileOf,
   toCountFeatureCollection,
-  useCountRule,
+  useCountLevel,
 } from './mapCounts';
 
 interface LatticeCase { name: string; lng: number; lat: number; level: number; x: number; y: number }
@@ -53,21 +52,17 @@ describe('tileCentre', () => {
   });
 });
 
-describe('countRule', () => {
+describe('countLevel', () => {
   it('groups at round(zoom) + 2, a 90 to 181 px pitch on MapLibre\'s 512 px world', () => {
-    expect(countRule(12).level).toBe(14);
-    expect(countRule(12.49).level).toBe(14);
-    expect(countRule(12.5).level).toBe(15);
-    expect(countRule(12.9).level).toBe(15);
+    expect(countLevel(12)).toBe(14);
+    expect(countLevel(12.49)).toBe(14);
+    expect(countLevel(12.5)).toBe(15);
+    expect(countLevel(12.9)).toBe(15);
     for (const zoom of [12, 12.49, 12.5, 12.9]) {
-      const pitchPx = 512 * 2 ** (zoom - countRule(zoom).level);
+      const pitchPx = 512 * 2 ** (zoom - countLevel(zoom));
       expect(pitchPx).toBeGreaterThanOrEqual(90);
       expect(pitchPx).toBeLessThan(181.1);
     }
-  });
-  it('draws a point cohort pin by pin from PIN_ZOOM', () => {
-    expect(countRule(PIN_ZOOM - 0.01).pins).toBe(false);
-    expect(countRule(PIN_ZOOM).pins).toBe(true);
   });
 });
 
@@ -77,52 +72,42 @@ const row = (id: number, p: { lng: number; lat: number }): MapRow =>
   ({ listing_id: id, lng: p.lng, lat: p.lat } as unknown as MapRow);
 
 describe('groupByTile', () => {
-  const points = [
-    { ...PRAHA, n: 1, id: 1 },
-    { lng: PRAHA.lng + 0.0001, lat: PRAHA.lat, n: 1, id: 2 },
-    { ...BRNO, n: 1, id: 3 },
+  const cells = [
+    { ...PRAHA, n: 3 },
+    { lng: PRAHA.lng + 0.0001, lat: PRAHA.lat, n: 4 },
+    { ...BRNO, n: 1 },
   ];
 
-  it('a tile holding one known property is that pin; two or more are a count at the tile centre', () => {
-    const g = groupByTile(points, 12);
-    expect(g.lone.map((p) => p.id)).toEqual([3]);
-    expect(g.marks).toHaveLength(1);
-    const [mark] = g.marks;
-    expect(mark.n).toBe(2);
-    expect(mark.ids).toEqual([1, 2]);
+  it('one mark per tile at the tile centre, counts summed', () => {
+    const marks = groupByTile(cells, 12);
+    expect(marks.map((m) => m.n).sort()).toEqual([1, 7]);
     const tile = tileOf(PRAHA.lng, PRAHA.lat, 12);
-    expect([mark.lng, mark.lat]).toEqual(tileCentre(tile.x, tile.y, 12));
-  });
-
-  it('a cell with no id is always a count, even for one property', () => {
-    const g = groupByTile([{ ...BRNO, n: 1 }], 12);
-    expect(g.lone).toEqual([]);
-    expect(g.marks.map((m) => m.n)).toEqual([1]);
+    const praha = marks.find((m) => m.n === 7)!;
+    expect([praha.lng, praha.lat]).toEqual(tileCentre(tile.x, tile.y, 12));
   });
 
   it('conserves the total at every level', () => {
     for (const level of [5, 10, 14, 18]) {
-      const g = groupByTile(points, level);
-      expect(g.marks.reduce((s, m) => s + m.n, 0) + g.lone.length).toBe(points.length);
+      expect(groupByTile(cells, level).reduce((s, m) => s + m.n, 0)).toBe(8);
     }
   });
 
-  it('nests exactly: regrouping marks at a coarser level equals grouping the inputs there', () => {
-    const cells = Array.from({ length: 40 }, (_, i) => ({
+  it('nests exactly: regrouping marks at a coarser level equals grouping the cells there', () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
       lng: 14.2 + (i % 8) * 0.07,
       lat: 49.9 + Math.floor(i / 8) * 0.05,
       n: i + 1,
     }));
-    const viaFine = groupByTile(groupByTile(cells, 16).marks, 13).marks;
-    const direct = groupByTile(cells, 13).marks;
+    const viaFine = groupByTile(groupByTile(many, 16), 13);
+    const direct = groupByTile(many, 13);
     const byKey = (ms: typeof direct) => new Map(ms.map((m) => [m.key, m.n]));
     expect(byKey(viaFine)).toEqual(byKey(direct));
-    expect(viaFine.reduce((s, m) => s + m.n, 0)).toBe(cells.reduce((s, c) => s + c.n, 0));
+    expect(viaFine.reduce((s, m) => s + m.n, 0)).toBe(many.reduce((s, c) => s + c.n, 0));
   });
 
   it('keys a tile with its level, so a feature from another level can never resolve', () => {
-    const [fine] = groupByTile([{ ...PRAHA, n: 2 }], 16).marks;
-    const [coarse] = groupByTile([{ ...PRAHA, n: 2 }], 15).marks;
+    const [fine] = groupByTile([{ ...PRAHA, n: 2 }], 16);
+    const [coarse] = groupByTile([{ ...PRAHA, n: 2 }], 15);
     expect(fine.key).not.toBe(coarse.key);
     expect(fine.key % 32).toBe(16);
     expect(coarse.key % 32).toBe(15);
@@ -134,43 +119,42 @@ describe('groupByTile', () => {
     /* A view whose east edge cuts the tile just east of the point: the centre would be
      * off screen, the mark must not be. */
     const view = { west: PRAHA.lng - 1, east: PRAHA.lng + 0.001, south: PRAHA.lat - 1, north: PRAHA.lat + 1 };
-    const [mark] = groupByTile([{ ...PRAHA, n: 5 }], 12, view).marks;
+    const [mark] = groupByTile([{ ...PRAHA, n: 5 }], 12, view);
     expect(mark.lng).toBeLessThanOrEqual(view.east);
     expect(mark.lng).not.toBe(cx);
     expect(mark.lat).toBeCloseTo(cy, 3);
     expect(tileOf(mark.lng, mark.lat, 12)).toEqual(tile);
     /* A fully visible tile keeps its centre. */
     const wide = { west: 0, east: 30, south: 40, north: 60 };
-    expect(groupByTile([{ ...PRAHA, n: 5 }], 12, wide).marks[0]).toMatchObject({ lng: cx, lat: cy });
+    expect(groupByTile([{ ...PRAHA, n: 5 }], 12, wide)[0]).toMatchObject({ lng: cx, lat: cy });
   });
 });
 
 describe('marksFor', () => {
   const rows = [row(1, PRAHA), row(2, { lng: PRAHA.lng + 0.0001, lat: PRAHA.lat }), row(3, BRNO)];
 
-  it('below PIN_ZOOM a lone property is a pin and a shared tile is a count; from PIN_ZOOM all are pins', () => {
-    const grouped = marksFor(rows, null, countRule(12), null);
-    expect(grouped.pins.map((r) => r.listing_id)).toEqual([3]);
-    expect(grouped.marks.map((m) => m.n)).toEqual([2]);
-    const pins = marksFor(rows, null, countRule(PIN_ZOOM), null);
-    expect(pins.pins).toHaveLength(3);
-    expect(pins.marks).toEqual([]);
+  it('points are pins, every one of them, at any level', () => {
+    for (const level of [7, 14, 18]) {
+      const drawn = marksFor(rows, null, level, null);
+      expect(drawn.pins.map((r) => r.listing_id)).toEqual([1, 2, 3]);
+      expect(drawn.marks).toEqual([]);
+    }
   });
 
-  it('never regroups the server\'s cells finer than their level', () => {
+  it('cells are counts, never regrouped finer than their level', () => {
     const counts = { level: 12, cells: [{ ...PRAHA, n: 7 }, { ...BRNO, n: 3 }] };
-    const atFiner = marksFor([], counts, countRule(15), null);
+    const atFiner = marksFor([], counts, 15, null);
     expect(atFiner.pins).toEqual([]);
     expect(atFiner.marks.map((m) => m.key % 32)).toEqual([12, 12]);
-    const atCoarser = marksFor([], counts, countRule(5), null);
-    expect(atCoarser.marks.map((m) => m.key % 32)).toEqual([7]);
+    const atCoarser = marksFor([], counts, 5, null);
+    expect(atCoarser.marks.map((m) => m.key % 32)).toEqual([5]);
     expect(atCoarser.marks[0].n).toBe(10);
   });
 });
 
 describe('fitExtent', () => {
   it('fits the tiles holding 99 % of the count plus every pin, so a stray far-off cell cannot drag the view out', () => {
-    const marks = groupByTile([{ ...PRAHA, n: 9_000 }, { ...BRNO, n: 900 }, { lng: -118.2, lat: 34.0, n: 1 }], 10).marks;
+    const marks = groupByTile([{ ...PRAHA, n: 9_000 }, { ...BRNO, n: 900 }, { lng: -118.2, lat: 34.0, n: 1 }], 10);
     const extent = fitExtent(marks, [])!;
     expect(extent.west).toBeGreaterThan(14);
     expect(extent.east).toBeLessThan(17);
@@ -182,7 +166,7 @@ describe('fitExtent', () => {
 
 describe('the count feature collection', () => {
   it('carries the tile key as the feature id and the exact count', () => {
-    const [mark] = groupByTile([{ ...PRAHA, n: 1465 }], 12).marks;
+    const [mark] = groupByTile([{ ...PRAHA, n: 1465 }], 12);
     const fc = toCountFeatureCollection([mark]);
     expect(fc.features[0].id).toBe(mark.key);
     expect(fc.features[0].properties).toEqual({ n: 1465 });
@@ -225,7 +209,7 @@ describe('the count layer', () => {
   });
 });
 
-describe('useCountRule', () => {
+describe('useCountLevel', () => {
   class FakeMap {
     zoom = 12.2;
     handlers = new Map<string, () => void>();
@@ -235,23 +219,16 @@ describe('useCountRule', () => {
   }
   const asMap = (m: FakeMap) => m as unknown as maplibregl.Map;
 
-  it('answers once ready and again only when the level or the pin threshold changes', () => {
+  it('answers once ready and follows every zoom event', () => {
     const fake = new FakeMap();
-    const { result, rerender } = renderHook((p: { ready: boolean }) => useCountRule(asMap(fake), p.ready), {
+    const { result, rerender } = renderHook((p: { ready: boolean }) => useCountLevel(asMap(fake), p.ready), {
       initialProps: { ready: false },
     });
     expect(result.current).toBeNull();
     rerender({ ready: true });
-    const first = result.current;
-    expect(first).toEqual({ level: 14, pins: false });
-    fake.zoom = 12.4;
-    act(() => fake.handlers.get('zoom')!());
-    expect(result.current).toBe(first);
+    expect(result.current).toBe(14);
     fake.zoom = 12.6;
     act(() => fake.handlers.get('zoom')!());
-    expect(result.current).toEqual({ level: 15, pins: false });
-    fake.zoom = 14;
-    act(() => fake.handlers.get('zoom')!());
-    expect(result.current).toEqual({ level: 16, pins: true });
+    expect(result.current).toBe(15);
   });
 });

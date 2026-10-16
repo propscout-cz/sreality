@@ -804,13 +804,6 @@ export const fetchNoPriceCount = async (
   return count ?? 0;
 };
 
-/* Above this many MAPPABLE rows the map asks the server to aggregate; at or
- * below it, today's per-point read is already correct and is what runs. Measured
- * 2026-08-26 on the live default cohort: a 2,000-row point read is 153 blocks and
- * ~906 KB, which is the ceiling this threshold buys. The server applies it (it is
- * the one that knows the count), and this constant is what it is told. */
-export const MAP_POINT_BUDGET = 2_000;
-
 interface MapGrid {
   clustered: boolean;
   cells: MapCell[] | null;
@@ -819,8 +812,8 @@ interface MapGrid {
   total: number;
 }
 
-/* The per-point read, run only once the server has said the cohort fits
- * (MAP_POINT_BUDGET points), so it needs no limit of its own.
+/* The per-point read, run only once the server has said the cohort fits the pin
+ * limit, so it needs no limit of its own.
  *
  * It reads `properties_map_mv` (migration 254), NOT `properties_public`. Shipping
  * the points off the live, churned `properties` table was cold-fragile
@@ -846,6 +839,7 @@ const fetchMapPoints = async (
 
 export const fetchListingsForMap = async (
   f: ListingFilters,
+  pinLimit: number,
   opts?: PgReadOptions,
 ): Promise<MapResult> => {
   // `opts?`, not `{ signal }: PgReadOptions = {}`: tests/test_browse_map_read_contract.py pins this
@@ -867,7 +861,7 @@ export const fetchListingsForMap = async (
         property_ids_filter: pre.propertyIds,
         property_ids_excluded: pre.propertyIdsExcluded,
       }),
-      point_budget: MAP_POINT_BUDGET,
+      point_budget: pinLimit,
     }),
     { signal },
   );

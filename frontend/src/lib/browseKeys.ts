@@ -21,7 +21,9 @@ const root = {
 export const browseKeys = {
   cards: (f: ListingFilters, s: SortSpec) => [root.cards, f, s] as const,
   table: (f: ListingFilters, s: SortSpec) => [root.table, f, s] as const,
-  map: (f: ListingFilters) => [root.map, f] as const,
+  /* The pin limit is the server's point budget, so it decides the answer's SHAPE
+   * (points or counts) and must be in the key. */
+  map: (f: ListingFilters, pinLimit: number) => [root.map, f, pinLimit] as const,
   stats: (f: ListingFilters) => [root.stats, f] as const,
   count: (f: ListingFilters) => [root.count, f] as const,
   noPriceCount: (f: ListingFilters) => [root.noPriceCount, f] as const,

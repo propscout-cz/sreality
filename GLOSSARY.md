@@ -177,10 +177,10 @@ which properties.
 _Avoid_: data layer, overlay data, map data, GIS layer
 
 **Count mark**:
-The number a map shows for one world tile holding two or more matching properties (or any tile the
-server counted): exactly that many, in a pill at the tile's centre. A tile holding one known property
-shows its pin instead. One tile holds one mark; the marks and the lone pins on a map together add up
-to the mapped total.
+The number a map shows for one world tile when more properties are in view than the pin limit (a
+number the user sets above the map, 200 by default): exactly that many, in a pill at the tile's
+centre. At or under the limit every property is its own pin, at any zoom. One tile holds one mark;
+the marks on a map add up to the mapped total.
 _Avoid_: cluster, bubble, cell, bin, group
 
 ### A property's working files

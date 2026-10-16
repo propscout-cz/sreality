@@ -68,6 +68,10 @@ of the analytical and UI phases; runs alongside them.
   centres. Rails: `tests/test_602_*`, the rewritten `tests/test_browse_map_cells_live.py`
   (fixture parity, bounded-and-finest, one tile per row, pan-stable interiors, children sum to
   their parent), `tests/fixtures/map_tile_lattice.json` read by pytest AND vitest.
+- **W4 (done 2026-10-16, rulings 7–8):** pins up to a user-set limit at any zoom (default 200,
+  range 20–2 000; the input above the map, URL `pins=`), which IS the server's point budget (one
+  number end to end, in the map query key); price labels a tick box (URL `labels=0`). Deleted the
+  zoom-14 pin rule, the browser-side grouping of points and `MAP_POINT_BUDGET`.
 - **Named follow-ups:** town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one
   tile (a location-precision concern); `DatasetMap.tsx` interpolates `obec_name` into popup HTML
   unescaped; four `MAP_COLS` columns are never read and commercial popups show "—" for `subtype`.
