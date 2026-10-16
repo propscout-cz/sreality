@@ -129,15 +129,19 @@ def _stub_engine(monkeypatch: pytest.MonkeyPatch, result: Any) -> dict[str, Any]
 def _summary(**over: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "counts": {"claimed": 12, "pairs_scored": 40, "clusters_written": 3, "held": 1,
+                   "chunks": 2,
                    "retired": 0, "wanted_pairs": 52, "attempts": 1, "wanted_by_attempt": [52],
                    "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
-                   "ledger_skipped": 31, "ledger_written": 6},
+                   "ledger_skipped": 31, "ledger_written": 6, "dirty": 30,
+                   "reads": {"claim": 12, "decided": 9}},
         "aborted": "",
         "latency_s": {"n": 12, "p50": 310.2, "p95": 355.0},
         "claim_bound": {"bound_by": "count", "limit": 100},
         "reconcile": {"counts": {"applied": 2}},
         "peak_rss_mb": 412.5,
         "rss_mb": 388.0,
+        "chunk_rss_mb": [395.0, 401.5],
+        "chunk_vectored": [61, 58],
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "claim_cap": {"cap": 500, "reason": "rt_seed", "limit_mb": 8192.0},
         "predecessor_released": None,
@@ -286,6 +290,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # E951: the budget the claim was cut from (a build's 787.5 s), and the doubled rate
         "pass_budget_s": 787.5, "rate_doubled": True,
         "reconcile_refused": 0, "reconcile_failed": 0, "reconcile_waiting": 0,
+        "reconcile_stale": 0, "reconcile_handed_on": 0, "reconcile_handed_on_dropped": 0,
+        "stale_claimed": None,
         "reconcile_skipped_at_apply": 0, "reconcile_quarantined": 0, "reconcile_deferred": 0,
         "must_link_dissolved": 0,
         # the plan's silent outcomes (2026-10-07): settled groups and standing refusals by reason
@@ -298,16 +304,23 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         "rss_mb": 388.0, "memory_limit_mb": 8192.0,
         "claim_cap": {"cap": 500, "reason": "rt_seed", "limit_mb": 8192.0},
         "predecessor_released": None,
+        # E944: the calibration's age (the engine's summary names none here)
+        "calibration_built_age_days": None,
         # E949: the engine's body and token memos at the pass's end, and the RSS once freed
         # memory was handed back, before the pass began and as it ended
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "rss_at_start_mb": 290.0, "rss_after_trim_mb": 301.5,
+        # E950: the chunks the decided pairs were scored in, the RSS as each was written and the
+        # listings then holding their CLIP vectors
+        "chunks": 2, "chunk_rss_mb": [395.0, 401.5], "chunk_vectored": [61, 58],
         # E952: the claims the pass made, each one's wanted pair set and the last's, no refusal
         "attempts": 1, "wanted_pairs": 52, "wanted_by_attempt": [52], "aborted": None,
         # E943: what the budget counted (the last claim's and each claim's), the wanted pairs
         # the reject ledger answered, and the rejects the pass ledgered
         "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
         "ledger_skipped": 31, "ledger_written": 6,
+        # E960: the neighbourhood re-retrieved from the store, and the adverts read, by why
+        "dirty": 30, "reads": {"claim": 12, "decided": 9},
     }
     for gone in ("AUTODEDUP_PASS_DEADLINE_SECONDS", "AUTODEDUP_PASS_BUDGET_SECONDS",
                  "_AUTODEDUP_BACKOFF", "_DeadlineConnection", "_AutodedupDeadline"):
@@ -333,7 +346,7 @@ def test_an_absent_store_skips_every_tick_with_one_warning(
     assert first["errors"] == 0 and first["ran"] is False
     assert second["reason"] == "store_absent"
     assert conn.closed
-    assert sum("store (migrations 539/540/596) is absent" in r.message
+    assert sum("store (migrations 539/540/596/604) is absent" in r.message
                for r in caplog.records) == 1
 
 
@@ -389,6 +402,59 @@ def test_a_completed_pass_after_a_refusal_keeps_the_failure_count(
     lane = state["lanes"]["autodedup"]
     assert lane["passes"] == 1 and lane["failed_passes"] == 1
     assert lane["last"]["ran"] is True and lane["last"]["errors"] == 0
+
+
+def test_a_re_cut_tick_is_a_green_skip_and_its_outcome_stays_on_the_heartbeat(
+        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """E944: the tick that re-cuts the calibration instead of passing is a skip named `recut`,
+    and how the cut went stays on the lane's heartbeat (`recut`) through the passes after it —
+    a cut a few times a day would otherwise be gone from `last` a minute later."""
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: _Conn())
+    _settings(monkeypatch)
+    cut = {"digest": "b", "digest_before": "a", "moved": True, "seconds": 612.4,
+           "n_listings": 39_470, "at": "2026-10-15T22:00:00+00:00"}
+    _stub_engine(monkeypatch, lambda n: {"skipped": "recut", "reason": "drifted", "recut": cut,
+                                         "spent_usd": 0.0} if n == 1 else _summary())
+    state = rw._new_state()
+
+    with caplog.at_level(logging.INFO, logger="scraper.realtime_worker"):
+        asyncio.run(rw._autodedup_pass(asyncio.Event(), state))
+    lane = state["lanes"]["autodedup"]
+    assert (lane["last"]["ran"], lane["last"]["skipped"], lane["last"]["errors"]) == (False, 1, 0)
+    assert lane["last"]["reason"] == "recut" and lane["last"]["recut"] == cut == lane["recut"]
+    assert sum("AUTODEDUP lane re-cut" in r.message for r in caplog.records) == 1
+
+    asyncio.run(rw._autodedup_pass(asyncio.Event(), state))
+    lane = state["lanes"]["autodedup"]
+    assert lane["last"]["ran"] is True and "recut" not in lane["last"]
+    assert lane["recut"] == cut, "the last re-cut outlives the passes after it"
+    Jsonb(rw._lane_snapshot(state["lanes"]))
+
+
+def test_a_failed_re_cut_is_an_error_and_every_tick_says_its_memory_and_calibration_age(
+        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """E944 (review 4): a re-cut that failed is not a quiet skip — `errors` 1 with its reason —
+    and the skip carries the process's memory and the calibration's age, as a pass does."""
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: _Conn())
+    _settings(monkeypatch)
+    cut = {"skipped": "CalibrationRefusal: the tick's time ran out mid-cut", "failed": True,
+           "seconds": 930.2, "peak_rss_mb": 2_310.0, "rss_mb": 1_204.5,
+           "at": "2026-10-16T09:00:00+00:00"}
+    _stub_engine(monkeypatch, {"skipped": "recut", "reason": "drifted", "recut": cut,
+                               "calibration": {"built_age_days": 1.75},
+                               "peak_rss_mb": 2_310.0, "rss_mb": 1_204.5, "spent_usd": 0.0})
+    state = rw._new_state()
+
+    with caplog.at_level(logging.WARNING, logger="scraper.realtime_worker"):
+        asyncio.run(rw._autodedup_pass(asyncio.Event(), state))
+
+    last = state["lanes"]["autodedup"]["last"]
+    assert (last["skipped"], last["errors"]) == (1, 1)
+    assert last["recut_failed"].startswith("CalibrationRefusal")
+    assert (last["peak_rss_mb"], last["rss_mb"], last["calibration_built_age_days"]) == (
+        2_310.0, 1_204.5, 1.75)
+    assert "memory_limit_mb" in last and state["lanes"]["autodedup"]["recut"] == cut
+    assert any("CalibrationRefusal" in r.getMessage() for r in caplog.records)
 
 
 def test_an_aborted_pass_ran_but_counts_as_an_error(monkeypatch: pytest.MonkeyPatch) -> None:

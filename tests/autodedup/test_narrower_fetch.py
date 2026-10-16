@@ -236,20 +236,18 @@ def test_the_vector_read_names_the_claim_and_the_scored_endpoints_only() -> None
     """Per pass, `COHORT_CLIP_SQL` reads the photographs of the claimed listings (their refresh
     records the vectors' presence) and of the two sides of every pair the pass DECIDES — never
     those of a neighbourhood listing, nor of the sides of a wanted pair whose stored decision
-    stands. The read before E933 carried all of them, every pass."""
+    stands. The read before E933 carried all of them, every pass; since E960 a neighbourhood
+    listing's gallery is not read at all."""
     conn = _world()
     passes, statements = _drain(SqlStore(conn, GEN, store_floor=0.0, **LEDGER_KEY),
                                 SqlFacts(conn), conn)
-    full = _world()
-    _, before = _drain(SqlStore(full, GEN, store_floor=0.0, **LEDGER_KEY),
-                       _EveryVector(SqlFacts(full)),
-                       full)
     assert (GEN, *sorted(OUTLIERS)) in conn.pairs, "the outliers pair with each other"
     assert all(set(key[1:]) <= set(OUTLIERS) or not set(key[1:]) & set(OUTLIERS)
                for key in conn.pairs), "and with nothing else"
 
     skipped = 0
-    for result, issued, issued_before in zip(passes, statements, before):
+    stored: set[int] = set()
+    for result, issued in zip(passes, statements):
         claimed = set(result.claimed)
         decided = {int(params[side]) for text, params in issued
                    if text == RT_PAIR_UPSERT_SQL and params.get("features") is not None
@@ -257,12 +255,12 @@ def test_the_vector_read_names_the_claim_and_the_scored_endpoints_only() -> None
         vectored = _ids(issued, COHORT_CLIP_SQL)
         assert _images_of(conn, claimed) <= vectored, "the claim's presence is read"
         assert _images_of(conn, claimed | decided) == vectored
-        for outlier in set(OUTLIERS) - claimed - decided:
-            if outlier in _ids(issued, COHORT_IMAGES_SQL):
-                skipped += 1
-                assert not _images_of(conn, {outlier}) & vectored
-                assert _images_of(conn, {outlier}) <= _ids(issued_before, COHORT_CLIP_SQL)
-    assert skipped > 0, "the outliers were read as neighbourhood, without vectors"
+        for outlier in set(OUTLIERS) - claimed - decided if set(OUTLIERS) <= stored else ():
+            skipped += 1
+            assert outlier not in _ids(issued, COHORT_IMAGES_SQL), "E960: never read"
+            assert not _images_of(conn, {outlier}) & vectored
+        stored |= claimed
+    assert skipped > 0, "the outliers sat in every later neighbourhood, unread"
 
 
 def test_a_refused_attempt_reads_no_vector() -> None:

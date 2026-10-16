@@ -372,7 +372,8 @@ nothing else.
   size. The claim is the engine's: its time budget (half the deadline) × the rate it measured. The
   worker's statement-refusing deadline wrapper and in-process back-off are gone. Deadline + one
   120 s statement stays under the 1,200 s stall warn and `LANE_PASS_TIMEOUT_SECONDS`; the 2,400 s
-  lease also covers the reconcile's last group and a calibration re-cut.
+  lease also covers the reconcile's last group. A calibration re-cut is a tick of its own under the
+  same deadline (E944).
 - **A dead predecessor's lease, and the claim cap (E948).** One worker process runs per container
   and a restart in place keeps the hostname and the pid, so right before every take a pass
   releases the LIVE lease whose holder (`<hostname>:<pid>:<second>`) names this hostname and pid
@@ -414,10 +415,23 @@ nothing else.
   keyed on the body itself) and `normalize`'s token hashes and SimHash lanes. The CLIP top-up
   encodes each 500-image slice as it arrives. Decisions stay a fresh process's; `SEED_VERSION` is
   unchanged.
-- **Its calibration follows the corpus (A10).** `rt_seed` cuts it from the database (no export)
-  and resets the measured rate; a pass whose pHash population coverage falls below 0.85 re-cuts
-  it (at most every 6 h) inside its own remaining time — every statement bounded by it, a cut
-  that runs out rolls back and the next pass re-tries.
+- **Its calibration follows the corpus (A10, E944).** `rt_seed` cuts it from the database (no
+  export) and resets the measured rate. A pass whose pHash population coverage falls below 0.85
+  (≥ 200 hashed photographs) marks `rt_recut:<gen>` due, and the NEXT tick re-cuts instead of
+  passing: the same lease and fence, a 1,050 s deadline of its own whose reads stop 120 s early
+  for the build and the writes. Never in a build, and never while the scope holds more than
+  `RECUT_MAX_LISTINGS` (50,000) adverts — the larger of the last cut's count and the store's
+  fingerprinted adverts, read each tick — so a Prague-sized scope keeps the calibration its seed
+  cut until a cut that resumes across ticks exists; the row records `bootstrap` / `unfit`
+  instead. At most one attempt every 6 h: it is stamped before the cut (`tried_at`, `cutting`),
+  so a worker that dies inside it waits too and E948 does not halve the claim cap for the holder
+  that was cutting; two such deaths under one calibration make it `died` until a seed. A failed
+  cut waits 6 h and is `errors: 1` (`recut_failed`); one its fence or the shutdown stopped is
+  taken back (only while its stamp is still the row's), and the next worker, which reads the row
+  again once it holds the lease, re-cuts at once. The row keeps the last outcome (`last`: digest, moved, seconds,
+  scope_listings, peak_rss_mb, rss_mb, or why it was skipped or died). A pass reads the payload
+  once a digest and hashes it once: the process keeps the parsed calibration (~16 MB at 39.5k
+  adverts), the one reading E949 lets outlive its pass.
 - **A refusal is an error, never a crash.** The engine refuses by raising `SystemExit` (a storage
   budget, a scope it cannot walk, a missing migration); carried out of `asyncio.to_thread` that
   would stop the event loop and every lane, so the lane records it as `errors: 1` with the text,
@@ -426,27 +440,42 @@ nothing else.
   `details.autodedup.last` = `{ran, claimed, scored (pairs), grouped (groups written), merged
   (production merges the reconcile made), reconcile (ran / its skip or stop reason) +
   reconcile_reason, reconcile_groups, reconcile_seconds, reconcile_refused, reconcile_failed,
-  reconcile_waiting (a block not fully read), reconcile_skipped_at_apply, reconcile_quarantined,
+  reconcile_waiting (a block not fully read), reconcile_stale (E960: groups waiting for a moving
+  member refreshed within 12 h and under this engine) + reconcile_handed_on and
+  reconcile_handed_on_dropped (the groups queued for the next pass's re-claim, and those the
+  queue's 5,000-advert cap left out) + stale_claimed (the queue's adverts the committed attempt
+  re-claimed), reconcile_skipped_at_apply, reconcile_quarantined,
   reconcile_deferred (the run cap), must_link_dissolved (operator `same` closures the pass
-  dissolved, E926), skipped (0/1) + reason, errors (0/1) + refused/aborted,
+  dissolved, E926), skipped (0/1) + reason (`recut` on a re-cut tick, E944), errors (0/1) +
+  refused/aborted/recut_failed, recut (E944: the cut's outcome on a re-cut tick, or a death or an
+  `unfit` the pass recorded; also kept as the lane's own `recut` field until the worker restarts,
+  `rt_recut:<gen>.last` being the durable copy), calibration_built_age_days (E944),
   deadline_exceeded, seconds, held, retired, latency_p50_s, latency_p95_s, bound_by, claim_cap
   ({cap, reason, limit_mb}) + predecessor_released (E948; a skip carries it only when set, or
   instead predecessor_kept, the lease the cap's floor left to its TTL), peak_rss_mb (E941) +
-  rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b),
+  rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b; on every
+  path, a skip's included, since E944),
   memo_entries (the body readers by module, the shingle sets and the tokens, before the pass's end
   empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
   before the pass and at its end; E949: on every path but `previous_pass_running`, and a raised
   pass writes no `last`, so the heartbeat keeps the previous pass's until the next pass's
-  rss_at_start_mb shows what the raised one left), pairs_to_decide + pairs_to_decide_by_attempt
+  rss_at_start_mb shows what the raised one left), chunks + chunk_rss_mb + chunk_vectored (E950:
+  the chunks the pass scored its decided pairs in, the RSS as each was written and the listings
+  then holding their CLIP vectors — the rows follow the chunk, a side's vectors are held from its
+  first decided pair to its last), pairs_to_decide + pairs_to_decide_by_attempt
   (E943: what the pair budget counts, the last claim's and each claim's), ledger_skipped +
   ledger_written (the wanted below-floor rejects the reject ledger answered instead of a re-score,
-  and the rejects the pass ledgered)}`; an absent store (migrations 539/540/596) =
-  `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
+  and the rejects the pass ledgered), dirty + reads (E960: the probe-key neighbourhood the last
+  attempt re-retrieved from the store's keys and guard rows, and the adverts whose facts the pass
+  read, by why — claim, order, digest, decided, cluster, rail — summed over its attempts)}`; an
+  absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
   E73), and a photo-dependent merge waits until every photograph carries its pHash, CLIP vector
   and tags (E908; CLIP p50 2.5 h). So a text-certified duplicate merges in ~6–7 minutes and a
-  photo-certified one after CLIP; sub-hour photo merges need the vision producer moved inline, which
+  photo-certified one after CLIP; a merge whose moved advert was last refreshed more than 12 h
+  ago (or before the current engine) waits one more pass, which re-claims it (E960) — an
+  arrival is refreshed in its own pass, so arrival merges do not wait; sub-hour photo merges need the vision producer moved inline, which
   is an operator decision (D901, rule 7).
 
 **Liveness — the worker cannot freeze silently (2026-09-30).** From 2026-09-29 23:42 to 07:22 UTC

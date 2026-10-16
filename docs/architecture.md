@@ -1713,13 +1713,20 @@ renumber.** Navigate by area:
     go through the apply path below (`apply.plan_groups` / `apply.apply_group`, the same
     refusals, the same chokepoint, `source='autodedup'`, ledger rows `generation='rt'`,
     `run_id='rt:<holder>'`), only inside `autodedup_apply_scope` and never as a split — a
-    grouping the stream no longer supports is a proposal. It reconciles only a generation a
+    grouping the stream no longer supports is a proposal. A pass reads an advert it does not
+    claim as its row stored it (E960), so a merge is applied only when every advert it moves was
+    refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
+    engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
+    pass re-claims waiting groups whole, oldest first, 100 adverts on its first attempt, each
+    group at most once in 6 h, and none while the apply scope is closed or the reject ledger is
+    inert. It reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) whose build
     phase ended, and review pages default to `rt` under the same condition (else the newest batch
     pass). The brake is the interval (0), then `mode=unapply` — a live apply or unapply refuses
     while the interval is above 0. Its calibration is cut from the database (`rt_seed`, and a
-    re-cut inside the pass's remaining time when the pHash population drifts); a pass past its own
-    deadline rolls back and halves its rate. The
+    re-cut, in the tick after a pass found the pHash population drifted, instead of a pass, never
+    in a build or while the scope holds more than 50k adverts; E944) and read once a digest; a
+    pass past its own deadline rolls back and halves its rate. The
     batch `apply` and `unapply` modes stay until the lane has run three live days and checkpoint
     C2 passes (the undo path after that is an open operator decision, `roadmap/autodedup.md`);
     `legacy_retire` per area under the live generation since W8 (E953). **The engine's only detaches** are two `detach_listings` callers, one
