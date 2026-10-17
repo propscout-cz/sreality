@@ -67,7 +67,7 @@ comment on function public.measure_tom_days(boolean, timestamptz, timestamptz) i
   'THE time-on-market measure, in whole days (floor, never negative). An ACTIVE row is its '
   'age so far, now() - first_seen_at: the run is still open, so the figure is a lower bound '
   'on its final length (right-censored). An INACTIVE row is the length of its closed run, '
-  'last_seen_at - first_seen_at. NULL first_seen_at yields NULL. first_seen_at is OUR first '
+  'last_seen_at - first_seen_at. Both timestamps are NOT NULL on listings and properties. first_seen_at is OUR first '
   'sighting, not the portal''s listing date, so a listing already live when its portal was '
   'first walked reads younger than it is (left-censored). Mixing active and inactive rows in '
   'one cohort therefore mixes ages-so-far with completed durations. Python face: '

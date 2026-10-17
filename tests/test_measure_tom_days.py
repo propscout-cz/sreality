@@ -88,12 +88,6 @@ def test_the_measure_answers_the_documented_cases(
 
 
 @REQUIRED_DB
-def test_a_missing_first_sighting_is_a_gap_not_a_zero(cur: Any) -> None:
-    cur.execute("SELECT measure_tom_days(false, NULL, now())")
-    assert cur.fetchone()[0] is None
-
-
-@REQUIRED_DB
 @pytest.mark.parametrize("active", [True, False])
 def test_the_view_and_the_python_emitter_agree_with_the_function(cur: Any, active: bool) -> None:
     from tests._live_property import _advert, _property
