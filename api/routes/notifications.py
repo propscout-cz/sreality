@@ -135,7 +135,7 @@ def delete_subscription(
 def get_dispatches(
     subscription_id: str | None = None,
     collection_id: int | None = None,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: nf.SourceKindFilter = "all",
     seen: Literal["all", "seen", "unseen"] = "all",
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -159,13 +159,13 @@ def get_dispatches(
 
 @router.get("/unread-count")
 def get_unread_count(
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: nf.SourceKindFilter = "all",
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, int]:
     """Unseen dispatch counts for the nav badge.
 
-    Returns `{watchdog, collection_monitor, total, unread_count}` — `unread_count`
-    is the total (or the scoped count when `source_kind` is set). RLS scopes the
+    Returns one count per `SourceKind` (api/notifications.py) + `total` + `unread_count` —
+    `unread_count` is the total (or the scoped count when `source_kind` is set). RLS scopes the
     count to the caller's own account.
     """
     return nf.get_unread_count(conn, source_kind=source_kind)
@@ -173,7 +173,7 @@ def get_unread_count(
 
 @router.post("/mark-all-seen")
 def post_mark_all_seen(
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: nf.SourceKindFilter = "all",
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, int]:
     """Mark every unseen dispatch (optionally scoped to a source) as seen.

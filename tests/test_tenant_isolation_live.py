@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from tests._admin_gate_shape import gate_is_sound
+from tests._tenant_registry import TENANT_TABLES
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -31,10 +32,9 @@ pytestmark = pytest.mark.skipif(
     reason="TEST_DATABASE_URL not set — live tenant-isolation checks run only in the CI DB job",
 )
 
-# SPA-facing PER-ACCOUNT views (migrations 022/025/202/203/205/211/278) the
-# frontend reads directly via supabase-js — must be `security_invoker` (migration
-# 316) or they run as their postgres owner and BYPASS every RLS policy below,
-# regardless of the caller's role. The base-table tests above don't exercise this:
+# SPA-facing PER-ACCOUNT views the frontend reads directly via supabase-js — must be
+# `security_invoker` (migration 316) or they run as their postgres owner and BYPASS
+# every RLS policy below, regardless of the caller's role. The base-table tests above don't exercise this:
 # the SPA never queries base tables directly, only these views.
 #
 # `property_estimates_public` is deliberately NOT here. Migration 316 included it,
@@ -45,7 +45,6 @@ pytestmark = pytest.mark.skipif(
 # below pins that, and it must stay out of this list.
 _TENANT_VIEWS: list[str] = [
     "collection_properties_public",
-    "collections_public",
     # The kanban's cohort view (migration 417). It is invoker-mode over
     # property_pipeline_public, so its scoping is inherited rather than its
     # own -- which is exactly why it belongs here: inherited scoping is the
@@ -56,7 +55,6 @@ _TENANT_VIEWS: list[str] = [
     "property_notes_public",
     "property_pipeline_public",
     "property_tags_public",
-    "tags_public",
 ]
 
 # Views that must NOT be security_invoker: they join a shared table that is
@@ -195,6 +193,10 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # not market data. NO `_public` view; the ONE reader is `sold_coverage` below.
     # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "sold_transaction_fetches",
+    # Auth identities (migration 610). The one reader, account_email(), is not executable
+    # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
+    # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "auth.users",
 ]
 
 # Relations that read the above but are legitimately reachable without the gate.
@@ -245,32 +247,9 @@ _ADMIN_GATE_ALLOWLIST: list[str] = [
     "images_public",
 ]
 
-# The 22 user-state tables migrations 290-294 (+ entitlements 298, property_dismissals
-# 536, property_note_attachments 592, property_artifact_links 599) scope per account.
-_TENANT_TABLES: list[str] = [
-    "collections",
-    "tags",
-    "property_notes",
-    "filter_presets",
-    "notification_subscriptions",
-    "manual_rental_estimates",
-    "collection_properties",
-    "property_tags",
-    "notification_dispatches",
-    "estimation_cohort_entries",
-    "estimation_trace_payloads",
-    "estimation_feedback",
-    "building_run_attachments",
-    "estimation_runs",
-    "building_runs",
-    "property_pipeline",
-    "pipeline_stages",
-    "property_pipeline_events",
-    "entitlements",
-    "property_dismissals",
-    "property_note_attachments",
-    "property_artifact_links",
-]
+# The user-state tables, from the one registry both tenancy gates read. A list, because
+# psycopg binds a list (not a tuple) as the array `= ANY(%s)` takes.
+_TENANT_TABLES: list[str] = list(TENANT_TABLES)
 
 # Amendment A6 (Phase 0): the broker-directory PII surfaces stay dark to BOTH
 # browser roles; the SPA reads them only through the identity-gated, PII-masking
@@ -604,8 +583,9 @@ def test_a5_properties_readable_listings_still_deny_all(
                     "A5 policy: authenticated must read base properties"
                 )
                 # The PII-free identity view resolves the id<->sreality_id map
-                # create_note depends on (owner-bypass, no broker columns). Both
-                # directions the INSERT subselects use must round-trip.
+                # create_note depends on (owner-bypass, no broker columns). The
+                # sreality_id -> id lookup only finds this test's listing; the
+                # id -> sreality_id lookup is the one create_note's INSERT uses.
                 cur.execute(
                     "SELECT id FROM listing_natural_key_public WHERE sreality_id = %s",
                     (srid,),
@@ -884,8 +864,8 @@ def seeded_tenant_rows(
     svc: Any, tenants: dict[str, uuid.UUID],
 ) -> "Iterator[dict[str, tuple[str, tuple[Any, ...]]]]":
     """One row per tenant view, all owned by account A, each findable by a filter
-    the view actually exposes. Seeded as `svc` (the owner, so RLS never blocks
-    setup); torn down children-first."""
+    the view actually exposes (plus the collection and tag the member rows hang off).
+    Seeded as `svc` (the owner, so RLS never blocks setup); torn down children-first."""
     nonce = uuid.uuid4().hex[:12]
     a_acc = tenants["a_acc"]
     where: dict[str, tuple[str, tuple[Any, ...]]] = {}
@@ -903,7 +883,6 @@ def seeded_tenant_rows(
         )
         coll = cur.fetchone()[0]
         cleanup.append(("DELETE FROM collections WHERE id = %s", (coll,)))
-        where["collections_public"] = ("name = %s", (nonce,))
 
         cur.execute(
             # `color` is a named-palette CHECK (copper/sage/brick/ochre/slate/
@@ -913,7 +892,6 @@ def seeded_tenant_rows(
         )
         tag = cur.fetchone()[0]
         cleanup.append(("DELETE FROM tags WHERE id = %s", (tag,)))
-        where["tags_public"] = ("name = %s", (nonce,))
 
         cur.execute(
             "INSERT INTO property_notes (account_id, property_id, body) VALUES (%s, %s, %s)",

@@ -145,7 +145,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "district_chip_list",
       "pg_column": null,
       "default": null,
-      "description": "Location chips. Each chip is an object `{name: str, context: str | null, level: 'kraj' | 'okres' | 'obec' | 'cast_obce' | 'locality' | null, id: int | null, excluded: bool}`, where `id` is the RÚIAN CODE at that level. ONE predicate compiles them everywhere (Browse, Stats, the map, the Watchdog): `<level>_id = any(codes)` with plain equality — `region_id` / `okres_id` / `obec_id` / `cast_obce_id`. A 'locality' chip (street / POI / address pick) carries its containing obec code and filters at the obec level. A chip with no code — an old saved filter — is resolved by name once at read time; if the RÚIAN name index cannot place it, it matches nothing. `context` disambiguates that name lookup and is not a predicate. INCLUDE chips OR together; chips with `excluded: true` are subtracted from the result.",
+      "description": "Location chips. Each chip is an object `{name: str, context: str | null, level: 'kraj' | 'okres' | 'obec' | 'cast_obce' | 'ulice', id: int, excluded: bool}`, where `id` is the RÚIAN CODE of the unit picked at that level; `level` and `id` are required. ONE predicate compiles them everywhere (Browse, Stats, the map, the Watchdog): `<level>_id = any(codes)` with plain equality — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` / `ulice_id`. A street chip filters at its street, never its town. `name` and `context` (the obec a část obce or a street sits in) are display only, never a predicate. INCLUDE chips OR together; chips with `excluded: true` are subtracted from the result.",
       "category": "Spatial",
       "ui_control": "multiselect",
       "agendas": [
@@ -2400,7 +2400,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "int_list",
       "pg_column": null,
       "default": null,
-      "description": "Operator-curated collection ids. OR-semantics — a property matches if it is in ANY collection in the list. Deliberately the opposite of `tags` (AND): collections read as folders, so two of them mean 'either folder'. Collection ids are account-scoped and stable across renames. BROWSE-only, for the same reasons as `pipeline`: watching a collection would fire on the operator's own clicks, and their groupings must never feed back into a valuation.",
+      "description": "Collection ids the caller can read — own or shared with them (migration 610). OR-semantics — a property matches if it is in ANY collection in the list. Deliberately the opposite of `tags` (AND): collections read as folders, so two of them mean 'either folder'. Collection ids are stable across renames. BROWSE-only, for the same reasons as `pipeline`: watching a collection would fire on the operator's own clicks, and their groupings must never feed back into a valuation.",
       "category": "Curation",
       "ui_control": "multiselect",
       "agendas": [

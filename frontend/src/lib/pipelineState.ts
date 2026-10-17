@@ -152,9 +152,9 @@ export function usePipelineViewState(): PipelineViewState {
   const setDistricts = useCallback(
     (next: DistrictChip[]) =>
       patch((sp) => {
-        // Clear the whole family first: the serializer omits optional params
-        // when no chip needs them, so a stale districts_lvl would otherwise
-        // survive a change that no longer emits one.
+        // Clear the whole family first: the serializer omits districts_ctx /
+        // districts_excl when no chip needs them, so a stale one would
+        // otherwise survive a change that no longer emits it.
         for (const p of DISTRICT_PARAMS) sp.delete(p);
         for (const [k, v] of Object.entries(districtChipsToCsvParams(next))) {
           sp.set(k, v);

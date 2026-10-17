@@ -26,13 +26,21 @@ Every table below follows: `revoke all on <table> from anon, authenticated` →
 set where the table is genuinely add/remove-only) → a `for all using (...) with check
 (...)` policy testing `account_id in (select current_account_ids())` → (if the table has
 a `bigserial`/`serial` PK) an explicit `grant usage on sequence <seq> to authenticated`,
-since `grant insert` on the table does not cover the sequence.
+since `grant insert` on the table does not cover the sequence. Every such table is listed
+once, in `tests/_tenant_registry.py`, which both tenancy gates read (the offline grant scan
+`tests/test_migration_rls_grants.py` and the live lane `tests/test_tenant_isolation_live.py`):
+a new tenant table is added there.
 
 **Migration 290 — curation tables**, `account_id` on the row directly (not
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
 `notification_subscriptions`, `manual_rental_estimates`. Later siblings: `property_dismissals`
 (536) and `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
-caller-supplied account, API-only reads and writes).
+caller-supplied account, API-only reads and writes). The column was added nullable (the tables
+already held rows); it is NOT NULL on four of the six since `notification_subscriptions` 364,
+`filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
+about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row);
+`manual_rental_estimates` stays nullable by design: its account is provenance on platform-wide
+reference data (`ON DELETE SET NULL`).
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
@@ -47,8 +55,9 @@ column default would miss): `collection_properties` (parent `collections`),
 `property_note_attachments`, parent `property_notes`, migration 592). Because
 Postgres evaluates `WITH CHECK` **after** `BEFORE` triggers run, a tenant inserting a
 child row that points at another tenant's parent gets `account_id = NULL` back from the
-RLS-filtered parent lookup (the trigger runs as the invoking role) and the insert **fails
-closed** — a `with check (true)` here would instead silently write invisible orphan rows.
+RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OWNER's account when
+the parent is merely shared with it (migration 610) — and `WITH CHECK` refuses either, so the
+insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
 their parent lookups see every row.
 
@@ -69,6 +78,19 @@ their parent lookups see every row.
    where account_id = '<account uuid>' and archived_at is null
    order by position, id;
   ```
+
+**Migration 610 — `collection_shares`**, one row per (collection, recipient account):
+`account_id` is the OWNER, stamped by a `BEFORE INSERT` trigger from the collection (292's
+function, renamed `sync_account_id_from_collection`). ONE `FOR ALL` party policy (`USING` owner
+or recipient, `WITH CHECK` owner); `grant select, delete` and **no INSERT** — account uuids are
+learnable, so a share is created only by the API (`POST /collections/{id}/shares`, service role,
+after resolving a confirmed email); either party deletes (revoke / leave). Reads widen through
+four `FOR SELECT` policies (`*_shared_read` on `collections`, `collection_properties`,
+`property_notes` — only rows the author marked `shared`, and through a share the author
+RECEIVED only if it predates `shared_at` (trigger-stamped consent time) — and
+`property_note_attachments`);
+the owner's `FOR ALL` policies decide every write, unchanged. Visibility rule:
+`docs/design/collection-sharing.md` §3.2.
 
 **Migration 536 — `property_dismissals`**, `account_id` on the row directly (the route
 names it, shape 2 below). Append-only: `grant select, insert` plus a COLUMN-scoped
@@ -154,10 +176,20 @@ and its SQL carries **no account predicate**. An `UPDATE`/`DELETE` *by id* is th
 the policy's `USING` clause is the row set, so supplying an account would be a second
 definition of it, not a gate.
 
+**The write is the gate.** On a tenant connection, ownership is proven by the `UPDATE`/`DELETE`
+itself — rowcount 0 (or no `RETURNING` row) → 404, before any side effect — never by a `SELECT`
+probe first: a `SELECT` proves only visibility, and once collections can be shared
+(`docs/design/collection-sharing.md`, W4) visibility is wider than ownership, so a probe would pass
+and the write would 500 on `WITH CHECK` or report a false success. A refusal that depends on the row (the system
+collection's 409) is raised inside the transaction so it rolls back; a pre-write check that must
+see the row takes `SELECT … FOR UPDATE`, which applies the UPDATE policy. Example:
+`api/curation.py` (`update_collection`, `delete_collection`, `add_properties_to_collection`,
+`update_note`) and `api/note_attachments.add_attachment`.
+
 **2. Writes carry exactly ONE account, resolved once at the route edge.**
 `tenant_pool.require_account_id` (FastAPI dependency) resolves it and raises
 `400 "no account for caller"` when there is none. Never a silent `None` (the account columns
-are `NOT NULL` since migrations 290/295, so a forwarded NULL is an empty result set or an
+are `NOT NULL`, see the per-table section, so a forwarded NULL is an empty result set or an
 opaque 500) and never a `SYSTEM` fallback (migration 290's `WITH CHECK` has no SYSTEM arm to
 accept it, so that fallback could only ever 500). The single best shape is the one where the
 route names no account at all because a **BEFORE INSERT trigger derives it from the parent
@@ -213,6 +245,24 @@ admin-only service-role work.** The route does not take `tenant_conn`; it opens
 The route-scope census excludes it structurally (it reaches `verify_jwt`, not `tenant_conn`).
 `test_estimation_child_routes_ride_the_tenant_connection` holds its shape instead, and
 `tests/api/test_estimation_child_routes_tenancy.py` holds its behaviour.
+
+**Second instance — `POST /collections/{collection_id}/shares`: the tenant gate, then a
+service-role write.** Browser roles hold no INSERT on `collection_shares` (uuids are learnable)
+or on `notification_dispatches`, so the share row and the recipient's notification are written
+on the service-role connection. The order is fixed: the tenant `UPDATE collections SET
+updated_at = now()` is the ownership gate (shape 1, rowcount 0 → 404) BEFORE the service-role
+connection even opens (`deps.open_background_conn` in the handler, never a dependency; pinned by
+`test_the_share_route_opens_the_service_role_only_after_its_gate`); the email resolves on the
+service role (`tenant_pool.account_for_email`); the share and its dispatch are one service-role
+transaction; the response is re-read on the tenant connection. Unlike the feedback route it keeps
+the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
+(`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
+
+**The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
+from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
+counterparties only) and by the admin entitlements route; and the share route's email lookup,
+`tenant_pool.account_for_email` (service role, confirmed emails only). A share is never membership:
+`current_account_ids()` is untouched, and a recipient's identity never widens.
 
 ### The two test rules that would have caught #917
 

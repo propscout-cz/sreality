@@ -21,12 +21,14 @@ the shadows too), inside one transaction that is always rolled back.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
 import pytest
 
 import toolkit.filter_registry as fr
+from api.location_filter import LEVEL_COLUMN, DistrictChip, district_where
 from tests.toolkit import test_filter_compiler_golden as gold
 from toolkit.measures import per_m2_sql, plot_area_sql
 
@@ -56,6 +58,9 @@ _CASES = [
     c for c in (gold.golden() if gold.GOLDEN_PATH.exists() else [])
     if c["grain"] in _STATEMENT and "raises" not in c
 ]
+_CHIP_CASES = json.loads(
+    (gold.GOLDEN_PATH.parent / "district_chip_plan.json").read_text(encoding="utf-8")
+)["cases"]
 
 
 @pytest.fixture(scope="module")
@@ -184,3 +189,30 @@ def test_the_fixture_annotations_are_the_measures(conn) -> None:
             for i, p, a in cur.fetchall()
         }
     assert actual == expected
+
+
+@pytest.mark.parametrize("case", _CHIP_CASES, ids=lambda c: c["name"])
+def test_the_chip_table_rows_match_in_postgres_too(conn, case: dict[str, Any]) -> None:
+    """R1-3. The shared chip table's `rows` were checked only by the SPA's
+    in-memory predicate; here `district_where` runs over the same rows in
+    Postgres, so a NULL code under an exclude (kept) or a street chip in its own
+    town (not widened) is judged by the engine the Watchdog actually runs on."""
+    columns = list(LEVEL_COLUMN.values())
+    params: dict[str, Any] = {}
+    values: list[str] = []
+    for i, r in enumerate(case["rows"]):
+        cells = [str(i)]
+        for col in columns:
+            params[f"row{i}_{col}"] = r["row"].get(col)
+            cells.append(f"%(row{i}_{col})s::bigint")
+        values.append(f"({', '.join(cells)})")
+    where, chip_params = district_where([DistrictChip(**c) for c in case["chips"]], alias="l")
+    sql = (
+        f"SELECT l.idx FROM (VALUES {', '.join(values)}) AS l(idx, {', '.join(columns)}) "
+        f"WHERE {' AND '.join(where) if where else 'true'}"
+    )
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(sql, {**params, **chip_params})
+        got = {int(r[0]) for r in cur.fetchall()}
+    assert got == {i for i, r in enumerate(case["rows"]) if r["matches"]}
+

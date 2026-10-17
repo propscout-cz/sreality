@@ -8,8 +8,9 @@
  *   funnel   — out of the pipeline: one click adds at the entry stage. In it:
  *              a click opens the stage menu (move, or remove behind a two-step
  *              confirm). Never a remove toggle (rule #22).
- *   bookmark — opens the checklist of every collection (rule #18); a click on
- *              a row adds or removes the property.
+ *   bookmark — opens the checklist of every collection of MINE (rule #18; a
+ *              shared one is never a save target); a click on a row adds or
+ *              removes the property.
  *   eye      — hides the property / restores it, one click either way
  *              (migration 536). Absent while the property is a LIVE deal.
  *
@@ -32,9 +33,12 @@ import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,
   bookmarkIconSvg,
+  collectionsKey,
   eyeOffIconSvg,
   funnelIconSvg,
-  sortCollections,
+  knowsAll,
+  savedCollections,
+  saveTargets,
   stageAccent,
   stageBadge,
 } from './glyphs';
@@ -371,6 +375,9 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
   let collections: ExtCollection[] | null = null;
   let collectionsLoading = false;
   let collectionsFailed = false;
+  /* Collection ids a held list did not know and was re-read for — once each, so
+   * an id a fresh read still lacks cannot loop the re-read. */
+  const rereadFor = new Set<number>();
   /* Read once a card on the page carries a tag; tags are edited in the app. */
   let tags: ExtTag[] | null = null;
   let tagsLoading = false;
@@ -475,9 +482,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     }
     /* The usual re-read changes nothing and lands just as the checklist opened —
      * rebuilding it then, under the pointer, can swallow the click being made. */
-    const key = (list: ExtCollection[]): string =>
-      JSON.stringify(sortCollections(list).map((c) => [c.id, c.name, c.monitoring_enabled]));
-    const changed = collections == null || key(collections) !== key(data);
+    const changed = collections == null || collectionsKey(collections) !== collectionsKey(data);
     collections = data;
     if (changed) refresh();
   }
@@ -728,11 +733,11 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const p = pid != null ? l.pipeline : null;
       const inPipe = p?.in_pipeline ?? false;
       const code = inPipe ? stageBadge(p?.stage_code, p?.stage_id, stages) : null;
-      const savedIds = pid != null ? l.collection_ids ?? [] : [];
-      const saved = savedIds.length;
-      const savedNames = sortCollections(collections ?? [])
-        .filter((c) => savedIds.includes(c.id))
-        .map((c) => c.name);
+      const memberIds = pid != null ? l.collection_ids ?? [] : [];
+      /* Saved = in one of MINE; until the list lands mine is unknown, and no
+       * mark beats a wrong one (a shared-only property is not saved). */
+      const savedNames = (savedCollections(memberIds, collections) ?? []).map((c) => c.name);
+      const saved = savedNames.length;
       const tagIds = pid != null ? l.tag_ids ?? [] : [];
       const tagged = (tags ?? [])
         .filter((t) => tagIds.includes(t.id))
@@ -741,8 +746,24 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       const canHide = pid != null && l.dismissed != null && !isLive(l);
       const veiled = dismissed && deps.veilOn();
       const view = deps.badgeFor(l, href);
+      /* The lists tell mine from shared and name the label; they name the tag
+       * chips. A held list that lacks one of the card's collections is stale
+       * (made or shared in the app since it was read): re-read it once. Before
+       * the unchanged-paint return, so a stale-but-unchanged card still asks. */
+      if (memberIds.length > 0 && !collectionsFailed) {
+        if (collections == null) void loadCollections(false);
+        else if (!collectionsLoading && !knowsAll(memberIds, collections)) {
+          const fresh = memberIds.filter((id) => !rereadFor.has(id));
+          if (fresh.length > 0) {
+            for (const id of fresh) rereadFor.add(id);
+            void loadCollections(true);
+          }
+        }
+      }
+      if (tagIds.length > 0) void loadTags();
       const state = JSON.stringify([
         pid, inPipe, p?.stage_label, p?.stage_color, code, saved, savedNames, tagged, dismissed,
+        memberIds.length > 0 && collectionsFailed,
         canHide,
         veiled, view, busy.has(`p:${pid}`), busy.has(`d:${pid}`),
         menu?.anchor === funnel, menu?.anchor === save,
@@ -776,9 +797,12 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
 
       save.hidden = pid == null;
       save.className = 'act' + (saved > 0 ? ' act--saved' : '');
-      const saveLabel = saved === 0
-        ? COLLECTION_SAVE_LABEL
-        : `${COLLECTION_SAVE_LABEL} — v ${saved} ${saved === 1 ? 'kolekci' : 'kolekcích'}`;
+      // A failed read is unknown, never "not saved" (the panel's 'Kolekce').
+      const saveLabel = saved > 0
+        ? `${COLLECTION_SAVE_LABEL} — v ${saved} ${saved === 1 ? 'kolekci' : 'kolekcích'}`
+        : memberIds.length > 0 && collectionsFailed
+          ? 'Kolekce se nepodařilo načíst'
+          : COLLECTION_SAVE_LABEL;
       save.title = saveLabel;
       save.setAttribute('aria-label', saveLabel);
       save.setAttribute('aria-expanded', String(menu?.anchor === save));
@@ -815,9 +839,6 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
           tags: tagged,
         }
         : null);
-      // The lists name the collection label and the tag chips.
-      if (saved > 0 && !collectionsFailed) void loadCollections(false);
-      if (tagIds.length > 0) void loadTags();
     }
 
     handles.set(card, {
@@ -878,6 +899,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     collections = null;
     collectionsLoading = false;
     collectionsFailed = false;
+    rereadFor.clear();
     tags = null;
     tagsLoading = false;
     tagsFailed = false;
@@ -1128,8 +1150,8 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     box.appendChild(confirm);
   }
 
-  /* The app's <CollectionSaveMenu>: every collection as a checkable row,
-   * monitored ones first and bell-marked. It stays open across clicks — a
+  /* The app's <CollectionSaveMenu>: every collection of MINE as a checkable
+   * row, monitored ones first and bell-marked. It stays open across clicks — a
    * property can sit in several collections. */
   function buildCollectionMenu(box: HTMLElement, l: PortalListing, open: Menu): void {
     const propertyId = open.propertyId;
@@ -1145,11 +1167,11 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
       box.appendChild(collectionsFailed
         ? stateLine('Kolekce se nepodařilo načíst.', () => { void loadCollections(true); })
         : stateLine('Načítám kolekce…'));
-    } else if (collections.length === 0) {
+    } else if (saveTargets(collections).length === 0) {
       box.appendChild(stateLine('Zatím nemáte žádnou kolekci.'));
     } else {
       const list = el('div', 'list');
-      for (const c of sortCollections(collections)) {
+      for (const c of saveTargets(collections)) {
         const member = memberIds.has(c.id);
         const row = button('row' + (member ? ' row--member' : ''));
         row.setAttribute('aria-pressed', String(member));
@@ -1181,7 +1203,7 @@ export function createCardLayer(deps: CardLayerDeps): CardLayer {
     /* Creating, renaming and monitoring settings stay in the app — the
      * checklist only files the property. */
     if (deps.collectionsUrl != null) {
-      const manage = el('a', 'link manage', collections?.length === 0
+      const manage = el('a', 'link manage', collections != null && saveTargets(collections).length === 0
         ? 'Založit kolekci v aplikaci →'
         : 'Spravovat kolekce →');
       manage.href = deps.collectionsUrl;

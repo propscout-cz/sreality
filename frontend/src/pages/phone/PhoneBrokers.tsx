@@ -9,7 +9,7 @@
  * results in place (a dropdown has no room on a phone, and the keyboard covers
  * half the screen); clearing the field brings the roll back. */
 
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
@@ -21,12 +21,12 @@ import { ChevronIcon, ClearIcon, PinIcon, SearchIcon } from '@/components/phone/
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import {
   LEADER_METRIC_OPTIONS,
-  chipsToGeoArrays,
   fetchBrokerLeaderboard,
   searchBrokersByName,
   type BrokerLeaderRow,
   type LeaderMetric,
 } from '@/lib/brokers';
+import { districtChipKey } from '@/lib/districtCodes';
 import type { DistrictChip } from '@/lib/filters';
 import { czPlural, fmtCount } from '@/lib/format';
 import { ROUTES } from '@/lib/routes';
@@ -47,16 +47,14 @@ const LIMIT = 100;
 const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
 const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
 
-/* The chips that actually scope the board: coded includes at the three levels
- * the leaderboard takes (`chipsToGeoArrays` skips a city-quarter chip). */
-export const scopingChips = (chips: ReadonlyArray<DistrictChip>): DistrictChip[] =>
-  chips.filter((d) => d.id != null && !d.excluded && d.level !== 'cast_obce');
-
-/* "Celá ČR", "Praha", "Praha +2" — short enough for a chip and a rule. */
+/* "Celá ČR", "Praha", "Praha +2", "Celá ČR − Žižkov", "Celá ČR −2" — short
+ * enough for a chip and a rule. Every chip counts; an include leads, else the
+ * whole country minus the excludes. */
 export function placeLabelOf(chips: ReadonlyArray<DistrictChip>): string {
-  const scoped = scopingChips(chips);
-  if (scoped.length === 0) return 'Celá ČR';
-  return scoped.length === 1 ? scoped[0].name : `${scoped[0].name} +${scoped.length - 1}`;
+  const lead = chips.find((c) => !c.excluded);
+  if (lead) return chips.length === 1 ? lead.name : `${lead.name} +${chips.length - 1}`;
+  if (chips.length === 0) return 'Celá ČR';
+  return chips.length === 1 ? `Celá ČR − ${chips[0].name}` : `Celá ČR −${chips.length}`;
 }
 
 /* The ranked figure and its noun: active properties, or every ad ever. */
@@ -190,13 +188,12 @@ function Leaderboard() {
   const [metric, setMetric] = useState<LeaderMetric>('active_property_count');
   const [placeOpen, setPlaceOpen] = useState(false);
 
-  const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
   const placeLabel = placeLabelOf(districts);
 
   const boardQ = useQuery<{ rows: BrokerLeaderRow[]; caption: string }>({
     queryKey: [
       'broker-leaderboard-phone',
-      geo.regionIds, geo.okresIds, geo.obecIds,
+      districts.map((d) => [districtChipKey(d), d.excluded === true]),
       categoryMain, categoryType, metric, LIMIT,
     ],
     /* The caption travels with the rows it was fetched under, so the previous
@@ -206,7 +203,7 @@ function Leaderboard() {
       const caption = [placeLabel, categoryMain && CATEGORY_WORD[categoryMain], categoryType && OFFER_WORD[categoryType]]
         .filter(Boolean)
         .join(' · ');
-      return fetchBrokerLeaderboard({ ...geo, categoryMain, categoryType, metric, limit: LIMIT }, signal).then(
+      return fetchBrokerLeaderboard({ districts, categoryMain, categoryType, metric, limit: LIMIT }, signal).then(
         (rows) => ({ rows, caption }),
       );
     },
@@ -216,7 +213,7 @@ function Leaderboard() {
   const rows = boardQ.data?.rows ?? [];
 
   const pill = (on: boolean) => `${CHIP} ${CHIP_MD} ${chipState(on)}`;
-  const placeOn = scopingChips(districts).length > 0;
+  const placeOn = districts.length > 0;
 
   return (
     <>
@@ -324,7 +321,7 @@ function Leaderboard() {
           <div className="min-h-[70dvh] px-4 pt-3">
             <LocationTypeahead label="Místo" value={districts} onChange={(next) => setDistricts(next ?? [])} />
             <p className="mt-3 text-[12px] text-[var(--color-ink-3)]">
-              Kraj, okres nebo obec; bez místa platí celá ČR. Městská část se v žebříčku zatím nepočítá.
+              Kraj, okres, obec, část obce nebo ulice; bez místa platí celá ČR.
             </p>
           </div>
         </BottomSheet>

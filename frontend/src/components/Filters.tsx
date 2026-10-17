@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { Suspense, useRef, type ReactNode } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import {
   type CenterRadius,
@@ -15,14 +15,13 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { pgRead } from '@/lib/pgRead';
 import {
-  curationKeys,
   dismissalKeys,
   fetchBrowseCount,
   fetchDismissedCount,
   fetchNoPriceCount,
 } from '@/lib/queries';
-import { listCollections } from '@/lib/api';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
+import { collectionLabel, useCollections } from '@/lib/collectionCache';
 import { browseKeys } from '@/lib/browseKeys';
 import { FilterForm } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
@@ -188,7 +187,10 @@ function IncludeNoPriceToggle({
 
 /* Collection scope (rule #18). The registry's `int_list` fallback is a box you
  * type ids into, so the sidebar picks from the ONE collections list instead. A
- * failed read is a retry, never "No collections yet" (MS16). */
+ * failed read is a retry, never "No collections yet" (MS16). Collections shared
+ * with the caller sit in their own group over the SAME value array (one
+ * `collections` URL parameter); a picked id the list no longer holds (revoked,
+ * deleted) stays as a clearable `#id` chip rather than filtering invisibly. */
 export function CollectionsPicker({
   value,
   onChange,
@@ -196,12 +198,7 @@ export function CollectionsPicker({
   value: ReadonlyArray<number> | null;
   onChange: (next: number[] | null) => void;
 }) {
-  const q = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-  const collections = q.data?.data ?? [];
+  const { collections, mine, shared, byId, query: q } = useCollections();
 
   if (q.isLoading) {
     return (
@@ -213,7 +210,10 @@ export function CollectionsPicker({
     return <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void q.refetch()} />;
   }
 
-  if (collections.length === 0) {
+  const picked = value ?? [];
+  const missing = picked.filter((id) => !byId.has(id));
+
+  if (collections.length === 0 && missing.length === 0) {
     return (
       <p className="text-[0.75rem] text-[var(--color-ink-4)]">
         No collections yet. Create one from the Collections page.
@@ -221,12 +221,43 @@ export function CollectionsPicker({
     );
   }
 
+  const set = (next: number[]) => onChange(next.length === 0 ? null : next);
+  const chips = (items: typeof collections) =>
+    items.map((c) => ({ value: c.id, label: collectionLabel(c) }));
+  const grouped = shared.length > 0;
   return (
-    <MultiselectChips
-      value={value ?? []}
-      options={collections.map((c) => ({ value: c.id, label: c.name }))}
-      onChange={(next) => onChange(next.length === 0 ? null : next)}
-    />
+    <div className="flex flex-col gap-2">
+      {mine.length > 0 && (
+        <PickerGroup label={grouped ? 'Mine' : null}>
+          <MultiselectChips value={picked} options={chips(mine)} onChange={set} />
+        </PickerGroup>
+      )}
+      {grouped && (
+        <PickerGroup label="Shared with me">
+          <MultiselectChips value={picked} options={chips(shared)} onChange={set} />
+        </PickerGroup>
+      )}
+      {missing.length > 0 && (
+        <PickerGroup label="No longer available">
+          <MultiselectChips
+            value={picked}
+            options={missing.map((id) => ({ value: id, label: `#${id}` }))}
+            onChange={set}
+          />
+        </PickerGroup>
+      )}
+    </div>
+  );
+}
+
+function PickerGroup({ label, children }: { label: string | null; children: ReactNode }) {
+  if (label == null) return <>{children}</>;
+  return (
+    <div role="group" aria-label={label} className="flex flex-col gap-1">
+      {/* The sidebar's sub-group caption (as PipelineScopePicker's "Fáze"). */}
+      <p className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">{label}</p>
+      {children}
+    </div>
   );
 }
 
@@ -294,6 +325,10 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
   // already use. The adapter in lib/filters bridges both directions
   // (tri-state amenities pivot bool|null ↔ 'any'|'yes'|'no' inside it).
   const registryView = listingFiltersToRegistryView(filters);
+  // A location pick lands only after `/maps/resolve` answers, so it merges into
+  // the LATEST filters, never the ones the click closed over.
+  const latestFilters = useRef(filters);
+  latestFilters.current = filters;
   // The unit the Kč/m² bound is authored IN, resolved from the cohort the
   // operator is currently looking at. A cohort spanning bases has no single
   // unit, so the hint says so rather than picking one.
@@ -445,9 +480,10 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
               <LocationTypeahead
                 label="District"
                 value={filters.districts}
-                onChange={(next) =>
-                  onChange({ ...filters, districts: next ?? [] })
-                }
+                onChange={(next) => {
+                  latestFilters.current = { ...latestFilters.current, districts: next ?? [] };
+                  onChange(latestFilters.current);
+                }}
                 onPick={onLocationPick}
               />
             </Section>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -6,7 +6,6 @@ import {
   listOutreachCampaigns,
   type OutreachCampaign,
 } from '../lib/api';
-import { chipsToGeoArrays } from '../lib/brokers';
 import type { DistrictChip } from '../lib/filters';
 import { LocationTypeahead } from '../components/filter-controls/LocationTypeahead';
 import { Field, Segmented } from '../components/controls';
@@ -37,7 +36,6 @@ export default function Outreach() {
   const [districts, setDistricts] = useState<DistrictChip[]>([]);
   const [categoryMain, setCategoryMain] = useState<string | null>('byt');
   const [categoryType, setCategoryType] = useState<string | null>('prodej');
-  const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
 
   const createM = useMutation({
     mutationFn: () =>
@@ -46,9 +44,7 @@ export default function Outreach() {
         goal: goal.trim() || null,
         guidance: guidance.trim() || null,
         target: {
-          region_ids: geo.regionIds,
-          okres_ids: geo.okresIds,
-          obec_ids: geo.obecIds,
+          districts,
           category_main: categoryMain,
           category_type: categoryType,
           metric: 'active_property_count',
