@@ -1,15 +1,17 @@
-"""Offline contracts W4 must not break (migrations 435, 469).
+"""Offline contracts W4 must not break (migrations 435, 469, 609).
 
 Load-bearing things about the broker leaderboard, invisible in the normal test suite, and
 each would fail only in production:
 
-  * `api/outreach.py` calls the function with SEVEN positional arguments regardless of how
-    many parameters it has grown to. That is legal only because every parameter added since
-    migration 410 (`p_firm_ids`, then 448's `p_min_price_czk`/`p_include_unpriced`, then
-    469's `p_subtypes`/`p_include_unknown_subtype`) is TRAILING and carries a DEFAULT.
-    Dropping a default, or inserting a new parameter anywhere but the end, breaks that
-    call at runtime with CI green —
-    `tests/api/test_outreach_routes.py` mentions neither `leaderboard` nor `select_targets`.
+  * `api/outreach.py` calls the function with EIGHT positional arguments — the four chip
+    arrays, the two categories, the metric and its 2000 cap — however many parameters it
+    has grown to. That is legal only because every parameter after those (410's
+    `p_firm_ids`, 448's `p_min_price_czk`/`p_include_unpriced`, 469's
+    `p_subtypes`/`p_include_unknown_subtype`) is TRAILING and carries a DEFAULT. 609 is the
+    one re-signing that touched the leading positions (three id lists became four chip
+    arrays), so it moved this call from seven to eight in the same change; dropping a
+    default, or inserting a parameter anywhere but the end, breaks the call at runtime with
+    CI green — the fake cursors in tests/api/test_outreach_routes.py cannot see a signature.
   * `CREATE OR REPLACE` preserves a function's ACL; `DROP` + `CREATE` resets it to the
     default, `EXECUTE TO PUBLIC`. Since this function returns `primary_email` and
     `primary_phone`, that default silently re-exposes broker PII to `anon` — undoing
@@ -34,6 +36,7 @@ lives in `tests/test_broker_leaderboard_plan_shape.py`.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -77,7 +80,7 @@ def _sql(path: Path) -> str:
 def _leaderboard_call_args(source: str) -> str:
     """The text INSIDE `broker_leaderboard(` ... `)` in outreach's SQL literal.
 
-    Counting `%s` across the whole statement gives 10 and proves nothing — 7 function
+    Counting `%s` across the whole statement gives 11 and proves nothing — 8 function
     arguments plus two campaign_id binds plus the LIMIT. Count the wrapper, not the name.
     """
     start = source.index("broker_leaderboard(")
@@ -92,35 +95,40 @@ def _leaderboard_call_args(source: str) -> str:
     return source[start + len("broker_leaderboard(") : i - 1]
 
 
-def test_outreach_passes_seven_positional_args():
-    """RED by: changing the call to 8 placeholders, or re-signing the function."""
+def test_outreach_passes_eight_positional_args():
+    """RED by: changing the call to 9 placeholders, or re-signing the function."""
     args = _leaderboard_call_args(_OUTREACH.read_text())
-    assert args.count("%s") == 7, (
+    assert args.count("%s") == 8, (
         f"api/outreach.py passes {args.count('%s')} arguments to broker_leaderboard, "
-        f"expected 7: {args!r}"
+        f"expected 8: {args!r}"
     )
 
 
 def test_every_function_parameter_carries_a_default():
-    """The actual invariant that keeps a 7-argument call against 10 parameters legal.
+    """The actual invariant that keeps an 8-argument call against 13 parameters legal.
 
     Anchored on the CREATE (not the file's leading DROP, which names the OLD 8-param
     signature it is retiring) — `body.index("broker_leaderboard(")` alone would find that
     DROP first and silently check the wrong parameter list.
 
-    RED by: un-defaulting any parameter in 469.
+    RED by: un-defaulting any parameter in 609.
     """
     body = _sql(_FN_MIGRATION)
     create_at = body.index("create or replace function public.broker_leaderboard(")
     start = create_at + len("create or replace function public.broker_leaderboard(")
     params = body[start : body.index(")\nreturns", start)]
     lines = [p.strip() for p in params.split(",\n") if p.strip()]
-    assert len(lines) == 12, f"expected 12 parameters, found {len(lines)}: {lines}"
+    assert len(lines) == 13, f"expected 13 parameters, found {len(lines)}: {lines}"
     missing = [p for p in lines if "default" not in p.lower()]
     assert not missing, (
-        "every broker_leaderboard parameter must carry a DEFAULT — api/outreach.py:123 "
-        f"passes only 7 of 10 positionally: {missing}"
+        "every broker_leaderboard parameter must carry a DEFAULT — api/outreach.py "
+        f"passes only 8 of 13 positionally: {missing}"
     )
+    # Browse's chip parameters, Browse's names and order (605): toolkit/brokers.py and
+    # api/outreach.py both pass `api.location_filter.district_arrays` into these four.
+    assert [p.split()[0] for p in lines[:4]] == [
+        "districts_filter", "districts_excluded_filter", "districts_levels", "districts_ids",
+    ]
 
 
 def test_outreach_filters_by_email_after_the_rpc_not_inside_it():
@@ -399,10 +407,77 @@ def test_combined_hydrates_from_the_ranked_top_cte_not_the_raw_aggregate():
 # The two gate expressions, spelled once here and asserted verbatim below. They must be
 # exact logical complements over the SAME parameters: if a call could satisfy both, its
 # rows are double-counted; if it could satisfy neither, the leaderboard comes back empty.
-# Adding a THIRD live-path filter means updating both spellings AND this pair — which is
-# the point of pinning the literal text rather than a loose substring.
-_FAST_GATE = "p_min_price_czk is null and p_subtypes is null"
-_LIVE_GATE = "p_min_price_czk is not null or p_subtypes is not null"
+# Adding a live-path filter means updating both spellings AND this pair — which is the
+# point of pinning the literal text rather than a loose substring. 609 added the chips:
+# the count book has cells for an INCLUDE at kraj / okres / obec only, one level per name.
+_FAST_GATE = (
+    "p_min_price_czk is null and p_subtypes is null\n"
+    "      and coalesce(districts_levels, '{}') <@ '{kraj,okres,obec}'\n"
+    "      and coalesce(districts_excluded_filter, '{}') <@ '{false}'\n"
+    "      and cardinality(districts_levels) is not distinct from cardinality(districts_filter)"
+)
+_LIVE_GATE = (
+    "p_min_price_czk is not null or p_subtypes is not null\n"
+    "      or not coalesce(districts_levels, '{}') <@ '{kraj,okres,obec}'\n"
+    "      or not coalesce(districts_excluded_filter, '{}') <@ '{false}'\n"
+    "      or cardinality(districts_levels) is distinct from cardinality(districts_filter)"
+)
+
+
+def _negated(atom: str) -> str:
+    if atom.endswith(" is null"):
+        return atom.removesuffix(" is null") + " is not null"
+    if " is not distinct from " in atom:
+        return atom.replace(" is not distinct from ", " is distinct from ")
+    return f"not {atom}"
+
+
+def test_the_count_book_levels_are_the_fast_gates_and_the_derived_lists():
+    """toolkit.brokers stamps freshness only when the count book answers, judged from the
+    same levels the SQL gate names. RED by: a level added to one side only — the stamp
+    would then claim matview freshness for a live read, or the reverse."""
+    from toolkit.brokers import COUNT_BOOK_LEVELS
+
+    assert f"<@ '{{{','.join(COUNT_BOOK_LEVELS)}}}'" in _FAST_GATE
+    fast, _ = _branches(_fn_body())
+    derived = re.findall(
+        r"district_level_codes\(districts_levels, districts_ids, districts_excluded_filter, "
+        r"'(\w+)', false\)", fast)
+    assert derived == list(COUNT_BOOK_LEVELS)
+
+
+def test_the_precondition_names_the_live_body_and_this_files_own():
+    """A re-run must pass its own md5 gate, so the gate must name THIS body's md5 exactly
+    as Postgres stores prosrc (the text between the `$function$` quotes) — any edit inside
+    the body (a renumbered comment included) changes it. 605's rail, for 609.
+
+    RED by: editing the function body without recomputing the precondition's hash."""
+    sql = _FN_MIGRATION.read_text()
+    pre = sql[sql.index("do $pre$"): sql.index("$pre$;")]
+    assert pre.index("into populated") < pre.index("return;") < pre.index("pg_proc")
+    at = sql.index("create or replace function public.broker_leaderboard(")
+    body = sql[at: sql.index("$function$;", at)].split("$function$")[1]
+    assert f"'{hashlib.md5(body.encode()).hexdigest()}'" in pre, "re-run would refuse"
+    assert "'aabd5828e6bed3be596ae07a74c11216'" in pre, "580's body as applied live"
+    code = _sql(_FN_MIGRATION)
+    assert code.lstrip().startswith("set lock_timeout = '5s';")
+    assert code.rstrip().endswith("reset lock_timeout;")
+
+
+def test_the_two_gates_are_de_morgan_complements_and_both_branches_carry_one():
+    """The live gate is the fast gate negated atom by atom. Every atom is two-valued — an
+    IS NULL test, a containment over a COALESCEd array, an IS DISTINCT FROM — so De Morgan
+    holds in SQL's three-valued logic too: exactly one branch answers every call.
+
+    RED by: adding a chip condition to one gate only (a street chip would then reach the
+    count book, which has no street cells, and answer with its town's or the country's
+    brokers), or gating `live_priced` on less than the full live gate.
+    """
+    fast = re.split(r"\s+and\s+", _FAST_GATE)
+    live = re.split(r"\s+or\s+", _LIVE_GATE)
+    assert [_negated(a) for a in fast] == live
+    _, live_branch = _branches(_fn_body())
+    assert f"where ({_LIVE_GATE})" in live_branch.lower()
 
 
 def test_combined_arms_are_gated_by_complementary_live_filter_conditions():
@@ -456,6 +531,11 @@ def test_the_fast_branch_is_one_exact_cell_arm_carrying_the_full_gate():
         "the okres and obec disjuncts must each suppress chips nested under a selected "
         "parent (count-once, operator ruling 2026-09-30)"
     )
+    # "No chips" is a PARAMETER test, so the planner folds it and a chip call never reads
+    # the national cells. Derived from `g` it would be an InitPlan the planner cannot fold:
+    # measured live 2026-10-17, a kraj + obec call then read the cz band too (+15,099 rows,
+    # 4,558 -> 11,799 heap blocks) to filter it all away.
+    assert "(coalesce(cardinality(districts_filter), 0) = 0\n         and s.geo_level = 'cz')" in low
 
 
 def test_the_live_branch_predicates_are_each_inert_when_unset():

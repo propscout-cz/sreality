@@ -1,5 +1,4 @@
 import { ApiError, apiGet, apiPost } from './api';
-import { isDistrictChip } from './districtCodes';
 import type { DistrictChip } from './filters';
 import type { ListingStatus } from './filters';
 
@@ -167,9 +166,7 @@ export interface BrokerDossier {
 }
 
 export interface LeaderboardParams {
-  regionIds: number[];
-  okresIds: number[];
-  obecIds: number[];
+  districts: DistrictChip[];
   categoryMain: string | null;
   categoryType: string | null;
   metric: LeaderMetric;
@@ -224,34 +221,6 @@ export function contactState(
   return has ? { state: 'masked' } : { state: 'none' };
 }
 
-// The location chips as the leaderboard RPC's three code arrays. The RPC serves
-// only INCLUDE chips at kraj / okres / obec; if ANY chip is not one of those
-// (část obce, ulice, excluded, or no valid chip at all) the WHOLE selection
-// projects to a no-match obec code alone, because dropping that chip would widen
-// the page. The page says why (GEO_UNSERVED_HINT); a write route must never
-// receive it.
-const UNSERVED_OBEC_ID = -1;
-const SERVED_LEVELS: ReadonlyArray<string> = ['kraj', 'okres', 'obec'];
-
-export function chipsToGeoArrays(chips: ReadonlyArray<DistrictChip>): {
-  regionIds: number[];
-  okresIds: number[];
-  obecIds: number[];
-} {
-  if (chips.some((c) => !isDistrictChip(c) || c.excluded || !SERVED_LEVELS.includes(c.level))) {
-    return { regionIds: [], okresIds: [], obecIds: [UNSERVED_OBEC_ID] };
-  }
-  const at = (level: DistrictChip['level']) => chips.filter((c) => c.level === level).map((c) => c.id);
-  return { regionIds: at('kraj'), okresIds: at('okres'), obecIds: at('obec') };
-}
-
-export const geoUnserved = (geo: { obecIds: ReadonlyArray<number> }): boolean =>
-  geo.obecIds.includes(UNSERVED_OBEC_ID);
-
-export const GEO_UNSERVED_HINT =
-  'This page filters by region, district or town only — a street, a part of a town '
-  + 'or an excluded place selects nothing here';
-
 /* The standard toolkit envelope. `pii_masked` is stamped on every /brokers
  * response, masked or not. `capped` is stamped only by broker_property_ids. */
 interface Envelope<T> {
@@ -286,8 +255,8 @@ function chunk<T>(xs: ReadonlyArray<T>, size: number): T[][] {
 
 /* No wrapper for GET /brokers/geo-options: this module's caller (BrokerDetail's
  * region-name map) went away when the dossier started joining region_shares[].name
- * server-side, and the page's location control is the shared LocationTypeahead +
- * chipsToGeoArrays, which matches on stable admin ids like Browse and Datasets do.
+ * server-side, and the page's location control is the shared LocationTypeahead,
+ * whose chips the leaderboard filters on exactly as Browse does.
  * A broker-specific geo vocabulary would fork that contract for one page. The
  * route stays — it is the only path to broker_geo_options, which is dark to
  * `authenticated` — so re-adding a wrapper is a few lines if a consumer appears. */
@@ -299,9 +268,10 @@ export async function fetchBrokerLeaderboard(
   const r = await apiGet<Envelope<BrokerLeaderRow[]>>(
     '/brokers/leaderboard',
     {
-      region_ids: p.regionIds,
-      okres_ids: p.okresIds,
-      obec_ids: p.obecIds,
+      districts: p.districts.map((d) => d.name),
+      districts_lvl: p.districts.map((d) => d.level),
+      districts_id: p.districts.map((d) => d.id),
+      districts_excl: p.districts.map((d) => d.excluded === true),
       category_main: p.categoryMain,
       category_type: p.categoryType,
       metric: p.metric,

@@ -60,6 +60,7 @@ _PROBE = textwrap.dedent(
     # heavy top-level import anywhere in the eager closure would fail here.
     import toolkit  # noqa: F401
     from toolkit.broker_sources import BROKER_SOURCE_NAMES  # noqa: F401
+    from toolkit.brokers import leaderboard  # noqa: F401
 
     print("OK")
     """
@@ -93,4 +94,14 @@ def test_boto3_specifically_is_not_import_time() -> None:
         "boto3 is imported at toolkit import time again — regression of the "
         "slim-install outage.\n\n"
         f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+    )
+
+
+def test_toolkit_brokers_needs_no_api_stack() -> None:
+    """toolkit/ sits below api/: the leaderboard takes the four chip arrays the API
+    compiles (migration 609), so importing it pulls in neither pydantic nor fastapi."""
+    result = _run_probe(("pydantic", "fastapi"))
+    assert result.returncode == 0, (
+        "toolkit.brokers imports the API stack again — keep `api.location_filter` on the "
+        f"api side.\n\nstdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
     )

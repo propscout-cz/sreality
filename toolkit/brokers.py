@@ -25,6 +25,12 @@ _VALID_METRICS = {
     "active_property_count", "property_count", "listing_count", "active_listing_count",
 }
 GEO_LEVELS = ("region", "okres")
+# A chip-taking RPC's four parallel arguments — names, excluded flags, levels, codes —
+# as `api.location_filter.district_arrays` builds them; all None = no chips.
+ChipArrays = tuple[list[str] | None, list[bool] | None, list[str] | None, list[int] | None]
+NO_CHIPS: ChipArrays = (None, None, None, None)
+# The chip levels broker_region_type_stats has cells for, in migration 609's fast-gate order.
+COUNT_BOOK_LEVELS = ("kraj", "okres", "obec")
 MAX_BATCH = 1000
 _REDACTED = "[redacted]"
 _EMAIL_RE = re.compile(r"[^@\s<>,;()\[\]\"']+@[^@\s<>,;()\[\]\"']+\.[a-z]{2,}",
@@ -151,21 +157,21 @@ def _mask(value: Any) -> Any:
     return out
 
 
-def leaderboard(conn: Any, *, region_ids: list[int] | None = None,
-                okres_ids: list[int] | None = None, obec_ids: list[int] | None = None,
+def leaderboard(conn: Any, *, districts: ChipArrays = NO_CHIPS,
                 category_main: str | None = None, category_type: str | None = None,
                 metric: str = "active_property_count", limit: int = 100,
                 firm_ids: list[int] | None = None, min_price_czk: int | None = None,
                 include_unpriced: bool = False, subtypes: list[str] | None = None,
                 include_unknown_subtype: bool = False) -> dict[str, Any]:
-    """Top brokers by a chosen metric, optionally scoped to admin regions +
-    category + one or more companies (firm_ids, migration 410) + a minimum
-    property value (min_price_czk, migration 448) + property subtypes
-    (subtypes, migration 469).
+    """Top brokers by a chosen metric, optionally scoped to location chips (Browse's
+    five-level predicate, migration 609) + category + one or more companies
+    (firm_ids, migration 410) + a minimum property value (min_price_czk, migration
+    448) + property subtypes (subtypes, migration 469).
 
     Thin wrapper over the broker_leaderboard RPC, so every caller (this page and
-    api/outreach.select_targets) ranks brokers identically. Empty id arrays =
-    national / every company.
+    api/outreach.select_targets) ranks brokers identically. `districts` is the four
+    chip arrays (`api.location_filter.district_arrays`; no chips = national); empty
+    firm_ids = every company.
 
     `min_price_czk` reads `listings.price_czk` directly — same column, same ">="
     semantics as Browse's own min_price_czk filter (toolkit.comparables), unit-for-unit
@@ -194,20 +200,23 @@ def leaderboard(conn: Any, *, region_ids: list[int] | None = None,
     if metric not in _VALID_METRICS:
         metric = "active_property_count"
     limit = max(1, min(int(limit), 2000))
+    names, excluded, levels, ids = districts
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT * FROM broker_leaderboard("
-            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (region_ids or None, okres_ids or None, obec_ids or None,
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (names, excluded, levels, ids,
              category_main, category_type, metric, limit, firm_ids or None,
              min_price_czk, include_unpriced, subtypes or None,
              include_unknown_subtype))
         rows = cur.fetchall()
         # W4: the fast branch answers from the matview, so its freshness IS the
-        # registry stamp (hourly-if-stale drain republish); a price/subtype
-        # call reads listings live and stays un-stamped (None = "as of now").
+        # registry stamp (hourly-if-stale drain republish); a price/subtype call,
+        # or a chip the matview has no cell for, reads listings live and stays
+        # un-stamped (None = "as of now").
         freshness = None
-        if min_price_czk is None and not subtypes:
+        if (min_price_czk is None and not subtypes and not any(excluded or ())
+                and set(levels or ()) <= set(COUNT_BOOK_LEVELS)):
             cur.execute(
                 "SELECT last_succeeded_at FROM derived_artifacts "
                 "WHERE name = 'broker_region_type_stats'")
@@ -216,8 +225,9 @@ def leaderboard(conn: Any, *, region_ids: list[int] | None = None,
                 "last_succeeded_at") else None
     return _envelope(
         "broker_leaderboard", rows,
-        {"region_ids": region_ids or [], "okres_ids": okres_ids or [],
-         "obec_ids": obec_ids or [], "category_main": category_main,
+        {"districts": [{"name": n, "excluded": x, "level": lv, "id": i} for n, x, lv, i
+                       in zip(names or [], excluded or [], levels or [], ids or [])],
+         "category_main": category_main,
          "category_type": category_type, "metric": metric, "limit": limit,
          "firm_ids": firm_ids or [], "min_price_czk": min_price_czk,
          "include_unpriced": include_unpriced, "subtypes": subtypes or [],

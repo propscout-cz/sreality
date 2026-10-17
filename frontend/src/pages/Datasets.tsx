@@ -42,7 +42,7 @@ import { YmPicker, YM_PARTS } from '@/components/YmPicker';
 import CityPicker from '@/components/CityPicker';
 import { buildHoverData } from '@/lib/growthChoropleth';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
-import { GEO_UNSERVED_HINT, chipsToGeoArrays, geoUnserved } from '@/lib/brokers';
+import { hasChipFinerThanObec, keepObecFor } from '@/lib/datasetsPlace';
 import type { DistrictChip } from '@/lib/filters';
 
 const METRIC_ORDER: DatasetMetric[] = ['rent_cagr_pct', 'sale_cagr_pct', 'yield_change_pp_pa'];
@@ -273,35 +273,8 @@ export default function Datasets() {
     return { okresId, krajId };
   }, [obecTreeQ.data]);
 
-  // The projection Brokers/Outreach use: the chips' kraj/okres/obec codes, then
-  // keep an obec iff it (or its okres/kraj ancestor) is selected. Empty
-  // selection ⇒ keep everything. Datasets has per-obec rows only, so a selection
-  // holding a chip it cannot serve (část obce, ulice, excluded) selects nothing
-  // here, and the hint under the Location box says so.
-  const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
-  const loc = useMemo(() => ({
-    obec: new Set(geo.obecIds),
-    okres: new Set(geo.okresIds),
-    region: new Set(geo.regionIds),
-    active: geo.obecIds.length + geo.okresIds.length + geo.regionIds.length > 0,
-  }), [geo]);
-  const keepObec = useMemo(() => {
-    const { obec, okres, region, active } = loc;
-    const { okresId, krajId } = adminIdsByObec;
-    return (obecId: number): boolean => {
-      if (!active) return true;
-      if (obec.has(obecId)) return true;
-      const ok = okresId.get(obecId);
-      if (ok != null && okres.has(ok)) return true;
-      const kr = krajId.get(obecId);
-      return kr != null && region.has(kr);
-    };
-  }, [loc, adminIdsByObec]);
-
-  const filteredRows = useMemo(
-    () => (loc.active ? rows.filter((r) => keepObec(r.obec_id)) : rows),
-    [rows, loc.active, keepObec],
-  );
+  const keepObec = useMemo(() => keepObecFor(districts, adminIdsByObec), [districts, adminIdsByObec]);
+  const filteredRows = useMemo(() => rows.filter((r) => keepObec(r.obec_id)), [rows, keepObec]);
 
   const nameToCityId = useMemo(() => {
     const m = new Map<string, number>();
@@ -422,8 +395,8 @@ export default function Datasets() {
   const selectedInScope = useMemo(() => {
     const ids = active?.obec_ids;
     if (!ids) return null;
-    return loc.active ? ids.filter((id) => keepObec(id)).length : ids.length;
-  }, [active, loc.active, keepObec]);
+    return ids.filter((id) => keepObec(id)).length;
+  }, [active, keepObec]);
 
   const activeSort: { col: string; dir: 'asc' | 'desc' } = sort ?? { col: metric, dir: 'desc' };
 
@@ -559,8 +532,11 @@ export default function Datasets() {
               <span className="mt-2 shrink-0 text-xs uppercase tracking-[0.14em] text-[var(--color-ink-3)]">Location</span>
               <div className="w-full sm:max-w-sm">
                 <LocationTypeahead label="Location" value={districts} onChange={(n) => setDistricts(n ?? [])} />
-                {geoUnserved(geo) && (
-                  <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">{GEO_UNSERVED_HINT}</p>
+                {hasChipFinerThanObec(districts) && (
+                  <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">
+                    Datasets has per-town data only — a street or part-of-town chip selects nothing
+                    here, and excluding one removes nothing
+                  </p>
                 )}
               </div>
             </div>
@@ -573,7 +549,7 @@ export default function Datasets() {
           <div className="mt-6">
             {rows.length === 0 && !growthQ.isLoading ? (
               <EmptyData run={runQ.data ?? null} />
-            ) : loc.active && filteredRows.length === 0 ? (
+            ) : districts.length > 0 && filteredRows.length === 0 ? (
               <NoLocationMatch onClear={() => setDistricts([])} />
             ) : (
               <>
