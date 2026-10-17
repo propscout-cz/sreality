@@ -1,4 +1,4 @@
--- 609: collection sharing, view-only (docs/design/collection-sharing.md §3.1).
+-- 610: collection sharing, view-only (docs/design/collection-sharing.md §3.1).
 --
 -- NORTH STAR. A share is ONE row, (collection, recipient account), and it widens only what the
 -- recipient can READ. No write rule widens: the owner's FOR ALL `*_tenant_rw` policy on every
@@ -91,18 +91,18 @@ create policy collection_shares_party on collection_shares
   with check (account_id in (select current_account_ids()));
 
 comment on table collection_shares is
-  'A read-only grant of one collection to one account (migration 609). account_id = the owner, '
+  'A read-only grant of one collection to one account (migration 610). account_id = the owner, '
   'stamped from the collection by trigger. Created only by the API (no browser INSERT); either '
   'party may delete (owner revokes, recipient leaves). Widens reads only, never writes.';
 
 alter table property_notes add column shared boolean not null default false;
 alter table property_notes add column shared_at timestamptz;
 comment on column property_notes.shared is
-  'The author''s consent mark (migration 609): readable by the other party of a share the '
+  'The author''s consent mark (migration 610): readable by the other party of a share the '
   'author is party to whose collection holds this property (as recipient, only of a share '
   'older than shared_at). Default private.';
 comment on column property_notes.shared_at is
-  'When the shared mark last turned on (migration 609; trigger-stamped, NULL while private). '
+  'When the shared mark last turned on (migration 610; trigger-stamped, NULL while private). '
   'A share the author RECEIVED shows the note only if it already existed at this moment.';
 
 create function stamp_property_notes_shared_at()
@@ -218,7 +218,7 @@ declare
   found_count int;
 begin
   if not (select relrowsecurity from pg_class where oid = 'public.collection_shares'::regclass) then
-    raise exception '609: RLS is off on collection_shares';
+    raise exception '610: RLS is off on collection_shares';
   end if;
   select count(*) into found_count
     from pg_policies
@@ -227,21 +227,21 @@ begin
      and permissive = 'PERMISSIVE'
      and roles = array['authenticated']::name[];
   if found_count <> 5 then
-    raise exception '609: expected 5 share policies (cmd + roles = {authenticated}), found %', found_count;
+    raise exception '610: expected 5 share policies (cmd + roles = {authenticated}), found %', found_count;
   end if;
   if (select count(*) from pg_policies where schemaname = 'public' and tablename = 'collection_shares') <> 1 then
-    raise exception '609: collection_shares must carry exactly one policy';
+    raise exception '610: collection_shares must carry exactly one policy';
   end if;
   if has_table_privilege('authenticated', 'public.collection_shares', 'INSERT')
      or has_table_privilege('authenticated', 'public.collection_shares', 'UPDATE')
      or has_table_privilege('anon', 'public.collection_shares', 'SELECT') then
-    raise exception '609: collection_shares grants drifted (no INSERT/UPDATE for authenticated, nothing for anon)';
+    raise exception '610: collection_shares grants drifted (no INSERT/UPDATE for authenticated, nothing for anon)';
   end if;
   if has_function_privilege('authenticated', 'public.account_email(uuid)', 'EXECUTE')
      or has_function_privilege('anon', 'public.account_email(uuid)', 'EXECUTE')
      or has_function_privilege('anon', 'public.share_party_emails()', 'EXECUTE')
      or not has_function_privilege('authenticated', 'public.share_party_emails()', 'EXECUTE') then
-    raise exception '609: label function grants drifted';
+    raise exception '610: label function grants drifted';
   end if;
   if (select count(*) from pg_constraint
        where conname in ('notification_dispatches_source_ck', 'notification_dispatches_change_kind_ck')
@@ -249,16 +249,16 @@ begin
      or not exists (select 1 from pg_constraint
                      where conname = 'collection_shares_not_self'
                        and conrelid = 'public.collection_shares'::regclass) then
-    raise exception '609: constraints missing';
+    raise exception '610: constraints missing';
   end if;
   if not exists (select 1 from pg_trigger
                   where tgname = 'property_notes_shared_at_biu'
                     and tgrelid = 'public.property_notes'::regclass) then
-    raise exception '609: the shared_at trigger is missing';
+    raise exception '610: the shared_at trigger is missing';
   end if;
   if to_regprocedure('public.sync_collection_properties_account_id()') is not null
      or to_regprocedure('public.sync_account_id_from_collection()') is null then
-    raise exception '609: the collection account trigger function was not renamed';
+    raise exception '610: the collection account trigger function was not renamed';
   end if;
 end $$;
 

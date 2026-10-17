@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -6,7 +6,6 @@ import {
   listOutreachCampaigns,
   type OutreachCampaign,
 } from '../lib/api';
-import { GEO_UNSERVED_HINT, chipsToGeoArrays, geoUnserved } from '../lib/brokers';
 import type { DistrictChip } from '../lib/filters';
 import { LocationTypeahead } from '../components/filter-controls/LocationTypeahead';
 import { Field, Segmented } from '../components/controls';
@@ -37,7 +36,6 @@ export default function Outreach() {
   const [districts, setDistricts] = useState<DistrictChip[]>([]);
   const [categoryMain, setCategoryMain] = useState<string | null>('byt');
   const [categoryType, setCategoryType] = useState<string | null>('prodej');
-  const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
 
   const createM = useMutation({
     mutationFn: () =>
@@ -46,9 +44,7 @@ export default function Outreach() {
         goal: goal.trim() || null,
         guidance: guidance.trim() || null,
         target: {
-          region_ids: geo.regionIds,
-          okres_ids: geo.okresIds,
-          obec_ids: geo.obecIds,
+          districts,
           category_main: categoryMain,
           category_type: categoryType,
           metric: 'active_property_count',
@@ -110,9 +106,6 @@ export default function Outreach() {
           </Field>
           <Field label="Lokalita" className="min-w-[16rem]">
             <LocationTypeahead label="Lokalita" value={districts} onChange={(n) => setDistricts(n ?? [])} />
-            {geoUnserved(geo) && (
-              <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">{GEO_UNSERVED_HINT}</p>
-            )}
           </Field>
           <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
             <Field label="Typ">
@@ -126,8 +119,7 @@ export default function Outreach() {
         <div className="mt-4 flex items-center gap-3">
           <button
             type="button"
-            /* Never store the no-match code as a campaign target. */
-            disabled={name.trim().length < 2 || geoUnserved(geo) || createM.isPending}
+            disabled={name.trim().length < 2 || createM.isPending}
             onClick={() => createM.mutate()}
             className="text-sm rounded-[var(--radius-sm)] border border-[var(--color-copper)] bg-[var(--color-copper-soft)] px-4 py-2 text-[var(--color-ink)] hover:bg-[var(--color-copper)] hover:text-[var(--color-paper)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >

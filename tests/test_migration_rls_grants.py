@@ -394,7 +394,7 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # is migration 545's `sold_coverage`, a SECURITY DEFINER point lookup that answers
     # about a single municipality and is annotated `ci-allow-ungated` there.
     "sold_transaction_fetches",
-    # Auth identities (migration 609): emails are PII. The ONE reader is account_email(),
+    # Auth identities (migration 610): emails are PII. The ONE reader is account_email(),
     # EXECUTE revoked from every browser role and annotated `ci-allow-ungated` there; the
     # browser reaches a label only through share_party_emails(), counterparties only.
     "auth.users",
@@ -583,9 +583,9 @@ def test_dynamic_ddl_is_annotated():
     )
 
 
-# --- the sharing policies (migration 609), pinned ---------------------------
+# --- the sharing policies (migration 610), pinned ---------------------------
 # A share widens READS only, and it does so through exactly these five permissive policies.
-# 609's own assert block checks them once, when 609 applies; this census re-reads EVERY
+# 610's own assert block checks them once, when 610 applies; this census re-reads EVERY
 # migration so a later one that re-creates a `*_shared_read` as FOR ALL (WITH CHECK defaults
 # to USING: a recipient could write) or drops `to authenticated` (anon reaches it), or that
 # alters or drops one, fails here instead of shipping green.
@@ -633,7 +633,7 @@ def _final_share_policies() -> dict[str, object]:
 
 def test_the_sharing_policies_stay_select_only_and_authenticated_only():
     state = _final_share_policies()
-    assert set(state) == set(_SHARE_POLICY_PIN), "the census lost sight of migration 609"
+    assert set(state) == set(_SHARE_POLICY_PIN), "the census lost sight of migration 610"
     drifted = []
     for name, (table, cmd, roles) in _SHARE_POLICY_PIN.items():
         got = state[name]

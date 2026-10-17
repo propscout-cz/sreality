@@ -394,7 +394,7 @@ describe('<CurationBlock> artifact link', () => {
   });
 });
 
-/* Sharing (migration 609, docs/design/collection-sharing.md §3.7): a note crosses a
+/* Sharing (migration 610, docs/design/collection-sharing.md §3.7): a note crosses a
  * share only when its author marks it; another author's note is theirs to edit. */
 describe('<CurationBlock> shared notes', () => {
   const SHARED_COLLECTION: Collection = {

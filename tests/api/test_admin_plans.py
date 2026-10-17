@@ -212,7 +212,7 @@ def test_list_entitlements(make_client):
         "current_period_end": None,
         "is_explicit": False,
     }
-    # One label definition (migration 609), one row per account: no inline auth.users join.
+    # One label definition (migration 610), one row per account: no inline auth.users join.
     [(sql, _)] = conn.executed
     assert "account_email(a.id)" in sql
     assert "auth.users" not in sql and "account_members" not in sql

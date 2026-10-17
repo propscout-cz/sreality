@@ -1,6 +1,6 @@
 /* The "save to collection" panel: every collection of the caller's own as a
  * checkable row (a shared one is view-only, and every saved mark counts the
- * same `mine` set — migration 609), monitored ones first and marked with a bell. Shared by the Browse card's
+ * same `mine` set — migration 610), monitored ones first and marked with a bell. Shared by the Browse card's
  * over-photo glyph and the listing header's button, the way
  * <PipelineStageMenu> is shared by every pipeline affordance — three surfaces
  * growing three answers to "which collections is this in, and how do I change

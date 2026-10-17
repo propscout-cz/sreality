@@ -1931,10 +1931,15 @@ renumber.** Navigate by area:
     `<level>_id = any(codes)`, plain equality per level.** A location chip is a LEVEL plus a
     RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
     `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
-    (Browse's PostgREST string and the pipeline board's in-memory twin) and the two RPC bodies
-    (`browse_stats_properties`, `browse_map_cells`) all compile the same plan; the shared table
-    `tests/fixtures/district_chip_plan.json` is read by BOTH `tests/test_one_place_predicate.py`
-    and `districtCodes.test.ts`, so a divergence is a red test rather than a support ticket.
+    (Browse's PostgREST string and the pipeline board's in-memory twin) and the three RPC bodies
+    (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard` — Brokers and
+    Outreach, in the per-level `= any(district_level_codes(…))` form, the SQL twin of `district_where`
+    over `listing_location`'s `*_kod`, which the planner folds to constants) all compile the same plan; the shared table
+    `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py`,
+    `districtCodes.test.ts` and `tests/test_broker_leaderboard_chip_parity.py`, so a divergence is a red
+    test rather than a support ticket. The leaderboard's count book has cells for an INCLUDE at kraj /
+    okres / obec only, so any other chip set (a quarter, a street, an exclude) reads `listings` live —
+    one gate pair, exact complements, pinned in `tests/test_broker_leaderboard_contract.py`.
     What this replaced was **five** predicates in **six** copies (obec/okres/region equality, a
     `locality` obec-AND-ILIKE pair, a name fallback ILIKE-ing four text columns). Equality is
     enough because `listing_location` (migration 501) answers every listing with RÚIAN codes.
@@ -2027,7 +2032,7 @@ renumber.** Navigate by area:
     when every member workflow posts a newer `workflow_run_health.last_success_at`, on
     `ops_incident_max_age_hours`, or manually (`toolkit.ops_incidents.resolve_incident`).
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
-    **A FOURTH producer is live (migration 609): `collection_share`.** `POST
+    **A FOURTH producer is live (migration 610): `collection_share`.** `POST
     /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
     `share:<collection>:<recipient>`, no time: a revoke + re-share loop cannot refill an inbox) —
     `collection_id` set, `subscription_id` NULL (`notification_dispatches_source_ck` gained the
@@ -2156,7 +2161,7 @@ renumber.** Navigate by area:
     by value (a bookmark button opening a checklist of collections, monitored ones first and
     bell-marked); it replaced a one-click "Sledovat" bell that could only reach the single
     monitoring collection, so the panel and the app offer the same verb. Since collection sharing
-    (migration 609) the SPA checklist lists the caller's OWN collections only — a shared one is
+    (migration 610) the SPA checklist lists the caller's OWN collections only — a shared one is
     view-only — and every saved mark means "in one of mine" (`saved = mine.size > 0`), while cohort
     readers (Browse prefilter, Pipeline board, phone roll) keep the full visible map; the extension
     panel still lists every visible collection until it follows (sharing wave W6).
@@ -2255,7 +2260,7 @@ renumber.** Navigate by area:
     (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
     accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
-    **Sharing (migration 609, `docs/design/collection-sharing.md`) widens READS, never writes.**
+    **Sharing (migration 610, `docs/design/collection-sharing.md`) widens READS, never writes.**
     `collection_shares` holds one row per (collection, recipient account); `account_id` is the
     owner, trigger-stamped from the collection; browser roles get SELECT + DELETE and no INSERT
     (account uuids are learnable), so a share is created only by `POST /collections/{id}/shares`
@@ -3927,8 +3932,9 @@ legacy columns in five different assemblies, the SPA and the extension falling b
 orders, so one listing could be labelled two ways at once. Every place FILTER is
 `<level>_id = any(codes)`, plain equality at five levels (`region_id` / `okres_id` / `obec_id` /
 `cast_obce_id` / `ulice_id`), compiled in exactly two places (`api/location_filter.py` and
-`frontend/src/lib/districtCodes.ts`) plus two SQL bodies (`browse_stats_properties`,
-`browse_map_cells`), all four tested against ONE table, `tests/fixtures/district_chip_plan.json`.
+`frontend/src/lib/districtCodes.ts`) plus three SQL bodies (`browse_stats_properties`,
+`browse_map_cells`, `broker_leaderboard` — 609, over `listing_location`'s five codes), all five
+tested against ONE table, `tests/fixtures/district_chip_plan.json`.
 A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
 draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj

@@ -547,7 +547,7 @@ class CreateNoteIn(BaseModel):
     # display provenance ("written while viewing this advert") and a split's routing
     # key, never a grouping key. The legacy origin_listing_id column is derived from it.
     origin_listing_ref_id: int | None = None
-    # The author's consent mark (migration 609): the parties of a share holding this property may read it.
+    # The author's consent mark (migration 610): the parties of a share holding this property may read it.
     shared: bool = False
 
 

@@ -605,7 +605,7 @@ def test_create_tag_helper_409_on_unique_violation():
 
 
 # --- the write is the gate -------------------------------------------------
-# A SELECT proves only that a row is VISIBLE; a shared collection (migration 609) is visible but
+# A SELECT proves only that a row is VISIBLE; a shared collection (migration 610) is visible but
 # not owned, so each write is its own gate: rowcount 0 -> 404 before any side effect, and a
 # refusal raised inside the transaction rolls the statement back.
 
@@ -946,7 +946,7 @@ def test_curation_writes_without_an_account_are_400(client, store, monkeypatch):
         assert res.json()["detail"] == "no account for caller"
 
 
-# --- sharing (migration 609) -----------------------------------------------
+# --- sharing (migration 610) -----------------------------------------------
 # A share widens READS only. The tenant UPDATE is the ownership gate and runs before any
 # service-role statement; the share row and its one notification are one service-role
 # transaction (browser roles hold no INSERT on either table).

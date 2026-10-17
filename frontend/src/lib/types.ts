@@ -864,7 +864,7 @@ export interface Collection {
   monitoring_enabled: boolean;
   notify_channels: string[];
   is_system: boolean;
-  /* Sharing (migration 609). `owner_email` is null exactly when the caller owns
+  /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
    * the collection (lib/collectionCache `isMine`); on a shared row monitoring
    * reads off and notify_channels empty — the alerts are the owner's. */
   owner_email: string | null;
@@ -894,7 +894,7 @@ export interface Note {
   /* Null until the author edits the body; marking shared is not an edit. */
   updated_at: string | null;
   /* The author's consent for the people they share this property with to read
-   * it (migration 609); a foreign note is always shared. */
+   * it (migration 610); a foreign note is always shared. */
   shared: boolean;
   /* Null iff the caller wrote it; else the author's email (read-only here). */
   owner_email: string | null;
@@ -1412,7 +1412,7 @@ export interface FilterPreset {
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
-  /* A collection was shared with the caller (migration 609): collection_id
+  /* A collection was shared with the caller (migration 610): collection_id
    * set, change_kind 'shared', no listing subject — the `message` text. */
   | 'collection_share'
   /* System-health alerts (migration 273/274 producer): pipeline stalls, credit

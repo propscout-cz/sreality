@@ -888,7 +888,7 @@ def test_get_unread_count_sums_system_health_into_total() -> None:
 
 
 def test_get_unread_count_names_the_share_kind() -> None:
-    # Every SourceKind gets its own count from the ONE alias (migration 609's fourth producer).
+    # Every SourceKind gets its own count from the ONE alias (migration 610's fourth producer).
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "GROUP BY d.source_kind" in s, [("collection_share", 2)], 0),
     ]

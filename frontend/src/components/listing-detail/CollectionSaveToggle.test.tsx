@@ -198,7 +198,7 @@ describe('<CollectionSaveToggle>', () => {
     expect(await screen.findByRole('button', { name: /Sledované/ })).toBeInTheDocument();
   });
 
-  /* Sharing (migration 609): a collection shared WITH me is view-only, so it is
+  /* Sharing (migration 610): a collection shared WITH me is view-only, so it is
      never a save target, and a property held only there is not "saved". */
   it('counts and offers my collections only, never one shared with me', async () => {
     vi.mocked(api.listCollections).mockResolvedValue({

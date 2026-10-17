@@ -444,7 +444,7 @@ _MOVE_SQL: dict[str, str] = {
 }
 
 # A copy or a re-created fold (MS18): a note keeps its text, dates, origin ad and shared mark with
-# its consent time (migration 609; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
+# its consent time (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
 # dated now. Never over a row already there.
 _INSERT_SQL: dict[str, str] = {
     "property_notes": (

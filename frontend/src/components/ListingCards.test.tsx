@@ -581,7 +581,7 @@ describe('<ListingCards> collection popover keyboard entry', () => {
   });
 });
 
-/* Saved means MINE (migration 609): a property only in someone else's shared
+/* Saved means MINE (migration 610): a property only in someone else's shared
  * collection never paints as saved, so the glyph agrees with the save menu. */
 describe('<ListingCards> the collection glyph counts my collections only', () => {
   const glyph = async () =>
