@@ -1,7 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
 Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W6 run on this text.
-W1–W3 merged; W4 in PR #… (`feature/collection-shares`); migration 609 (#1829/#1830 renumber past it).
+W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); migration 609 (#1829/#1830 renumber past it).
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
