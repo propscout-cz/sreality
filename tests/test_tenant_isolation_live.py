@@ -193,7 +193,7 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # not market data. NO `_public` view; the ONE reader is `sold_coverage` below.
     # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "sold_transaction_fetches",
-    # Auth identities (migration 609). The one reader, account_email(), is not executable
+    # Auth identities (migration 610). The one reader, account_email(), is not executable
     # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
     # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "auth.users",

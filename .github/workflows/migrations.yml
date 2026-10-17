@@ -178,11 +178,11 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_tenant_isolation_live.py -q
 
-      # Collection sharing (migration 609) widens READS only, through four FOR SELECT policies,
+      # Collection sharing (migration 610) widens READS only, through four FOR SELECT policies,
       # a party policy and a SECURITY DEFINER label function. Only a real schema under the
       # `authenticated` role can show that a recipient reads but never writes, that a bystander
       # sees nothing, and that a note crosses a share only when its author marked it.
-      - name: Collection sharing is read-only and party-scoped (migration 609)
+      - name: Collection sharing is read-only and party-scoped (migration 610)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"

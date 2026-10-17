@@ -59,7 +59,7 @@ column default would miss): `collection_properties` (parent `collections`),
 Postgres evaluates `WITH CHECK` **after** `BEFORE` triggers run, a tenant inserting a
 child row that points at another tenant's parent gets `account_id = NULL` back from the
 RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OWNER's account when
-the parent is merely shared with it (migration 609) — and `WITH CHECK` refuses either, so the
+the parent is merely shared with it (migration 610) — and `WITH CHECK` refuses either, so the
 insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
 their parent lookups see every row.
@@ -78,7 +78,7 @@ their parent lookups see every row.
   flags this as unsafe once signup is public (non-operator) — the "first signup wins"
   assumption only holds while signup is effectively single-operator.
 
-**Migration 609 — `collection_shares`**, one row per (collection, recipient account):
+**Migration 610 — `collection_shares`**, one row per (collection, recipient account):
 `account_id` is the OWNER, stamped by a `BEFORE INSERT` trigger from the collection (292's
 function, renamed `sync_account_id_from_collection`). ONE `FOR ALL` party policy (`USING` owner
 or recipient, `WITH CHECK` owner); `grant select, delete` and **no INSERT** — account uuids are
@@ -256,7 +256,7 @@ transaction; the response is re-read on the tenant connection. Unlike the feedba
 the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
 (`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
 
-**The only `auth.users` touchpoints:** `account_email(uuid)` (migration 609; EXECUTE revoked
+**The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
 counterparties only) and by the admin entitlements route; and the share route's email lookup,
 `tenant_pool.account_for_email` (service role, confirmed emails only). A share is never membership:

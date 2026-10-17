@@ -2028,7 +2028,7 @@ renumber.** Navigate by area:
     when every member workflow posts a newer `workflow_run_health.last_success_at`, on
     `ops_incident_max_age_hours`, or manually (`toolkit.ops_incidents.resolve_incident`).
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
-    **A FOURTH producer is live (migration 609): `collection_share`.** `POST
+    **A FOURTH producer is live (migration 610): `collection_share`.** `POST
     /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
     `share:<collection>:<recipient>`, no time: a revoke + re-share loop cannot refill an inbox) —
     `collection_id` set, `subscription_id` NULL (`notification_dispatches_source_ck` gained the
@@ -2252,7 +2252,7 @@ renumber.** Navigate by area:
     (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
     accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
-    **Sharing (migration 609, `docs/design/collection-sharing.md`) widens READS, never writes.**
+    **Sharing (migration 610, `docs/design/collection-sharing.md`) widens READS, never writes.**
     `collection_shares` holds one row per (collection, recipient account); `account_id` is the
     owner, trigger-stamped from the collection; browser roles get SELECT + DELETE and no INSERT
     (account uuids are learnable), so a share is created only by `POST /collections/{id}/shares`

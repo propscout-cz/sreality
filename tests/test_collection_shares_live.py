@@ -1,4 +1,4 @@
-"""Collection sharing, view-only (migration 609), proven on the replayed schema.
+"""Collection sharing, view-only (migration 610), proven on the replayed schema.
 
 Three tenants: A owns a collection holding one property and shares it with B; C is a
 bystander. Every assertion about what a tenant can read or write runs through

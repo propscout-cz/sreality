@@ -1,7 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
 Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W6 run on this text.
-W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); migration 609 (#1829/#1830 renumber past it).
+W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); migration 610 (#1829/#1830 renumber past it).
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
@@ -56,7 +56,7 @@ the note's own `shared` mark and the database's read policies as the ONLY places
 
 ## 3. The design
 
-### 3.1 Data model — migration `609_collection_shares.sql` (additive; 609 is the next free number on main — #1829/#1830 renumber past it)
+### 3.1 Data model — migration `610_collection_shares.sql` (additive; main took 609 while the PR was open, so 609 → 610 — #1829/#1830 renumber past it)
 
 ```sql
 begin;
@@ -473,7 +473,7 @@ which must renumber); W4 takes the next free number at merge time.
   passage, the second named exception, the `auth.users` touchpoints, "a share is never
   membership"), database SKILL summary, architecture.md rules 16 + 18, GLOSSARY ("Share", "Shared
   note"; Collection "may be shared read-only"), CLAUDE.md rules 16 + 18 clauses, toolkit-api route
-  list, `api/curation.py` docstring. Verify: apply 609 BEFORE merge (safe: no share can exist until
+  list, `api/curation.py` docstring. Verify: apply 610 BEFORE merge (safe: no share can exist until
   the route deploys; the W4 projections need `share_party_emails()` and `property_notes.shared`, so
   merging first 500s every collection and note route), one `execute_sql` policy/privilege check, confirm Supabase → Authentication →
   Email → "Confirm email" is ON, merge, API status.

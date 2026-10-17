@@ -37,7 +37,7 @@ alter default privileges for role postgres in schema public
 -- container does not, so migrations that FK-reference or trigger on auth.users
 -- (multi-tenant accounts, migration 286+) fail the smoke-test without this stub.
 -- Minimal shape sufficient for FK targets + AFTER INSERT triggers, plus the
--- confirmation stamp the share route's email lookup filters on (migration 609).
+-- confirmation stamp the share route's email lookup filters on (migration 610).
 create schema if not exists auth;
 create table if not exists auth.users (
   id                 uuid primary key default gen_random_uuid(),
