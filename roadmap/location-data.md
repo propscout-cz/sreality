@@ -1139,13 +1139,25 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `html_regex` keeps its locatable-match gate, narrowed from `find_span` to `ScopedDocument.shows`;
   `json_regex` (no live entry) loses its. Also gone: the `scope_version` pass-throughs and
   `ArchivedPayload.source/source_id_native` (nothing read them). Net −1,067 lines.
-- **Street filter sprint 2026-10-02 — in progress** (operator rulings Q1–Q6): a location chip is ONE
-  RÚIAN unit at the level picked, the street the fifth level. PR-A (migration 584, DB only, no behaviour
-  change): `ulice_id` (= `listing_location.ulice_kod`) served last on browse_projection /
-  properties_public / pipeline_board_public / listing_feed_public and both read models. Next: measure
-  the read paths; then 585 (the street chip arm + the resolver's street binder); then 586 (the 10
-  name-only preset chips stamped with their kraj codes; the two inactive watchdogs removed after a
-  backup); then the Brokers / Outreach / Datasets region-search parity (587).
+- **Street chip — DONE 2026-10-16** (operator rulings 2026-10-02 Q1–Q6 and 2026-10-16; migrations 584,
+  605, 606): a location chip is ONE RÚIAN unit at the level picked — kraj, okres, obec, cast_obce, ulice —
+  and a chip without a (level, code) cannot exist. 584 served `ulice_id` (= `listing_location.ulice_kod`);
+  605 swapped both aggregate RPCs' `locality` arms (a street filtered its whole TOWN) for `ulice` and added
+  `browse_list_ulice_idx` (via the rebuild) + `listing_location_ulice_kod_idx` (measured 2026-10-03: one
+  street read its whole category band, 13,330 buffers; the feed seq-scanned 943k rows, 4.97 s of an 8 s
+  cap); 606 deleted, after `backup_606`, the only code-less chips stored — 2 presets (5 name-only kraj
+  chips each) and 2 inactive watchdogs (8 chips, 778 dispatches). The read-time name reader is deleted.
+  Recall: 162,562 of 378,380 active CZ listings (43 %) carry a street code.
+- **Region-search parity — DONE 2026-10-17** (migration 609): Brokers / phone Brokers / Outreach / Datasets
+  take the same chips. `broker_leaderboard` takes Browse's four chip arrays (its three id lists deleted);
+  its live branch is the SQL twin of `district_where` over `listing_location`'s five codes, each level's
+  codes a `district_level_codes()` call the planner folds to a constant
+  (`tests/test_broker_leaderboard_chip_parity.py` runs it over the shared chip table); the count book
+  answers only includes at kraj / okres / obec — a quarter, a street or an exclude reads `listings`
+  live. Measured: a kraj chip + min price 194 ms (580: 189; a first draft with 605's per-row CASE blocks took 1,187), one street 118 ms
+  (first draft 1.77 s; 2.51 s with no category), a kraj + obec pair 44 ms as before. Outreach stores
+  chips in `target.districts` (609 rewrote the stored id lists; 0 campaigns existed); the API refuses
+  the old id lists (422 on a request, 409 on a stored target). No index: the arms OR five columns.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

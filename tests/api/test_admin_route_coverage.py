@@ -219,6 +219,15 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "DELETE /collections/{collection_id}/properties/{property_id}": (
         "DELETE by id on a child-grain table — migration 292 USING clause"
     ),
+    "POST /collections/{collection_id}/shares": (
+        "the tenant UPDATE of the collection is the ownership gate (migration 290 USING); the "
+        "share row it then writes on the service role takes its owner from the collection by "
+        "trigger and its recipient from a confirmed email (migration 610), so no caller account "
+        "is named — tenancy.md's second 'tenant gate, then a service-role write'"
+    ),
+    "DELETE /collections/{collection_id}/shares/{account_id}": (
+        "DELETE by key — migration 610's party policy USING (owner revokes, recipient leaves)"
+    ),
     "GET /properties/{property_id}/notes": "RLS-only read (migration 290 on `property_notes`)",
     "GET /artifact-links": "RLS-only read (migration 599 on `property_artifact_links`)",
     "DELETE /properties/{property_id}/artifact-link": (
@@ -393,3 +402,14 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
     assert "tenant_pool.tenant_transaction(" in inspect.getsource(post.endpoint), (
         f"{_FEEDBACK_POST} no longer gates on a tenant transaction"
     )
+
+
+def test_the_share_route_opens_the_service_role_only_after_its_gate() -> None:
+    # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a
+    # bystander's refused POST must not have checked out a service-role connection first.
+    routes = {(m, p): r for m, p, r in _api_routes()}
+    share = routes[("POST", "/collections/{collection_id}/shares")]
+    calls = _reachable_calls(share.dependant)
+    assert tenant_pool.tenant_conn in calls
+    assert deps.get_db_conn not in calls, "the share route took the service role as a dependency again"
+    assert "deps.open_background_conn" in inspect.getsource(share.endpoint)

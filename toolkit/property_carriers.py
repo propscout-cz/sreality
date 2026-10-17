@@ -443,15 +443,15 @@ _MOVE_SQL: dict[str, str] = {
         "  WHERE x.property_id = %(to)s AND x.account_id = d.account_id AND x.lifted_at IS NULL)"),
 }
 
-# A copy or a re-created fold (MS18): a note keeps its text, dates and origin ad (read from its
-# row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
+# A copy or a re-created fold (MS18): a note keeps its text, dates, origin ad and shared mark with
+# its consent time (migration 610; read from its row, wherever it went); a card keeps its stage, last in its column, its dates now; the rest
 # dated now. Never over a row already there.
 _INSERT_SQL: dict[str, str] = {
     "property_notes": (
         "INSERT INTO property_notes (property_id, body, origin_listing_id, origin_listing_ref_id, "
-        "  created_at, updated_at, account_id) "
+        "  created_at, updated_at, shared, shared_at, account_id) "
         "SELECT %(to)s, body, origin_listing_id, origin_listing_ref_id, created_at, updated_at, "
-        "  account_id FROM property_notes WHERE id = %(key)s RETURNING id"),
+        "  shared, shared_at, account_id FROM property_notes WHERE id = %(key)s RETURNING id"),
     "property_pipeline": (
         "INSERT INTO property_pipeline (property_id, stage_id, board_position, account_id) "
         "SELECT %(to)s::bigint, %(stage)s::bigint, coalesce(max(board_position), 0) + 1, "

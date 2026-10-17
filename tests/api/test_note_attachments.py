@@ -47,8 +47,11 @@ class _Cur:
 
     def execute(self, sql: str, params: Any = None) -> None:
         self.db.ran.append((sql, params))
-        if sql.startswith("SELECT count(f.id)"):
-            self._rows = [self.db.note] if self.db.note else []
+        if sql.startswith("SELECT f.sha256_hex"):
+            if self.db.hashes is None:
+                self._rows = []
+            else:
+                self._rows = [(h,) for h in self.db.hashes] or [(None,)]
         elif sql.startswith("INSERT INTO property_note_attachments"):
             note_id, _key, filename, mime, size, _sha = params
             self._rows = [(41, note_id, filename, mime, size, _WHEN)]
@@ -71,7 +74,7 @@ class _Cur:
 class _Conn:
     def __init__(self) -> None:
         self.ran: list[tuple[str, Any]] = []
-        self.note: tuple | None = (0, None)          # (files on the note, already attached?)
+        self.hashes: list[str] | None = []          # the note's files by sha; None = no such note
         self.stored: tuple | None = None
         self.deletes = 1
         self.notes: list[tuple] = []
@@ -124,8 +127,9 @@ def test_an_upload_lands_in_r2_under_the_note_and_is_recorded(client, conn, r2):
     insert = next(p for s, p in conn.ran if s.startswith("INSERT"))
     assert insert == (7, key, "Plán bytu.pdf", "application/pdf", len(_PDF),
                       hashlib.sha256(_PDF).hexdigest())
-    check = next(p for s, p in conn.ran if s.startswith("SELECT count"))
-    assert check[1:] == (7, 5), "the note must be this property's"
+    sql, check = next((s, p) for s, p in conn.ran if s.startswith("SELECT f.sha256_hex"))
+    assert check == (7, 5), "the note must be this property's"
+    assert sql.endswith("FOR UPDATE OF n"), "the note's UPDATE policy, not mere visibility"
 
 
 @pytest.mark.parametrize("name,mime", [
@@ -144,13 +148,14 @@ def test_a_file_without_extension_takes_its_declared_type(client, conn, r2):
     assert r2.put[0][0].endswith(".jpg")
 
 
-@pytest.mark.parametrize("note,status", [
-    (None, 404),            # not this property's note, or not the caller's (RLS)
-    ((1, True), 409),       # the same bytes are on the note already
-    ((na.MAX_FILES_PER_NOTE, False), 409),
+@pytest.mark.parametrize("hashes,status", [
+    (None, 404),            # not this property's note, or not the caller's to change (RLS);
+                            # nothing reaches R2, so the probe runs before the upload
+    ([hashlib.sha256(_PDF).hexdigest()], 409),       # the same bytes are on the note already
+    ([f"{i:064x}" for i in range(na.MAX_FILES_PER_NOTE)], 409),
 ])
-def test_the_note_is_checked_before_storage(client, conn, r2, note, status):
-    conn.note = note
+def test_the_note_is_checked_before_storage(client, conn, r2, hashes, status):
+    conn.hashes = hashes
     assert _upload(client, "plan.pdf").status_code == status
     assert r2.put == []
 
@@ -188,7 +193,7 @@ def test_a_delete_removes_the_row_scoped_to_note_and_property(client, conn, r2):
 
 
 def test_the_notes_list_carries_each_notes_attachments(conn):
-    conn.notes = [(8, 5, "druhá", None, _WHEN, None), (7, 5, "první", None, _WHEN, None)]
+    conn.notes = [(8, 5, "druhá", False, _WHEN, None, None), (7, 5, "první", False, _WHEN, None, None)]
     conn.files = [(41, 7, "plan.pdf", "application/pdf", 10, _WHEN)]
     data = curation.list_notes(conn, 5)["data"]
     assert [(n["id"], [f["id"] for f in n["attachments"]]) for n in data] == [(8, []), (7, [41])]

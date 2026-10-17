@@ -8,11 +8,13 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
 
 import Brokers from './Brokers';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
+import * as maps from '@/lib/maps';
 import type { BrokerLeaderRow } from '@/lib/brokers';
 import { ROUTES } from '@/lib/routes';
 
@@ -29,6 +31,11 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
   fetchBrokerLeaderboard: vi.fn(),
   searchBrokerFirms: vi.fn(),
   searchBrokersByName: vi.fn(),
+}));
+vi.mock('@/lib/maps', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/maps')>()),
+  fetchSuggest: vi.fn(),
+  resolveSuggestion: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -90,6 +97,65 @@ function leaderRow(broker_id: number, display_name: string): BrokerLeaderRow {
     listing_count: 1, property_count: 1, active_listing_count: 1, active_property_count: 1,
   };
 }
+
+/* What you pick is what you filter: every chip reaches the leaderboard as a chip
+ * — a street too — and the caption names every chip, an excluded one with a minus. */
+describe('<Brokers> location chips', () => {
+  const PARDUBICE = { level: 'obec', id: 555134, name: 'Pardubice', context: null };
+  const STREET = { level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice' };
+
+  const pick = async (typed: string, res: maps.LocationResolution, type: string) => {
+    vi.mocked(maps.fetchSuggest).mockResolvedValue([
+      { name: res.name ?? '', label: '', type, position: { lon: 15.77, lat: 50.03 } },
+    ]);
+    vi.mocked(maps.resolveSuggestion).mockResolvedValue(res);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: 'Lokalita' }), typed);
+    await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
+  };
+
+  it('sends a street chip as a chip and captions the board with its name', async () => {
+    asUser(false);
+    vi.mocked(brokers.fetchBrokerLeaderboard).mockResolvedValue([leaderRow(1, 'První Makléř')]);
+    renderPage();
+    expect(await screen.findByText('Celá ČR')).toBeInTheDocument();
+
+    await pick('Na Ryb', STREET, 'regional.street');
+    await waitFor(() =>
+      expect(brokers.fetchBrokerLeaderboard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ districts: [STREET] }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(await screen.findByText('Na Rybníčkách')).toBeInTheDocument();
+  });
+
+  it('names every chip in the caption, the excludes after a minus, the country when none is included', async () => {
+    asUser(false);
+    renderPage();
+    await pick('Pard', PARDUBICE, 'regional.municipality');
+    await screen.findByRole('button', { name: 'Remove Pardubice (Obec)' });
+    await pick('Na Ryb', STREET, 'regional.street');
+    await userEvent.setup().click(
+      await screen.findByRole('button', { name: 'Exclude Na Rybníčkách · Pardubice (Ulice)' }),
+    );
+
+    await waitFor(() =>
+      expect(brokers.fetchBrokerLeaderboard).toHaveBeenLastCalledWith(
+        expect.objectContaining({ districts: [PARDUBICE, { ...STREET, excluded: true }] }),
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(
+      await screen.findByText('Žádní makléři pro tento výběr v Pardubice − Na Rybníčkách.'),
+    ).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Exclude Pardubice (Obec)' }));
+    expect(
+      await screen.findByText('Žádní makléři pro tento výběr v Celá ČR − Pardubice − Na Rybníčkách.'),
+    ).toBeInTheDocument();
+  });
+});
 
 describe('<Brokers> W10a: keepPreviousData', () => {
   it('keeps the previous ledger on screen (not the loading text) while a filter change refetches', async () => {

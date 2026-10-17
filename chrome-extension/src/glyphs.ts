@@ -102,3 +102,77 @@ export function sortCollections(collections: ExtCollection[]): ExtCollection[] {
       || a.name.localeCompare(b.name),
   );
 }
+
+/* The collection list as the marks draw it — ONE definition for the panel and
+ * the cards, compared this way rather than as whole API rows, which also carry
+ * an `updated_at` that every add/remove bumps (no reason to redraw). Owner and
+ * recipients count: they decide what is saved and who a shared note reaches. */
+export function collectionsKey(collections: ExtCollection[]): string {
+  return JSON.stringify(
+    sortCollections(collections).map((c) => [
+      c.id, c.name, c.monitoring_enabled, c.owner_email,
+      (c.shared_with ?? []).map((r) => r.email),
+    ]),
+  );
+}
+
+/* Whether a held list knows every collection a lookup names. RLS means a fresh
+ * read holds every id a lookup can return, so an unknown id means the held
+ * list is stale (made or shared since it was read) — re-read it. */
+export function knowsAll(
+  collectionIds: readonly number[] | null | undefined,
+  collections: ExtCollection[],
+): boolean {
+  const held = new Set(collections.map((c) => c.id));
+  return (collectionIds ?? []).every((id) => held.has(id));
+}
+
+/* Mine vs shared with me, told by ONE field — the SPA's collectionCache
+ * `isMine`: `owner_email` is null exactly when the collection (or note) is the
+ * caller's. */
+export function isMine(x: { owner_email: string | null }): boolean {
+  return x.owner_email == null;
+}
+
+/* The save checklist's rows: MINE only, in its order. A view-only collection is
+ * never a save target, so it is not offered (no disabled variant). */
+export function saveTargets(collections: ExtCollection[]): ExtCollection[] {
+  return sortCollections(collections.filter(isMine));
+}
+
+/* What "saved" means on every mark: the property's collections that are MINE,
+ * checklist order — so a mark always agrees with the checklist, and a property
+ * that sits only in someone else's collection never reads as saved. Null while
+ * the collection list is unknown and the property sits in any collection:
+ * without the list mine cannot be told from shared. */
+export function savedCollections(
+  collectionIds: readonly number[] | null | undefined,
+  collections: ExtCollection[] | null,
+): ExtCollection[] | null {
+  const ids = new Set(collectionIds ?? []);
+  if (ids.size === 0) return [];
+  if (collections == null) return null;
+  return saveTargets(collections).filter((c) => ids.has(c.id));
+}
+
+/* Who else can read a SHARED note on a property sitting in `collectionIds` —
+ * the SPA's collectionCache `shareAudience`, so the two clients never disagree:
+ * for a collection I own, every recipient; for one shared with me, its owner.
+ * De-duplicated and sorted, so the composer label is stable. */
+export function shareAudience(
+  collectionIds: readonly number[],
+  collections: ExtCollection[],
+): string[] {
+  const byId = new Map(collections.map((c) => [c.id, c] as const));
+  const emails = new Set<string>();
+  for (const id of collectionIds) {
+    const c = byId.get(id);
+    if (c == null) continue;
+    if (isMine(c)) {
+      for (const s of c.shared_with ?? []) if (s.email != null) emails.add(s.email);
+    } else if (c.owner_email != null) {
+      emails.add(c.owner_email);
+    }
+  }
+  return [...emails].sort();
+}

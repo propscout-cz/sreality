@@ -82,6 +82,7 @@ const base: PipelineBoardCard = {
   price_change_count: 1,
   obec_id: 554782,
   cast_obce_id: null,
+  ulice_id: null,
   okres_id: null,
   region_id: 19,
   obec: 'Praha',
@@ -138,6 +139,7 @@ beforeEach(() => {
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
     watchdog: 0,
     collection_monitor: 0,
+    collection_share: 0,
     system_health: 0,
     total: 0,
     unread_count: 0,
@@ -216,7 +218,8 @@ describe('phone pipeline', () => {
     /* The header's title and count are the phone frame's. */
     const header = screen.getByRole('banner');
     expect(within(header).getByRole('heading', { name: 'Pipeline' })).toBeInTheDocument();
-    expect(within(header).getByText(/^3\s+karty$/)).toBeInTheDocument();
+    /* The aside is set by an effect after the pages render, so it is awaited. */
+    expect(await within(header).findByText(/^3\s+karty$/)).toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: 'Spravovat fáze' })).toBeNull();
     expect(screen.queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();

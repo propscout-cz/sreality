@@ -227,7 +227,8 @@ export function NoteAttachmentList({
   noteId: number;
   attachments: NoteAttachment[];
   uploading: File[];
-  onRemoved: () => Promise<unknown>;
+  /* Absent = read-only (another author's note): the tiles open, but carry no ×. */
+  onRemoved?: () => Promise<unknown>;
 }) {
   const [confirming, setConfirming] = useState<NoteAttachment | null>(null);
   const [busy, setBusy] = useState(false);
@@ -238,7 +239,7 @@ export function NoteAttachmentList({
     setBusy(true);
     setError(null);
     deleteNoteAttachment(propertyId, noteId, a.id)
-      .then(onRemoved)
+      .then(() => onRemoved?.())
       .then(() => setConfirming(null))
       .catch((err: ApiError | Error) => setError(err.message || 'Failed to remove the file'))
       .finally(() => setBusy(false));
@@ -253,7 +254,7 @@ export function NoteAttachmentList({
               propertyId={propertyId}
               noteId={noteId}
               attachment={a}
-              onRemove={() => setConfirming(a)}
+              onRemove={onRemoved ? () => setConfirming(a) : undefined}
             />
           </li>
         ))}
@@ -300,13 +301,13 @@ function SavedAttachment({
   propertyId: number;
   noteId: number;
   attachment: NoteAttachment;
-  onRemove: () => void;
+  onRemove?: () => void;
 }) {
   const image = isPreviewableImage(attachment.mime_type);
   const thumb = useAttachmentUrl(propertyId, noteId, attachment.id, image);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
-  const remove = { label: `Remove ${attachment.filename}`, onClick: onRemove };
+  const remove = onRemove && { label: `Remove ${attachment.filename}`, onClick: onRemove };
 
   if (image && thumb.url) {
     return (

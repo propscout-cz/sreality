@@ -921,13 +921,54 @@
   min-width: 0;
 }
 
-.note-date {
-  display: block;
+.note-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.1rem 0.45rem;
   margin-top: 0.25rem;
+}
+
+.note-date {
   font-size: 0.6rem;
   color: var(--ink-4);
   font-variant-numeric: tabular-nums;
 }
+
+/* Another author's shared note: read only, a neutral rule — not mine to work. */
+.note-item--foreign { border-left: 2px solid var(--ink-4); }
+
+.note-shared {
+  font-size: 0.56rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.note-share-toggle {
+  padding: 0;
+  font: inherit;
+  font-size: 0.6rem;
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.note-share-toggle:hover { color: var(--ink); text-decoration: underline; }
+.note-share-toggle:disabled { opacity: 0.5; cursor: wait; }
+
+.note-share {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: fit-content;
+  margin-top: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  cursor: pointer;
+  user-select: none;
+}
+.note-share input { margin: 0; accent-color: var(--ink-3); }
 
 .note-input {
   width: 100%;

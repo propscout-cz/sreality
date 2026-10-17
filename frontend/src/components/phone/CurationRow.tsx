@@ -17,7 +17,8 @@ import CollectionMark from '@/components/CollectionMark';
 import { readFailed } from '@/components/ReadFailedMark';
 import { AlertIcon, EyeOffIcon, FunnelIcon, PencilIcon } from '@/components/icons';
 import { listPropertyNotes } from '@/lib/api';
-import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
+import { useCollectionMembership } from '@/lib/collectionCache';
+import { curationKeys } from '@/lib/queries';
 import { useDismissal } from '@/lib/useDismissal';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 
@@ -57,11 +58,11 @@ export default function CurationRow({
   const [sheet, setSheet] = useState<'stage' | 'collections' | null>(null);
 
   const { membersQ, member, badge, accent } = usePipelineLook(property_id);
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const {
+    ids: collectionIds,
+    saved,
+    query: collectionsQ,
+  } = useCollectionMembership(property_id);
   /* NotesRow's own read (same key): the count beside "Poznámka". */
   const notesQ = useQuery({
     queryKey: curationKeys.propertyNotes(property_id),
@@ -72,8 +73,6 @@ export default function CurationRow({
   const { dismissed, dismiss, restore, pending: dismissPending } = useDismissal(property_id);
 
   const pipelinePending = pipelinePendingFor(property_id);
-  const collectionIds = new Set(collectionsQ.data?.get(property_id) ?? []);
-  const saved = collectionIds.size > 0;
   const notes = notesQ.data?.data.length ?? 0;
 
   /* A live deal is never hidden (the API refuses it); a closed one can be. */
