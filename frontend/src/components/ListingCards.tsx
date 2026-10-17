@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import CollectionMark from '@/components/CollectionMark';
 import CollectionSaveMenu, {
   COLLECTION_SAVE_LABEL,
@@ -26,9 +25,8 @@ import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { useScrollRestoration } from '@/lib/useScrollRestoration';
 import { taggedImageUrls, useCardHydration } from '@/lib/hydration';
 import { COVER_OPTIONS, coverIndex, type CoverTag } from '@/lib/imageTags';
+import { useCollectionMembership } from '@/lib/collectionCache';
 import {
-  curationKeys,
-  fetchPropertyCollectionMemberSet,
   sortToParam,
   type CardRow,
   type SortSpec,
@@ -73,8 +71,6 @@ const CARD_IMAGE_MIN = { sm: '11.5rem', lg: '23rem' } as const;
 interface Props {
   rows: CardRow[] | null;
   total: number | null;
-  /* `total` is an approximate (planner-estimate) cohort size — render "~N". */
-  totalApprox?: boolean;
   sort: SortSpec;
   /* The portal whose newest ad orders the cards (queries.ts orderPortal), or
    * null: a card whose date there differs from its own first seen shows both. */
@@ -147,7 +143,6 @@ interface Props {
 export default function ListingCards({
   rows,
   total,
-  totalApprox = false,
   sort,
   orderPortal = null,
   imageLarge,
@@ -215,7 +210,7 @@ export default function ListingCards({
               ? '—'
               : total === 0
                 ? '0 listings'
-                : `${loaded.toLocaleString('cs-CZ')} of ${totalApprox ? '~' : ''}${total.toLocaleString('cs-CZ')}`}
+                : `${loaded.toLocaleString('cs-CZ')} of ${total.toLocaleString('cs-CZ')}`}
         </span>
         <div className="flex items-center gap-2 shrink-0">
           <CoverDropdown coverTag={coverTag} onChange={onCoverTag} />
@@ -298,17 +293,15 @@ function CollectionSaveButton({
   const panelId = useId();
   /* Stable so the popover's positioning effect doesn't re-subscribe each render. */
   const close = useCallback(() => setOpen(false), []);
-  const membersQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const {
+    ids: memberIds,
+    saved: inAny,
+    query: membersQ,
+  } = useCollectionMembership(property_id);
 
   if (readFailed(membersQ)) {
     return <ReadFailedMark what="Kolekce" onRetry={() => void membersQ.refetch()} />;
   }
-  const memberIds = new Set(membersQ.data?.get(property_id) ?? []);
-  const inAny = memberIds.size > 0;
 
   return (
     <>

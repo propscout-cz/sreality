@@ -323,16 +323,31 @@ describe('districtsFilterClause, re-exported by queries.ts', () => {
     ])).toBe('and(or(cast_obce_id.in.(490067)))');
   });
 
-  it('never emits a name match for a chip that carries no code', () => {
-    const got = districtsFilterClause([{ name: 'Brno', context: null }]);
-    expect(got).toBe('and(or(obec_id.in.(-1)))');
-    expect(got).not.toContain('ilike');
+  it('compiles a street chip at the street, never at its town', () => {
+    expect(districtsFilterClause([
+      { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
+    ])).toBe('and(or(ulice_id.in.(666742)))');
+  });
+
+  /* The two Stats/map RPCs compile the same CASE over the RAW level: an alias
+   * mapped here (a street sent as its town) would widen Stats and the map. */
+  it('ships each chip\'s raw level and code to the Stats/map RPCs', () => {
+    const args = buildBrowseStatsArgs({
+      ...DEFAULT_FILTERS,
+      districts: [
+        { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
+        { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 490067, excluded: true },
+      ],
+    }, { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null });
+    expect(args.districts_levels).toEqual(['ulice', 'cast_obce']);
+    expect(args.districts_ids).toEqual([666742, 490067]);
+    expect(args.districts_excluded_filter).toEqual([false, true]);
   });
 });
 
 describe('matchesDistricts, re-exported by queries.ts', () => {
   const mkRow = (o: Partial<DistrictMatchRow>): DistrictMatchRow => ({
-    obec_id: null, okres_id: null, region_id: null, cast_obce_id: null, ...o,
+    obec_id: null, okres_id: null, region_id: null, cast_obce_id: null, ulice_id: null, ...o,
   });
 
   it('matches any row when there are no chips', () => {
@@ -608,72 +623,75 @@ const STALLS = (init: RequestInit) =>
     init.signal!.addEventListener('abort', () => reject(init.signal!.reason));
   });
 
-describe('the Browse cohort total is always a number', () => {
+describe('the Browse cohort total is exact, or an error — never an estimate', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
-  /* Production as observed: the exact count misses its 2.5 s client budget;
-   * a planned count carries a total only when it reads a relation. Every
-   * deadline runs 100x faster here, so the real budget path is exercised
-   * without a 2.5 s wait per case, and `budgets` records the unscaled values. */
-  const stubPostgrest = (
-    relationEstimate: string,
-    exact: (init: RequestInit) => Response | Promise<Response> = STALLS,
-  ) => {
-    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const budgets = vi
-      .spyOn(AbortSignal, 'timeout')
-      .mockImplementation((ms: number) => realTimeout(ms / 100));
-    const planned: string[] = [];
+  /* PostgREST as the SPA sees it; `prefers` logs every count mode asked for,
+   * with the path it went to. */
+  const stubPostgrest = (answer: (init: RequestInit) => Response | Promise<Response>) => {
+    const prefers: string[] = [];
     const fetch = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const path = new URL(String(input)).pathname;
-      const prefer = new Headers(init.headers).get('Prefer') ?? '';
-      if (prefer.includes('count=exact')) return exact(init);
-      if (prefer.includes('count=planned')) planned.push(path);
-      const total = path.includes('/rpc/') ? '*' : relationEstimate;
-      return {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: new Headers({ 'Content-Range': `*/${total}` }),
-        text: async () => '',
-      } as unknown as Response;
+      const mode = (new Headers(init.headers).get('Prefer') ?? '').match(/count=(\w+)/)?.[1];
+      if (mode) prefers.push(`${mode} ${new URL(String(input)).pathname}`);
+      return answer(init);
     });
     vi.stubGlobal('fetch', fetch);
-    return { planned, budgets, fetch };
+    return { prefers, fetch };
+  };
+  const counted = (total: string) => () =>
+    ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Range': `*/${total}` }),
+      text: async () => '',
+    }) as unknown as Response;
+  /* The 20 s deadline runs 1000x faster here. */
+  const fastDeadline = () => {
+    const real = AbortSignal.timeout.bind(AbortSignal);
+    return vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => real(ms / 1000));
   };
 
-  it('falls back to the estimate of the plain relation when the exact count misses its budget', async () => {
-    const { planned, budgets, fetch } = stubPostgrest('72');
-    const total = await fetchBrowseCount(DEFAULT_FILTERS);
-    expect(Number.isFinite(total.value)).toBe(true);
-    expect(total).toEqual({ value: 72, precise: false });
-    expect(planned).toEqual(['/rest/v1/browse_list']);
-    expect(budgets).toHaveBeenCalledWith(2500);
+  it('is the exact count of the dismissal-aware list, one HEAD', async () => {
+    const { prefers, fetch } = stubPostgrest(counted('4577'));
+    expect(await fetchBrowseCount(DEFAULT_FILTERS)).toBe(4577);
+    expect(prefers).toEqual(['exact /rest/v1/rpc/browse_list_visible']);
     expect(fetch.mock.calls[0][1]?.method).toBe('HEAD');
   });
 
-  it('estimates a one-portal cohort from the plain list, with the rule and its conjunct', async () => {
-    const { planned, fetch } = stubPostgrest('15');
-    const total = await fetchBrowseCount({ ...DEFAULT_FILTERS, portals: ['bazos'] });
-    expect(total).toEqual({ value: 15, precise: false });
-    expect(planned).toEqual(['/rest/v1/browse_list']);
+  it('counts a one-portal cohort with the rule and its conjunct', async () => {
+    const { fetch } = stubPostgrest(counted('15'));
+    expect(await fetchBrowseCount({ ...DEFAULT_FILTERS, portals: ['bazos'] })).toBe(15);
     const url = new URL(String(fetch.mock.calls.at(-1)![0]));
     expect(url.searchParams.get('all_sources')).toBe('ov.{bazos}');
     expect(url.searchParams.get('newest_ad_at_bazos')).toBe('not.is.null');
   });
 
+  /* The 2026-10-13 fallback asked the plain relation for the planner's estimate
+   * here; it answered "72 of ~15" on 2026-10-16. A slow count is now the
+   * header's error with its retry, and nothing else is asked for. */
+  it('fails a slow count at the one deadline, asking for no estimate', async () => {
+    const budgets = fastDeadline();
+    const { prefers } = stubPostgrest(STALLS);
+    await expect(fetchBrowseCount(DEFAULT_FILTERS)).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'timeout',
+    });
+    expect(budgets).toHaveBeenCalledWith(20_000);
+    expect(prefers).toEqual(['exact /rest/v1/rpc/browse_list_visible']);
+  });
+
   it('fails the count, which the header shows as an error, when there is no number at all', async () => {
-    stubPostgrest('*');
+    stubPostgrest(counted('*'));
     await expect(fetchBrowseCount(DEFAULT_FILTERS)).rejects.toThrow(/count unavailable/);
   });
 
-  /* A caller abort is a cancellation, not "too slow": no estimate is asked for. */
-  it('cancels, never estimating, when the caller aborts during the exact count', async () => {
-    const { planned, budgets, fetch } = stubPostgrest('72');
-    budgets.mockRestore();
+  /* A caller abort is a cancellation, not an error banner. */
+  it('cancels when the caller aborts during the count', async () => {
+    const { fetch } = stubPostgrest(STALLS);
     const ctrl = new AbortController();
     const p = fetchBrowseCount(DEFAULT_FILTERS, { signal: ctrl.signal });
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
@@ -681,22 +699,16 @@ describe('the Browse cohort total is always a number', () => {
     const err = await p.catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(ApiError);
     expect((err as Error).name).toBe('AbortError');
-    expect(planned).toEqual([]);
   });
 
-  /* Only "too slow" earns the estimate. A refused or malformed exact count is a
-   * real failure; answering it with a different relation's estimate hid it. */
-  it('does not answer a failed exact count with an estimate', async () => {
-    const { planned } = stubPostgrest(
-      '72',
-      failed(400, { code: 'PGRST100', message: 'failed to parse filter' }),
-    );
+  it('surfaces a refused count as the failure it is', async () => {
+    const { prefers } = stubPostgrest(failed(400, { code: 'PGRST100', message: 'failed to parse filter' }));
     await expect(fetchBrowseCount(DEFAULT_FILTERS)).rejects.toMatchObject({
       name: 'ApiError',
       status: 400,
       kind: 'http',
     });
-    expect(planned).toEqual([]);
+    expect(prefers).toEqual(['exact /rest/v1/rpc/browse_list_visible']);
   });
 });
 
@@ -741,10 +753,12 @@ describe('dismissed properties are hidden at the source', () => {
 
   it('tells the map cells and reads the map pins through the same twin', async () => {
     const s = stubReads();
-    await fetchListingsForMap(DEFAULT_FILTERS);
+    await fetchListingsForMap(DEFAULT_FILTERS, 200);
     const [cells, pins] = s.rpc.mock.calls;
     expect(cells[0]).toBe('browse_map_cells');
     expect((cells[1] as Record<string, unknown>).hide_dismissed).toBe(true);
+    /* The pin limit IS the server's point budget: one number end to end. */
+    expect((cells[1] as Record<string, unknown>).point_budget).toBe(200);
     expect(pins[0]).toBe('properties_map_visible');
   });
 
@@ -944,9 +958,9 @@ describe('Browse Stats resolves through the one prefilter path', () => {
 
   it('never names the retired listing_ids_filter on the map, and carries the broker', async () => {
     const { rpcArgs } = stubReads();
-    await fetchListingsForMap({ ...DEFAULT_FILTERS, brokerId: 527 });
+    await fetchListingsForMap({ ...DEFAULT_FILTERS, brokerId: 527 }, 200);
     expect(rpcArgs[0]).not.toHaveProperty('listing_ids_filter');
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
-    expect(rpcArgs[0].point_budget).toBe(2000);
+    expect(rpcArgs[0].point_budget).toBe(200);
   });
 });

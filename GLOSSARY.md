@@ -98,9 +98,25 @@ _Avoid_: operator state, user-defined information, user-created state, carried s
 A property's place in one account's deal pipeline. At most one per property per account.
 _Avoid_: deal, card (alone)
 
+**Stage**:
+One step of one account's pipeline, drawn as a board column; every account gets its own copy of the default board at signup.
+_Avoid_: fáze (in code), column
+
 **Collection**:
-A named set of properties an account keeps, optionally watched for changes.
+A named set of properties an account keeps, optionally watched for changes. It may be shared
+read-only with other accounts.
 _Avoid_: list, folder, favourites, saved list
+
+**Share**:
+A read-only grant of one collection to one account. The owner revokes it, the recipient may leave
+it; the recipient can never change the collection.
+_Avoid_: invite, membership, access (alone), collaborator
+
+**Shared note**:
+A note its author marked for the people they share its property with: readable by the other party
+of any share the author is party to whose collection holds that property, including shares made
+after the note was marked. Unmarked notes stay private.
+_Avoid_: public note, team note
 
 **Tag**:
 A coloured label an account puts on a property; a property carries any number. A tag filter
@@ -172,15 +188,15 @@ _Avoid_: PWA (in prose), mobile app, native app, companion app
 
 **Reference overlay**:
 A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF
-rent map — that a user switches on or off; it changes what the map shows around properties, never
+rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never
 which properties.
 _Avoid_: data layer, overlay data, map data, GIS layer
 
 **Count mark**:
-The number a map shows for one world tile holding two or more matching properties (or any tile the
-server counted): exactly that many, in a pill at the tile's centre. A tile holding one known property
-shows its pin instead. One tile holds one mark; the marks and the lone pins on a map together add up
-to the mapped total.
+The number a map shows for one world tile when more properties are in view than the pin limit (a
+number the user sets above the map, 200 by default): exactly that many, in a pill at the tile's
+centre. At or under the limit every property is its own pin, at any zoom. One tile holds one mark;
+the marks on a map add up to the mapped total.
 _Avoid_: cluster, bubble, cell, bin, group
 
 ### A property's working files

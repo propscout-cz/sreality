@@ -5,9 +5,13 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import { bboxAround, fromSearchParams, DEFAULT_FILTERS } from './filters';
 import {
   DEFAULT_OVERLAY,
+  PIN_LIMIT_DEFAULT,
+  PIN_LIMIT_MAX,
+  PIN_LIMIT_MIN,
   browseFiltersForArea,
   browseFiltersForBroker,
   browseUrlFromState,
+  parsePinLimit,
   useMemoryBrowseState,
   useUrlBrowseState,
   type ExploreAreaSeed,
@@ -200,6 +204,47 @@ describe('priceMetric on the map overlay', () => {
     const withPm = fromSearchParams(new URLSearchParams('pm=per_m2'));
     const without = fromSearchParams(new URLSearchParams(''));
     expect(withPm).toEqual(without);
+  });
+});
+
+/* The pin limit (`pins`) and the price-label switch (`labels`): view knobs like
+ * `pm`. The limit IS the server's point budget (docs/design/map-counts.md), so a
+ * shared link carries it; the default state serialises to the plain /browse URL. */
+describe('pin limit and price labels on the map overlay', () => {
+  const state = (overlay: Partial<typeof DEFAULT_OVERLAY>) => ({
+    filters: DEFAULT_FILTERS,
+    sort: DEFAULT_SORT,
+    tab: 'map' as const,
+    overlay: { ...DEFAULT_OVERLAY, ...overlay },
+  });
+
+  it('defaults to 200 pins with labels on, and neither default appears in the URL', () => {
+    expect(DEFAULT_OVERLAY.pinLimit).toBe(PIN_LIMIT_DEFAULT);
+    expect(DEFAULT_OVERLAY.priceLabels).toBe(true);
+    const url = browseUrlFromState(state({}));
+    expect(url).not.toContain('pins=');
+    expect(url).not.toContain('labels=');
+  });
+
+  it('serialises a changed limit under `pins` and hidden labels under `labels=0`', () => {
+    expect(browseUrlFromState(state({ pinLimit: 500 }))).toContain('pins=500');
+    expect(browseUrlFromState(state({ priceLabels: false }))).toContain('labels=0');
+  });
+
+  it('clamps the limit into range and reads nonsense as the default', () => {
+    expect(parsePinLimit(null)).toBe(PIN_LIMIT_DEFAULT);
+    expect(parsePinLimit('abc')).toBe(PIN_LIMIT_DEFAULT);
+    expect(parsePinLimit('1.5')).toBe(PIN_LIMIT_DEFAULT);
+    expect(parsePinLimit('5')).toBe(PIN_LIMIT_MIN);
+    expect(parsePinLimit('99999')).toBe(PIN_LIMIT_MAX);
+    expect(parsePinLimit('350')).toBe(350);
+  });
+
+  /* View knobs, NOT cohort filters: they must not reach the filter spec. */
+  it('are invisible to the filter parser', () => {
+    const withKnobs = fromSearchParams(new URLSearchParams('pins=500&labels=0'));
+    const without = fromSearchParams(new URLSearchParams(''));
+    expect(withKnobs).toEqual(without);
   });
 });
 

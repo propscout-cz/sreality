@@ -185,9 +185,9 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     the registry in `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate only
     (`sql_kind`, place plan, rule-23 measures, served predicate, portal rule). **Portal + broker filters select ADS, rows stay properties (MS19):**
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
-    **three producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
+    **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
     per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    `ops_incidents`, mig 462). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    `ops_incidents`, mig 462) + `collection_share` (not property-grain; recipient-stamped by the share route, in-app only, mig 610). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
@@ -197,7 +197,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     transaction, so no such row orphans onto `merged_away`; every other column naming a property sits in `NOT_CARRIED` with its reason, and a census (offline
     over migrations, live over the replayed schema) fails on a column in neither. A SET/APPEND table = one `CurationTable(...)` line; any other shape = one
     adapter. Each merge writes one `property_merge_carries` row per curation row it moved or folded (alerts none); a detach routes it back (`route_curation`: a note with its ad, the rest by its carry rows, folds re-created; a split's user picks per item, copies allowed).
-    Collections carry monitoring (`monitoring_enabled` + `notify_channels`). Writes go through the API.
+    Collections carry monitoring (`monitoring_enabled` + `notify_channels`); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never). Writes go through the API.
 19. **The scrape is cadence-split: a fast index-walk feeds an async batched detail-drain via `listing_detail_queue`** (migration 105).
     Index-walk (`--index-only`) walks the full index, `portal_runner.reconcile_sightings` (touch + enqueue) + end-gated nomination (rule #3); detail-drain
     (`--drain-only`) claims a bounded slice (`FOR UPDATE SKIP LOCKED`) and writes each flush in ONE `listing_write.write_listings` call.
@@ -214,7 +214,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     (touch every sighted known row, enqueue new + repriced; CI rail). The parser emits `source_url` (stored, never rebuilt;
     sreality: `scraper/sreality_url.py`). An unproven walk nominates nothing; its listings close only via gone fetches (rule #3);
     `supports_complete_walk` is posture. A per-portal need is a `Portal` seam, never an `if source ==`; seams + owed: `docs/architecture.md` § rule 21.
-22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property at one
+22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property per account at one
     `pipeline_stages` stage (a TABLE, not an enum); "bookmark" == presence of a row at the entry stage. It has its OWN carrier in `PROPERTY_CARRIERS` (over
     `toolkit/pipeline_identity.py`; TERMINAL-AWARE — a live stage always beats a closed one); the losing card is folded into the carry record (rule #18).
     Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards/rows, listing header, kanban drag + trash) is ONE hook,
@@ -222,9 +222,9 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
     one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
-    stage. Stages operator-curated (API-enforced). The badge is `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's
-    pipeline scope (`?pipeline=any|<stage ids>`) is a property-id prefilter mirrored into
-    `browse_stats_properties.property_ids_filter` (migration 378) and OUTSIDE preset identity; the chip LOADS
+    stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API. The badge is
+    `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline=any|<stage ids>`) is a
+    property-id prefilter mirrored into `browse_stats_properties.property_ids_filter` (migration 378) and OUTSIDE preset identity; the chip LOADS
     A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable
     (`?deal=any`, the "Vše" pill, `FilterDef.nullable`) — NULL has always meant "no constraint" to comparables,
     the watchdog matcher and browse_stats; never an `any` enum member (it would reach the estimation agent).
@@ -246,7 +246,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     (uncast = DEGREES). TWO producers write `location_claims`, both fingerprinted in SQL: the `claims_intake` lane
     (payload, page body, the text lane's reading) and `operator_corrections`; ONE four-step resolver writes the
     answer table; TWELVE claim types, ≤ 1 contract entry each, the `obec_name` entry mandatory and live; every
-    display is `location_display_label`, every place filter `<level>_id = any(codes)` at four levels. CONSUMERS
+    display is `location_display_label`, every place filter `<level>_id = any(codes)` at five levels. CONSUMERS
     (browse/map/watchdog/dedup) serve a listing only when its location is resolved or determined foreign — ONE
     predicate (`claims_common.SERVED_LOCATION_PREDICATE`, mig 514); detail-by-id surfaces stay reachable. Invariant:
     **every served listing has a row, every active Czech listing has a town** (`location_town_coverage` red until

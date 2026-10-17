@@ -1,22 +1,13 @@
-"""Persistence for the deal pipeline (migration 205).
+"""Persistence for the deal pipeline (migration 205): an account's stages and
+its cards, at most one card per property per account; a bookmark is a card at
+the entry stage.
 
-Phase 0 = the bookmark surface: a property is "bookmarked / interested" iff it
-has a property_pipeline row, which starts at the entry stage. Stage moves (the
-kanban) come in a later phase. Single-valued (one row per property per account);
-writes go through the bearer-gated API, reads (membership) via
-property_pipeline_public.
-
-Account scoping (Phase 1, migrations 294/295): every WRITE path takes exactly
-one required account_id (resolved at the route edge by
-tenant_pool.require_account_id) and predicates with `account_id = %s`. Explicit
-even under RLS, and NOT because RLS can be bypassed: the PK is
+Every WRITE path takes exactly one required account_id (resolved at the route
+edge by tenant_pool.require_account_id) and predicates with `account_id = %s`.
+Explicit even under RLS, and NOT because RLS can be bypassed: the PK is
 (account_id, property_id) and `pipeline_stages_one_entry` is unique per account,
 so a write must NAME its one owner — RLS's WITH CHECK can validate the account a
-row claims, it cannot choose one. The columns are NOT NULL (migration 295), so a
-NULL-tolerant spelling would tolerate nothing; it would only convert a lost
-account into silence. The card INSERT's ON CONFLICT stays bare (no inference
-target) so it works against both the (property_id) PK and the
-(account_id, property_id) PK migration 295 swaps in.
+row claims, it cannot choose one.
 """
 
 from __future__ import annotations
@@ -266,8 +257,7 @@ def add_card(
             cur.execute("SELECT 1 FROM pipeline_stages WHERE id = %s FOR UPDATE", (entry_stage_id,))
             # board_position is per (account, stage): scope the max by account so
             # the query is served by mig-357's (account_id, stage_id,
-            # board_position) index and two accounts sharing a stage id can't
-            # interleave positions.
+            # board_position) index.
             cur.execute(
                 "SELECT coalesce(max(board_position), 0) + 1 "
                 "FROM property_pipeline "

@@ -178,6 +178,14 @@ def client(monkeypatch):
         lambda conn, cid, pid: {"removed": True},
     )
     monkeypatch.setattr(
+        api_curation, "create_share",
+        lambda conn, identity_conn, cid, body: {"id": cid},
+    )
+    monkeypatch.setattr(
+        api_curation, "delete_share",
+        lambda conn, cid, account_id: {"deleted": True},
+    )
+    monkeypatch.setattr(
         api_curation, "list_notes",
         lambda conn, pid: {"data": []},
     )
@@ -241,15 +249,7 @@ def client(monkeypatch):
     monkeypatch.setattr(
         api_maps,
         "resolve",
-        lambda *a, **kw: {
-            "kind": "unresolved",
-            "label": "x",
-            "lat": None,
-            "lng": None,
-            "polygon": None,
-            "default_radius_m": 1500,
-            "raw": {},
-        },
+        lambda *a, **kw: {"level": None, "id": None, "name": None, "context": None},
     )
 
     yield TestClient(api_main.app)
@@ -268,7 +268,7 @@ _MARKET_VEL_BODY = {"target": {"lat": 50.0, "lng": 14.0}, **_CAT}
 _LISTING_VEL_BODY = {"sreality_id": 1}
 _ANCHORS_BODY = {"lat": 50.0, "lng": 14.0}
 _CREATE_ESTIMATION_BODY = {"spec": {"lat": 50.0, "lng": 14.0, "area_m2": 50.0}}
-_RESOLVE_BODY = {"label": "x", "lat": 50.0, "lng": 14.0}
+_RESOLVE_BODY = {"lat": 50.0, "lng": 14.0, "type": "regional.municipality", "name": "x"}
 _CREATE_COLLECTION_BODY = {"name": "test"}
 _PATCH_COLLECTION_BODY = {"name": "renamed"}
 _ADD_PROPERTIES_BODY = {"property_ids": [1]}
@@ -334,6 +334,8 @@ def _jwt_gated_calls() -> list:
         ("GET",    "/collections/1", None),
         ("PATCH",  "/collections/1", _PATCH_COLLECTION_BODY),
         ("DELETE", "/collections/1", None),
+        ("POST",   "/collections/1/shares", {"email": "b@example.com"}),
+        ("DELETE", "/collections/1/shares/33333333-3333-3333-3333-333333333333", None),
         ("GET",    "/tags", None),
         ("POST",   "/tags", _CREATE_TAG_BODY),
         ("PATCH",  "/tags/1", _PATCH_TAG_BODY),

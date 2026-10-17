@@ -176,7 +176,17 @@ jobs:
       - name: Tenant-isolation sweep (RLS cross-tenant denial, Phase 1)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-        run: pytest tests/test_tenant_isolation_live.py -q
+        run: pytest tests/test_tenant_isolation_live.py tests/test_tenant_ids_identity_live.py -q
+
+      # Collection sharing (migration 610) widens READS only, through four FOR SELECT policies,
+      # a party policy and a SECURITY DEFINER label function. Only a real schema under the
+      # `authenticated` role can show that a recipient reads but never writes, that a bystander
+      # sees nothing, and that a note crosses a share only when its author marked it.
+      - name: Collection sharing is read-only and party-scoped (migration 610)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_collection_shares_live.py -q
 
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
@@ -216,14 +226,16 @@ jobs:
       # merged_away broker eat a top-N slot and silently under-fill the page.
       #
       # The behavioural rail parks the matview and substitutes a real table — you cannot
-      # INSERT into a materialized view, and CI's replayed copy is empty.
+      # INSERT into a materialized view, and CI's replayed copy is empty. The chip-parity
+      # rail (609) runs the live branch's chip predicate over the shared chip table.
       - name: Broker leaderboard ranks before it hydrates (migration 435)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: |
           pytest tests/test_broker_leaderboard_plan_shape.py \
-                 tests/test_broker_leaderboard_live.py -q
+                 tests/test_broker_leaderboard_live.py \
+                 tests/test_broker_leaderboard_chip_parity.py -q
 
       # The map RPC makes two claims a real schema is the only thing that can check.
       #

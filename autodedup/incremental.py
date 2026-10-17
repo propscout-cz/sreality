@@ -44,12 +44,14 @@ import bisect
 import hashlib
 import json
 import math
+import os
 import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Container, Iterable, Mapping, Protocol, Sequence
 
-from autodedup.blocking import BlockIndex
+from autodedup.blocking import _DECILES as DECILES
+from autodedup.blocking import QUARTER_PROBE, TOWN_PROBE, BlockIndex
 from autodedup.cluster import cluster_pairs, cluster_rows
 from autodedup.dataset import Image, Listing
 from autodedup.decide import Decision, decide_pair
@@ -66,7 +68,7 @@ from autodedup.features import (
 from autodedup.features import _attr_map as _feature_attr_map
 from autodedup.fingerprint import Fingerprint, build_fingerprint
 from autodedup.d43 import relation_for
-from autodedup.guards import UNIT_DESIGNATOR_VETO, pair_veto
+from autodedup.guards import UNIT_DESIGNATOR_VETO, GuardSide, pair_veto
 from autodedup.hazard_context import BlockCell, ContextIndex, ContextStamp, rail_plan
 from autodedup.hazard_context import address_block_key, category_group
 from autodedup.model import LogisticModel
@@ -125,6 +127,10 @@ def stream_live(control: Mapping[str, Any], generation: str = GENERATION) -> boo
 # index lookup in SQL and the same string in the in-memory twin. Unit separator, because a
 # street key may hold anything a portal prints but never a control character.
 _SEP: str = "\x1f"
+# E960: the dirty listings whose posted keys a pass holds at once while it retrieves them.
+KEY_CHUNK: int = 5000
+# The probes whose tokens lead with a band number (`simhash_bands`): text, and phash per anchor.
+_BANDED: frozenset[str] = frozenset({"text", "phash"})
 
 
 def key_token(key: Sequence[Any]) -> str:
@@ -258,6 +264,9 @@ class FpRow:
     # refresh, and the twin does the same with its own.
     evidence: Evidence = Evidence()
     first_decided_at: float | None = None
+    # The listing's `decision_digest` as the lane last read its facts (E960): the reject ledger's
+    # key for a side the pass does not read. Empty on a row written before migration 604.
+    dd: str = ""
 
     @property
     def cell(self) -> tuple[str, str]:
@@ -345,6 +354,10 @@ class Calibration:
     block_attr_df: dict[str, dict[str, int]] = field(default_factory=dict)
     pin_pop: dict[str, int] = field(default_factory=dict)
     certifying_codes: list[str] = field(default_factory=list)
+    # E944: `digest()` hashed once. A pass hashes it three to seven times and the lane keeps one
+    # calibration across passes; nothing writes into one after it is built (`replace` makes a
+    # new one, with no digest yet).
+    _digest: str | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def build(
@@ -392,11 +405,13 @@ class Calibration:
         `built_at` is excluded deliberately: it says WHEN the calibration was cut, not what it
         contains, and a digest that moved every time the same cohort was re-cut would certify
         nothing. Two identical calibrations must hash identically or E70's stamp is decoration."""
-        payload = dict(self.to_json())
-        payload.pop("built_at", None)
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()[:16]
+        if self._digest is None:
+            payload = dict(self.to_json())
+            payload.pop("built_at", None)
+            self._digest = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()[:16]
+        return self._digest
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -459,6 +474,30 @@ class Keyer:
 
     def probe_keys(self, fp: Fingerprint) -> list[tuple[str, str]]:
         return [(probe, key_token(key)) for probe, key in self.index.probe_keys(fp)]
+
+    def probe_keys_of(self, posted: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+        """`probe_keys` of a listing known only by the keys it is POSTED under (E960), in
+        `probe_keys`' order: every probe posts one key, or one band a band number — except
+        `phash` over two anchor images or more, whose bands follow the images, which no posting
+        keeps (`retrieve_posted` reads that probe loose)."""
+        posted = sorted(set(posted), key=lambda key: (
+            key[0], int(key[1].partition(_SEP)[0]) if key[0] in _BANDED else 0, key[1]))
+        quarter = any(probe == QUARTER_PROBE for probe, _token in posted)
+        out: list[tuple[str, str]] = []
+        for probe, token in posted:
+            head, _sep, last = token.rpartition(_SEP)
+            if probe in ("attr_area", TOWN_PROBE, QUARTER_PROBE):
+                # E936: an ad that posts its quarter does not probe its town.
+                if probe == TOWN_PROBE and quarter:
+                    continue
+                out.extend((probe, f"{head}{_SEP}{int(last) + offset}") for offset in (-1, 0, 1))
+            elif probe == "broker" and last:
+                out.extend((probe, f"{head}{_SEP}{decile}")
+                           for decile in range(int(last) - 1, int(last) + 2)
+                           if 0 <= decile < DECILES)
+            else:
+                out.append((probe, token))
+        return out
 
     def is_exploded(self, probe: str, token: str) -> bool:
         return token in self.index.exploded[probe]
@@ -534,6 +573,7 @@ class Store(Protocol):
                     ) -> dict[tuple[str, str], list[int]]: ...
     def put_listing(self, listing_id: int, row: FpRow,
                     keys: Sequence[tuple[str, str]]) -> None: ...
+    def put_decision_digests(self, dds: Mapping[int, str]) -> None: ...
     def drop_listing(self, listing_id: int) -> None: ...
     def keys_many(self, ids: Iterable[int]) -> dict[int, list[tuple[str, str]]]: ...
     def rows(self, ids: Iterable[int]) -> dict[int, FpRow]: ...
@@ -544,6 +584,7 @@ class Store(Protocol):
     def upsert_pairs(self, rows: Sequence[PairRow]) -> int: ...
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None: ...
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]: ...
+    def ledger_keyed(self) -> bool: ...
     def clusters_touching(self, members: Iterable[int]) -> dict[int, list[int]]: ...
     def write_clusters(self, drop_keys: Sequence[int], rows: Sequence[dict[str, Any]],
                        conflicts: Sequence[dict[str, Any]]) -> None: ...
@@ -620,12 +661,47 @@ def retrieve(
     listing id, exactly as the cohort pass fills it, so the cap can only ever discard the
     weakest evidence class (E17). `tests/autodedup/test_incremental.py` asserts this against
     `BlockIndex.candidates` over the whole cohort rather than trusting the restatement."""
+    return _fill(fp.listing_id, fp, keyer.probe_keys(fp), keyer, store, guards, settings,
+                 vetoed) or {}
+
+
+def retrieve_posted(
+    side: GuardRow,
+    posted: Iterable[tuple[str, str]],
+    keyer: Keyer,
+    store: Store,
+    guards: Mapping[int, GuardRow],
+    settings: Settings,
+    vetoed: dict[tuple[int, int], str],
+) -> dict[int, set[str]] | None:
+    """`retrieve` for a listing whose facts the pass does not read (E960): its keys as the store
+    posts them and its guard columns as its row keeps them. None when its `phash` bands came
+    from two anchors or more and the fan-out cap refused, inside that probe, a candidate the
+    rule floor would have let in — the one case the lost order of its bands can reach — and the
+    caller then reads its facts and `retrieve`s."""
+    keys = keyer.probe_keys_of(posted)
+    bands = [token.partition(_SEP)[0] for probe, token in keys if probe == "phash"]
+    return _fill(side.listing_id, side, keys, keyer, store, guards, settings, vetoed,
+                 loose="phash" if len(bands) != len(set(bands)) else None)
+
+
+def _fill(
+    listing_id: int,
+    side: GuardSide,
+    probe_keys: Sequence[tuple[str, str]],
+    keyer: Keyer,
+    store: Store,
+    guards: Mapping[int, GuardRow],
+    settings: Settings,
+    vetoed: dict[tuple[int, int], str],
+    loose: str | None = None,
+) -> dict[int, set[str]] | None:
     # `index.probes` is `PROBE_PRIORITY`, plus E300's town and E936's quarter probes last when
     # the row asks for them.
     probes = keyer.index.probes
     by_probe: dict[str, list[str]] = {probe: [] for probe in probes}
     wanted: list[tuple[str, str]] = []
-    for probe, token in keyer.probe_keys(fp):
+    for probe, token in probe_keys:
         by_probe[probe].append(token)
         if not keyer.is_exploded(probe, token):
             wanted.append((probe, token))
@@ -635,25 +711,32 @@ def retrieve(
     out: dict[int, set[str]] = {}
     cap = settings.max_candidates_per_listing
     for probe in probes:
+        # A probe whose tokens are out of order fills the same set in any order unless the cap
+        # turns away a candidate the floor would admit while it is read.
+        ordered = probe != loose or len(out) >= cap
         for token in by_probe[probe]:
             if keyer.is_exploded(probe, token):
                 continue
             for other in postings.get((probe, token), ()):
-                if other == fp.listing_id:
+                if other == listing_id:
                     continue
                 hit = out.get(other)
                 if hit is not None:
                     hit.add(probe)
                     continue
+                pair = (listing_id, other) if listing_id < other else (other, listing_id)
                 if len(out) >= cap:
+                    if not ordered and pair not in vetoed:
+                        row = guards.get(other)
+                        if row is not None and pair_veto(side, row, settings) is None:
+                            return None
                     continue
-                pair = (fp.listing_id, other) if fp.listing_id < other else (other, fp.listing_id)
                 if pair in vetoed:
                     continue
                 row = guards.get(other)
                 if row is None:
                     continue
-                veto = pair_veto(fp, row, settings)
+                veto = pair_veto(side, row, settings)
                 if veto is not None:
                     vetoed[pair] = veto
                     continue
@@ -715,6 +798,11 @@ class Limits:
     # read costs anyway; 150k scored is ~480 s beside ~450 s of fixed cost, inside 1,050 s.
     max_pairs: int = 150_000
     max_component: int = 400
+    # E950: the decided pairs are scored this many at a time, each chunk's rows written before
+    # the next, so the rows a pass holds follow the chunk and not `max_pairs`. A side's CLIP
+    # vectors and feature context are held from its first decided pair to its last, which in a
+    # dense pass is most sides. A scheduling bound as well: the rows are the same.
+    score_chunk: int = 5_000
 
 
 @dataclass(slots=True)
@@ -731,6 +819,11 @@ class PassResult:
     ledger_skipped: int = 0
     pairs_to_decide: int = 0
     ledger_written: int = 0
+    # E950: the process's resident memory (MiB) as each scoring chunk was written, before it gave
+    # its vectors and features back: one reading a chunk, so their number is the chunks'. Beside
+    # it, the listings holding their CLIP vectors at that moment: the share no chunk bounds.
+    chunk_rss_mb: list[float | None] = field(default_factory=list)
+    chunk_vectored: list[int] = field(default_factory=list)
     components: int = 0
     clusters_written: int = 0
     clusters_dropped: int = 0
@@ -764,6 +857,10 @@ class PassResult:
     pairs_to_decide_by_attempt: list[int] = field(default_factory=list)
     # The groups this pass (re)wrote — what the lane's reconcile (A9) looks at first.
     cluster_keys: list[int] = field(default_factory=list)
+    # E960: the listings whose facts the pass read, by why: its claim, a neighbour whose phash
+    # band order the cap could reach (`order`), a side whose row carries no decision digest
+    # yet (`digest`), the sides of the pairs it decided, a group's members, the rail's merges.
+    reads: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -778,6 +875,7 @@ class PassResult:
                 "ledger_skipped": self.ledger_skipped,
                 "pairs_to_decide": self.pairs_to_decide,
                 "ledger_written": self.ledger_written,
+                "chunks": len(self.chunk_rss_mb),
                 "components": self.components,
                 "clusters_written": self.clusters_written,
                 "clusters_dropped": self.clusters_dropped,
@@ -790,6 +888,7 @@ class PassResult:
                 "attempts": self.attempts,
                 "wanted_by_attempt": list(self.wanted_by_attempt),
                 "pairs_to_decide_by_attempt": list(self.pairs_to_decide_by_attempt),
+                "reads": dict(self.reads),
             },
             "feeds": dict(self.feeds),
             "aborted": self.aborted,
@@ -798,6 +897,8 @@ class PassResult:
             "rail": dict(self.rail),
             "latency_s": _latency(self.latency_s),
             "timings": {k: round(v, 4) for k, v in self.timings.items()},
+            "chunk_rss_mb": list(self.chunk_rss_mb),
+            "chunk_vectored": list(self.chunk_vectored),
             # D19: no LLM judge has merge authority on the band, and this lane runs none.
             "spent_usd": self.spent_usd,
             "oversized_components": self.oversized_components,
@@ -827,6 +928,16 @@ def _now() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def rss_mb(statm: str = "/proc/self/statm") -> float | None:
+    """The process's resident memory now in MiB: resident pages x the page size (E948)."""
+    try:
+        with open(statm, encoding="ascii") as handle:
+            pages = int(handle.read().split()[1])
+        return round(pages * os.sysconf("SC_PAGE_SIZE") / 1_048_576.0, 1)
+    except Exception:  # noqa: BLE001 — observability only: None, never a failed pass
+        return None
 
 
 def fp_digest(fp: Fingerprint, images: Sequence[Image]) -> str:
@@ -911,17 +1022,22 @@ class _Working:
         self.listings: dict[int, Listing] = {}
         self.images: dict[int, list[Image]] = {}
         self.fps: dict[int, Fingerprint] = {}
-        # E933: who carries CLIP vectors. A gallery is fetched without them unless asked: the
-        # probe-key neighbourhood is O(store) a pass and no fingerprint, key, guard, digest or
-        # census reads one. The listings a pass refreshed (their row records the vectors'
-        # PRESENCE, E92; read once the pair budget agreed, E952) and the scored endpoints ask.
+        # E933: who carries CLIP vectors. A gallery is fetched without them unless asked: no
+        # fingerprint, key, guard, digest or census reads one. The listings a pass refreshed
+        # (their row records the vectors' PRESENCE, E92; read once the pair budget agreed, E952)
+        # and the scored endpoints ask.
         self.vectored: set[int] = set()
+        # E960: the listings whose facts were read, by why (the heartbeat's `reads`).
+        self.read: dict[str, int] = {}
 
-    def ensure(self, ids: Iterable[int], *, clip: bool = False) -> None:
+    def ensure(self, ids: Iterable[int], *, clip: bool = False, reason: str = "other") -> None:
         ids = list(ids)
         missing = [i for i in ids if i not in self.fps]
         if missing:
-            for listing_id, (listing, images) in self.facts.facts(missing, clip=clip).items():
+            fetched = self.facts.facts(missing, clip=clip)
+            if fetched:
+                self.read[reason] = self.read.get(reason, 0) + len(fetched)
+            for listing_id, (listing, images) in fetched.items():
                 self.listings[listing_id] = listing
                 self.images[listing_id] = list(images)
                 self.fps[listing_id] = build_fingerprint(listing, images, self.settings)
@@ -942,6 +1058,16 @@ class _Working:
                 if image.image_id in vectors else image
                 for image in self.images.get(listing_id, ())]
             self.vectored.add(listing_id)
+
+    def release(self, ids: Iterable[int]) -> None:
+        """Give back these listings' CLIP vectors, decoded ones included (E950): their galleries
+        as the bare read holds them, so a later `ensure(clip=True)` reads the vectors again."""
+        for listing_id in ids:
+            if listing_id in self.vectored:
+                self.vectored.discard(listing_id)
+                self.images[listing_id] = [
+                    replace(image, clip=None) if image.clip is not None else image
+                    for image in self.images.get(listing_id, ())]
 
 
 class _Overlay:
@@ -1167,8 +1293,9 @@ def run_pass(
         rulings = read_rulings(store)
         seeds = _ruling_seeds(store, rulings)
         if seeds:
-            _recluster(store, facts, settings, _Working(facts, settings), seeds, caps,
-                       result, rulings)
+            idle = _Working(facts, settings)
+            _recluster(store, facts, settings, idle, seeds, caps, result, rulings)
+            result.reads = dict(idle.read)
         store.flush()
         result.cursors = work.commit(items)
         result.timings["total_s"] = time.perf_counter() - clock
@@ -1178,7 +1305,7 @@ def run_pass(
     working = _Working(facts, settings)
     # Without vectors: nothing up to the budget check reads one, so a refused attempt never
     # pays for them (E952); the refreshed listings' are read once the budget has agreed.
-    working.ensure(claimed)
+    working.ensure(claimed, reason="claim")
     # Everything this pass writes before the budget check goes through the overlay, so a
     # refusal leaves the store exactly as it found it (E75).
     view = _Overlay(store)
@@ -1190,6 +1317,9 @@ def run_pass(
     changed: set[int] = set()
     touched_keys: list[tuple[str, str]] = []
     touched_blocks: set[str] = set()
+    # E960: the decision digests of the listings the pass read whose row does not carry them
+    # yet, written once the budget has agreed.
+    stamps: dict[int, str] = {}
 
     # --- 1a. E79: retire what the scope no longer holds ------------------------------------
     # A retired listing's keys are TOUCHED keys, so step 2 widens to everything that could
@@ -1223,8 +1353,15 @@ def run_pass(
         # share a pHash band, and the posting list is a set — a pass that read that difference
         # as a change would re-score the whole corpus on every drain.
         new_keys = sorted(set(keyer.index_keys(fp)))
+        dd = decision_digest(listing, working.images.get(listing_id, ()))
+        # E960: a claimed advert whose decision digest moved under an unmoved fingerprint (a
+        # body edit the SimHash keeps, a broker identity, tags) is refreshed too, so its stored
+        # pairs are re-decided, not only its ledgered rejects; a row with no digest yet (written
+        # before migration 604) is stamped.
         if (old is not None and old.digest == digest and old_keys == new_keys
-                and listing_id not in redecide):
+                and listing_id not in redecide and (not old.dd or old.dd == dd)):
+            if old.dd != dd:
+                stamps[listing_id] = dd
             continue  # idempotence: an unchanged listing costs a digest, not a pass
         cell = (address_block_key(listing), category_group(listing))
         if old is not None:
@@ -1239,7 +1376,7 @@ def run_pass(
                   # The FIRST decision's stamp is carried, never restamped: the evidence
                   # horizon is measured from it, and a refresh that reset it would hold a
                   # merge for ever (E92). The store coalesces it on the way down too.
-                  first_decided_at=old.first_decided_at if old is not None else None),
+                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd),
             new_keys, old_keys,
         )
         view.bump_cell(listing)
@@ -1251,35 +1388,60 @@ def run_pass(
     _in_time(deadline, stopping)
 
     # --- 2. E71: the dirty set is the probe-key neighbourhood ------------------------------
+    # Its facts are NOT read (E960): a neighbour's retrieval needs only its posted keys and its
+    # guard columns, both of which the store keeps.
     clock = time.perf_counter()
     dirty = set(changed) | neighbourhood(keyer, view, set(touched_keys))
     dirty &= view.known(dirty)
     result.dirty = len(dirty)
-    working.ensure(dirty)
 
     # --- 3. retrieval for every dirty listing, against the CURRENT corpus ------------------
-    # The postings and the candidates' guard rows are prefetched in two statements, so the
-    # retrieval loop below is pure computation over what is already in hand.
+    # A slice of `KEY_CHUNK` dirty listings at a time (E960): its posted keys, postings and
+    # guard rows are prefetched in three statements, so the retrieval loop is pure computation
+    # over what is already in hand, and only one slice's posted keys are held at once.
     local_guards = {i: guard_row(working.fps[i]) for i in dirty if i in working.fps}
-    probe_keys: set[tuple[str, str]] = set()
-    for listing_id in sorted(dirty):
-        fp = working.fps.get(listing_id)
-        if fp is None:
-            continue
-        probe_keys.update(key for key in keyer.probe_keys(fp)
-                          if not keyer.is_exploded(key[0], key[1]))
-    reachable: set[int] = set()
-    for ids in view.lookup_many(sorted(probe_keys)).values():
-        reachable.update(ids)
-    fetched = view.rows(sorted(reachable - set(local_guards)))
-    lookup = _GuardLookup(view, local_guards, {i: row.guard for i, row in fetched.items()})
+    lookup = _GuardLookup(view, local_guards)
     vetoed: dict[tuple[int, int], str] = {}
     cand: dict[int, dict[int, set[str]]] = {}
-    for listing_id in sorted(dirty):
-        fp = working.fps.get(listing_id)
-        if fp is None:
-            continue
-        cand[listing_id] = retrieve(fp, keyer, view, lookup, settings, vetoed)
+    unordered: list[int] = []
+    order = sorted(dirty)
+    for start in range(0, len(order), KEY_CHUNK):
+        _in_time(deadline, stopping)
+        chunk = order[start:start + KEY_CHUNK]
+        posted = view.keys_many([i for i in chunk if i not in local_guards])
+        probe_keys: set[tuple[str, str]] = set()
+        for listing_id in chunk:
+            fp = working.fps.get(listing_id)
+            probe_keys.update(keyer.probe_keys(fp) if fp is not None
+                              else keyer.probe_keys_of(posted.get(listing_id, ())))
+        reachable: set[int] = set()
+        for ids in view.lookup_many(sorted(key for key in probe_keys
+                                           if not keyer.is_exploded(key[0], key[1]))).values():
+            reachable.update(ids)
+        fetched = view.rows(sorted((reachable | set(chunk)) - set(local_guards)
+                                   - set(lookup.cache)))
+        lookup.cache.update({i: row.guard for i, row in fetched.items()})
+        for listing_id in chunk:
+            fp = working.fps.get(listing_id)
+            if fp is not None:
+                cand[listing_id] = retrieve(fp, keyer, view, lookup, settings, vetoed)
+                continue
+            guard = lookup.cache.get(listing_id)
+            if guard is None:
+                continue
+            found = retrieve_posted(guard, posted.get(listing_id, ()), keyer, view, lookup,
+                                    settings, vetoed)
+            if found is None:
+                unordered.append(listing_id)
+            else:
+                cand[listing_id] = found
+    if unordered:
+        working.ensure(unordered, reason="order")
+        for listing_id in unordered:
+            fp = working.fps.get(listing_id)
+            if fp is not None:
+                cand[listing_id] = retrieve(fp, keyer, view, lookup, settings, vetoed)
+        cand = {listing_id: cand[listing_id] for listing_id in sorted(cand)}
     result.timings["retrieve_s"] = time.perf_counter() - clock
     _in_time(deadline, stopping)
 
@@ -1319,33 +1481,43 @@ def run_pass(
     result.wanted_pairs = len(wanted)
 
     # --- 5. score what is new or stale -----------------------------------------------------
-    # Read before the budget (E943), so a refused attempt pays the endpoints' facts and the
-    # ledger lookup again; what it never pays is the CLIP vectors, read once it has agreed.
+    # E960: whether a pair is decided reads each side's ROW — its digest and decision digest
+    # as the lane last read its facts (a refreshed side's as this pass did) — so only the sides
+    # of the pairs the pass then decides are read, once the budget has agreed.
     endpoints = {i for pair in wanted for i in pair}
-    working.ensure(endpoints)
-    digests = {i: fp_digest(working.fps[i], working.images.get(i, ()))
-               for i in endpoints if i in working.fps}
+    sides = view.rows(sorted(endpoints))
+    digests = {i: row.digest for i, row in sides.items()}
+    dds = {i: stamps.get(i) or row.dd for i, row in sides.items()}
     # A stored decision stands while neither side's digest moved and neither side was refreshed.
     # Only the pairs it does not cover are decided, and only their two sides read photographs —
     # the features the CLIP vectors, E93's hold their presence — so only they carry them (E933).
     decide: set[tuple[int, int]] = set()
     for lo, hi in wanted:
-        if lo not in working.fps or hi not in working.fps:
+        if lo not in sides or hi not in sides:
             continue
         previous = stored.get((lo, hi))
-        if (previous is None or previous.fp_lo != digests.get(lo, "")
-                or previous.fp_hi != digests.get(hi, "") or lo in changed or hi in changed):
+        if (previous is None or previous.fp_lo != digests[lo] or previous.fp_hi != digests[hi]
+                or lo in changed or hi in changed):
             decide.add((lo, hi))
-    dds = {i: decision_digest(working.listings[i], working.images.get(i, ()))
-           for i in {i for pair in decide for i in pair}}
     # E943: a pair decided below `store_floor` is not stored, so it reaches here with no row. The
     # ledger answers it while both sides' decision digests and the store's calibration, feature
     # version and engine digest all still match, which is exactly when a re-score would decide
     # it the same. A refreshed side is never answered: its pairs are re-decided whatever its
-    # digest says.
-    skipped = store.rejected(
-        [(lo, hi, dds[lo], dds[hi]) for lo, hi in sorted(decide)
-         if (lo, hi) not in stored and lo not in changed and hi not in changed])
+    # digest says. A side whose row predates its digest (migration 604) is read for it.
+    asked = [(lo, hi) for lo, hi in sorted(decide)
+             if (lo, hi) not in stored and lo not in changed and hi not in changed]
+    # Read only while the ledger holds a row under this store's key: right after a deploy that
+    # moved the engine digest (the one that ships 604) none matches, and the sides are read
+    # once their pairs are decided instead.
+    blank = sorted({i for pair in asked for i in pair if not dds[i]})
+    if blank and store.ledger_keyed():
+        working.ensure(blank, reason="digest")
+        for listing_id in blank:
+            if listing_id in working.listings:
+                stamps[listing_id] = dds[listing_id] = decision_digest(
+                    working.listings[listing_id], working.images.get(listing_id, ()))
+    skipped = store.rejected([(lo, hi, dds[lo], dds[hi]) for lo, hi in asked
+                              if dds[lo] and dds[hi]])
     decide -= skipped
     result.ledger_skipped = len(skipped)
     result.pairs_to_decide = len(decide)
@@ -1354,13 +1526,14 @@ def run_pass(
     if len(decide) > caps.max_pairs:
         # Nothing of this pass has reached the store yet, so the refusal IS the rollback.
         result.aborted = "pair_budget"
+        result.reads = dict(working.read)
         result.timings["total_s"] = sum(
             value for key, value in result.timings.items() if key.endswith("_s"))
         return result
 
     # E92's evidence counts the refreshed listings' CLIP vectors, the one read of the claim the
     # wanted set does not need: read only now, so a refused attempt never pays it (E952).
-    working.ensure(sorted(changed), clip=True)
+    working.ensure(sorted(changed), clip=True, reason="claim")
     for listing_id in changed:
         view.fp[listing_id] = replace(
             view.fp[listing_id], evidence=evidence_of(working.images.get(listing_id, ())))
@@ -1370,24 +1543,41 @@ def run_pass(
         store.delete_pairs(dropped)
         result.pairs_deleted = len(dropped)
 
-    working.ensure({i for pair in decide for i in pair}, clip=True)
+    # Bare: the decided sides' CLIP vectors are read a chunk at a time (E950), below.
+    working.ensure({i for pair in decide for i in pair}, reason="decided")
+    for listing_id in {i for pair in decide for i in pair}:
+        if not dds[listing_id] and listing_id in working.listings:
+            stamps[listing_id] = dds[listing_id] = decision_digest(
+                working.listings[listing_id], working.images.get(listing_id, ()))
+    if stamps:
+        store.put_decision_digests(stamps)
     ctx = context_for(calibration, settings, working.fps, working.listings)
     census = _census(store, working.listings, working.images)
     # E93's two inputs, batched for the whole pass: what each endpoint's photographs ARE right
     # now (off the facts this pass read) and when this generation first decided it.
     decided_at = ({i: row.first_decided_at for i, row in view.rows(sorted(endpoints)).items()}
                   if hold is not None else {})
+    # E950: the decided pairs are scored `score_chunk` at a time, in key order. A chunk's sides
+    # read their CLIP vectors as it opens; as it closes its rows are written and every side no
+    # later chunk decides gives its vectors and its feature context back (in a dense pass most
+    # sides are decided again by a later chunk). Every pair is decided on the facts the unchunked
+    # pass decided it on, so only WHEN a row reaches the store moves.
+    ordered = sorted(wanted)
+    opens, closes = _score_chunks(ordered, decide, working.fps, max(1, caps.score_chunk))
     rows: list[PairRow] = []
+    moved: set[int] = set()
     result.redecided = len(redecide)
-    for index, (lo, hi) in enumerate(sorted(wanted)):
+    for index, (lo, hi) in enumerate(ordered):
         if index % 256 == 255:
             _in_time(deadline, stopping)
+        if index in opens:
+            working.ensure(opens[index], clip=True, reason="decided")
         entry = wanted[(lo, hi)]
-        if lo not in working.fps or hi not in working.fps:
+        if lo not in sides or hi not in sides:
             continue
         previous = stored.get((lo, hi))
-        dlo = digests.get(lo, "")
-        dhi = digests.get(hi, "")
+        dlo = digests[lo]
+        dhi = digests[hi]
         if (lo, hi) not in decide:
             # A stored decision that stands, or a reject the ledger answered (no row to touch).
             if previous is not None and (
@@ -1399,8 +1589,15 @@ def run_pass(
                 previous.from_hi = bool(entry["from_hi"])
                 rows.append(previous)
             continue
+        if lo not in working.fps or hi not in working.fps:
+            continue
         fa, fb = working.fps[lo], working.fps[hi]
         la, lb = working.listings[lo], working.listings[hi]
+        if lo not in working.vectored or hi not in working.vectored:
+            # E950: a side given back too early would score with no CLIP gallery, no tfidf and
+            # no vectors in its evidence, which E93's hold covers only while the side is young.
+            raise RuntimeError(f"pair ({lo}, {hi}) reached scoring without its sides' CLIP "
+                               "vectors (E950)")
         feats: Feats = pair_features(fa, fb, la, lb, working.images.get(lo, ()),
                                      working.images.get(hi, ()), ctx, settings)
         decision = decide_pair(fa, fb, la, lb, feats, entry["probes"], model, settings, census)
@@ -1442,8 +1639,13 @@ def run_pass(
             slots={name: feats[name] for name in FEATURE_SLOTS if name in feats},
             dd_lo=dds[lo], dd_hi=dds[hi],
         ))
-    result.ledger_written = store.upsert_pairs(rows)
-    result.pairs_written = len(rows)
+        if index in closes:
+            moved |= _write_rows(store, rows, stored, result)
+            result.chunk_rss_mb.append(rss_mb())
+            result.chunk_vectored.append(len(working.vectored))
+            working.release(closes[index])
+            ctx.forget(closes[index])
+    moved |= _write_rows(store, rows, stored, result)
     result.timings["score_s"] = time.perf_counter() - clock
 
     # --- 6. E72: re-cluster the touched components ----------------------------------------
@@ -1451,12 +1653,7 @@ def run_pass(
     # that scores a thousand rejects re-clusters nothing. A pair that merely changed its
     # probes or its band score leaves the component's edge set alone.
     clock = time.perf_counter()
-    seeds: set[int] = set()
-    for row in rows:
-        previous = stored.get((row.lo, row.hi))
-        was = previous.zone if previous is not None else None
-        if row.zone == "merge" or was == "merge" or row.veto == UNIT_DESIGNATOR_VETO:
-            seeds |= {row.lo, row.hi}
+    seeds: set[int] = set(moved)
     for key in dropped:
         previous = stored.get(key)
         if previous is not None and previous.zone == "merge":
@@ -1479,6 +1676,7 @@ def run_pass(
     result.timings["rail_s"] = time.perf_counter() - clock
 
     store.flush()
+    result.reads = dict(working.read)
     if now is not None:
         for item in items:
             if item.arrived_at is not None:
@@ -1488,6 +1686,50 @@ def run_pass(
         value for key, value in result.timings.items() if key.endswith("_s")
     )
     return result
+
+
+def _score_chunks(ordered: Sequence[tuple[int, int]], decide: set[tuple[int, int]],
+                  known: Container[int], size: int
+                  ) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
+    """E950: the scoring chunks of `ordered`, each at most `size` of the pairs a pass scores (the
+    decided ones whose sides it holds). `opens` maps the index of a chunk's first such pair to
+    the sides they read, `closes` the index of its last to the sides no later chunk reads,
+    which it gives back once written."""
+    opens: dict[int, set[int]] = {}
+    ends: list[int] = []
+    last: dict[int, int] = {}
+    sides: set[int] = set()
+    taken = 0
+    for index, pair in enumerate(ordered):
+        if pair not in decide or pair[0] not in known or pair[1] not in known:
+            continue
+        if taken % size == 0:
+            sides = opens[index] = set()
+            ends.append(index)
+        taken += 1
+        sides.update(pair)
+        ends[-1] = index
+        last[pair[0]] = last[pair[1]] = len(ends) - 1
+    closes: dict[int, set[int]] = {index: set() for index in ends}
+    for side, chunk in last.items():
+        closes[ends[chunk]].add(side)
+    return opens, closes
+
+
+def _write_rows(store: Store, rows: list[PairRow], stored: Mapping[tuple[int, int], PairRow],
+                result: PassResult) -> set[int]:
+    """Write one chunk's rows and empty the list (E950); return the listings whose merge edges or
+    vetoes they moved, which step 6 re-clusters from."""
+    result.ledger_written += store.upsert_pairs(rows)
+    result.pairs_written += len(rows)
+    moved: set[int] = set()
+    for row in rows:
+        previous = stored.get((row.lo, row.hi))
+        was = previous.zone if previous is not None else None
+        if row.zone == "merge" or was == "merge" or row.veto == UNIT_DESIGNATOR_VETO:
+            moved |= {row.lo, row.hi}
+    rows.clear()
+    return moved
 
 
 def run_pass_bounded(
@@ -1520,6 +1762,7 @@ def run_pass_bounded(
                       hold, deadline, stopping)
     wanted = [result.wanted_pairs]
     to_decide = [result.pairs_to_decide]
+    reads = dict(result.reads)
     while result.aborted and len(wanted) < attempts:
         made = min(caps.max_listings, int(
             (getattr(work, "claim_bound", None) or {}).get("limit") or caps.max_listings))
@@ -1530,6 +1773,9 @@ def run_pass_bounded(
                           now, hold, deadline, stopping)
         wanted.append(result.wanted_pairs)
         to_decide.append(result.pairs_to_decide)
+        for reason, count in result.reads.items():
+            reads[reason] = reads.get(reason, 0) + count
+    result.reads = reads
     result.attempts = len(wanted)
     result.wanted_by_attempt = wanted
     result.pairs_to_decide_by_attempt = to_decide
@@ -1780,7 +2026,7 @@ def _recluster(
     if not components:
         return
     every = sorted({i for members in components for i in members})
-    working.ensure(every)
+    working.ensure(every, reason="cluster")
     of_component = {i: index for index, members in enumerate(components) for i in members}
     edges: list[list[PairRow]] = [[] for _ in components]
     # F2 (E909): the D43 relation the batch pass clusters with, read off the SAME rows the batch
@@ -1866,7 +2112,8 @@ def _run_rail(
     if not stamped:
         return {"reopened": 0, "deferred_by_cap": 0, "blocks_at_cap": 0, "blocks_touched": 0,
                 "owed": 0}
-    working.ensure({i for lo, hi, _stamp, _block, _cert in stamped for i in (lo, hi)})
+    working.ensure({i for lo, hi, _stamp, _block, _cert in stamped for i in (lo, hi)},
+                   reason="rail")
     merges = [(lo, hi, stamp, block) for lo, hi, stamp, block, _cert in stamped]
     exempt = frozenset((lo, hi) for lo, hi, _s, _b, cert in stamped if cert)
     live = _census(store, working.listings, working.images)

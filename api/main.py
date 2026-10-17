@@ -403,7 +403,7 @@ def health() -> dict[str, str]:
 @app.get("/maps/suggest")
 def get_maps_suggest(
     query: str = Query(..., min_length=1, max_length=200),
-    limit: int = Query(default=10, ge=1, le=20),
+    limit: int = Query(default=10, ge=1, le=15),
     lang: str = Query(default="cs", min_length=2, max_length=8),
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
@@ -431,43 +431,12 @@ def post_maps_resolve(
 ) -> dict[str, Any]:
     return maps.resolve(
         conn,
-        label=body.label,
         lat=body.lat,
         lng=body.lng,
         type_=body.type,
-        regional_structure=body.regional_structure,
-        raw=body.raw,
         name=body.name,
+        regional_structure=[e.model_dump() for e in body.regional_structure],
     )
-
-
-@app.post("/maps/resolve-names")
-def post_maps_resolve_names(
-    body: s.ResolveChipNamesIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Resolve stored name-only chips to RÚIAN codes at read time (W3 S3).
-
-    The SPA calls this once when a URL / preset hands it a chip written before
-    codes existed; the Watchdog calls `maps.resolve_names` in-process for the
-    same reason. One resolution rule, so Browse and the matcher cannot read the
-    same saved filter differently (rule 16)."""
-    pairs = [(c.name, c.context) for c in body.chips]
-    resolved = maps.resolve_names(conn, pairs)
-    return {
-        "chips": [
-            {
-                "name": name,
-                "context": context,
-                "matches": [
-                    {"level": lvl, "id": code}
-                    for lvl, code in resolved.get((name, context), [])
-                ],
-            }
-            for name, context in pairs
-        ]
-    }
 
 
 @app.post("/tools/find_comparables")
@@ -1418,10 +1387,7 @@ def post_estimate_yield(
 
 
 # --- curation -------------------------------------------------------------
-# Operator-curated lists of listings, editable journal notes, and free-form
-# coloured tags. Reads also flow through the *_public views in
-# migration 025 (used by the SPA via the anon key); writes always
-# come through these endpoints.
+# Collections, notes, tags, artifact links: tenant connection, RLS-scoped; all writes land here.
 
 
 @app.post("/collections")
@@ -1483,6 +1449,27 @@ def delete_collection_property(
     return curation.remove_property_from_collection(
         conn, collection_id, property_id,
     )
+
+
+# The second "tenant gate, then a service-role write" (tenancy.md): browser roles hold no INSERT on
+# collection_shares or notification_dispatches, so the share lands on the service role, opened in
+# the handler only after the gate passed (never a dependency: a refused caller costs no connection).
+@app.post("/collections/{collection_id}/shares")
+def post_collection_share(
+    collection_id: int,
+    body: s.ShareCollectionIn,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return curation.create_share(conn, deps.open_background_conn, collection_id, body)
+
+
+@app.delete("/collections/{collection_id}/shares/{account_id}")
+def delete_collection_share(
+    collection_id: int,
+    account_id: uuid.UUID,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return curation.delete_share(conn, collection_id, str(account_id))
 
 
 # --- price-stats datasets (ceny-nemovitosti) -------------------------------
@@ -1561,6 +1548,9 @@ def get_price_stat_city_series(
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
     return price_stats_module.dataset_city_series(conn, dataset_id, entity_type, entity_id)
+
+
+# --- curation (cont.): notes, artifact links, attachments, tags -----------
 
 
 @app.get("/properties/{property_id}/notes")
@@ -1720,10 +1710,8 @@ def delete_property_tag(
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Phase 0: bookmark a property into the pipeline (entry stage) / remove it.
-# Membership reads go through property_pipeline_public via the anon key.
-# tenant_conn replaces get_db_conn + require_token: its verify_jwt fails
-# closed and every caller gets an RLS-scoped one-transaction connection.
+# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")
 def get_pipeline_stages(

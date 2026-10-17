@@ -53,7 +53,7 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   S0 rails (#1692, E940 the paged walk, E941) → S1 Nusle + Libeň scanned with #1709's re-seed
   (~15.2k ads, shadow) → S2 they merge under E942's brakes → S3 facts only for scored pairs, the
   re-cut out of the pass, street keys for the 36k no-quarter ads (E943–E945) → S4 one Prague block
-  (`obec:554782`, 5,000 MB, E946), a 3–6-day build with merging paused everywhere → S5 the apply
+  (the 157 quarters as blocks beside the eight towns, 6,000 MB, E946; the ~36k no-quarter ads a week later, E940 + E945), a 3–6-day build with merging paused everywhere → S5 the apply
   scope widens a batch of quarters at a time, `town:554782` last. Brake: interval 0, the area out
   of the apply scope, then `unapply blocks=`. Open: D905–D910 (the operator's).
 - **E941 (2026-10-09, S0 rails for the widened S1, ~38k ads):** the seed re-checks storage after its
@@ -82,8 +82,15 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   arenas (`env MALLOC_ARENA_MAX=2`); the engine counts and empties its body and token memos after
   every pass (`memo_entries`; the shingle memo keyed on the body itself); and the CLIP top-up is
   encoded a slice at a time. Decisions are a fresh process's and `SEED_VERSION` is unchanged; the
-  claim cap stays at 25 until a seed or, E948b, a bigger container. Next: Part 2, chunked scoring,
-  so the pair budget bounds a pass's memory.
+  claim cap stays at 25 until a seed or, E948b, a bigger container. Part 2 is E950.
+- **E950 (2026-10-16, chunked scoring):** a pass scores the pairs it decides 5,000 at a time and
+  writes each chunk's rows before the next, so the rows it holds follow the chunk; a side's CLIP
+  vectors stay from its first decided pair to its last (most sides in a dense pass; the heartbeat's
+  `chunk_vectored` shows it). On the dense worst case (every wanted pair scored, as after a deploy
+  that moves the engine digest) the pass's peak falls 37 %, its time within 3 %; at the 39.5k build's
+  passes 2–5 %. Decisions identical (cohort 18 and the trial export, every pair field and group).
+  Prague's memory case is the working set, E960's. It moves the engine digest: it lands with E960
+  and E944 as one train in one deploy before the Prague seed.
 - **E951 (2026-10-12, a build stuck at small passes):** in a build a pass's time budget is three
   quarters of the 1,050 s deadline (787.5 s, was 525 s), and a pass the clock cut that claimed its
   whole share and finished inside half the deadline (525 s) stores at least twice its starting rate
@@ -97,6 +104,15 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   store already wanted more; a refusal now re-claims a quarter of the claim actually made, not of
   `max_listings`, and no longer reads the claim's CLIP vectors; the heartbeat carries `attempts`,
   `wanted_pairs`, `wanted_by_attempt` and `aborted`. The build's own budget was undone by E943 below.
+- **E944, the re-cut out of the pass (2026-10-15):** a pass that finds the pHash population
+  drifted marks the calibration due (`rt_recut:rt`) and the next tick re-cuts instead of passing,
+  under the same lease and its own 1,050 s deadline (heartbeat `recut`); a pass reads the payload
+  once a digest and hashes it once. Measured at 39.5k: the read ≈1.5 s a pass (≈0.9 % of a live
+  pass), the cut 633 s (read-bound), which fitted only behind a pass shorter than ~417 s and never
+  behind a build pass. Review (#1819): never in a build or while the scope holds > 50k ads (the
+  row says why), the attempt stamped first (a death mid-cut waits 6 h, no claim-cap halving; two
+  = `died` until a seed), a shutdown takes it back, a failure is `errors: 1`. Owed before Prague re-cuts: at 157k the cut is ≈2,500 s and fits
+  no tick, so Prague keeps its seed's calibration until a cut resumes across ticks.
 - **E943, the reject ledger (2026-10-12, two PRs: migration 596, then the code):** a pair decided
   below `store_floor` was deleted at write and re-scored by every pass that wanted it again (≥ 95 %
   of a 35-advert build pass's 117,795 scored pairs). It is now ledgered under both adverts' decision

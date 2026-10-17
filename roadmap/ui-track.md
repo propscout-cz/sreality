@@ -72,6 +72,11 @@ toolkit work.
   "Kopírovat", kraje and per-type counts as numbers, firms, the live ads as feed cards by
   `brokerId`). Rename, delete, monitoring and the broker map stay on the desktop (#1760 Q11/Q12).
   Closes on the install walk.
+- **Collection sharing on the phone** (collection sharing W5, `docs/design/collection-sharing.md`):
+  sharing is managed on the desktop; the phone shows shared collections read-only — "Sdílené se
+  mnou" under the own list (row "sdílí {email}", no monitored mark), the detail header "sdílí
+  {email} · jen ke čtení" with no "Otevřít Nové", and the notes composer's "Sdílet s {email}"
+  checkbox and "Sdíleno" mark. The footer says sharing lives on the desktop.
 
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first
@@ -101,7 +106,8 @@ toolkit work.
   retried a Supabase read; only postgrest-js's own hidden GET retry did, now switched off). Recorded
   trade: that hidden retry made up to 3 attempts (1/2/4 s) on a 503, a 520 or a network error; the
   one rule makes a single retry after 1 s, and now counts Cloudflare's 520 as transient. The Browse
-  count falls back to the estimate only on its own 2.5 s budget, not on any error; the agenda gate
+  count fell back to the estimate only on its own 2.5 s budget (exact ONLY since 2026-10-16: the
+  fallback and `deadlineMs` deleted, a slow count is loading, a failed one the header's error); the agenda gate
   rethrows a transient failure instead of caching "no constraint" for the session; dead `ping`
   deleted; an ESLint selector bans destructuring `data`/`error`/`count` off an awaited builder.
 
@@ -412,7 +418,7 @@ End-to-end browser flow over the U1b backend.
   `browse_read_model_state(_public)`.
 - Frontend cards/table/count/no-price re-pointed to `browse_list`;
   `fetchBrowseCount` flipped to EXACT-FIRST (index-only ~200 ms cold
-  market-wide; `count=planned` is the fallback, "~N" now rare);
+  market-wide; `count=planned` was the fallback until 2026-10-16, exact only since);
   `DEFAULT_SORT` → `first_seen_at DESC`. Stats RPC re-pointed
   (migration 278, body-only) — cards/table/count/stats read ONE
   snapshot and cannot disagree.

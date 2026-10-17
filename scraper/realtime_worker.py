@@ -2213,6 +2213,11 @@ def _autodedup_outcome(
             reconcile_refused=int(merged.get("refused") or 0),
             reconcile_failed=int(merged.get("failed") or 0),
             reconcile_waiting=int(merged.get("block_not_fully_read") or 0),
+            # E960: groups waiting for a member refreshed lately, under this engine; the groups
+            # handed to the next pass and those the queue's 5,000-advert cap dropped.
+            reconcile_stale=int(merged.get("stale_decision") or 0),
+            reconcile_handed_on=int(merged.get("handed_on") or 0),
+            reconcile_handed_on_dropped=int(merged.get("handed_on_dropped") or 0),
             reconcile_skipped_at_apply=int(merged.get("skipped_at_apply") or 0),
             reconcile_quarantined=int(merged.get("quarantined") or 0),
             reconcile_deferred=int(merged.get("deferred_run_cap") or 0),
@@ -2263,6 +2268,13 @@ def _autodedup_outcome(
             # E949: what the engine's body and token memos held at the pass's end, before it
             # emptied them.
             memo_entries=summary.get("memo_entries"),
+            # E950: the chunks the pass scored its decided pairs in, the process's resident
+            # memory as each was written, before it gave its vectors and features back, and the
+            # listings then holding their CLIP vectors (held from a side's first decided pair to
+            # its last: the share no chunk bounds).
+            chunks=counts.get("chunks"),
+            chunk_rss_mb=summary.get("chunk_rss_mb"),
+            chunk_vectored=summary.get("chunk_vectored"),
             # E952: the claims the pass made (each the pair budget refused re-claims a quarter
             # of the claim made, E75), each one's wanted pair set and the last's, and why the
             # pass stopped (None: committed).
@@ -2277,7 +2289,29 @@ def _autodedup_outcome(
             pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
             ledger_skipped=counts.get("ledger_skipped"),
             ledger_written=counts.get("ledger_written"),
+            # E960: the probe-key neighbourhood the last attempt re-retrieved from the store's
+            # keys and guard rows, and the adverts whose facts the pass read, by why (claim,
+            # order, digest, decided, cluster, rail), summed over every attempt.
+            dirty=counts.get("dirty"),
+            reads=counts.get("reads"),
+            # E960: the waiting groups' adverts the committed attempt re-claimed.
+            stale_claimed=(summary.get("evidence") or {}).get("stale_claimed"),
         )
+
+    if summary is not None:
+        # E944, on every path a skip's included: the last re-cut (a failed one is an error), the
+        # calibration's age and the process's memory.
+        recut = summary.get("recut")
+        if recut is not None:
+            last["recut"] = recut
+            if recut.get("failed"):
+                last.update(errors=1, recut_failed=str(recut.get("skipped") or "")
+                            [:AUTODEDUP_REASON_CHARS])
+        last["calibration_built_age_days"] = (summary.get("calibration") or {}).get(
+            "built_age_days")
+        for key in ("peak_rss_mb", "rss_mb"):
+            last.setdefault(key, summary.get(key))
+        last.setdefault("memory_limit_mb", memory_limit_mb)
     return last
 
 
@@ -2325,7 +2359,7 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596) is "
+                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604) is "
                     "absent on this database; the lane skips every tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False
@@ -2438,7 +2472,8 @@ def _autodedup_note(last: dict[str, Any]) -> None:
     global _AUTODEDUP_LAST_OUTCOME
 
     if last.get("errors"):
-        key = "error:" + str(last.get("refused") or last.get("aborted") or "")
+        key = "error:" + str(last.get("refused") or last.get("aborted")
+                             or last.get("recut_failed") or "")
     elif last.get("skipped"):
         key = "skipped:" + str(last.get("reason"))
     else:
@@ -2448,7 +2483,7 @@ def _autodedup_note(last: dict[str, Any]) -> None:
     _AUTODEDUP_LAST_OUTCOME = key
     if last.get("errors"):
         LOG.warning("AUTODEDUP lane pass stopped: %s",
-                    last.get("refused") or last.get("aborted"))
+                    last.get("refused") or last.get("aborted") or last.get("recut_failed"))
     elif last.get("skipped"):
         LOG.info("AUTODEDUP lane skipping: %s %s", last.get("reason"), last.get("detail") or "")
     else:
@@ -2478,7 +2513,13 @@ async def _autodedup_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> N
         _record_pass_failed(state, "autodedup", float(last["seconds"]))
         state["lanes"]["autodedup"]["last"] = last
         return
+    # E944: the lane's last re-cut, kept on its heartbeat (`recut`) through the passes after it.
+    recut = last.get("recut") or state["lanes"].get("autodedup", {}).get("recut")
+    if last.get("recut"):
+        LOG.info("AUTODEDUP lane re-cut: %s", last["recut"])
     _record_pass(state, "autodedup", last)
+    if recut is not None:
+        state["lanes"]["autodedup"]["recut"] = recut
 
 
 def _lane_snapshot(lanes: dict[str, Any]) -> dict[str, Any]:

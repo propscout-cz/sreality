@@ -84,19 +84,36 @@ def tenant_conn(
         yield conn
 
 
+# A deterministic pick: account_members has only a composite PK, so a user with >1 membership
+# (already legal — team/multi-account is anticipated) would otherwise resolve to a
+# per-request-arbitrary account. Stable oldest-membership-wins until a real primary-account
+# concept exists; ONE constant so a share lands on the account its recipient writes under.
+_FIRST_MEMBERSHIP_ORDER = "ORDER BY m.created_at, m.account_id"
+
+_RESOLVE_ACCOUNT_SQL = (
+    "SELECT m.account_id FROM account_members m WHERE m.user_id = %s "
+    f"{_FIRST_MEMBERSHIP_ORDER} LIMIT 1"
+)
+
+_ACCOUNT_FOR_EMAIL_SQL = (
+    "SELECT m.account_id FROM auth.users u JOIN account_members m ON m.user_id = u.id "
+    "WHERE lower(u.email) = lower(%s) AND u.email_confirmed_at IS NOT NULL "
+    f"{_FIRST_MEMBERSHIP_ORDER} LIMIT 1"
+)
+
+
 def resolve_account_id(conn: psycopg.Connection, claims: dict) -> uuid.UUID | None:
     """The caller's own (first) account, or None when the user has no membership."""
     with conn.cursor() as cur:
-        # ORDER BY for a deterministic pick: account_members has only a composite
-        # PK, so a user with >1 membership (already legal — team/multi-account is
-        # anticipated) would otherwise resolve to a per-request-arbitrary account,
-        # making every pipeline write nondeterministically scoped. Stable oldest-
-        # membership-wins until a real primary-account concept exists.
-        cur.execute(
-            "SELECT account_id FROM account_members WHERE user_id = %s "
-            "ORDER BY created_at, account_id LIMIT 1",
-            (claims["sub"],),
-        )
+        cur.execute(_RESOLVE_ACCOUNT_SQL, (claims["sub"],))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def account_for_email(conn: psycopg.Connection, email: str) -> uuid.UUID | None:
+    """A confirmed user's first account on the SERVICE-ROLE conn; None is the share route's 422, never a scope."""
+    with conn.cursor() as cur:
+        cur.execute(_ACCOUNT_FOR_EMAIL_SQL, (email,))
         row = cur.fetchone()
     return row[0] if row else None
 
@@ -108,8 +125,8 @@ def require_account_id(
     """The ONE account a write is scoped to, resolved once at the route edge.
 
     A caller with no membership is a loud 400, never a silently empty 200 or an
-    opaque 500: every account-predicated write column is NOT NULL (migrations
-    290/295) and RLS's WITH CHECK can only validate the account a row claims, not
+    opaque 500: every account-predicated write column is NOT NULL or refused NULL by
+    WITH CHECK (290/295/608), and RLS's WITH CHECK can only validate the account a row claims, not
     choose one — so a route that forwards None writes a row RLS is guaranteed to
     reject, or predicates a DELETE/UPDATE that matches nothing.
 

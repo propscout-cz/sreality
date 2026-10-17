@@ -11,8 +11,8 @@ import {
 } from './types';
 import { fmtArea } from './format';
 /* Value import, but not a runtime cycle: districtCodes imports only TYPES from
- * this file, and "what a valid RÚIAN code is" must have ONE definition. */
-import { isValidCode } from './districtCodes';
+ * this file, and the level list and the chip guard must have ONE definition. */
+import { isDistrictChip, type LocationLevel } from './districtCodes';
 import { portalScopeLabel } from './portals';
 
 export type TriState = 'any' | 'yes' | 'no';
@@ -84,41 +84,24 @@ export interface CityIndexRule {
   value: number;
 }
 
-/* One entry of the district chip list. A chip is a LEVEL plus a RÚIAN
- * CODE, and it compiles to `<level>_id = any(codes)` — plain equality,
- * nothing else (W3 S3; lib/districtCodes). A 'locality' (street / POI /
- * address) pick carries its CONTAINING obec code and filters at the obec
- * level: the ILIKE half of that predicate, on `place_search_text`, went
- * with the column (W3 S4, migration 506). A chip with no code — an old
- * saved preset — is resolved by name ONCE at read time, and matches
- * nothing if the RÚIAN name index cannot place it (fail closed).
- * `context` is the parent municipality from Mapy.cz's `regionalStructure`;
- * it disambiguates THAT name lookup, so picking the Plzeň entry for
- * "Edvarda Beneše" doesn't drag in the Olomouc + Hradec Králové streets
- * of the same name, and it is never itself a predicate. Picks at the
- * municipality / okres / kraj level (or coarser) leave context null.
- * `excluded` flips the chip from an INCLUDE to an
- * EXCLUDE filter: an excluded chip removes its matches from the cohort
- * instead of requiring them (NOT-ed in the query, red in the UI).
- * Absent / false = the legacy include behaviour. The same shape is
- * sent to the watchdog matcher
+/* One entry of the district chip list. A chip is ONE RÚIAN unit — a LEVEL
+ * plus its CODE — and it compiles to `<level>_id = any(codes)`: plain equality,
+ * nothing else (lib/districtCodes). What you pick is what you filter: a street
+ * chip is its street, never its town. A chip without a valid (level, code)
+ * cannot exist: the typeahead never makes one and `parseDistrictChips` drops one.
+ * `name` and `context` are the register's names (`context` = the unit's obec,
+ * for a level below obec) — display only, never a predicate.
+ * `excluded` flips the chip from an INCLUDE to an EXCLUDE filter: an excluded
+ * chip removes its matches from the cohort instead of requiring them. The same
+ * shape is sent to the watchdog matcher
  * (`api/notifications.WatchdogFilterSpec.districts`) so Browse and
  * Watchdog stay aligned via the shared filter registry. */
-export type LocationLevel = 'obec' | 'okres' | 'kraj' | 'cast_obce' | 'locality';
-
 export interface DistrictChip {
   name: string;
   context: string | null;
   excluded?: boolean;
-  /* Level of the pick, from `/maps/resolve`. `cast_obce` (W3) is the quarter
-   * level RÚIAN draws no polygon for — the point places the obec, the name
-   * places the part inside it. Absent = a chip stored before codes existed;
-   * `useLegacyChipUpgrade` resolves it once at read time. */
-  level?: LocationLevel;
-  /* The RÚIAN CODE at `level`, or the containing obec code for a 'locality'
-   * (street / POI / address) chip. Null/absent = no code yet: the chip matches
-   * NOTHING until it is resolved (`districtCodes.NO_MATCH_CODE`). */
-  id?: number | null;
+  level: LocationLevel;
+  id: number;
 }
 
 /* One active price-stats growth filter: keep listings whose obec meets/exceeds
@@ -461,21 +444,13 @@ const splitCsv = (s: string | null): string[] =>
 
 const joinCsv = (xs: string[]): string => xs.map(encodeURIComponent).join(',');
 
-const _LOCATION_LEVELS: ReadonlyArray<LocationLevel> = [
-  'obec', 'okres', 'kraj', 'cast_obce', 'locality',
-];
-
 /* Parse the parallel `districts` (names) + `districts_ctx` (contexts) +
- * `districts_excl` (exclude flags) + `districts_lvl` (admin level) +
- * `districts_id` (admin id) query params into a `DistrictChip[]`.
- * Empty-string entries in the contexts CSV stand for "no context for
- * this chip" — that's how we keep the URL clean when only some chips
- * carry a parent. Missing `districts_ctx` entirely means every chip has
- * `context: null`, matching the legacy URL shape (`?districts=Praha`).
- * `districts_excl` is a parallel CSV of `1`/`0`; absent means every chip
- * is an include (legacy). `districts_lvl` / `districts_id` are absent for
- * legacy / unresolved chips, which then fall back to name matching — so the
- * schema only ever widens. */
+ * `districts_excl` (exclude flags) + `districts_lvl` (level) + `districts_id`
+ * (RÚIAN code) query params into a `DistrictChip[]`. An empty context entry is
+ * "no context"; an absent `districts_excl` means every chip is an include. A
+ * chip whose level is not one of the five or whose code is not a positive
+ * integer is DROPPED — an old bookmark (`?districts=Brno`, the retired street
+ * alias) carries no unit to filter on. */
 export const parseDistrictChips = (
   namesRaw: string | null,
   ctxRaw: string | null,
@@ -483,29 +458,16 @@ export const parseDistrictChips = (
   lvlRaw: string | null,
   idRaw: string | null,
 ): DistrictChip[] => {
-  const names = splitCsv(namesRaw);
-  if (names.length === 0) return [];
   const ctxs = splitCsv(ctxRaw);
   const excls = splitCsv(exclRaw);
   const lvls = splitCsv(lvlRaw);
   const ids = splitCsv(idRaw);
-  return names.map((name, i) => {
-    const ctx = ctxs[i];
-    const chip: DistrictChip = {
-      name,
-      context: ctx == null || ctx === '' ? null : ctx,
+  return splitCsv(namesRaw).flatMap((name, i) => {
+    const chip = {
+      name, context: ctxs[i] || null, level: lvls[i], id: Number(ids[i]),
+      ...(excls[i] === '1' ? { excluded: true } : {}),
     };
-    if (excls[i] === '1') chip.excluded = true;
-    const lvl = lvls[i];
-    if (lvl != null && (_LOCATION_LEVELS as ReadonlyArray<string>).includes(lvl)) {
-      chip.level = lvl as LocationLevel;
-      const rawId = ids[i];
-      const n = rawId == null || rawId === '' ? null : Number(rawId);
-      // RÚIAN codes are positive: a URL must not be able to hand the predicate
-      // the no-match sentinel (-1) dressed as a resolved pick.
-      chip.id = isValidCode(n) ? n : null;
-    }
-    return chip;
+    return isDistrictChip(chip) ? [chip] : [];
   });
 };
 
@@ -792,9 +754,8 @@ const fmtRange = (lo: number | null, hi: number | null): string =>
 /* Serialise a `DistrictChip[]` into the parallel `districts` / `districts_ctx` /
  * `districts_excl` / `districts_lvl` / `districts_id` CSV shape `parseDistrictChips`
  * reads back — the one wire format every location-filterable surface uses (Browse's
- * URL here; the API params in `lib/api.ts`). Each
- * optional param is only emitted when at least one chip needs it, so the common
- * case (plain include-only, unresolved or single-level chips) keeps a minimal URL. */
+ * URL here; the API params in `lib/api.ts`). The level and code are always
+ * written; context and exclude flags only when a chip needs them. */
 export const districtChipsToCsvParams = (
   districts: ReadonlyArray<DistrictChip>,
 ): Record<string, string> => {
@@ -808,12 +769,8 @@ export const districtChipsToCsvParams = (
   if (districts.some((d) => d.excluded)) {
     out.districts_excl = joinCsv(districts.map((d) => (d.excluded ? '1' : '0')));
   }
-  if (districts.some((d) => d.level != null)) {
-    out.districts_lvl = joinCsv(districts.map((d) => d.level ?? ''));
-    out.districts_id = joinCsv(
-      districts.map((d) => (d.id == null ? '' : String(d.id))),
-    );
-  }
+  out.districts_lvl = joinCsv(districts.map((d) => d.level));
+  out.districts_id = joinCsv(districts.map((d) => String(d.id)));
   return out;
 };
 
@@ -1009,15 +966,10 @@ const fmtDaysRange = (lo: number | null, hi: number | null): string => {
   return `≤ ${hi} d`;
 };
 
-export const summarise = (
-  f: ListingFilters,
-  count: number | null,
-  approx = false,
-): string => {
+export const summarise = (f: ListingFilters, count: number | null): string => {
   const bits: string[] = [];
   bits.push(f.status === 'active' ? 'active' : f.status === 'inactive' ? 'inactive' : 'all');
-  const countStr =
-    count == null ? '…' : `${approx ? '~' : ''}${count.toLocaleString('cs-CZ')}`;
+  const countStr = count == null ? '…' : count.toLocaleString('cs-CZ');
   bits.push(`${countStr} ${categoryMainLabel(f.categoryMain)}`);
   const dealLabel = categoryTypeLabel(f.categoryType);
   if (dealLabel) bits.push(dealLabel);
@@ -1240,7 +1192,8 @@ const coerceStoredFilters = (stored: unknown): ListingFilters => {
         k === 'categoryMain' && typeof vRaw === 'string' ? [vRaw] : vRaw;
       // Array-vs-scalar mismatch ⇒ the field's type evolved; keep the default.
       if (Array.isArray(def[k]) !== Array.isArray(v)) continue;
-      out[k] = v;
+      // A stored chip passes the same guard a URL chip does (parseDistrictChips).
+      out[k] = k === 'districts' ? (v as unknown[]).filter(isDistrictChip) : v;
     }
   }
   return out as unknown as ListingFilters;

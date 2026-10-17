@@ -1,8 +1,9 @@
 name: "Data: ingest map overlays"
 
 # Ingests the map reference overlays (Prague metro from IPR Praha's Metropolitní plán,
-# the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries, the
-# MF rent map from rent_map_values × admin_boundaries) into map_overlay_* and renders each
+# the national flood-zone register from VÚV TGM, kraj borders from admin_boundaries, Prague's
+# university sites from IPR Praha classed by MŠMT's student counts, the MF rent map from
+# rent_map_values × admin_boundaries) into map_overlay_* and renders each
 # section's vector tiles. Quarterly, two days after the quarter starts; dispatch by hand
 # after a publisher revises its data.
 #
@@ -21,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       sections:
-        description: "Sections to ingest (comma-separated: metro,flood,kraje,rent_map). Empty = all."
+        description: "Sections to ingest (comma-separated: metro,flood,kraje,universities,rent_map). Empty = all."
         required: false
         type: string
         default: ""

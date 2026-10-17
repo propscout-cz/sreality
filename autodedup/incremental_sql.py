@@ -42,7 +42,10 @@ select to_regclass('autodedup.fp_key')         is not null
    and to_regclass('autodedup.rt_calibration') is not null
    and to_regclass('autodedup.rt_block_cell')  is not null
    and to_regclass('autodedup.rt_lease')       is not null
-   and to_regclass('autodedup.rt_reject_ledger') is not null as present
+   and to_regclass('autodedup.rt_reject_ledger') is not null
+   and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'dd' and not attisdropped) as present
 """
 
 # A pass is one transaction (E75) and a statement that runs away is a lease held past its TTL,
@@ -619,6 +622,28 @@ select s.key, s.value
  where s.key = any(%(keys)s::text[])
 """
 
+# E944: a re-cut stopped by the shutdown or its fence puts the row back as it was — only while
+# the stamp is still its own; a next holder that stamped its own attempt keeps it.
+RT_RECUT_PUT_BACK_SQL = """
+update autodedup.settings
+   set value = %(value)s::jsonb, updated_at = now(), updated_by = %(updated_by)s::text
+ where key = %(key)s::text
+   and value->>'cutting' = %(holder)s::text
+"""
+
+# E960: the engine digest the lane runs under and since when, stamped by the DATABASE's clock —
+# the one `rt_fp.updated_at` is compared against.
+RT_ENGINE_WRITE_SQL = """
+insert into autodedup.settings (key, value, updated_at, updated_by)
+values (%(key)s::text, jsonb_build_object('digest', %(digest)s::text, 'since', now()), now(),
+        %(updated_by)s::text)
+on conflict (key) do update set
+    value      = excluded.value,
+    updated_at = now(),
+    updated_by = excluded.updated_by
+returning value ->> 'since'
+"""
+
 # The growth readout's own watermark. An OBSERVATION row rather than a knob: the lane writes
 # it, nothing reads it but the next pass's summary, and it lives in `autodedup.settings`
 # because a new key there needs no migration (528).
@@ -755,13 +780,14 @@ RT_FP_UPSERT_SQL = """
 insert into autodedup.rt_fp (
     generation, listing_id, category_main, category_type, area_m2, disposition, floor,
     fp_digest, cell_key, cell_group, is_active, ev_images, ev_phash, ev_clip, ev_tags,
-    ev_complete, first_decided_at, updated_at
+    ev_complete, dd, first_decided_at, updated_at
 ) values (
     %(generation)s::text, %(listing_id)s::bigint, %(category_main)s::text,
     %(category_type)s::text, %(area_m2)s::double precision, %(disposition)s::text,
     %(floor)s::integer, %(fp_digest)s::text, %(cell_key)s::text, %(cell_group)s::text,
     %(is_active)s::boolean, %(ev_images)s::integer, %(ev_phash)s::integer,
-    %(ev_clip)s::integer, %(ev_tags)s::integer, %(ev_complete)s::boolean, now(), now()
+    %(ev_clip)s::integer, %(ev_tags)s::integer, %(ev_complete)s::boolean, %(dd)s::text,
+    now(), now()
 )
 on conflict (generation, listing_id) do update set
     category_main    = excluded.category_main,
@@ -778,9 +804,38 @@ on conflict (generation, listing_id) do update set
     ev_clip          = excluded.ev_clip,
     ev_tags          = excluded.ev_tags,
     ev_complete      = excluded.ev_complete,
+    dd               = excluded.dd,
     first_decided_at = coalesce(autodedup.rt_fp.first_decided_at,
                                 excluded.first_decided_at),
     updated_at       = now()
+"""
+
+# E960: the decision digest of a listing the pass read but did not refresh (a claimed listing
+# whose digest moved without its fingerprint, or a row written before migration 604), so a
+# later pass keys the reject ledger on it without reading the listing again. Nothing else on
+# the row moves: it is not a refresh.
+RT_FP_DD_SQL = """
+update autodedup.rt_fp f
+   set dd = w.dd
+  from unnest(%(ids)s::bigint[], %(dds)s::text[]) as w(listing_id, dd)
+ where f.generation = %(generation)s::text
+   and f.listing_id = w.listing_id
+"""
+
+# E960: every given advert's last refresh and whether a merge may rest on it — not when it was
+# refreshed longer ago than `fresh_s`, before the engine the lane runs now (`engine_since`; NULL:
+# no bound), or not at all (no row: fail closed). `updated_at` moves only on a refresh:
+# `RT_FP_DD_SQL` leaves it alone.
+RT_STALE_SQL = """
+select w.listing_id, f.updated_at,
+       (f.listing_id is null
+        or f.updated_at < now() - make_interval(secs => %(fresh_s)s::double precision)
+        or f.updated_at < coalesce(%(engine_since)s::timestamptz, '-infinity'::timestamptz))
+           as stale
+  from unnest(%(listing_ids)s::bigint[]) as w(listing_id)
+  left join autodedup.rt_fp f
+         on f.generation = %(generation)s::text and f.listing_id = w.listing_id
+ order by w.listing_id
 """
 
 RT_FP_DELETE_SQL = """
@@ -793,7 +848,8 @@ RT_FP_READ_SQL = """
 select f.listing_id, f.category_main, f.category_type, f.area_m2, f.disposition, f.floor,
        f.fp_digest, f.cell_key, f.cell_group, f.is_active,
        f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags,
-       extract(epoch from f.first_decided_at)::double precision as first_decided_epoch
+       extract(epoch from f.first_decided_at)::double precision as first_decided_epoch,
+       f.dd
   from autodedup.rt_fp f
  where f.generation = %(generation)s::text
    and f.listing_id = any(%(ids)s::bigint[])
@@ -1008,6 +1064,17 @@ select l.listing_lo, l.listing_hi
 """
 
 # At most one row a pair: a re-decision overwrites it, so nothing ever prunes the table.
+# E960: does any row carry the store's key? A row with no decision digest is read for one only
+# then: after a deploy that moved the key, no lookup can match.
+RT_REJECT_LEDGER_KEYED_SQL = """
+select exists (
+    select 1 from autodedup.rt_reject_ledger l
+     where l.generation = %(generation)s::text
+       and l.calibration_digest = %(calibration_digest)s::text
+       and l.feature_version = %(feature_version)s::smallint
+       and l.engine_digest = %(engine_digest)s::text)
+"""
+
 RT_REJECT_LEDGER_UPSERT_SQL = """
 insert into autodedup.rt_reject_ledger (
     generation, listing_lo, listing_hi, dd_lo, dd_hi, calibration_digest, feature_version,
@@ -1154,9 +1221,13 @@ select c.generation, c.digest, c.built_at
  where c.generation = %(generation)s::text
 """
 
+# E944: `held` is the digest of the calibration the caller already holds; the payload (5.7 MB
+# of text at 39.5k adverts) comes back NULL while it is still the stored one, so a pass reads it
+# once per digest. NULL `held` reads it always.
 RT_CALIBRATION_READ_SQL = """
-select c.generation, c.digest, c.n_listings, c.payload, c.artifact_url, c.settings,
-       c.model_version, c.built_at
+select c.generation, c.digest, c.n_listings,
+       case when c.digest = %(held)s::text then null else c.payload end as payload,
+       c.artifact_url, c.settings, c.model_version, c.built_at
   from autodedup.rt_calibration c
  where c.generation = %(generation)s::text
 """
@@ -1381,6 +1452,16 @@ select count(*)::bigint from gone
 
 # The seed resets while HOLDING the lease (so no pass can write into the generation it empties),
 # so its own row is the one row this keeps.
+# E960: a fresh seed forgets the engine's since and the reconcile's re-claim list with the rest.
+RT_FRESH_SETTINGS_SQL = """
+with gone as (
+    delete from autodedup.settings
+     where key = any(%(keys)s::text[])
+ returning 1
+)
+select count(*)::bigint from gone
+"""
+
 RT_FRESH_LEASE_SQL = """
 with gone as (
     delete from autodedup.rt_lease

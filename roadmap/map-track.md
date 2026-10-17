@@ -50,6 +50,16 @@ of the analytical and UI phases; runs alongside them.
   the way in: the register's Q500 layer spells its fields in mixed case (#1810, fields matched by case) and a
   nationwide per-band `ST_UnaryUnion` ran past the 30-minute statement budget (#1813, per-zone overlap cutting).
   Open follow-up: two expanded chip panels crowd the split-view map (collapse legends by default?).
+- **Stations in service (2026-10-16, operator ruling: station proximity must be readable):** a
+  fourth reader on the `metro` layer, IPR's named `ReferencedServices/DOP_MetroZarizeni_b`
+  (`DRUH=1`, native S-JTSK), class = the line letter so each of the 61 dots wears its line's colour
+  (transfer stations once per line); no SPA change, no migration, re-ingest `--sections metro`.
+- **Universities (2026-10-16, ruling 5 of the spec):** a `universities` section — IPR's 289
+  Prague university sites, teaching/service sites in one toggle and dorms in another; a site is
+  primary and labelled ("FF UK", "FEL ČVUT") when MŠMT's F21 table counts 2 000+ present-form
+  students at it (22 sites), through a curated faculty → site table in the ingest; F21 read live
+  each run with two refusal rails (stale code, primary seat without a point). No SPA change, no
+  migration; ingest `--sections universities`.
 
 ### map-3: count marks — one count rule on world tiles (built 2026-10-15)
 - **Why:** the count discs hid the basemap on any dense cohort (232 discs at a 55 px median spacing
@@ -68,6 +78,10 @@ of the analytical and UI phases; runs alongside them.
   centres. Rails: `tests/test_602_*`, the rewritten `tests/test_browse_map_cells_live.py`
   (fixture parity, bounded-and-finest, one tile per row, pan-stable interiors, children sum to
   their parent), `tests/fixtures/map_tile_lattice.json` read by pytest AND vitest.
+- **W4 (done 2026-10-16, rulings 7–8):** pins up to a user-set limit at any zoom (default 200,
+  range 20–2 000; the input above the map, URL `pins=`), which IS the server's point budget (one
+  number end to end, in the map query key); price labels a tick box (URL `labels=0`). Deleted the
+  zoom-14 pin rule, the browser-side grouping of points and `MAP_POINT_BUDGET`.
 - **Named follow-ups:** town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one
   tile (a location-precision concern); `DatasetMap.tsx` interpolates `obec_name` into popup HTML
   unescaped; four `MAP_COLS` columns are never read and commercial popups show "—" for `subtype`.

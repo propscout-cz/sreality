@@ -93,7 +93,7 @@ tenant-scoped:
   the row just written. `verify_jwt` is authentication; `tenant_conn` (via RLS) is
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
-  `TENANT_POOL_DB_URL` raises. The `legacy_backfill_claim` TABLE stays (signup CAS).
+  `TENANT_POOL_DB_URL` raises.
   `tenant_transaction(claims)` is the same block as a context manager, for one named
   exception (`references/tenancy.md`): it commits before slow service-role work.
 
@@ -132,13 +132,14 @@ already exist on disk (`276_browse_read_model.sql` / `276_listings_geo_cell_key.
 both pairs coexist harmlessly because the runner orders by filename, not the numeric
 prefix alone, but don't count on that.
 
-**This Supabase project's default privileges auto-GRANT, not just on tables.** New
-tables get `anon`/`authenticated` grants by default (the Phase-0 hardening's root
-cause); migration 287 found the **same default ACL applies to new functions** — a
-freshly created `SECURITY DEFINER` function is directly callable by `anon` via PostgREST
-RPC until explicitly revoked (`revoke execute on function ... from anon, authenticated`),
-even though `revoke ... from public` is a no-op against an explicit ACL entry. Revoke
-explicitly on every new function; grant back only the roles that need it.
+**Default privileges: a new table reaches `authenticated` read-only; a new function is born
+private (migration 612).** Tables: 299 stripped `anon` and the write verbs, and the table's
+deny-all RLS (CI-enforced) is the backstop. Functions: 612 removed the built-in PUBLIC EXECUTE
+(the global form; 299's per-schema form could not) and the per-schema grant to `authenticated`,
+so a new function reaches only `postgres` + `service_role`; `CREATE OR REPLACE` keeps the ACL a
+function already has. Recipe, on every function you write: `revoke all on function <sig> from
+public, anon, authenticated;`, then `grant execute` to `authenticated` (or `service_role`) only
+where a caller needs it.
 
 ## Migration safety policy (under autopilot)
 
@@ -178,8 +179,8 @@ so it matches the repo filename sometimes (`444_listings_discovered_at`) and not
 (441 is recorded as `stamp_derived_artifact`, unnumbered), and it carries ad-hoc migrations
 with no repo file at all. The catalog cannot lie; the ledger can. Migrations that only drop,
 grant or update data declare nothing probeable and are reported in an explicit
-`unverifiable` list rather than counted as passing. A function is probed by NAME only, so a
-re-signed or rewritten function (590, 597) reads present before it is applied: prove those with
+`unverifiable` list rather than counted as passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
+re-signed or rewritten function (590, 597), like a dropped-and-recreated policy (613), reads present before it is applied: prove those with
 their own `$post$` block and a call with the new arguments.
 
 **Billing (migration 298, PR #769 — Phase 1 increment 5)** extends the same RLS pattern:
@@ -208,9 +209,9 @@ Per-table RLS pattern, repeated across migrations 290 (6 curation tables: `colle
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
-using/with check (account_id in (select current_account_ids()))` policy. **Grant the id
-sequence's `USAGE` too** — `GRANT INSERT` on the table does not cover it, and a `bigserial` PK
-fails every `authenticated` insert until it is added (a real bug the CI lane caught pre-deploy).
+using/with check (account_id in (select current_account_ids()))` policy. **An integer surrogate id is
+`bigint generated always as identity`** (611), never `bigserial`: a browser-chosen id pre-claims the sequence
+and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly
@@ -232,21 +233,17 @@ PostgREST); read a listing's identity on the tenant conn through `listing_natura
 and market facts through a service-role connection (as `portal_lookup` does). Don't add a
 `USING (true)` policy to `listings`.
 
-**First-signup backfill race**: the on-signup trigger (migration 294) does an atomic
-INSERT-with-`ON CONFLICT` CAS into `legacy_backfill_claim` (mirrors the lease-row CAS pattern
-above) — whoever signs up first wins and claims every pre-tenancy NULL-`account_id` row via
-`backfill_legacy_account_id`; every later signup instead gets `seed_default_pipeline` /
-`seed_default_collections`. The migration comment flags this as unsafe once public
-(non-operator) signup ships — revisit before then.
+**Signup** (`handle_new_user`, one path since migration 612): the Signup bullet in `references/tenancy.md`.
 
 **THE TENANCY DOCTRINE — four shapes, only four.** Full version, the table-by-table migration
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week
 outage: `references/tenancy.md`. (1) **Reads on a tenant connection are scoped by RLS alone** —
 `current_account_ids()` is the ONE definition of who the caller is (PLURAL, because membership
-is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too (its policy's
-USING clause is the scope). (2) **Writes carry exactly ONE account, resolved once at the route
-edge** by `tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a
-silent NULL nor a SYSTEM fallback 290's WITH CHECK has no arm to accept. (3) **An explicit
+is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
+ownership gate (rowcount 0 → 404, never a SELECT probe: that proves visibility, not ownership).
+(2) **Writes carry exactly ONE account, resolved once at the route edge** by
+`tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a silent NULL nor
+a SYSTEM fallback. (3) **An explicit
 `account_id = %s` predicate appears ONLY on a service-role connection**
 (`toolkit/pipeline_identity.py`, `api/estimation_runs.py`, the Stripe webhook), where RLS is off
 and the predicate is the SOLE gate. (4) **`deps.account_scope` returns `[account_id, SYSTEM]`**
@@ -458,12 +455,12 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `listings` and `properties` carry NO place column at all: read a listing's place by joining
   `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.repr_listing_ref_id`
   — a property's place is its representative listing's). The codes are `ll.obec_kod` /
-  `okres_kod` / `kraj_kod` / `cast_obce_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
+  `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
   labels `ll.obec_name` / `okres_name` / `street_name`. One trap: `ll.geom` IS
   `geometry(Point,4326)`, so a metre-based `ST_DWithin`/`ST_Distance` must cast
   `ll.geom::geography` (index `listing_location_geog_gist`, migration 507) or it silently
   measures degrees. The place STRING every surface renders is `location_display_label(...)`
-  (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`.
+  (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`, five levels.
   `admin_boundaries` survives for price stats / the rent map / city proximity / the kraje overlay only — it is no
   longer a location path. `scraper/street.py` still extracts a street from a portal page; that
   extraction is now a CLAIM the resolver arbitrates, not a column — and since W18

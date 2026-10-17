@@ -184,9 +184,10 @@ def test_the_map_rpc_carries_both_prefilter_id_spaces() -> None:
 
 
 def test_the_map_lane_is_chosen_from_the_filters_alone() -> None:
-    """The points-vs-cells lane must be a function of the FILTERS, nothing else.
+    """The points-vs-cells lane must be a function of the query KEY, nothing else.
 
-    The map query is keyed `['map', filters]`. Anything outside that key that can change
+    The map query is keyed `['map', filters, pinLimit]` (the pin limit is the server's
+    point budget, passed in as an argument). Anything outside that key that can change
     the SHAPE of the answer between renders lets react-query serve a CLUSTER payload out
     of a cache entry warmed by a POINTS payload — ListingMap is then handed `cells` for
     `rows` or the reverse, with no refetch and no error. That is exactly why `?map=legacy`

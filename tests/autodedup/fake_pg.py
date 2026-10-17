@@ -59,6 +59,8 @@ class FakePg:
         # answers from the tables its statement NAMES, so one it forgets cannot hide a missing
         # migration (E943: 596 applied after the code merged).
         self.absent_tables: set[str] = set()
+        # Columns, as `table.column`, a migration has not added yet (E960: `rt_fp.dd`, 604).
+        self.absent_columns: set[str] = set()
         # `autodedup.rt_reject_ledger` (migration 596, E943), keyed as its primary key.
         self.reject_ledger: dict[tuple[str, int, int], dict[str, Any]] = {}
         self.clusters: dict[tuple[str, int], dict[str, Any]] = {}
@@ -316,7 +318,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
 
     if sql == S.RT_STORE_PRESENT_SQL:
         named = re.findall(r"to_regclass\('autodedup\.(\w+)'\)", sql)
-        return [(all(table not in db.absent_tables for table in named),)]
+        columns = re.findall(
+            r"attrelid = to_regclass\('autodedup\.(\w+)'\)\s+and attname = '(\w+)'", sql)
+        return [(all(table not in db.absent_tables for table in named)
+                 and all(f"{table}.{column}" not in db.absent_columns
+                         for table, column in columns),)]
     if sql == S.RT_SCHEMA_SIZE_SQL:
         return [(int(db.schema_bytes),)]
     if sql == S.RT_ROW_CENSUS_SQL:
@@ -346,6 +352,22 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                 ("pairs", len(db.pairs)), ("rt_block_cell", len(db.cells))]
     if sql == S.RT_SETTINGS_MANY_SQL:
         return [(key, db.settings[key]) for key in p["keys"] if key in db.settings]
+    if sql == S.RT_RECUT_PUT_BACK_SQL:
+        held = db.settings.get(str(p["key"]))
+        if isinstance(held, dict) and held.get("cutting") == p["holder"]:
+            db.settings[str(p["key"])] = _jsonb(p["value"])
+            db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
+        return []
+    if sql == S.RT_ENGINE_WRITE_SQL:
+        since = db.now.isoformat()
+        db.settings[str(p["key"])] = {"digest": p["digest"], "since": since}
+        db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
+        return [(since,)]
+    if sql == S.RT_FRESH_SETTINGS_SQL:
+        gone = [key for key in p["keys"] if key in db.settings]
+        for key in gone:
+            db.settings.pop(key, None)
+        return [(len(gone),)]
     if sql == S.RT_SETTING_WRITE_SQL:
         db.settings[str(p["key"])] = _jsonb(p["value"])
         db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
@@ -423,9 +445,28 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             "cell_group": p["cell_group"], "is_active": p["is_active"],
             "ev_images": p["ev_images"], "ev_phash": p["ev_phash"],
             "ev_clip": p["ev_clip"], "ev_tags": p["ev_tags"],
-            "ev_complete": p["ev_complete"],
+            "ev_complete": p["ev_complete"], "dd": p["dd"],
             "first_decided_at": held.get("first_decided_at") or db.now,
+            "updated_at": db.now,
         }
+        return []
+    if sql == S.RT_STALE_SQL:
+        # Every asked advert, its last refresh and whether a merge may NOT rest on it; an advert
+        # with no row is stale (fail closed), as the statement's left join makes it.
+        bound = db.now - timedelta(seconds=float(p["fresh_s"]))
+        since = (datetime.fromisoformat(p["engine_since"]) if p.get("engine_since") else None)
+        out = []
+        for listing_id in sorted({int(i) for i in p["listing_ids"]}):
+            row = db.rt_fp.get((gen, listing_id))
+            stamp = None if row is None else row.get("updated_at")
+            out.append((listing_id, stamp, stamp is None or stamp < bound
+                        or (since is not None and stamp < since)))
+        return out
+    if sql == S.RT_FP_DD_SQL:
+        for listing_id, dd in zip(p["ids"], p["dds"]):
+            row = db.rt_fp.get((gen, int(listing_id)))
+            if row is not None:
+                row["dd"] = dd
         return []
     if sql == S.RT_FP_DELETE_SQL:
         for listing_id in p["ids"]:
@@ -443,7 +484,8 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                         row["cell_key"], row["cell_group"], row["is_active"],
                         row.get("ev_images"), row.get("ev_phash"), row.get("ev_clip"),
                         row.get("ev_tags"),
-                        stamp.timestamp() if hasattr(stamp, "timestamp") else stamp))
+                        stamp.timestamp() if hasattr(stamp, "timestamp") else stamp,
+                        row.get("dd")))
         return out
     if sql == S.RT_KNOWN_SQL:
         return [(int(i),) for i in p["ids"] if (gen, int(i)) in db.rt_fp]
@@ -512,6 +554,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         return []
 
     # ---------------------------------------------------------------- the reject ledger
+    if sql == S.RT_REJECT_LEDGER_KEYED_SQL:
+        key = (p["calibration_digest"], p["feature_version"], p["engine_digest"])
+        return [(any(g == gen and (row["calibration_digest"], row["feature_version"],
+                                   row["engine_digest"]) == key
+                     for (g, _lo, _hi), row in db.reject_ledger.items()),)]
     if sql == S.RT_REJECT_LEDGER_LOOKUP_SQL:
         # The four keys are READ from the statement, never assumed: a lookup that stopped
         # matching one of them answers here what it would answer in Postgres.
@@ -855,15 +902,17 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     # ---------------------------------------------------------------- calibration
     if sql == S.RT_CALIBRATION_PRESENT_SQL:
         row = db.calibration.get(gen)
-        return [] if row is None else [(gen, row["digest"], db.now)]
+        return [] if row is None else [(gen, row["digest"], row.get("built_at", db.now))]
     if sql == S.RT_CALIBRATION_READ_SQL:
         row = db.calibration.get(gen)
+        held = p["held"]
         return [] if row is None else [(gen, row["digest"], row["n_listings"],
-                                        _jsonb(row["payload"]), row["artifact_url"],
+                                        None if held is not None and held == row["digest"]
+                                        else _jsonb(row["payload"]), row["artifact_url"],
                                         _jsonb(row["settings"]), row["model_version"],
-                                        db.now)]
+                                        row.get("built_at", db.now))]
     if sql == S.RT_CALIBRATION_WRITE_SQL:
-        db.calibration[gen] = dict(p)
+        db.calibration[gen] = {**p, "built_at": db.now}
         return []
 
     # ---------------------------------------------------------------- cursors

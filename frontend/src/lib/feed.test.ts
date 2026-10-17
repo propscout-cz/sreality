@@ -64,6 +64,20 @@ describe('scope → filters', () => {
     expect(f.bounds).toEqual(bounds);
   });
 
+  /* The feed reads a preset straight into its query — no URL in between — so a
+     stored chip without a (level, code) must be dropped here, not land in the
+     plan under no level and leave the feed unfiltered beside it. */
+  it('drops a stored chip without a level and code, keeping the coded one', () => {
+    const praha = { name: 'Praha', context: null, level: 'obec' as const, id: 554782 };
+    const f = feedFiltersForPreset(preset({
+      filters: {
+        ...DEFAULT_FILTERS,
+        districts: [{ name: 'Brno', context: null }, praha],
+      } as unknown as ListingFilters,
+    }));
+    expect(f.districts).toEqual([praha]);
+  });
+
   it('reads a legacy bare-filters preset blob', () => {
     const f = feedFiltersForPreset(
       preset({ ...DEFAULT_FILTERS, categoryMain: 'dum' } as unknown as ListingFilters),

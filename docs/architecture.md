@@ -543,7 +543,7 @@ match of the register are on screen; and the headline median holds out the 0–3
 Kč/m² is a denominator defect rather than a market fact. The reas.cz and Cenová-mapa outbound chips both stay beside it: the
 table holds only reas.cz's anonymous 24-month window. Waves and sequencing: `roadmap/sold-comps.md`.
 
-### Reference overlays — metro, flood zones, kraje (migration 600; spec `docs/design/map-overlays.md`)
+### Reference overlays — metro, flood zones, kraje, universities (migration 600; spec `docs/design/map-overlays.md`)
 
 Static geometry from outside publishers, drawn as toggleable map layers. ONE path: a Python registry
 in `scripts/ingest_map_overlays.py` (sections → layers, each with its legend, note, attribution and
@@ -558,8 +558,12 @@ frontend code. The four tables are a MIRROR (rules 10/11's class): service-role 
 quarterly `ingest_map_overlays.yml` (dispatch `--sections kraje` after a boundaries ingest).
 Sources: IPR Praha's Metropolitní plán hosted services (A/B/C existing, Metro D proposals, territorial
 reserves — the "tangenciální kolejové spojení" the press calls metro E is labelled as the plan labels
-it — and named planned stations; CC BY) and the VÚV TGM / MŽP national flood-zone register
-(Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly). Two facts the ingest enforces: the VÚV
+it — and named stations, in service and planned; CC BY), the VÚV TGM / MŽP national flood-zone register
+(Q5/Q20/Q100/Q500 + active zone; CC BY 4.0; quarterly) and, since 2026-10-16, IPR's planning-analysis layer
+of Prague's 289 university sites (`universities` section: teaching and service sites in one toggle, dorms in
+another; a site is PRIMARY and labelled when MŠMT's F21 table counts 2 000+ present-form students at it,
+through the ingest's curated faculty → site table `UNIVERSITY_SEATS`; the F21 workbook is read live each
+run). Two facts the ingest enforces: the VÚV
 service is fetched in its NATIVE S-JTSK (its own WGS84 output applies a 3-parameter datum shift about
 10 m off; a PID stop with both coordinate systems is the control point, > 1 m fails the run), and a
 layer is replaced only when every requested id came back and the count holds (≥ 90 % of the previous
@@ -618,8 +622,10 @@ rules. Identify which one a task belongs to before you start.
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
   account, migration 595).
-- Every PostgREST read runs as `authenticated`; `anon` is granted nothing (Phase 0,
-  migrations 299/331). The SPA reads the `*_public` views; the Browse/map read models
+- Every PostgREST read runs as `authenticated`; `anon` is granted no relation (Phase 0,
+  migrations 299/331), functions are born private since migration 612, and a CI census
+  (`tests/test_tenant_isolation_live.py`) keeps every `SECURITY DEFINER` function in `public`
+  out of `anon`'s reach. The SPA reads the `*_public` views; the Browse/map read models
   `browse_list` (an UNLOGGED table rebuilt blue-green) and `properties_map_mv` — plain
   SELECT grants to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through their `*_visible` INVOKER twins (migration 537); the location-audit
@@ -777,6 +783,10 @@ rules. Identify which one a task belongs to before you start.
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
   its lazily loaded phone layout by `usePhoneShell()`, so `routes.tsx` does not change.
+  Managing collection shares is desktop-only (collection sharing W5, #1760 Q11): the phone lists
+  collections shared with the caller read-only under "Sdílené se mnou" (`useCollections().shared`),
+  heads one as "sdílí {email} · jen ke čtení" with no add affordance, and its card sheet offers
+  only the caller's own collections, so a viewer can neither add to nor remove from it there.
   The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
   query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
   `pages/Link` is, so the first-visit budget never pays for them; no WebGL maps, no estimation start —
@@ -804,12 +814,12 @@ rules. Identify which one a task belongs to before you start.
   open across #1775's deploy kept choosing the static token). No session → no header; the server's
   401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
   History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
-- **`Mapy.cz`-powered location search.** The Region/Browse pages call `GET /maps/suggest`
-  and `POST /maps/resolve` on the FastAPI service for autocomplete + admin-unit
-  resolution. The `MAPY_CZ_API_KEY` is server-side only — never inlined into the browser
-  bundle. When the API returns 503 (key unset), the search box renders a graceful
-  fallback hint and auto-opens the Advanced disclosure with the legacy district / radius
-  pickers.
+- **`Mapy.cz`-powered location search.** Every location typeahead calls `GET /maps/suggest`
+  (Mapy `type=regional`: no POIs) and, on a pick, `POST /maps/resolve` `{lat, lng, type, name,
+  regional_structure}` → ONE shape `{level, id, name, context}`: the RÚIAN unit at the picked
+  level (an address binds its street), its register name, and `context` = the register obec
+  name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
+  `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions.
 - Frontend conventions live in `frontend/README.md`. Design tokens are in
   `frontend/src/styles/globals.css` under a single `@theme` block; **never tweak these
   tokens without operator approval** — they encode the agreed visual direction
@@ -864,9 +874,9 @@ rules. Identify which one a task belongs to before you start.
   deal-pipeline control (bookmark; once in, change stage via a native `<select>`, and remove
   behind the panel's two-step confirm — rule #22: no surface removes a card on one click)
   + a save-to-collection control (rule #18 — the SPA header's "Uložit do kolekce": a checklist of
-  every collection, monitored first) + **operator notes** (list existing + add a new
+  every collection of mine, monitored first — a shared one is never a save target) + **operator notes** (list existing + add a new
   one via `GET`/`POST /properties/{id}/notes`, property-grain, the viewed advert recorded as
-  the note's `origin_listing_id`) + an "Otevřít v aplikaci" deep-link to the SPA
+  the note's `origin_listing_ref_id`) + an "Otevřít v aplikaci" deep-link to the SPA
   (`{VITE_APP_BASE_URL}/listing/{source}/{native}` — an advert alias that lands on the
   property page with that advert's row open) + subject facts; for a flat it shows the
   property's MF result by SHAPE (value + "Výnos MF" on a sale flat, range + (i) note, note,
@@ -901,12 +911,12 @@ rules. Identify which one a task belongs to before you start.
   silent, read as a broken extension — 2026-09-24), "Obnovit stránku" when the extension was
   reloaded / updated / disabled / removed under the open tab (the overlay then stops scanning),
   the error + "Zkusit znovu" otherwise (no button for a build without an API URL). × lasts for
-  the page (a soft-nav round trip through a listing keeps it hidden). Automatic re-lookups back off 60 s, `visibilitychange` re-asks at once (a sign-in made in
-  the panel or another tab heals the page — the content script never receives the session; the
-  sign-in button asks `get_auth_state` first and skips the Google round trip if one exists); one
-  lookup is out per generation (a sign-in or the retry starts a new one, older answers are
-  dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late
-  `ok` still badges;
+  the page (a soft-nav round trip through a listing keeps it hidden). Automatic re-lookups back off 60 s, `visibilitychange` re-asks at once. Every content
+  script watches the stored session's user (`session.ts` `onAccountChange`; a token refresh changes nothing): an account
+  change in any tab drops the lookup cache, card controls and every cached list and re-asks the cards and any open panel at
+  once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
+  excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
+  one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
   `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
   truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
@@ -1706,13 +1716,20 @@ renumber.** Navigate by area:
     go through the apply path below (`apply.plan_groups` / `apply.apply_group`, the same
     refusals, the same chokepoint, `source='autodedup'`, ledger rows `generation='rt'`,
     `run_id='rt:<holder>'`), only inside `autodedup_apply_scope` and never as a split — a
-    grouping the stream no longer supports is a proposal. It reconciles only a generation a
+    grouping the stream no longer supports is a proposal. A pass reads an advert it does not
+    claim as its row stored it (E960), so a merge is applied only when every advert it moves was
+    refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
+    engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
+    pass re-claims waiting groups whole, oldest first, 100 adverts on its first attempt, each
+    group at most once in 6 h, and none while the apply scope is closed or the reject ledger is
+    inert. It reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) whose build
     phase ended, and review pages default to `rt` under the same condition (else the newest batch
     pass). The brake is the interval (0), then `mode=unapply` — a live apply or unapply refuses
     while the interval is above 0. Its calibration is cut from the database (`rt_seed`, and a
-    re-cut inside the pass's remaining time when the pHash population drifts); a pass past its own
-    deadline rolls back and halves its rate. The
+    re-cut, in the tick after a pass found the pHash population drifted, instead of a pass, never
+    in a build or while the scope holds more than 50k adverts; E944) and read once a digest; a
+    pass past its own deadline rolls back and halves its rate. The
     batch `apply` and `unapply` modes stay until the lane has run three live days and checkpoint
     C2 passes (the undo path after that is an open operator decision, `roadmap/autodedup.md`);
     `legacy_retire` per area under the live generation since W8 (E953). **The engine's only detaches** are two `detach_listings` callers, one
@@ -1909,31 +1926,31 @@ renumber.** Navigate by area:
     from its first seen shows both (`effectiveSort`, never in a URL). A redundant
     `newest_ad_at_<P> is not null` conjunct rides on the list, cards and count alike, so the
     portal's partial index serves the page and the count from ONE filter chain.
-    **PLACE is the same rule (W3 S3, migration 504): ONE code predicate,
+    **PLACE is the same rule (W3 S3, migration 504; the street since 605): ONE code predicate,
     `<level>_id = any(codes)`, plain equality per level.** A location chip is a LEVEL plus a
-    RÚIAN CODE at four levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` — and
-    `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
-    (Browse's PostgREST string and the pipeline board's in-memory twin) and the two RPC bodies
-    (`browse_stats_properties`, `browse_map_cells`) all compile the same plan; the shared table
-    `tests/fixtures/district_chip_plan.json` is read by BOTH `tests/test_one_place_predicate.py`
-    and `districtCodes.test.ts`, so a divergence is a red test rather than a support ticket.
-    What this replaced was **five** predicates in **six** copies: obec/okres/region equality, a
-    `locality` pair (obec equality AND `place_search_text ILIKE`), and a legacy name fallback
-    ILIKE-ing across `district` / `place_search_text` / `okres` / `region` AND-ed with an
-    optional parent-`context` narrow. Equality is enough because `listing_location`
-    (migration 501) answers every listing with RÚIAN codes and `browse_list.obec_id` /
-    `okres_id` / `region_id` already WERE those codes (`admin_boundaries.id` IS the RÚIAN code),
-    so the swap is value-identical for a resolved row. Two consequences worth knowing: a
-    street / POI / address chip now filters at its CONTAINING OBEC (there is no street-grain
-    code to narrow with, and no text column left to ILIKE), and **a chip that carries no code
-    matches NOTHING** — `NO_MATCH_CODE` (-1), which no positive RÚIAN code can equal. That is
-    deliberate and fail-CLOSED: an include chip we cannot resolve must not widen a saved
-    watchdog to the whole country. Chips saved before codes existed are resolved ONCE at read
-    time against the RÚIAN name index (`api/maps.resolve_names`, shared by the matcher in
-    process and by the SPA over `POST /maps/resolve-names`) — the stored blob is never
-    rewritten, because a preset stores the operator's own full blob. The chip producer
-    `/maps/resolve` PIPs the RÚIAN mirror for obec/okres/kraj; `cast_obce` has no polygon at
-    any registry version, so the point places the obec and the NAME places the part inside it.
+    RÚIAN CODE at five levels — `region_id` / `okres_id` / `obec_id` / `cast_obce_id` /
+    `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
+    (Browse's PostgREST string and the pipeline board's in-memory twin) and the three RPC bodies
+    (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard` — Brokers and
+    Outreach, in the per-level `= any(district_level_codes(…))` form, the SQL twin of `district_where`
+    over `listing_location`'s `*_kod`, which the planner folds to constants) all compile the same plan; the shared table
+    `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py`,
+    `districtCodes.test.ts` and `tests/test_broker_leaderboard_chip_parity.py`, so a divergence is a red
+    test rather than a support ticket. The leaderboard's count book has cells for an INCLUDE at kraj /
+    okres / obec only, so any other chip set (a quarter, a street, an exclude) reads `listings` live —
+    one gate pair, exact complements, pinned in `tests/test_broker_leaderboard_contract.py`.
+    What this replaced was **five** predicates in **six** copies (obec/okres/region equality, a
+    `locality` obec-AND-ILIKE pair, a name fallback ILIKE-ing four text columns). Equality is
+    enough because `listing_location` (migration 501) answers every listing with RÚIAN codes.
+    **A chip is the unit it names** (operator rulings 2026-10-02 / 2026-10-16): a street chip is
+    its street code (until 605 a street / address pick was a pseudo-level `locality` that filtered
+    its whole TOWN), and **a chip without a (level, code) cannot exist** — the typeahead never
+    makes one, `DistrictChip` refuses one (422), the SPA's URL parser drops one, and migration
+    606 deleted the four stored filters that held them. No read-time name reader exists: a name
+    is not a unit ("Jihlava" is an obec AND an okres), so re-reading one could only widen a chip.
+    The chip producer `/maps/resolve` PIPs the RÚIAN mirror for obec/okres/kraj; `cast_obce` and
+    `ulice` have no polygon, so the point places the obec and the NAME binds the part or street
+    inside it — a street only on one exact register name near its doors, else no chip.
     Deleted with the ILIKE arms: the sreality-only `locality_district_id` /
     `locality_region_id` filters (registry, comparables, watchdog spec, API schemas, SPA filter
     types) — one portal out of nine could answer them, and `districts` at the obec / okres level
@@ -1941,17 +1958,15 @@ renumber.** Navigate by area:
     request models ignore unknown fields (Pydantic's default), so an old watchdog filtering on
     `locality_district_id` silently loses that narrowing rather than erroring — deliberate (a 422
     on every save of a pre-W3 watchdog is worse), and the reason `districts` is the one place
-    filter left to re-pick. Two smaller asymmetries are recorded rather than fixed here: the
-    Watchdog reads its four codes off `properties_public` (trigger-289-sourced) while Browse reads
-    them off `browse_list` (`listing_location`-sourced) — identical values by construction, but
-    **W4 owes a row-level parity measurement** before it re-sources the first; and an EXCLUDE chip
-    keeps rows whose code at that level is NULL (`NOT COALESCE(…, false)` in SQL,
+    filter left to re-pick. Every relation reads its five codes off `listing_location`; an
+    EXCLUDE chip keeps rows whose code at that level is NULL (`NOT COALESCE(…, false)` in SQL,
     `or(col.is.null,col.not.in.(…))` in PostgREST), because an exclude subtracts what it MATCHES
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
     `notification_dispatches` is the **unified notification event table** (migration 206 —
-    physical name kept; conceptually "notifications"): one source-generic, **property-grain**,
-    append-only event row per `(source_kind ∈ {watchdog, collection_monitor, system_health},
-    subject, change_kind)`,
+    physical name kept; conceptually "notifications"): one source-generic, append-only event row per
+    `(source_kind ∈ {watchdog, collection_monitor, collection_share, system_health}, subject,
+    change_kind)` — **property-grain** for the first two, a text row for the last two (the
+    `SourceKind` alias in `api/notifications.py` is the list),
     deduped by a single per-event **`dedupe_key`** (`wd:{sub}:new:{property_id}` once-ever;
     `wd:{sub}:price_drop:{snapshot_id}` **per-snapshot**, so a property that keeps dropping fires
     once per real cut — and so does the collection-monitor producer). **A price step is one
@@ -2016,8 +2031,20 @@ renumber.** Navigate by area:
     when every member workflow posts a newer `workflow_run_health.last_success_at`, on
     `ops_incident_max_age_hours`, or manually (`toolkit.ops_incidents.resolve_incident`).
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
+    **A FOURTH producer is live (migration 610): `collection_share`.** `POST
+    /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
+    `share:<collection>:<recipient>`, no time: a revoke + re-share loop cannot refill an inbox) —
+    `collection_id` set, `subscription_id` NULL (`notification_dispatches_source_ck` gained the
+    arm), `change_kind = 'shared'`, `message` "<owner email> shared the collection "<name>" with
+    you" (the one stored copy of an email in the sharing model, a snapshot at share time), in-app
+    only (`target_channels` empty, never routed to email/Telegram). It is stamped to
+    the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
+    `sync_notification_dispatches_account_id()` trigger KEEPS the supplied account for this kind
+    and raises when none is supplied. Like `system_health` it is NOT property-grain
+    (`property_id` NULL), so no carrier touches it. ONE `SourceKind` alias in
+    `api/notifications.py` names the four kinds for every list/unread/mark route.
     The unified in-app **Notifications**
-    page (`/notifications`) reads all THREE producers off one LEFT-join feed (the watchdog-only
+    page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
     INNER join became a LEFT join + a `collections` join so monitor and system_health rows
     aren't dropped), and a red nav unread badge polls `GET /notifications/unread-count`;
     `POST /notifications/mark-all-seen` clears it.)
@@ -2126,15 +2153,24 @@ renumber.** Navigate by area:
     `target_channels`); a protected default "monitoring" collection (`is_system=true`, can't be
     renamed or deleted) ships monitoring on. The "add to collection" affordance lives on the
     Browse card (a layers control ADJACENT to the pipeline funnel — rule #22 keeps the funnel the
-    sole pipeline affordance), the listing-detail `CurationBlock`, and the Chrome-extension panel.**
+    sole pipeline affordance), the listing-detail header (`CollectionSaveToggle`; the page's second
+    editor, a chip row in `CurationBlock`, was deleted 2026-10), the phone curation row and margin
+    marks, and the Chrome-extension panel.**
     The panel's control is the SPA header's `CollectionSaveToggle` + `CollectionSaveMenu` reproduced
-    by value (a bookmark button opening a checklist of EVERY collection, monitored ones first and
+    by value (a bookmark button opening a checklist of collections, monitored ones first and
     bell-marked); it replaced a one-click "Sledovat" bell that could only reach the single
-    monitoring collection, so the panel and the app now offer the same verb over the same set.
-    In the SPA those affordances share ONE membership read (`fetchPropertyCollectionMemberSet`
-    under `curationKeys.propertyCollectionMembers`; one property's ids are `members.get(id)`) and
-    ONE revalidation — `lib/collectionCache.ts`, called by every writer: the menu, the
-    `CurationBlock` row, the collection page's row-remove, BOTH collection DELETEs (migration 202
+    monitoring collection, so the panel and the app offer the same verb. Since collection sharing
+    (migration 610) the SPA checklist lists the caller's OWN collections only — a shared one is
+    view-only — and every saved mark means "in one of mine" (`saved = mine.size > 0`), while cohort
+    readers (Browse prefilter, Pipeline board, phone roll) keep the full visible map; the extension
+    follows by value (`chrome-extension/src/glyphs.ts`: `isMine`, `saveTargets`, `savedCollections`
+    over the lookup's `collection_ids`, and `shareAudience` mirroring the SPA's for its notes).
+    In the SPA those affordances share ONE membership read and ONE collection list, each behind a
+    hook in `lib/collectionCache.ts` (`useCollections`, `useCollectionMembers` — the whole-set map,
+    `fetchPropertyCollectionMemberSet` under `curationKeys.propertyCollectionMembers` — and
+    `useCollectionMembership(property_id)`; no surface hand-types a `useQuery` over either key),
+    and ONE revalidation in the same file, called by every writer: the menu, the collection page's
+    row-remove, BOTH collection DELETEs (migration 202
     cascades memberships away) and the merge (operator state re-points `collection_properties`, so
     the map's keys change). The hand-typed key lists it replaced had drifted — every one but the
     menu forgot the shared map — the same failure `lib/browseInvalidation.ts` records for Browse. The
@@ -2188,7 +2224,7 @@ renumber.** Navigate by area:
     view).
     **Adding notes is reachable from the Chrome-extension panel too** — it lists the property's
     existing notes + an add box, writing through the SAME `POST /properties/{id}/notes` the
-    `CurationBlock` uses (the viewed advert's `sreality_id` as `origin_listing_id`); notes are
+    `CurationBlock` uses (the viewed advert's surrogate id as `origin_listing_ref_id`); notes are
     NOT batched into `POST /listings/lookup` (too heavy per index card) — the panel fetches them
     lazily via `GET /properties/{id}/notes` on open. Tags are the one curation surface the
     extension does not yet expose, and a note's files the one part of a note (it shows the text).
@@ -2206,8 +2242,9 @@ renumber.** Navigate by area:
     none and are scoped by RLS. The doctrine and its standing gates are stated once — rule #22's
     tenancy note below.**
     Same no-hard-delete spirit as the rest of the data model.
-    **Every curation route runs on the tenant pool (`tenant_conn` + `verify_jwt`), with no
-    exceptions** (hydration sprint W-1c). Until then the collection CRUD (`POST /collections`,
+    **Every curation route runs on the tenant pool (`tenant_conn` + `verify_jwt`)** (hydration
+    sprint W-1c); one gated addition: `POST /collections/{id}/shares` also opens a service-role
+    connection, in the handler and only after its tenant UPDATE gate passed (tenancy.md). Until then the collection CRUD (`POST /collections`,
     `GET`/`PATCH`/`DELETE /collections/{id}`) and every `/tags` route were still on the
     `get_db_conn` + `require_token` pair the rest of the module had already left: that pair is
     service-role (RLS off) behind the static `API_TOKEN` that shipped inside the public SPA bundle,
@@ -2223,6 +2260,27 @@ renumber.** Navigate by area:
     (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
     accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
+    **Sharing (migration 610, `docs/design/collection-sharing.md`) widens READS, never writes.**
+    `collection_shares` holds one row per (collection, recipient account); `account_id` is the
+    owner, trigger-stamped from the collection; browser roles get SELECT + DELETE and no INSERT
+    (account uuids are learnable), so a share is created only by `POST /collections/{id}/shares`
+    (the tenant `UPDATE` is the ownership gate, then the service role resolves a CONFIRMED email
+    to the recipient's first account and writes the share + its notification), and either party
+    deletes it (`DELETE /collections/{id}/shares/{account_id}`: the owner revokes, the recipient
+    leaves). `property_notes.shared` is the author's consent mark, default private. **The
+    visibility rule, stated once:** a recipient reads a shared collection and its member rows; a
+    party X reads a note by author A on property P iff the note is marked `shared` and some share
+    between X and A names a collection that currently holds P — one A owns or one A received,
+    made before or after the mark (ruled 2026-10-17; migration 613 dropped 610's `shared_at`
+    consent time, accepting the bait-share edge: shares need no acceptance) — co-recipients never see each
+    other; files follow their note. Four `FOR SELECT` `*_shared_read` policies
+    carry it and every read path inherits it; the owner's `FOR ALL` policies decide every write
+    unchanged, so a recipient's write by id matches no row (404). The API tells mine from shared
+    by ONE field, `owner_email` (null iff the row is the caller's), labelled through
+    `share_party_emails()` (the caller's counterparties only) over `account_email()`, the one
+    label definition; a shared collection reads `monitoring_enabled = false` (alerts stay the
+    owner's). A share is keyed on the collection, which a merge never changes, so it needs no
+    carrier; the `shared` mark rides the note through a merge and a split's copy.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
     groupings, a dismissal is one boolean per property, and a pseudo-collection would need a
@@ -2558,9 +2616,13 @@ renumber.** Navigate by area:
     `enumOr` silently snapped back to `pronajem` — the control lied about what it could do.
 
 22. **The deal pipeline is single-valued, property-grain operator state (migration 205).**
-    `property_pipeline` holds at most ONE card per property (PK on `property_id`) at one
-    `stage_id` (`pipeline_stages`, a TABLE not an enum so the operator can rename/reorder/add
-    columns with no migration — the curated-index precedent). **A "bookmark / interested" is
+    `property_pipeline` holds at most ONE card per property per account (PK
+    `(account_id, property_id)` since migration 295) at one `stage_id` (`pipeline_stages`, a
+    TABLE not an enum so an account can rename/reorder/add columns with no migration — the
+    curated-index precedent). Every account gets its own copy of the default board at signup
+    (`seed_default_pipeline`, migration 612), and every stage reference — the card's and the
+    event ledger's `from_stage_id` / `to_stage_id` — is account-qualified (a composite FK onto
+    `pipeline_stages (account_id, id)`). **A "bookmark / interested" is
     just the entry stage** (`pipeline_stages.is_entry`), not a separate flag: presence of a
     `property_pipeline` row == the property is in the pipeline. Single-valued-ness is why it
     can't live at advert grain (unlike the m2m curation of rule #18) — so it gets its OWN
@@ -2683,10 +2745,9 @@ renumber.** Navigate by area:
     The rule going forward: if the board cannot filter, sort or place a card without a field, it is a
     decoration and does not belong in that queryFn.
     **The badge is `pipeline_stages.code` (migration 377), not an ordinal and never a parse of
-    the label.** The live board numbers its stages inside the display text ("1. For Review" …
-    "9. Passed", "9. Bought", "9. Lost"), so the number is operator data: three stages
-    deliberately share "9" while their `position` runs 5/6/7, and a badge derived from ordering
-    would contradict the labels the operator reads. `code` is nullable and NOT unique; when it is
+    the label.** Boards number their stages inside the label, so the number is operator data:
+    several closed stages deliberately share a code, which a badge derived from ordering would
+    contradict. `code` is nullable and NOT unique; when it is
     NULL the funnel falls back to the stage's 1-based ordinal among the live stages
     (`lib/pipelineStage.ts:stageBadge`) — computed where it renders, so nothing guessed is ever
     written back. `stageAccent` in the same module is the one answer to "what colour is this
@@ -2782,6 +2843,9 @@ renumber.** Navigate by area:
     needs a delisted card, Typ ≥2 present types, Kolekce a RESOLVED member map plus either a
     selection in the URL (a live constraint is always visible, so it is always liftable — before
     the list arrives its chip reads `#<id>`) or a board collection that could partition the board.
+    Lokalita and the Řazení / Karty presentation row have no gate: they draw from first paint, on
+    an empty or still-loading board too (operator ruling 2026-10-16), while Stav, Typ, Kolekce and
+    Štítky keep theirs.
     Clearing is ONE header **Reset** gated on a derived `filtersActive`, never a per-row
     clear. **Fail-open contract** (pinned by `Pipeline.test.tsx`): an unresolved member map
     (loading or errored) means no constraint, no Kolekce row and nothing counted — a `?collections=`
@@ -3202,7 +3266,7 @@ renumber.** Navigate by area:
     resolver (bind → fill → grade → check); ONE claim shape in `location_claims`, written by TWO
     producers, both fingerprinted in SQL — the hourly `claims_intake` lane (over the stored payload,
     the stored page body and the text lane's stored reading) and `operator_corrections`; TWELVE claim types, at most one contract entry per
-    type, the town entry mandatory and naming a reader; ONE label function and ONE four-level code
+    type, the town entry mandatory and naming a reader; ONE label function and ONE five-level code
     predicate for every place display and filter; no serving flags, no granularity floors, no
     second store — `listings` and `properties` carry no place column, so a reader joins `ll on
     ll.listing_id = l.id` and casts `ll.geom::geography` for anything measured in metres. The reason the answer is graded rather
@@ -3872,16 +3936,18 @@ while `listing_location` is revoked from `authenticated`), and the API's raw-SQL
 same function with the same columns — where eleven sites used to compose a place string out of five
 legacy columns in five different assemblies, the SPA and the extension falling back in opposite
 orders, so one listing could be labelled two ways at once. Every place FILTER is
-`<level>_id = any(codes)`, plain equality at four levels (`region_id` / `okres_id` / `obec_id` /
-`cast_obce_id`), compiled in exactly two places (`api/location_filter.py` and
-`frontend/src/lib/districtCodes.ts`) plus two SQL bodies (`browse_stats_properties`,
-`browse_map_cells`), all four tested against ONE table, `tests/fixtures/district_chip_plan.json`.
-A street / POI / address chip filters at its CONTAINING OBEC; a chip with no code matches NOTHING
-(`NO_MATCH_CODE = -1`, fail closed); chips saved before codes existed are resolved once at read time
-against `ruian_name_index` — in-process for the watchdog matcher, over `POST /maps/resolve-names` for
-the SPA (`frontend/src/lib/useLegacyChipUpgrade.ts`, still called by Browse and the pipeline board) —
-without ever rewriting the stored blob. Because RÚIAN draws no polygon for `cast_obce` or `momc`, a
-POINT resolves only to obec / okres / kraj and the quarter is placed BY NAME inside the PIP'd obec.
+`<level>_id = any(codes)`, plain equality at five levels (`region_id` / `okres_id` / `obec_id` /
+`cast_obce_id` / `ulice_id`), compiled in exactly two places (`api/location_filter.py` and
+`frontend/src/lib/districtCodes.ts`) plus three SQL bodies (`browse_stats_properties`,
+`browse_map_cells`, `broker_leaderboard` — 609, over `listing_location`'s five codes), all five
+tested against ONE table, `tests/fixtures/district_chip_plan.json`.
+A street chip filters at its street; a chip without a (level, code) cannot exist (the typeahead,
+the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
+draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj
+and the quarter or street is bound BY NAME inside the PIP'd obec. The street is indexed twice
+(migration 605: `browse_list_ulice_idx` via the rebuild, `listing_location_ulice_kod_idx` for the
+feed lane) because without them one street read its whole category band and the feed seq-scanned
+`listing_location` for 4.97 s; `cast_obce` on the feed lane has the same shape and is not indexed.
 
 `browse_projection` re-sources `obec_id` / `okres_id` / `region_id` from
 `ll.obec_kod` / `okres_kod` / `kraj_kod` and `lat` / `lng` from `ST_Y/ST_X(ll.geom)`, and appends

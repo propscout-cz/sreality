@@ -9,10 +9,10 @@ architecture rule #1, so older migrations are never rewritten):
 
   1. No migration grants a WRITE privilege (INSERT/UPDATE/DELETE/TRUNCATE/ALL) to
      `anon` — anon is dark after Phase 0 (migration 299).
-  2. No migration grants a WRITE privilege to `authenticated` EXCEPT on the 20
-     user-state TENANT tables, whose per-account DML is deliberate and RLS-scoped
-     (migrations 290-294,298,536). This registry MIRRORS tests/test_tenant_isolation_
-     live.py::_TENANT_TABLES — add a new tenant table to BOTH.
+  2. No migration grants a WRITE privilege to `authenticated` EXCEPT on the
+     user-state TENANT tables, whose per-account DML is deliberate and RLS-scoped.
+     The list is tests/_tenant_registry.py, shared with the live lane — add a new
+     tenant table there.
   3. Every new base table ships with `enable row level security` in the same
      migration (Supabase's default ACL would otherwise make an RLS-off public
      table reachable). Escape hatch: `-- ci-allow-no-rls: <table> <reason>`.
@@ -31,6 +31,7 @@ import re
 from pathlib import Path
 
 from tests._admin_gate_shape import gate_is_sound
+from tests._tenant_registry import TENANT_TABLES
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 # Phase 0 (299) is the baseline: it establishes the posture this gate protects.
@@ -43,18 +44,6 @@ _WRITE_PRIVS = {"insert", "update", "delete", "truncate", "all", "all privileges
 # (the exact vector Phase 0 closed on functions) — a `grant insert ... to public`
 # would hand anon write access while naming neither browser role.
 _ROLES = ("anon", "authenticated", "public")
-
-# Mirrors tests/test_tenant_isolation_live.py::_TENANT_TABLES — the user-state
-# tables whose per-account `authenticated` DML is intentional and RLS-guarded.
-_TENANT_TABLES = frozenset({
-    "collections", "tags", "property_notes", "filter_presets",
-    "notification_subscriptions", "manual_rental_estimates", "collection_properties",
-    "property_tags", "notification_dispatches", "estimation_cohort_entries",
-    "estimation_trace_payloads", "estimation_feedback", "building_run_attachments",
-    "estimation_runs", "building_runs", "property_pipeline", "pipeline_stages",
-    "property_pipeline_events", "entitlements", "property_dismissals",
-    "property_note_attachments", "property_artifact_links",
-})
 
 # Amendment A6: these broker-directory PII surfaces stay dark to browser roles;
 # the SPA reads them only through the PII-masking /brokers API. A migration must
@@ -231,7 +220,7 @@ def _offending_write_grants(sql: str) -> list[str]:
         if "authenticated" in roles:
             # allowed only on the tenant registry (and only when EVERY target is
             # a registry table — a mixed grant is rejected to force an explicit split)
-            if not objs or any(o not in _TENANT_TABLES for o in objs):
+            if not objs or any(o not in TENANT_TABLES for o in objs):
                 out.append(f"WRITE to authenticated on non-tenant table: {collapsed}")
     return out
 
@@ -405,6 +394,10 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # is migration 545's `sold_coverage`, a SECURITY DEFINER point lookup that answers
     # about a single municipality and is annotated `ci-allow-ungated` there.
     "sold_transaction_fetches",
+    # Auth identities (migration 610): emails are PII. The ONE reader is account_email(),
+    # EXECUTE revoked from every browser role and annotated `ci-allow-ungated` there; the
+    # browser reaches a label only through share_party_emails(), counterparties only.
+    "auth.users",
 })
 
 _CREATE_GATED_OBJ = re.compile(
@@ -493,8 +486,8 @@ def test_no_write_grants_to_browser_roles():
     assert not offenders, (
         "Migration(s) grant a WRITE privilege to anon, or to authenticated on a "
         "non-tenant table — browser roles get SELECT only; shared-market writes go "
-        "through the bearer-gated API, tenant writes are RLS-scoped on the 20 "
-        "registry tables (mirror tests/test_tenant_isolation_live.py):\n"
+        "through the bearer-gated API, tenant writes are RLS-scoped on the "
+        f"{len(TENANT_TABLES)} tables of tests/_tenant_registry.py:\n"
         + "\n".join(offenders)
     )
 
@@ -587,4 +580,70 @@ def test_dynamic_ddl_is_annotated():
     assert not offenders, (
         "migration(s) build DDL via EXECUTE, which the offline scanner cannot inspect. "
         "Annotate with `-- ci-allow-dynamic: <name> <why>`:\n" + "\n".join(offenders)
+    )
+
+
+# --- the sharing policies (migration 610), pinned ---------------------------
+# A share widens READS only, and it does so through exactly these five permissive policies.
+# 610's own assert block checks them once, when 610 applies; this census re-reads EVERY
+# migration so a later one that re-creates a `*_shared_read` as FOR ALL (WITH CHECK defaults
+# to USING: a recipient could write) or drops `to authenticated` (anon reaches it), or that
+# alters or drops one, fails here instead of shipping green.
+_SHARE_POLICY_PIN: dict[str, tuple[str, str, frozenset[str]]] = {
+    "collection_shares_party": ("collection_shares", "all", frozenset({"authenticated"})),
+    "collections_shared_read": ("collections", "select", frozenset({"authenticated"})),
+    "collection_properties_shared_read": (
+        "collection_properties", "select", frozenset({"authenticated"})),
+    "property_notes_shared_read": ("property_notes", "select", frozenset({"authenticated"})),
+    "property_note_attachments_shared_read": (
+        "property_note_attachments", "select", frozenset({"authenticated"})),
+}
+
+
+def _policy_shape(rest: str) -> tuple[str, frozenset[str], bool]:
+    head = re.split(r"\b(?:using|with check)\b", rest, maxsplit=1)[0]
+    cmd = re.search(r"\bfor (all|select|insert|update|delete)\b", head)
+    roles = re.search(r"\bto (.+)$", head.strip())
+    return (
+        cmd.group(1) if cmd else "all",
+        frozenset(r.strip() for r in roles.group(1).split(",")) if roles else frozenset({"public"}),
+        "as restrictive" in head,
+    )
+
+
+def _final_share_policies() -> dict[str, object]:
+    state: dict[str, object] = {}
+    paths = sorted(
+        (p for p in MIGRATIONS_DIR.glob("*.sql") if _migration_number(p) is not None),
+        key=lambda p: _migration_number(p) or 0,
+    )
+    for p in paths:
+        for stmt in _statements(p.read_text(encoding="utf-8")):
+            low = re.sub(r"\s+", " ", stmt.lower()).strip()
+            m = re.match(r'create policy "?(\w+)"? on (?:public\.)?"?(\w+)"?(.*)$', low)
+            if m and m.group(1) in _SHARE_POLICY_PIN:
+                cmd, roles, restrictive = _policy_shape(m.group(3))
+                state[m.group(1)] = (m.group(2), cmd, roles, restrictive, p.name)
+                continue
+            m = re.match(r'(drop|alter) policy (?:if exists )?"?(\w+)"?', low)
+            if m and m.group(2) in _SHARE_POLICY_PIN:
+                state[m.group(2)] = f"{m.group(1)} policy in {p.name}"
+    return state
+
+
+def test_the_sharing_policies_stay_select_only_and_authenticated_only():
+    state = _final_share_policies()
+    assert set(state) == set(_SHARE_POLICY_PIN), "the census lost sight of migration 610"
+    drifted = []
+    for name, (table, cmd, roles) in _SHARE_POLICY_PIN.items():
+        got = state[name]
+        if not isinstance(got, tuple):
+            drifted.append(f"  {name}: {got}")
+        elif got[:4] != (table, cmd, roles, False):
+            drifted.append(f"  {name} ({got[4]}): on {got[0]} for {got[1]} to {sorted(got[2])}"
+                           f"{' restrictive' if got[3] else ''}; pinned {table}/{cmd}/{sorted(roles)}")
+    assert not drifted, (
+        "a sharing policy drifted from its pin (docs/design/collection-sharing.md §3.1, §7): a "
+        "share must widen reads only, to signed-in callers only. If the change is deliberate, "
+        "update _SHARE_POLICY_PIN in the same PR:\n" + "\n".join(drifted)
     )

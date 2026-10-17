@@ -115,8 +115,10 @@ def test_the_answer_is_four_keys_and_bounded_by_construction() -> None:
 
 
 def test_the_latest_definitions() -> None:
-    assert latest_definition(FN).name == NAME
-    assert latest_definition("browse_stats_properties").name == "598_property_ids_excluded.sql"
+    """605 restated both RPCs with this file's map body except the chip arms
+    (tests/test_one_place_predicate.py pins the swap)."""
+    assert latest_definition(FN).name == "605_street_chip_level.sql"
+    assert latest_definition("browse_stats_properties").name == "605_street_chip_level.sql"
 
 
 def test_the_receipt_probes_the_function() -> None:

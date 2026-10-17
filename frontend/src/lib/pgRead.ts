@@ -10,8 +10,7 @@
  * postgrest-js's own hidden GET retry stacked under all of it.
  *
  * What this owns:
- * - ONE deadline per request (PG_DEADLINE_MS, or `deadlineMs` for a read that
- *   has a cheaper fallback), combined with the caller's signal.
+ * - ONE deadline per request (PG_DEADLINE_MS), combined with the caller's signal.
  * - ONE abort rule: a caller abort rethrows `signal.reason`, so it stays a
  *   cancellation and never becomes an error banner.
  * - ONE error class: every failure is an ApiError with the wire status, so
@@ -52,7 +51,6 @@ export interface PgBuilder extends PromiseLike<PostgrestSingleResponse<unknown>>
 
 export interface PgReadOptions {
   signal?: AbortSignal;
-  deadlineMs?: number;
 }
 
 export interface PgResult<T> {
@@ -62,10 +60,10 @@ export interface PgResult<T> {
 
 export async function pgRead<T = unknown>(
   builder: PgBuilder,
-  { signal, deadlineMs = PG_DEADLINE_MS }: PgReadOptions = {},
+  { signal }: PgReadOptions = {},
 ): Promise<PgResult<T>> {
   if (signal?.aborted) throw signal.reason;
-  const deadline = AbortSignal.timeout(deadlineMs);
+  const deadline = AbortSignal.timeout(PG_DEADLINE_MS);
   const stop = signal ? AbortSignal.any([signal, deadline]) : deadline;
   builder.retry(false);
   /* maybeSingle()/single() return `this` at runtime (postgrest-js); only their
@@ -90,7 +88,7 @@ export async function pgRead<T = unknown>(
     if (signal?.aborted) throw signal.reason;
     /* Deliberately not "statement timeout": that is the server's fact, and the
      * Browse banners match it to say something different. */
-    throw new ApiError(`Databáze neodpověděla do ${deadlineMs / 1000} s`, 0, null, 'timeout');
+    throw new ApiError(`Databáze neodpověděla do ${PG_DEADLINE_MS / 1000} s`, 0, null, 'timeout');
   }
   const { error, status, statusText } = res;
   if (status === 0) throw new ApiError(error.message, 0, error, 'network');

@@ -166,9 +166,7 @@ export interface BrokerDossier {
 }
 
 export interface LeaderboardParams {
-  regionIds: number[];
-  okresIds: number[];
-  obecIds: number[];
+  districts: DistrictChip[];
   categoryMain: string | null;
   categoryType: string | null;
   metric: LeaderMetric;
@@ -223,33 +221,6 @@ export function contactState(
   return has ? { state: 'masked' } : { state: 'none' };
 }
 
-// Split Browse location chips into per-level RÚIAN-code arrays for the
-// leaderboard RPC. Only chips that carry a code, and only includes, contribute;
-// a 'locality' chip's code is its containing obec.
-//
-// The leaderboard RPC takes THREE levels, not the four the place predicate has
-// (lib/districtCodes): a `cast_obce` chip is skipped here rather than widened to
-// its town, because a broker leaderboard silently scoped to the whole of Prague
-// when the operator picked Žižkov is worse than one that ignores the chip. W4
-// gives the RPC the fourth level.
-export function chipsToGeoArrays(chips: DistrictChip[]): {
-  regionIds: number[];
-  okresIds: number[];
-  obecIds: number[];
-} {
-  const regionIds: number[] = [];
-  const okresIds: number[] = [];
-  const obecIds: number[] = [];
-  for (const c of chips) {
-    if (c.excluded || c.id == null) continue;
-    if (c.level === 'kraj') regionIds.push(c.id);
-    else if (c.level === 'okres') okresIds.push(c.id);
-    else if (c.level === 'obec' || c.level === 'locality') obecIds.push(c.id);
-    // c.level === 'cast_obce' — no arm on this RPC; see the note above.
-  }
-  return { regionIds, okresIds, obecIds };
-}
-
 /* The standard toolkit envelope. `pii_masked` is stamped on every /brokers
  * response, masked or not. `capped` is stamped only by broker_property_ids. */
 interface Envelope<T> {
@@ -284,8 +255,8 @@ function chunk<T>(xs: ReadonlyArray<T>, size: number): T[][] {
 
 /* No wrapper for GET /brokers/geo-options: this module's caller (BrokerDetail's
  * region-name map) went away when the dossier started joining region_shares[].name
- * server-side, and the page's location control is the shared LocationTypeahead +
- * chipsToGeoArrays, which matches on stable admin ids like Browse and Datasets do.
+ * server-side, and the page's location control is the shared LocationTypeahead,
+ * whose chips the leaderboard filters on exactly as Browse does.
  * A broker-specific geo vocabulary would fork that contract for one page. The
  * route stays — it is the only path to broker_geo_options, which is dark to
  * `authenticated` — so re-adding a wrapper is a few lines if a consumer appears. */
@@ -297,9 +268,10 @@ export async function fetchBrokerLeaderboard(
   const r = await apiGet<Envelope<BrokerLeaderRow[]>>(
     '/brokers/leaderboard',
     {
-      region_ids: p.regionIds,
-      okres_ids: p.okresIds,
-      obec_ids: p.obecIds,
+      districts: p.districts.map((d) => d.name),
+      districts_lvl: p.districts.map((d) => d.level),
+      districts_id: p.districts.map((d) => d.id),
+      districts_excl: p.districts.map((d) => d.excluded === true),
       category_main: p.categoryMain,
       category_type: p.categoryType,
       metric: p.metric,

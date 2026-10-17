@@ -14,14 +14,13 @@ import {
 import {
   archivePipelineStage,
   createPipelineStage,
-  listCollections,
   listTags,
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
+import { collectionLabel, useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
   curationKeys,
-  fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
   matchesDistricts,
   pipelineKeys,
@@ -35,7 +34,6 @@ import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import { CardHydrationProvider } from '@/lib/hydration';
-import { useLegacyChipUpgrade } from '@/lib/useLegacyChipUpgrade';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import { MultiselectChips } from '@/components/filter-controls/MultiselectChips';
 import { type EnumOptionLite } from '@/components/filter-controls/types';
@@ -131,12 +129,6 @@ function PipelineBoardPage() {
     setSort,
     reset,
   } = usePipelineViewState();
-  /* The board filters its cards in the browser (matchesDistricts), so a chip
-   * with no code matches nothing here exactly as it does server-side — which
-   * means a URL carrying a pre-code chip has to be upgraded on THIS surface
-   * too. Without it the same link shows a cohort on /browse and an empty board
-   * here, and the kanban looks broken rather than unfiltered. */
-  useLegacyChipUpgrade(districts, setDistricts);
   /* Card size is a workspace preference, NOT part of the URL view state above:
    * a shared link carries which deals to look at, not how this browser likes
    * its photos. Same split Browse draws for its own image-size switch. */
@@ -146,16 +138,8 @@ function PipelineBoardPage() {
 
   /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-  const membersQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const { collections } = useCollections();
+  const membersQ = useCollectionMembers();
   const tagsQ = useQuery({
     queryKey: curationKeys.tags,
     queryFn: listTags,
@@ -208,7 +192,7 @@ function PipelineBoardPage() {
       if (c.category_main) present.add(c.category_main);
       if (!c.is_active) inactive += 1;
     }
-    const collections = offerCuratedSet(cards, members, collectionsQ.data?.data ?? [], collectionIds);
+    const offered = offerCuratedSet(cards, members, collections, collectionIds);
     const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], [
       ...tagChoice.tags,
       ...tagChoice.tagsExcluded,
@@ -217,14 +201,14 @@ function PipelineBoardPage() {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
       collections: [
-        ...collections.options.map((c) => ({ value: c.id, label: c.name })),
-        ...collections.missing.map((id) => ({ value: id, label: `#${id}` })),
+        ...offered.options.map((c) => ({ value: c.id, label: collectionLabel(c) })),
+        ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
       ],
-      showCollections: collections.show,
+      showCollections: offered.show,
       tags: tagOptionsFor(tags.options, tagChoice),
       showTags: tags.show,
     };
-  }, [cards, members, collectionsQ.data, collectionIds, tagMembers, tagsQ.data, tagChoice]);
+  }, [cards, members, collections, collectionIds, tagMembers, tagsQ.data, tagChoice]);
 
   /* The decoration cohort: the representative listing of every card ON the
    * board (not just the filtered view — filtering is client-side and instant,
@@ -304,99 +288,97 @@ function PipelineBoardPage() {
 
       {manage && stages.length > 0 && <StageManager stages={stages} />}
 
-      {cards.length > 0 && (
-        <div className="mt-5 flex flex-col gap-3">
-          <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-            {bar.hasInactive && (
-              <Field label="Stav">
-                <Segmented
-                  variant="solid"
-                  options={STATUS_OPTIONS}
-                  value={status}
-                  onChange={setStatus}
-                />
-              </Field>
-            )}
-            {bar.types.length >= 2 && (
-              <Field label="Typ">
-                <MultiselectChips
-                  value={[...types]}
-                  options={bar.types}
-                  onChange={setTypes}
-                />
-              </Field>
-            )}
-            {readFailed(membersQ) && (
-              /* The filter fails open (rule #22) and says so (MS16). */
-              <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void membersQ.refetch()} />
-            )}
-            {bar.showCollections && (
-              <Field label="Kolekce">
-                <MultiselectChips
-                  value={collectionIds}
-                  options={bar.collections}
-                  onChange={setCollections}
-                />
-              </Field>
-            )}
-            {readFailed(tagMembersQ) && (
-              <ReadFailedMark what="Štítky" variant="header" onRetry={() => void tagMembersQ.refetch()} />
-            )}
-            {bar.showTags && (
-              <Field label="Štítky">
-                <TagFilterControl tags={bar.tags} value={tagChoice} onChange={setTagChoice} />
-              </Field>
-            )}
-            <Field label="Lokalita" className="min-w-[16rem] max-w-xl flex-1">
-              <LocationTypeahead
-                label="Lokalita"
-                value={districts}
-                onChange={(n) => setDistricts(n ?? [])}
+      <div className="mt-5 flex flex-col gap-3">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          {bar.hasInactive && (
+            <Field label="Stav">
+              <Segmented
+                variant="solid"
+                options={STATUS_OPTIONS}
+                value={status}
+                onChange={setStatus}
               />
             </Field>
-          </div>
-          {/* Řazení and Karty are how the board PRESENTS the cohort, not which
-              deals are in it — their own row, and Reset leaves them alone. */}
-          <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-            <Field label="Řazení" as="control">
-              <select
-                aria-label="Řazení karet ve fázi"
-                value={
-                  PIPELINE_SORT_OPTIONS.find(
-                    (o) => o.field === sort.field && o.direction === sort.direction,
-                  )?.value ?? sortParamOf(sort)
-                }
-                onChange={(e) => {
-                  const picked = PIPELINE_SORT_OPTIONS.find(
-                    (o) => o.value === e.target.value,
-                  );
-                  if (picked) setSort({ field: picked.field, direction: picked.direction });
-                }}
-                className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1 text-[0.78rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-rule-strong)]"
-              >
-                {PIPELINE_SORT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Karty" className="ml-auto">
-              <SizeToggle
-                label="Velikost karet"
-                value={cardSize.value}
-                onChange={cardSize.set}
-                steps={PIPELINE_CARD_SIZES.map((v) => ({
-                  value: v,
-                  label: PIPELINE_CARD_SIZE_LABELS[v].label,
-                  title: PIPELINE_CARD_SIZE_LABELS[v].title,
-                  glyph: CARD_SIZE_GLYPH[v],
-                }))}
+          )}
+          {bar.types.length >= 2 && (
+            <Field label="Typ">
+              <MultiselectChips
+                value={[...types]}
+                options={bar.types}
+                onChange={setTypes}
               />
             </Field>
-          </div>
+          )}
+          {readFailed(membersQ) && (
+            /* The filter fails open (rule #22) and says so (MS16). */
+            <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void membersQ.refetch()} />
+          )}
+          {bar.showCollections && (
+            <Field label="Kolekce">
+              <MultiselectChips
+                value={collectionIds}
+                options={bar.collections}
+                onChange={setCollections}
+              />
+            </Field>
+          )}
+          {readFailed(tagMembersQ) && (
+            <ReadFailedMark what="Štítky" variant="header" onRetry={() => void tagMembersQ.refetch()} />
+          )}
+          {bar.showTags && (
+            <Field label="Štítky">
+              <TagFilterControl tags={bar.tags} value={tagChoice} onChange={setTagChoice} />
+            </Field>
+          )}
+          <Field label="Lokalita" className="min-w-[16rem] max-w-xl flex-1">
+            <LocationTypeahead
+              label="Lokalita"
+              value={districts}
+              onChange={(n) => setDistricts(n ?? [])}
+            />
+          </Field>
         </div>
-      )}
+        {/* Řazení and Karty are how the board PRESENTS the cohort, not which
+            deals are in it — their own row, and Reset leaves them alone. */}
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <Field label="Řazení" as="control">
+            <select
+              aria-label="Řazení karet ve fázi"
+              value={
+                PIPELINE_SORT_OPTIONS.find(
+                  (o) => o.field === sort.field && o.direction === sort.direction,
+                )?.value ?? sortParamOf(sort)
+              }
+              onChange={(e) => {
+                const picked = PIPELINE_SORT_OPTIONS.find(
+                  (o) => o.value === e.target.value,
+                );
+                if (picked) setSort({ field: picked.field, direction: picked.direction });
+              }}
+              className="rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1 text-[0.78rem] text-[var(--color-ink-2)] transition-colors hover:border-[var(--color-rule-strong)]"
+            >
+              {PIPELINE_SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Karty" className="ml-auto">
+            <SizeToggle
+              label="Velikost karet"
+              value={cardSize.value}
+              onChange={cardSize.set}
+              steps={PIPELINE_CARD_SIZES.map((v) => ({
+                value: v,
+                label: PIPELINE_CARD_SIZE_LABELS[v].label,
+                title: PIPELINE_CARD_SIZE_LABELS[v].title,
+                glyph: CARD_SIZE_GLYPH[v],
+              }))}
+            />
+          </Field>
+        </div>
+      </div>
 
       {readFailed(stagesQ) || readFailed(boardQ) ? (
         <ErrorBanner
@@ -407,18 +389,11 @@ function PipelineBoardPage() {
             void boardQ.refetch();
           }}
         />
-      ) : boardQ.isLoading ? (
-        /* The stages arrive in their own (cached, often already-warm) query, so
-           the columns can be drawn — labelled, coloured, in order — while the
-           cards are still in flight. That is the whole shape of this page, and
-           it lands ~0.35s before the cards do; a bare "Načítání…" threw that
-           away and made an interactive board look like a blank screen. */
+      ) : stagesQ.data === undefined || boardQ.data === undefined ? (
+        /* Until BOTH reads land: a frame drawn from one alone is a board with no
+           columns, or columns that read as empty. The stages are usually warm,
+           so this is the real columns with the cards still in flight. */
         <BoardSkeleton stages={stages} size={cardSize.value} />
-      ) : cards.length === 0 ? (
-        <p className="mt-8 text-sm text-[var(--color-ink-3)]">
-          Zatím prázdné. Přidejte nemovitost do pipeline tlačítkem „Přidat do
-          pipeline" na detailu inzerátu.
-        </p>
       ) : (
         <CardHydrationProvider
           listingIds={visibleListingIds}

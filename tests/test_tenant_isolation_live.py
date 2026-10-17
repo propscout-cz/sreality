@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from tests._admin_gate_shape import gate_is_sound
+from tests._tenant_registry import TENANT_TABLES
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -31,10 +32,9 @@ pytestmark = pytest.mark.skipif(
     reason="TEST_DATABASE_URL not set — live tenant-isolation checks run only in the CI DB job",
 )
 
-# SPA-facing PER-ACCOUNT views (migrations 022/025/202/203/205/211/278) the
-# frontend reads directly via supabase-js — must be `security_invoker` (migration
-# 316) or they run as their postgres owner and BYPASS every RLS policy below,
-# regardless of the caller's role. The base-table tests above don't exercise this:
+# SPA-facing PER-ACCOUNT views the frontend reads directly via supabase-js — must be
+# `security_invoker` (migration 316) or they run as their postgres owner and BYPASS
+# every RLS policy below, regardless of the caller's role. The base-table tests above don't exercise this:
 # the SPA never queries base tables directly, only these views.
 #
 # `property_estimates_public` is deliberately NOT here. Migration 316 included it,
@@ -45,7 +45,6 @@ pytestmark = pytest.mark.skipif(
 # below pins that, and it must stay out of this list.
 _TENANT_VIEWS: list[str] = [
     "collection_properties_public",
-    "collections_public",
     # The kanban's cohort view (migration 417). It is invoker-mode over
     # property_pipeline_public, so its scoping is inherited rather than its
     # own -- which is exactly why it belongs here: inherited scoping is the
@@ -56,7 +55,6 @@ _TENANT_VIEWS: list[str] = [
     "property_notes_public",
     "property_pipeline_public",
     "property_tags_public",
-    "tags_public",
 ]
 
 # Views that must NOT be security_invoker: they join a shared table that is
@@ -195,6 +193,10 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # not market data. NO `_public` view; the ONE reader is `sold_coverage` below.
     # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "sold_transaction_fetches",
+    # Auth identities (migration 610). The one reader, account_email(), is not executable
+    # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
+    # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "auth.users",
 ]
 
 # Relations that read the above but are legitimately reachable without the gate.
@@ -245,32 +247,9 @@ _ADMIN_GATE_ALLOWLIST: list[str] = [
     "images_public",
 ]
 
-# The 22 user-state tables migrations 290-294 (+ entitlements 298, property_dismissals
-# 536, property_note_attachments 592, property_artifact_links 599) scope per account.
-_TENANT_TABLES: list[str] = [
-    "collections",
-    "tags",
-    "property_notes",
-    "filter_presets",
-    "notification_subscriptions",
-    "manual_rental_estimates",
-    "collection_properties",
-    "property_tags",
-    "notification_dispatches",
-    "estimation_cohort_entries",
-    "estimation_trace_payloads",
-    "estimation_feedback",
-    "building_run_attachments",
-    "estimation_runs",
-    "building_runs",
-    "property_pipeline",
-    "pipeline_stages",
-    "property_pipeline_events",
-    "entitlements",
-    "property_dismissals",
-    "property_note_attachments",
-    "property_artifact_links",
-]
+# The user-state tables, from the one registry both tenancy gates read. A list, because
+# psycopg binds a list (not a tuple) as the array `= ANY(%s)` takes.
+_TENANT_TABLES: list[str] = list(TENANT_TABLES)
 
 # Amendment A6 (Phase 0): the broker-directory PII surfaces stay dark to BOTH
 # browser roles; the SPA reads them only through the identity-gated, PII-masking
@@ -340,46 +319,29 @@ def svc() -> "Iterator[Any]":
 
 @pytest.fixture(scope="module")
 def tenants(svc: Any) -> "Iterator[dict[str, uuid.UUID]]":
-    """Two accounts + two auth users + memberships, via direct service-role
-    inserts. The on-signup trigger (migration 294) would mint its own accounts
-    and race for the legacy-backfill claim, so it is disabled around the
-    auth.users inserts to keep the fixture deterministic."""
+    """Two auth users, each born through the real signup trigger (migration 612:
+    the account, its owner membership, the default board, the monitoring
+    collection and the trial), so every check here runs against what a signup
+    actually produces."""
     a_user, b_user = uuid.uuid4(), uuid.uuid4()
     with svc.cursor() as cur:
         cur.execute(
-            "INSERT INTO accounts (kind, name) VALUES ('personal', %s) RETURNING id",
-            (f"iso-a-{a_user.hex[:8]}",),
+            "INSERT INTO auth.users (id, email) VALUES (%s, %s), (%s, %s)",
+            (
+                a_user, f"iso-a-{a_user.hex[:8]}@test.local",
+                b_user, f"iso-b-{b_user.hex[:8]}@test.local",
+            ),
         )
-        a_acc = cur.fetchone()[0]
         cur.execute(
-            "INSERT INTO accounts (kind, name) VALUES ('personal', %s) RETURNING id",
-            (f"iso-b-{b_user.hex[:8]}",),
+            "SELECT user_id, account_id FROM account_members WHERE user_id IN (%s, %s)",
+            (a_user, b_user),
         )
-        b_acc = cur.fetchone()[0]
-        cur.execute("ALTER TABLE auth.users DISABLE TRIGGER USER")
-        try:
-            cur.execute(
-                "INSERT INTO auth.users (id, email) VALUES (%s, %s), (%s, %s)",
-                (
-                    a_user, f"iso-a-{a_user.hex[:8]}@test.local",
-                    b_user, f"iso-b-{b_user.hex[:8]}@test.local",
-                ),
-            )
-        finally:
-            cur.execute("ALTER TABLE auth.users ENABLE TRIGGER USER")
-        cur.execute(
-            "INSERT INTO account_members (account_id, user_id, role) "
-            "VALUES (%s, %s, 'owner'), (%s, %s, 'owner')",
-            (a_acc, a_user, b_acc, b_user),
-        )
+        account_of = {row[0]: row[1] for row in cur.fetchall()}
+    a_acc, b_acc = account_of[a_user], account_of[b_user]
     try:
         yield {"a_user": a_user, "b_user": b_user, "a_acc": a_acc, "b_acc": b_acc}
     finally:
         with svc.cursor() as cur:
-            cur.execute(
-                "DELETE FROM legacy_backfill_claim WHERE account_id IN (%s, %s)",
-                (a_acc, b_acc),
-            )
             cur.execute("DELETE FROM accounts WHERE id IN (%s, %s)", (a_acc, b_acc))
             cur.execute("DELETE FROM auth.users WHERE id IN (%s, %s)", (a_user, b_user))
 
@@ -402,6 +364,113 @@ def _scoped(sub: uuid.UUID) -> "Iterator[Any]":
             yield conn
     finally:
         conn.close()
+
+
+def test_signup_seeds_the_default_board(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """Migration 612: a signup is born with the default board, the monitoring
+    collection and the trial. Invariants only, never the literal — the board's
+    one definition is seed_default_pipeline, and a copy here would be a second.
+    Read on account B, which no fixture in this module touches (seeded_tenant_rows
+    adds an extra column to A's board)."""
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT position, is_entry, is_terminal, code, color, key, label "
+            "FROM pipeline_stages WHERE account_id = %s AND archived_at IS NULL "
+            "ORDER BY position",
+            (tenants["b_acc"],),
+        )
+        stages = cur.fetchall()
+        cur.execute(
+            "SELECT count(*) FROM collections "
+            "WHERE account_id = %s AND name = 'monitoring' AND is_system",
+            (tenants["b_acc"],),
+        )
+        monitoring = cur.fetchone()[0]
+        cur.execute(
+            "SELECT plan, status, current_period_end > now() FROM entitlements "
+            "WHERE account_id = %s",
+            (tenants["b_acc"],),
+        )
+        trial = cur.fetchone()
+    positions = [s[0] for s in stages]
+    assert positions == list(range(1, len(stages) + 1)) and stages, (
+        f"a seeded board runs 1..n with no gap: {positions}"
+    )
+    entries = [s for s in stages if s[1]]
+    assert len(entries) == 1 and entries[0][0] == 1 and not entries[0][2], (
+        "exactly one entry stage, first on the board, never terminal"
+    )
+    terminal = [s[2] for s in stages]
+    assert terminal == sorted(terminal), "closed stages sit after every live one"
+    assert all(all(s[3:]) for s in stages), (
+        "every seeded stage carries a code, a colour, a key and a label "
+        "(the ordinal fallback must never be what a new account sees)"
+    )
+    assert len({s[5].lower() for s in stages}) == len(stages), "keys are unique"
+    assert monitoring == 1, "the protected monitoring collection"
+    assert trial == ("free", "trialing", True), f"the 7-day free trial: {trial}"
+
+
+def test_pipeline_event_cannot_name_a_foreign_stage(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """Migration 612: the ledger's stage references carry the account, as the
+    card's does since 295 — FK checks bypass RLS, so the key itself must refuse
+    another account's stage id."""
+    import psycopg
+
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry",
+            (tenants["b_acc"],),
+        )
+        b_entry = cur.fetchone()[0]
+    with _scoped(tenants["a_user"]) as conn:
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO property_pipeline_events "
+                        "  (property_id, to_stage_id, reason, account_id) "
+                        "VALUES (1, %s, 'operator', %s)",
+                        (b_entry, tenants["a_acc"]),
+                    )
+
+
+def test_cross_tenant_pipeline_writes_match_nothing(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> None:
+    """The write half of the two-account check at the DB level: as A, every
+    rename, archive, reorder or delete aimed at B's stages matches no row, and a
+    card planted on B's board is refused by RLS's WITH CHECK."""
+    import psycopg
+
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry",
+            (tenants["b_acc"],),
+        )
+        b_entry = cur.fetchone()[0]
+    with _scoped(tenants["a_user"]) as conn:
+        with conn.cursor() as cur:
+            for sql in (
+                "UPDATE pipeline_stages SET label = 'taken' WHERE id = %s",
+                "UPDATE pipeline_stages SET archived_at = now() WHERE id = %s",
+                "UPDATE pipeline_stages SET position = 99 WHERE id = %s",
+                "DELETE FROM pipeline_stages WHERE id = %s",
+            ):
+                cur.execute(sql, (b_entry,))
+                assert cur.rowcount == 0, f"A reached B's stage via: {sql}"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO property_pipeline (account_id, property_id, stage_id) "
+                        "VALUES (%s, 1, %s)",
+                        (tenants["b_acc"], b_entry),
+                    )
 
 
 def test_cross_tenant_denial(svc: Any, tenants: dict[str, uuid.UUID]) -> None:
@@ -514,8 +583,9 @@ def test_a5_properties_readable_listings_still_deny_all(
                     "A5 policy: authenticated must read base properties"
                 )
                 # The PII-free identity view resolves the id<->sreality_id map
-                # create_note depends on (owner-bypass, no broker columns). Both
-                # directions the INSERT subselects use must round-trip.
+                # create_note depends on (owner-bypass, no broker columns). The
+                # sreality_id -> id lookup only finds this test's listing; the
+                # id -> sreality_id lookup is the one create_note's INSERT uses.
                 cur.execute(
                     "SELECT id FROM listing_natural_key_public WHERE sreality_id = %s",
                     (srid,),
@@ -794,8 +864,8 @@ def seeded_tenant_rows(
     svc: Any, tenants: dict[str, uuid.UUID],
 ) -> "Iterator[dict[str, tuple[str, tuple[Any, ...]]]]":
     """One row per tenant view, all owned by account A, each findable by a filter
-    the view actually exposes. Seeded as `svc` (the owner, so RLS never blocks
-    setup); torn down children-first."""
+    the view actually exposes (plus the collection and tag the member rows hang off).
+    Seeded as `svc` (the owner, so RLS never blocks setup); torn down children-first."""
     nonce = uuid.uuid4().hex[:12]
     a_acc = tenants["a_acc"]
     where: dict[str, tuple[str, tuple[Any, ...]]] = {}
@@ -813,7 +883,6 @@ def seeded_tenant_rows(
         )
         coll = cur.fetchone()[0]
         cleanup.append(("DELETE FROM collections WHERE id = %s", (coll,)))
-        where["collections_public"] = ("name = %s", (nonce,))
 
         cur.execute(
             # `color` is a named-palette CHECK (copper/sage/brick/ochre/slate/
@@ -823,7 +892,6 @@ def seeded_tenant_rows(
         )
         tag = cur.fetchone()[0]
         cleanup.append(("DELETE FROM tags WHERE id = %s", (tag,)))
-        where["tags_public"] = ("name = %s", (nonce,))
 
         cur.execute(
             "INSERT INTO property_notes (account_id, property_id, body) VALUES (%s, %s, %s)",
@@ -855,10 +923,10 @@ def seeded_tenant_rows(
         cleanup.insert(0, ("DELETE FROM property_dismissals WHERE property_id = %s", (prop,)))
         where["property_dismissals_public"] = ("property_id = %s", (prop,))
 
-        # A fresh account has no stages; a lone non-entry/non-terminal stage trivially
-        # satisfies both the app-layer rule and the DB CHECK (migration 357) that a
-        # stage can't be entry and terminal at once. The view filters
-        # archived_at IS NULL, so leave it NULL.
+        # The account already has the seeded board (migration 612); one more
+        # non-entry/non-terminal stage trivially satisfies both the app-layer rule
+        # and the DB CHECK (migration 357) that a stage can't be entry and terminal
+        # at once. The view filters archived_at IS NULL, so leave it NULL.
         cur.execute(
             "INSERT INTO pipeline_stages (account_id, key, label, position) "
             "VALUES (%s, %s, 'iso', 1) RETURNING id",
@@ -1370,6 +1438,32 @@ def test_anon_holds_no_relation_grants(svc: Any) -> None:
         f"anon must hold no SELECT on any relation — the SPA is fully login-gated "
         f"and reads as authenticated. Drift (usually a `grant ... to anon` in a "
         f"migration added after 299's sweep): {readable}"
+    )
+
+
+def test_anon_executes_no_definer_function(svc: Any) -> None:
+    """The built-in PUBLIC EXECUTE reaches anon, and a revoke that names only
+    anon + authenticated leaves it in place — that is how seed_trial_entitlement
+    shipped callable with the anon key (migration 362, closed by 612). Functions
+    are born private since 612; this rail covers every one created before it or
+    granted by hand. Allowlist empty, equality."""
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT p.proname FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = 'public' AND p.prosecdef "
+            "AND has_function_privilege('anon', p.oid, 'EXECUTE') "
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend d "
+            "  WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid "
+            "  AND d.deptype = 'e') "
+            "ORDER BY p.proname"
+        )
+        callable_by_anon = [r[0] for r in cur.fetchall()]
+    assert callable_by_anon == [], (
+        f"anon can EXECUTE a SECURITY DEFINER function — it runs as the owner, "
+        f"so this is a write or read path open to anyone holding the anon key. "
+        f"The revoke must name `public` as well as anon and authenticated: "
+        f"{callable_by_anon}"
     )
 
 

@@ -123,14 +123,6 @@ export default function PhonePipeline() {
     );
   }
   if (!loaded) return <PhonePipelineSkeleton />;
-  if (total === 0) {
-    return (
-      <Notice
-        title="Pipeline je zatím prázdná."
-        detail="Nemovitost sem přidáte trychtýřem v okraji karty v Nových nebo na stránce nemovitosti."
-      />
-    );
-  }
 
   return (
     <CardHydrationProvider listingIds={listingIds} renders={{ covers: true }}>
@@ -557,21 +549,19 @@ function Notice({
 }: {
   title: string;
   detail: string;
-  action?: { label: string; onClick: () => void };
+  action: { label: string; onClick: () => void };
 }) {
   return (
     <div className="mx-4 mt-4 flex flex-col items-start gap-2 rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] px-4 py-6">
       <p className="font-display text-[17px] text-[var(--color-ink)]">{title}</p>
       <p className="text-[13px] text-[var(--color-ink-3)]">{detail}</p>
-      {action && (
-        <button
-          type="button"
-          onClick={action.onClick}
-          className="inline-flex h-9 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-3 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
-        >
-          {action.label}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={action.onClick}
+        className="inline-flex h-9 items-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-3 text-[13px] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
+      >
+        {action.label}
+      </button>
     </div>
   );
 }

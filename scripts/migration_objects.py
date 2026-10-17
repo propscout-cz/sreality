@@ -224,33 +224,35 @@ _RE_DROP_RELATION = re.compile(
     re.IGNORECASE,
 )
 _RE_DROP_FUNCTION = re.compile(
-    rf"\bdrop\s+function\s+(?:if\s+exists\s+)?({_QUALIFIED})\s*\(", re.IGNORECASE
+    rf"\bdrop\s+function\s+(?:if\s+exists\s+)?({_QUALIFIED})", re.IGNORECASE,
 )
 _RE_DROP_COLUMNS = re.compile(
     rf"\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?({_QUALIFIED})\s+(drop\s+column\b[^;]*)",
     re.IGNORECASE,
 )
 _RE_DROP_COLUMN = re.compile(rf"\bdrop\s+column\s+(?:if\s+exists\s+)?({_IDENT})", re.IGNORECASE)
+_RE_DROP_POLICY = re.compile(
+    rf"\bdrop\s+policy\s+(?:if\s+exists\s+)?({_IDENT})\s+on\s+({_QUALIFIED})", re.IGNORECASE,
+)
 
 
 def _key(kind: Kind, ident: str) -> tuple[str, str]:
-    """How a declaration and a drop of the same object compare: `public.` is implied."""
     ident = ident.lower()
     return kind, ident[len("public."):] if ident.startswith("public.") else ident
 
 
-def _drops_in(body: str) -> set[tuple[str, str]]:
-    """Every relation, function and column a stripped body drops, as `_key`s (a drop in
-    prose or inside a function body is not one, exactly as for `parse_objects`)."""
-    out: set[tuple[str, str]] = set()
-    for m in _RE_DROP_RELATION.finditer(body):
-        out |= {_key("relation", _clean(name)) for name in m.group(1).split(",")}
-    for m in _RE_DROP_FUNCTION.finditer(body):
-        out.add(_key("function", _clean(m.group(1))))
+def _dropped(sql: str) -> set[tuple[str, str]]:
+    """What this SQL drops (the shapes a later migration uses to retire an earlier one's object)."""
+    body = _strip_noise(sql)
+    out = {_key("relation", _clean(name))
+           for m in _RE_DROP_RELATION.finditer(body) for name in m.group(1).split(",")}
+    out |= {_key("function", _clean(m.group(1))) for m in _RE_DROP_FUNCTION.finditer(body)}
     for m in _RE_DROP_COLUMNS.finditer(body):
-        table = _key("relation", _clean(m.group(1)))[1]
-        out |= {("column", f"{table}.{_clean(c.group(1)).lower()}")
-                for c in _RE_DROP_COLUMN.finditer(m.group(2))}
+        schema, _, table = _clean(m.group(1)).rpartition(".")
+        prefix = f"{schema}.{table}" if schema and schema != "public" else table
+        out |= {_key("column", f"{prefix}.{_clean(c.group(1))}") for c in _RE_DROP_COLUMN.finditer(m.group(2))}
+    for m in _RE_DROP_POLICY.finditer(body):
+        out.add(_key("policy", f"{_clean(m.group(2)).split('.')[-1]}.{_clean(m.group(1))}"))
     return out
 
 
@@ -266,22 +268,27 @@ class Migration:
 
 def load_migrations(migrations_dir: Path, newest: int = 25) -> list[Migration]:
     """The `newest` numbered migrations, parsed. Files under `reverts/` and any
-    non-numbered file are ignored — a revert is expected NOT to be present. An object a
-    LATER file drops leaves the earlier file's list: its absence is that later file's
-    doing, not a sign the earlier one was never applied (a file that drops and re-creates
-    an object keeps declaring it)."""
-    parsed: list[tuple[int, str, str]] = []
+    non-numbered file are ignored — a revert is expected NOT to be present."""
+    out: list[Migration] = []
+    paths: dict[str, Path] = {}
     for path in sorted(migrations_dir.glob("*.sql")):
         m = _MIGRATION_NAME.match(path.name)
         if not m:
             continue
-        parsed.append((int(m.group(1)), path.name, _strip_noise(path.read_text(encoding="utf-8"))))
-    parsed.sort(key=lambda p: p[0])
-    out: list[Migration] = []
-    dropped_later: set[tuple[str, str]] = set()
-    for number, filename, body in reversed(parsed):
-        objects = [o for o in _objects_in(body) if _key(o.kind, o.ident) not in dropped_later]
-        out.append(Migration(number, filename, objects))
-        dropped_later |= _drops_in(body)
-    out.reverse()
-    return out[-newest:] if newest > 0 else out
+        paths[path.name] = path
+        out.append(
+            Migration(int(m.group(1)), path.name, parse_objects(path.read_text(encoding="utf-8")))
+        )
+    out.sort(key=lambda mig: mig.number)
+    out = out[-newest:] if newest > 0 else out
+    # An object a LATER migration retires is absent by design, not by drift (613 drops 610's
+    # shared_at): one dropped and not re-created in that same file stops being probed for the
+    # earlier file. A re-creation in a later file is probed there.
+    retired: set[tuple[str, str]] = set()
+    for i in range(len(out) - 1, -1, -1):
+        mig = out[i]
+        objects = [o for o in mig.objects if _key(o.kind, o.ident) not in retired]
+        sql = paths[mig.filename].read_text(encoding="utf-8")
+        retired |= _dropped(sql) - {_key(o.kind, o.ident) for o in mig.objects}
+        out[i] = Migration(mig.number, mig.filename, objects)
+    return out

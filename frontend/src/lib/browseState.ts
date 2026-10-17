@@ -64,16 +64,38 @@ export interface MapOverlayState {
    * mark a saved preset dirty — the same reasoning rule 22 applies to the
    * pipeline scope). The UNIT is still decided per pin, never per map. */
   priceMetric: PriceMetric;
+  /* Whether the pins print their price label at all (URL key `labels`, `0` hides). */
+  priceLabels: boolean;
+  /* Up to this many properties in view the map draws every one as its own pin, at any
+   * zoom; above it the server counts them by world tile (docs/design/map-counts.md).
+   * It IS the server's point budget, so it sits in the map query's key (URL key `pins`,
+   * absent = PIN_LIMIT_DEFAULT). A view knob like `priceMetric`: URL-serialised,
+   * carried by preserveExtras, outside preset identity. */
+  pinLimit: number;
 }
 
 /* The two things a pin can be labelled with. */
 export type PriceMetric = 'total' | 'per_m2';
+
+export const PIN_LIMIT_DEFAULT = 200;
+export const PIN_LIMIT_MIN = 20;
+/* A 2 000-point read is about 0.9 MB (453 B per row, measured 2026-08-26). */
+export const PIN_LIMIT_MAX = 2_000;
+
+/* The URL's `pins` value as a limit: clamped into range, anything unreadable = the default. */
+export const parsePinLimit = (raw: string | null): number => {
+  const n = raw == null ? NaN : Number(raw);
+  if (!Number.isInteger(n)) return PIN_LIMIT_DEFAULT;
+  return Math.min(PIN_LIMIT_MAX, Math.max(PIN_LIMIT_MIN, n));
+};
 
 export const DEFAULT_OVERLAY: MapOverlayState = {
   showCities: true,
   colorByIndexName: null,
   layers: '',
   priceMetric: 'total',
+  priceLabels: true,
+  pinLimit: PIN_LIMIT_DEFAULT,
 };
 
 /* The contract <BrowseExperience> consumes. Setters carry the page's history
@@ -106,7 +128,9 @@ export interface BrowseViewState {
  * `rentmap` + `rentvk` (layersFromSearchParams) — carried until a layer change
  * rewrites them, so an old link keeps its layers through filtering. */
 const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
-const OVERLAY_URL_KEYS = ['tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm'];
+const OVERLAY_URL_KEYS = [
+  'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
+];
 
 /* The Browse page adapter. Lifted verbatim from the page so its behaviour —
  * the dual serialization (filters via toSearchParams + overlay knobs carried by
@@ -126,6 +150,8 @@ export function useUrlBrowseState(): BrowseViewState {
       colorByIndexName: searchParams.get('colorby') ?? null,
       layers: layersFromSearchParams(searchParams) ?? rememberedLayers,
       priceMetric: searchParams.get('pm') === 'per_m2' ? 'per_m2' : 'total',
+      priceLabels: searchParams.get('labels') !== '0',
+      pinLimit: parsePinLimit(searchParams.get('pins')),
     };
   }, [searchParams, rememberedLayers]);
   const activePresetId = searchParams.get('preset');
@@ -192,6 +218,11 @@ export function useUrlBrowseState(): BrowseViewState {
        * default-state map must serialise to the plain /browse URL. */
       if ('priceMetric' in patch)
         patch.priceMetric === 'per_m2' ? sp.set('pm', 'per_m2') : sp.delete('pm');
+      if ('priceLabels' in patch) patch.priceLabels ? sp.delete('labels') : sp.set('labels', '0');
+      if ('pinLimit' in patch) {
+        const limit = parsePinLimit(String(patch.pinLimit));
+        limit === PIN_LIMIT_DEFAULT ? sp.delete('pins') : sp.set('pins', String(limit));
+      }
       setSearchParams(sp, { replace: true });
     },
     [searchParams, setSearchParams],
@@ -383,6 +414,8 @@ export const browseUrlFromState = (s: {
   if (s.overlay.colorByIndexName) sp.set('colorby', s.overlay.colorByIndexName);
   if (s.overlay.layers) sp.set('layers', s.overlay.layers);
   if (s.overlay.priceMetric === 'per_m2') sp.set('pm', 'per_m2');
+  if (!s.overlay.priceLabels) sp.set('labels', '0');
+  if (s.overlay.pinLimit !== PIN_LIMIT_DEFAULT) sp.set('pins', String(s.overlay.pinLimit));
   const qs = sp.toString();
   // Concatenated rather than withQuery(): `sp` is built here key by key and may
   // one day carry a repeated key, which a Record round-trip would collapse.

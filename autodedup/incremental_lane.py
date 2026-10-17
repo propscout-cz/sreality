@@ -8,8 +8,9 @@ and the operator's rulings the batch pass clusters under (F2, E909; E910), commi
 RECONCILES production (`autodedup/reconcile.py`, A9): the groups it re-clustered become merges
 through `toolkit.property_identity.merge_property_set` inside the area
 `app_settings.autodedup_apply_scope` names. It never splits. Its calibration is cut from the
-database (A10, E912) — at `rt_seed` and again whenever the pHash population it reads has fallen
-below `COVERAGE_FLOOR` — and its controls are constants of this module, not settings rows.
+database (A10, E912) — at `rt_seed` and again whenever the pHash population a pass reads has
+fallen below `COVERAGE_FLOOR`, in a tick of its own after that pass (E944) — and its controls
+are constants of this module, not settings rows.
 
 The pass itself is `incremental.run_pass_bounded`; this module is the three adapters it needs —
 the store, the read-only fact source and the watermark — plus the lease that keeps two runs out
@@ -39,7 +40,7 @@ import socket
 import sys
 import time
 from contextlib import nullcontext, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterable, Iterator, Mapping, Sequence
@@ -97,6 +98,7 @@ from autodedup.incremental import (
     bootstrap_key,
     engine_digest,
     key_token,
+    rss_mb,
     run_pass_bounded,
     seed_current,
     seed_version_key,
@@ -141,12 +143,15 @@ from autodedup.incremental_sql import (
     RT_FRESH_CURSORS_SQL,
     RT_FRESH_FP_KEY_SQL,
     RT_FRESH_LEASE_SQL,
+    RT_FRESH_SETTINGS_SQL,
     RT_FRESH_PAIRS_SQL,
     RT_FRESH_REJECT_LEDGER_SQL,
     RT_FRESH_RETIRE_EVENT_SQL,
     RT_FRESH_RT_FP_SQL,
     RT_FRESH_SCOPE_IDS_SQL,
     RT_FRESH_SCOPE_SCAN_SQL,
+    RT_ENGINE_WRITE_SQL,
+    RT_FP_DD_SQL,
     RT_FP_READ_SQL,
     RT_FP_UPSERT_SQL,
     RT_GENERATION_BYTES_SQL,
@@ -173,6 +178,7 @@ from autodedup.incremental_sql import (
     RT_PAIRS_TOUCHING_SQL,
     RT_PAIRS_WITHIN_SQL,
     RT_REJECT_LEDGER_DELETE_SQL,
+    RT_REJECT_LEDGER_KEYED_SQL,
     RT_REJECT_LEDGER_LOOKUP_SQL,
     RT_REJECT_LEDGER_UPSERT_SQL,
     RT_REVIVED_SQL,
@@ -191,6 +197,7 @@ from autodedup.incremental_sql import (
     RT_SCOPE_SCAN_STATE_SQL,
     RT_SCOPE_SCAN_WRITE_SQL,
     RT_SCOPE_DRIFT_SQL,
+    RT_RECUT_PUT_BACK_SQL,
     RT_RETIRE_EVENT_WRITE_SQL,
     RT_RETIRE_WINDOW_SQL,
     RT_SEED_CURSORS_SQL,
@@ -223,8 +230,9 @@ LANE_NAME: str = rt_lease.NAME
 # half the size. Sized so the deadline plus one statement at `statement_timeout` stays under
 # the worker's 1,200 s stall warning.
 PASS_DEADLINE_S: float = 1050.0
-# The lease outlives the longest pass by construction: the deadline, one statement past it,
-# the reconcile's last group and a calibration re-cut (A10) that may follow the pass.
+# The lease outlives the longest pass by construction: the deadline, one statement past it and
+# the reconcile's last group. A calibration re-cut (A10) is a tick of its own under the same
+# deadline (E944).
 LEASE_TTL_S: int = 2400
 # `rt_seed` takes the SAME lease (E97's reset, the calibration and the cursors it rewrites are
 # exactly what a pass reads and writes). Its TTL is the seeding job's own timeout
@@ -246,10 +254,12 @@ RULINGS_OVERLAP_S: float = 300.0
 # the scope the seed cut the generation for, the seed's version and the build phase the seed
 # opens and the pass closes (both named in `incremental`, which the API reads too), the rate
 # each pass measures, the claim cap a death halves (E948) and a bigger container resets
-# (E948b), and the storage watermark (E914).
+# (E948b), the storage watermark (E914), and the re-cut a pass found due (E944).
 SCOPE_SETTING: str = "rt_scope"
+RECUT_SETTING: str = "rt_recut"
 PASS_RATE_SETTING: str = "rt_pass_rate_per_s"
 CLAIM_CAP_SETTING: str = "rt_claim_cap"
+ENGINE_SETTING: str = "rt_engine"
 # The reconcile's skip over a generation no seed of this design built.
 SEED_MISMATCH: str = "seed_version"
 # E941: a pass that sees the worker shutting down, and one whose lease ended under it.
@@ -260,12 +270,21 @@ STORAGE_WATERMARK: str = "rt_storage_last"
 PASS_LIMITS: Limits = Limits(max_listings=500, max_component=400)
 # The calibration re-cut (A10): when the share of a pass's hashed photographs whose population
 # the table can measure falls below the floor — photographs that arrived after the last cut —
-# the pass re-cuts, at most once per `RECUT_MIN_AGE_H`, on a pass that measured at least
-# `RECUT_MIN_IMAGES` of them and still has `RECUT_RESERVE_S` of its time left.
+# on a pass that measured at least `RECUT_MIN_IMAGES` of them, the lane's next tick re-cuts
+# instead of passing (E944), at most once per `RECUT_MIN_AGE_H` since the last cut or attempt.
 COVERAGE_FLOOR: float = 0.85
 RECUT_MIN_IMAGES: int = 200
 RECUT_MIN_AGE_H: float = 6.0
-RECUT_RESERVE_S: float = 300.0
+# A re-cut runs only where one tick can finish it: never in a build (the seed cut the calibration
+# the build runs under) and never over more than RECUT_MAX_LISTINGS adverts. The seed's cut over
+# 39,470 adverts took 632.9 s, ~16.0 ms an advert and read-bound; a tick's reads stop
+# RECUT_WRITE_RESERVE_S before its 1,050 s deadline (930 s), and 50,000 adverts read in ~800 s.
+RECUT_MAX_LISTINGS: int = 50_000
+RECUT_WRITE_RESERVE_S: float = 120.0
+# A cut that killed its worker twice under one calibration (the OOM killer, most likely) is not
+# tried again until a seed: one death is not proof, since a deploy's SIGKILL after the 30 s drain
+# reads the same, but every further attempt would cost a worker restart.
+RECUT_MAX_DEATHS: int = 2
 # The cut reads the scope's facts in chunks of this many listings, and its one corpus-wide
 # statement (the pHash population, a sequential scan of `public.images` the export always ran)
 # gets a longer statement timeout than a pass.
@@ -426,25 +445,21 @@ MAX_RETIRE_FRACTION: float = 0.05
 # double it. `rt_scope = all` is gated by `CORPUS_PROJECTION_MB` (17,000) through
 # `guard_agrees`, and this budget stays far below it, so raising it never enables the corpus.
 #
-# 1,500 MB since E941 (2026-10-09; 800 since E916, 400 before that; MB here are MiB, as the
-# guard computes them), sized for the S1 scope the operator widened on 2026-10-09: the trial
-# blocks plus Praha-Nusle, Praha-Libeň and six towns (Beroun, Pardubice, Hradec Králové,
-# Jihlava, Humpolec, Havlíčkův Brod), ~38,000 located adverts against 7,298 in the store.
-# Measured and recorded (2026-10-09, read-only):
-#   * the schema reads 464.3 MB; generation `rt` holds 129.2 MB of it (`generation_bytes`, the
-#     share a fresh reset frees);
-#   * the walk and the cut add ~60 MB at that scope (the snapshot and the pHash population,
-#     scaled from today's 2.2 and 9.4 MB for 7,295 adverts);
-#   * the build writes BUILD_BYTES_PER_LISTING an advert, ~668 MB for 38,000.
-# So the seed's second check (E941) projects 464 + 60 - 129 + 668 = ~1,063 MB (~1,190 MB were
-# none of the reset's space reused), and 1,500 leaves ~310-440 MB: about three months of the
-# widened scope's arrivals (~95-135 MB a month: E939's Prague rate scaled to 38,000 adverts, or
-# E79's ~20 % of the store a month at 18 KiB), not a second widening. E943's reject ledger
-# adds ~2 KiB an advert (20 KiB): ~1,137 MB projected, ~360 MB left, about two and a half
-# months. The whole town is E946's (5,000 MB, once the operator has read the database's disk,
-# D907). 800 rested on E916's trial measurements; a DELETE never shrinks a file, so the
-# schema's size is a high-water mark that pruned generations leave behind.
-MAX_SCHEMA_MB: float = 1500.0
+# 6,000 MB since E946 (2026-10-16; 1,500 since E941, 800 since E916, 400 before that; MB here
+# are MiB, as the guard computes them), sized for the Prague seeds of S4 (E939, D907): the eight
+# towns of S1 plus all 157 Prague quarters, ~170,000 located adverts against 39,838 in the
+# store, then a second seed with Prague's ~36,000 no-quarter adverts (E940 + E945), ~206,000.
+# Measured and recorded (2026-10-16, read-only): the schema reads 996 MB after S1's second build
+# (pairs 630, the reject ledger 118, fp_key 108), generation `rt` ~750 MB of it (the share a
+# fresh reset frees); the build writes BUILD_BYTES_PER_LISTING an advert, ~3,400 MB for 170,000.
+# So the seed's second check (E941) projects ~996 - ~750 + ~60 + 3,400 = ~3,700 MB; the second
+# seed, on files the first left at that high-water mark, ~4,500 MB; arrivals at E79's ~20 % of
+# the store a month are ~800 MB a month at that size. 6,000 holds the two seeds and about two
+# months of arrivals, not a third widening, and stays far under CORPUS_PROJECTION_MB. E941's
+# 1,500 was sized the same way for S1's 38,000 (464 + 60 - 129 + 668 = ~1,063 projected, ~1,137
+# with the ledger; the second build measured 996 for 39,838). A DELETE never shrinks a file, so
+# the schema's size is a high-water mark that pruned generations leave behind.
+MAX_SCHEMA_MB: float = 6000.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
@@ -556,6 +571,7 @@ class SqlStore:
         self._cells_dirty: set[tuple[str, str]] = set()
         # This pass's start, as `rulings_changed` read it: the `rt_rulings` cursor `flush` writes.
         self._rulings_read_at: Any = None
+        self._ledger_keyed: bool | None = None
 
     # ------------------------------------------------------------------ plumbing
     def _query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[tuple]:
@@ -608,6 +624,7 @@ class SqlStore:
                 "ev_clip": pending[listing_id][0].evidence.n_clip,
                 "ev_tags": pending[listing_id][0].evidence.n_tags,
                 "ev_complete": pending[listing_id][0].evidence.complete,
+                "dd": pending[listing_id][0].dd or None,
             }
             for listing_id in ids
         ])
@@ -636,6 +653,17 @@ class SqlStore:
                     keys: Sequence[tuple[str, str]]) -> None:
         self._pending[int(listing_id)] = (row, list(keys))
         self._fp[int(listing_id)] = row
+
+    def put_decision_digests(self, dds: Mapping[int, str]) -> None:
+        ids = sorted(int(i) for i in dds)
+        if not ids:
+            return
+        self._run(RT_FP_DD_SQL, {"generation": self.generation, "ids": ids,
+                                 "dds": [dds[i] for i in ids]})
+        for listing_id in ids:
+            row = self._fp.get(listing_id)
+            if row is not None:
+                self._fp[listing_id] = replace(row, dd=dds[listing_id])
 
     def drop_listing(self, listing_id: int) -> None:
         self._pending.pop(int(listing_id), None)
@@ -670,6 +698,7 @@ class SqlStore:
                 Evidence(int(row[10] or 0), int(row[11] or 0), int(row[12] or 0),
                          int(row[13] or 0)),
                 float(row[14]) if row[14] is not None else None,
+                str(row[15] or ""),
             ) for row in self._query(RT_FP_READ_SQL,
                                      {"generation": self.generation, "ids": missing})}
             for listing_id in missing:
@@ -815,6 +844,14 @@ class SqlStore:
                     "calibration_digest": self.calibration_digest,
                     "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest}))
         return out
+
+    def ledger_keyed(self) -> bool:
+        if self._ledger_keyed is None:
+            self._ledger_keyed = bool(self._query(RT_REJECT_LEDGER_KEYED_SQL, {
+                "generation": self.generation, "calibration_digest": self.calibration_digest,
+                "feature_version": FEATURE_VERSION,
+                "engine_digest": self.engine_digest})[0][0])
+        return self._ledger_keyed
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         self._run_many(RT_PAIR_DELETE_SQL, [
@@ -1227,7 +1264,10 @@ class SqlWork:
                  bootstrap: bool = False,
                  pass_budget_s: float = PASS_BUDGET_S,
                  rate_per_s: float = PASS_RATE_PER_S,
-                 claim_cap: int | None = None) -> None:
+                 claim_cap: int | None = None,
+                 stale_claims: Sequence[int] = (),
+                 stale_waiting: int = 0,
+                 stale_budget: int = reconcile.STALE_FLOOR) -> None:
         self.conn = conn
         self.scope = scope
         self.generation = generation
@@ -1246,6 +1286,13 @@ class SqlWork:
         self.pass_budget_s = float(pass_budget_s)
         self.rate_per_s = float(rate_per_s)
         self.claim_cap = claim_cap
+        # E960: the adverts of the groups the last reconcile handed on that this pass re-claims
+        # (chosen and stamped ahead of the pass), offered on its FIRST claim only, so a retry
+        # after the pair budget refused is the normal feeds alone (E75); and how many wait.
+        self.stale_claims = [int(i) for i in stale_claims]
+        self.stale_waiting = int(stale_waiting)
+        self.stale_budget = int(stale_budget)
+        self.attempt = 0
         # Set by `claim` while the phase is on: the entrant backlog it measured, and whether
         # this pass is the one that empties it (E98).
         self.bootstrap_done = False
@@ -1413,6 +1460,18 @@ class SqlWork:
             # longer holds it, so there is nothing to re-decide it into.
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
+        # E960: the groups a merge waits on, re-claimed WHOLE, oldest wait first, so their pairs
+        # are re-decided on facts read now and the group merges in this pass's reconcile — on
+        # the pass's first claim only.
+        self.attempt += 1
+        if self.stale_claims or self.stale_waiting:
+            retiring = {item.listing_id for item in items if item.retire}
+            taken = ([i for i in self.stale_claims if i not in retiring]
+                     if self.attempt == 1 else [])
+            self.evidence = {**self.evidence, "stale": self.stale_waiting,
+                             "stale_claimed": len(taken), "stale_budget": self.stale_budget}
+            items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
+                         for listing_id in taken)
         for item in items:
             self._claimed.setdefault(item.feed, set()).add(item.listing_id)
         return items
@@ -1829,9 +1888,21 @@ def pass_rate_key(generation: str) -> str:
     return f"{PASS_RATE_SETTING}:{generation}"
 
 
+def engine_key(generation: str) -> str:
+    """`rt_engine:<generation>` — the engine digest the lane runs under and since when (E960):
+    the reconcile applies a merge only on members refreshed after it."""
+    return f"{ENGINE_SETTING}:{generation}"
+
+
 def claim_cap_key(generation: str) -> str:
     """`rt_claim_cap:<generation>` — the claim size THIS generation's passes survive (E948)."""
     return f"{CLAIM_CAP_SETTING}:{generation}"
+
+
+def recut_key(generation: str) -> str:
+    """`rt_recut:<generation>` — `due`: the cut stamp of the calibration a pass found the
+    population drifted under; `tried_at`: when the lane last re-cut, done or not (E944)."""
+    return f"{RECUT_SETTING}:{generation}"
 
 
 def full_claim_cap(reason: str | None = None, limit_mb: float | None = None) -> dict[str, Any]:
@@ -2054,6 +2125,10 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
         deleted[name] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_CURSORS_SQL, {"names": list(RESET_CURSORS)})
     deleted["scan_cursor"] = int(rows[0][0] or 0) if rows else 0
+    rows = _rows(conn, RT_FRESH_SETTINGS_SQL, {
+        "keys": [engine_key(generation), reconcile.redecide_key(generation),
+                 reconcile.tried_key(generation), reconcile.budget_key(generation)]})
+    deleted["settings"] = int(rows[0][0] or 0) if rows else 0
     rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
     deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
     return deleted
@@ -2152,7 +2227,7 @@ class CalibrationRefusal(Exception):
 def _cut_bound(conn: Any, deadline: float | None,
                stopping: Callable[[], bool] | None = None) -> None:
     """The cut's statement timeout: the export's own (CUT_STATEMENT_TIMEOUT_MS) at a seed, and
-    never past the pass's deadline inside a pass (review A5/B6) — the pHash aggregate is a
+    never past the tick's deadline in a re-cut (review A5/B6; E944) — the pHash aggregate is a
     sequential scan of `public.images`, and an unbounded one could outlive the worker's stall
     warning. Past the deadline the cut stops between chunks and its transaction rolls back; so
     it does once the worker is `stopping` (E941: `PassStopped`)."""
@@ -2162,14 +2237,156 @@ def _cut_bound(conn: Any, deadline: float | None,
     else:
         left_ms = int((deadline - time.perf_counter()) * 1000)
         if left_ms <= 0:
-            raise CalibrationRefusal("the pass's time ran out mid-cut; the next pass re-tries")
+            raise CalibrationRefusal("the tick's time ran out mid-cut; the next attempt waits "
+                                     "RECUT_MIN_AGE_H")
         timeout_ms = min(CUT_STATEMENT_TIMEOUT_MS, left_ms)
     _exec(conn, RT_STATEMENT_GUARD_SQL, {"statement_timeout_ms": timeout_ms})
 
 
+# E944: the calibration this process last read, by generation, under the row's digest. The row is
+# content-addressed (`Calibration.digest`), so a pass reads and parses the payload only when the
+# digest moved — a cut or a seed — and every other pass reads it back from here.
+_CALIBRATIONS: dict[str, tuple[str, Calibration]] = {}
+
+
+def read_calibration(conn: Any, generation: str = GENERATION
+                     ) -> tuple[Sequence[Any], Calibration]:
+    """The generation's calibration row and its calibration, the payload read once a digest."""
+    held = _CALIBRATIONS.get(generation)
+    rows = _rows(conn, RT_CALIBRATION_READ_SQL,
+                 {"generation": generation, "held": held[0] if held else None})
+    if not rows:
+        raise SystemExit(f"no calibration for generation {generation!r} — seed it")
+    digest, payload = str(rows[0][1]), rows[0][3]
+    if held is not None and payload is None and held[0] == digest:
+        return rows[0], held[1]
+    calibration = Calibration.from_json(
+        payload if isinstance(payload, dict) else json.loads(payload or "{}"))
+    _CALIBRATIONS[generation] = (digest, calibration)
+    return rows[0], calibration
+
+
+def recut_due(recut: Any, built_at: Any) -> bool:
+    """A pass found the population drifted under the calibration still in force (E944): a seed
+    or a cut since then rewrote `built_at`, and what it measured is void."""
+    due = recut.get("due") if isinstance(recut, Mapping) else None
+    return due is not None and due == _iso(built_at)
+
+
+def _recut_age_ok(recut: Any, built_at: Any) -> bool:
+    """At most one re-cut a `RECUT_MIN_AGE_H`, counted from the last cut or attempt (E944)."""
+    tried = _stamp(recut.get("tried_at") if isinstance(recut, Mapping) else None)
+    stamps = [stamp for stamp in (_stamp(built_at), tried) if stamp is not None]
+    return not stamps or (
+        datetime.now(timezone.utc) - max(stamps)).total_seconds() >= RECUT_MIN_AGE_H * 3600.0
+
+
+def recut_unfit(bootstrap: bool, scope_listings: int, recut: Any = None,
+                built_at: Any = None) -> str | None:
+    """Why no tick could finish a re-cut now (E944): a build, a scope too big for one tick, or a
+    cut that already killed its worker RECUT_MAX_DEATHS times under this calibration."""
+    if bootstrap:
+        return "bootstrap"
+    if scope_listings > RECUT_MAX_LISTINGS:
+        return "unfit"
+    if (isinstance(recut, Mapping) and recut.get("died_under") == _iso(built_at)
+            and int(recut.get("deaths") or 0) >= RECUT_MAX_DEATHS):
+        return "died"
+    return None
+
+
+def _deaths(recut: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: recut[key] for key in ("deaths", "died_under") if key in recut}
+
+
+def _write_recut(conn: Any, generation: str, holder: str, value: Mapping[str, Any],
+                 why: str) -> None:
+    """`rt_recut:<generation>`, fenced like every lane write (E941)."""
+    with _transaction(conn):
+        _exec(conn, RT_SETTING_WRITE_SQL, {"key": recut_key(generation),
+                                           "value": json.dumps(value),
+                                           "updated_by": f"{LANE_NAME}:{why}"})
+        rt_lease.hold(conn, holder)
+
+
+def _recut_memory() -> dict[str, Any]:
+    return {"peak_rss_mb": peak_rss_mb(), "rss_mb": rss_mb()}
+
+
+def recut_died(conn: Any, generation: str, holder: str, recut: Any, built_at: Any) -> Any:
+    """A re-cut stamped `cutting` and never ended: its worker died inside it (OOM, SIGKILL).
+    Recorded as a failed attempt, counted under the calibration in force, so its
+    RECUT_MIN_AGE_H wait stands and the heartbeat says so; the row as it now stands is
+    returned."""
+    if not isinstance(recut, Mapping) or not recut.get("cutting"):
+        return recut
+    deaths = int(recut.get("deaths") or 0) if recut.get("died_under") == _iso(built_at) else 0
+    value = {key: item for key, item in recut.items() if key != "cutting"}
+    value.update(deaths=deaths + 1, died_under=_iso(built_at))
+    if deaths + 1 >= RECUT_MAX_DEATHS:
+        value["due"] = None
+    value["last"] = {"skipped": f"died mid-cut ({recut['cutting']})",
+                     "at": recut.get("tried_at"), "failed": True, "deaths": deaths + 1}
+    with suppress(rt_lease.LeaseLost):
+        _write_recut(conn, generation, holder, value, "recut_died")
+    return value
+
+
+def run_recut(conn: Any, settings: Settings, model_version: str | None, generation: str, *,
+              holder: str, before: str, recut: Any, deadline: float,
+              stopping: Callable[[], bool] | None = None) -> dict[str, Any]:
+    """The re-cut as a tick of its own (E944): `cut_calibration` in its own transaction, under
+    the pass's lease and fence and a deadline of its own, so no pass pays for it; its outcome is
+    kept in `rt_recut:<generation>` (`last`) in the same commit. The attempt is stamped first
+    (`tried_at`, `cutting`), so a worker that dies inside it waits RECUT_MIN_AGE_H instead of
+    re-cutting into the same death. A cut that fails waits too (`failed`). One that its fence
+    or the worker's shutdown stopped is taken back — the row as it was, the one write after the
+    lease is gone — so the next holder re-cuts at once."""
+    previous = dict(recut) if isinstance(recut, Mapping) else {}
+    at = datetime.now(timezone.utc).isoformat()
+    clock = time.perf_counter()
+    try:
+        _write_recut(conn, generation, holder, {**previous, "tried_at": at, "cutting": holder},
+                     "recut_start")
+    except rt_lease.LeaseLost as exc:
+        return {"skipped": f"{type(exc).__name__}: {exc}"[:300], "at": at}
+    try:
+        with _transaction(conn):
+            out: dict[str, Any] = cut_calibration(conn, settings, model_version, generation,
+                                                  deadline=deadline, stopping=stopping,
+                                                  reserve_s=RECUT_WRITE_RESERVE_S)
+            out.update(digest_before=before, moved=out["digest"] != before, at=at,
+                       **_recut_memory())
+            _exec(conn, RT_SETTING_WRITE_SQL, {
+                "key": recut_key(generation),
+                "value": json.dumps({**_deaths(previous), "due": None, "tried_at": at,
+                                     "last": out}),
+                "updated_by": f"{LANE_NAME}:recut"})
+            rt_lease.hold(conn, holder)
+        return out
+    except Exception as exc:  # noqa: BLE001 — rolled back; the row and the heartbeat say why
+        out = {"skipped": f"{type(exc).__name__}: {exc}"[:300], "at": at,
+               "seconds": round(time.perf_counter() - clock, 3), **_recut_memory()}
+        if isinstance(exc, (rt_lease.LeaseLost, PassStopped)) or (stopping and stopping()):
+            # Only while the stamp is still this attempt's: a next holder may have stamped its
+            # own by now, and the row is its to write.
+            with suppress(Exception):
+                _exec(conn, RT_RECUT_PUT_BACK_SQL, {"key": recut_key(generation),
+                                                    "value": json.dumps(previous),
+                                                    "holder": holder,
+                                                    "updated_by": f"{LANE_NAME}:recut_stopped"})
+            return out
+        out["failed"] = True
+        with suppress(rt_lease.LeaseLost):
+            _write_recut(conn, generation, holder,
+                         {**_deaths(previous), "due": None, "tried_at": at, "last": out},
+                         "recut_failed")
+        return out
+
+
 def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
                     generation: str = GENERATION, *, chunk: int = CUT_CHUNK,
-                    deadline: float | None = None,
+                    deadline: float | None = None, reserve_s: float = 0.0,
                     stopping: Callable[[], bool] | None = None) -> dict[str, Any]:
     """Cut the generation's calibration from the database, over what its scope snapshot holds.
 
@@ -2182,8 +2399,10 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
     hashes, the statement the export always ran. Written together with the calibration row, so
     the switch is atomic inside the caller's transaction. A cut is not a generation (E915):
     stored decisions keep the digest they were taken under and are re-decided only when a feed
-    re-claims their listing."""
+    re-claims their listing. Under a `deadline` the reads stop `reserve_s` before it, so the
+    build and the writes keep that much of it (E944)."""
     clock = time.perf_counter()
+    read_by = None if deadline is None else deadline - reserve_s
     ids = [int(row[0]) for row in _rows(conn, RT_CUT_SCOPE_IDS_SQL, {"generation": generation})]
     if not ids:
         raise CalibrationRefusal(
@@ -2191,19 +2410,19 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
             "cut a calibration over. Refusing rather than freezing an empty one.")
     hashes: set[int] = set()
     for start in range(0, len(ids), chunk):
-        if deadline is not None:
-            _cut_bound(conn, deadline, stopping)
+        if read_by is not None:
+            _cut_bound(conn, read_by, stopping)
         hashes |= {int(row[0]) for row in _rows(conn, RT_CUT_HASHES_SQL,
                                                 {"ids": ids[start:start + chunk]})}
-    _cut_bound(conn, deadline, stopping)
+    _cut_bound(conn, read_by, stopping)
     population = ({int(row[0]): int(row[1]) for row in _rows(
         conn, COHORT_PHASH_POP_SQL, {"hashes": sorted(hashes)})} if hashes else {})
     facts = SqlFacts(conn, population=population, stopping=stopping)
     listings: dict[int, Listing] = {}
     fps: dict[int, Any] = {}
     for start in range(0, len(ids), chunk):
-        if deadline is not None:
-            _cut_bound(conn, deadline, stopping)
+        if read_by is not None:
+            _cut_bound(conn, read_by, stopping)
         # Fingerprints read no CLIP vector, so the cut skips the read that would move ~2 kB per
         # photograph for nothing.
         for listing_id, (listing, images) in facts.facts(ids[start:start + chunk],
@@ -2211,6 +2430,8 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
             listings[listing_id] = listing
             fps[listing_id] = build_fingerprint(listing, images, settings)
     calibration = Calibration.build(fps, listings, settings, generation)
+    if deadline is not None:
+        _cut_bound(conn, deadline, stopping)
     rows = [{"phash": phash, "n_listings": n} for phash, n in sorted(population.items())]
     for start in range(0, len(rows), POP_CHUNK):
         _exec_many(conn, RT_PHASH_POP_WRITE_SQL, rows[start:start + POP_CHUNK])
@@ -2240,6 +2461,65 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     if saturated and elapsed_s < RAMP_HEADROOM * PASS_DEADLINE_S and 2.0 * start > blended:
         return round(2.0 * start, 6), True
     return round(blended, 6), False
+
+
+def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str:
+    """Since when the lane has run under `digest` (E960): the recorded instant while the digest
+    is the recorded one, else the database's now, written in a commit of its own (the clock
+    `rt_fp.updated_at` is stamped by). A deploy overlapping a pass of the previous engine can
+    leave this a pass early or late; the next pass's digest check settles it."""
+    if isinstance(recorded, Mapping) and recorded.get("digest") == digest and recorded.get(
+            "since"):
+        return str(recorded["since"])
+    return str(_rows(conn, RT_ENGINE_WRITE_SQL, {
+        "key": engine_key(generation), "digest": digest,
+        "updated_by": f"{LANE_NAME}:engine"})[0][0])
+
+
+def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: str) -> None:
+    _exec(conn, RT_SETTING_WRITE_SQL, {
+        "key": reconcile.budget_key(generation), "value": json.dumps(dict(record)),
+        "updated_by": f"{LANE_NAME}:{why}"})
+
+
+def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
+                  handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
+                  engine_since: str) -> tuple[list[int], int, int]:
+    """What this pass re-claims for the groups the reconcile handed on (E960), chosen BEFORE the
+    pass and stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
+    refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
+    the head of the queue. None while no reconcile follows the pass (the build, a seed of
+    another version, a closed apply scope) or while the reject ledger holds no row under this
+    store's key (after a deploy that moved it, every neighbour's reject would be re-scored).
+    The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
+    pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
+    one offers none and halves the budget. Returns the adverts, how many of the queue's adverts
+    are stale, and the budget."""
+    record = control.get(reconcile.budget_key(generation))
+    record = dict(record) if isinstance(record, Mapping) else {}
+    budget = max(1, int(record.get("budget") or reconcile.STALE_FLOOR))
+    if record.get("inflight"):
+        budget = max(1, int(record["inflight"]) // 2)
+        _stale_budget(conn, generation, {"budget": budget}, "redecide_halved")
+        return [], 0, budget
+    if not handed or bootstrap or not seed_current(control, generation):
+        return [], 0, budget
+    if reconcile.read_scope(conn)[0] is None or not store.ledger_keyed():
+        return [], 0, budget
+    ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS,
+                               engine_since=engine_since)
+    tried = control.get(reconcile.tried_key(generation))
+    taken, stamps = reconcile.select_claims(handed, ages,
+                                            tried if isinstance(tried, Mapping) else {},
+                                            datetime.now(timezone.utc), budget)
+    _exec(conn, RT_SETTING_WRITE_SQL, {
+        "key": reconcile.tried_key(generation), "value": json.dumps(stamps),
+        "updated_by": f"{LANE_NAME}:redecide"})
+    if taken:
+        _stale_budget(conn, generation, {"budget": budget, "inflight": len(taken)},
+                      "redecide_ahead")
+    return taken, sum(1 for _at, stale in ages.values() if stale), budget
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:
@@ -2285,13 +2565,16 @@ def _fit_claim_cap(conn: Any, generation: str, stored: Any, limit_mb: float | No
 
 
 def _release_predecessor(conn: Any, generation: str, cap: dict[str, Any], booted_epoch: int,
-                         limit_mb: float | None, *, halve: bool = True
+                         limit_mb: float | None, *, halve: bool = True,
+                         re_cutting: str | None = None
                          ) -> tuple[str | None, str | None, dict[str, Any]]:
     """The live lease a dead predecessor of this process left, released with the cap halved in
     ONE commit of their own and logged at once, before a pass that may die the same way: the
     released holder, None, the halved cap. At the cap's floor it is only named and left to its
     TTL (`CLAIM_CAP_FLOOR`): None, that holder, the cap as it was. Without `halve` (the limit
-    grew since the predecessor ran, E948b) it is released and logged, and the cap kept."""
+    grew since the predecessor ran, E948b) it is released and logged, and the cap kept; so it
+    is when the released holder is `re_cutting`, the one a re-cut stamped (E944): it died of the
+    cut, not of its claim."""
     host, pid = socket.gethostname(), os.getpid()
     if int(cap["cap"]) <= CLAIM_CAP_FLOOR:
         return None, rt_lease.predecessor(conn, host, pid, booted_epoch), cap
@@ -2300,12 +2583,14 @@ def _release_predecessor(conn: Any, generation: str, cap: dict[str, Any], booted
         if died is None:
             return None, None, cap
         before = cap
+        halve = halve and died != re_cutting
         if halve:
             cap = halve_claim_cap(before, died, booted_epoch, limit_mb)
             _write_claim_cap(conn, generation, cap, "halved")
     LOG.warning("AUTODEDUP: a predecessor of this container died holding autodedup.rt_lease: "
                 "%s; released, and the claim cap %s", died,
                 f"halved from {before['cap']} to {cap['cap']} (E948)" if halve else
+                f"kept at {cap['cap']}: it died inside a re-cut (E944)" if died == re_cutting else
                 f"kept at {cap['cap']}: it ran under a smaller memory limit (E948b)")
     return died, None, cap
 
@@ -2333,16 +2618,6 @@ def peak_rss_mb() -> float | None:
         return None
     peak = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return round(peak / (1_048_576.0 if sys.platform == "darwin" else 1024.0), 1)
-
-
-def rss_mb(statm: str = "/proc/self/statm") -> float | None:
-    """The process's resident memory now in MiB: resident pages x the page size (E948)."""
-    try:
-        with open(statm, encoding="ascii") as handle:
-            pages = int(handle.read().split()[1])
-        return round(pages * os.sysconf("SC_PAGE_SIZE") / 1_048_576.0, 1)
-    except Exception:  # noqa: BLE001 — observability only: None, never a failed pass
-        return None
 
 
 def memo_entries() -> dict[str, int]:
@@ -2425,7 +2700,9 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     above 0. The pass decides, groups and commits; then, outside the bootstrap phase and inside
     what is left of its time, the reconcile turns the groups it re-clustered into production
     merges; then, when the pHash population has drifted below `COVERAGE_FLOOR`, the calibration
-    is re-cut. The rate is halved BEFORE the pass (E941), in a write of its own that commits
+    is due: the next tick re-cuts it instead of passing, under the same lease and a deadline of
+    its own (`run_recut`, E944), and a pass reads its payload once a digest (`read_calibration`).
+    The rate is halved BEFORE the pass (E941), in a write of its own that commits
     before the pass's transaction opens, so a pass the system kills — a deploy, a restart, the
     kernel's OOM killer — has already slowed the next claim; a pass that committed puts the
     previous rate back before its reconcile and overwrites it with its measurement after it
@@ -2483,17 +2760,23 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596 or 604 "
+                             "not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
                                "`gh workflow run autodedup.yml -f mode=rt_seed` first"),
                     "generation": generation, "spent_usd": 0.0}
-        control = lane_settings(conn, [scope_setting_key(generation),
+        control = lane_settings(conn, [recut_key(generation),
+                                       scope_setting_key(generation),
                                        bootstrap_setting_key(generation),
                                        pass_rate_key(generation),
                                        seed_version_key(generation),
-                                       claim_cap_key(generation)])
+                                       claim_cap_key(generation),
+                                       engine_key(generation),
+                                       reconcile.redecide_key(generation),
+                                       reconcile.tried_key(generation),
+                                       reconcile.budget_key(generation)])
         try:
             scope = pass_scope(read_scope_setting(control, generation))
             parents = resolve_scope_parents(conn, scope)
@@ -2515,8 +2798,11 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         cap, grew = _fit_claim_cap(conn, generation, control.get(claim_cap_key(generation)),
                                    limit_mb)
         if booted_epoch is not None:
-            predecessor, kept, cap = _release_predecessor(conn, generation, cap, booted_epoch,
-                                                          limit_mb, halve=not grew)
+            # E944: a holder that died inside a re-cut died of the cut, not of its claim.
+            stamped = control.get(recut_key(generation))
+            predecessor, kept, cap = _release_predecessor(
+                conn, generation, cap, booted_epoch, limit_mb, halve=not grew,
+                re_cutting=(stamped.get("cutting") if isinstance(stamped, Mapping) else None))
         if not take_lease(conn, holder):
             held_by = ("another writer holds autodedup.rt_lease" if kept is None else
                        "a dead predecessor of this container holds autodedup.rt_lease, left to "
@@ -2532,21 +2818,45 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             leased = False
             return {"skipped": STOPPING, "reason": "the worker is shutting down",
                     "predecessor_released": predecessor, "spent_usd": 0.0}
-        rows = _rows(conn, RT_CALIBRATION_READ_SQL, {"generation": generation})
-        if not rows:
-            raise SystemExit(f"no calibration for generation {generation!r} — seed it")
-        payload = rows[0][3]
-        calibration = Calibration.from_json(
-            payload if isinstance(payload, dict) else json.loads(payload or "{}"))
-        settings, model = pass_config(rows[0][5], rows[0][6], generation)
+        row, calibration = read_calibration(conn, generation)
+        settings, model = pass_config(row[5], row[6], generation)
+        # E944: read again under the lease — a re-cut stopped while this tick waited for it has
+        # put its row back since `control` was read.
+        recut = lane_settings(conn, [recut_key(generation)]).get(recut_key(generation))
+        cutting = isinstance(recut, Mapping) and bool(recut.get("cutting"))
+        recut = recut_died(conn, generation, holder, recut, row[7])
+        died = recut["last"] if cutting else None
+        # The scope as it now stands: the last cut's count, or the store's fingerprinted adverts
+        # when the scope has grown since.
+        scope_listings = max(int(row[2] or 0),
+                             int((storage.get("rows") or {}).get("rt_fp") or 0))
+        if (recut_unfit(bootstrap, scope_listings, recut, row[7]) is None
+                and recut_due(recut, row[7]) and _recut_age_ok(recut, row[7])):
+            # E944: the tick a pass found the population drifted re-cuts instead of passing.
+            return {"skipped": "recut",
+                    "reason": "the pHash population fell below the floor: the calibration is "
+                              "re-cut in this tick, the next one passes",
+                    "recut": run_recut(conn, settings, model.version, generation, holder=holder,
+                                       before=str(row[1]), recut=recut, deadline=deadline,
+                                       stopping=stopping),
+                    "calibration": {"built_age_days": age_days(row[7])},
+                    "generation": generation, "predecessor_released": predecessor,
+                    "claim_cap": cap, "spent_usd": 0.0, **pass_memory()}
         store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
                          engine_digest=engine_digest(settings, model),
                          store_floor=settings.store_floor, model_version=model.version)
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
+        engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
+                                     store.engine_digest)
+        handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
+        stale_claims, stale_waiting, stale_budget = _stale_claims(
+            conn, generation, control, handed, bootstrap, store, engine_since)
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
-                       rate_per_s=rate_per_s, claim_cap=int(cap["cap"]))
+                       rate_per_s=rate_per_s, claim_cap=int(cap["cap"]),
+                       stale_claims=stale_claims, stale_waiting=stale_waiting,
+                       stale_budget=stale_budget)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands
@@ -2636,6 +2946,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             # eight such passes take the claim to one advert. The measurement below, once the
             # reconcile has run, still overwrites it.
             _write_rate(conn, generation, rate_per_s, "restored")
+        if stale_claims and not shutting_down() and (
+                stopped == "pair_budget" or (not stopped and result is not None)):
+            # E960: the pass carrying the re-claims did not die. Committed WITH them (its first
+            # attempt), the budget is whole again; refused or retried without them, it stands.
+            committed = not stopped and result is not None and result.attempts == 1
+            _stale_budget(conn, generation,
+                          {"budget": reconcile.STALE_FLOOR if committed else stale_budget},
+                          "redecide_committed" if committed else "redecide_refused")
         summary: dict[str, Any] = (result.to_json() if result is not None
                                    else {"counts": {}, "aborted": stopped})
         summary["aborted"] = stopped
@@ -2667,7 +2985,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 clock=_pass_clock(shutting_down),
                 # E941: every group's transaction ends with the pass's lease check, so a lease
                 # released after the pass committed stops the merges at the next group.
-                fence=lambda group_conn: rt_lease.hold(group_conn, holder))
+                fence=lambda group_conn: rt_lease.hold(group_conn, holder),
+                engine_since=engine_since, waiting=handed)
             # What the reconcile cost inside the pass, so G2's rate is read with it in (B3).
             summary["reconcile"]["seconds"] = round(time.perf_counter() - reconcile_started, 3)
         elapsed = time.perf_counter() - started
@@ -2698,25 +3017,28 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             "coverage": coverage,
             "floor": COVERAGE_FLOOR,
         }
-        built_at = _stamp(rows[0][7])
-        age_h = (None if built_at is None
-                 else (datetime.now(timezone.utc) - built_at).total_seconds() / 3600.0)
-        # A10: the population has drifted — re-cut the calibration, atomically, inside what
-        # is left of the pass's own time (every statement bounded by it); a cut that runs out
-        # rolls back and the next pass re-tries it.
+        if died is not None:
+            summary["recut"] = died
+        # A10: the population has drifted — the next tick re-cuts the calibration (E944), so
+        # no pass spends its own time on a cut that grows with the scope; in a build, or over a
+        # scope no tick could cut, the row says why instead and the drift is measured again in
+        # RECUT_MIN_AGE_H.
         if (not stopped and owns_the_lane() and coverage is not None
                 and coverage < COVERAGE_FLOOR
                 and facts.images_with_phash >= RECUT_MIN_IMAGES
-                and (age_h is None or age_h >= RECUT_MIN_AGE_H)
-                and deadline - time.perf_counter() >= RECUT_RESERVE_S):
-            try:
-                with _transaction(conn):
-                    summary["recut"] = cut_calibration(conn, settings, model.version,
-                                                       generation, deadline=deadline,
-                                                       stopping=stopping)
-                    rt_lease.hold(conn, holder)       # E941: the re-cut is a write too
-            except Exception as exc:  # noqa: BLE001 — best effort: the pass already committed
-                summary["recut"] = {"skipped": f"{type(exc).__name__}: {exc}"[:300]}
+                and not recut_due(recut, row[7]) and _recut_age_ok(recut, row[7])):
+            unfit = recut_unfit(bootstrap, scope_listings, recut, row[7])
+            value = {**(recut if isinstance(recut, Mapping) else {}),
+                     "due": None if unfit else _iso(row[7])}
+            if unfit:
+                at = datetime.now(timezone.utc).isoformat()
+                summary["recut"] = value["last"] = {
+                    "skipped": unfit, "scope_listings": scope_listings, "at": at}
+                value["tried_at"] = at
+            with suppress(rt_lease.LeaseLost):
+                _write_recut(conn, generation, holder, value,
+                             "recut_unfit" if unfit else "recut_due")
+            summary["population"]["recut_due"] = unfit is None
         summary["fact_reads"] = facts.reads
         summary["statements"] = store.statements + facts.statements + work.statements
         summary["settings"] = settings.to_dict()
@@ -2741,8 +3063,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             "released_this_pass": result.released if result is not None else 0,
             "redecided": result.redecided if result is not None else 0,
         }
-        summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(rows[0][7]),
-                                  "built_age_days": age_days(rows[0][7])}
+        summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(row[7]),
+                                  "built_age_days": age_days(row[7])}
         # E943: the reject ledger's engine key; a pass after it moved decides every reject anew.
         summary["engine_digest"] = store.engine_digest
         summary["retention"] = {"store_floor": settings.store_floor,
@@ -2757,9 +3079,6 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             "pass_growth_mb": round(
                 (after_bytes / 1_048_576.0) - float(storage["schema_mb"]), 3),
         }
-        # A re-cut its fence stopped means the same as a reconcile it stopped (E941).
-        lost = lost or str((summary.get("recut") or {}).get("skipped", "")).startswith(
-            "LeaseLost")
         if owns_the_lane():
             record_storage(conn, generation, after_bytes)
         summary["predecessor_released"] = predecessor
@@ -2831,7 +3150,8 @@ def run_rt_seed(
     try:
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
-            raise SystemExit("autodedup realtime store absent — migration 539 or 596 not applied")
+            raise SystemExit("autodedup realtime store absent — migration 539, 596 or 604 "
+                             "not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
         if existing and not fresh:
             raise SystemExit(

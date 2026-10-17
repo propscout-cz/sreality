@@ -291,7 +291,7 @@ const HIDING_DISMISSED: Record<string, string> = {
 };
 
 interface CountOption {
-  count?: 'exact' | 'planned';
+  count?: 'exact';
   head?: boolean;
 }
 
@@ -338,7 +338,7 @@ export const effectiveSort = (f: ListingFilters, sort: SortSpec): SortSpec => {
  * keeps working. What used to live in this file — a PostgREST string builder
  * and a hand-kept in-memory twin, five predicates each, ILIKE patterns and all
  * — is now two renderings of one plan. See districtCodes.ts for the why. */
-import { districtsFilterClause, isValidCode } from './districtCodes';
+import { districtsFilterClause } from './districtCodes';
 
 export {
   districtsFilterClause,
@@ -804,13 +804,6 @@ export const fetchNoPriceCount = async (
   return count ?? 0;
 };
 
-/* Above this many MAPPABLE rows the map asks the server to aggregate; at or
- * below it, today's per-point read is already correct and is what runs. Measured
- * 2026-08-26 on the live default cohort: a 2,000-row point read is 153 blocks and
- * ~906 KB, which is the ceiling this threshold buys. The server applies it (it is
- * the one that knows the count), and this constant is what it is told. */
-export const MAP_POINT_BUDGET = 2_000;
-
 interface MapGrid {
   clustered: boolean;
   cells: MapCell[] | null;
@@ -819,8 +812,8 @@ interface MapGrid {
   total: number;
 }
 
-/* The per-point read, run only once the server has said the cohort fits
- * (MAP_POINT_BUDGET points), so it needs no limit of its own.
+/* The per-point read, run only once the server has said the cohort fits the pin
+ * limit, so it needs no limit of its own.
  *
  * It reads `properties_map_mv` (migration 254), NOT `properties_public`. Shipping
  * the points off the live, churned `properties` table was cold-fragile
@@ -846,6 +839,7 @@ const fetchMapPoints = async (
 
 export const fetchListingsForMap = async (
   f: ListingFilters,
+  pinLimit: number,
   opts?: PgReadOptions,
 ): Promise<MapResult> => {
   // `opts?`, not `{ signal }: PgReadOptions = {}`: tests/test_browse_map_read_contract.py pins this
@@ -867,7 +861,7 @@ export const fetchListingsForMap = async (
         property_ids_filter: pre.propertyIds,
         property_ids_excluded: pre.propertyIdsExcluded,
       }),
-      point_budget: MAP_POINT_BUDGET,
+      point_budget: pinLimit,
     }),
     { signal },
   );
@@ -978,71 +972,34 @@ export const fetchListingsForTable = async (
   };
 };
 
-export interface CohortCount {
-  /* The cohort size — exact when an exact count fit the budget, otherwise the
-   * query planner's estimate. */
-  value: number;
-  /* False when `value` is the planner estimate (the exact count would exceed
-   * the anon statement_timeout). The UI renders an approximate value as "~N". */
-  precise: boolean;
-}
-
-/* The ONE cohort total — header, tab badge, and the infinite-scroll progress
- * labels. EXACT FIRST on the compact browse_list read model: a one-category
- * exact count is an index-only scan (measured 201 ms fully cold for the
- * broadest single cohort — 68k rows, zero heap fetches); a cohort with no
- * category is a sequential scan (~2.4 s cold, 2026-10-13), so precision is the
- * norm, not the exception. The pre-read-model planner-estimate-first
- * hybrid existed because an exact count on the churned live table could not
- * finish under the anon 3s budget; that constraint is gone. `count=planned`
- * stays as the graceful FALLBACK when the exact count exceeds the abort budget
- * (a pathological filter combination or a saturated instance) — rendered as
- * "~N". The planned estimate depends on the rebuild's ANALYZE-before-swap
- * (pinned by tests/test_browse_read_path_guardrail.py). Shares the exact
- * filter chain (resolveBrowsePrefilters + applyFilters) with the Table/Cards
- * fetchers, so the total can never disagree with the listed rows. */
-const EXACT_COUNT_BUDGET_MS = 2500;
+/* The ONE cohort total — header, tab badge, the cards/table "of N" labels and
+ * the map pill's denominator: PostgREST's exact count (a HEAD with
+ * `count=exact`) over the same filter chain (resolveBrowsePrefilters +
+ * applyFilters) the Table/Cards fetchers read, so the total can never disagree
+ * with the listed rows. Exact or nothing: the planner-estimate fallback of
+ * 2026-10-13 answered a slow count with a figure that could sit below the
+ * cards already on screen ("72 of ~15", 2026-10-16), so it is gone — a slow
+ * count shows as loading, a failed one as the header's error with its retry.
+ * Cost on the compact browse_list read model (2026-10-16, cold cache): 226 ms
+ * market-wide (index-only), ~3 s for a one-category cohort with price and
+ * disposition predicates (heap filter over 177k rows), ~1.4 s for a
+ * no-category seq scan — all under the 8 s statement_timeout. */
 export const fetchBrowseCount = async (
   f: ListingFilters,
   { signal }: PgReadOptions = {},
-): Promise<CohortCount> => {
+): Promise<number> => {
   const pre = await resolveBrowsePrefilters(f, signal);
-  if (pre.empty) return { value: 0, precise: true };
-  /* The estimate reads the PLAIN relation, never the dismissal-aware function:
-   * PostgREST plans a count only for a table or view, so a function call answers
-   * `Content-Range: 0-N/*` and the client parses the `*` to NaN (the "~NaN"
-   * header, 2026-09-25). The plain relation also counts dismissed properties;
-   * the "~" already says the figure is not exact. */
-  const build = (mode: 'exact' | 'planned') =>
+  if (pre.empty) return 0;
+  const { count } = await pgRead(
     applyPrefilters(
-      applyFilters(
-        listSource(
-          mode === 'planned' ? { ...f, showDismissed: true } : f,
-          'property_id',
-          { count: mode, head: true },
-        ),
-        f,
-      ),
+      applyFilters(listSource(f, 'property_id', { count: 'exact', head: true }), f),
       pre,
-    );
-  try {
-    const { count } = await pgRead(build('exact'), { signal, deadlineMs: EXACT_COUNT_BUDGET_MS });
-    if (count != null && Number.isFinite(count)) return { value: count, precise: true };
-  } catch (e) {
-    /* Only our 2.5 s client budget earns the estimate. The server's 57014
-     * cannot: a count is a HEAD, whose error has no body, so it arrives as a
-     * plain 500 (harmless while the 8 s statement_timeout outlasts the budget).
-     * Anything else (a 400 filter, a revoked grant, a caller abort) is not
-     * "too slow", and answering it with a different relation's estimate would
-     * hide it. */
-    if (!(e instanceof ApiError && e.kind === 'timeout')) throw e;
-  }
-  const { count: estimate } = await pgRead(build('planned'), { signal });
+    ),
+    { signal },
+  );
   /* No number is an error the header shows as one (dimmed + retry), never a NaN. */
-  if (estimate == null || !Number.isFinite(estimate)) {
-    throw new Error('Browse count unavailable: no exact count within budget and no estimate');
-  }
-  return { value: estimate, precise: estimate === 0 };
+  if (count == null || !Number.isFinite(count)) throw new Error('Browse count unavailable');
+  return count;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -1286,17 +1243,12 @@ export const buildBrowseStatsArgs = (
     districts_excluded_filter: f.districts.length
       ? f.districts.map((d) => d.excluded === true)
       : null,
-    /* The level + RÚIAN code parallel to the names — the ONE code predicate the
-     * two RPCs compile (migration 504, lib/districtCodes). A NULL entry is a
-     * chip with no code, which matches NOTHING there exactly as it does here;
+    /* The raw level + RÚIAN code parallel to the names — the ONE code predicate
+     * the two RPCs compile (latest: migration 605, lib/districtCodes);
      * `districts_filter` (the names) is now only the array that drives the
      * unnest. */
-    districts_levels: f.districts.length
-      ? f.districts.map((d) => d.level ?? null)
-      : null,
-    districts_ids: f.districts.length
-      ? f.districts.map((d) => (isValidCode(d.id) ? d.id : null))
-      : null,
+    districts_levels: f.districts.length ? f.districts.map((d) => d.level) : null,
+    districts_ids: f.districts.length ? f.districts.map((d) => d.id) : null,
     dispositions_filter:     f.dispositions.length ? f.dispositions : null,
     price_min_filter:        f.priceMin,
     price_max_filter:        f.priceMax,
@@ -2314,10 +2266,11 @@ export const fetchPropertyTagMemberSet = (
 ): Promise<Map<number, number[]>> =>
   fetchMemberSet('property_tags_public', 'tag_id', signal);
 
-/* How many notes the caller's account holds on each property (MS16): the note
- * mark on every Browse row, from ONE whole-set read rather than one per row.
- * property_notes_public is security_invoker over the account-scoped RLS
- * (migrations 290, 393), so the set is the caller's own notes and nothing else. */
+/* How many notes the caller can READ on each property (MS16): the note mark on
+ * every Browse row, from ONE whole-set read rather than one per row.
+ * property_notes_public is security_invoker over RLS (migrations 290, 393, 610),
+ * so the set is the caller's own notes plus other authors' notes marked shared
+ * and in reach through a collection share. */
 export const fetchNoteCounts = async (
   { signal }: PgReadOptions = {},
 ): Promise<Map<number, number>> => {
@@ -2363,15 +2316,17 @@ export const curationKeys = {
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,
+  /* Prefix of every property's notes: a share change moves which notes I can read. */
+  allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
   manualEstimates: (sreality_id: number) =>
     ['curation', 'manual-estimates', sreality_id] as const,
 };
 
-/* Deal pipeline (migration 205). The "is this property bookmarked + at which   */
-/* stage" read pulls from property_pipeline_public via the anon key; writes go   */
-/* through the FastAPI service. Single-valued — at most one card per property.
+/* Deal pipeline (migration 205). The "is this property bookmarked + at which
+ * stage" read pulls from property_pipeline_public, RLS-scoped as authenticated;
+ * writes go through the FastAPI service. At most one card per property per account.
  *
  * W3 collapsed the per-property `card(id)` key into `members` — a single
  * property's card is just `members.get(id)`. The two used to be separate
@@ -2499,7 +2454,7 @@ export const fetchPipelineStages = async (
       /* `code` too (migration 377): the stage menu badges every row from this
        * list, and the stage editor pre-fills its code box from it — omitting the
        * column rendered every existing code as blank, inviting the operator to
-       * overwrite intentional badges (three stages deliberately share "9"). */
+       * overwrite intentional badges (several closed stages share a code). */
       .select('id, key, label, position, color, is_terminal, is_entry, code')
       .order('position'),
     { signal },

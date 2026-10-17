@@ -48,7 +48,6 @@ import {
   browseTitleSummary,
   toSearchParams,
   DEFAULT_FILTERS,
-  type DistrictChip,
   type ListingFilters,
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -85,7 +84,6 @@ import {
   TABLE_PAGE_SIZE,
   type BrowseStats,
   type CardRow,
-  type CohortCount,
   type CityIndexDefinition,
   type CityIndexValue,
   type CityPolygon,
@@ -96,7 +94,6 @@ import {
   type TableRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
-import { useLegacyChipUpgrade } from '@/lib/useLegacyChipUpgrade';
 import { CardHydrationProvider } from '@/lib/hydration';
 
 /* Client-side retention cap for a card's carousel — the same 50 the inline read
@@ -155,17 +152,6 @@ export default function BrowseExperience({
   const f = { ...DEFAULT_FEATURES, ...features };
   const isModal = layout === 'modal';
   const { filters, sort, tab, overlay, activePresetId } = view;
-
-  /* A URL or a preset can still carry a chip written before chips had codes.
-   * Resolve those once, in memory, before they reach a cohort read — the one
-   * predicate treats a code-less chip as "matches nothing" (fail closed), and
-   * the Watchdog resolves the same names through the same index, so a saved
-   * filter cannot mean two things (rule 16). The stored blob is not rewritten. */
-  const upgradeChips = useCallback(
-    (districts: DistrictChip[]) => view.setFilters({ ...view.filters, districts }),
-    [view],
-  );
-  useLegacyChipUpgrade(filters.districts, upgradeChips);
 
   // Browser-tab title reflects the active filters ("LR: 2+kk · 60–90 m² · Praha")
   // so multiple Browse tabs are distinguishable. Skipped in the Explore-area
@@ -293,8 +279,8 @@ export default function BrowseExperience({
   /* Map tab fetches the map cohort (points, or counted by tile above the point
    * budget) + the paginated card slice. */
   const mapQuery = useQuery<MapResult, Error>({
-    queryKey: browseKeys.map(filters),
-    queryFn: ({ signal }) => fetchListingsForMap(filters, { signal }),
+    queryKey: browseKeys.map(filters, overlay.pinLimit),
+    queryFn: ({ signal }) => fetchListingsForMap(filters, overlay.pinLimit, { signal }),
     placeholderData: (prev) => prev,
     enabled: mapVisible,
   });
@@ -431,17 +417,13 @@ export default function BrowseExperience({
    * gate suppressed its refetch. Its fetch/error state is surfaced in the
    * header (FilterSummary) — a lagging or failed count must look different
    * from a settled one, never silently pin the previous cohort's value. */
-  const browseCountQuery = useQuery<CohortCount, Error>({
+  const browseCountQuery = useQuery<number, Error>({
     queryKey: browseKeys.count(filters),
     queryFn: ({ signal }) => fetchBrowseCount(filters, { signal }),
     placeholderData: (prev) => prev,
     staleTime: 60_000,
   });
-  const cohortTotal = browseCountQuery.data?.value ?? null;
-  /* The total is the planner's estimate (exact count exceeded the budget for a
-   * large/heavy cohort) — rendered as "~N" so the figure is never silently
-   * approximate. */
-  const cohortTotalApprox = browseCountQuery.data?.precise === false;
+  const cohortTotal = browseCountQuery.data ?? null;
   /* True while a refetch for a NEW cohort is in flight and we are still
    * showing the PREVIOUS cohort's number (placeholderData). This is exactly
    * the "looks settled but is stale" window that made the count appear stuck. */
@@ -698,7 +680,7 @@ export default function BrowseExperience({
   ]);
 
   const tabs: ReadonlyArray<Tab<TabKey>> = [
-    { key: 'map', label: 'Listings', badge: cohortTotal != null ? `${cohortTotalApprox ? '~' : ''}${cohortTotal.toLocaleString('cs-CZ')}` : undefined },
+    { key: 'map', label: 'Listings', badge: cohortTotal?.toLocaleString('cs-CZ') },
     { key: 'table', label: 'Table' },
     ...(f.stats ? [{ key: 'stats', label: 'Stats' } as Tab<TabKey>] : []),
   ];
@@ -760,7 +742,6 @@ export default function BrowseExperience({
             filters={filters}
             order={sortOrderPortal ? { portal: sortOrderPortal, direction: sort.direction } : null}
             count={cohortTotal}
-            countApprox={cohortTotalApprox}
             countStale={cohortCountStale}
             countError={browseCountQuery.error}
             onRetryCount={() => browseCountQuery.refetch()}
@@ -843,7 +824,6 @@ export default function BrowseExperience({
               <ListingCards
                 rows={cards.isLoading ? null : cards.rows}
                 total={cohortTotal}
-                totalApprox={cohortTotalApprox}
                 sort={sort}
                 orderPortal={sortOrderPortal}
                 isLoading={cards.isLoading}
@@ -890,7 +870,6 @@ export default function BrowseExperience({
                     counts={mapQuery.data?.counts ?? null}
                     total={mapQuery.data?.total ?? null}
                     cohortTotal={cohortTotal}
-                    cohortTotalApprox={cohortTotalApprox}
                     isLoading={mapQuery.isLoading}
                     bounds={filters.bounds}
                     onBoundsChange={view.setBounds}
@@ -910,6 +889,10 @@ export default function BrowseExperience({
                     onToggleShowCities={(next) => view.setOverlay({ showCities: next })}
                     priceMetric={overlay.priceMetric}
                     onPriceMetricChange={(next) => view.setOverlay({ priceMetric: next })}
+                    priceLabels={overlay.priceLabels}
+                    onPriceLabelsChange={(next) => view.setOverlay({ priceLabels: next })}
+                    pinLimit={overlay.pinLimit}
+                    onPinLimitChange={(next) => view.setOverlay({ pinLimit: next })}
                     colorByIndex={cityOverlay.colorByIndex}
                     cityIndexValues={cityOverlay.cityIndexValues}
                     cityIndexValuesAll={cityOverlay.cityIndexValuesAll}
@@ -949,7 +932,6 @@ export default function BrowseExperience({
               <ListingTable
                 rows={table.isLoading ? null : table.rows}
                 total={cohortTotal}
-                totalApprox={cohortTotalApprox}
                 sort={sort}
                 isLoading={table.isLoading}
                 isError={table.isError}
@@ -1011,7 +993,6 @@ export default function BrowseExperience({
 function zoomForSuggestionType(type: string): number {
   if (type.startsWith('regional.address')) return 16;
   if (type === 'regional.street') return 16;
-  if (type === 'poi') return 16;
   if (type === 'regional.municipality_part') return 13;
   if (type === 'regional.municipality') return 11;
   if (type === 'regional.region') return 8;
@@ -1048,7 +1029,6 @@ function FilterSummary({
   filters,
   order,
   count,
-  countApprox,
   countStale,
   countError,
   onRetryCount,
@@ -1061,9 +1041,6 @@ function FilterSummary({
   filters: ListingFilters;
   order: { portal: string; direction: SortDirection } | null;
   count: number | null;
-  /* `count` is the planner estimate (exact count exceeded budget) — render
-   * "~N" so the headline figure is never silently approximate. */
-  countApprox: boolean;
   /* The displayed count is the PREVIOUS cohort's value while a refetch for the
    * new cohort is still in flight. Surfaced so a lagging count is visibly
    * provisional instead of looking settled (the bug this page had). */
@@ -1093,7 +1070,7 @@ function FilterSummary({
             }`}
             aria-busy={countStale || undefined}
           >
-            {loading && count == null ? 'Loading…' : summarise(filters, count, countApprox)}
+            {loading && count == null ? 'Loading…' : summarise(filters, count)}
           </p>
           {order && <PortalOrderChip portal={order.portal} direction={order.direction} />}
           {countStale && (

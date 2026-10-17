@@ -19,8 +19,8 @@ const stage = (over: Partial<PipelineStage> & { id: number }): PipelineStage => 
   ...over,
 });
 
-/* Shaped like the operator's live board: hand-numbered 1..4, then three closed
- * stages all coded "9", sitting at positions 5, 6 and 7. */
+/* Shaped like a real board: hand-numbered live stages, then closed stages that
+ * all share the code "9" while their positions keep counting (5, 6 and 7). */
 const BOARD: PipelineStage[] = [
   stage({ id: 11, code: '1', color: 'slate', is_entry: true }),
   stage({ id: 12, code: '2', color: 'ochre' }),

@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
+import io
 import json
 import re
+import zipfile
 from collections import Counter
 from collections.abc import Iterator
 from datetime import date
@@ -48,14 +51,15 @@ def _props(fixture: str, mapper: mod.Props) -> list[dict[str, Any] | None]:
 # --- the registry -----------------------------------------------------------------------
 
 
-def test_the_registry_holds_the_four_sections_in_order() -> None:
+def test_the_registry_holds_the_five_sections_in_order() -> None:
     assert {key: (s.label, s.sort, s.minzoom, s.maxzoom) for key, s in mod.SOURCES.items()} == {
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
         "kraje": ("Kraje", 3, 3, 9),
+        "universities": ("Vysoké školy", 4, 9, 12),
         "rent_map": ("Cenová mapa nájemného", 0, 3, 12),
     }
-    assert list(mod.SOURCES) == ["metro", "flood", "kraje", "rent_map"]
+    assert list(mod.SOURCES) == ["metro", "flood", "kraje", "universities", "rent_map"]
 
 
 def test_layers_their_sort_and_how_they_are_stored() -> None:
@@ -66,6 +70,7 @@ def test_layers_their_sort_and_how_they_are_stored() -> None:
                   ("flood_q100", 3, "dissolve"), ("flood_q500", 4, "dissolve"),
                   ("flood_az", 5, "outline")],
         "kraje": [("kraje", 1, "plain")],
+        "universities": [("universities", 1, "plain"), ("dorms", 2, "plain")],
         "rent_map": [("rent_map", 1, "whole")],
     }
 
@@ -93,11 +98,21 @@ def test_the_flood_and_kraje_legends() -> None:
     ]
 
 
+def test_the_university_legends() -> None:
+    assert [list(_layer(k).legend) for k in ("universities", "dorms")] == [
+        [{"class": "primary", "label": "Hlavní místo výuky (2 000+ studentů)", "color": "#5E35B1",
+          "geom": "point"},
+         {"class": "secondary", "label": "Další pracoviště VŠ", "color": "#B39DDB", "geom": "point"}],
+        [{"class": "dorm", "label": "Kolej", "color": "#F57C00", "geom": "point"}],
+    ]
+
+
 def test_the_notes_attribution_and_licences() -> None:
     assert mod.SOURCES["metro"].note == (
         "Metropolitní plán hl. m. Prahy (platný od 1. 9. 2026): stav, návrh a územní rezervy. "
         "Rezerva „výhledové tangenciální kolejové spojení“ (v tisku metro E) nemá rozhodnutou "
-        "trasu ani technologii."
+        "trasu ani technologii. Stanice v provozu v barvě své linky; přestupní stanice má bod "
+        "za každou linku."
     )
     assert mod.SOURCES["flood"].note == (
         "Stanovená záplavová území (zákonný rozsah, orientační). Nezohledňují protipovodňová "
@@ -105,12 +120,19 @@ def test_the_notes_attribution_and_licences() -> None:
         "přívalové povodně nejsou zahrnuty. Závazné informace: vodoprávní úřad."
     )
     assert mod.SOURCES["kraje"].note is None
+    assert mod.SOURCES["universities"].note == (
+        "Místa vysokých škol v Praze podle ÚAP IPR Praha. Hlavní místo výuky = budova fakulty "
+        "nebo školy, kde podle MŠMT (SIMS, poslední zveřejněný rok) studuje 2 000 a více studentů "
+        "prezenčního studia; u škol s pobočkami mimo Prahu jde o počet za celou školu. Další "
+        "pracoviště: ostatní budovy, kliniky, rektoráty, menzy, sportoviště."
+    )
     # No note: the rent map's panel showed none before it moved onto this path.
     assert mod.SOURCES["rent_map"].note is None
     assert {k: (s.attribution, s.licence) for k, s in mod.SOURCES.items()} == {
         "metro": ("datový podklad © IPR Praha", "CC BY 4.0"),
         "flood": ("© VÚV TGM pro MŽP (ISVS VODA)", "CC BY 4.0"),
         "kraje": ("© ČÚZK (RÚIAN)", "CC BY 4.0"),
+        "universities": ("datový podklad © IPR Praha; počty studentů MŠMT", "CC BY 4.0 (IPR Praha)"),
         # The MF states no licence for the data, only its site's copyright.
         "rent_map": ("Ministerstvo financí ČR – Cenová mapa nájemného",
                      "Licence neuvedena (© Ministerstvo financí ČR)"),
@@ -123,8 +145,13 @@ def test_the_readers_ask_each_publisher_for_its_native_crs() -> None:
         ("MPP_CUR_MPP_STAV_600_DI_TRASY_L", "kapitola=621", 3857, mod.POLYLINE),
         ("MPP_CUR_MPP_600_DI_TRASY_L", "kapitola=621", 3857, mod.POLYLINE),
         ("MPP_CUR_MPP_600_DI_ZARIZENI_B", "kapitola=621 and druh=2", 3857, mod.POINT),
+        # Stations in service come from IPR's referenced (not hosted) named layer, in its
+        # native S-JTSK: its WGS84 output carries the same ~10 m datum shift as the VÚV server.
+        ("DOP_MetroZarizeni_b", "DRUH=1", 5514, mod.POINT),
     ]
-    assert all(r.service_url == f"{mod.IPR_HOSTED}/{r.layer_name}/FeatureServer" for r in metro)
+    assert all(r.service_url == f"{mod.IPR_HOSTED}/{r.layer_name}/FeatureServer" for r in metro[:3])
+    assert metro[3].service_url == f"{mod.IPR_REFERENCED}/DOP_MetroZarizeni_b/FeatureServer"
+    assert metro[3].fields == ("DRUH", "NAZEV", "TRASA")
     assert [(lyr.key, lyr.readers[0].layer_name, lyr.readers[0].out_sr)
             for lyr in mod.SOURCES["flood"].layers] == [
         ("flood_q5", "ZaplavUzemi_Q5", 5514), ("flood_q20", "ZaplavUzemi_Q20", 5514),
@@ -134,6 +161,15 @@ def test_the_readers_ask_each_publisher_for_its_native_crs() -> None:
     assert all(lyr.readers[0].service_url == mod.VUV_MAPSERVER for lyr in mod.SOURCES["flood"].layers)
     assert _layer("kraje").readers == (mod.SqlSource(mod.KRAJE_SQL),)
     assert _layer("rent_map").readers == (mod.SqlSource(mod.RENT_MAP_SQL),)
+    # Both university layers read IPR's one hosted universities layer (3857); the teaching
+    # and service sites through the reader that binds MŠMT's counts first.
+    assert _layer("universities").readers == (mod.UniversitySites("typ_uap in ('02_01','02_02')"),)
+    (dorms,) = _layer("dorms").readers
+    assert (dorms.service_url, dorms.layer_name, dorms.where, dorms.out_sr, dorms.geometry_type,
+            dorms.fields) == (f"{mod.IPR_HOSTED}/FSV_CUR_OV_SKOLYVS_B/FeatureServer",
+                              "FSV_CUR_OV_SKOLYVS_B", "typ_uap = '02_03'", 3857, mod.POINT,
+                              ("id_zar", "nazev_zar", "typ_uap"))
+    assert dorms.props is mod.dorm_props
 
 
 def test_the_rent_map_paints_the_choropleth_the_browse_map_drew() -> None:
@@ -240,6 +276,28 @@ def test_cancelled_rows_vestibules_and_depots_are_skipped() -> None:
     assert mod.metro_station_props({"druh": 2, "stav": 1, "nazev": "Stanice metra Florenc"}) is None
 
 
+def test_stations_in_service_wear_their_line_letter() -> None:
+    """IPR's named metro-equipment layer: DRUH 1 = station, TRASA = the line. The class IS
+    the letter, so the dot takes the line's legend colour and a transfer station has one
+    point per line; the label drops the plan's prefix if it ever appears."""
+    assert mod.metro_existing_station_props({"DRUH": 1, "NAZEV": "Muzeum", "TRASA": "A"}) == {
+        "class": "A", "name": "Muzeum", "label": "Muzeum"}
+    assert mod.metro_existing_station_props({"DRUH": 1, "NAZEV": "Muzeum", "TRASA": "C"}) == {
+        "class": "C", "name": "Muzeum", "label": "Muzeum"}
+    assert mod.metro_existing_station_props(
+        {"DRUH": 1, "NAZEV": "Stanice metra Florenc", "TRASA": " b "}
+    ) == {"class": "B", "name": "Stanice metra Florenc", "label": "Florenc"}
+    # Vestibules (2) and depots (3) are not stations.
+    assert mod.metro_existing_station_props({"DRUH": 2, "NAZEV": "Muzeum", "TRASA": "A"}) is None
+    assert mod.metro_existing_station_props({"DRUH": 3, "NAZEV": "Depo Hostivař", "TRASA": "A"}) is None
+    # A station the layer cannot place on a line, or cannot name, refuses the run (nothing partial).
+    for attrs in ({"DRUH": 1, "NAZEV": "Muzeum", "TRASA": "D"},
+                  {"DRUH": 1, "NAZEV": "Muzeum", "TRASA": None},
+                  {"DRUH": 1, "NAZEV": " ", "TRASA": "A"}):
+        with pytest.raises(mod.Refused):
+            mod.metro_existing_station_props(attrs)
+
+
 @pytest.mark.parametrize("attrs", [
     {"stav": 2, "nazev": "Výhledové kolejové spojení Pankrác - Smíchov"},
     {"stav": 5, "nazev": "Trasa metra A"},
@@ -247,6 +305,177 @@ def test_cancelled_rows_vestibules_and_depots_are_skipped() -> None:
 def test_a_line_the_mapper_cannot_class_is_refused(attrs: dict[str, Any]) -> None:
     with pytest.raises(mod.Refused):
         mod.metro_line_props(attrs)
+
+
+# --- universities: IPR's sites classed by MŠMT's student counts -------------------------
+
+UNIVERSITIES_SERVICE = f"{mod.IPR_HOSTED}/FSV_CUR_OV_SKOLYVS_B/FeatureServer"
+
+
+def _counts(**overrides: int) -> dict[str, int]:
+    """Present-form students for every code the seat table names (100 unless overridden)."""
+    codes = {code for _, _, seat_codes in mod.UNIVERSITY_SEATS for code in seat_codes}
+    return {code: overrides.get(code, 100) for code in codes} | overrides
+
+
+def _xlsx(sheets: dict[str, list[list[Any]]]) -> bytes:
+    """A workbook the way MŠMT writes F21: one sheet per year, text in shared strings."""
+    shared: list[str] = []
+
+    def cell(ref: str, value: Any) -> str:
+        if isinstance(value, str):
+            if value not in shared:
+                shared.append(value)
+            return f'<c r="{ref}" t="s"><v>{shared.index(value)}</v></c>'
+        return f'<c r="{ref}"><v>{value}</v></c>'
+
+    books: dict[str, str] = {}
+    for n, (name, rows) in enumerate(sheets.items(), start=1):
+        body = "".join(
+            f'<row r="{i}">' + "".join(cell(f"{chr(64 + j)}{i}", v) for j, v in enumerate(row, start=1)
+                                       if v is not None) + "</row>"
+            for i, row in enumerate(rows, start=1))
+        books[f"xl/worksheets/sheet{n}.xml"] = (
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            f"<sheetData>{body}</sheetData></worksheet>")
+    books["xl/workbook.xml"] = (
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
+        + "".join(f'<sheet name="{name}" sheetId="{n}" r:id="rId{n}"/>'
+                  for n, name in enumerate(sheets, start=1)) + "</sheets></workbook>")
+    books["xl/_rels/workbook.xml.rels"] = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(f'<Relationship Id="rId{n}" Target="worksheets/sheet{n}.xml" Type="w"/>'
+                  for n in range(1, len(sheets) + 1)) + "</Relationships>")
+    books["xl/sharedStrings.xml"] = (
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        + "".join(f"<si><t>{text}</t></si>" for text in shared) + "</sst>")
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        for path, xml in books.items():
+            z.writestr(path, xml)
+    return out.getvalue()
+
+
+def _f21(counts: dict[str, int], year: str = "2025") -> bytes:
+    header = [["VŠ – studenti podle formy a typu studijního programu – podle vysoké školy/fakulty"],
+              ["k 31.12."], [None, None, None, None, None, None, "Studenti (fyzické osoby) celkem"],
+              [None, None, None, None, None, None, "celkem", "v prezenčním studiu"]]
+    rows = [[None, code, f"name {code}", None, None, None, n * 2, n] for code, n in counts.items()]
+    return _xlsx({"2024": header + [[None, "11210", "FF", None, None, None, 1, 1]],
+                  year: header + rows})
+
+
+def test_the_seat_table_names_real_ipr_sites_each_faculty_once() -> None:
+    ids = [id_zar for _, id_zar, _ in mod.UNIVERSITY_SEATS]
+    labels = [label for label, _, _ in mod.UNIVERSITY_SEATS]
+    codes = [code for _, _, seat_codes in mod.UNIVERSITY_SEATS for code in seat_codes]
+    assert len(ids) == len(set(ids)) and set(ids) <= set(_load("ipr_universities_ids.json"))
+    assert len(labels) == len(set(labels))
+    assert len(codes) == len(set(codes)) and all(mod._F21_CODE.fullmatch(c) for c in codes)
+    assert mod.PRIMARY_STUDENTS == 2_000
+
+
+def test_students_on_site_sums_a_sites_faculties_and_refuses_a_missing_code() -> None:
+    on_site = mod.students_on_site(_counts(**{"21240": 2_406, "21450": 1_750, "11210": 5_757}))
+    assert on_site[270203] == ("FIT + FA ČVUT", 4_156)
+    assert on_site[280001] == ("FF UK", 5_757)
+    assert on_site[280086] == ("KTF UK", 100)
+    counts = _counts()
+    del counts["31150"]
+    with pytest.raises(mod.Refused, match="31150"):
+        mod.students_on_site(counts)
+
+
+def test_a_site_is_primary_at_two_thousand_present_students() -> None:
+    """Real IPR sites: the Faculty of Arts seat, a 1. LF clinic in the General University
+    Hospital, the Albertov canteen, VŠE and the FIT/FA building; the class follows the count
+    at the site, the label comes only with `primary`, names lose doubled spaces."""
+    on_site = mod.students_on_site(
+        _counts(**{"11210": 5_757, "11110": 1_999, "31110": 2_690, "31120": 3_068, "31130": 3_540,
+                   "31140": 2_833, "31150": 1_563, "21240": 2_406, "21450": 1_750}))
+    mapper = functools.partial(mod.university_site_props, on_site)
+    sites = {f["properties"]["id_zar"]: f["properties"]
+             for f in _load("ipr_universities_query.json")["features"]}
+    assert mapper(sites[280001]) == {"class": "primary", "name": "UK - F filosofická", "label": "FF UK"}
+    assert mapper(sites[220001]) == {"class": "primary", "name": "Vysoká škola ekonomická v Praze",
+                                     "label": "VŠE"}
+    assert mapper(sites[270203]) == {"class": "primary", "name": "ČVUT - FIT, F architektury",
+                                     "label": "FIT + FA ČVUT"}
+    assert mapper(sites[280028]) == {"class": "secondary", "name": "UK - F1L"}  # 1 999 < 2 000
+    assert mapper(sites[280309]) == {"class": "secondary", "name": "UK - F1L - VFN"}
+    assert mapper(sites[280004]) == {"class": "secondary", "name": "UK - FF - Buquoy"}
+    assert mapper(sites[280161]) == {"class": "secondary", "name": "UK - menza Albertov"}
+    assert mod.dorm_props(sites[280154]) == {"class": "dorm", "name": "UK - kolej 17. listopadu"}
+    # A dorm is not a teaching site and a teaching site is not a dorm; an unnamed site refuses.
+    with pytest.raises(mod.Refused):
+        mapper(sites[280154])
+    with pytest.raises(mod.Refused):
+        mod.dorm_props(sites[280001])
+    with pytest.raises(mod.Refused):
+        mapper({**sites[280001], "nazev_zar": " "})
+
+
+def test_parse_f21_reads_the_latest_year_sheet() -> None:
+    year, students = mod.parse_f21(_f21({"11210": 5757, "6D000": 784, "21900": 701}))
+    assert (year, students) == (2025, {"11210": 5757, "6D000": 784, "21900": 701})
+    year, students = mod.parse_f21(_f21({"11210": 6000}, year="2026"))
+    assert (year, students["11210"]) == (2026, 6000)
+    with pytest.raises(mod.Refused, match="no sheet named by a year"):
+        mod.parse_f21(_xlsx({"souhrn": [["x"]]}))
+    with pytest.raises(mod.Refused, match="no code/count rows"):
+        mod.parse_f21(_xlsx({"2025": [["jen", "záhlaví"]]}))
+
+
+class _UniversitiesSession:
+    """IPR's universities layer from its fixtures plus MŠMT's workbook at its URL."""
+
+    def __init__(self, f21: bytes) -> None:
+        self.server = _FakeServer(UNIVERSITIES_SERVICE, "ipr_universities_service.json", 0,
+                                  "ipr_universities_layer.json", "ipr_universities_query.json",
+                                  "objectid")
+        self.f21 = f21
+        self.f21_gets = 0
+
+    def get(self, url: str, params: dict[str, Any] | None = None,
+            headers: dict[str, str] | None = None, timeout: Any = None) -> _Resp:
+        if url == mod.MSMT_F21_URL:
+            self.f21_gets += 1
+            return _Resp(200, content=self.f21)
+        return self.server.get(url, params, headers, timeout)
+
+
+def _universities_ctx(session: _UniversitiesSession) -> mod.Context:
+    http = _http(session)
+    return mod.Context(http, mod.ArcGis(http), None)  # type: ignore[arg-type]
+
+
+def test_university_sites_bind_the_counts_once_then_page_ipr() -> None:
+    session = _UniversitiesSession(_f21(_counts(**{"11210": 5_757, "31130": 3_540})))
+    dorms = [fid for fid, f in session.server.features.items() if f["properties"]["typ_uap"] == "02_03"]
+    for fid in dorms:  # the fake server ignores `where`; the real one filters the dorms out
+        del session.server.features[fid]
+    features = list(mod.UniversitySites(mod.TEACHING_SITES_WHERE).read(_universities_ctx(session)))
+    assert session.f21_gets == 1
+    assert Counter(f.props["class"] for f in features) == {"primary": 2, "secondary": 5}
+    assert sorted(f.props["label"] for f in features if "label" in f.props) == ["FF UK", "VŠE"]
+    assert all(f.srid == 3857 for f in features)
+    wheres = {p.get("where") for _, p, _ in session.server.calls if "where" in p}
+    assert wheres == {"typ_uap in ('02_01','02_02')"}
+
+
+def test_a_primary_seat_without_an_ipr_point_refuses_the_run() -> None:
+    # FSV UK (Jinonice) is primary by its count but absent from the eight-site fixture.
+    session = _UniversitiesSession(_f21(_counts(**{"11230": 5_652})))
+    for fid in [fid for fid, f in session.server.features.items() if f["properties"]["typ_uap"] == "02_03"]:
+        del session.server.features[fid]
+    with pytest.raises(mod.Refused, match="FSV UK"):
+        list(mod.UniversitySites(mod.TEACHING_SITES_WHERE).read(_universities_ctx(session)))
+
+
+def test_the_universities_revision_is_the_ipr_layers_edit_date() -> None:
+    section = mod.SOURCES["universities"]
+    assert section.revised_at(section, _universities_ctx(_UniversitiesSession(b""))) == date(2026, 1, 20)
 
 
 def test_flood_features_keep_the_watercourse_as_their_name() -> None:
@@ -931,7 +1160,7 @@ def test_a_database_only_render_degrades_a_network_revision_date_at_once(
 
 
 def test_sections_are_selected_in_registry_order() -> None:
-    assert mod.select_sections("") == ["metro", "flood", "kraje", "rent_map"]
+    assert mod.select_sections("") == ["metro", "flood", "kraje", "universities", "rent_map"]
     assert mod.select_sections("kraje, metro") == ["metro", "kraje"]
     assert mod.select_sections("rent_map") == ["rent_map"]
     with pytest.raises(ValueError, match="tram"):
@@ -958,7 +1187,7 @@ def test_one_refused_section_does_not_block_the_others(monkeypatch: pytest.Monke
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {"flood": mod.Refused("shrunk")}))
     monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
     assert mod.main([]) == 1
-    assert seen == ["metro", "flood", "kraje", "rent_map"]
+    assert seen == ["metro", "flood", "kraje", "universities", "rent_map"]
 
 
 def test_a_datum_refusal_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:

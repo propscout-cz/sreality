@@ -82,6 +82,7 @@ const base: PipelineBoardCard = {
   price_change_count: 1,
   obec_id: 554782,
   cast_obce_id: null,
+  ulice_id: null,
   okres_id: null,
   region_id: 19,
   obec: 'Praha',
@@ -138,6 +139,7 @@ beforeEach(() => {
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
     watchdog: 0,
     collection_monitor: 0,
+    collection_share: 0,
     system_health: 0,
     total: 0,
     unread_count: 0,
@@ -216,7 +218,8 @@ describe('phone pipeline', () => {
     /* The header's title and count are the phone frame's. */
     const header = screen.getByRole('banner');
     expect(within(header).getByRole('heading', { name: 'Pipeline' })).toBeInTheDocument();
-    expect(within(header).getByText(/^3\s+karty$/)).toBeInTheDocument();
+    /* The aside is set by an effect after the pages render, so it is awaited. */
+    expect(await within(header).findByText(/^3\s+karty$/)).toBeInTheDocument();
 
     expect(screen.queryByRole('button', { name: 'Spravovat fáze' })).toBeNull();
     expect(screen.queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();
@@ -247,6 +250,22 @@ describe('phone pipeline', () => {
     expect(
       within(bought).getByText('V této fázi teď nic není. Kartu sem přesunete z jejího odznaku fáze.'),
     ).toBeInTheDocument();
+  });
+
+  /* A new account's board: every stage page, each with its own note — never a
+     notice in their place. */
+  it('draws every stage for an empty board', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([]);
+    renderPipeline();
+    const tablist = await screen.findByRole('tablist', { name: 'Fáze' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tabs.map((t) => t.getAttribute('aria-label')?.replace(/\u00a0/g, ' '))).toEqual([
+      'Zájem, 0 karet',
+      'Prohlídka, 0 karet',
+      'Koupeno, 0 karet',
+      'Zamítnuto, 0 karet',
+    ]);
+    expect(screen.queryByText(/Pipeline je zatím prázdná/)).toBeNull();
   });
 
   it('moves a card through its stage badge: the sheet, then usePipelineCard', async () => {

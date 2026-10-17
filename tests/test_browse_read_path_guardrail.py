@@ -19,8 +19,8 @@ Three invariant families, all deterministic and offline (no database):
 
 2. REBUILD INVARIANTS — the pg_cron rebuild functions (migration 277) must
    ANALYZE the replacement relation BEFORE swapping it live (autovacuum never
-   analyzes a fresh relation in time; the frontend's count=planned reads
-   pg_statistic — no stats = garbage counts), and must pg_notify PostgREST
+   analyzes a fresh relation in time; every Browse read's plan comes from
+   pg_statistic — no stats = seq scans and bad plans), and must pg_notify PostgREST
    after the swap (the OID changed).
 
 3. READ CONTRACT — every column the Browse frontend can select, filter, or
@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from api.location_filter import LEVEL_COLUMN
 from toolkit.filter_registry import REGISTRY, Agenda
 
 REPO = Path(__file__).resolve().parents[1]
@@ -170,8 +171,8 @@ def _rebuild_invariants(fn: str, next_rel: str, rename_stmt: str) -> None:
     rename_at = sql.find(rename_stmt)
     assert analyze_at != -1, (
         f"{src.name}: {fn} must `analyze {next_rel}` before the swap — "
-        f"autovacuum never analyzes it in time and count=planned reads "
-        f"pg_statistic (no stats = garbage counts)."
+        f"autovacuum never analyzes it in time and every Browse read's plan comes "
+        f"from pg_statistic (no stats = seq scans and bad plans)."
     )
     assert rename_at != -1, f"{src.name}: {fn} lost its swap ({rename_stmt!r})"
     assert analyze_at < rename_at, (
@@ -326,12 +327,12 @@ def _sortable_fields() -> set[str]:
 # only genuinely hand-wired columns belong here.
 HAND_CODED_FILTER_COLUMNS = {
     "is_active", "last_seen_at", "first_seen_at", "last_change_at",
-    # districtsFilterClause — the ONE code predicate's four levels (W3 S3,
+    # districtsFilterClause — the ONE code predicate's five levels (W3 S3,
     # lib/districtCodes), and now the WHOLE of it: S4 (migration 506) dropped
     # `district` / `place_search_text` / `okres` / `region` from the projection,
     # so a chip predicate that reintroduced an ILIKE arm would fail the
     # subset check below rather than 400 in production.
-    "obec_id", "okres_id", "region_id", "cast_obce_id",
+    *LEVEL_COLUMN.values(),
     # material / enums / price
     "building_type", "furnished", "ownership", "price_czk",
     # price-change windows (priceChangeCountColumn)
