@@ -162,5 +162,3 @@ Still open (small follow-up PR): the late-binding window never evicts permanentl
 unbindable rows (latent above ~5k such runs); the daily full sweep does not call the
 binder, only the incremental pass does; migration 359 declares a partial index while the
 live one is not partial (the safe direction — the binder needs `IS NULL` scans).
-Separately, `api/outreach.py` carries the identical `or None` idiom on `region_ids`,
-where an explicitly empty region list targets the whole country.

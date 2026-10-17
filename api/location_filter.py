@@ -2,16 +2,18 @@
 
 Every surface that lets the operator narrow by place — Browse's list
 (`districtsFilterClause`), Browse's Stats and map (`browse_stats_properties` /
-`browse_map_cells`), the pipeline board's in-memory predicate and the Watchdog
-matcher — tests a chip the same way:
+`browse_map_cells`), the pipeline board's in-memory predicate, the Watchdog
+matcher and the broker leaderboard (`broker_leaderboard`, migration 609: Brokers
+and Outreach) — tests a chip the same way:
 
     <level>_id = any(<codes at that level>)
 
 plain equality, per level, nothing else, over FIVE code columns: `region_id`,
 `okres_id`, `obec_id`, `cast_obce_id` (migration 503) and `ulice_id`, the RÚIAN
-street code (584). `listing_location` answers every listing with those codes,
-and `admin_boundaries.id` IS the RÚIAN code (migrations 083/141), so a chip and
-a listing come from one register.
+street code (584) — or, in the leaderboard, which reads `listing_location`
+directly, its `kraj_kod` … `ulice_kod`. `listing_location` answers every listing
+with those codes, and `admin_boundaries.id` IS the RÚIAN code (migrations
+083/141), so a chip and a listing come from one register.
 
 WHAT YOU PICK IS WHAT YOU FILTER. A chip is exactly one unit at the level the
 operator picked; a street chip filters at its street, never its town. A chip
@@ -68,6 +70,18 @@ def district_code_plan(chips: Sequence[DistrictChip] | None) -> DistrictCodePlan
         if chip.id not in codes:
             codes.append(chip.id)
     return plan
+
+
+def district_arrays(
+    chips: Sequence[DistrictChip] | None,
+) -> tuple[list[str] | None, list[bool] | None, list[str] | None, list[int] | None]:
+    """The four parallel chip arguments of a chip-taking RPC — names (which drive
+    its unnest), excluded flags, levels, codes — one entry per chip, all NULL for
+    none: what the SPA's `buildBrowseStatsArgs` sends Browse's two RPCs."""
+    if not chips:
+        return None, None, None, None
+    return ([c.name for c in chips], [c.excluded for c in chips],
+            [c.level for c in chips], [c.id for c in chips])
 
 
 def _arms(plan_side: dict[str, list[int]], alias: str, prefix: str,
