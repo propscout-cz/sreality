@@ -252,6 +252,22 @@ describe('phone pipeline', () => {
     ).toBeInTheDocument();
   });
 
+  /* A new account's board: every stage page, each with its own note — never a
+     notice in their place. */
+  it('draws every stage for an empty board', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([]);
+    renderPipeline();
+    const tablist = await screen.findByRole('tablist', { name: 'Fáze' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tabs.map((t) => t.getAttribute('aria-label')?.replace(/\u00a0/g, ' '))).toEqual([
+      'Zájem, 0 karet',
+      'Prohlídka, 0 karet',
+      'Koupeno, 0 karet',
+      'Zamítnuto, 0 karet',
+    ]);
+    expect(screen.queryByText(/Pipeline je zatím prázdná/)).toBeNull();
+  });
+
   it('moves a card through its stage badge: the sheet, then usePipelineCard', async () => {
     renderPipeline();
     const interest = await waitFor(() => panel(/^Zájem/));

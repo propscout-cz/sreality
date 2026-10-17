@@ -465,6 +465,41 @@ describe('<Pipeline> board', () => {
     expect(await screen.findByText('Sadová')).toBeInTheDocument();
   });
 
+  /* A new account's board is its stage columns, empty, under the bar a full
+     board has — never a sentence in their place. */
+  it('draws every stage column and the bar for an empty board', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([]);
+    renderBoard();
+    for (const s of STAGES) {
+      expect(await screen.findByRole('list', { name: s.label })).toBeInTheDocument();
+    }
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('0 nemovitostí');
+    expect(screen.queryByText(/Zatím prázdné/)).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Lokalita' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Řazení karet ve fázi' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Karty' })).toBeInTheDocument();
+  });
+
+  /* The frame waits for BOTH reads: a board that lands before its stages
+     would otherwise paint no columns at all. */
+  it('holds the skeleton until the stages land too', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockReturnValue(new Promise(() => {}));
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([]);
+    renderBoard();
+    await waitFor(() =>
+      expect(screen.getByText(/nemovitostí/).textContent).toBe('0 nemovitostí'),
+    );
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+  });
+
+  it('holds the skeleton, with the stages drawn, while the board is in flight', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    for (const s of STAGES) expect(await screen.findByText(s.label)).toBeInTheDocument();
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('— nemovitostí');
+  });
+
   it('filters the board by property type', async () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
     renderBoard();

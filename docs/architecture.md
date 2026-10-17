@@ -2846,6 +2846,9 @@ renumber.** Navigate by area:
     needs a delisted card, Typ ≥2 present types, Kolekce a RESOLVED member map plus either a
     selection in the URL (a live constraint is always visible, so it is always liftable — before
     the list arrives its chip reads `#<id>`) or a board collection that could partition the board.
+    Lokalita and the Řazení / Karty presentation row have no gate: they draw from first paint, on
+    an empty or still-loading board too (operator ruling 2026-10-16), while Stav, Typ, Kolekce and
+    Štítky keep theirs.
     Clearing is ONE header **Reset** gated on a derived `filtersActive`, never a per-row
     clear. **Fail-open contract** (pinned by `Pipeline.test.tsx`): an unresolved member map
     (loading or errored) means no constraint, no Kolekce row and nothing counted — a `?collections=`
