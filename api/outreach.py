@@ -17,6 +17,9 @@ from __future__ import annotations
 from typing import Any
 
 from psycopg.rows import dict_row
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from api.location_filter import DistrictChip, district_arrays
 
 _DRAFT_MODEL_KEY = "outreach_draft_model"
 _DRAFT_PROMPT_KEY = "outreach_draft_system_prompt"
@@ -38,6 +41,23 @@ RECORD_OUTREACH_DRAFT_TOOL: dict[str, Any] = {
 
 
 # --- Campaigns -------------------------------------------------------------
+
+class CampaignTarget(BaseModel):
+    """What `select_targets` ranks by. Unknown keys are refused, so a stale client's (or
+    a stored row's) `region_ids` is an error, never a campaign silently aimed at the
+    whole country."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    districts: list[DistrictChip] = Field(default_factory=list)
+    category_main: str | None = None
+    category_type: str | None = None
+    metric: str | None = None
+
+
+class StaleTarget(ValueError):
+    """A stored target that is not a chip target (migration 609 rewrites them)."""
+
 
 def create_campaign(conn: Any, *, name: str, goal: str | None = None,
                     guidance: str | None = None, target: dict[str, Any] | None = None,
@@ -113,22 +133,24 @@ def select_targets(conn: Any, target: dict[str, Any], *, campaign_id: int | None
                    limit: int = 25) -> list[dict[str, Any]]:
     """Brokers matching the campaign criteria that are reachable (have an email),
     not suppressed, and not already drafted for this campaign."""
-    region_ids = target.get("region_ids") or None
-    okres_ids = target.get("okres_ids") or None
-    obec_ids = target.get("obec_ids") or None
-    metric = target.get("metric") or "active_property_count"
+    try:
+        spec = CampaignTarget.model_validate(target)
+    except ValidationError as exc:
+        raise StaleTarget("this campaign's target predates the location chips (migration "
+                          "609); pick its location again and save it") from exc
+    metric = spec.metric or "active_property_count"
     limit = max(1, min(int(limit), 500))
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT lb.* FROM broker_leaderboard(%s, %s, %s, %s, %s, %s, %s) lb "
+            "SELECT lb.* FROM broker_leaderboard(%s, %s, %s, %s, %s, %s, %s, %s) lb "
             "WHERE lb.primary_email IS NOT NULL "
             "  AND NOT EXISTS (SELECT 1 FROM broker_outreach_suppression s WHERE s.broker_id = lb.broker_id) "
             "  AND (%s::bigint IS NULL OR NOT EXISTS ("
             "        SELECT 1 FROM outreach_messages m "
             "        WHERE m.campaign_id = %s::bigint AND m.broker_id = lb.broker_id)) "
             "LIMIT %s",
-            (region_ids, okres_ids, obec_ids, target.get("category_main"),
-             target.get("category_type"), metric, 2000,
+            (*district_arrays(spec.districts), spec.category_main,
+             spec.category_type, metric, 2000,
              campaign_id, campaign_id, limit))
         return cur.fetchall()
 

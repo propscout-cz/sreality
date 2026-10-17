@@ -41,8 +41,8 @@ const MAX_CHIPS = 4;
 export interface PhotoMarkView {
   /* The deal's stage; null out of the pipeline. */
   stage: { color: string | null; badge: string | null; label: string | null } | null;
-  /* The names of the collections the property sits in, checklist order — empty
-   * while the list is loading; null when it is in none. */
+  /* The names of MY collections the property sits in, checklist order; null
+   * when it is in none of mine. */
   collections: string[] | null;
   /* The property's tags, by name; empty when it has none. */
   tags: { name: string; color: string }[];
@@ -216,11 +216,9 @@ function place(card: HTMLElement, host: HTMLElement): Placement | null {
 
 const px = (radii: number[]): string => radii.map((r) => `${Math.round(r * 10) / 10}px`).join(' ');
 
-/* The label's words: the first collection's name, "+N" for the rest; before
- * the names load, the glyph alone. */
+/* The label's words: the first collection's name, "+N" for the rest. */
 function savedText(names: string[]): string {
-  if (names.length === 0) return '';
-  return names.length === 1 ? names[0] : `${names[0]} +${names.length - 1}`;
+  return names.length > 1 ? `${names[0]} +${names.length - 1}` : names[0] ?? '';
 }
 
 export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark {
@@ -320,7 +318,7 @@ export function createPhotoMark(card: HTMLElement, cardAttr: string): PhotoMark 
     const face = s != null
       ? { color: stageAccent(s.color).fg, glyph: false, badge: s.badge, label: s.label }
       : names != null
-        ? { color: 'var(--copper)', glyph: true, badge: '', label: savedText(names) || 'V kolekci' }
+        ? { color: 'var(--copper)', glyph: true, badge: '', label: savedText(names) }
         : null;
     for (const layer of stage) layer.hidden = face == null;
     if (face != null) {

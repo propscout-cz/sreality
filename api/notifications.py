@@ -42,19 +42,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from api import maps
 from api.cursor import decode_cursor, encode_cursor
-from api.location_filter import (
-    DistrictChip,
-    district_code_plan,
-    district_where,
-    needs_upgrade,
-    upgrade_district_chips,
-)
+from api.location_filter import DistrictChip, district_where
 from location_data.claims_common import served_location_predicate
 from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
@@ -63,6 +56,10 @@ if TYPE_CHECKING:
     import psycopg
 
 LOG = logging.getLogger(__name__)
+
+# The notification_dispatches producers (rule 16; CHECK notification_dispatches_source_ck).
+SourceKind = Literal["watchdog", "collection_monitor", "collection_share", "system_health"]
+SourceKindFilter = Literal[SourceKind, "all"]
 
 
 # --- filter spec ----------------------------------------------------------
@@ -107,27 +104,8 @@ class WatchdogFilterSpec(BaseModel):
 
     # Place. Each chip is a `DistrictChip` — a LEVEL plus a RÚIAN CODE
     # (`api/location_filter.py`), the one predicate Browse, Stats, the map and
-    # this matcher share (rule 16). Migration 075 lifted any pre-existing rows
-    # from `text[]` to the chip shape; the field_validator below also accepts
-    # plain `list[str]` request bodies for clients that haven't redeployed yet,
-    # and a chip stored without a code is resolved by name at read time
-    # (`upgrade_district_chips`) rather than by rewriting the stored blob.
+    # this matcher share (rule 16). A chip without both is refused (422).
     districts: list["DistrictChip"] | None = None
-
-    @field_validator("districts", mode="before")
-    @classmethod
-    def _lift_legacy_districts(cls, v: Any) -> Any:
-        if v is None:
-            return None
-        if not isinstance(v, list):
-            return v
-        out: list[Any] = []
-        for item in v:
-            if isinstance(item, str):
-                out.append({"name": item, "context": None})
-            else:
-                out.append(item)
-        return out
 
     # Price + area bounds.
     min_price_czk: int | None = None
@@ -259,24 +237,6 @@ class WatchdogFilterSpec(BaseModel):
         return self
 
 
-def _resolve_stored_chips(
-    conn: "psycopg.Connection", spec: WatchdogFilterSpec, origin: str
-) -> None:
-    """Upgrade a stored spec's name-only chips to codes, once, at read time.
-
-    A watchdog saved before migration 172 stores `{name, context}` and no code.
-    The blob is the operator's own text and is never rewritten; this resolves it
-    on the way into the predicate, through the same name index `/maps/resolve`
-    uses, so a saved filter means the same thing in Browse and here."""
-    if not needs_upgrade(spec.districts):
-        return
-    spec.districts = upgrade_district_chips(
-        spec.districts,
-        lambda pairs: maps.resolve_names(conn, list(pairs)),
-        origin=origin,
-    )
-
-
 def _build_match_clauses(
     spec: WatchdogFilterSpec,
 ) -> tuple[list[str], dict[str, Any]]:
@@ -344,22 +304,12 @@ class SubscriptionRow:
     updated_at: str
     channels: list[str]
     dispatch_count: int
-    # Place chips this saved filter matches NOTHING on, by name. A watchdog
-    # written before chips carried codes is resolved at read time, so this is
-    # what is left after that: a chip the RÚIAN name index cannot place. Empty
-    # for every healthy filter. Surfaced so a dead place filter is visible in
-    # the list instead of only as a watchdog that quietly stopped firing.
-    unresolved_places: list[str]
 
 
 _SUB_COLS = "id, name, filter_spec, is_active, created_at, updated_at, channels"
 
 
-def _row_to_sub(
-    row: tuple[Any, ...],
-    dispatch_count: int,
-    unresolved_places: list[str] | None = None,
-) -> SubscriptionRow:
+def _row_to_sub(row: tuple[Any, ...], dispatch_count: int) -> SubscriptionRow:
     return SubscriptionRow(
         id=str(row[0]),
         name=row[1],
@@ -369,44 +319,7 @@ def _row_to_sub(
         updated_at=row[5].isoformat() if row[5] else "",
         channels=list(row[6]) if row[6] else [],
         dispatch_count=dispatch_count,
-        unresolved_places=unresolved_places or [],
     )
-
-
-def _chips_of(filter_spec: Any) -> list[DistrictChip]:
-    """The stored spec's place chips, leniently — a list endpoint must survive a
-    blob the matcher would reject."""
-    raw = (filter_spec or {}).get("districts") if isinstance(filter_spec, dict) else None
-    chips: list[DistrictChip] = []
-    for entry in raw or []:
-        if isinstance(entry, str) and entry:
-            chips.append(DistrictChip(name=entry))
-        elif isinstance(entry, dict) and entry.get("name"):
-            try:
-                chips.append(DistrictChip(**entry))
-            except Exception:  # noqa: BLE001 — one bad chip is not a broken list
-                continue
-    return chips
-
-
-def unresolved_places(
-    conn: "psycopg.Connection", filter_spec: Any,
-) -> list[str]:
-    """Which of this saved filter's place chips match NOTHING.
-
-    Runs the SAME read-time name upgrade the matcher runs, so what comes back is
-    the honest answer — a pre-code chip whose name the index CAN place is not
-    dead and is not listed here. Empty list = nothing to say."""
-    chips = _chips_of(filter_spec)
-    if not chips:
-        return []
-    if needs_upgrade(chips):
-        chips = upgrade_district_chips(
-            chips,
-            lambda pairs: maps.resolve_names(conn, list(pairs)),
-            origin="subscription list",
-        ) or []
-    return district_code_plan(chips).unresolved
 
 
 # Every in-app read and count of `notification_dispatches d` hides a dispatch
@@ -438,12 +351,7 @@ def list_subscriptions(
     with conn.cursor() as cur:
         cur.execute(sql)
         rows = cur.fetchall()
-    return [
-        _row_to_sub(
-            r[:-1], int(r[-1] or 0), unresolved_places(conn, r[2]),
-        ).__dict__
-        for r in rows
-    ]
+    return [_row_to_sub(r[:-1], int(r[-1] or 0)).__dict__ for r in rows]
 
 
 def get_subscription(
@@ -460,9 +368,7 @@ def get_subscription(
         row = cur.fetchone()
     if row is None:
         return None
-    return _row_to_sub(
-        row[:-1], int(row[-1] or 0), unresolved_places(conn, row[2]),
-    ).__dict__
+    return _row_to_sub(row[:-1], int(row[-1] or 0)).__dict__
 
 
 def create_subscription(
@@ -617,7 +523,7 @@ def list_dispatches(
     *,
     subscription_id: str | None = None,
     collection_id: int | None = None,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: SourceKindFilter = "all",
     seen: Literal["all", "seen", "unseen"] = "all",
     limit: int = 50,
     offset: int = 0,
@@ -756,7 +662,7 @@ def _fetch_dispatch(
 def get_unread_count(
     conn: "psycopg.Connection",
     *,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: SourceKindFilter = "all",
 ) -> dict[str, int]:
     """Unseen dispatch counts — drives the nav unread badge.
 
@@ -775,9 +681,7 @@ def get_unread_count(
     # system_health alerts from the badge.
     total = sum(counts.values())
     return {
-        "watchdog": counts.get("watchdog", 0),
-        "collection_monitor": counts.get("collection_monitor", 0),
-        "system_health": counts.get("system_health", 0),
+        **{kind: counts.get(kind, 0) for kind in get_args(SourceKind)},
         "total": total,
         "unread_count": total if source_kind == "all" else counts.get(source_kind, 0),
     }
@@ -786,7 +690,7 @@ def get_unread_count(
 def mark_all_seen(
     conn: "psycopg.Connection",
     *,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: SourceKindFilter = "all",
 ) -> int:
     """Mark every visible unseen dispatch (optionally scoped to a source) as seen.
 
@@ -1316,7 +1220,6 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
     for sub_id, raw_spec, cursor_ts, channels in sub_rows:
         try:
             spec = WatchdogFilterSpec(**(raw_spec or {}))
-            _resolve_stored_chips(conn, spec, f"watchdog subscription {sub_id}")
         except Exception as exc:  # noqa: BLE001 — bad spec, skip but keep loop alive
             LOG.warning(
                 "matcher: subscription %s has invalid filter_spec: %s",
@@ -1528,7 +1431,6 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
     for sub_id, raw_spec, channels in sub_rows:
         try:
             spec = WatchdogFilterSpec(**(raw_spec or {}))
-            _resolve_stored_chips(conn, spec, f"watchdog subscription {sub_id}")
         except Exception as exc:  # noqa: BLE001 — bad spec, skip but keep loop alive
             LOG.warning(
                 "change matcher: subscription %s has invalid filter_spec: %s",

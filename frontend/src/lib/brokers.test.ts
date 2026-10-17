@@ -92,9 +92,7 @@ describe('auth mode', () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const b = await loadBrokers();
     await b.fetchBrokerLeaderboard({
-      regionIds: [],
-      okresIds: [],
-      obecIds: [],
+      districts: [],
       categoryMain: null,
       categoryType: null,
       metric: 'active_property_count',
@@ -109,13 +107,17 @@ describe('auth mode', () => {
 });
 
 describe('fetchBrokerLeaderboard', () => {
-  it('sends each geo level as repeated params and omits the empty ones', async () => {
+  /* One entry per chip in each of the four parallel params, in chip order — the
+   * route zips them back into chips; the context is display-only and stays home. */
+  it('sends the chips as four parallel repeated params', async () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const { fetchBrokerLeaderboard } = await loadBrokers();
     await fetchBrokerLeaderboard({
-      regionIds: [19, 27],
-      okresIds: [],
-      obecIds: [554782],
+      districts: [
+        { name: 'Kraj Vysočina', context: null, level: 'kraj', id: 108 },
+        { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
+        { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 490067, excluded: true },
+      ],
       categoryMain: 'byt',
       categoryType: 'prodej',
       metric: 'listing_count',
@@ -124,29 +126,34 @@ describe('fetchBrokerLeaderboard', () => {
     });
     const url = new URL(calls[0].url);
     expect(url.pathname).toBe('/brokers/leaderboard');
-    expect(url.searchParams.getAll('region_ids')).toEqual(['19', '27']);
-    expect(url.searchParams.getAll('okres_ids')).toEqual([]);
-    expect(url.searchParams.getAll('obec_ids')).toEqual(['554782']);
+    expect(url.searchParams.getAll('districts')).toEqual(['Kraj Vysočina', 'Na Rybníčkách', 'Žižkov']);
+    expect(url.searchParams.getAll('districts_lvl')).toEqual(['kraj', 'ulice', 'cast_obce']);
+    expect(url.searchParams.getAll('districts_id')).toEqual(['108', '666742', '490067']);
+    expect(url.searchParams.getAll('districts_excl')).toEqual(['false', 'false', 'true']);
+    expect(url.searchParams.has('districts_ctx')).toBe(false);
     expect(url.searchParams.get('metric')).toBe('listing_count');
     expect(url.searchParams.get('limit')).toBe('50');
     expect(url.searchParams.getAll('firm_ids')).toEqual(['8', '41']);
   });
 
-  it('omits firm_ids when no company filter is set', async () => {
+  it('omits the chip params and firm_ids when neither is set — no chips is the whole country', async () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const { fetchBrokerLeaderboard } = await loadBrokers();
     await fetchBrokerLeaderboard({
-      regionIds: [], okresIds: [], obecIds: [],
+      districts: [],
       categoryMain: null, categoryType: null, metric: 'listing_count',
     });
-    expect(new URL(calls[0].url).searchParams.getAll('firm_ids')).toEqual([]);
+    const params = new URL(calls[0].url).searchParams;
+    for (const k of ['districts', 'districts_lvl', 'districts_id', 'districts_excl', 'firm_ids']) {
+      expect(params.has(k)).toBe(false);
+    }
   });
 
   it('sends min_price_czk and include_unpriced when a value filter is set', async () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const { fetchBrokerLeaderboard } = await loadBrokers();
     await fetchBrokerLeaderboard({
-      regionIds: [], okresIds: [], obecIds: [],
+      districts: [],
       categoryMain: 'byt', categoryType: 'prodej', metric: 'active_property_count',
       minPriceCzk: 5_000_000, includeUnpriced: true,
     });
@@ -159,7 +166,7 @@ describe('fetchBrokerLeaderboard', () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const { fetchBrokerLeaderboard } = await loadBrokers();
     await fetchBrokerLeaderboard({
-      regionIds: [], okresIds: [], obecIds: [],
+      districts: [],
       categoryMain: 'komercni', categoryType: null, metric: 'active_property_count',
       subtypes: ['kancelar', 'sklad'], includeUnknownSubtype: true,
     });
@@ -172,7 +179,7 @@ describe('fetchBrokerLeaderboard', () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const { fetchBrokerLeaderboard } = await loadBrokers();
     await fetchBrokerLeaderboard({
-      regionIds: [], okresIds: [], obecIds: [],
+      districts: [],
       categoryMain: null, categoryType: null, metric: 'listing_count',
     });
     const url = new URL(calls[0].url);
@@ -186,7 +193,7 @@ describe('fetchBrokerLeaderboard', () => {
     const calls = stubFetch(() => ({ body: { data: [] } }));
     const { fetchBrokerLeaderboard } = await loadBrokers();
     await fetchBrokerLeaderboard({
-      regionIds: [], okresIds: [], obecIds: [],
+      districts: [],
       categoryMain: null, categoryType: null, metric: 'listing_count',
     });
     const url = new URL(calls[0].url);
@@ -203,7 +210,7 @@ describe('fetchBrokerLeaderboard', () => {
     }));
     const { fetchBrokerLeaderboard, contactState } = await loadBrokers();
     const rows = await fetchBrokerLeaderboard({
-      regionIds: [], okresIds: [], obecIds: [],
+      districts: [],
       categoryMain: null, categoryType: null, metric: 'listing_count',
     });
     expect(contactState(rows[0].primary_email, rows[0].has_email)).toEqual({

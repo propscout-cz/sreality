@@ -69,14 +69,6 @@ vi.mock('@/lib/brokers', async (importOriginal) => {
   };
 });
 
-/* The board shares Browse's stored-chip reader (W3 S3): a URL written before
- * chips carried codes is resolved through this one call. */
-const resolveChipNames = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/maps', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/maps')>();
-  return { ...actual, resolveChipNames };
-});
-
 const CARDS: PipelineBoardCard[] = [
   {
     property_id: 42,
@@ -102,6 +94,7 @@ const CARDS: PipelineBoardCard[] = [
     price_change_count: 1,
     obec_id: 554782,
     cast_obce_id: null,
+    ulice_id: null,
     okres_id: null,
     region_id: 19,
     obec: 'Praha',
@@ -153,6 +146,7 @@ const CARD_DUM: PipelineBoardCard = {
   price_change_count: 0,
   obec_id: 582786,
   cast_obce_id: null,
+  ulice_id: null,
   okres_id: 3702,
   region_id: 116,
   obec: 'Brno',
@@ -183,6 +177,8 @@ const collection = (id: number, name: string): Collection => ({
   monitoring_enabled: false,
   notify_channels: [],
   is_system: false,
+  owner_email: null,
+  shared_with: [],
 });
 
 // Šortlist holds a board property; Archiv holds none — only the first earns a chip.
@@ -520,26 +516,20 @@ describe('<Pipeline> board', () => {
     expect(screen.getByText('Lesní')).toBeInTheDocument();
   });
 
-  /* W3 S3. The board filters its cards in the BROWSER, so it needs the same
-     chip treatment Browse gets: under the one code predicate a chip with no
-     code matches nothing, and a URL written before chips carried codes would
-     empty the board while the very same link still shows a cohort on /browse. */
-  it('resolves a pre-code chip in the URL instead of emptying the board', async () => {
-    resolveChipNames.mockResolvedValue([[{ level: 'obec', id: 554782 }]]);
-    renderBoard('/pipeline?districts=Praha');
-    expect(await screen.findByText('Sadová')).toBeInTheDocument();
-    expect(resolveChipNames).toHaveBeenCalledWith([
-      { name: 'Praha', context: null },
+  /* The board filters its cards in the BROWSER over the same five codes the
+     server-side predicate uses: a street chip keeps the cards on that street,
+     not every card in its town. */
+  it('filters the board by a street chip', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      { ...CARDS[0], ulice_id: 700001 },
+      { ...CARD_DUM, obec_id: 554782, ulice_id: null },
     ]);
-  });
-
-  it('filters the board on the resolved code, not on the name', async () => {
-    resolveChipNames.mockResolvedValue([[{ level: 'obec', id: 582786 }]]);
-    renderBoard('/pipeline?districts=Brno');
-    await waitFor(() => expect(resolveChipNames).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(screen.queryByText('Sadová')).not.toBeInTheDocument(),
+    renderBoard(
+      '/pipeline?districts=Sadov%C3%A1&districts_ctx=Praha&districts_lvl=ulice&districts_id=700001',
     );
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByText('Lesní')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove Sadová · Praha (Ulice)' })).toBeInTheDocument();
   });
 
   it('filters the board by active/inactive status', async () => {
@@ -634,6 +624,21 @@ describe('<Pipeline> board', () => {
     );
     expect(screen.getByText('Sadová')).toBeInTheDocument();
     expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
+  });
+
+  it('names a collection shared with me by its owner', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [{ ...collection(9, 'Od Petra'), owner_email: 'petr@example.cz' }],
+      total: 1,
+    });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
+      new Map([[42, [9]]]),
+    );
+    renderBoard();
+    expect(
+      await screen.findByRole('button', { name: 'Od Petra · petr@example.cz' }),
+    ).toBeInTheDocument();
   });
 
   /* A resolved selection that matches nothing is ZERO cards, never the whole

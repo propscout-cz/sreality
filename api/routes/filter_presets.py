@@ -19,28 +19,46 @@ stored/returned as an opaque dict. Deliberately decoupled from the Watchdog
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, TypeAdapter
 
 from api import filter_presets as fp
 from api import tenant_pool
+from api.location_filter import DistrictChip
 from api.schemas import TagColor
 
 router = APIRouter(prefix="/filter-presets", tags=["filter-presets"])
 
+_CHIPS = TypeAdapter(list[DistrictChip])
+
+
+# The blob is stored VERBATIM, so its chips are checked strictly (a "582786" or a
+# `true` id would be stored as written), where the SPA reads them (`readPresetSpec`:
+# `spec.filters`, else a legacy bare filter set). `strict=` at validation time: a
+# `ConfigDict(strict=True)` on the adapter does not reach the nested model.
+def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
+    """Every place chip in the blob is a level plus a RÚIAN code, or the write is a 422."""
+    filters = spec["filters"] if spec.get("filters") is not None else spec
+    if isinstance(filters, dict) and filters.get("districts") is not None:
+        _CHIPS.validate_python(filters["districts"], strict=True)
+    return spec
+
+
+PresetSpec = Annotated[dict[str, Any], AfterValidator(_coded_chips)]
+
 
 class CreatePresetIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    filter_spec: dict[str, Any]
+    filter_spec: PresetSpec
     # Shared tag palette (api.schemas.TagColor); None = neutral default chip.
     color: TagColor | None = None
 
 
 class UpdatePresetIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    filter_spec: dict[str, Any] | None = None
+    filter_spec: PresetSpec | None = None
     color: TagColor | None = None
 
 

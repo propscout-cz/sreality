@@ -1,19 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
-import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
-import {
-  createCollection,
-  deleteCollection,
-  listCollections,
-} from '@/lib/api';
-import { revalidateCollections } from '@/lib/collectionCache';
-import { curationKeys } from '@/lib/queries';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { createCollection, deleteCollection } from '@/lib/api';
+import { isMine, revalidateCollections, useCollections } from '@/lib/collectionCache';
+import { SectionLabel } from '@/components/section';
+import { BellGlyph } from '@/components/CollectionSaveMenu';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
 import { fmtCount, fmtRelative, fmtAbsolute } from '@/lib/format';
@@ -37,21 +29,15 @@ export default function Collections() {
 function CollectionsDesktop() {
   const qc = useQueryClient();
 
-  const listQ = useQuery<{ data: Collection[]; total: number }, Error>({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,
-  });
-
-  const items = listQ.data?.data ?? [];
+  const { mine, shared, query: listQ } = useCollections();
 
   return (
     <div className="px-6 py-8 max-w-4xl mx-auto">
-      <Header total={listQ.data?.total ?? null} />
+      {/* Mine only: the shared ones are counted by their own section. */}
+      <Header total={listQ.data ? mine.length : null} />
       <div className="mt-7">
         <NewCollectionForm
-          existing={items.map((c) => c.name.toLowerCase())}
+          existing={mine.map((c) => c.name.toLowerCase())}
           onCreated={() => revalidateCollections(qc)}
         />
       </div>
@@ -64,10 +50,22 @@ function CollectionsDesktop() {
             message={listQ.error.message}
             onRetry={() => void listQ.refetch()}
           />
-        ) : items.length === 0 ? (
-          <EmptyState />
         ) : (
-          <CollectionList items={items} />
+          <>
+            {mine.length === 0 ? (
+              <EmptyState sharedOnly={shared.length > 0} />
+            ) : (
+              <CollectionList items={mine} />
+            )}
+            {shared.length > 0 && (
+              <section className="mt-10">
+                <SectionLabel>Shared with me</SectionLabel>
+                <div className="mt-3">
+                  <CollectionList items={shared} />
+                </div>
+              </section>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -225,9 +223,13 @@ function CollectionList({ items }: { items: Collection[] }) {
   );
 }
 
+/* One row for both groups: a collection shared with me names its owner and
+ * carries no Default / Delete / monitoring — those are the owner's. */
 function CollectionRow({ c }: { c: Collection }) {
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
+  const own = isMine(c);
+  const recipients = c.shared_with.length;
 
   const del = useMutation({
     mutationFn: () => deleteCollection(c.id),
@@ -244,7 +246,7 @@ function CollectionRow({ c }: { c: Collection }) {
           >
             {c.name}
           </Link>
-          {c.monitoring_enabled && <MonitorPill />}
+          {own && c.monitoring_enabled && <MonitorPill />}
         </div>
         {c.description && (
           <p className="mt-1 text-sm text-[var(--color-ink-3)] truncate">
@@ -252,10 +254,12 @@ function CollectionRow({ c }: { c: Collection }) {
           </p>
         )}
         <p className="mt-1 text-[0.7rem] tracking-wide text-[var(--color-ink-4)]">
+          {!own && <>Shared by {c.owner_email} · </>}
           Updated{' '}
           <span className="cursor-help" title={fmtAbsolute(c.updated_at)}>
             {fmtRelative(c.updated_at)}
           </span>
+          {own && recipients > 0 && <> · shared with {fmtCount(recipients)}</>}
         </p>
       </div>
       <div className="shrink-0 text-right">
@@ -267,7 +271,7 @@ function CollectionRow({ c }: { c: Collection }) {
         </p>
       </div>
       <div className="shrink-0">
-        {c.is_system ? (
+        {!own ? null : c.is_system ? (
           <span
             title="The default monitoring collection can't be deleted."
             className="px-2.5 py-1 text-[0.65rem] tracking-[0.12em] uppercase text-[var(--color-ink-4)] select-none"
@@ -316,31 +320,17 @@ function MonitorPill() {
       title="Monitoring — changes to properties here raise alerts"
       className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[0.62rem] tracking-[0.1em] uppercase rounded-[var(--radius-xs)] bg-[var(--color-copper-soft)] text-[var(--color-copper)] shrink-0"
     >
-      <BellIcon />
+      <BellGlyph />
       <span>Monitoring</span>
     </span>
   );
 }
 
-function BellIcon() {
-  return (
-    <svg width="9" height="9" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M8 1.5a3.5 3.5 0 0 0-3.5 3.5c0 3-1.5 4-1.5 4h10s-1.5-1-1.5-4A3.5 3.5 0 0 0 8 1.5ZM6.5 12.5a1.5 1.5 0 0 0 3 0"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function EmptyState() {
+function EmptyState({ sharedOnly }: { sharedOnly: boolean }) {
   return (
     <div className="px-6 py-12 text-center border border-dashed border-[var(--color-rule)] rounded-[var(--radius-md)]">
       <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        No collections yet
+        {sharedOnly ? 'No collections of your own yet' : 'No collections yet'}
       </p>
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
         Use the form above to start one. Then add listings from any listing's

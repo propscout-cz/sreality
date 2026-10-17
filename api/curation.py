@@ -1,58 +1,89 @@
-"""Persistence helpers for /collections, /properties/{id}/notes, /artifact-links, /tags.
+"""Persistence helpers for /collections (+ /shares), /properties/{id}/notes, /artifact-links, /tags.
 
-CRUD over the property-grain curation tables (migration 202): collection
-membership, tags and notes are keyed on `property_id` so operator curation
-describes the real-world property and is dedup-stable (it follows the property
-across merge/detach via toolkit.property_carriers). Each handler is a plain
-function returning a dict; EVERY FastAPI route in api/main.py that wraps them now
-uses tenant_pool.tenant_conn + Depends(verify_jwt) (RLS-scoped by the caller's
-verified JWT) — reads then need no account_id in code, RLS filters them; top-level
-INSERTs with no account-owned parent to derive it from (create_collection,
-create_tag, create_note) take one REQUIRED account_id (no default): the route
-resolves it once via tenant_pool.require_account_id, or 400s.
+CRUD over the property-grain curation tables (migration 202), keyed on `property_id` so curation
+follows the property across merge/detach (toolkit.property_carriers). Every route runs on
+tenant_pool.tenant_conn, so RLS scopes reads; a top-level INSERT takes one REQUIRED account_id
+resolved at the route edge; a write by id is its own ownership gate (rowcount 0 -> 404, never a
+SELECT probe first: a SELECT proves visibility, and a shared collection is visible, not owned).
+One transaction per write, UniqueViolation -> 409, flat dicts out.
 
-The stragglers still on Depends(get_db_conn) + Depends(require_token) — collection
-CRUD and every /tags route — were moved here in one pass: that pair is service-role
-(RLS off) behind a static token that shipped inside the public SPA bundle, and the
-statements below carry no account predicate of their own, so any holder of the
-token could read or delete another account's curation. Nothing in this module may
-go back to the service-role pair; a new route joins the tenant path or it does not
-ship.
-
-Pattern mirrors api/estimation_runs.py:
-  - one transaction per write,
-  - psycopg.errors.UniqueViolation -> HTTP 409,
-  - flat dicts on the way out (no Pydantic response model).
+Sharing (migration 610, docs/design/collection-sharing.md) widens READS only: a shared collection
+and the other party's notes marked `shared` arrive through the same projections, told apart by ONE
+field, `owner_email` (null iff the row is the caller's). A share row is written on the service-role
+connection (browser roles hold no INSERT on it) only after the tenant UPDATE gate passed.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable, ContextManager
 
 import psycopg
 from fastapi import HTTPException
 
 from api import note_attachments
 from api import schemas as s
+from api import tenant_pool
 from toolkit.property_identity import (
     resolve_active_property_id,
     resolve_active_property_ids,
 )
 
-if TYPE_CHECKING:
-    pass
-
 
 # --- collections -----------------------------------------------------------
 
+def _is_mine(col: str) -> str:
+    """The one "is this row the caller's" predicate every share-aware projection uses."""
+    return f"{col} IN (SELECT current_account_ids())"
+
+
+def _party_label(col: str) -> str:
+    """The account's label as the caller may see it: a counterparty's email, else NULL."""
+    return f"(SELECT e.email FROM share_party_emails() e WHERE e.account_id = {col})"
+
+
+_COLLECTION_IS_MINE = _is_mine("c.account_id")
+
 # `listing_count` is kept as the field name for API/UI stability; it now counts
-# member properties (the curation grain).
-_COLLECTION_FULL_PROJECTION = (
+# member properties (the curation grain). Scalar subselects only, so the one projection serves
+# SELECT, INSERT … RETURNING and UPDATE … RETURNING alike. Monitoring describes the CALLER (alerts
+# go to the owner), so a shared row reads it off; labels come from share_party_emails(), which
+# answers only the caller's counterparties (a recipient's own grant reads `email: null` = you).
+_COLLECTION_PROJECTION = (
     "c.id, c.name, c.description, c.created_at, c.updated_at, "
     "(SELECT count(*) FROM collection_properties cp "
     " WHERE cp.collection_id = c.id) AS listing_count, "
-    "c.monitoring_enabled, c.notify_channels, c.is_system"
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.monitoring_enabled ELSE false END "
+    "  AS monitoring_enabled, "
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.notify_channels ELSE '{{}}'::text[] END "
+    "  AS notify_channels, "
+    "c.is_system, "
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN NULL ELSE {_party_label('c.account_id')} END "
+    "  AS owner_email, "
+    "(SELECT coalesce(json_agg(json_build_object("
+    "    'account_id', s.recipient_account_id, "
+    f"    'email', {_party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
+    "  '[]'::json) "
+    " FROM collection_shares s WHERE s.collection_id = c.id) AS shared_with"
+)
+
+_CREATE_COLLECTION_SQL = (
+    "INSERT INTO collections AS c "
+    "  (name, description, monitoring_enabled, notify_channels, account_id) "
+    "VALUES (%s, %s, %s, %s, %s) "
+    f"RETURNING {_COLLECTION_PROJECTION}"
+)
+
+# One statement for every patch: an absent field keeps its value (coalesce), and a system
+# collection keeps its name in the SET so the 409 below is decided on the RETURNING row.
+_UPDATE_COLLECTION_SQL = (
+    "UPDATE collections c SET "
+    "  name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END, "
+    "  description = coalesce(%s, c.description), "
+    "  monitoring_enabled = coalesce(%s, c.monitoring_enabled), "
+    "  notify_channels = coalesce(%s, c.notify_channels), "
+    "  updated_at = now() "
+    f"WHERE c.id = %s RETURNING {_COLLECTION_PROJECTION}"
 )
 
 
@@ -65,17 +96,10 @@ def create_collection(
     # (mig 292) copies it off the parent collection — and it carries no
     # DEFAULT, so a tenant_conn INSERT that leaves it NULL fails the table's
     # WITH CHECK closed. Same shape as create_note.
-    sql = (
-        "INSERT INTO collections "
-        "  (name, description, monitoring_enabled, notify_channels, account_id) "
-        "VALUES (%s, %s, %s, %s, %s) "
-        "RETURNING id, name, description, created_at, updated_at, "
-        "          monitoring_enabled, notify_channels, is_system"
-    )
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(
-                sql,
+                _CREATE_COLLECTION_SQL,
                 (body.name, body.description,
                  body.monitoring_enabled, body.notify_channels, account_id),
             )
@@ -84,30 +108,25 @@ def create_collection(
         raise HTTPException(409, "collection name already exists")
     if row is None:
         raise RuntimeError("INSERT collections did not return a row")
-    return _to_collection(row, listing_count=0)
+    return _to_collection(row)
 
 
 def list_collections(conn: "psycopg.Connection") -> dict[str, Any]:
     sql = (
-        f"SELECT {_COLLECTION_FULL_PROJECTION} FROM collections c "
+        f"SELECT {_COLLECTION_PROJECTION} FROM collections c "
         "ORDER BY c.updated_at DESC"
     )
     with conn.cursor() as cur:
         cur.execute(sql)
         rows = cur.fetchall()
-    data = [_to_collection_full(r) for r in rows]
+    data = [_to_collection(r) for r in rows]
     return {"data": data, "total": len(data)}
 
 
 def get_collection(
     conn: "psycopg.Connection", collection_id: int,
 ) -> dict[str, Any]:
-    """Return the collection metadata + the property rows it holds.
-
-    The embedded rows are the property rollups (joined server-side under the
-    service role); `sreality_id` is the property's representative listing so the
-    SPA can link to the detail page.
-    """
+    """The collection + its member property rollups; `sreality_id` is the repr listing."""
     coll = _fetch_collection(conn, collection_id)
     if coll is None:
         raise HTTPException(404, "collection not found")
@@ -165,64 +184,38 @@ def update_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
 ) -> dict[str, Any]:
-    sets: list[str] = []
-    params: list[Any] = []
-    if body.name is not None:
-        sets.append("name = %s")
-        params.append(body.name)
-    if body.description is not None:
-        sets.append("description = %s")
-        params.append(body.description)
-    if body.monitoring_enabled is not None:
-        sets.append("monitoring_enabled = %s")
-        params.append(body.monitoring_enabled)
-    if body.notify_channels is not None:
-        sets.append("notify_channels = %s")
-        params.append(body.notify_channels)
-    if not sets:
-        coll = _fetch_collection(conn, collection_id)
-        if coll is None:
-            raise HTTPException(404, "collection not found")
-        return coll
-
-    existing = _fetch_collection(conn, collection_id)
-    if existing is None:
-        raise HTTPException(404, "collection not found")
-    if (
-        body.name is not None
-        and existing["is_system"]
-        and body.name != existing["name"]
-    ):
-        raise HTTPException(409, "the system collection cannot be renamed")
-
-    sets.append("updated_at = now()")
-    params.append(collection_id)
-    sql = f"UPDATE collections SET {', '.join(sets)} WHERE id = %s"
+    fields = (body.name, body.description, body.monitoring_enabled, body.notify_channels)
+    if all(f is None for f in fields):
+        raise HTTPException(422, "nothing to update")
     try:
+        # The UPDATE is the ownership gate (rowcount 0 -> 404); an HTTPException raised inside
+        # the transaction rolls it back, so a refused system rename writes nothing.
         with conn.transaction(), conn.cursor() as cur:
-            cur.execute(sql, params)
-            if cur.rowcount == 0:
+            cur.execute(_UPDATE_COLLECTION_SQL, (*fields, collection_id))
+            row = cur.fetchone()
+            if row is None:
                 raise HTTPException(404, "collection not found")
+            coll = _to_collection(row)
+            if coll["is_system"] and body.name is not None and body.name != coll["name"]:
+                raise HTTPException(409, "the system collection cannot be renamed")
     except psycopg.errors.UniqueViolation:
         raise HTTPException(409, "collection name already exists")
-    coll = _fetch_collection(conn, collection_id)
-    assert coll is not None
     return coll
 
 
 def delete_collection(
     conn: "psycopg.Connection", collection_id: int,
 ) -> dict[str, Any]:
+    # The DELETE is the ownership gate; the 409 raised inside the transaction rolls it back.
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
-            "SELECT is_system FROM collections WHERE id = %s", (collection_id,),
+            "DELETE FROM collections WHERE id = %s RETURNING is_system", (collection_id,),
         )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(404, "collection not found")
         if row[0]:
             raise HTTPException(409, "the system collection cannot be deleted")
-        cur.execute("DELETE FROM collections WHERE id = %s", (collection_id,))
     return {"deleted": True}
 
 
@@ -235,7 +228,7 @@ def add_properties_to_collection(
 
     INSERT ... ON CONFLICT DO NOTHING — already-present pairs count as
     skipped, property_ids that aren't in the properties table fail the FK
-    and are reported via 422. Bumps collections.updated_at on success.
+    and are reported via 422.
     """
     if not body.property_ids:
         raise HTTPException(422, "property_ids must be non-empty")
@@ -246,10 +239,12 @@ def add_properties_to_collection(
     )
     try:
         with conn.transaction(), conn.cursor() as cur:
+            # The bump is the ownership gate, so it runs first: rowcount 0 -> 404 before any INSERT.
             cur.execute(
-                "SELECT 1 FROM collections WHERE id = %s", (collection_id,),
+                "UPDATE collections SET updated_at = now() WHERE id = %s",
+                (collection_id,),
             )
-            if cur.fetchone() is None:
+            if cur.rowcount == 0:
                 raise HTTPException(404, "collection not found")
             # Redirect merged-away property_ids to their live survivor so
             # membership never lands on a retired property (dedup-stability).
@@ -262,10 +257,6 @@ def add_properties_to_collection(
             survivor_ids = list({resolved[p] for p in body.property_ids})
             cur.execute(sql, (collection_id, survivor_ids))
             added = cur.rowcount
-            cur.execute(
-                "UPDATE collections SET updated_at = now() WHERE id = %s",
-                (collection_id,),
-            )
     except psycopg.errors.ForeignKeyViolation as exc:
         raise HTTPException(
             422, f"one or more property_ids do not exist: {exc}",
@@ -299,10 +290,114 @@ def remove_property_from_collection(
     return {"removed": removed}
 
 
+# --- shares (migration 610) -------------------------------------------------
+
+# The ownership gate (shape 1): a recipient sees the row but its UPDATE matches nothing.
+_SHARE_GATE_SQL = "UPDATE collections SET updated_at = now() WHERE id = %s RETURNING name"
+
+# account_id is the OWNER, stamped by trigger from the collection; RETURNING it names the sender.
+_INSERT_SHARE_SQL = (
+    "INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s) "
+    "ON CONFLICT DO NOTHING RETURNING account_id"
+)
+
+# The fourth notification producer: in-app only, stamped to the RECIPIENT (the trigger keeps it).
+# ONE notification per (collection, recipient) ever: a revoke + re-share loop must not let a
+# sender refill someone's inbox with text it chose (the collection name), so the key has no time.
+_INSERT_SHARE_DISPATCH_SQL = (
+    "INSERT INTO notification_dispatches "
+    "  (source_kind, collection_id, change_kind, message, account_id, dedupe_key) "
+    "VALUES ('collection_share', %s::bigint, 'shared', "
+    "  account_email(%s::uuid) || ' shared the collection \"' || %s::text || '\" with you', "
+    "  %s::uuid, "
+    "  'share:' || %s::text || ':' || %s::text) "
+    "ON CONFLICT DO NOTHING"
+)
+
+_DELETE_SHARE_SQL = (
+    "DELETE FROM collection_shares WHERE collection_id = %s AND recipient_account_id = %s"
+)
+
+
+def create_share(
+    conn: "psycopg.Connection",
+    open_identity_conn: Callable[[], ContextManager["psycopg.Connection"]],
+    collection_id: int,
+    body: s.ShareCollectionIn,
+) -> dict[str, Any]:
+    """Share one collection read-only with the account behind a confirmed email (owner only).
+
+    The service-role connection opens only after the tenant gate passed (tenancy.md)."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_SHARE_GATE_SQL, (collection_id,))
+        gate = cur.fetchone()
+    if gate is None:
+        raise HTTPException(404, "collection not found")
+    with open_identity_conn() as identity_conn:
+        recipient = tenant_pool.account_for_email(identity_conn, body.email)
+        if recipient is None:
+            raise HTTPException(422, "No account uses this email.")
+        with identity_conn.transaction(), identity_conn.cursor() as cur:
+            # Only the share's own CHECK (not-self) is a 422; a CHECK on the dispatch is drift
+            # and must page as a 500.
+            try:
+                cur.execute(_INSERT_SHARE_SQL, (collection_id, recipient))
+            except psycopg.errors.CheckViolation:
+                raise HTTPException(422, "That's your own account.")
+            inserted = cur.fetchone()
+            if inserted is not None:
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
+                    collection_id, inserted[0], gate[0], recipient, collection_id, recipient,
+                ))
+    coll = _fetch_collection(conn, collection_id)
+    if coll is None:
+        raise HTTPException(404, "collection not found")
+    return coll
+
+
+def delete_share(
+    conn: "psycopg.Connection", collection_id: int, account_id: str,
+) -> dict[str, Any]:
+    """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_DELETE_SHARE_SQL, (collection_id, account_id))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "share not found")
+    return {"deleted": True}
+
+
 # --- notes -----------------------------------------------------------------
 
 
-_NOTE_PROJECTION = "id, property_id, body, origin_listing_id, created_at, updated_at"
+# owner_email: null iff the caller wrote it; a foreign note is readable only when marked shared.
+_NOTE_PROJECTION = (
+    "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, "
+    f"CASE WHEN {_is_mine('n.account_id')} THEN NULL ELSE {_party_label('n.account_id')} END "
+    "  AS owner_email"
+)
+
+# Marking shared is not an edit: updated_at moves only with the body.
+_UPDATE_NOTE_SQL = (
+    "UPDATE property_notes n SET body = coalesce(%s::text, n.body), "
+    "  shared = coalesce(%s::boolean, n.shared), "
+    "  updated_at = CASE WHEN %s::text IS NOT NULL THEN now() ELSE n.updated_at END "
+    "WHERE n.id = %s AND n.property_id = %s "
+    f"RETURNING {_NOTE_PROJECTION}"
+)
+
+_LIST_NOTES_SQL = (
+    f"SELECT {_NOTE_PROJECTION} FROM property_notes n "
+    "WHERE n.property_id = %s ORDER BY n.created_at DESC, n.id DESC"
+)
+
+_CREATE_NOTE_SQL = (
+    "INSERT INTO property_notes AS n "
+    "  (property_id, body, shared, origin_listing_id, origin_listing_ref_id, account_id) "
+    "VALUES (%s, %s, %s, "
+    "  (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s), "
+    "  %s, %s) "
+    f"RETURNING {_NOTE_PROJECTION}"
+)
 
 
 def list_notes(
@@ -310,13 +405,9 @@ def list_notes(
 ) -> dict[str, Any]:
     """The property's notes, newest first, each with its attachments (oldest first); a
     merged-away id reads its survivor's, as writes do."""
-    sql = (
-        f"SELECT {_NOTE_PROJECTION} FROM property_notes "
-        "WHERE property_id = %s ORDER BY created_at DESC, id DESC"
-    )
     pid = resolve_active_property_id(conn, property_id) or property_id
     with conn.cursor() as cur:
-        cur.execute(sql, (pid,))
+        cur.execute(_LIST_NOTES_SQL, (pid,))
         rows = cur.fetchall()
     notes = [_to_note(r) for r in rows]
     files = note_attachments.attachments_by_note(conn, [n["id"] for n in notes])
@@ -329,11 +420,9 @@ def create_note(
     body: s.CreateNoteIn,
     account_id: str,
 ) -> dict[str, Any]:
-    # origin_listing_ref_id is the surrogate; origin_listing_id holds the legacy
-    # sreality_id. Prefer a caller-supplied surrogate and derive the legacy handle
-    # FROM it; only fall back to resolving legacy -> surrogate for a caller that
-    # still sends the old field (post-Gate-2 that lookup returns NULL, which is
-    # precisely why the surrogate has to be the driving value).
+    # origin_listing_ref_id (the surrogate) is the only provenance a caller sends;
+    # the legacy origin_listing_id column (an R2-era carrier a split's note copy
+    # still writes) is derived FROM it and never leaves the API.
     #
     # account_id: property_notes has no owning-parent to derive it from (unlike
     # collection_properties/property_tags, mig 292) and no DEFAULT (unlike
@@ -341,31 +430,19 @@ def create_note(
     # the table's WITH CHECK closed, so it is REQUIRED (no default): the route
     # resolves exactly one via tenant_pool.require_account_id, or 400s.
     #
-    # The id<->sreality_id map reads through listing_natural_key_public, NOT base
+    # The id -> sreality_id map reads through listing_natural_key_public, NOT base
     # `listings`: on the tenant conn (SET LOCAL ROLE authenticated) `listings` is
     # RLS deny-all, so `(SELECT sreality_id FROM listings ...)` folds to NULL and
     # silently drops the note's provenance. The identity view is owner-bypass +
-    # PII-free (id/sreality_id/source/source_id_native only) — Amendment A5. The
-    # service-role bridge could read base listings fine, but the view is correct
-    # for both callers, so there's one path.
-    sql = (
-        "INSERT INTO property_notes "
-        "  (property_id, body, origin_listing_id, origin_listing_ref_id, account_id) "
-        "VALUES (%s, %s, "
-        "  COALESCE(%s, (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s)), "
-        "  COALESCE(%s, (SELECT id FROM listing_natural_key_public WHERE sreality_id = %s)), "
-        "  %s) "
-        f"RETURNING {_NOTE_PROJECTION}"
-    )
+    # PII-free (id/sreality_id/source/source_id_native only) — Amendment A5.
     try:
         with conn.transaction(), conn.cursor() as cur:
             pid = resolve_active_property_id(conn, property_id)
             if pid is None:
                 raise HTTPException(404, "property not found")
-            cur.execute(sql, (
-                pid, body.body,
-                body.origin_listing_id, body.origin_listing_ref_id,
-                body.origin_listing_ref_id, body.origin_listing_id,
+            cur.execute(_CREATE_NOTE_SQL, (
+                pid, body.body, body.shared,
+                body.origin_listing_ref_id, body.origin_listing_ref_id,
                 account_id,
             ))
             row = cur.fetchone()
@@ -381,23 +458,16 @@ def update_note(
     note_id: int,
     body: s.UpdateNoteIn,
 ) -> dict[str, Any]:
-    """Edit a note's body in place. Scoped by (id, property_id) — belt-and-braces
-    on top of RLS so a note can never be edited via the wrong property's route."""
+    """Edit or (un)mark a note in place; the UPDATE is the ownership gate, scoped by (id, property_id)."""
+    if body.body is None and body.shared is None:
+        raise HTTPException(422, "nothing to update")
     # The note itself was re-pointed onto the survivor at merge, so a stale
     # property_id makes that pair unsatisfiable and a live note reads as 404.
     property_id = resolve_active_property_id(conn, property_id) or property_id
-    if body.body is None:
-        row = _fetch_note(conn, property_id, note_id)
-        if row is None:
-            raise HTTPException(404, "note not found")
-        return row
-    sql = (
-        "UPDATE property_notes SET body = %s, updated_at = now() "
-        "WHERE id = %s AND property_id = %s "
-        f"RETURNING {_NOTE_PROJECTION}"
-    )
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(sql, (body.body, note_id, property_id))
+        cur.execute(
+            _UPDATE_NOTE_SQL, (body.body, body.shared, body.body, note_id, property_id),
+        )
         row = cur.fetchone()
     if row is None:
         raise HTTPException(404, "note not found")
@@ -467,19 +537,24 @@ def delete_artifact_link(conn: "psycopg.Connection", property_id: int) -> dict[s
 
 # --- tags ------------------------------------------------------------------
 
-_TAG_FULL_PROJECTION = (
+_TAG_PROJECTION = (
     "t.id, t.name, t.color, t.created_at, "
     "(SELECT count(*) FROM property_tags pt WHERE pt.tag_id = t.id) "
     "  AS listing_count"
 )
 
+_CREATE_TAG_SQL = (
+    "INSERT INTO tags AS t (name, color, account_id) VALUES (%s, %s, %s) "
+    f"RETURNING {_TAG_PROJECTION}"
+)
+
 
 def list_tags(conn: "psycopg.Connection") -> dict[str, Any]:
-    sql = f"SELECT {_TAG_FULL_PROJECTION} FROM tags t ORDER BY lower(t.name)"
+    sql = f"SELECT {_TAG_PROJECTION} FROM tags t ORDER BY lower(t.name)"
     with conn.cursor() as cur:
         cur.execute(sql)
         rows = cur.fetchall()
-    return {"data": [_to_tag_full(r) for r in rows]}
+    return {"data": [_to_tag(r) for r in rows]}
 
 
 def create_tag(
@@ -489,18 +564,14 @@ def create_tag(
     # account_id: same top-level case as create_collection — property_tags
     # inherits it from the parent tag via trigger, `tags` itself has nothing
     # to inherit from and no DEFAULT.
-    sql = (
-        "INSERT INTO tags (name, color, account_id) VALUES (%s, %s, %s) "
-        "RETURNING id, name, color, created_at"
-    )
     try:
         with conn.transaction(), conn.cursor() as cur:
-            cur.execute(sql, (body.name, body.color, account_id))
+            cur.execute(_CREATE_TAG_SQL, (body.name, body.color, account_id))
             row = cur.fetchone()
     except psycopg.errors.UniqueViolation:
         raise HTTPException(409, "tag name already exists")
     assert row is not None
-    return _to_tag(row, listing_count=0)
+    return _to_tag(row)
 
 
 def update_tag(
@@ -593,7 +664,7 @@ def _fetch_collection(
     conn: "psycopg.Connection", collection_id: int,
 ) -> dict[str, Any] | None:
     sql = (
-        f"SELECT {_COLLECTION_FULL_PROJECTION} FROM collections c "
+        f"SELECT {_COLLECTION_PROJECTION} FROM collections c "
         "WHERE c.id = %s"
     )
     with conn.cursor() as cur:
@@ -601,36 +672,22 @@ def _fetch_collection(
         row = cur.fetchone()
     if row is None:
         return None
-    return _to_collection_full(row)
+    return _to_collection(row)
 
 
 def _fetch_tag(
     conn: "psycopg.Connection", tag_id: int,
 ) -> dict[str, Any] | None:
-    sql = f"SELECT {_TAG_FULL_PROJECTION} FROM tags t WHERE t.id = %s"
+    sql = f"SELECT {_TAG_PROJECTION} FROM tags t WHERE t.id = %s"
     with conn.cursor() as cur:
         cur.execute(sql, (tag_id,))
         row = cur.fetchone()
     if row is None:
         return None
-    return _to_tag_full(row)
+    return _to_tag(row)
 
 
-def _to_collection(row: tuple[Any, ...], *, listing_count: int) -> dict[str, Any]:
-    return {
-        "id":                 int(row[0]),
-        "name":               row[1],
-        "description":        row[2],
-        "created_at":         _iso(row[3]),
-        "updated_at":         _iso(row[4]),
-        "listing_count":      listing_count,
-        "monitoring_enabled": bool(row[5]),
-        "notify_channels":    list(row[6]) if row[6] is not None else [],
-        "is_system":          bool(row[7]),
-    }
-
-
-def _to_collection_full(row: tuple[Any, ...]) -> dict[str, Any]:
+def _to_collection(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "id":                 int(row[0]),
         "name":               row[1],
@@ -641,29 +698,20 @@ def _to_collection_full(row: tuple[Any, ...]) -> dict[str, Any]:
         "monitoring_enabled": bool(row[6]),
         "notify_channels":    list(row[7]) if row[7] is not None else [],
         "is_system":          bool(row[8]),
+        "owner_email":        row[9],
+        "shared_with":        list(row[10]),
     }
-
-
-def _fetch_note(
-    conn: "psycopg.Connection", property_id: int, note_id: int,
-) -> dict[str, Any] | None:
-    sql = f"SELECT {_NOTE_PROJECTION} FROM property_notes WHERE id = %s AND property_id = %s"
-    with conn.cursor() as cur:
-        cur.execute(sql, (note_id, property_id))
-        row = cur.fetchone()
-    if row is None:
-        return None
-    return _to_note(row)
 
 
 def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
-        "id":                int(row[0]),
-        "property_id":       int(row[1]),
-        "body":              row[2],
-        "origin_listing_id": int(row[3]) if row[3] is not None else None,
-        "created_at":        _iso(row[4]),
-        "updated_at":        _iso(row[5]),
+        "id":          int(row[0]),
+        "property_id": int(row[1]),
+        "body":        row[2],
+        "shared":      bool(row[3]),
+        "created_at":  _iso(row[4]),
+        "updated_at":  _iso(row[5]),
+        "owner_email": row[6],
     }
 
 
@@ -676,17 +724,7 @@ def _to_artifact_link(row: tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
-def _to_tag(row: tuple[Any, ...], *, listing_count: int) -> dict[str, Any]:
-    return {
-        "id":            int(row[0]),
-        "name":          row[1],
-        "color":         row[2],
-        "created_at":    _iso(row[3]),
-        "listing_count": listing_count,
-    }
-
-
-def _to_tag_full(row: tuple[Any, ...]) -> dict[str, Any]:
+def _to_tag(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "id":            int(row[0]),
         "name":          row[1],

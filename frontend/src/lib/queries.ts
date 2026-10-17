@@ -338,7 +338,7 @@ export const effectiveSort = (f: ListingFilters, sort: SortSpec): SortSpec => {
  * keeps working. What used to live in this file — a PostgREST string builder
  * and a hand-kept in-memory twin, five predicates each, ILIKE patterns and all
  * — is now two renderings of one plan. See districtCodes.ts for the why. */
-import { districtsFilterClause, isValidCode } from './districtCodes';
+import { districtsFilterClause } from './districtCodes';
 
 export {
   districtsFilterClause,
@@ -1243,17 +1243,12 @@ export const buildBrowseStatsArgs = (
     districts_excluded_filter: f.districts.length
       ? f.districts.map((d) => d.excluded === true)
       : null,
-    /* The level + RÚIAN code parallel to the names — the ONE code predicate the
-     * two RPCs compile (migration 504, lib/districtCodes). A NULL entry is a
-     * chip with no code, which matches NOTHING there exactly as it does here;
+    /* The raw level + RÚIAN code parallel to the names — the ONE code predicate
+     * the two RPCs compile (latest: migration 605, lib/districtCodes);
      * `districts_filter` (the names) is now only the array that drives the
      * unnest. */
-    districts_levels: f.districts.length
-      ? f.districts.map((d) => d.level ?? null)
-      : null,
-    districts_ids: f.districts.length
-      ? f.districts.map((d) => (isValidCode(d.id) ? d.id : null))
-      : null,
+    districts_levels: f.districts.length ? f.districts.map((d) => d.level) : null,
+    districts_ids: f.districts.length ? f.districts.map((d) => d.id) : null,
     dispositions_filter:     f.dispositions.length ? f.dispositions : null,
     price_min_filter:        f.priceMin,
     price_max_filter:        f.priceMax,
@@ -2271,10 +2266,11 @@ export const fetchPropertyTagMemberSet = (
 ): Promise<Map<number, number[]>> =>
   fetchMemberSet('property_tags_public', 'tag_id', signal);
 
-/* How many notes the caller's account holds on each property (MS16): the note
- * mark on every Browse row, from ONE whole-set read rather than one per row.
- * property_notes_public is security_invoker over the account-scoped RLS
- * (migrations 290, 393), so the set is the caller's own notes and nothing else. */
+/* How many notes the caller can READ on each property (MS16): the note mark on
+ * every Browse row, from ONE whole-set read rather than one per row.
+ * property_notes_public is security_invoker over RLS (migrations 290, 393, 610),
+ * so the set is the caller's own notes plus other authors' notes marked shared
+ * and in reach through a collection share. */
 export const fetchNoteCounts = async (
   { signal }: PgReadOptions = {},
 ): Promise<Map<number, number>> => {
@@ -2320,6 +2316,8 @@ export const curationKeys = {
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,
+  /* Prefix of every property's notes: a share change moves which notes I can read. */
+  allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
   manualEstimates: (sreality_id: number) =>

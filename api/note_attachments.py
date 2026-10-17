@@ -123,18 +123,22 @@ def add_attachment(
     digest = hashlib.sha256(data).hexdigest()
     property_id = resolve_active_property_id(conn, property_id) or property_id
     with conn.transaction(), conn.cursor() as cur:
+        # FOR UPDATE applies the note's UPDATE policy, so a note the caller can see but does not
+        # own matches no row and 404s here, before any byte reaches R2; the lock also serialises
+        # concurrent uploads to this note, so the count and duplicate checks below hold.
         cur.execute(
-            "SELECT count(f.id), bool_or(f.sha256_hex = %s) FROM property_notes n "
+            "SELECT f.sha256_hex FROM property_notes n "
             "LEFT JOIN property_note_attachments f ON f.note_id = n.id "
-            "WHERE n.id = %s AND n.property_id = %s GROUP BY n.id",
-            (digest, note_id, property_id),
+            "WHERE n.id = %s AND n.property_id = %s FOR UPDATE OF n",
+            (note_id, property_id),
         )
-        row = cur.fetchone()
-        if row is None:
+        rows = cur.fetchall()
+        if not rows:
             raise HTTPException(404, "note not found")
-        if row[1]:
+        hashes = [r[0] for r in rows if r[0] is not None]
+        if digest in hashes:
             raise HTTPException(409, f"{filename} is already attached to this note")
-        if row[0] >= MAX_FILES_PER_NOTE:
+        if len(hashes) >= MAX_FILES_PER_NOTE:
             raise HTTPException(409, f"a note holds at most {MAX_FILES_PER_NOTE} files")
         key = f"custom-attachments/note/{note_id}/{uuid.uuid4().hex}{ALLOWED[mime]}"
         _storage().upload_bytes(key, data, mime)

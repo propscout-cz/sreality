@@ -549,28 +549,25 @@ def _build_registry() -> dict[str, FilterDef]:
             id="districts",
             type=FilterType.DISTRICT_CHIP_LIST,
             # No single column backs it: one chip list compiles to equality
-            # against FOUR code columns (region_id / okres_id / obec_id /
-            # cast_obce_id), the same way the `location` composite above is
-            # pg_column=None. It named `district` while the predicate still had
-            # an ILIKE arm on that text column; W3 S3 removed the arm and S4
-            # (migration 506) removed the column from the read models.
+            # against FIVE code columns (region_id / okres_id / obec_id /
+            # cast_obce_id / ulice_id), the same way the `location` composite
+            # above is pg_column=None. It named `district` while the predicate
+            # still had an ILIKE arm on that text column; W3 S3 removed the arm
+            # and S4 (migration 506) removed the column from the read models.
             pg_column=None,
             default=None,
             description=(
                 "Location chips. Each chip is an object `{name: str, "
                 "context: str | null, level: 'kraj' | 'okres' | 'obec' "
-                "| 'cast_obce' | 'locality' | null, id: int | null, "
-                "excluded: bool}`, where `id` is the RÚIAN CODE at that "
-                "level. ONE predicate compiles them everywhere (Browse, "
-                "Stats, the map, the Watchdog): `<level>_id = "
-                "any(codes)` with plain equality — `region_id` / "
-                "`okres_id` / `obec_id` / `cast_obce_id`. A 'locality' "
-                "chip (street / POI / address pick) carries its "
-                "containing obec code and filters at the obec level. A "
-                "chip with no code — an old saved filter — is resolved "
-                "by name once at read time; if the RÚIAN name index "
-                "cannot place it, it matches nothing. `context` "
-                "disambiguates that name lookup and is not a predicate. "
+                "| 'cast_obce' | 'ulice', id: int, excluded: bool}`, "
+                "where `id` is the RÚIAN CODE of the unit picked at that "
+                "level; `level` and `id` are required. ONE predicate "
+                "compiles them everywhere (Browse, Stats, the map, the "
+                "Watchdog): `<level>_id = any(codes)` with plain equality "
+                "— `region_id` / `okres_id` / `obec_id` / `cast_obce_id` "
+                "/ `ulice_id`. A street chip filters at its street, never "
+                "its town. `name` and `context` (the obec a část obce or "
+                "a street sits in) are display only, never a predicate. "
                 "INCLUDE chips OR together; chips with `excluded: true` "
                 "are subtracted from the result."
             ),
@@ -1675,11 +1672,12 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column=None,  # prefilter via collection_properties_public (mig 202)
             default=None,
             description=(
-                "Operator-curated collection ids. OR-semantics — a property "
+                "Collection ids the caller can read — own or shared with them "
+                "(migration 610). OR-semantics — a property "
                 "matches if it is in ANY collection in the list. Deliberately "
                 "the opposite of `tags` (AND): collections read as folders, so "
                 "two of them mean 'either folder'. Collection ids are "
-                "account-scoped and stable across renames. BROWSE-only, for "
+                "stable across renames. BROWSE-only, for "
                 "the same reasons as `pipeline`: watching a collection would "
                 "fire on the operator's own clicks, and their groupings must "
                 "never feed back into a valuation."

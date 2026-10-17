@@ -16,6 +16,7 @@ import { cardRow } from '@/test/cardRow';
 
 import CollectionDetail from '../CollectionDetail';
 import { collectionCardFilters } from './PhoneCollectionDetail';
+import { DESKTOP_ONLY_NOTE, VIEWER_NOTE } from './PhoneCollections';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -50,6 +51,8 @@ const COLLECTION: Collection = {
   monitoring_enabled: true,
   notify_channels: [],
   is_system: false,
+  owner_email: null,
+  shared_with: [],
 };
 
 const member = (property_id: number, extra: Partial<CollectionPropertyRow> = {}): CollectionPropertyRow => ({
@@ -135,7 +138,7 @@ describe('<CollectionDetail> on the phone', () => {
     expect(within(header).getByText('sledováno')).toBeInTheDocument();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByRole('button', { name: /delete|smazat|save/i })).toBeNull();
-    expect(screen.getByText('Přejmenování, smazání a sledování nastavíte na počítači.')).toBeInTheDocument();
+    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení nastavíte na počítači.')).toBeInTheDocument();
   });
 
   it('removes a property by unchecking this collection in the card sheet', async () => {
@@ -176,5 +179,58 @@ describe('<CollectionDetail> on the phone', () => {
     vi.mocked(api.getCollection).mockRejectedValue(new api.ApiError('not found', 404, null));
     renderPage();
     expect(await screen.findByText('Taková sbírka není.')).toBeInTheDocument();
+    expect(screen.getByText('Odkaz je špatně, sbírka byla na počítači smazána, nebo už s vámi není sdílená.')).toBeInTheDocument();
+  });
+
+  it('heads a collection shared with me as read-only, naming its owner', async () => {
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: {
+        ...COLLECTION,
+        monitoring_enabled: false,
+        owner_email: 'jana@example.com',
+        shared_with: [{ account_id: 'me', email: null }],
+      },
+      properties: [member(1)],
+    });
+    renderPage();
+    const heading = await screen.findByRole('heading', { name: 'K prohlídce' });
+    const header = heading.closest('header');
+    expect(header?.textContent).toContain('sdílí jana@example.com · jen ke čtení');
+    expect(header?.textContent).not.toContain('založena');
+    expect(within(heading.closest('header') as HTMLElement).queryByText('sledováno')).toBeNull();
+    // The owner's footer promises management a viewer does not have.
+    expect(screen.queryByText(DESKTOP_ONLY_NOTE)).toBeNull();
+    expect(screen.getByText(VIEWER_NOTE)).toBeInTheDocument();
+  });
+
+  it('does not invite adding to an empty collection shared with me', async () => {
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, listing_count: 0, owner_email: 'jana@example.com', shared_with: [] },
+      properties: [],
+    });
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [], nextCursor: null });
+    renderPage();
+    expect(await screen.findByText('Sbírka je zatím prázdná.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Otevřít Nové' })).toBeNull();
+  });
+
+  it("offers no removal from a collection shared with me: the card's sheet lists only my own", async () => {
+    const shared = { ...COLLECTION, owner_email: 'jana@example.com', shared_with: [] };
+    vi.mocked(api.getCollection).mockResolvedValue({ collection: shared, properties: [member(1), member(2)] });
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [shared, { ...COLLECTION, id: 9, name: 'Archiv', monitoring_enabled: false }],
+      total: 2,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('link', { name: /Místo 2/ });
+    // Saved means MINE: property 1 sits only in the shared collection, so its mark is empty.
+    expect(await within(cardFor('Místo 1')).findByRole('button', { name: 'Uložit do sbírky' }))
+      .toBeInTheDocument();
+    const bookmark = await within(cardFor('Místo 2')).findByRole('button', { name: 'Ve sbírce — upravit' });
+    await user.click(bookmark);
+    const sheet = screen.getByRole('dialog', { name: 'Uložit do sbírky' });
+    await within(sheet).findByRole('button', { name: /Archiv/ });
+    expect(within(sheet).queryByRole('button', { name: /K prohlídce/ })).toBeNull();
   });
 });

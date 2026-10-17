@@ -42,7 +42,7 @@ import { YmPicker, YM_PARTS } from '@/components/YmPicker';
 import CityPicker from '@/components/CityPicker';
 import { buildHoverData } from '@/lib/growthChoropleth';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
-import { chipsToGeoArrays } from '@/lib/brokers';
+import { hasChipFinerThanObec, keepObecFor } from '@/lib/datasetsPlace';
 import type { DistrictChip } from '@/lib/filters';
 
 const METRIC_ORDER: DatasetMetric[] = ['rent_cagr_pct', 'sale_cagr_pct', 'yield_change_pp_pa'];
@@ -273,38 +273,8 @@ export default function Datasets() {
     return { okresId, krajId };
   }, [obecTreeQ.data]);
 
-  // The same shared helper Browse/Brokers use: split the chips into per-level
-  // stable-id sets, then keep an obec iff it (or its okres/kraj ancestor) is
-  // selected. Empty selection ⇒ keep everything (no filter). Datasets is
-  // obec-id-keyed: it matches ONLY by stable admin id via the picker tree, with
-  // no name-ILIKE fallback (Browse/Watchdog have one on place_search_text). So an
-  // unresolved chip (id==null — e.g. /maps/resolve down, or a pick Mapy can't PIP)
-  // can't narrow here and is a deliberate fail-open no-op, surfaced by the hint
-  // under the Location box rather than silently showing the whole dataset.
-  const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
-  const loc = useMemo(() => ({
-    obec: new Set(geo.obecIds),
-    okres: new Set(geo.okresIds),
-    region: new Set(geo.regionIds),
-    active: geo.obecIds.length + geo.okresIds.length + geo.regionIds.length > 0,
-  }), [geo]);
-  const keepObec = useMemo(() => {
-    const { obec, okres, region, active } = loc;
-    const { okresId, krajId } = adminIdsByObec;
-    return (obecId: number): boolean => {
-      if (!active) return true;
-      if (obec.has(obecId)) return true;
-      const ok = okresId.get(obecId);
-      if (ok != null && okres.has(ok)) return true;
-      const kr = krajId.get(obecId);
-      return kr != null && region.has(kr);
-    };
-  }, [loc, adminIdsByObec]);
-
-  const filteredRows = useMemo(
-    () => (loc.active ? rows.filter((r) => keepObec(r.obec_id)) : rows),
-    [rows, loc.active, keepObec],
-  );
+  const keepObec = useMemo(() => keepObecFor(districts, adminIdsByObec), [districts, adminIdsByObec]);
+  const filteredRows = useMemo(() => rows.filter((r) => keepObec(r.obec_id)), [rows, keepObec]);
 
   const nameToCityId = useMemo(() => {
     const m = new Map<string, number>();
@@ -425,8 +395,8 @@ export default function Datasets() {
   const selectedInScope = useMemo(() => {
     const ids = active?.obec_ids;
     if (!ids) return null;
-    return loc.active ? ids.filter((id) => keepObec(id)).length : ids.length;
-  }, [active, loc.active, keepObec]);
+    return ids.filter((id) => keepObec(id)).length;
+  }, [active, keepObec]);
 
   const activeSort: { col: string; dir: 'asc' | 'desc' } = sort ?? { col: metric, dir: 'desc' };
 
@@ -562,10 +532,10 @@ export default function Datasets() {
               <span className="mt-2 shrink-0 text-xs uppercase tracking-[0.14em] text-[var(--color-ink-3)]">Location</span>
               <div className="w-full sm:max-w-sm">
                 <LocationTypeahead label="Location" value={districts} onChange={(n) => setDistricts(n ?? [])} />
-                {districts.length > 0 && !loc.active && (
+                {hasChipFinerThanObec(districts) && (
                   <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">
-                    Couldn’t resolve this location, so the filter isn’t applied. Datasets matches
-                    by municipality — try picking a town, district, or region.
+                    Datasets has per-town data only — a street or part-of-town chip selects nothing
+                    here, and excluding one removes nothing
                   </p>
                 )}
               </div>
@@ -579,7 +549,7 @@ export default function Datasets() {
           <div className="mt-6">
             {rows.length === 0 && !growthQ.isLoading ? (
               <EmptyData run={runQ.data ?? null} />
-            ) : loc.active && filteredRows.length === 0 ? (
+            ) : districts.length > 0 && filteredRows.length === 0 ? (
               <NoLocationMatch onClear={() => setDistricts([])} />
             ) : (
               <>

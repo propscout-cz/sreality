@@ -14,14 +14,13 @@ import {
 import {
   archivePipelineStage,
   createPipelineStage,
-  listCollections,
   listTags,
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
+import { collectionLabel, useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
   curationKeys,
-  fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
   matchesDistricts,
   pipelineKeys,
@@ -35,7 +34,6 @@ import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import { CardHydrationProvider } from '@/lib/hydration';
-import { useLegacyChipUpgrade } from '@/lib/useLegacyChipUpgrade';
 import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
 import { MultiselectChips } from '@/components/filter-controls/MultiselectChips';
 import { type EnumOptionLite } from '@/components/filter-controls/types';
@@ -131,12 +129,6 @@ function PipelineBoardPage() {
     setSort,
     reset,
   } = usePipelineViewState();
-  /* The board filters its cards in the browser (matchesDistricts), so a chip
-   * with no code matches nothing here exactly as it does server-side — which
-   * means a URL carrying a pre-code chip has to be upgraded on THIS surface
-   * too. Without it the same link shows a cohort on /browse and an empty board
-   * here, and the kanban looks broken rather than unfiltered. */
-  useLegacyChipUpgrade(districts, setDistricts);
   /* Card size is a workspace preference, NOT part of the URL view state above:
    * a shared link carries which deals to look at, not how this browser likes
    * its photos. Same split Browse draws for its own image-size switch. */
@@ -146,16 +138,8 @@ function PipelineBoardPage() {
 
   /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
-  const collectionsQ = useQuery({
-    queryKey: curationKeys.collections,
-    queryFn: listCollections,
-    staleTime: 30_000,
-  });
-  const membersQ = useQuery({
-    queryKey: curationKeys.propertyCollectionMembers,
-    queryFn: fetchPropertyCollectionMemberSet,
-    staleTime: 30_000,
-  });
+  const { collections } = useCollections();
+  const membersQ = useCollectionMembers();
   const tagsQ = useQuery({
     queryKey: curationKeys.tags,
     queryFn: listTags,
@@ -208,7 +192,7 @@ function PipelineBoardPage() {
       if (c.category_main) present.add(c.category_main);
       if (!c.is_active) inactive += 1;
     }
-    const collections = offerCuratedSet(cards, members, collectionsQ.data?.data ?? [], collectionIds);
+    const offered = offerCuratedSet(cards, members, collections, collectionIds);
     const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], [
       ...tagChoice.tags,
       ...tagChoice.tagsExcluded,
@@ -217,14 +201,14 @@ function PipelineBoardPage() {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
       collections: [
-        ...collections.options.map((c) => ({ value: c.id, label: c.name })),
-        ...collections.missing.map((id) => ({ value: id, label: `#${id}` })),
+        ...offered.options.map((c) => ({ value: c.id, label: collectionLabel(c) })),
+        ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
       ],
-      showCollections: collections.show,
+      showCollections: offered.show,
       tags: tagOptionsFor(tags.options, tagChoice),
       showTags: tags.show,
     };
-  }, [cards, members, collectionsQ.data, collectionIds, tagMembers, tagsQ.data, tagChoice]);
+  }, [cards, members, collections, collectionIds, tagMembers, tagsQ.data, tagChoice]);
 
   /* The decoration cohort: the representative listing of every card ON the
    * board (not just the filtered view — filtering is client-side and instant,

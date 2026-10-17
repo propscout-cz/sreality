@@ -17,19 +17,15 @@ import type { PipelineBoardCard } from '@/lib/types';
 export const PIPELINE_BOARD_COLS =
   'property_id, stage_id, board_position, entered_stage_at, added_at, ' +
   'sreality_id, source, source_id_native, listing_id, category_main, ' +
-  /* W3: `street` came out, `display_label` went in -- the board's place line is
-   * the one server-composed label (migration 503), not a locality/obec/street
-   * assembly the board did itself. W3 S4 (migration 506) took the rest of the
-   * legacy place text with it: `district`, `place_search_text`, `locality`,
-   * `okres` and `region` were the retired chip predicate's ILIKE inputs, and
-   * once the predicate became four codes they were carried onto every card and
-   * read by nothing. */
+  /* The board's place line is the one server-composed label (migration 503);
+   * the legacy place text went in migration 506. */
   'display_label, disposition, subtype, area_m2, price_czk, mf_gross_yield_pct, ' +
   'total_price_change_pct, price_change_count, obec_id, okres_id, region_id, ' +
-  /* W3 S3: the fourth chip level. The board filters its cards in the browser
-   * (matchesDistricts), so it needs the SAME four codes the server-side
-   * predicate uses or a `cast_obce` chip would match on Browse and not here. */
-  'cast_obce_id, ' +
+  /* The two finer chip levels. The board filters its cards in the browser
+   * (matchesDistricts), so it needs the SAME five codes the server-side
+   * predicate uses or a `cast_obce` / `ulice` chip would match on Browse and
+   * not here. */
+  'cast_obce_id, ulice_id, ' +
   /* The town, and ONLY the town: the "Mesto A-Z" sort orders by it because the
    * label leads with the street when there is one (lib/pipelineSort). W4-a
    * re-sourced this column from `listing_location.obec_name` (migration 507) --
@@ -67,6 +63,7 @@ export interface PipelineBoardRow {
   okres_id: number | null;
   region_id: number | null;
   cast_obce_id: number | null;
+  ulice_id: number | null;
   obec: string | null;
   is_active: boolean | null;
   category_type: string | null;
@@ -102,6 +99,7 @@ export function composePipelineCards(
     okres_id: r.okres_id,
     region_id: r.region_id,
     cast_obce_id: r.cast_obce_id,
+    ulice_id: r.ulice_id,
     obec: r.obec,
     is_active: r.is_active ?? true,
     category_type: r.category_type,

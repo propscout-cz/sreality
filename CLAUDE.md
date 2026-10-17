@@ -185,9 +185,9 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     the registry in `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate only
     (`sql_kind`, place plan, rule-23 measures, served predicate, portal rule). **Portal + broker filters select ADS, rows stay properties (MS19):**
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
-    **three producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
+    **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
     per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    `ops_incidents`, mig 462). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    `ops_incidents`, mig 462) + `collection_share` (not property-grain; recipient-stamped by the share route, in-app only, mig 610). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
@@ -197,7 +197,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     transaction, so no such row orphans onto `merged_away`; every other column naming a property sits in `NOT_CARRIED` with its reason, and a census (offline
     over migrations, live over the replayed schema) fails on a column in neither. A SET/APPEND table = one `CurationTable(...)` line; any other shape = one
     adapter. Each merge writes one `property_merge_carries` row per curation row it moved or folded (alerts none); a detach routes it back (`route_curation`: a note with its ad, the rest by its carry rows, folds re-created; a split's user picks per item, copies allowed).
-    Collections carry monitoring (`monitoring_enabled` + `notify_channels`). Writes go through the API.
+    Collections carry monitoring (`monitoring_enabled` + `notify_channels`); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never). Writes go through the API.
 19. **The scrape is cadence-split: a fast index-walk feeds an async batched detail-drain via `listing_detail_queue`** (migration 105).
     Index-walk (`--index-only`) walks the full index, `portal_runner.reconcile_sightings` (touch + enqueue) + end-gated nomination (rule #3); detail-drain
     (`--drain-only`) claims a bounded slice (`FOR UPDATE SKIP LOCKED`) and writes each flush in ONE `listing_write.write_listings` call.
@@ -246,7 +246,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     (uncast = DEGREES). TWO producers write `location_claims`, both fingerprinted in SQL: the `claims_intake` lane
     (payload, page body, the text lane's reading) and `operator_corrections`; ONE four-step resolver writes the
     answer table; TWELVE claim types, ≤ 1 contract entry each, the `obec_name` entry mandatory and live; every
-    display is `location_display_label`, every place filter `<level>_id = any(codes)` at four levels. CONSUMERS
+    display is `location_display_label`, every place filter `<level>_id = any(codes)` at five levels. CONSUMERS
     (browse/map/feed/watchdog/dedup) serve a listing only when its location is resolved or determined foreign — ONE
     predicate (`claims_common.SERVED_LOCATION_PREDICATE`, mig 514); detail-by-id surfaces stay reachable. Invariant:
     **every served listing has a row, every active Czech listing has a town** (`location_town_coverage` red until
