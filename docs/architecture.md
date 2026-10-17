@@ -911,12 +911,12 @@ rules. Identify which one a task belongs to before you start.
   silent, read as a broken extension — 2026-09-24), "Obnovit stránku" when the extension was
   reloaded / updated / disabled / removed under the open tab (the overlay then stops scanning),
   the error + "Zkusit znovu" otherwise (no button for a build without an API URL). × lasts for
-  the page (a soft-nav round trip through a listing keeps it hidden). Automatic re-lookups back off 60 s, `visibilitychange` re-asks at once (a sign-in made in
-  the panel or another tab heals the page — the content script never receives the session; the
-  sign-in button asks `get_auth_state` first and skips the Google round trip if one exists); one
-  lookup is out per generation (a sign-in or the retry starts a new one, older answers are
-  dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late
-  `ok` still badges;
+  the page (a soft-nav round trip through a listing keeps it hidden). Automatic re-lookups back off 60 s, `visibilitychange` re-asks at once. Every content
+  script watches the stored session's user (`session.ts` `onAccountChange`; a token refresh changes nothing): an account
+  change in any tab drops the lookup cache, card controls and every cached list and re-asks the cards and any open panel at
+  once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
+  excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
+  one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
   `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
   truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
