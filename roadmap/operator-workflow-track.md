@@ -20,7 +20,7 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   me", the Sharing block, viewer pages, foreign notes read-only, the "Share with …" checkbox, the
   Shared tab, phone read-only in Czech), W6 #1839 (Chrome extension: "saved" and the save checklist
   are mine only, foreign notes read-only "od {email}", the "Sdílet s …" checkbox + "Sdíleno" /
-  "Nesdílet" toggle on the SPA's audience rule). W7 PR #TBD (migration 613): the operator ruled
+  "Nesdílet" toggle on the SPA's audience rule). W7 PR #1840 (migration 613): the operator ruled
   2026-10-17 that a marked note reaches shares made later too, so 610's consent-time anchor
   (`property_notes.shared_at`, its trigger and the policy's time clause) is dropped; the bait-share
   edge is accepted (spec §7, §8 ruling 9). 613 is applied AFTER the merge + Railway rollout.

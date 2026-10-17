@@ -1,7 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
 Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W7 run on this text.
-W1–W6 merged (#1833, #1834, #1835, #1837, #1838, #1839); migration 610_collection_shares.sql (renumbered from 609 after #1836 took it; applied + verified in production 2026-10-17). W7 in PR #TBD (feature/collection-sharing-marks-reach-later-shares): migration 613_shared_notes_reach_later_shares.sql drops the consent-time anchor (ruling 9); applied AFTER its merge and the Railway API + worker rollout (the split's note copy deployed before W7 still names `shared_at`). #1830 holds 611 and #1829 612.
+W1–W6 merged (#1833, #1834, #1835, #1837, #1838, #1839); migration 610_collection_shares.sql (renumbered from 609 after #1836 took it; applied + verified in production 2026-10-17). W7 in PR #1840 (feature/collection-sharing-marks-reach-later-shares): migration 613_shared_notes_reach_later_shares.sql drops the consent-time anchor (ruling 9); applied AFTER its merge and the Railway API + worker rollout (the split's note copy deployed before W7 still names `shared_at`). #1830 holds 611 and #1829 612.
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
