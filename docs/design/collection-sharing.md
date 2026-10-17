@@ -432,9 +432,9 @@ the in-app row is the house pattern · pending invites, an acceptance step: off 
 | — | dead `if TYPE_CHECKING: pass`, stale "service role"/"anon key" prose | `curation.py:14-20, 43-44`; `main.py:1420-1424`; `CurationBlock.tsx:10-14` |
 
 **Net, plainly.** ≤ 0 on read paths (0 new), client special cases (one "is it mine" rule in one
-place instead of 16), rules (one consent predicate instead of a time rule + two anchors) and the
-Note field count. **Not ≤ 0:** Collection fields +2 (`is_system` would
-have paid for them; its removal is visible and deferred); ExtNote +1 (−`origin_listing_id`,
+place instead of 14) and rules (one consent predicate instead of a time rule + two anchors).
+**Not ≤ 0:** Collection fields +2 (`is_system` would have paid for them; its removal is visible and
+deferred); Note +1 and ExtNote +1 (−`origin_listing_id`,
 +`shared`, +`owner_email`) and ExtCollection +1 (−`is_system`, +`owner_email`, +`shared_with`); database objects +1 table, +1 column, +5
 policies, +2 functions, +1 trigger branch against −2 views and −2 nullable variants (a third, `property_notes`, pending a ruling); test lines
 (the three-tenant proof). These are irreducible — the share is a genuinely new fact, the Sharing
