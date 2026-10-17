@@ -688,6 +688,10 @@ def plan_groups(
     for merge in _engine_merges(conn, every_listing):
         for lid in merge.member_ids:
             merges_by_listing.setdefault(lid, []).append(merge)
+    held: set[int] = set()
+    if generation == GENERATION:
+        held = {int(lid) for (lid,) in _rows(conn, S.RT_FINGERPRINTED_SQL, {
+            "generation": generation, "listing_ids": sorted(every_listing)})}
     # A chokepoint refusal is remembered by the MEMBER SET it refused, not by the key it was
     # filed under: a real-time generation's keys move as its groups do (A9), and a batch
     # generation's key names exactly one member set, so the two readings agree there.
@@ -755,9 +759,12 @@ def plan_groups(
             reasons.append(SKIP_SPANS_GROUPS)
             detail["listings_in_other_groups"] = foreign[:20]
         # The engine vouched for its members only. A child no group holds may ride along only
-        # where THIS engine already merged it onto its property together with a grouped member.
+        # where THIS engine already merged it onto its property together with a grouped member
+        # — and, under the real-time generation, only one it does not fingerprint (E965): one
+        # it read and grouped with no one (D43 refused it, cluster.py drops the singleton) is
+        # its present word, which no earlier merge outranks.
         touching = {mg for lid in extended for mg in merges_by_listing.get(lid, ())}
-        vouched = _engine_vouched(member_set, extended, prop_of,
+        vouched = _engine_vouched(member_set, extended - held, prop_of,
                                   sorted(touching, key=lambda mg: mg.merge_group_id))
         ungrouped = sorted(lid for lid in carried - vouched if lid not in listing_group)
         if ungrouped:

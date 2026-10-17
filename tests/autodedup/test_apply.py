@@ -104,6 +104,8 @@ class FakeDb:
         self.depth = 0
         # `autodedup.rt_lease`: the one-writer rail a live apply or unapply takes (A9).
         self.lease: dict[str, dict[str, Any]] = {}
+        # `autodedup.rt_fp`: the listings the real-time generation fingerprints (E965).
+        self.read: set[int] = set()
 
     # --- plumbing
     _STATE = ("listings", "properties", "ledger", "events", "settings")
@@ -235,6 +237,8 @@ class FakeDb:
                 out.append((r["generation"], r["cluster_key"], r["merge_group_id"],
                             r["survivor_property_id"], list(r["member_ids"])))
             return out
+        if sql == S.RT_FINGERPRINTED_SQL:
+            return [(lid,) for lid in sorted(set(p["listing_ids"]) & self.read)]
         if sql == S.LATER_LIVE_MERGES_SQL:
             return [(r["generation"], r["cluster_key"], r["merge_group_id"],
                      r["survivor_property_id"], r["retired_property_id"], r["applied_at"],

@@ -497,7 +497,6 @@ class LaneDb(FakeDb):
         self.cursors: dict[str, int] = {}
         self.walked: set[str] = {BLOCK}
         self.snapshot: dict[int, str] = {}
-        self.read: set[int] = set()
         self.guards: list[dict] = []
         # E960: each member's last refresh (absent: refreshed now) and what the reconcile handed
         # the next pass to re-claim.
@@ -626,6 +625,66 @@ def test_the_reconciles_refusals_are_the_batch_applys_refusals() -> None:
         AP.SKIP_CARRIES_OUT_OF_SCOPE, AP.SKIP_UNATTACHED}
     assert lane["counts"]["out_of_scope_by_reason"] == {AP.OUT_CATEGORY: 1}
     assert lane["counts"]["applied"] == 0
+
+
+def _redrawn(db: LaneDb, old: int, key: int, lids: list[int]) -> None:
+    """A later pass re-clusters the component: group `old` is gone, `key` holds `lids`."""
+    del db.clusters[(RT, old)]
+    db.members = [m for m in db.members if not (m[0] == RT and m[1] == old)]
+    db.group(key, lids, gen=RT)
+
+
+def test_an_advert_the_stream_holds_and_groups_with_no_one_never_rides_its_earlier_merge() -> None:
+    """E965: a1=11 and a2=12 merge; X=10 then arrives, the same unit as a2 and stated apart from
+    a1, so the re-clustered {a2, X} refuses the union with a1 (D43) and a1 is a singleton (no
+    group row). Its earlier rt merge must not carry it onto X: the stream read a1 and grouped it
+    with no one, which is its present word. A missed merge, never a stated-fact false merge."""
+    db = LaneDb()
+    db.live_scope()
+    _pair_group(db, 11, [11, 12], [200, 250], gen=RT)
+    _read(db, 11, 12)
+    assert _lane(db)["counts"]["applied"] == 1
+    assert db.listings[11]["property_id"] == db.listings[12]["property_id"] == 200
+
+    db.prop(100)
+    db.listing(10, 100)
+    _read(db, 10)
+    _redrawn(db, 11, 10, [10, 12])
+    out = _lane(db)
+
+    assert out["counts"]["applied"] == 0
+    assert out["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_UNGROUPED: 1}
+    (row,) = [r for r in db.ledger if r["member_ids"] == [10, 12]]
+    assert (row["outcome"], row["error"]) == ("skipped", AP.SKIP_CARRIES_UNGROUPED)
+    assert json.loads(row["plan_json"])["detail"]["ungrouped_listings"] == [11]
+    assert db.listings[10]["property_id"] == 100 != db.listings[11]["property_id"]
+
+
+def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vouched_it() -> None:
+    """What E965 keeps of E903: g11 merged 12 onto 200 with 11; the stream groups 10 with 11 and
+    holds no fingerprint for 12 (it never read it), so g11's live merge is the only word about
+    12 and it rides along. Once the stream reads 12 and groups it with no one, it is refused."""
+    db = LaneDb()
+    db.live_scope()
+    _pair_group(db, 11, [11, 12], [200, 250], gen="g11")
+    scope = AP.effective_scope(db.settings[AP.SCOPE_SETTING], {}, live=True)
+    assert AP.apply_plan(db, AP.plan_apply(db, "g11", scope), dry_run=False,
+                         merge=db.merge([]))["counts"]["applied"] == 1
+    _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
+    _read(db, 10, 11)
+
+    held = AP.plan_apply(db, RT, scope)
+    db.read.add(12)
+    refused = AP.plan_apply(db, RT, scope)
+    db.read.discard(12)
+    out = _lane(db)
+
+    assert [g.reasons for g in held.groups] == [[]]
+    assert held.groups[0].listing_ids == [10, 11, 12]
+    assert [g.reasons for g in refused.groups] == [[AP.SKIP_CARRIES_UNGROUPED]]
+    assert refused.groups[0].detail["ungrouped_listings"] == [12]
+    assert out["counts"]["applied"] == 1 and out["counts"]["listings_moved"] == 2
+    assert db.listings[12]["property_id"] == db.listings[10]["property_id"] == 100
 
 
 def test_the_reconcile_never_splits() -> None:
