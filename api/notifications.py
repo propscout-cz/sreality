@@ -42,7 +42,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -56,6 +56,10 @@ if TYPE_CHECKING:
     import psycopg
 
 LOG = logging.getLogger(__name__)
+
+# The notification_dispatches producers (rule 16; CHECK notification_dispatches_source_ck).
+SourceKind = Literal["watchdog", "collection_monitor", "collection_share", "system_health"]
+SourceKindFilter = Literal[SourceKind, "all"]
 
 
 # --- filter spec ----------------------------------------------------------
@@ -519,7 +523,7 @@ def list_dispatches(
     *,
     subscription_id: str | None = None,
     collection_id: int | None = None,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: SourceKindFilter = "all",
     seen: Literal["all", "seen", "unseen"] = "all",
     limit: int = 50,
     offset: int = 0,
@@ -658,7 +662,7 @@ def _fetch_dispatch(
 def get_unread_count(
     conn: "psycopg.Connection",
     *,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: SourceKindFilter = "all",
 ) -> dict[str, int]:
     """Unseen dispatch counts — drives the nav unread badge.
 
@@ -677,9 +681,7 @@ def get_unread_count(
     # system_health alerts from the badge.
     total = sum(counts.values())
     return {
-        "watchdog": counts.get("watchdog", 0),
-        "collection_monitor": counts.get("collection_monitor", 0),
-        "system_health": counts.get("system_health", 0),
+        **{kind: counts.get(kind, 0) for kind in get_args(SourceKind)},
         "total": total,
         "unread_count": total if source_kind == "all" else counts.get(source_kind, 0),
     }
@@ -688,7 +690,7 @@ def get_unread_count(
 def mark_all_seen(
     conn: "psycopg.Connection",
     *,
-    source_kind: Literal["watchdog", "collection_monitor", "system_health", "all"] = "all",
+    source_kind: SourceKindFilter = "all",
 ) -> int:
     """Mark every visible unseen dispatch (optionally scoped to a source) as seen.
 

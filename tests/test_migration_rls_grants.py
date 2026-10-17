@@ -394,6 +394,10 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # is migration 545's `sold_coverage`, a SECURITY DEFINER point lookup that answers
     # about a single municipality and is annotated `ci-allow-ungated` there.
     "sold_transaction_fetches",
+    # Auth identities (migration 610): emails are PII. The ONE reader is account_email(),
+    # EXECUTE revoked from every browser role and annotated `ci-allow-ungated` there; the
+    # browser reaches a label only through share_party_emails(), counterparties only.
+    "auth.users",
 })
 
 _CREATE_GATED_OBJ = re.compile(
@@ -576,4 +580,70 @@ def test_dynamic_ddl_is_annotated():
     assert not offenders, (
         "migration(s) build DDL via EXECUTE, which the offline scanner cannot inspect. "
         "Annotate with `-- ci-allow-dynamic: <name> <why>`:\n" + "\n".join(offenders)
+    )
+
+
+# --- the sharing policies (migration 610), pinned ---------------------------
+# A share widens READS only, and it does so through exactly these five permissive policies.
+# 610's own assert block checks them once, when 610 applies; this census re-reads EVERY
+# migration so a later one that re-creates a `*_shared_read` as FOR ALL (WITH CHECK defaults
+# to USING: a recipient could write) or drops `to authenticated` (anon reaches it), or that
+# alters or drops one, fails here instead of shipping green.
+_SHARE_POLICY_PIN: dict[str, tuple[str, str, frozenset[str]]] = {
+    "collection_shares_party": ("collection_shares", "all", frozenset({"authenticated"})),
+    "collections_shared_read": ("collections", "select", frozenset({"authenticated"})),
+    "collection_properties_shared_read": (
+        "collection_properties", "select", frozenset({"authenticated"})),
+    "property_notes_shared_read": ("property_notes", "select", frozenset({"authenticated"})),
+    "property_note_attachments_shared_read": (
+        "property_note_attachments", "select", frozenset({"authenticated"})),
+}
+
+
+def _policy_shape(rest: str) -> tuple[str, frozenset[str], bool]:
+    head = re.split(r"\b(?:using|with check)\b", rest, maxsplit=1)[0]
+    cmd = re.search(r"\bfor (all|select|insert|update|delete)\b", head)
+    roles = re.search(r"\bto (.+)$", head.strip())
+    return (
+        cmd.group(1) if cmd else "all",
+        frozenset(r.strip() for r in roles.group(1).split(",")) if roles else frozenset({"public"}),
+        "as restrictive" in head,
+    )
+
+
+def _final_share_policies() -> dict[str, object]:
+    state: dict[str, object] = {}
+    paths = sorted(
+        (p for p in MIGRATIONS_DIR.glob("*.sql") if _migration_number(p) is not None),
+        key=lambda p: _migration_number(p) or 0,
+    )
+    for p in paths:
+        for stmt in _statements(p.read_text(encoding="utf-8")):
+            low = re.sub(r"\s+", " ", stmt.lower()).strip()
+            m = re.match(r'create policy "?(\w+)"? on (?:public\.)?"?(\w+)"?(.*)$', low)
+            if m and m.group(1) in _SHARE_POLICY_PIN:
+                cmd, roles, restrictive = _policy_shape(m.group(3))
+                state[m.group(1)] = (m.group(2), cmd, roles, restrictive, p.name)
+                continue
+            m = re.match(r'(drop|alter) policy (?:if exists )?"?(\w+)"?', low)
+            if m and m.group(2) in _SHARE_POLICY_PIN:
+                state[m.group(2)] = f"{m.group(1)} policy in {p.name}"
+    return state
+
+
+def test_the_sharing_policies_stay_select_only_and_authenticated_only():
+    state = _final_share_policies()
+    assert set(state) == set(_SHARE_POLICY_PIN), "the census lost sight of migration 610"
+    drifted = []
+    for name, (table, cmd, roles) in _SHARE_POLICY_PIN.items():
+        got = state[name]
+        if not isinstance(got, tuple):
+            drifted.append(f"  {name}: {got}")
+        elif got[:4] != (table, cmd, roles, False):
+            drifted.append(f"  {name} ({got[4]}): on {got[0]} for {got[1]} to {sorted(got[2])}"
+                           f"{' restrictive' if got[3] else ''}; pinned {table}/{cmd}/{sorted(roles)}")
+    assert not drifted, (
+        "a sharing policy drifted from its pin (docs/design/collection-sharing.md §3.1, §7): a "
+        "share must widen reads only, to signed-in callers only. If the change is deliberate, "
+        "update _SHARE_POLICY_PIN in the same PR:\n" + "\n".join(drifted)
     )

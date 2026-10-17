@@ -18,7 +18,7 @@ from api import schemas as s
 from tests.api._script_conn import ScriptConn
 
 
-_NOTE_ROW = (7, 99, "note body", "2026-07-21T00:00:00Z", None)
+_NOTE_ROW = (7, 99, "note body", False, "2026-07-21T00:00:00Z", None, None)
 
 
 def _conn() -> ScriptConn:

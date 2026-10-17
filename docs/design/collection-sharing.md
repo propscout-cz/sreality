@@ -1,6 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
 Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W6 run on this text.
+W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); migration 610 (#1829/#1830 renumber past it).
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
@@ -55,7 +56,7 @@ the note's own `shared` mark and the database's read policies as the ONLY places
 
 ## 3. The design
 
-### 3.1 Data model — migration `NNN_collection_shares.sql` (additive; the next free number at merge, 609+)
+### 3.1 Data model — migration `610_collection_shares.sql` (additive; main took 609 while the PR was open, so 609 → 610 — #1829/#1830 renumber past it)
 
 ```sql
 begin;
@@ -81,8 +82,13 @@ create policy collection_shares_party on collection_shares for all to authentica
   using      (account_id in (select current_account_ids()) or recipient_account_id in (select current_account_ids()))
   with check (account_id in (select current_account_ids()));
 
--- The author's mark. Default private; the author flips it; RLS reads it.
+-- The author's mark. Default private; the author flips it; RLS reads it. shared_at = when the
+-- mark last turned on (trigger-stamped; NULL while private; an edit never moves it).
 alter table property_notes add column shared boolean not null default false;
+alter table property_notes add column shared_at timestamptz;
+create function stamp_property_notes_shared_at() returns trigger ...  -- on: now(); off: NULL; else keep
+create trigger property_notes_shared_at_biu before insert or update on property_notes
+  for each row execute function stamp_property_notes_shared_at();
 
 -- Reads widen, FOR SELECT only. The FOR ALL *_tenant_rw owner policies are NOT touched.
 create policy collections_shared_read on collections for select to authenticated
@@ -92,12 +98,16 @@ create policy collection_properties_shared_read on collection_properties for sel
 -- A shared note is readable by every party of a share whose collection holds the property and whose
 -- OTHER side is the author. collection_shares is RLS-filtered to the caller's own party rows, so
 -- "author is a party" means "author is the counterparty" for anyone but the author (own policy).
+-- An author who RECEIVED the share never chose that audience (no acceptance step), so that arm
+-- counts only shares that already existed when the author marked the note.
 create policy property_notes_shared_read on property_notes for select to authenticated
   using (shared and exists (
           select 1 from collection_shares s
             join collection_properties cp on cp.collection_id = s.collection_id
            where cp.property_id = property_notes.property_id
-             and property_notes.account_id in (s.account_id, s.recipient_account_id)));
+             and (property_notes.account_id = s.account_id
+                  or (property_notes.account_id = s.recipient_account_id
+                      and s.created_at <= property_notes.shared_at))));
 create policy property_note_attachments_shared_read on property_note_attachments for select to authenticated
   using (note_id in (select id from property_notes));
 
@@ -135,7 +145,7 @@ create function account_email(target uuid) returns text language sql stable set 
     (select a.name from public.accounts a where a.id = target)) $$;
 revoke execute on function account_email(uuid) from public, anon, authenticated;
 
--- ci-allow-ungated: share_party_emails — counterparty-scoped labels only; pinned by a live equality test
+-- counterparty-scoped labels only (auth.users only through account_email); pinned by a live equality test
 create function share_party_emails() returns table (account_id uuid, email text)
 language sql stable security definer set search_path = '' as $$
   select distinct p.id, public.account_email(p.id)
@@ -163,19 +173,25 @@ Why this shape and nothing more:
 - **No new or replaced view.** The `*_public` views inherit through their base tables, so the
   391/393 `security_invoker` hazard does not recur.
 - **No carrier entry.** The share row names no property; both carrier censuses look only at
-  property foreign keys. `property_notes.shared` rides the note through merge and split copies.
+  property foreign keys. `property_notes.shared` + `shared_at` ride the note through a merge, and a
+  split's copy writes both (`toolkit/property_carriers.py` `_INSERT_SQL`).
 - **`shared` is a fact the author states about one row, not a feature flag.** It replaces an
   implicit time-gated rule (two server-stamped anchors, a column-scoped grant, a merge edge) with
-  explicit consent, one predicate, no timestamps.
-- **No role column, no stored email.**
+  explicit consent, one predicate. Its one timestamp, `shared_at`, dates the consent: a share the
+  author RECEIVED counts only if it existed when the author marked the note (review 2026-10-17,
+  see §7; shares need no acceptance, so otherwise anyone knowing an author's email could make
+  themselves an audience of every note that author had marked for someone else).
+- **No role column; no email stored in the share model** (labels resolve live). The one snapshot
+  is the share notification's `message` (the owner's email at share time, §3.5).
 - **CI stub:** `scripts/ci_db_bootstrap.sql`'s `auth.users(id, email)` gains
   `email_confirmed_at timestamptz` because the email lookup filters on it.
 
 ### 3.2 The visibility rule, stated once
 
 - **Recipient R** reads collection C and its member rows iff a share (C → R) exists.
-- **Party X** reads a note by author A on property P iff the note is marked `shared`, some share
-  between X and A (either direction) names a collection that currently holds P. Files follow the
+- **Party X** reads a note by author A on property P iff the note is marked `shared`, and some share
+  between X and A names a collection that currently holds P — a share A OWNS (A chose X), or a
+  share A RECEIVED that already existed when A marked the note (`shared_at`). Files follow the
   note.
 - Everything else stays owner-only exactly as today. **Writes never widen.**
 
@@ -185,7 +201,8 @@ Why this shape and nothing more:
 |---|---|---|---|
 | See the collection (list, Browse picker, page, member count) | yes | yes, labelled `name · owner@email` | no |
 | Filter Browse by it (`?collections=<id>`) | yes | yes | no (empty) |
-| Rename / description / delete / monitoring / add or remove properties | yes | 404 | 404 |
+| Rename / description / delete / monitoring / add properties | yes | 404 | 404 |
+| Remove properties | yes | no-op `{removed: false}` (the DELETE matches no row; nothing written) | same |
 | Share with an email / revoke a recipient | yes | no (no re-share) | no |
 | Leave ("Remove from my list") | — | yes | — |
 | See who it is shared with | all recipients | only themselves | — |
@@ -238,7 +255,10 @@ any side effect. This replaces the three visibility probes:
 - **No 42501 → 403 mapping**: a forgotten GRANT must keep paging as a 500.
 
 **New routes** (both `tenant_conn`; the share INSERT is the second instance of tenancy.md's named
-"short tenant transaction, then a service-role write" exception, `POST /estimations/{id}/feedback`):
+"short tenant transaction, then a service-role write" exception, `POST /estimations/{id}/feedback`;
+like it, the service-role connection opens in the handler only after the gate passed,
+`deps.open_background_conn`; unlike it, the route keeps the request-long `tenant_conn`, because
+its service-role work is two fast INSERTs, not an LLM call):
 ```
 POST   /collections/{collection_id}/shares            body {email}      -> Collection   (owner only)
   1 tenant:   UPDATE collections SET updated_at=now() WHERE id=%s        -> 0 rows: 404
@@ -249,7 +269,11 @@ POST   /collections/{collection_id}/shares            body {email}      -> Colle
               if a row was inserted: INSERT INTO notification_dispatches
                 (source_kind='collection_share', collection_id, change_kind='shared', account_id=recipient,
                  message='<owner email> shared the collection "<name>" with you', channel='in_app',
-                 status='sent', target_channels='{}', dedupe_key='share:<collection>:<recipient>:<epoch>')
+                 status='sent', target_channels='{}', dedupe_key='share:<collection>:<recipient>')
+                ON CONFLICT DO NOTHING — ONE notification per pair ever: a revoke + re-share
+                loop cannot refill the recipient's inbox with sender-chosen text
+                only the share INSERT's CheckViolation maps to 422; any other (a drifted dispatch
+                CHECK) stays a 500
   4 tenant:   re-read, return the Collection
 DELETE /collections/{collection_id}/shares/{account_id}                -> {deleted}    (owner revokes OR recipient leaves)
   tenant: DELETE … ; the party policy's USING decides who may; 0 rows -> 404
@@ -261,7 +285,8 @@ The uuid, not the email, keys the DELETE (an email in a URL lands in access logs
 and `_to_tag`/`_to_tag_full` go):
 - **Collection** = today's fields + `owner_email: str | null` + `shared_with: [{account_id,
   email | null}]`. `owner_email` is null iff `c.account_id IN (select current_account_ids())` —
-  null-iff-mine by construction; the label comes from `LEFT JOIN share_party_emails()`. On a shared
+  null-iff-mine by construction; the label comes from a scalar `share_party_emails()` subselect
+  (scalar subselects only, so one projection serves SELECT and every RETURNING). On a shared
   row `monitoring_enabled` is `false` and `notify_channels` `[]`: they describe the CALLER (alerts
   go to the owner), which removes every recipient branch from the bell and pill marks.
   `shared_with`: the owner sees all recipients; a recipient sees only their own grant (`email:
@@ -338,11 +363,14 @@ resolve so no wrong mark flashes. The 16 hand-typed `useQuery` copies become the
 ### 3.7 Notes: semantics and attribution
 
 - **Author** = the account `require_account_id` stamps at creation (never the collection's).
-- **Label** = the live auth email via `account_email()`, never stored.
+- **Label** = the live auth email via `account_email()`, never stored (the share notification's
+  message is the one snapshot).
 - **Consent, not time** (ruling 1): a note is private until its author marks it shared; the mark is
   the author's statement "people I share this property with may read this". It is symmetric —
   owner → recipients and recipient → owner follow the same rule — and co-recipients never see each
-  other (5b).
+  other (5b). One dated edge: a recipient's mark consents to the shares it had received AT THAT
+  MOMENT (`shared_at`); a share someone creates later does not inherit it, and re-marking consents
+  again. An owner's mark needs no such date — the owner chose every recipient.
 - **Visibility recomputes from the live facts**: unmarking, revoking, leaving, or removing the
   property from the collection hides the note again; re-sharing or re-adding shows marked notes
   again (the mark persists). Nothing is deleted by any of these.
@@ -352,7 +380,7 @@ resolve so no wrong mark flashes. The 16 hand-typed `useQuery` copies become the
 
 - Shares are keyed on the collection, which a merge never changes. Membership is carried as the
   owner's rows; notes (with their `shared` mark) are carried by property (append), so visibility
-  recomputes on the survivor; a split's note copy keeps the mark. The split preview still shows
+  recomputes on the survivor; a split's note copy keeps the mark and its `shared_at`. The split preview still shows
   only the acting account's items.
 - **Monitoring is unchanged**: alerts stay stamped to the owner; a recipient never receives one;
   the masked fields stop the UI implying otherwise. The share notification is the only event a
@@ -381,7 +409,7 @@ the in-app row is the house pattern · pending invites, an acceptance step: off 
 | `property_notes.shared` | the v1 time rule, its two server-stamped anchors and the column-scoped grant; the merge-collapse edge | §4 |
 | 4th notification kind + 1 trigger branch | six `Literal[...]` copies → one `SourceKind` | `api/notifications.py:620,759,789`; `api/routes/notifications.py:138,162,176` |
 | `account_email()` | `admin.get_entitlements`' inline `auth.users` join + its duplicate rows | `api/routes/admin.py:741-751` |
-| `share_party_emails()` | no stored email, no second connection on read routes, no `accounts` widening | PII rail |
+| `share_party_emails()` | no stored label (the share notification keeps the one snapshot), no second connection on read routes, no `accounts` widening | PII rail |
 | the write-is-the-gate pattern | 3 visibility probes + `add_properties`' `SELECT 1` + `_fetch_note` | `curation.py` `_fetch_collection` ×2, `delete_collection` SELECT, `:249-253`, `:389-393, 647-656`; fixes the false `{deleted:true}` and a 500 |
 | `owner_email` + `shared` on Note | `origin_listing_id` on the Note surface, `CreateNoteIn.origin_listing_id`, the COALESCE arm, the `sreality_id` prop chain (2 sites), `ExtNote.origin_listing_id` | no reader in frontend/src or the extension; written-but-never-read |
 | `owner_email` on ExtCollection | `ExtCollection.is_system` + the double "saved" derivation | `chrome-extension/src/types.ts:102` unread; `index_cards.ts` |
@@ -445,8 +473,9 @@ which must renumber); W4 takes the next free number at merge time.
   passage, the second named exception, the `auth.users` touchpoints, "a share is never
   membership"), database SKILL summary, architecture.md rules 16 + 18, GLOSSARY ("Share", "Shared
   note"; Collection "may be shared read-only"), CLAUDE.md rules 16 + 18 clauses, toolkit-api route
-  list, `api/curation.py` docstring. Verify: apply 607 BEFORE merge (safe: no share can exist until
-  the route deploys), one `execute_sql` policy/privilege check, confirm Supabase → Authentication →
+  list, `api/curation.py` docstring. Verify: apply 610 BEFORE merge (safe: no share can exist until
+  the route deploys; the W4 projections need `share_party_emails()` and `property_notes.shared`, so
+  merging first 500s every collection and note route), one `execute_sql` policy/privilege check, confirm Supabase → Authentication →
   Email → "Confirm email" is ON, merge, API status.
 - **W5 `feature/collection-sharing-surfaces`** (SPA, §3.6 desktop + phone + Notifications page).
   Vitest for the NoteRow foreign variant and the share checkbox/mark, own-only CollectionSaveList,
@@ -466,10 +495,14 @@ which must renumber); W4 takes the next free number at merge time.
 | A shared-read policy written FOR ALL or without `TO authenticated` silently grants writes or reaches anon | pinned policy census + the migration's assert block |
 | `share_party_emails()` restates the party rule; drift mislabels | live equality test against the visible share rows for all three tenants |
 | a note marked shared on a property later added to a shared collection becomes visible without a fresh decision | the mark means "people I share this property with may read this"; the composer and mark always show the current audience; unmark hides |
+| a stranger who knows an author's email shares a bait collection WITH the author to read notes the author marked for someone else (shares need no acceptance) | the recipient-author arm counts only shares older than the note's `shared_at`; marks made after the bait share do reach the stranger, whose share the author sees in their list and notification and can Leave (live test `test_a_share_made_after_the_mark_does_not_widen_a_recipients_note`). **Operator ruling owed** on this added edge (review 2026-10-17) |
+| a revoke + re-share loop floods a recipient's inbox with sender-chosen text | ONE share notification per (collection, recipient) ever (`dedupe_key` without a time) |
+| `shared_with[].account_id` lets an owner turn a confirmed email into its account uuid (share, read, revoke), linking a named person to `account_id` rows in read-all tables (`manual_rental_estimates`) | accepted for a closed platform, like enumeration; revisit with signup (an opaque per-share handle would close it) |
+| the share notification's message snapshots the owner's email | the one stored copy; it outlives a revoke and an email change on purpose (an inbox row is history) |
 | email enumeration | accepted for a closed platform (5 users); rate limit if signup opens |
 | a squatter registers someone's address | confirmed-only match + the W4 "Confirm email ON" check |
 | unsolicited shares clutter a list; a hostile owner shares >100k properties and breaks the recipient's member map (`expectMax`) | Leave; the share notification; 5 users; watch the map size |
-| per-note subquery on the whole-set note-count read | index-backed (share PK, `collection_properties_by_property`); 102 notes; timed in the live test |
+| per-note subquery on the whole-set note-count read | index-backed (share PK, `collection_properties_by_property`); 102 notes; NOT timed by the live test (its fixture is a handful of rows) — measure on production after apply |
 | a recipient's own dismissals hide shared properties in Browse | consistent with own collections; documented |
 | caches 30 s stale after a revoke | clean 404 copy; clearable `#id` chip |
 | Collections nav plan-gated, Browse picker not | same posture as own collections today; flagged, not changed |

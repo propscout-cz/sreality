@@ -547,6 +547,21 @@ class CreateNoteIn(BaseModel):
     # display provenance ("written while viewing this advert") and a split's routing
     # key, never a grouping key. The legacy origin_listing_id column is derived from it.
     origin_listing_ref_id: int | None = None
+    # The author's consent mark (migration 610): the parties of a share holding this property may read it.
+    shared: bool = False
+
+
+class ShareCollectionIn(BaseModel):
+    email: str
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _one_address(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip().lower()
+            if not 3 <= len(v) <= 320 or v.count("@") != 1:
+                raise ValueError("must be one email address")
+        return v
 
 
 class SetArtifactLinkIn(BaseModel):
@@ -570,6 +585,7 @@ class CreateTagIn(BaseModel):
 
 class UpdateNoteIn(BaseModel):
     body: str | None = Field(default=None, min_length=1, max_length=4000)
+    shared: bool | None = None
 
 
 class UpdateTagIn(BaseModel):

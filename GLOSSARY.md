@@ -99,8 +99,20 @@ A property's place in one account's deal pipeline. At most one per property per 
 _Avoid_: deal, card (alone)
 
 **Collection**:
-A named set of properties an account keeps, optionally watched for changes.
+A named set of properties an account keeps, optionally watched for changes. It may be shared
+read-only with other accounts.
 _Avoid_: list, folder, favourites, saved list
+
+**Share**:
+A read-only grant of one collection to one account. The owner revokes it, the recipient may leave
+it; the recipient can never change the collection.
+_Avoid_: invite, membership, access (alone), collaborator
+
+**Shared note**:
+A note its author marked for the people they share its property with: readable by the other party
+of any share the author is party to whose collection holds that property — for a share the author
+received, only one that already existed when the note was marked. Unmarked notes stay private.
+_Avoid_: public note, team note
 
 **Tag**:
 A coloured label an account puts on a property; a property carries any number. A tag filter
