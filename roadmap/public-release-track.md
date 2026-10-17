@@ -55,8 +55,8 @@ common to all. Full plan, sequencing, and gates: `docs/design/public-release-pro
   stopped `verify_jwt` emitting the claim). `tenant_conn`'s service-role fallback and
   `resolve_account_id`'s `legacy_backfill_claim` read are gone, so an unset
   `TENANT_POOL_DB_URL` now RAISES instead of silently degrading to an RLS-off connection —
-  the shape that hid the bad-DSN incident below. The `legacy_backfill_claim` TABLE stays
-  (read by nothing since migration 612); no tenant-route test runs on the RLS-bypass path.
+  the shape that hid the bad-DSN incident below. The `legacy_backfill_claim` TABLE is dropped
+  (613, once 612 removed its last reader); no tenant-route test runs on the RLS-bypass path.
 - **2026-09-11 W3 ("One Account, One Answer" — reads go RLS-only)**: the architectural payoff.
   `lookup_portal_listings` now takes NO account at all and its SQL carries no account predicate —
   `current_account_ids()` is the single membership definition, so the extension's answer IS the

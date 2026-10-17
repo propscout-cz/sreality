@@ -404,7 +404,7 @@ the author's explicit mark — simpler and consented · a `shared_note_ids()` de
 policy does the same without an RPC surface · an INSERT grant on shares: uuids are learnable ·
 `DELETE /shares/{email}`: PII in access logs · a second label definition: one `account_email()` · a
 second service-role connection on four hot read routes for labels: a recurring pool cost held by
-convention · dropping `legacy_backfill_claim`: tenancy.md:134 forbids it · dropping `is_system`
+convention · dropping `legacy_backfill_claim`: done later by migration 613 · dropping `is_system`
 before the code stops reading it: a migration-438-class outage · replacing the collection table with
 cards: an unrelated visible change · email on share: per-recipient external delivery is not built;
 the in-app row is the house pattern · pending invites, an acceptance step: off the north star (5e).
