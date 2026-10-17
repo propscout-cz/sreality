@@ -41,10 +41,10 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   `seed_default_pipeline`, the monitoring collection, the 7-day trial), functions born private, the event ledger's stage FKs
   account-qualified. Own PRs, same sprint (merge separately): #1828 the SPA draws an empty board's columns, #1830
   migration 611 (tenant serial ids → identity; apply it BEFORE 612), #1831 the extension resets its caches on an
-  identity change.
+  identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
 - **Next (unscheduled):** `notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
   browser-writable); the 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
-  census arm); dropping `legacy_backfill_claim` (operator's call, 2026-10-17: yes, as its own migration after 612).
+  census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
 - **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),

@@ -106,7 +106,6 @@ def tenants(svc: Any) -> Iterator[dict[str, _Tenant]]:
     finally:
         accs = [t.acc for t in made.values()]
         with svc.cursor() as cur:
-            cur.execute("DELETE FROM legacy_backfill_claim WHERE account_id = ANY(%s)", (accs,))
             cur.execute("DELETE FROM accounts WHERE id = ANY(%s)", (accs,))
             cur.execute(
                 "DELETE FROM auth.users WHERE id = ANY(%s)", ([t.user for t in made.values()],)

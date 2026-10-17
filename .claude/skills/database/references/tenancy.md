@@ -155,10 +155,9 @@ silently degrading to an RLS-off connection (that silent degradation is exactly 
 2026-07 bad-DSN incident stayed invisible for weeks); and `current_account_ids()` is the
 one definition of who the caller is, so a tenant-connection read is scoped by RLS alone.
 
-**`legacy_backfill_claim` stays, read by nothing.** It was the first-signup CAS that handed
-the pre-tenancy rows to the operator's account (claimed 2026-07-11); migration 612 removed that
-branch from `handle_new_user`. Dropping the table is a destructive migration the operator has
-not ruled on.
+**`legacy_backfill_claim` is gone (613).** It was the first-signup CAS that handed the
+pre-tenancy rows to the operator's account (claimed 2026-07-11); 612 removed the branch that
+read it, 613 dropped the table (operator ruling 2026-10-17; the row is in 613's header).
 
 ## The tenancy doctrine — four shapes, and only four
 
