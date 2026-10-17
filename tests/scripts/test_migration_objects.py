@@ -121,7 +121,7 @@ def _declared(root: Path) -> list[list[str]]:
 
 
 def test_a_later_drop_retires_the_earlier_declaration(tmp_path):
-    """W6 (migration 593) drops a view 567 and 584 declared: its absence is 593's doing, not
+    """W6 (migration 615) drops a view 567 and 584 declared: its absence is 615's doing, not
     a sign 567 was never applied, so 567 stops declaring it. A drop in prose or inside a
     function body is not a drop."""
     (tmp_path / "001_a.sql").write_text(
@@ -141,10 +141,11 @@ def test_a_later_drop_retires_the_earlier_declaration(tmp_path):
 
 
 def test_a_file_that_drops_and_recreates_keeps_declaring(tmp_path):
-    """593's pipeline views, 597's map function, 590's views: dropped and created in one file."""
+    """615's pipeline views, 597's map function, 590's views: dropped and created in one file.
+    The re-created object exists after the later file, so the earlier declaration stays probed."""
     (tmp_path / "001_a.sql").write_text("create view v as select 1;")
     (tmp_path / "002_b.sql").write_text("drop view if exists v; create view v as select 2;")
-    assert _declared(tmp_path) == [[], ["relation:v"]]
+    assert _declared(tmp_path) == [["relation:v"], ["relation:v"]]
 
 
 def test_every_recent_migration_is_either_probeable_or_openly_unverifiable():

@@ -1,4 +1,4 @@
-"""Migration 593's rails (MERGE SPRINT W6, PROGRAM.md §6): the one destructive window, offline.
+"""Migration 615's rails (MERGE SPRINT W6, PROGRAM.md §6): the one destructive window, offline.
 
 What only the text can show: the §6 objects are dropped and nothing else, with no CASCADE and no
 EXECUTE; the three concurrent index drops are top-level statements, the feed's before the column
@@ -25,7 +25,7 @@ from tests.migration_defs import latest_definition
 from tests.test_migration_rls_grants import _dynamic_ddl
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
-SQL = (MIGRATIONS / "593_merge_sprint_w6_drops.sql").read_text(encoding="utf-8")
+SQL = (MIGRATIONS / "615_merge_sprint_w6_drops.sql").read_text(encoding="utf-8")
 CODE = re.sub(r"--[^\n]*", "", SQL)
 S590 = (MIGRATIONS / "590_read_model_portal_rule.sql").read_text(encoding="utf-8")
 S377 = (MIGRATIONS / "377_pipeline_stage_code.sql").read_text(encoding="utf-8")
@@ -97,7 +97,7 @@ def test_the_concurrent_drops_are_top_level_the_feeds_first_the_keysets_last() -
 def test_each_section_returns_when_applied_and_refuses_before_its_first_drop(tag: str) -> None:
     block = _block(tag)
     first = min(m.start() for m in re.finditer(r"\b(?:drop|alter table|lock table)\b", block))
-    assert block.index("already applied") < block.index("raise exception '593 refused") < first
+    assert block.index("already applied") < block.index("raise exception '615 refused") < first
 
 
 _GUARDED = {"status_assets": ("properties", "any (v_cols)"), "feed": ("listings", "v_col"),
@@ -137,7 +137,7 @@ def test_section_0s_production_half_names_what_its_owners_name() -> None:
 
     pre = _flat(_block("pre"))
     production = pre[pre.index("if not v_populated then"):]
-    refuse = " then raise exception '593 refused"
+    refuse = " then raise exception '615 refused"
     for check in (
         "if coalesce((select value #>> '{}' from public.app_settings where key = "
         f"'{AUTODEDUP_INTERVAL_SETTING}'), '0') <> '0'",
@@ -170,7 +170,7 @@ def test_the_two_restated_views_are_pinned_before_the_production_gate() -> None:
                     "'06c950df3e18e0f58c4be6b06973600e' or md5(pg_get_viewdef("
                     "'public.property_pipeline_public'::regclass)) not in "
                     "('54671707e2d2c12d1a47971325e9a784', '88093f6916bb54a0a9e4333fbf0cd544') "
-                    "then raise exception '593 refused")
+                    "then raise exception '615 refused")
     assert pin < pre.index("if not v_populated then")
     post = _flat(_block("post"))
     for view, md5 in (("property_pipeline_public", "88093f6916bb54a0a9e4333fbf0cd544"),
@@ -181,12 +181,12 @@ def test_the_two_restated_views_are_pinned_before_the_production_gate() -> None:
 
 def test_the_map_function_is_597s_and_this_file_only_calls_it() -> None:
     """Migration 597 (portal exclusion, applied 2026-10-13) re-created browse_map_cells without
-    `listing_ids_filter`, so 593 no longer drops, creates, grants or pins it.
+    `listing_ids_filter`, so 615 no longer drops, creates, grants or pins it.
 
-    RED by: restating the map here again. Production applies 593 after 597, so a restatement would
-    undo 597's portal exclusion; the CI replay runs 593 first, so 597's md5 precondition would
-    refuse. The one call left (section 8's smoke read) names only arguments that 590's signature
-    (the replay) and the latest one (production) both take.
+    RED by: restating the map here again: it would undo the later definitions (597's portal
+    exclusion and after), live and on the replay, which since the renumbering runs this file after
+    them. The one call left (section 8's smoke read) names only arguments that 590's signature
+    and the latest one both take.
     """
     assert "listing_ids_filter" not in CODE
     assert len(re.findall(r"browse_map_cells", CODE)) == 1

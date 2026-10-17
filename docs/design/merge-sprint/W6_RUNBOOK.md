@@ -1,7 +1,7 @@
-# W6 runbook: the one destructive window (migration 593)
+# W6 runbook: the one destructive window (migration 615)
 
 The order for the day the operator names (PROGRAM.md §5's W6 gate, §6's list, §7's brake). The file is
-`migrations/593_merge_sprint_w6_drops.sql` on branch `feature/merge-sprint-w6`. Every SQL read below
+`migrations/615_merge_sprint_w6_drops.sql` on branch `feature/merge-sprint-w6`. Every SQL read below
 goes through MCP `execute_sql` and starts with `SET statement_timeout='30s';`. `execute_sql` returns only
 the last result set and collapses columns that share a name, so run each SELECT of C2, C4's second
 block, C6, C10 and step 14 as its own call, each starting with that SET, or fold a check into one
@@ -12,8 +12,8 @@ been refused by the permission check before; the apply (step 10), which runs onl
 The reload and the drop need the operator's OK too. Baselines were read on 2026-10-08 between 03:51 and 06:29 UTC,
 except those dated 2026-10-10 or later.
 
-593 does not touch `browse_map_cells`. Migration 597 (portal exclusion, applied 2026-10-13) already
-re-created it without `listing_ids_filter`, so 593's section 5 is gone and 597 owns the function's
+615 does not touch `browse_map_cells`. Migration 597 (portal exclusion, applied 2026-10-13) already
+re-created it without `listing_ids_filter`, so 615's section 5 is gone and 597 owns the function's
 body and ACL; no check below pins it, and only the smoke reads call it.
 
 ```bash
@@ -22,11 +22,11 @@ TARGETS="property_status_events assets asset_membership_events properties:id,ass
 
 ## D−1, off-peak (not 05:00–05:40, not 10:30–12:45 UTC)
 
-1. **CI is green on the PR.** The migrations job replays 593 and its log shows `593: landed`.
+1. **CI is green on the PR.** The migrations job replays 615 and its log shows `615: landed`.
 2. **Plan and connectivity:**
-   `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=593_merge_sprint_w6_drops.sql -f dry_run=true`,
+   `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=615_merge_sprint_w6_drops.sql -f dry_run=true`,
    then `gh run list --workflow apply_migration.yml --limit 1 --json databaseId` and `gh run watch <id> --exit-status`.
-   Expect `593_merge_sprint_w6_drops.sql: 112 statement(s), 2 probeable object(s)` and one connectivity row.
+   Expect `615_merge_sprint_w6_drops.sql: 112 statement(s), 2 probeable object(s)` and one connectivity row.
    Then run C1 and C2 once: each answers, and C1's `interval_s` reads 60 until the brake (null: a wrong key).
 3. **Backup rehearsal.** The column-CSV path has never run in production.
    `gh workflow run backup_before_drop.yml --ref main -f label=merge-sprint-w6-rehearsal -f targets="$TARGETS"`,
@@ -45,7 +45,7 @@ first.
 - Until the apply, no ad-hoc read that filters, sorts or aggregates `properties.last_seen_at`, and none
   that names `property_status_events_public`, `listing_feed_public` or `listing_feed_visible` as an
   identifier. The keyset-index gate in section 0 is one-way: one planner probe of
-  `properties_last_seen_keyset_idx` makes 593 refuse until a stats reset. C6 counts every statement that
+  `properties_last_seen_keyset_idx` makes 615 refuse until a stats reset. C6 counts every statement that
   names those three.
 
 3b. **04:40–04:45, the bootstrap gate.** Read the build flag, the lease and the worker in one call:
@@ -96,7 +96,7 @@ first.
    Expect `live_lease` null, `bootstrap` false (true on a morning under step 3b's override), and the same
    `passes` and `last_pass_at` in both reads with `in_flight_s` null. If `bootstrap` is true without that
    override, move the window a day (the dedup session's rule). Section 0 refuses unless the brake is 0,
-   and until a held lease expires (593:105-107). A pass ends by itself within 17.5 minutes; a lease from
+   and until a held lease expires (615:105-107). A pass ends by itself within 17.5 minutes; a lease from
    a pass that died lasts up to 40 minutes, and a `dispatch:` or seed holder up to 5 hours. If a lease
    will outlast the dispatch, re-time the dispatch to 05:31:30–05:36:30, between the 05:30 rebuilds and
    the 05:37 map rebuild, or move the day.
@@ -254,7 +254,7 @@ first.
    where backend_type = 'client backend' and state <> 'idle' and xact_start < now() - interval '10 seconds' order by age desc;
   ```
 - **C11, the PR, read at 05:15.** `gh pr view 1732 --json isDraft,mergeable,mergeStateStatus,headRefOid`
-  must read `true`, `MERGEABLE`, `CLEAN` and the head that CI last passed. #1732 stays a draft until 593
+  must read `true`, `MERGEABLE`, `CLEAN` and the head that CI last passed. #1732 stays a draft until 615
   has landed (step 12).
 
 ### 05:20:30, the apply
@@ -263,22 +263,22 @@ first.
    run completed, and only when `gh run list --workflow apply_migration.yml --limit 5 --json status,databaseId`
    shows nothing queued or in progress: the concurrency group `apply-migration` (cancel-in-progress false,
    apply_migration.yml:45-47) lets a newer dispatch cancel an older pending one.
-10. **Apply:** `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=593_merge_sprint_w6_drops.sql -f dry_run=false -f confirm=APPLY`,
+10. **Apply:** `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=615_merge_sprint_w6_drops.sql -f dry_run=false -f confirm=APPLY`,
     then `gh run watch <id> --exit-status`. psql starts about 33 s after the dispatch, and its NOTICEs,
-    `593: landed` among them, print only after psql exits. Write down the `headSha` of the run that prints
-    `593: landed` (`gh run view <id> --json headSha --jq .headSha`).
-    - **What the log shows.** On success: `593: landed`, `applied migrations/593_merge_sprint_w6_drops.sql`,
+    `615: landed` among them, print only after psql exits. Write down the `headSha` of the run that prints
+    `615: landed` (`gh run view <id> --json headSha --jq .headSha`).
+    - **What the log shows.** On success: `615: landed`, `applied migrations/615_merge_sprint_w6_drops.sql`,
       then the receipt `receipt OK: 2 object(s) present`. The receipt proves nothing about the drops,
-      because those two views existed before: the proof is `593: landed` plus step 11's P1.
+      because those two views existed before: the proof is `615: landed` plus step 11's P1.
     - **`canceling statement due to lock timeout`.** This is the retry working (30 tries, 20 s apart). A
       concurrent index drop that times out leaves its index invalid until the next try.
-    - **`593 refused: …`, or any other error** (`deadlock detected` is not retried). Its section and
+    - **`615 refused: …`, or any other error** (`deadlock detected` is not retried). Its section and
       every later section did not run, and every earlier one stands. Read the message, fix the cause,
       and dispatch again: the file is idempotent.
     - **`property_pipeline.note KEPT`.** Section 6 skipped because a card holds a note. A later migration drops the note.
 11. **The receipt, by hand (P1).** Expect every relation, function and trigger null or 0, and `cols_left` null
     (`property_pipeline.note` if section 6 skipped), and `pp_md5` `88093f6916bb54a0a9e4333fbf0cd544`
-    (`54671707…` if section 6 skipped). The map function is not 593's to check: 597 owns it.
+    (`54671707…` if section 6 skipped). The map function is not 615's to check: 597 owns it.
     ```sql
     select to_regclass('public.property_status_events') pse, to_regclass('public.property_status_events_public') psev, to_regclass('public.assets') a,
            to_regclass('public.asset_membership_events') ame, to_regclass('public.listing_feed_public') feed, to_regclass('public.listing_discovery_seq') seq,
@@ -295,11 +295,11 @@ first.
 
 ### The merge, still braked
 
-12. **Merge the PR** as W5 was (never `--admin`), only if the branch's 593 is the text production ran
-    (else stop, rule 1). #1732 stays a draft until 593 has landed (C11); marking it ready re-runs no
+12. **Merge the PR** as W5 was (never `--admin`), only if the branch's 615 is the text production ran
+    (else stop, rule 1). #1732 stays a draft until 615 has landed (C11); marking it ready re-runs no
     required check, because those workflows trigger on a bare `pull_request`:
     ```bash
-    git fetch origin && git diff --quiet <headSha> origin/feature/merge-sprint-w6 -- migrations/593_merge_sprint_w6_drops.sql && gh pr ready 1732 && gh pr merge 1732 --squash
+    git fetch origin && git diff --quiet <headSha> origin/feature/merge-sprint-w6 -- migrations/615_merge_sprint_w6_drops.sql && gh pr ready 1732 && gh pr merge 1732 --squash
     ```
     The merge redeploys the worker, and a pass killed mid-flight would strand the lease for up to 40
     minutes. Confirm the rollout with
@@ -331,7 +331,7 @@ first.
       move after 05:30, and `dirty_properties` drains.
     - The Postgres logs since 05:20 (MCP `query_logs`, source `postgres_logs`) show no `does not exist` naming a dropped object.
 16. **PostgREST has reloaded.** The file ends with `pg_notify('pgrst', 'reload schema')`, and the DDL
-    event triggers reload too. 593 changes no surviving function's parameter list (597 changed the
+    event triggers reload too. 615 changes no surviving function's parameter list (597 changed the
     map's on 2026-10-13), so the reload is about the dropped relations, columns and functions and the
     two re-created pipeline views: a fresh tab's `/pipeline` and property page answer. If PostgREST
     still names a dropped object, send `select pg_notify('pgrst', 'reload schema');` once, with the OK.
@@ -345,14 +345,14 @@ first.
     1.36 GB, the status log 230 MB, the feed index 149 MB. Expect `properties` at about 1.81 GB.
     About 13 MB of dropped column bytes are reused as rows are rewritten.
 19. **The drift check.** Dispatch `verify_pipeline.yml`; `migration_drift` should read ok. A run between
-    the apply and the merge reads WARN on 567 and 584 (`listing_feed_public`) until main carries 593.
+    the apply and the merge reads WARN on 567 and 584 (`listing_feed_public`) until main carries 615.
 20. **The hand-over note.** Write the times of the brake, the apply, the merge, the brake off and the first
     pass into `merge-sprint-handover-to-autodedup`, and record there:
     - The status-log rows written between the dump and the apply, which no backup holds (roughly 20–50, step 4).
     - The dedup session's `properties.published_at` drop is unblocked, but `properties_gate_cover_idx`
       includes that column, so its replacement comes first.
     - #1655 rebases.
-    - #1634 removes its `listing_feed_public` reads (its 575 pre- and post-conditions) and takes a number above 593.
+    - #1634 removes its `listing_feed_public` reads (its 575 pre- and post-conditions) and takes a number above 615.
     Then mark W6 applied in PROGRAM.md §4, §5 and §6 and in `roadmap/merge-sprint.md`.
 21. **The sampler's table goes, with the operator's OK.** The reader hunt's per-minute job (2026-10-08/09)
     was unscheduled on 2026-10-09 once it had confirmed the reader; its unlogged table (41 MB) is not part

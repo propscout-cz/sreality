@@ -1582,7 +1582,7 @@ renumber.** Navigate by area:
     back every original property in any order (tests/test_detach_listing.py, executed in
     tests/test_merge_safety_live.py). Callers serialize per-property on the row locks.
     **There is no status log.** Merge sprint W6 dropped migration 392's per-property status
-    history (`property_status_events`, its view, trigger and function; migration 593): nothing
+    history (`property_status_events`, its view, trigger and function; migration 615): nothing
     read it after W2b, where the chart started drawing every advert's own line. A detach restores
     `is_active` in the statement that clears `merged_away` (active exactly when one of its ads
     is). **Apply 559 before its code merges**
@@ -2407,7 +2407,7 @@ renumber.** Navigate by area:
     write (full analysis: `docs/design/portal-order-fidelity.md`). `listing_detail_queue.discovery_seq`
     / `listings.discovery_seq` (migration 368) carried a sequence value from enqueue to write for
     the per-ad Browse lane until W5 (merge sprint, MS19); W6 dropped both columns and the
-    sequence (migration 593).
+    sequence (migration 615).
     **`listings.discovered_at` (migration 444) is the claim's time** — the claimed row's
     `enqueued_at`, carried through `claim_detail_batch` → `listing_write.write_listings` and
     written **once**, never on a later re-fetch (`COALESCE(listings.discovered_at,
@@ -3960,7 +3960,7 @@ such pin at once — with ~87 % of active pins below building level it buried th
 A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public` (gone
-since 593), and so to both read models — served for the street chip level, read by no filter
+since 615), and so to both read models — served for the street chip level, read by no filter
 until its RPC arm lands.
 **Appending is the only legal edit here** — `browse_list` and `properties_map_mv` materialize
 `select * from browse_projection` and `toolkit/browse_read_model.sync_browse_list` re-inserts

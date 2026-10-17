@@ -63,7 +63,7 @@ _TENANT_VIEWS: list[str] = [
 # RLS-enabled-with-zero-policies (fully deny-all); `properties` now carries one
 # permissive authenticated-SELECT policy (Amendment A5, migration 349) but a
 # view that JOINs `listings`, which stays deny-all, must stay owner-bypass (the
-# per-ad feed was the other one until W6 dropped it, migration 593).
+# per-ad feed was the other one until W6 dropped it, migration 615).
 #
 # Owner rights does NOT mean unscoped. property_estimates_public reads
 # `estimation_runs`, whose RLS cannot bind inside an owner-rights view, so
