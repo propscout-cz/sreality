@@ -18,7 +18,7 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   610: party read policies, share/revoke/leave routes, the one share notification, Collection and
   Note gain `owner_email` / `shared_with` / `shared`), W5 #1838 (SPA: Browse picker "Shared with
   me", the Sharing block, viewer pages, foreign notes read-only, the "Share with …" checkbox, the
-  Shared tab, phone read-only in Czech), W6 #TBD (Chrome extension: "saved" and the save checklist
+  Shared tab, phone read-only in Czech), W6 #1839 (Chrome extension: "saved" and the save checklist
   are mine only, foreign notes read-only "od {email}", the "Sdílet s …" checkbox + "Sdíleno" /
   "Nesdílet" toggle on the SPA's audience rule).
 - **Next (unscheduled):**
