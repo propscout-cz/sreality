@@ -781,6 +781,10 @@ rules. Identify which one a task belongs to before you start.
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
   its lazily loaded phone layout by `usePhoneShell()`, so `routes.tsx` does not change.
+  Managing collection shares is desktop-only (collection sharing W5, #1760 Q11): the phone lists
+  collections shared with the caller read-only under "Sdílené se mnou" (`useCollections().shared`),
+  heads one as "sdílí {email} · jen ke čtení" with no add affordance, and its card sheet offers
+  only the caller's own collections, so a viewer can neither add to nor remove from it there.
   The property page (W2 #1767) is ONE set of reads with two drawings: `PropertyDetail` keeps every
   query and, under the phone shell, hands them to `components/phone/PhoneProperty` (a lazy chunk, as
   `pages/Link` is, so the first-visit budget never pays for them; no WebGL maps, no estimation start —
@@ -2149,9 +2153,13 @@ renumber.** Navigate by area:
     editor, a chip row in `CurationBlock`, was deleted 2026-10), the phone curation row and margin
     marks, and the Chrome-extension panel.**
     The panel's control is the SPA header's `CollectionSaveToggle` + `CollectionSaveMenu` reproduced
-    by value (a bookmark button opening a checklist of EVERY collection, monitored ones first and
+    by value (a bookmark button opening a checklist of collections, monitored ones first and
     bell-marked); it replaced a one-click "Sledovat" bell that could only reach the single
-    monitoring collection, so the panel and the app now offer the same verb over the same set.
+    monitoring collection, so the panel and the app offer the same verb. Since collection sharing
+    (migration 609) the SPA checklist lists the caller's OWN collections only — a shared one is
+    view-only — and every saved mark means "in one of mine" (`saved = mine.size > 0`), while cohort
+    readers (Browse prefilter, Pipeline board, phone roll) keep the full visible map; the extension
+    panel still lists every visible collection until it follows (sharing wave W6).
     In the SPA those affordances share ONE membership read and ONE collection list, each behind a
     hook in `lib/collectionCache.ts` (`useCollections`, `useCollectionMembers` — the whole-set map,
     `fetchPropertyCollectionMemberSet` under `curationKeys.propertyCollectionMembers` — and

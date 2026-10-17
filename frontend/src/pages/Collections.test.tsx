@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -75,5 +75,46 @@ describe('<Collections>', () => {
         monitoring_enabled: false,
       }),
     );
+  });
+
+  /* Sharing (migration 609): what is shared with me is its own section, named by
+   * its owner, with none of the owner's controls. */
+  it('lists collections shared with me apart, and counts my recipients', async () => {
+    const base = {
+      description: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+      listing_count: 1, monitoring_enabled: false, notify_channels: [], is_system: false,
+    };
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [
+        { ...base, id: 7, name: 'Šortlist', owner_email: null,
+          shared_with: [{ account_id: 'b', email: 'petr@example.cz' },
+            { account_id: 'c', email: 'jana@example.cz' }] },
+        { ...base, id: 9, name: 'Od Petra', owner_email: 'petr@example.cz',
+          shared_with: [{ account_id: 'me', email: null }] },
+        // Every account has a system "monitoring"; shared, it is not my Default.
+        { ...base, id: 10, name: 'monitoring', is_system: true, owner_email: 'petr@example.cz',
+          shared_with: [{ account_id: 'me', email: null }] },
+      ],
+      total: 3,
+    });
+    renderPage();
+
+    expect(await screen.findByText(/shared with 2/)).toBeInTheDocument();
+    // The header counts my own collections, not the API total.
+    expect(screen.getByText('1 collection.')).toBeInTheDocument();
+    const section = screen.getByText('Shared with me').closest('section') as HTMLElement;
+    expect(within(section).getByRole('link', { name: 'Od Petra' })).toBeInTheDocument();
+    expect(within(section).getAllByText(/Shared by petr@example\.cz/)).toHaveLength(2);
+    expect(within(section).queryByRole('button', { name: 'Delete' })).toBeNull();
+    expect(within(section).queryByText('Default')).toBeNull();
+    // My own row keeps its Delete.
+    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(1);
+
+    // A shared collection's name is not mine to collide with.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Od Petra' },
+    });
+    expect(screen.queryByText(/already exists/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
   });
 });

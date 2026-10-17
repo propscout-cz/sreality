@@ -16,6 +16,7 @@ import * as queries from '@/lib/queries';
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getMergePreview: vi.fn(),
+  listCollections: vi.fn(),
 }));
 
 vi.mock('@/lib/queries', async (importOriginal) => ({
@@ -26,6 +27,13 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
   fetchIsDismissed: vi.fn(),
   fetchNoteCounts: vi.fn(),
 }));
+
+// The collection mark counts MY collections, so the list read names id 7 as mine.
+const MINE_7 = {
+  id: 7, name: 'Šortlist', description: null, created_at: '2026-05-01T00:00:00Z',
+  updated_at: '2026-05-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
+  notify_channels: [], is_system: false, owner_email: null, shared_with: [],
+};
 
 const renderWith = (ui: React.ReactElement) =>
   render(
@@ -44,6 +52,7 @@ beforeEach(() => {
   vi.mocked(queries.fetchIsDismissed).mockImplementation(async (id) => id === 43);
   vi.mocked(queries.fetchNoteCounts).mockResolvedValue(new Map([[42, 2]]));
   vi.mocked(api.getMergePreview).mockResolvedValue({ property_ids: [42, 43], rulings_taken_back: 0 });
+  vi.mocked(api.listCollections).mockResolvedValue({ data: [MINE_7], total: 1 });
 });
 
 const mergeBar = (ids: number[]) => (
@@ -108,6 +117,23 @@ describe('<MergeSelection> in the merge bar', () => {
     expect(screen.getByRole('button', { name: 'Merge 2' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Zkusit znovu' }));
     expect(await screen.findByText('Vezme zpět 2 rozhodnutí „Různé“.')).toBeInTheDocument();
+  });
+
+  /* Sharing (migration 609): a property held only by a collection shared WITH me
+   * is not saved — the mark agrees with the save menu, which lists mine only. */
+  it('draws no collection mark for a property held only by a shared collection', async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [MINE_7, { ...MINE_7, id: 9, name: 'Od Petra', owner_email: 'petr@example.cz' }],
+      total: 2,
+    });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
+      new Map([[43, [9]], [44, [7, 9]]]),
+    );
+    renderWith(<MergeSelection ids={new Set([43, 44])} />);
+    const [shared, both] = within(screen.getByRole('list', { name: 'Vybráno ke sloučení' }))
+      .getAllByRole('listitem');
+    expect(await within(both).findByText('V kolekci')).toBeInTheDocument();
+    expect(within(shared).queryByText(/V kolekc/)).toBeNull();
   });
 
   it('turns a failed read into a retry instead of dropping the mark', async () => {

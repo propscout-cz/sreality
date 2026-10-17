@@ -11,13 +11,14 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import type { ArtifactLink, Note, Tag } from '@/lib/types';
+import type { ArtifactLink, Collection, Note, Tag } from '@/lib/types';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
   listTags: vi.fn(),
   listPropertyNotes: vi.fn(),
   createPropertyNote: vi.fn(),
+  updatePropertyNote: vi.fn(),
   deletePropertyNote: vi.fn(),
   fetchArtifactLinks: vi.fn(),
   setPropertyArtifactLink: vi.fn(),
@@ -45,6 +46,7 @@ import {
   listPropertyNotes,
   listTags,
   setPropertyArtifactLink,
+  updatePropertyNote,
   uploadNoteAttachment,
 } from '@/lib/api';
 import {
@@ -52,7 +54,7 @@ import {
   fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
-import CurationBlock from './CurationBlock';
+import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
 
 const TAG: Tag = {
   id: 3, name: 'k prohlídce', color: 'copper', created_at: '2026-05-01T00:00:00+00:00',
@@ -61,7 +63,7 @@ const TAG: Tag = {
 
 const NOTE: Note = {
   id: 11, property_id: 42, body: 'Sousedi jsou hlučni.',
-  created_at: '2026-05-02T00:00:00+00:00', updated_at: null,
+  created_at: '2026-05-02T00:00:00+00:00', updated_at: null, shared: false, owner_email: null,
 };
 
 const LINK: ArtifactLink = {
@@ -74,6 +76,8 @@ function mockReads() {
   vi.mocked(listTags).mockResolvedValue({ data: [TAG] } as never);
   vi.mocked(listPropertyNotes).mockResolvedValue({ data: [NOTE] } as never);
   vi.mocked(fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+  vi.mocked(listCollections).mockResolvedValue({ data: [], total: 0 });
+  vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
 }
 
 function renderBlock() {
@@ -103,9 +107,8 @@ describe('<CurationBlock> collections', () => {
     await screen.findByRole('textbox', { name: 'Notes' });
     expect(screen.queryByText('Collections')).toBeNull();
     expect(screen.queryByRole('link', { name: /Manage/ })).toBeNull();
-    // The block reads no collection data at all, whatever a row would be labelled.
-    expect(listCollections).not.toHaveBeenCalled();
-    expect(fetchPropertyCollectionMemberSet).not.toHaveBeenCalled();
+    // The collection reads feed only the notes' share audience: no save control here.
+    expect(screen.queryByRole('button', { name: /kolekce|collection/i })).toBeNull();
   });
 });
 
@@ -220,7 +223,7 @@ describe('<CurationBlock> note attachments', () => {
     await user.type(box, 'Půdorys od makléře.');
     await user.click(screen.getByRole('button', { name: 'Save note' }));
     await waitFor(() => expect(uploadNoteAttachment).toHaveBeenCalledWith(42, 12, file));
-    expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900);
+    expect(createPropertyNote).toHaveBeenCalledWith(42, 'Půdorys od makléře.', 900, false);
     await waitFor(() => expect(screen.queryByRole('list', { name: 'Files to attach' })).toBeNull());
   });
 
@@ -235,7 +238,7 @@ describe('<CurationBlock> note attachments', () => {
     await user.upload(screen.getAllByTestId('attach-input')[0], pdf());
     await user.click(screen.getByRole('button', { name: 'Save note' }));
     await waitFor(() => expect(createPropertyNote).toHaveBeenCalledWith(
-      42, 'Attached: plan.pdf', 900));
+      42, 'Attached: plan.pdf', 900, false));
   });
 
   it('puts a file dropped on a saved note onto that note, not into the composer', async () => {
@@ -388,5 +391,211 @@ describe('<CurationBlock> artifact link', () => {
 
     expect(await screen.findByText(/Odkaz na artefakt/)).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: 'Artifact link' })).not.toBeInTheDocument();
+  });
+});
+
+/* Sharing (migration 609, docs/design/collection-sharing.md §3.7): a note crosses a
+ * share only when its author marks it; another author's note is theirs to edit. */
+describe('<CurationBlock> shared notes', () => {
+  const SHARED_COLLECTION: Collection = {
+    id: 7, name: 'Šortlist', description: null, created_at: '2026-10-01T00:00:00Z',
+    updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
+    notify_channels: [], is_system: false, owner_email: null,
+    shared_with: [{ account_id: 'b', email: 'petr@example.cz' }],
+  };
+  /* The property sits in one of my collections that I share with petr@. */
+  const withAudience = () => {
+    vi.mocked(listCollections).mockResolvedValue({ data: [SHARED_COLLECTION], total: 1 });
+    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+  };
+  const noteGroup = () => screen.findByRole('group', { name: /^Note/ });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    URL.createObjectURL = vi.fn(() => 'blob:x');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  it('shows another author\'s note read-only, named by its author', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{
+      ...NOTE, id: 12, shared: true, owner_email: 'petr@example.cz',
+      attachments: [{ id: 5, note_id: 12, filename: 'plan.pdf', mime_type: 'application/pdf',
+        byte_size: 4096, created_at: NOTE.created_at }],
+    }] } as never);
+    renderWithReads();
+
+    const note = await screen.findByRole('group', { name: /^Note by petr@example\.cz · / });
+    expect(within(note).getByText('Sousedi jsou hlučni.')).toBeInTheDocument();
+    expect(within(note).getByText('petr@example.cz')).toBeInTheDocument();
+    for (const verb of [/Edit note/, /Delete note/, /Attach files/, /Remove plan\.pdf/]) {
+      expect(within(note).queryByRole('button', { name: verb })).toBeNull();
+    }
+    // The file still opens.
+    expect(within(note).getByRole('button', { name: 'Download plan.pdf' })).toBeInTheDocument();
+    expect(within(note).queryByRole('button', { name: /^Share|Make private/ })).toBeNull();
+  });
+
+  it('never takes a file dropped on another author\'s note onto that note', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{
+      ...NOTE, id: 12, shared: true, owner_email: 'petr@example.cz',
+    }] } as never);
+    renderWithReads();
+
+    const note = await screen.findByRole('group', { name: /^Note by petr@example\.cz/ });
+    const file = new File(['%PDF'], 'plan.pdf', { type: 'application/pdf' });
+    const dataTransfer = { files: [file], types: ['Files'], dropEffect: 'none' };
+    fireEvent.dragEnter(note, { dataTransfer });
+    fireEvent.dragOver(note, { dataTransfer });
+    fireEvent.drop(note, { dataTransfer });
+
+    // It bubbles to the composer and waits for a NEW note of mine.
+    expect(await screen.findByText('plan.pdf')).toBeInTheDocument();
+    expect(uploadNoteAttachment).not.toHaveBeenCalled();
+  });
+
+  it('offers no share checkbox while the property sits only in my unshared collection', async () => {
+    mockReads();
+    vi.mocked(listCollections).mockResolvedValue({
+      data: [{ ...SHARED_COLLECTION, shared_with: [] }], total: 1,
+    });
+    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    renderWithReads();
+
+    // Both reads settled: the mark now states the audience is empty.
+    const note = await noteGroup();
+    expect(await within(note).findByText('Shared · nobody can see it yet')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Share with/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Share/ })).toBeNull();
+  });
+
+  it('never says "nobody" while the collection list is still loading', async () => {
+    mockReads();
+    vi.mocked(listCollections).mockReturnValue(new Promise(() => {}));
+    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    renderWithReads();
+
+    const note = await noteGroup();
+    expect(within(note).getByText('Shared')).toBeInTheDocument();
+    expect(within(note).queryByText(/nobody/)).toBeNull();
+    // Making private stays safe; sharing waits until the audience is known.
+    expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Share with/ })).toBeNull();
+  });
+
+  it('says a failed collection read failed, instead of "nobody", and retries it', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(listCollections).mockRejectedValue(new Error('boom'));
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    renderWithReads();
+
+    const retry = await screen.findByRole('button', { name: /Sdílení se nepodařilo načíst/ });
+    const note = await noteGroup();
+    expect(within(note).getByText('Shared')).toBeInTheDocument();
+    expect(within(note).queryByText(/nobody/)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /Share with/ })).toBeNull();
+
+    withAudience();
+    await user.click(retry);
+    expect(await screen.findByRole('checkbox', { name: 'Share with petr@example.cz' }))
+      .toBeInTheDocument();
+  });
+
+  it('offers the checkbox, off by default, and saves the mark it was given', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    withAudience();
+    vi.mocked(createPropertyNote).mockResolvedValue({ ...NOTE, id: 12 } as never);
+    renderWithReads();
+
+    const box = await screen.findByRole('checkbox', { name: 'Share with petr@example.cz' });
+    expect(box).not.toBeChecked();
+    await user.type(screen.getByRole('textbox', { name: 'Notes' }), 'Makléř slevní.');
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    await waitFor(() =>
+      expect(createPropertyNote).toHaveBeenCalledWith(42, 'Makléř slevní.', 900, true));
+    // Every note needs its own consent: the box clears once the note is saved.
+    await waitFor(() => expect(box).not.toBeChecked());
+    await user.type(screen.getByRole('textbox', { name: 'Notes' }), 'Druhá.');
+    await user.click(screen.getByRole('button', { name: 'Save note' }));
+    await waitFor(() =>
+      expect(createPropertyNote).toHaveBeenLastCalledWith(42, 'Druhá.', 900, false));
+  });
+
+  it('marks my shared note and turns the mark off with a PATCH of {shared} alone', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    withAudience();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    vi.mocked(updatePropertyNote).mockResolvedValue({ ...NOTE, shared: false } as never);
+    renderWithReads();
+
+    const note = await noteGroup();
+    expect(await within(note).findByText('Shared')).toBeInTheDocument();
+    await user.click(within(note).getByRole('button', { name: 'Make private' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { shared: false }));
+  });
+
+  it('offers to share my private note once there is an audience', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    withAudience();
+    vi.mocked(updatePropertyNote).mockResolvedValue({ ...NOTE, shared: true } as never);
+    renderWithReads();
+
+    const note = await noteGroup();
+    expect(within(note).queryByText('Shared')).toBeNull();
+    // The toggle names who the note will reach; no tooltip carries it.
+    await user.click(await within(note).findByRole('button', { name: 'Share with petr@example.cz' }));
+    await waitFor(() => expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { shared: true }));
+  });
+
+  it('says a shared note reaches nobody when the audience is empty, and keeps the off switch', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    renderWithReads();
+
+    const note = await noteGroup();
+    expect(await within(note).findByText('Shared · nobody can see it yet')).toBeInTheDocument();
+    expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
+  });
+
+  it('speaks Czech on the phone: Sdílet s …, Sdíleno', async () => {
+    mockReads();
+    withAudience();
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <PhoneTagsAndNotes property_id={42} listing_id={900} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('checkbox', { name: 'Sdílet s petr@example.cz' }))
+      .not.toBeChecked();
+    // The row's own label speaks the page's language too.
+    const note = await screen.findByRole('group', { name: /^Poznámka z / });
+    expect(await within(note).findByText('Sdíleno')).toBeInTheDocument();
+    expect(within(note).getByRole('button', { name: 'Nesdílet' })).toBeInTheDocument();
+  });
+
+  it('edits the body with a PATCH of {body} alone', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(updatePropertyNote).mockResolvedValue(NOTE as never);
+    renderWithReads();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit note' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit note' });
+    await user.clear(editor);
+    await user.type(editor, 'Nový text.');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { body: 'Nový text.' }));
   });
 });

@@ -1,7 +1,7 @@
-/* The unified Notifications feed: watchdog matches AND collection-monitor
- * change events, from one endpoint (the LEFT-join feed serves both source
- * kinds). A read/triage surface — filter by source / change kind / seen, mark
- * one or all read, deep-link to the listing. The deal-pipeline, the watchdog
+/* The unified Notifications feed: watchdog matches, collection-monitor change
+ * events, collections shared with me and system alerts, from one endpoint. A
+ * read/triage surface — filter by source / change kind / seen, mark one or all
+ * read, deep-link to the listing. The deal-pipeline, the watchdog
  * manage pages, and this feed stay distinct; this is where "what changed about
  * things I care about" lives, and it drives the red nav unread badge. */
 
@@ -21,6 +21,7 @@ import {
 } from '@/lib/api';
 import { notificationKeys } from '@/lib/queries';
 import { listingPath } from '@/lib/listingUrl';
+import { ROUTES } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
@@ -46,12 +47,14 @@ const CHANGE_META: Record<string, { label: string; dot: string }> = {
   new_source:    { label: 'New source',    dot: 'var(--color-copper)' },
   broker_change: { label: 'Broker change', dot: 'var(--color-ink-3)' },
   system_alert:  { label: 'System alert',  dot: 'var(--color-brick)' },
+  shared:        { label: 'Shared',        dot: 'var(--color-ink-3)' },
 };
 
 const SOURCE_TABS: ReadonlyArray<{ key: SourceFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'collection_monitor', label: 'Monitoring' },
   { key: 'watchdog', label: 'Watchdogs' },
+  { key: 'collection_share', label: 'Shared' },
   { key: 'system_health', label: 'System' },
 ];
 
@@ -157,7 +160,8 @@ function Header({
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
           Watchdog matches and changes to properties in your monitored
-          collections — price moves, delistings, relistings, new sources.{' '}
+          collections — price moves, delistings, relistings, new sources — and
+          collections shared with you.{' '}
           {unread > 0 && (
             <span className="text-[var(--color-ink-3)]">
               {fmtCount(unread)} unread.
@@ -210,20 +214,48 @@ function Tabs<T extends string>({
   );
 }
 
-/* One feed row. system_health alerts have no listing subject, so they render as
- * a text/alert row (SystemNotificationRow); watchdog + collection_monitor rows
- * render the listing card. Split into two components so each calls its hooks
+/* One feed row. system_health alerts and collection shares have no listing
+ * subject, so they render as text rows; watchdog + collection_monitor rows
+ * render the listing card. One component per shape so each calls its hooks
  * unconditionally (rules-of-hooks) — the dispatcher itself uses none. */
 function NotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
-  return d.source_kind === 'system_health' ? (
-    <SystemNotificationRow dispatch={d} />
-  ) : (
-    <StandardNotificationRow dispatch={d} />
+  if (d.source_kind === 'system_health') return <SystemNotificationRow dispatch={d} />;
+  if (d.source_kind === 'collection_share') return <ShareNotificationRow dispatch={d} />;
+  return <StandardNotificationRow dispatch={d} />;
+}
+
+function useMarkSeen(d: WatchdogDispatch): () => void {
+  const qc = useQueryClient();
+  const markSeen = useMutation({
+    mutationFn: () => markWatchdogDispatchSeen(d.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: notificationKeys.all });
+    },
+  });
+  return () => {
+    if (d.seen_at == null) markSeen.mutate();
+  };
+}
+
+/* The unread dot is decorative; the state rides on the control's description
+ * (`id`), so marking a row seen never renames it. */
+function UnreadDot({ unread, id, color }: { unread: boolean; id: string; color: string }) {
+  return (
+    <span className="mt-1.5 w-1.5 shrink-0">
+      {unread && (
+        <>
+          <span className="block w-1.5 h-1.5 rounded-full" style={{ background: color }} aria-hidden />
+          <span id={id} hidden>
+            unread
+          </span>
+        </>
+      )}
+    </span>
   );
 }
 
 function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
-  const qc = useQueryClient();
+  const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
   const unreadId = useId();
   const meta = CHANGE_META[d.change_kind] ?? {
@@ -236,38 +268,14 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
       ? (d.collection_name ?? 'Monitoring')
       : (d.subscription_name ?? 'Watchdog');
 
-  const markSeen = useMutation({
-    mutationFn: () => markWatchdogDispatchSeen(d.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: notificationKeys.all });
-    },
-  });
-
   return (
     <Link
       to={listingPath(d.sreality_id)}
-      onClick={() => {
-        if (unread) markSeen.mutate();
-      }}
+      onClick={markSeen}
       aria-describedby={unread ? unreadId : undefined}
       className="flex items-start gap-3 py-3.5 group"
     >
-      {/* unread dot — decorative; the state is announced via the Link's
-          description, so marking the row seen never renames the link. */}
-      <span className="mt-1.5 w-1.5 shrink-0">
-        {unread && (
-          <>
-            <span
-              className="block w-1.5 h-1.5 rounded-full"
-              style={{ background: 'var(--color-copper)' }}
-              aria-hidden
-            />
-            <span id={unreadId} hidden>
-              unread
-            </span>
-          </>
-        )}
-      </span>
+      <UnreadDot unread={unread} id={unreadId} color="var(--color-copper)" />
 
       {/* change-kind chip */}
       <span className="mt-0.5 inline-flex items-center gap-1.5 shrink-0 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink-2)]">
@@ -316,42 +324,18 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
  * so clicking the row acknowledges it (marks seen), mirroring how the listing
  * rows mark seen on click-through. Red dot + AlertIcon signal severity. */
 function SystemNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
-  const qc = useQueryClient();
+  const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
   const unreadId = useId();
-
-  const markSeen = useMutation({
-    mutationFn: () => markWatchdogDispatchSeen(d.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: notificationKeys.all });
-    },
-  });
 
   return (
     <button
       type="button"
-      onClick={() => {
-        if (unread) markSeen.mutate();
-      }}
+      onClick={markSeen}
       aria-describedby={unread ? unreadId : undefined}
       className="w-full text-left flex items-start gap-3 py-3.5"
     >
-      {/* unread dot — brick for a system alert; decorative, the state rides on
-          the button's description so pressing it never renames the button. */}
-      <span className="mt-1.5 w-1.5 shrink-0">
-        {unread && (
-          <>
-            <span
-              className="block w-1.5 h-1.5 rounded-full"
-              style={{ background: 'var(--color-brick)' }}
-              aria-hidden
-            />
-            <span id={unreadId} hidden>
-              unread
-            </span>
-          </>
-        )}
-      </span>
+      <UnreadDot unread={unread} id={unreadId} color="var(--color-brick)" />
 
       {/* system chip */}
       <span className="mt-0.5 inline-flex items-center gap-1.5 shrink-0 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-[var(--color-brick)]">
@@ -373,6 +357,52 @@ function SystemNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) 
   );
 }
 
+/* collection_share: someone shared a collection with me. A text row like the
+ * system alert (the API's `message` names the owner and the collection);
+ * pressing the text marks it read, "Open collection" marks it read and goes
+ * to the collection. Two sibling controls, never a link inside a button. */
+function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
+  const markSeen = useMarkSeen(d);
+  const unread = d.seen_at == null;
+  const unreadId = useId();
+  const meta = CHANGE_META.shared;
+
+  return (
+    <div className="flex items-start gap-3 py-3.5">
+      <UnreadDot unread={unread} id={unreadId} color="var(--color-copper)" />
+      <button
+        type="button"
+        onClick={markSeen}
+        aria-describedby={unread ? unreadId : undefined}
+        className="min-w-0 flex-1 text-left flex items-start gap-3"
+      >
+        <span className="mt-0.5 inline-flex items-center gap-1.5 shrink-0 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink-2)]">
+          <span aria-hidden className="w-1.5 h-1.5 rounded-full" style={{ background: meta.dot }} />
+          {meta.label}
+        </span>
+        <span className="min-w-0 flex-1 text-sm text-[var(--color-ink)] break-words">
+          {d.message ?? 'A collection was shared with you.'}
+        </span>
+      </button>
+      {d.collection_id != null && (
+        <Link
+          to={ROUTES.collectionDetail.build({ id: d.collection_id })}
+          onClick={markSeen}
+          className="shrink-0 mt-0.5 text-[0.78rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-ink)] hover:decoration-[var(--color-ink-3)] transition-colors"
+        >
+          Open collection
+        </Link>
+      )}
+      <span
+        className="shrink-0 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help mt-0.5"
+        title={fmtAbsolute(d.dispatched_at)}
+      >
+        {fmtRelative(d.dispatched_at)}
+      </span>
+    </div>
+  );
+}
+
 function EmptyState({ seen }: { seen: WatchdogSeenFilter }) {
   return (
     <div className="px-6 py-12 text-center border border-dashed border-[var(--color-rule)] rounded-[var(--radius-md)]">
@@ -381,7 +411,7 @@ function EmptyState({ seen }: { seen: WatchdogSeenFilter }) {
       </p>
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
         Turn on monitoring for a collection, or save a watchdog, and changes show
-        up here.
+        up here. Collections someone shares with you are announced here too.
       </p>
     </div>
   );

@@ -581,6 +581,36 @@ describe('<ListingCards> collection popover keyboard entry', () => {
   });
 });
 
+/* Saved means MINE (migration 609): a property only in someone else's shared
+ * collection never paints as saved, so the glyph agrees with the save menu. */
+describe('<ListingCards> the collection glyph counts my collections only', () => {
+  const glyph = async () =>
+    (await screen.findByRole('button', { name: 'Uložit do kolekce' })).querySelector('svg');
+
+  it('fills for a property in my own collection', async () => {
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [{ id: 7, name: 'Šortlist', owner_email: null, shared_with: [] } as never],
+      total: 1,
+    });
+    renderGrid();
+    await waitFor(async () => expect((await glyph())?.getAttribute('fill')).toBe('currentColor'));
+  });
+
+  it('stays empty for a property only in a collection shared with me', async () => {
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [9]]]));
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [{ id: 9, name: 'Od Petra', owner_email: 'petr@example.cz', shared_with: [] } as never],
+      total: 1,
+    });
+    renderGrid();
+    await waitFor(() => expect(api.listCollections).toHaveBeenCalled());
+    await waitFor(() => expect(queries.fetchPropertyCollectionMemberSet).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await glyph())?.getAttribute('fill')).toBe('none');
+  });
+});
+
 /* MS16: a merge hides nothing it will touch — merge mode keeps every mark,
  * read-only, beside the checkbox, and drops the verbs that would change them. */
 describe('<ListingCards> merge mode keeps the marks, read-only', () => {
@@ -590,6 +620,11 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
       stage_code: '1', stage_position: 1, is_terminal: true,
     }]]));
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    // The mark counts MY collections: the list names 7 as mine (owner_email null).
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [{ id: 7, name: 'Šortlist', owner_email: null, shared_with: [] } as never],
+      total: 1,
+    });
     vi.mocked(queries.fetchIsDismissed).mockResolvedValue(true);
     vi.mocked(queries.fetchNoteCounts).mockResolvedValue(new Map([[42, 3]]));
   });

@@ -72,6 +72,11 @@ toolkit work.
   "Kopírovat", kraje and per-type counts as numbers, firms, the live ads as feed cards by
   `brokerId`). Rename, delete, monitoring and the broker map stay on the desktop (#1760 Q11/Q12).
   Closes on the install walk.
+- **Collection sharing on the phone** (collection sharing W5, `docs/design/collection-sharing.md`):
+  sharing is managed on the desktop; the phone shows shared collections read-only — "Sdílené se
+  mnou" under the own list (row "sdílí {email}", no monitored mark), the detail header "sdílí
+  {email} · jen ke čtení" with no "Otevřít Nové", and the notes composer's "Sdílet s {email}"
+  checkbox and "Sdíleno" mark. The footer says sharing lives on the desktop.
 
 ### Browse card cover photo by tag (done, 2026-10-07)
 - A "Cover" dropdown beside Sort picks which photo every card opens on: Default (the ad's own first

@@ -177,6 +177,8 @@ const collection = (id: number, name: string): Collection => ({
   monitoring_enabled: false,
   notify_channels: [],
   is_system: false,
+  owner_email: null,
+  shared_with: [],
 });
 
 // Šortlist holds a board property; Archiv holds none — only the first earns a chip.
@@ -587,6 +589,21 @@ describe('<Pipeline> board', () => {
     );
     expect(screen.getByText('Sadová')).toBeInTheDocument();
     expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
+  });
+
+  it('names a collection shared with me by its owner', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [{ ...collection(9, 'Od Petra'), owner_email: 'petr@example.cz' }],
+      total: 1,
+    });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
+      new Map([[42, [9]]]),
+    );
+    renderBoard();
+    expect(
+      await screen.findByRole('button', { name: 'Od Petra · petr@example.cz' }),
+    ).toBeInTheDocument();
   });
 
   /* A resolved selection that matches nothing is ZERO cards, never the whole

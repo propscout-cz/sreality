@@ -54,6 +54,51 @@ describe('Browse sidebar curation pickers', () => {
     expect(await screen.findByRole('button', { name: 'Šortlist' })).toBeInTheDocument();
   });
 
+  /* Ruling 3: one picker, one `collections` value; collections shared with me
+   * are their own group, labelled with their owner. */
+  it('groups mine and shared-with-me over one value, and keeps a vanished pick clearable', async () => {
+    const base = {
+      description: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+      listing_count: 1, monitoring_enabled: false, notify_channels: [], is_system: false,
+    };
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [
+        { ...base, id: 7, name: 'Šortlist', owner_email: null, shared_with: [] },
+        { ...base, id: 9, name: 'monitoring', owner_email: 'petr@example.cz',
+          shared_with: [{ account_id: 'me', email: null }] },
+      ],
+      total: 2,
+    });
+    const onChange = vi.fn();
+    renderPicker(<CollectionsPicker value={[9, 404]} onChange={onChange} />);
+
+    const mine = await screen.findByRole('group', { name: 'Mine' });
+    const shared = screen.getByRole('group', { name: 'Shared with me' });
+    expect(within(mine).getByRole('button', { name: 'Šortlist' })).toBeInTheDocument();
+    const picked = within(shared).getByRole('button', { name: 'monitoring · petr@example.cz' });
+    expect(picked).toHaveAttribute('aria-pressed', 'true');
+
+    // A pick the list no longer holds (revoked, deleted) stays visible and clears.
+    const gone = within(screen.getByRole('group', { name: 'No longer available' }))
+      .getByRole('button', { name: '#404' });
+    fireEvent.click(gone);
+    expect(onChange).toHaveBeenLastCalledWith([9]);
+
+    // Both groups write the ONE value array.
+    fireEvent.click(within(mine).getByRole('button', { name: 'Šortlist' }));
+    expect(onChange).toHaveBeenLastCalledWith([9, 404, 7]);
+  });
+
+  it('draws no group headings while nothing is shared with me', async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [{ id: 7, name: 'Šortlist', owner_email: null, shared_with: [] }],
+      total: 1,
+    } as never);
+    renderPicker(<CollectionsPicker value={null} onChange={() => {}} />);
+    expect(await screen.findByRole('button', { name: 'Šortlist' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Mine' })).toBeNull();
+  });
+
   it('says the tags failed instead of "none yet", and reads them again', async () => {
     vi.mocked(api.listTags)
       .mockRejectedValueOnce(new Error('HTTP 500'))

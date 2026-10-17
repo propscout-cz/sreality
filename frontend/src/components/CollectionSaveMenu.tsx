@@ -1,5 +1,6 @@
-/* The "save to collection" panel: every collection as a checkable row,
- * monitored ones first and marked with a bell. Shared by the Browse card's
+/* The "save to collection" panel: every collection of the caller's own as a
+ * checkable row (a shared one is view-only, and every saved mark counts the
+ * same `mine` set — migration 609), monitored ones first and marked with a bell. Shared by the Browse card's
  * over-photo glyph and the listing header's button, the way
  * <PipelineStageMenu> is shared by every pipeline affordance — three surfaces
  * growing three answers to "which collections is this in, and how do I change
@@ -105,7 +106,9 @@ export function CollectionSaveList({
   const cls = SIZES[size];
   const words = WORDS[size];
   const qc = useQueryClient();
-  const { collections, query: collectionsQ } = useCollections();
+  /* Mine only: a collection shared with me is view-only, so it is never a
+   * target here (no disabled variant to explain). */
+  const { mine, query: collectionsQ } = useCollections();
 
   const add = useMutation({
     mutationFn: (cid: number) => addPropertiesToCollection(cid, [property_id]),
@@ -120,7 +123,7 @@ export function CollectionSaveList({
   const pending = add.isPending || remove.isPending;
 
   // Monitored collections first, then alphabetical.
-  const sorted = [...collections].sort(
+  const sorted = [...mine].sort(
     (a, b) =>
       (b.monitoring_enabled ? 1 : 0) - (a.monitoring_enabled ? 1 : 0) ||
       a.name.localeCompare(b.name),

@@ -1,7 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
 Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W6 run on this text.
-W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); migration 609 (#1829/#1830 renumber past it).
+W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); W5 in PR #TBD (`feature/collection-sharing-surfaces`, stacked on W4); migration 609 (#1829/#1830 renumber past it).
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
@@ -314,8 +314,9 @@ and `_to_tag`/`_to_tag_full` go):
 `isMine(x) = x.owner_email == null`; `collectionLabel(c)` = `name`, or `name · owner@email` for a
 shared row (disambiguates same-named collections — every account has a "monitoring"; works on
 touch); `useCollections() → {mine, shared, byId}`; `useCollectionMembers()` (the visible map,
-unchanged); `useCollectionMembership(pid) → {mine, shared, saved}`, `undefined` until both reads
-resolve so no wrong mark flashes. The 16 hand-typed `useQuery` copies become these calls.
+unchanged); `useCollectionMembership(pid) → {ids, mine, shared, byId, saved, ready, query}`
+(as built in W5): `ready` is true only once both reads resolved and `query` is their combined
+status, so no wrong mark flashes and a failed read of either shows the mark's retry. The 16 hand-typed `useQuery` copies become these calls.
 
 - **Bookmark marks** (card glyph, phone curation row, margin marks, listing header, pipeline card)
   read `saved = mine.size > 0`: a property that sits only in someone else's collection never
@@ -343,15 +344,22 @@ resolve so no wrong mark flashes. The 16 hand-typed `useQuery` copies become the
   counterparties of every share whose collection holds it (from the member map × `shared_with` /
   `owner_email`). When the audience is non-empty the composer shows a checkbox, off by default:
   "Share with {emails}"; an own note shows a small "Shared" mark with a toggle (`PATCH {shared}`);
-  the mark reads "Shared · nobody can see it yet" when the audience is empty. A foreign note: meta
+  the mark reads "Shared · nobody can see it yet" when the audience is empty — only once both reads
+  resolved; until then (or when one failed, shown as a retry) the mark reads plain "Shared" and no
+  checkbox or share toggle shows, since an unknown audience is not "nobody". The toggle that shares
+  names its audience in its own label ("Share with {emails}"); making private needs no names. The
+  SPA never lists who reads an EXISTING note: the payload carries no `shared_at`, so for a
+  recipient-author (§3.7 dated edge) the computed audience can overstate it. A foreign note: meta
   `{email} · {time}` and a matching aria-label; no Attach / Edit / Delete, no drop zone, file tiles
   without ×; a neutral left border from an existing token. Note counts mean "notes I can read".
 - **Notifications page:** a `collection_share` row renders like the `system_health` text row — the
-  message, "Open collection" linking to `/collection/{id}`, the usual seen/dismiss — and the source
+  message, "Open collection" linking to `/collection/{id}`, the usual mark-seen (the feed has no
+  per-row dismiss) — and the source
   tabs gain "Shared". The unread badge needs nothing.
 - **Phone** (Czech; managing shares is desktop-only, #1760 Q11): shared rows under "Sdílené se
   mnou" as "sdílí {email}"; detail header "sdílí {email} · jen ke čtení", no "Otevřít Nové"; 404
-  copy "…smazána, nebo už s vámi není sdílená"; footer adds "sdílení"; composer checkbox "Sdílet s
+  copy "…smazána, nebo už s vámi není sdílená"; the owner's footer adds "sdílení", a viewer's reads
+  "Sbírku ze svého seznamu odeberete na počítači."; composer checkbox "Sdílet s
   {email}", mark "Sdíleno".
 - **Extension** (vanilla TS, no new message type or endpoint): `ExtCollection` drops `is_system`
   (never read) and gains `owner_email`; `ExtNote` drops `origin_listing_id` (never read) and gains

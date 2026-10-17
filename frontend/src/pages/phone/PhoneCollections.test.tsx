@@ -35,6 +35,8 @@ const coll = (c: Partial<Collection>): Collection => ({
   monitoring_enabled: false,
   notify_channels: [],
   is_system: false,
+  owner_email: null,
+  shared_with: [],
   ...c,
 });
 
@@ -80,12 +82,12 @@ describe('<Collections> on the phone', () => {
     expect(within(rows[1]).getByText('sledováno')).toBeInTheDocument();
   });
 
-  it('offers no rename, delete or monitoring control — the footer says where they live', async () => {
+  it('offers no rename, delete, monitoring or sharing control — the footer says where they live', async () => {
     renderPage();
     await screen.findByRole('list', { name: 'Sbírky' });
     expect(screen.queryByRole('button', { name: /delete|smazat/i })).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
-    expect(screen.getByText('Přejmenování, smazání a sledování nastavíte na počítači.')).toBeInTheDocument();
+    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení nastavíte na počítači.')).toBeInTheDocument();
   });
 
   it('creates a collection from the sheet with monitoring off', async () => {
@@ -127,5 +129,56 @@ describe('<Collections> on the phone', () => {
     renderPage();
     expect(await screen.findByText('Sbírky se nepodařilo načíst.')).toBeInTheDocument();
     expect(screen.queryByText('Zatím žádná sbírka.')).toBeNull();
+  });
+
+  it('lists collections shared with me in their own group, read-only, by owner', async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [
+        coll({}),
+        coll({
+          id: 5,
+          name: 'Od Jany',
+          monitoring_enabled: false,
+          listing_count: 4,
+          owner_email: 'jana@example.com',
+          shared_with: [{ account_id: 'me', email: null }],
+        }),
+      ],
+      total: 2,
+    });
+    renderPage();
+    const mine = await screen.findByRole('list', { name: 'Sbírky' });
+    expect(within(mine).getAllByRole('link')).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Sdílené se mnou' })).toBeInTheDocument();
+    const shared = screen.getByRole('list', { name: 'Sdílené se mnou' });
+    const [row] = within(shared).getAllByRole('link');
+    expect(row).toHaveAttribute('href', ROUTES.collectionDetail.build({ id: 5 }));
+    expect(row.textContent?.replace(/\u00a0/g, ' ')).toContain('4 nemovitosti · sdílí jana@example.com');
+    expect(within(row).queryByText('sledováno')).toBeNull();
+  });
+
+  it('checks a new name against my own collections only', async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [coll({}), coll({ id: 5, name: 'Od Jany', owner_email: 'jana@example.com' })],
+      total: 2,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('list', { name: 'Sbírky' });
+    await user.click(screen.getByRole('button', { name: 'Nová sbírka' }));
+    const sheet = screen.getByRole('dialog', { name: 'Nová sbírka' });
+    await user.type(within(sheet).getByLabelText('Název'), 'Od Jany');
+    expect(within(sheet).queryByText(/už existuje/)).toBeNull();
+    expect(within(sheet).getByRole('button', { name: 'Založit sbírku' })).toBeEnabled();
+  });
+
+  it('shows the shared group even when I have no collection of my own', async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [coll({ id: 5, name: 'Od Jany', owner_email: 'jana@example.com' })],
+      total: 1,
+    });
+    renderPage();
+    expect(await screen.findByText('Zatím žádná vlastní sbírka.')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Sdílené se mnou' })).toBeInTheDocument();
   });
 });

@@ -2266,10 +2266,11 @@ export const fetchPropertyTagMemberSet = (
 ): Promise<Map<number, number[]>> =>
   fetchMemberSet('property_tags_public', 'tag_id', signal);
 
-/* How many notes the caller's account holds on each property (MS16): the note
- * mark on every Browse row, from ONE whole-set read rather than one per row.
- * property_notes_public is security_invoker over the account-scoped RLS
- * (migrations 290, 393), so the set is the caller's own notes and nothing else. */
+/* How many notes the caller can READ on each property (MS16): the note mark on
+ * every Browse row, from ONE whole-set read rather than one per row.
+ * property_notes_public is security_invoker over RLS (migrations 290, 393, 609),
+ * so the set is the caller's own notes plus other authors' notes marked shared
+ * and in reach through a collection share. */
 export const fetchNoteCounts = async (
   { signal }: PgReadOptions = {},
 ): Promise<Map<number, number>> => {
@@ -2315,6 +2316,8 @@ export const curationKeys = {
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
   propertyNotes: (property_id: number) =>
     ['curation', 'property-notes', property_id] as const,
+  /* Prefix of every property's notes: a share change moves which notes I can read. */
+  allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
   manualEstimates: (sreality_id: number) =>
