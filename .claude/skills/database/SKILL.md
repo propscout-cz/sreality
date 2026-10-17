@@ -208,9 +208,9 @@ Per-table RLS pattern, repeated across migrations 290 (6 curation tables: `colle
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
-using/with check (account_id in (select current_account_ids()))` policy. **Grant the id
-sequence's `USAGE` too** — `GRANT INSERT` on the table does not cover it, and a `bigserial` PK
-fails every `authenticated` insert until it is added (a real bug the CI lane caught pre-deploy). **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
+using/with check (account_id in (select current_account_ids()))` policy. **An integer surrogate id is
+`bigint generated always as identity`** (611), never `bigserial`: a browser-chosen id pre-claims the sequence
+and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly

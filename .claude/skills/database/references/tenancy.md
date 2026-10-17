@@ -27,12 +27,12 @@ shape for each grain.
 Every table below follows: `revoke all on <table> from anon, authenticated` →
 `grant select, insert, update, delete on <table> to authenticated` (or a narrower verb
 set where the table is genuinely add/remove-only) → a `for all using (...) with check
-(...)` policy testing `account_id in (select current_account_ids())` → (if the table has
-a `bigserial`/`serial` PK) an explicit `grant usage on sequence <seq> to authenticated`,
-since `grant insert` on the table does not cover the sequence. Every such table is listed
-once, in `tests/_tenant_registry.py`, which both tenancy gates read (the offline grant scan
-`tests/test_migration_rls_grants.py` and the live lane `tests/test_tenant_isolation_live.py`):
-a new tenant table is added there.
+(...)` policy testing `account_id in (select current_account_ids())`. An integer surrogate id is `bigint
+generated always as identity` (611), never `bigserial`: ALWAYS refuses, with no USAGE grant, the caller-chosen id
+that would pre-claim the sequence; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. Every
+such table is listed once, in `tests/_tenant_registry.py`, which both tenancy gates read (the offline grant scan
+`tests/test_migration_rls_grants.py` and the live lane `tests/test_tenant_isolation_live.py`): a new tenant table
+is added there.
 
 **Migration 290 — curation tables**, `account_id` on the row directly (not
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
