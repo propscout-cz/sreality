@@ -270,26 +270,76 @@ def test_a_chip_nested_under_a_selected_parent_counts_once(conn):
     )
 
 
-@pytest.mark.parametrize("chips", [
-    "districts_filter => '{Na Rybníčkách}', districts_excluded_filter => '{f}',"
-    " districts_levels => '{ulice}', districts_ids => '{666742}'",
-    "districts_filter => '{kraj-1}', districts_excluded_filter => '{t}',"
-    " districts_levels => '{kraj}', districts_ids => '{1}'",
-    "districts_filter => '{kraj-1}', districts_ids => '{1}'",
-], ids=["a street", "an excluded kraj", "a name with no level"])
-def test_a_chip_the_count_book_has_no_cell_for_never_reads_it(conn, chips):
-    """609: the count book holds include cells at kraj / okres / obec only. Any other chip
-    must route to the live branch (here: no listings seeded, so no rows) — never fall
-    through to the national cell or to the kraj cell it names.
+def _seed_ad(cur, identity_id: int, kraj: int, okres: int, obec: int,
+             cast_obce: int | None = None, ulice: int | None = None) -> None:
+    """One live byt/prodej ad of `identity_id`, located at those listing_location codes."""
+    cur.execute(
+        "insert into listings (source, source_id_native, raw_json, category_main, "
+        " category_type, broker_identity_id) "
+        "values ('bazos', %s, '{}'::jsonb, 'byt', 'prodej', %s) returning id",
+        (f"rail-609-{kraj}-{obec}-{cast_obce}-{ulice}", identity_id),
+    )
+    cur.execute(
+        "insert into listing_location (listing_id, match_confidence, granularity, "
+        " uncertainty_radius_m, country_status, resolver_version, claim_set_hash, "
+        " registry_version, kraj_kod, okres_kod, obec_kod, cast_obce_kod, ulice_kod) "
+        "values (%s, 'exact', 'building', 5, 'cz', 'test', '\\x00'::bytea, 'test', "
+        " %s, %s, %s, %s, %s)",
+        (cur.fetchone()[0], kraj, okres, obec, cast_obce, ulice),
+    )
 
-    RED by: a fast gate that ignores the chip levels, the exclude flags, or a level array
-    shorter than the names (each would return broker 1 with 10 or 7).
+
+# The world every case below reads: broker 1's count book says 100 nationally, 50 in kraj 1,
+# 40 in okres 2, 30 in obec 3, 25 in obec 4 — numbers no live count here can produce — and
+# it has four live ads: A (obec 3, part 31, street 301), B (obec 3, part 32, no street),
+# C (obec 4, no part, no street), all in kraj 1 / okres 2, and D (kraj 9, obec 5, street 501).
+_N = "districts_filter => '{{{names}}}', districts_excluded_filter => '{{{excl}}}', " \
+     "districts_levels => '{{{levels}}}', districts_ids => '{{{ids}}}'"
+
+
+def _chips(*chips: tuple[str, int, bool]) -> str:
+    return _N.format(names=",".join(f"{lvl}-{code}" for lvl, code, _ in chips),
+                     excl=",".join("t" if x else "f" for *_, x in chips),
+                     levels=",".join(lvl for lvl, _, _ in chips),
+                     ids=",".join(str(code) for _, code, _ in chips))
+
+
+@pytest.mark.parametrize("chips,expected", [
+    (_chips(("ulice", 301, False)), 1),
+    (_chips(("cast_obce", 32, False)), 1),
+    (_chips(("obec", 3, True)), 2),
+    (_chips(("kraj", 1, False), ("obec", 3, True)), 1),
+    (_chips(("obec", 4, False), ("ulice", 501, False)), 2),
+    (_chips(("ulice", 301, True)), 3),
+    ("districts_levels => '{kraj}', districts_ids => '{1}'", 4),
+], ids=["a street", "a part of a town", "an exclude alone", "a kraj minus an obec in it",
+        "an obec plus a street", "a street exclude keeps the ads with no street",
+        "levels without names are no chips"])
+def test_a_chip_the_count_book_cannot_serve_is_counted_live(conn, chips, expected):
+    """609 EXECUTED: a chip set the count book has no cells for is answered from `listings`
+    by the one place predicate — the live count, never a cell. Each case CAN fail: a fast
+    gate that ignored the levels would answer the street/part with nothing; one that ignored
+    the excludes would answer 30, or 80 (kraj + obec); one that dropped the street would
+    answer obec 4's 25; one without the names-vs-levels atom would answer 100 + 50.
+
+    RED by: any of those, or a live predicate that drops an ad with a NULL code under an
+    exclude (the street-exclude case would count 1 instead of 3).
     """
     with conn.cursor() as cur:
         _park(cur)
         _seed_broker(cur, 1)
-        _seed_stats(cur, 1, 10)
-        _seed_stats(cur, 1, 7, geo_level="region", geo_id=1)
+        for geo_level, geo_id, apc in (("cz", 0, 100), ("region", 1, 50), ("okres", 2, 40),
+                                       ("obec", 3, 30), ("obec", 4, 25)):
+            _seed_stats(cur, 1, apc, geo_level=geo_level, geo_id=geo_id)
+        cur.execute(
+            "insert into broker_identities (source, source_broker_id_native, broker_id) "
+            "values ('bazos', 'rail-609', 1) returning id"
+        )
+        identity = cur.fetchone()[0]
+        _seed_ad(cur, identity, 1, 2, 3, cast_obce=31, ulice=301)
+        _seed_ad(cur, identity, 1, 2, 3, cast_obce=32)
+        _seed_ad(cur, identity, 1, 2, 4)
+        _seed_ad(cur, identity, 9, 8, 5, ulice=501)
         cur.execute("analyze brokers; analyze broker_region_type_stats;")
 
         cur.execute(
@@ -298,4 +348,4 @@ def test_a_chip_the_count_book_has_no_cell_for_never_reads_it(conn, chips):
         )
         rows = cur.fetchall()
 
-    assert rows == [], f"a chip the count book cannot serve was answered from it: {rows}"
+    assert rows == [(1, expected)], f"expected broker 1 counted live at {expected}: {rows}"

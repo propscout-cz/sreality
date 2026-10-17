@@ -12,25 +12,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from api import dependencies as deps
 from api import outreach
-from api.location_filter import DistrictChip
+from api.outreach import CampaignTarget
 
 router = APIRouter(prefix="/outreach", tags=["outreach"])
-
-
-class CampaignTarget(BaseModel):
-    """What `outreach.select_targets` ranks by. Unknown keys are refused, so a stale
-    client's `region_ids` is a 422, never a campaign silently widened to the country."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    districts: list[DistrictChip] = Field(default_factory=list)
-    category_main: str | None = None
-    category_type: str | None = None
-    metric: str | None = None
 
 
 class CampaignCreate(BaseModel):
@@ -100,7 +88,8 @@ def update_campaign(
 ) -> dict[str, Any]:
     result = outreach.update_campaign(
         conn, campaign_id, name=body.name, goal=body.goal, guidance=body.guidance,
-        status=body.status, target=body.target.model_dump() if body.target else None)
+        status=body.status,
+        target=body.target.model_dump() if body.target is not None else None)
     if result is None:
         raise HTTPException(status_code=404, detail="campaign not found")
     return result
@@ -116,8 +105,11 @@ def preview_targets(
     campaign = outreach.get_campaign(conn, campaign_id)
     if campaign is None:
         raise HTTPException(status_code=404, detail="campaign not found")
-    targets = outreach.select_targets(
-        conn, campaign.get("target") or {}, campaign_id=campaign_id, limit=limit)
+    try:
+        targets = outreach.select_targets(
+            conn, campaign.get("target") or {}, campaign_id=campaign_id, limit=limit)
+    except outreach.StaleTarget as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"targets": targets, "count": len(targets)}
 
 
@@ -129,7 +121,10 @@ def generate_drafts(
     llm_client: Any = Depends(deps.get_llm_client),
     _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
-    result = outreach.generate_drafts(conn, llm_client, campaign_id, limit=limit)
+    try:
+        result = outreach.generate_drafts(conn, llm_client, campaign_id, limit=limit)
+    except outreach.StaleTarget as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="campaign not found")
     return result

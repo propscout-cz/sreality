@@ -161,9 +161,11 @@ function BrokersDesktop() {
   });
 
   const rows = boardQ.data?.rows ?? [];
-  const placeLabel = districts.length === 0
-    ? 'Celá ČR'
-    : districts.map((d) => (d.excluded ? `− ${d.name}` : d.name)).join(' + ');
+  // "Praha + Brno − Žižkov"; with no include chip the base is the whole country.
+  const placeLabel = [
+    districts.filter((d) => !d.excluded).map((d) => d.name).join(' + ') || 'Celá ČR',
+    ...districts.filter((d) => d.excluded).map((d) => d.name),
+  ].join(' − ');
   // What the rows on screen were fetched under; falls back to the live label
   // only when there is nothing on screen yet (first load, error, empty).
   const shownPlaceLabel = boardQ.data?.placeLabel ?? placeLabel;

@@ -3595,7 +3595,7 @@ export const createOutreachCampaign = (input: {
   name: string;
   goal?: string | null;
   guidance?: string | null;
-  target?: OutreachTargetSpec | null;
+  target?: OutreachTargetSpec;
 }): Promise<OutreachCampaign> =>
   request<OutreachCampaign>('/outreach/campaigns', { method: 'POST', json: input });
 

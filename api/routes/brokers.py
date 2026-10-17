@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError
 
 from api import dependencies as deps
-from api.location_filter import DistrictChip
+from api.location_filter import DistrictChip, district_arrays
 from toolkit import brokers
 from toolkit.filter_registry import PORTAL_OPTIONS
 
@@ -90,7 +90,7 @@ def get_leaderboard(
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     return _policy(brokers.leaderboard(
-        conn, districts=districts, category_main=category_main, category_type=category_type,
+        conn, districts=district_arrays(districts), category_main=category_main, category_type=category_type,
         metric=metric, limit=limit, firm_ids=firm_ids,
         min_price_czk=min_price_czk, include_unpriced=include_unpriced,
         subtypes=subtypes, include_unknown_subtype=include_unknown_subtype), claims)

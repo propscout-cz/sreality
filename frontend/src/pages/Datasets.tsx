@@ -534,7 +534,8 @@ export default function Datasets() {
                 <LocationTypeahead label="Location" value={districts} onChange={(n) => setDistricts(n ?? [])} />
                 {hasChipFinerThanObec(districts) && (
                   <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">
-                    Datasets has per-town data only — a street or part-of-town chip selects nothing here
+                    Datasets has per-town data only — a street or part-of-town chip selects nothing
+                    here, and excluding one removes nothing
                   </p>
                 )}
               </div>

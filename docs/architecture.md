@@ -1929,7 +1929,8 @@ renumber.** Navigate by area:
     `ulice_id` — and `api/location_filter.district_where` (the Watchdog), `frontend/src/lib/districtCodes.ts`
     (Browse's PostgREST string and the pipeline board's in-memory twin) and the three RPC bodies
     (`browse_stats_properties`, `browse_map_cells`, and since 609 `broker_leaderboard` — Brokers and
-    Outreach, the same blocks over `listing_location`'s `*_kod`) all compile the same plan; the shared table
+    Outreach, in the per-level `= any(district_level_codes(…))` form, the SQL twin of `district_where`
+    over `listing_location`'s `*_kod`, which the planner folds to constants) all compile the same plan; the shared table
     `tests/fixtures/district_chip_plan.json` is read by `tests/test_one_place_predicate.py`,
     `districtCodes.test.ts` and `tests/test_broker_leaderboard_chip_parity.py`, so a divergence is a red
     test rather than a support ticket. The leaderboard's count book has cells for an INCLUDE at kraj /

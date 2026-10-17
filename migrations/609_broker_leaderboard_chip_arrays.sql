@@ -6,18 +6,22 @@
 -- exclude, so Brokers / Outreach dropped a quarter, a street or an excluded place: until this file
 -- those pages had to refuse such a selection (fail closed) rather than show the country.
 --
--- WHAT CHANGES. One function and the stored Outreach targets; no table, column or index.
+-- WHAT CHANGES. Two functions and the stored Outreach targets; no table, column or index.
+--   0. district_level_codes(levels, ids, excluded, level, want_excluded): a level's codes from
+--      the four chip arrays, include or exclude -- the one array builder both branches use.
 --   1. broker_leaderboard: p_region_ids / p_okres_ids / p_obec_ids are REPLACED by the four parallel
 --      chip arrays browse_stats_properties and browse_map_cells take -- districts_filter (the names,
 --      which drive the unnest), districts_excluded_filter, districts_levels, districts_ids -- then
 --      580's nine parameters unchanged. Body = 580's except:
---      (a) the LIVE branch's place predicate is 605's include + exclude blocks over
---          listing_location's five codes (kraj_kod, okres_kod, obec_kod, cast_obce_kod, ulice_kod),
---          the predicate api/location_filter.district_where renders (an exclude keeps a row whose
---          code is NULL; tests/test_broker_leaderboard_chip_parity.py runs it over the shared table);
+--      (a) the LIVE branch's place predicate is the SQL twin of api/location_filter.district_where
+--          over listing_location's five codes (kraj_kod ... ulice_kod): per level `code = any(that
+--          level's include codes)`, and an exclude as NOT COALESCE(..., false), so a row whose code
+--          is NULL survives it (tests/test_broker_leaderboard_chip_parity.py runs it over the shared
+--          chip table);
 --      (b) the FAST branch (the count book) answers only when every chip is an include at kraj /
 --          okres / obec, one level per name -- the cells it has -- and derives 580's three id lists
---          from those chips, so its cell arms and nested-chip suppression read as before. Any other
+--          from those chips (district_level_codes), so its cell arms and nested-chip suppression
+--          read as before. Any other
 --          chip set (a cast_obce, a street, an exclude) reads `listings` live. The two gates stay
 --          exact complements (tests/test_broker_leaderboard_contract.py pins both strings).
 --      CREATE OR REPLACE cannot change parameter types, so the old signature is DROPPED and 580's
@@ -26,16 +30,30 @@
 --      target.districts ({name: the register unit's name, context: null, excluded: false, level, id});
 --      api/outreach.select_targets reads nothing else. 0 campaigns live on 2026-10-17.
 --
--- NO INDEX (EXPLAIN ANALYZE of this body, live 2026-10-17, byt/prodej). One street chip: the fast
--- branch is pruned at plan time; the live one takes 1.77 s / 963k buffers, 877k of them the
--- listings-per-broker loop every price-filtered call already pays, plus a 40.7k-buffer seq scan of
--- listing_location. The chip CASE is a per-row filter, as 580's OR'd id lists were, so no code index
--- (605's ulice_kod one included) is reachable from it. A kraj + obec pair reads the count book
--- exactly as 580 did (33,177 buffers, 44 ms, both).
+-- MEASURED (EXPLAIN ANALYZE on production, 2026-10-17, read-only). "first draft" = 605's per-row
+-- unnest CASE blocks in the live branch; "this file" = the district_level_codes() form, measured
+-- as the constants its calls fold to (the helper exists only once this file applies). The fold
+-- itself, shown on an existing IMMUTABLE SQL function with a FROM body called through a pulled-up
+-- subquery with bound parameters (PREPARE / EXPLAIN EXECUTE): Filter `kraj_name = 'Geometry'`;
+-- under plan_cache_mode = force_generic_plan the call stays in the per-row filter instead.
+--   path                                 580 shape         first draft          this file
+--   kraj + min price 5M, byt/prodej      189 ms / 172k     1,187 ms / 1.30M     194 ms / 172k
+--   one street, no category ("Vse")      --                2,508 ms / 821k      119 ms / 42.6k
+--   one street, byt/prodej               --                1,770 ms / 963k      118 ms / 42.6k
+--   kraj minus an obec, byt/prodej       --                --                   195 ms / 163k
+--   kraj + obec pair (count book)        44 ms / 33.2k     44 ms / 33.2k        44 ms / 33.2k
+--   no chips (national cell)             --                --                   100 ms / 14.8k
+-- The first draft's per-row SubPlans could not be estimated, so the planner drove from
+-- broker_identities -> listings; folded constants are estimated to the row, as 580's were.
+-- NO INDEX: the arms OR five code columns and only ulice_kod is indexed (605), so no BitmapOr is
+-- possible; listing_location is seq-scanned (40.7k buffers) in every live plan above, as in 580's.
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) IMMEDIATELY BEFORE merging the code:
 -- between the two the deployed API calls the dropped signature, so the leaderboard and the Outreach
--- target preview answer 500 -- they fail closed, never with a wrong board.
+-- target preview answer 500 -- they fail closed, never with a wrong board. The old API image can
+-- still WRITE a campaign in that window, with the id lists this file rewrites; the new
+-- api/outreach.select_targets refuses such a target (409, never the national list) and a re-run
+-- of this file converts it.
 -- ROLLBACK: forward only (rule 1). A re-run is a no-op: the precondition accepts this file's body.
 
 set lock_timeout = '5s';
@@ -55,7 +73,7 @@ begin
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'broker_leaderboard'), '')
-     not in ('aabd5828e6bed3be596ae07a74c11216', '48616df4b1010a91bf2b923c446ff6ed') then
+     not in ('aabd5828e6bed3be596ae07a74c11216', '994f15ff0ee2fda42480924d1087a60c') then
     raise exception '609 refused: broker_leaderboard is not 580''s body nor this file''s (or has two overloads)';
   end if;
 end
@@ -63,6 +81,31 @@ $pre$;
 
 begin;
 
+-- 1. The one array builder both branches share: a level's codes, include or exclude, in chip
+--    order ('{}' when none). IMMUTABLE, so with constant arguments the planner evaluates it at
+--    plan time and every arm reads `code = any('{...}')`, estimated like 580's id lists. The
+--    arguments are constants in every custom plan, and the leaderboard's callers bind unnamed
+--    statements (scraper.db.connect: prepare_threshold=None); a GENERIC plan would call it per
+--    row. Not STRICT: a NULL excluded array means "nothing excluded" (Browse's coalesce(excl,
+--    false)), and STRICT would turn every chip into no chip.
+create or replace function public.district_level_codes(
+  levels text[], ids bigint[], excluded boolean[], level text, want_excluded boolean)
+returns bigint[]
+language sql
+immutable
+parallel safe
+as $codes$
+  select coalesce(array_agg(c.id order by c.ord), '{}')
+    from unnest(levels, ids, excluded) with ordinality as c(lvl, id, excl, ord)
+   where c.lvl = level and coalesce(c.excl, false) = want_excluded
+$codes$;
+
+revoke all on function public.district_level_codes(text[], bigint[], boolean[], text, boolean)
+  from public, anon, authenticated;
+grant execute on function public.district_level_codes(text[], bigint[], boolean[], text, boolean)
+  to service_role;
+
+-- 2. broker_leaderboard: drop the 12-type signature, create the chip one, restate the ACL.
 drop function if exists public.broker_leaderboard(
   bigint[], bigint[], bigint[], text, text, text, integer, bigint[], integer, boolean,
   text[], boolean);
@@ -98,20 +141,20 @@ as $function$
 
   -- FAST BRANCH: exact precomputed cells (W4), for the shapes the count book has cells for:
   -- no live-only filter, and every chip an include at kraj / okres / obec, one level per name
-  -- (609). `g` derives 580's three id lists from those chips, so the cell arms and the
-  -- nested-chip suppression read as they did; "no chips" stays a parameter test, so the
-  -- planner still drops the national arm from a chip call (an InitPlan count would not).
+  -- (609). `g` derives 580's three id lists from those chips -- constants once the planner
+  -- folds district_level_codes() -- so the cell arms and the nested-chip suppression read
+  -- as they did; "no chips" stays a parameter test, so a chip call drops the national arm.
   fast_raw as (
     select s.broker_id, s.listing_count, s.property_count,
            s.active_listing_count, s.active_property_count
     from broker_region_type_stats s
     cross join (
-      select array(select c.id from unnest(districts_levels, districts_ids, districts_excluded_filter) as c(lvl, id, excl)
-                    where c.lvl = 'kraj'  and not coalesce(c.excl, false)) as region_ids,
-             array(select c.id from unnest(districts_levels, districts_ids, districts_excluded_filter) as c(lvl, id, excl)
-                    where c.lvl = 'okres' and not coalesce(c.excl, false)) as okres_ids,
-             array(select c.id from unnest(districts_levels, districts_ids, districts_excluded_filter) as c(lvl, id, excl)
-                    where c.lvl = 'obec'  and not coalesce(c.excl, false)) as obec_ids
+      select district_level_codes(districts_levels, districts_ids, districts_excluded_filter, 'kraj', false)
+               as region_ids,
+             district_level_codes(districts_levels, districts_ids, districts_excluded_filter, 'okres', false)
+               as okres_ids,
+             district_level_codes(districts_levels, districts_ids, districts_excluded_filter, 'obec', false)
+               as obec_ids
     ) g
     where p_min_price_czk is null and p_subtypes is null
       and coalesce(districts_levels, '{}') <@ '{kraj,okres,obec}'
@@ -166,7 +209,9 @@ as $function$
 
   -- LIVE BRANCH: reads `listings` directly, for the filters the matview cannot
   -- express (price since 448, subtype since 469, and since 609 a chip it has no cell
-  -- for: a cast_obce, a street, an exclude). 580's body, except the place predicate.
+  -- for: a cast_obce, a street, an exclude). 580's body, except the place predicate,
+  -- which is api/location_filter.district_where's rendering: per level `code = any(that
+  -- level's codes)`, an exclude as NOT COALESCE(..., false) so a NULL code survives it.
   live_priced as (
     select l.broker_identity_id,
            coalesce(l.property_id, -l.id) as property_key,
@@ -182,54 +227,36 @@ as $function$
       and (p_category_main is null or l.category_main = p_category_main)
       and (p_category_type is null or l.category_type = p_category_type)
       and (
-        districts_filter is null or array_length(districts_filter, 1) is null
-        or not exists (
-          select 1 from unnest(districts_filter,
-                 coalesce(districts_excluded_filter, array_fill(false, array[array_length(districts_filter, 1)]))
-               ) with ordinality as t(needle, excl, ord)
-          where not coalesce(excl, false)
-        )
-        or exists (
-          select 1 from unnest(districts_filter,
-                 coalesce(districts_excluded_filter, array_fill(false, array[array_length(districts_filter, 1)])),
-                 coalesce(districts_levels, array_fill(null::text, array[array_length(districts_filter, 1)])),
-                 coalesce(districts_ids, array_fill(null::bigint, array[array_length(districts_filter, 1)]))
-               ) with ordinality as t(needle, excl, lvl, admin_id, ord)
-          where not coalesce(excl, false)
-            and case
-              -- ONE code predicate (W3 S3), Browse's (605) over listing_location's five codes:
-              -- a chip is a level plus a RUIAN code, plain equality; no code matches nothing.
-              when admin_id is null                  then false
-              when lvl = 'kraj'                      then ll.kraj_kod      = admin_id
-              when lvl = 'okres'                     then ll.okres_kod     = admin_id
-              when lvl = 'obec'                      then ll.obec_kod      = admin_id
-              when lvl = 'cast_obce'                 then ll.cast_obce_kod = admin_id
-              when lvl = 'ulice'                     then ll.ulice_kod     = admin_id
-              else false
-            end
-        )
+        -- no include chip (no chips, or every one excluded) -- counted over the NAMES, as
+        -- Browse does, so an include chip at a level no arm knows matches nothing
+        coalesce(cardinality(districts_filter), 0) = 0
+        or coalesce(districts_excluded_filter <@ '{true}'
+                    and cardinality(districts_excluded_filter) >= cardinality(districts_filter), false)
+        or ll.kraj_kod = any(district_level_codes(
+             districts_levels, districts_ids, districts_excluded_filter, 'kraj', false))
+        or ll.okres_kod = any(district_level_codes(
+             districts_levels, districts_ids, districts_excluded_filter, 'okres', false))
+        or ll.obec_kod = any(district_level_codes(
+             districts_levels, districts_ids, districts_excluded_filter, 'obec', false))
+        or ll.cast_obce_kod = any(district_level_codes(
+             districts_levels, districts_ids, districts_excluded_filter, 'cast_obce', false))
+        or ll.ulice_kod = any(district_level_codes(
+             districts_levels, districts_ids, districts_excluded_filter, 'ulice', false))
       )
       and (
-        districts_filter is null or array_length(districts_filter, 1) is null
-        or not exists (
-          select 1 from unnest(districts_filter,
-                 coalesce(districts_excluded_filter, array_fill(false, array[array_length(districts_filter, 1)])),
-                 coalesce(districts_levels, array_fill(null::text, array[array_length(districts_filter, 1)])),
-                 coalesce(districts_ids, array_fill(null::bigint, array[array_length(districts_filter, 1)]))
-               ) with ordinality as t(needle, excl, lvl, admin_id, ord)
-          where coalesce(excl, false)
-            and case
-              -- ONE code predicate (W3 S3), Browse's (605) over listing_location's five codes:
-              -- a chip is a level plus a RUIAN code, plain equality; no code matches nothing.
-              when admin_id is null                  then false
-              when lvl = 'kraj'                      then ll.kraj_kod      = admin_id
-              when lvl = 'okres'                     then ll.okres_kod     = admin_id
-              when lvl = 'obec'                      then ll.obec_kod      = admin_id
-              when lvl = 'cast_obce'                 then ll.cast_obce_kod = admin_id
-              when lvl = 'ulice'                     then ll.ulice_kod     = admin_id
-              else false
-            end
-        )
+        not coalesce(true = any(districts_excluded_filter), false)
+        or not coalesce(
+          ll.kraj_kod = any(district_level_codes(
+            districts_levels, districts_ids, districts_excluded_filter, 'kraj', true))
+          or ll.okres_kod = any(district_level_codes(
+            districts_levels, districts_ids, districts_excluded_filter, 'okres', true))
+          or ll.obec_kod = any(district_level_codes(
+            districts_levels, districts_ids, districts_excluded_filter, 'obec', true))
+          or ll.cast_obce_kod = any(district_level_codes(
+            districts_levels, districts_ids, districts_excluded_filter, 'cast_obce', true))
+          or ll.ulice_kod = any(district_level_codes(
+            districts_levels, districts_ids, districts_excluded_filter, 'ulice', true)),
+          false)
       )
       and (
         p_min_price_czk is null
@@ -318,8 +345,13 @@ revoke execute on function public.broker_leaderboard(
 revoke execute on function public.broker_leaderboard(
   text[], boolean[], text[], bigint[], text, text, text, integer, bigint[], integer, boolean,
   text[], boolean) from authenticated;
+-- Explicit, so the API's role does not depend on a default ACL (Supabase grants one; the CI
+-- replay does not).
+grant execute on function public.broker_leaderboard(
+  text[], boolean[], text[], bigint[], text, text, text, integer, bigint[], integer, boolean,
+  text[], boolean) to service_role;
 
--- 2. Outreach targets: the three id lists become chips, kraj first, each list in its stored order.
+-- 3. Outreach targets: the three id lists become chips, kraj first, each list in its stored order.
 --    A code the register does not know keeps its code as its name (display only; the code filters).
 with stored as (
   select c.id, k.lvl, k.rank, e.ord, e.code::bigint as code
@@ -352,15 +384,19 @@ update public.outreach_campaigns c
  where c.id = todo.id
    and (todo.target ?| array['region_ids', 'okres_ids', 'obec_ids'] or not todo.target ? 'districts');
 
--- 3. Post-conditions: one overload, the chip parameters first, both chip blocks carry the five arms,
---    no browser role can execute it, and every Outreach target is a chip list of (level, code)s.
+-- 4. Post-conditions: one overload, the chip parameters first, the five arms in both the include
+--    and the exclude block, the helper's answers, service_role and no browser role can execute
+--    either function, and every Outreach target is a chip list of (level, code)s.
 do $post$
 declare
   v_fn regprocedure := to_regprocedure('public.broker_leaderboard(text[], boolean[], text[], bigint[], '
     'text, text, text, integer, bigint[], integer, boolean, text[], boolean)');
+  v_codes regprocedure := to_regprocedure(
+    'public.district_level_codes(text[], bigint[], boolean[], text, boolean)');
   v_src text;
   v_names text[];
   v_lvl text;
+  v_arm text;
 begin
   if v_fn is null or (select count(*) from pg_proc where pronamespace = 'public'::regnamespace
                                                      and proname = 'broker_leaderboard') <> 1 then
@@ -372,14 +408,25 @@ begin
     raise exception '609: broker_leaderboard''s chip parameters are %', v_names[1:4];
   end if;
   foreach v_lvl in array array['kraj', 'okres', 'obec', 'cast_obce', 'ulice'] loop
-    if (length(v_src) - length(replace(v_src, format('then ll.%s_kod', v_lvl), '')))
-       / length(format('then ll.%s_kod', v_lvl)) <> 2 then
-      raise exception '609: the % arm is not in both chip blocks', v_lvl;
+    v_arm := format('ll.%s_kod = any(district_level_codes(', v_lvl);
+    if (length(v_src) - length(replace(v_src, v_arm, ''))) / length(v_arm) <> 2 then
+      raise exception '609: the % arm is not in both the include and the exclude block', v_lvl;
     end if;
   end loop;
+  if v_codes is null
+     or public.district_level_codes('{kraj,obec,kraj}', '{1,2,3}', '{f,f,t}', 'kraj', false) <> '{1}'
+     or public.district_level_codes('{kraj,obec,kraj}', '{1,2,3}', '{f,f,t}', 'kraj', true) <> '{3}'
+     or public.district_level_codes('{kraj}', '{1}', null, 'kraj', false) <> '{1}'
+     or public.district_level_codes(null, null, null, 'kraj', false) <> '{}' then
+    raise exception '609: district_level_codes does not answer as specified';
+  end if;
   if has_function_privilege('anon', v_fn, 'execute')
-     or has_function_privilege('authenticated', v_fn, 'execute') then
-    raise exception '609: a browser role can execute broker_leaderboard';
+     or has_function_privilege('authenticated', v_fn, 'execute')
+     or not has_function_privilege('service_role', v_fn, 'execute')
+     or has_function_privilege('anon', v_codes, 'execute')
+     or has_function_privilege('authenticated', v_codes, 'execute')
+     or not has_function_privilege('service_role', v_codes, 'execute') then
+    raise exception '609: both functions must be executable by service_role and no browser role';
   end if;
   if exists (select 1 from public.outreach_campaigns
               where target ?| array['region_ids', 'okres_ids', 'obec_ids']
@@ -395,3 +442,5 @@ end
 $post$;
 
 commit;
+
+reset lock_timeout;

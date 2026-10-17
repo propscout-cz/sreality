@@ -1,16 +1,20 @@
-"""The leaderboard tests a location chip with Browse's predicate (migration 609, rule 25).
+"""The leaderboard tests a location chip with the one place predicate (migration 609, rule 25).
 
-`broker_leaderboard`'s live branch carries the include + exclude chip blocks of
-`browse_stats_properties` (605), over `listing_location`'s five codes instead of the read
-model's five columns. Two rails keep it the ONE place predicate:
+`broker_leaderboard`'s live branch is the SQL twin of `api.location_filter.district_where`:
+per level `ll.<level>_kod = any(<that level's codes>)`, an exclude wrapped in
+`NOT COALESCE(..., false)` so a row whose code is NULL survives it. Every code array is a
+`district_level_codes(...)` call, which the planner folds to a constant, so each arm is
+estimated like 580's id lists were. Three rails:
 
-  * offline — the two blocks ARE 605's, token for token once the columns are mapped, and
-    their arms are exactly `api.location_filter.LEVEL_COLUMN`'s five levels;
+  * offline — five include arms and five exclude arms, one per `LEVEL_COLUMN` level, in
+    order, each reading that level's codes with the right flag, and the exclude wrapper;
   * DB lane — the blocks, bound through `api.location_filter.district_arrays` (what
     toolkit/brokers.py and api/outreach.py send), select exactly the rows the shared table
     `tests/fixtures/district_chip_plan.json` says match — the rows `district_where` is held
     to in tests/test_filter_compiler_rows_live.py, so a NULL code under an exclude is kept
-    and a street chip never widens to its town.
+    and a street chip never widens to its town;
+  * DB lane — `district_level_codes` itself: the include/exclude split, a NULL flag, a NULL
+    flag array, no chips.
 """
 
 from __future__ import annotations
@@ -34,7 +38,10 @@ _CASES = json.loads(
 
 # level -> its code on listing_location (migration 501), the store the leaderboard reads.
 _LL_COLUMN = {level: f"{level}_kod" for level in LEVEL_ORDER}
-_BLOCK_START = "      and (\n        districts_filter is null"
+_INCLUDE_START = "      and (\n        -- no include chip"
+_EXCLUDE_START = "      and (\n        not coalesce(true = any(districts_excluded_filter), false)"
+_ARM = (r"ll\.(\w+) = any\(district_level_codes\(\s*districts_levels, districts_ids, "
+        r"districts_excluded_filter, '(\w+)', (true|false)\)\)")
 
 
 def _body(func: str) -> str:
@@ -43,40 +50,35 @@ def _body(func: str) -> str:
     return sql[at: sql.index("$function$;", at)]
 
 
-def _chip_blocks(func: str) -> str:
+def _block(start: str) -> str:
+    body = _body("broker_leaderboard")
+    at = body.index(start)
+    return body[at: body.index("\n      )\n", at) + len("\n      )\n")]
+
+
+def _chip_blocks() -> str:
     """The include + exclude blocks (contiguous, in that order), comment lines dropped."""
-    body = _body(func)
-    start = body.index(_BLOCK_START)
-    second = body.index(_BLOCK_START, start + 1)
-    end = body.index("\n      )\n", second) + len("\n      )\n")
+    include, exclude = _block(_INCLUDE_START), _block(_EXCLUDE_START)
+    assert _body("broker_leaderboard").index(include + exclude) > 0, "not contiguous"
     return "\n".join(
-        line for line in body[start:end].splitlines() if not line.strip().startswith("--")
+        line for line in (include + exclude).splitlines() if not line.strip().startswith("--")
     )
 
 
-def _tokens(sql: str) -> list[str]:
-    return sql.split()
-
-
-def test_the_leaderboard_carries_605s_chip_blocks_over_listing_location() -> None:
-    """RED by: any edit to one copy of the predicate and not the other — an arm, the NULL
-    guard, the `coalesce(excl, false)` that keeps an unresolved row under an exclude."""
+def test_the_live_branch_has_five_include_and_five_exclude_arms_in_level_order() -> None:
+    """RED by: an arm dropped, added, reordered, pointed at another level's column, or
+    reading the other flag's codes — and by losing the NOT COALESCE that keeps a row whose
+    code is NULL under an exclude (the bare NOT drops it: "not Prague" would mean "not
+    Prague AND located")."""
     assert latest_definition("broker_leaderboard").name == "609_broker_leaderboard_chip_arrays.sql"
-    browse = _chip_blocks("browse_stats_properties")
-    for level, column in LEVEL_COLUMN.items():
-        browse = browse.replace(f"l.{column} ", f"ll.{_LL_COLUMN[level]} ")
-    assert _tokens(_chip_blocks("broker_leaderboard")) == _tokens(browse)
-
-
-def test_the_leaderboard_arms_are_the_five_levels_in_order() -> None:
-    blocks = re.findall(r"and case\b(.*?)\bend\b", _chip_blocks("broker_leaderboard"), re.DOTALL)
-    assert len(blocks) == 2, f"expected the include and the exclude CASE, found {len(blocks)}"
-    for block in blocks:
-        arms = re.findall(r"when lvl = '([a-z_]+)'\s*then ll\.([a-z_]+)\s*= admin_id", block)
-        assert arms == list(_LL_COLUMN.items())
-        assert tuple(_LL_COLUMN) == tuple(LEVEL_COLUMN)
-        assert re.search(r"when admin_id is null\s+then false", block)
-        assert "else false" in block
+    include, exclude = _block(_INCLUDE_START), _block(_EXCLUDE_START)
+    want = [(column, level) for level, column in _LL_COLUMN.items()]
+    assert [(c, lv) for c, lv, flag in re.findall(_ARM, include) if flag == "false"] == want
+    assert [(c, lv) for c, lv, flag in re.findall(_ARM, exclude) if flag == "true"] == want
+    assert len(re.findall(_ARM, include)) == len(re.findall(_ARM, exclude)) == len(LEVEL_COLUMN)
+    assert tuple(_LL_COLUMN) == tuple(LEVEL_COLUMN)
+    assert "or not coalesce(\n" in exclude and exclude.rstrip().endswith("false)\n      )")
+    assert "case" not in _chip_blocks() and "unnest" not in _chip_blocks()
 
 
 def test_every_code_column_the_arms_read_is_a_listing_location_column() -> None:
@@ -100,7 +102,7 @@ def conn():
 
 
 def _bound_predicate() -> str:
-    sql = _chip_blocks("broker_leaderboard")
+    sql = _chip_blocks()
     for name, (key, cast) in {
         "districts_filter": ("names", "text[]"),
         "districts_excluded_filter": ("excluded", "boolean[]"),
@@ -132,3 +134,24 @@ def test_the_chip_table_rows_match_in_the_leaderboard_too(conn, case: dict[str, 
         cur.execute(sql, params)
         got = {int(r[0]) for r in cur.fetchall()}
     assert got == {i for i, r in enumerate(case["rows"]) if r["matches"]}
+
+
+@pytest.mark.parametrize("args,expected", [
+    (("{kraj,obec,kraj}", "{1,2,3}", "{f,f,t}", "kraj", False), [1]),
+    (("{kraj,obec,kraj}", "{1,2,3}", "{f,f,t}", "kraj", True), [3]),
+    (("{kraj,obec,kraj}", "{1,2,3}", "{f,f,t}", "obec", False), [2]),
+    (("{ulice,ulice}", "{9,7}", "{f,NULL}", "ulice", False), [9, 7]),
+    (("{kraj}", "{1}", None, "kraj", False), [1]),
+    (("{kraj}", "{1}", None, "kraj", True), []),
+    (("{kraj}", "{1}", "{f}", "okres", False), []),
+    ((None, None, None, "kraj", False), []),
+], ids=["include", "exclude", "another level", "a NULL flag is false, chip order kept",
+        "a NULL flag array excludes nothing", "so nothing is excluded",
+        "a level with no chip", "no chips"])
+def test_district_level_codes_answers_one_level_and_one_flag(conn, args, expected) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select public.district_level_codes(%s::text[], %s::bigint[], %s::boolean[], %s, %s)",
+            args,
+        )
+        assert cur.fetchone()[0] == expected

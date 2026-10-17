@@ -47,13 +47,14 @@ const LIMIT = 100;
 const CATEGORY_WORD: Record<string, string> = { byt: 'byty', dum: 'domy' };
 const OFFER_WORD: Record<string, string> = { prodej: 'prodej', pronajem: 'pronájem' };
 
-/* "Celá ČR", "Praha", "Praha +2", "− Žižkov" — short enough for a chip and a
- * rule. Every chip counts; an include leads when there is one. */
+/* "Celá ČR", "Praha", "Praha +2", "Celá ČR − Žižkov", "Celá ČR −2" — short
+ * enough for a chip and a rule. Every chip counts; an include leads, else the
+ * whole country minus the excludes. */
 export function placeLabelOf(chips: ReadonlyArray<DistrictChip>): string {
+  const lead = chips.find((c) => !c.excluded);
+  if (lead) return chips.length === 1 ? lead.name : `${lead.name} +${chips.length - 1}`;
   if (chips.length === 0) return 'Celá ČR';
-  const lead = chips.find((c) => !c.excluded) ?? chips[0];
-  const name = lead.excluded ? `− ${lead.name}` : lead.name;
-  return chips.length === 1 ? name : `${name} +${chips.length - 1}`;
+  return chips.length === 1 ? `Celá ČR − ${chips[0].name}` : `Celá ČR −${chips.length}`;
 }
 
 /* The ranked figure and its noun: active properties, or every ad ever. */

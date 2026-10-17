@@ -70,14 +70,15 @@ def conn():
         yield c
 
 
-def _explain(conn, *, min_price_czk=None, subtypes=None, category_main="byt", chip=None):
-    """`chip` = (name, level, code): ONE include chip, bound like toolkit/brokers.py binds
-    them (609); without one the four chip arrays are literal NULLs."""
+def _explain(conn, *, min_price_czk=None, subtypes=None, category_main="byt", chip=None,
+             excluded=False):
+    """`chip` = (name, level, code): ONE chip, bound like toolkit/brokers.py binds them
+    (609); without one the four chip arrays are literal NULLs."""
     chips, chip_params = "null, null, null, null", ()
     if chip is not None:
         name, level, code = chip
         chips = "%s::text[], %s::boolean[], %s::text[], %s::bigint[]"
-        chip_params = ([name], [False], [level], [code])
+        chip_params = ([name], [excluded], [level], [code])
     with conn.cursor() as cur:
         # Plain SET, not SET LOCAL: this connection is autocommit, and outside a
         # transaction SET LOCAL is a silent no-op (the trap migration 429's rail hit).
@@ -121,6 +122,12 @@ def plan_street(conn):
     """A street chip, no value filter (609): the count book has no street cells, so the
     chip alone must route the call to the live branch."""
     return _explain(conn, chip=("Na Rybníčkách", "ulice", 666742))
+
+
+@pytest.fixture(scope="module")
+def plan_excluded_kraj(conn):
+    """An EXCLUDED kraj, no value filter: the count book holds include cells only."""
+    return _explain(conn, chip=("Kraj Vysočina", "kraj", 108), excluded=True)
 
 
 @pytest.fixture(scope="module")
@@ -351,6 +358,16 @@ def test_a_street_chip_reaches_listings_and_prunes_the_matview(plan_street):
     assert "listings" in names and "broker_region_type_stats" not in names, (
         f"a street chip must read listings live and prune the count book: {names}\n"
         + json.dumps(plan_street, indent=2)
+    )
+
+
+def test_an_excluded_kraj_reaches_listings_and_prunes_the_matview(plan_excluded_kraj):
+    """RED by: a fast gate that ignores the exclude flags — the call would then be answered
+    with the kraj's cell, the very inventory it asked to leave out."""
+    names = _relation_names(plan_excluded_kraj)
+    assert "listings" in names and "broker_region_type_stats" not in names, (
+        f"an excluded kraj must read listings live and prune the count book: {names}\n"
+        + json.dumps(plan_excluded_kraj, indent=2)
     )
 
 

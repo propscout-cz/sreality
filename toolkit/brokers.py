@@ -19,15 +19,18 @@ from typing import Any
 
 from psycopg.rows import dict_row
 
-from api.location_filter import DistrictChip, district_arrays, district_code_plan
 from toolkit import _now_iso
 
 _VALID_METRICS = {
     "active_property_count", "property_count", "listing_count", "active_listing_count",
 }
 GEO_LEVELS = ("region", "okres")
-# The chip levels broker_region_type_stats has cells for: migration 609's fast gate.
-_COUNT_BOOK_LEVELS = frozenset({"kraj", "okres", "obec"})
+# A chip-taking RPC's four parallel arguments — names, excluded flags, levels, codes —
+# as `api.location_filter.district_arrays` builds them; all None = no chips.
+ChipArrays = tuple[list[str] | None, list[bool] | None, list[str] | None, list[int] | None]
+NO_CHIPS: ChipArrays = (None, None, None, None)
+# The chip levels broker_region_type_stats has cells for, in migration 609's fast-gate order.
+COUNT_BOOK_LEVELS = ("kraj", "okres", "obec")
 MAX_BATCH = 1000
 _REDACTED = "[redacted]"
 _EMAIL_RE = re.compile(r"[^@\s<>,;()\[\]\"']+@[^@\s<>,;()\[\]\"']+\.[a-z]{2,}",
@@ -154,7 +157,7 @@ def _mask(value: Any) -> Any:
     return out
 
 
-def leaderboard(conn: Any, *, districts: Sequence[DistrictChip] | None = None,
+def leaderboard(conn: Any, *, districts: ChipArrays = NO_CHIPS,
                 category_main: str | None = None, category_type: str | None = None,
                 metric: str = "active_property_count", limit: int = 100,
                 firm_ids: list[int] | None = None, min_price_czk: int | None = None,
@@ -166,8 +169,9 @@ def leaderboard(conn: Any, *, districts: Sequence[DistrictChip] | None = None,
     448) + property subtypes (subtypes, migration 469).
 
     Thin wrapper over the broker_leaderboard RPC, so every caller (this page and
-    api/outreach.select_targets) ranks brokers identically. No chips = national;
-    empty firm_ids = every company.
+    api/outreach.select_targets) ranks brokers identically. `districts` is the four
+    chip arrays (`api.location_filter.district_arrays`; no chips = national); empty
+    firm_ids = every company.
 
     `min_price_czk` reads `listings.price_czk` directly — same column, same ">="
     semantics as Browse's own min_price_czk filter (toolkit.comparables), unit-for-unit
@@ -196,12 +200,12 @@ def leaderboard(conn: Any, *, districts: Sequence[DistrictChip] | None = None,
     if metric not in _VALID_METRICS:
         metric = "active_property_count"
     limit = max(1, min(int(limit), 2000))
-    plan = district_code_plan(districts)
+    names, excluded, levels, ids = districts
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT * FROM broker_leaderboard("
             "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (*district_arrays(districts),
+            (names, excluded, levels, ids,
              category_main, category_type, metric, limit, firm_ids or None,
              min_price_czk, include_unpriced, subtypes or None,
              include_unknown_subtype))
@@ -211,8 +215,8 @@ def leaderboard(conn: Any, *, districts: Sequence[DistrictChip] | None = None,
         # or a chip the matview has no cell for, reads listings live and stays
         # un-stamped (None = "as of now").
         freshness = None
-        if (min_price_czk is None and not subtypes and not plan.exclude
-                and plan.include.keys() <= _COUNT_BOOK_LEVELS):
+        if (min_price_czk is None and not subtypes and not any(excluded or ())
+                and set(levels or ()) <= set(COUNT_BOOK_LEVELS)):
             cur.execute(
                 "SELECT last_succeeded_at FROM derived_artifacts "
                 "WHERE name = 'broker_region_type_stats'")
@@ -221,7 +225,8 @@ def leaderboard(conn: Any, *, districts: Sequence[DistrictChip] | None = None,
                 "last_succeeded_at") else None
     return _envelope(
         "broker_leaderboard", rows,
-        {"districts": [c.model_dump() for c in districts or []],
+        {"districts": [{"name": n, "excluded": x, "level": lv, "id": i} for n, x, lv, i
+                       in zip(names or [], excluded or [], levels or [], ids or [])],
          "category_main": category_main,
          "category_type": category_type, "metric": metric, "limit": limit,
          "firm_ids": firm_ids or [], "min_price_czk": min_price_czk,

@@ -161,10 +161,10 @@ describe('phone broker helpers', () => {
     expect(placeLabelOf([ZIZKOV, STREET])).toBe('Žižkov +1');
   });
 
-  it('marks an excluded lead with a minus, and leads with an include when there is one', () => {
-    expect(placeLabelOf([{ ...ZIZKOV, excluded: true }])).toBe('− Žižkov');
-    expect(placeLabelOf([{ ...STREET, excluded: true }, { ...ZIZKOV, excluded: true }])).toBe('− Na Rybníčkách +1');
+  it('leads with an include when there is one, else with the whole country minus the excludes', () => {
     expect(placeLabelOf([{ ...ZIZKOV, excluded: true }, PRAHA])).toBe('Praha +1');
+    expect(placeLabelOf([{ ...ZIZKOV, excluded: true }])).toBe('Celá ČR − Žižkov');
+    expect(placeLabelOf([{ ...STREET, excluded: true }, { ...ZIZKOV, excluded: true }])).toBe('Celá ČR −2');
   });
 
   it('draws initials from the first and last word of the name, degrees aside', () => {

@@ -130,7 +130,7 @@ describe('<Brokers> location chips', () => {
     expect(await screen.findByText('Na Rybníčkách')).toBeInTheDocument();
   });
 
-  it('names every chip in the caption, an excluded one with a minus', async () => {
+  it('names every chip in the caption, the excludes after a minus, the country when none is included', async () => {
     asUser(false);
     renderPage();
     await pick('Pard', PARDUBICE, 'regional.municipality');
@@ -147,7 +147,12 @@ describe('<Brokers> location chips', () => {
       ),
     );
     expect(
-      await screen.findByText('Žádní makléři pro tento výběr v Pardubice + − Na Rybníčkách.'),
+      await screen.findByText('Žádní makléři pro tento výběr v Pardubice − Na Rybníčkách.'),
+    ).toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Exclude Pardubice (Obec)' }));
+    expect(
+      await screen.findByText('Žádní makléři pro tento výběr v Celá ČR − Pardubice − Na Rybníčkách.'),
     ).toBeInTheDocument();
   });
 });

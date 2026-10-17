@@ -36,6 +36,7 @@ lives in `tests/test_broker_leaderboard_plan_shape.py`.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -429,6 +430,38 @@ def _negated(atom: str) -> str:
     if " is not distinct from " in atom:
         return atom.replace(" is not distinct from ", " is distinct from ")
     return f"not {atom}"
+
+
+def test_the_count_book_levels_are_the_fast_gates_and_the_derived_lists():
+    """toolkit.brokers stamps freshness only when the count book answers, judged from the
+    same levels the SQL gate names. RED by: a level added to one side only — the stamp
+    would then claim matview freshness for a live read, or the reverse."""
+    from toolkit.brokers import COUNT_BOOK_LEVELS
+
+    assert f"<@ '{{{','.join(COUNT_BOOK_LEVELS)}}}'" in _FAST_GATE
+    fast, _ = _branches(_fn_body())
+    derived = re.findall(
+        r"district_level_codes\(districts_levels, districts_ids, districts_excluded_filter, "
+        r"'(\w+)', false\)", fast)
+    assert derived == list(COUNT_BOOK_LEVELS)
+
+
+def test_the_precondition_names_the_live_body_and_this_files_own():
+    """A re-run must pass its own md5 gate, so the gate must name THIS body's md5 exactly
+    as Postgres stores prosrc (the text between the `$function$` quotes) — any edit inside
+    the body (a renumbered comment included) changes it. 605's rail, for 609.
+
+    RED by: editing the function body without recomputing the precondition's hash."""
+    sql = _FN_MIGRATION.read_text()
+    pre = sql[sql.index("do $pre$"): sql.index("$pre$;")]
+    assert pre.index("into populated") < pre.index("return;") < pre.index("pg_proc")
+    at = sql.index("create or replace function public.broker_leaderboard(")
+    body = sql[at: sql.index("$function$;", at)].split("$function$")[1]
+    assert f"'{hashlib.md5(body.encode()).hexdigest()}'" in pre, "re-run would refuse"
+    assert "'aabd5828e6bed3be596ae07a74c11216'" in pre, "580's body as applied live"
+    code = _sql(_FN_MIGRATION)
+    assert code.lstrip().startswith("set lock_timeout = '5s';")
+    assert code.rstrip().endswith("reset lock_timeout;")
 
 
 def test_the_two_gates_are_de_morgan_complements_and_both_branches_carry_one():

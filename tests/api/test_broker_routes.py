@@ -16,7 +16,6 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
-from api.location_filter import DistrictChip
 from api.routes import brokers as broker_routes
 from toolkit import brokers as brokers_toolkit
 
@@ -60,10 +59,8 @@ def test_leaderboard_passes_params(client, monkeypatch):
                              "firm_ids": [8], "min_price_czk": 5_000_000,
                              "include_unpriced": True})
     assert res.status_code == 200
-    assert captured["districts"] == [
-        DistrictChip(name="Praha", level="obec", id=554782),
-        DistrictChip(name="Kraj Vysočina", level="kraj", id=108, excluded=True),
-    ]
+    assert captured["districts"] == (
+        ["Praha", "Kraj Vysočina"], [False, True], ["obec", "kraj"], [554782, 108])
     assert captured["metric"] == "listing_count"
     assert captured["limit"] == 5
     assert captured["firm_ids"] == [8]
@@ -80,7 +77,7 @@ def test_leaderboard_defaults_firm_ids_and_chips_to_empty(client, monkeypatch):
     monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
     client.get("/brokers/leaderboard")
     assert captured["firm_ids"] == []
-    assert captured["districts"] == []
+    assert captured["districts"] == (None, None, None, None)
 
 
 @pytest.mark.parametrize("params", [

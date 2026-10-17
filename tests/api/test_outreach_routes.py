@@ -105,6 +105,28 @@ def test_select_targets_without_chips_is_national() -> None:
                       None, None, 25)
 
 
+@pytest.mark.parametrize("target", [
+    {"region_ids": [108], "category_main": "byt"},
+    {"districts": [{"name": "Praha", "level": "locality", "id": 554782}]},
+    {"districts": [{"name": "Praha"}]},
+], ids=["the id lists", "not one of the five levels", "no level or code"])
+def test_select_targets_refuses_a_stored_target_that_is_not_chips(target) -> None:
+    """An old API image can write `region_ids` between 609's apply and the deploy. Read
+    leniently, that campaign would target the whole country; it is refused instead."""
+    conn = _Conn()
+    with pytest.raises(outreach.StaleTarget):
+        outreach.select_targets(conn, target)
+    assert conn.cur.seen == []
+
+
+def test_preview_and_generate_answer_409_for_a_stale_target(client, monkeypatch):
+    monkeypatch.setattr(outreach_routes.outreach, "get_campaign",
+                        lambda conn, cid: {"id": cid, "target": {"region_ids": [108]}})
+    assert client.get("/outreach/campaigns/4/targets").status_code == 409
+    res = client.post("/outreach/campaigns/4/generate")
+    assert res.status_code == 409 and "609" in res.json()["detail"]
+
+
 def test_get_campaign_404(client, monkeypatch):
     monkeypatch.setattr(outreach_routes.outreach, "get_campaign", lambda conn, cid: None)
     assert client.get("/outreach/campaigns/9").status_code == 404
