@@ -2324,9 +2324,9 @@ export const curationKeys = {
     ['curation', 'manual-estimates', sreality_id] as const,
 };
 
-/* Deal pipeline (migration 205). The "is this property bookmarked + at which   */
-/* stage" read pulls from property_pipeline_public via the anon key; writes go   */
-/* through the FastAPI service. Single-valued — at most one card per property.
+/* Deal pipeline (migration 205). The "is this property bookmarked + at which
+ * stage" read pulls from property_pipeline_public, RLS-scoped as authenticated;
+ * writes go through the FastAPI service. At most one card per property per account.
  *
  * W3 collapsed the per-property `card(id)` key into `members` — a single
  * property's card is just `members.get(id)`. The two used to be separate
@@ -2454,7 +2454,7 @@ export const fetchPipelineStages = async (
       /* `code` too (migration 377): the stage menu badges every row from this
        * list, and the stage editor pre-fills its code box from it — omitting the
        * column rendered every existing code as blank, inviting the operator to
-       * overwrite intentional badges (three stages deliberately share "9"). */
+       * overwrite intentional badges (several closed stages share a code). */
       .select('id, key, label, position, color, is_terminal, is_entry, code')
       .order('position'),
     { signal },

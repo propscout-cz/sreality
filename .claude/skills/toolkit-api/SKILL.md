@@ -298,8 +298,7 @@ For routes that need per-account **data isolation** (not just an admin/non-admin
 `api/tenant_pool.py`'s `tenant_conn` instead of the service-role `get_db_conn` — it opens an
 RLS-scoped transaction under the `tenant_pool` role; `verify_jwt` is authentication, `tenant_conn`
 (via RLS) is authorization, and it has no fallback connection (the static-token bypass was DELETED
-2026-09-11, dead since PR #941 — an unset `TENANT_POOL_DB_URL` now raises; the
-`legacy_backfill_claim` TABLE remains as the signup CAS). **WHICH of the four scoping shapes a
+2026-09-11, dead since PR #941 — an unset `TENANT_POOL_DB_URL` now raises). **WHICH of the four scoping shapes a
 route gets is stated ONCE — the `database` skill's Multi-tenancy section (four-line doctrine) and
 its `references/tenancy.md` (full version + the two test rules from the #917 post-mortem). Don't
 restate it here or in a module docstring.** Standing gates: `tests/api/test_admin_route_coverage.py`
@@ -325,7 +324,7 @@ enforcement is inline in `create_estimation_run` (below).
 single choke point *before the URL parse* (`_prepare_metered_submit`) so a rejected submit spends
 zero LLM cost. Meter = **per successful agent run, monthly** (operator decision, not USD): free
 plan `plans.agent_estimations_monthly_quota` = 3, `trial_*` = 10 (while
-`entitlements.status='trialing'` + unexpired). Only a real, non-admin tenant sending `mode:'agent'`
+`entitlements.status='trialing'` + unexpired: a signup's first 7 days). Only a real, non-admin tenant sending `mode:'agent'`
 is metered — admin/SYSTEM and all deterministic runs bypass, mirroring `require_entitlement`.
 (ClickUp is named in comments as a `claims is None` bypass — an internal direct-Python path only;
 it has zero historical rows, verified 2026-08-04, any HTTP call 401s, and a real credential waits
@@ -336,8 +335,7 @@ in one write, arbiter index `estimation_runs_inflight_idem`. The budget counts `
 directly; `usage_ledger` is the append-only billing/margin record (one row per metered success,
 cost = the run's `llm_calls` sum), written at the agent terminal, RLS-scoped like `entitlements`.
 Flags (app_settings, service-role read): `estimation_budget_enabled` (absent ⇒ **enforced**, fail-
-closed), `agent_estimation_concurrency_cap` (3). Deferred: trial at signup, extension
-`mode:'agent'`.
+closed), `agent_estimation_concurrency_cap` (3). Deferred: extension `mode:'agent'`.
 
 ## Auth and secrets
 

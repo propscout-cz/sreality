@@ -1710,10 +1710,8 @@ def delete_property_tag(
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Phase 0: bookmark a property into the pipeline (entry stage) / remove it.
-# Membership reads go through property_pipeline_public via the anon key.
-# tenant_conn replaces get_db_conn + require_token: its verify_jwt fails
-# closed and every caller gets an RLS-scoped one-transaction connection.
+# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")
 def get_pipeline_stages(
