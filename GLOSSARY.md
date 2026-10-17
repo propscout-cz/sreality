@@ -110,8 +110,8 @@ _Avoid_: invite, membership, access (alone), collaborator
 
 **Shared note**:
 A note its author marked for the people they share its property with: readable by the other party
-of any share the author is party to whose collection holds that property — for a share the author
-received, only one that already existed when the note was marked. Unmarked notes stay private.
+of any share the author is party to whose collection holds that property, including shares made
+after the note was marked. Unmarked notes stay private.
 _Avoid_: public note, team note
 
 **Tag**:

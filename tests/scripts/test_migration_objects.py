@@ -132,3 +132,14 @@ def test_every_recent_migration_is_either_probeable_or_openly_unverifiable():
     migs = load_migrations(_MIGRATIONS, newest=40)
     probeable = [m for m in migs if m.objects]
     assert len(probeable) >= 21, [m.filename for m in migs if not m.objects]
+
+
+def test_an_object_a_later_migration_drops_is_not_probed_on_the_earlier_one():
+    """613 drops 610's shared_at column and its stamp function (and recreates the policy it
+    drops): the drift check must not read 610 as half-applied once 613 is live."""
+    by_name = {m.filename: {str(o) for o in m.objects} for m in load_migrations(_MIGRATIONS, newest=0)}
+    m610 = by_name["610_collection_shares.sql"]
+    assert "column:property_notes.shared_at" not in m610
+    assert "function:stamp_property_notes_shared_at" not in m610
+    assert "column:property_notes.shared" in m610
+    assert "policy:property_notes.property_notes_shared_read" in m610
