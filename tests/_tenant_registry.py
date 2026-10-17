@@ -31,4 +31,6 @@ TENANT_TABLES: tuple[str, ...] = (
     "property_dismissals",
     "property_note_attachments",
     "property_artifact_links",
+    # Migration 609: owner-stamped by trigger; browser roles SELECT + DELETE, never INSERT.
+    "collection_shares",
 )

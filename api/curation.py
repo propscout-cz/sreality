@@ -1,23 +1,29 @@
-"""Persistence helpers for /collections, /properties/{id}/notes, /artifact-links, /tags.
+"""Persistence helpers for /collections (+ /shares), /properties/{id}/notes, /artifact-links, /tags.
 
 CRUD over the property-grain curation tables (migration 202), keyed on `property_id` so curation
 follows the property across merge/detach (toolkit.property_carriers). Every route runs on
 tenant_pool.tenant_conn, so RLS scopes reads; a top-level INSERT takes one REQUIRED account_id
 resolved at the route edge; a write by id is its own ownership gate (rowcount 0 -> 404, never a
-SELECT probe first: a SELECT proves visibility, and a shared collection (W4) is visible, not owned).
+SELECT probe first: a SELECT proves visibility, and a shared collection is visible, not owned).
 One transaction per write, UniqueViolation -> 409, flat dicts out.
+
+Sharing (migration 609, docs/design/collection-sharing.md) widens READS only: a shared collection
+and the other party's notes marked `shared` arrive through the same projections, told apart by ONE
+field, `owner_email` (null iff the row is the caller's). A share row is written on the service-role
+connection (browser roles hold no INSERT on it) only after the tenant UPDATE gate passed.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable, ContextManager
 
 import psycopg
 from fastapi import HTTPException
 
 from api import note_attachments
 from api import schemas as s
+from api import tenant_pool
 from toolkit.property_identity import (
     resolve_active_property_id,
     resolve_active_property_ids,
@@ -26,13 +32,39 @@ from toolkit.property_identity import (
 
 # --- collections -----------------------------------------------------------
 
+def _is_mine(col: str) -> str:
+    """The one "is this row the caller's" predicate every share-aware projection uses."""
+    return f"{col} IN (SELECT current_account_ids())"
+
+
+def _party_label(col: str) -> str:
+    """The account's label as the caller may see it: a counterparty's email, else NULL."""
+    return f"(SELECT e.email FROM share_party_emails() e WHERE e.account_id = {col})"
+
+
+_COLLECTION_IS_MINE = _is_mine("c.account_id")
+
 # `listing_count` is kept as the field name for API/UI stability; it now counts
-# member properties (the curation grain).
+# member properties (the curation grain). Scalar subselects only, so the one projection serves
+# SELECT, INSERT … RETURNING and UPDATE … RETURNING alike. Monitoring describes the CALLER (alerts
+# go to the owner), so a shared row reads it off; labels come from share_party_emails(), which
+# answers only the caller's counterparties (a recipient's own grant reads `email: null` = you).
 _COLLECTION_PROJECTION = (
     "c.id, c.name, c.description, c.created_at, c.updated_at, "
     "(SELECT count(*) FROM collection_properties cp "
     " WHERE cp.collection_id = c.id) AS listing_count, "
-    "c.monitoring_enabled, c.notify_channels, c.is_system"
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.monitoring_enabled ELSE false END "
+    "  AS monitoring_enabled, "
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.notify_channels ELSE '{{}}'::text[] END "
+    "  AS notify_channels, "
+    "c.is_system, "
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN NULL ELSE {_party_label('c.account_id')} END "
+    "  AS owner_email, "
+    "(SELECT coalesce(json_agg(json_build_object("
+    "    'account_id', s.recipient_account_id, "
+    f"    'email', {_party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
+    "  '[]'::json) "
+    " FROM collection_shares s WHERE s.collection_id = c.id) AS shared_with"
 )
 
 _CREATE_COLLECTION_SQL = (
@@ -258,15 +290,112 @@ def remove_property_from_collection(
     return {"removed": removed}
 
 
+# --- shares (migration 609) -------------------------------------------------
+
+# The ownership gate (shape 1): a recipient sees the row but its UPDATE matches nothing.
+_SHARE_GATE_SQL = "UPDATE collections SET updated_at = now() WHERE id = %s RETURNING name"
+
+# account_id is the OWNER, stamped by trigger from the collection; RETURNING it names the sender.
+_INSERT_SHARE_SQL = (
+    "INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s) "
+    "ON CONFLICT DO NOTHING RETURNING account_id"
+)
+
+# The fourth notification producer: in-app only, stamped to the RECIPIENT (the trigger keeps it).
+# ONE notification per (collection, recipient) ever: a revoke + re-share loop must not let a
+# sender refill someone's inbox with text it chose (the collection name), so the key has no time.
+_INSERT_SHARE_DISPATCH_SQL = (
+    "INSERT INTO notification_dispatches "
+    "  (source_kind, collection_id, change_kind, message, account_id, dedupe_key) "
+    "VALUES ('collection_share', %s::bigint, 'shared', "
+    "  account_email(%s::uuid) || ' shared the collection \"' || %s::text || '\" with you', "
+    "  %s::uuid, "
+    "  'share:' || %s::text || ':' || %s::text) "
+    "ON CONFLICT DO NOTHING"
+)
+
+_DELETE_SHARE_SQL = (
+    "DELETE FROM collection_shares WHERE collection_id = %s AND recipient_account_id = %s"
+)
+
+
+def create_share(
+    conn: "psycopg.Connection",
+    open_identity_conn: Callable[[], ContextManager["psycopg.Connection"]],
+    collection_id: int,
+    body: s.ShareCollectionIn,
+) -> dict[str, Any]:
+    """Share one collection read-only with the account behind a confirmed email (owner only).
+
+    The service-role connection opens only after the tenant gate passed (tenancy.md)."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_SHARE_GATE_SQL, (collection_id,))
+        gate = cur.fetchone()
+    if gate is None:
+        raise HTTPException(404, "collection not found")
+    with open_identity_conn() as identity_conn:
+        recipient = tenant_pool.account_for_email(identity_conn, body.email)
+        if recipient is None:
+            raise HTTPException(422, "No account uses this email.")
+        with identity_conn.transaction(), identity_conn.cursor() as cur:
+            # Only the share's own CHECK (not-self) is a 422; a CHECK on the dispatch is drift
+            # and must page as a 500.
+            try:
+                cur.execute(_INSERT_SHARE_SQL, (collection_id, recipient))
+            except psycopg.errors.CheckViolation:
+                raise HTTPException(422, "That's your own account.")
+            inserted = cur.fetchone()
+            if inserted is not None:
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
+                    collection_id, inserted[0], gate[0], recipient, collection_id, recipient,
+                ))
+    coll = _fetch_collection(conn, collection_id)
+    if coll is None:
+        raise HTTPException(404, "collection not found")
+    return coll
+
+
+def delete_share(
+    conn: "psycopg.Connection", collection_id: int, account_id: str,
+) -> dict[str, Any]:
+    """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_DELETE_SHARE_SQL, (collection_id, account_id))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "share not found")
+    return {"deleted": True}
+
+
 # --- notes -----------------------------------------------------------------
 
 
-_NOTE_PROJECTION = "id, property_id, body, created_at, updated_at"
+# owner_email: null iff the caller wrote it; a foreign note is readable only when marked shared.
+_NOTE_PROJECTION = (
+    "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, "
+    f"CASE WHEN {_is_mine('n.account_id')} THEN NULL ELSE {_party_label('n.account_id')} END "
+    "  AS owner_email"
+)
 
+# Marking shared is not an edit: updated_at moves only with the body.
 _UPDATE_NOTE_SQL = (
-    "UPDATE property_notes SET body = coalesce(%s::text, body), "
-    "  updated_at = CASE WHEN %s::text IS NOT NULL THEN now() ELSE updated_at END "
-    "WHERE id = %s AND property_id = %s "
+    "UPDATE property_notes n SET body = coalesce(%s::text, n.body), "
+    "  shared = coalesce(%s::boolean, n.shared), "
+    "  updated_at = CASE WHEN %s::text IS NOT NULL THEN now() ELSE n.updated_at END "
+    "WHERE n.id = %s AND n.property_id = %s "
+    f"RETURNING {_NOTE_PROJECTION}"
+)
+
+_LIST_NOTES_SQL = (
+    f"SELECT {_NOTE_PROJECTION} FROM property_notes n "
+    "WHERE n.property_id = %s ORDER BY n.created_at DESC, n.id DESC"
+)
+
+_CREATE_NOTE_SQL = (
+    "INSERT INTO property_notes AS n "
+    "  (property_id, body, shared, origin_listing_id, origin_listing_ref_id, account_id) "
+    "VALUES (%s, %s, %s, "
+    "  (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s), "
+    "  %s, %s) "
     f"RETURNING {_NOTE_PROJECTION}"
 )
 
@@ -276,13 +405,9 @@ def list_notes(
 ) -> dict[str, Any]:
     """The property's notes, newest first, each with its attachments (oldest first); a
     merged-away id reads its survivor's, as writes do."""
-    sql = (
-        f"SELECT {_NOTE_PROJECTION} FROM property_notes "
-        "WHERE property_id = %s ORDER BY created_at DESC, id DESC"
-    )
     pid = resolve_active_property_id(conn, property_id) or property_id
     with conn.cursor() as cur:
-        cur.execute(sql, (pid,))
+        cur.execute(_LIST_NOTES_SQL, (pid,))
         rows = cur.fetchall()
     notes = [_to_note(r) for r in rows]
     files = note_attachments.attachments_by_note(conn, [n["id"] for n in notes])
@@ -310,21 +435,13 @@ def create_note(
     # RLS deny-all, so `(SELECT sreality_id FROM listings ...)` folds to NULL and
     # silently drops the note's provenance. The identity view is owner-bypass +
     # PII-free (id/sreality_id/source/source_id_native only) — Amendment A5.
-    sql = (
-        "INSERT INTO property_notes "
-        "  (property_id, body, origin_listing_id, origin_listing_ref_id, account_id) "
-        "VALUES (%s, %s, "
-        "  (SELECT sreality_id FROM listing_natural_key_public WHERE id = %s), "
-        "  %s, %s) "
-        f"RETURNING {_NOTE_PROJECTION}"
-    )
     try:
         with conn.transaction(), conn.cursor() as cur:
             pid = resolve_active_property_id(conn, property_id)
             if pid is None:
                 raise HTTPException(404, "property not found")
-            cur.execute(sql, (
-                pid, body.body,
+            cur.execute(_CREATE_NOTE_SQL, (
+                pid, body.body, body.shared,
                 body.origin_listing_ref_id, body.origin_listing_ref_id,
                 account_id,
             ))
@@ -341,14 +458,16 @@ def update_note(
     note_id: int,
     body: s.UpdateNoteIn,
 ) -> dict[str, Any]:
-    """Edit a note in place; the UPDATE is the ownership gate, scoped by (id, property_id)."""
-    if body.body is None:
+    """Edit or (un)mark a note in place; the UPDATE is the ownership gate, scoped by (id, property_id)."""
+    if body.body is None and body.shared is None:
         raise HTTPException(422, "nothing to update")
     # The note itself was re-pointed onto the survivor at merge, so a stale
     # property_id makes that pair unsatisfiable and a live note reads as 404.
     property_id = resolve_active_property_id(conn, property_id) or property_id
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_UPDATE_NOTE_SQL, (body.body, body.body, note_id, property_id))
+        cur.execute(
+            _UPDATE_NOTE_SQL, (body.body, body.shared, body.body, note_id, property_id),
+        )
         row = cur.fetchone()
     if row is None:
         raise HTTPException(404, "note not found")
@@ -579,6 +698,8 @@ def _to_collection(row: tuple[Any, ...]) -> dict[str, Any]:
         "monitoring_enabled": bool(row[6]),
         "notify_channels":    list(row[7]) if row[7] is not None else [],
         "is_system":          bool(row[8]),
+        "owner_email":        row[9],
+        "shared_with":        list(row[10]),
     }
 
 
@@ -587,8 +708,10 @@ def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
         "id":          int(row[0]),
         "property_id": int(row[1]),
         "body":        row[2],
-        "created_at":  _iso(row[3]),
-        "updated_at":  _iso(row[4]),
+        "shared":      bool(row[3]),
+        "created_at":  _iso(row[4]),
+        "updated_at":  _iso(row[5]),
+        "owner_email": row[6],
     }
 
 

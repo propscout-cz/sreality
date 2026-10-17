@@ -581,3 +581,12 @@ def test_every_routing_statement_is_in_the_prepare_corpus_and_none_deletes():
     assert set(carriers._MOVE_SQL) == set(carriers._INSERT_SQL) == {
         "property_notes", "property_pipeline", "collection_properties", "property_tags",
         "property_dismissals"}
+
+
+def test_a_split_note_copy_keeps_the_shared_mark_and_its_consent_time():
+    # Migration 609: a copy that dropped `shared` would land private (the default) and silently
+    # hide the note from a share; one that dropped `shared_at` would be re-stamped now and widen
+    # the audience of a recipient-authored note to shares created since the author marked it.
+    columns, select = carriers._INSERT_SQL["property_notes"].split("SELECT", 1)
+    for col in ("shared", "shared_at"):
+        assert re.search(rf"\b{col}\b", columns) and re.search(rf"\b{col}\b", select), col

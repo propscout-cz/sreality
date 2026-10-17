@@ -178,6 +178,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_tenant_isolation_live.py -q
 
+      # Collection sharing (migration 609) widens READS only, through four FOR SELECT policies,
+      # a party policy and a SECURITY DEFINER label function. Only a real schema under the
+      # `authenticated` role can show that a recipient reads but never writes, that a bystander
+      # sees nothing, and that a note crosses a share only when its author marked it.
+      - name: Collection sharing is read-only and party-scoped (migration 609)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_collection_shares_live.py -q
+
       # This rail replaced migration 429's on 2026-09-12 (W2-a). That one EXPLAINed the
       # drain's bulk member read of listing_location_current — the platform's single
       # largest disk consumer at 39,488 calls x 69,327 blocks — and the drain does not make

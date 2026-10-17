@@ -1451,6 +1451,27 @@ def delete_collection_property(
     )
 
 
+# The second "tenant gate, then a service-role write" (tenancy.md): browser roles hold no INSERT on
+# collection_shares or notification_dispatches, so the share lands on the service role, opened in
+# the handler only after the gate passed (never a dependency: a refused caller costs no connection).
+@app.post("/collections/{collection_id}/shares")
+def post_collection_share(
+    collection_id: int,
+    body: s.ShareCollectionIn,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return curation.create_share(conn, deps.open_background_conn, collection_id, body)
+
+
+@app.delete("/collections/{collection_id}/shares/{account_id}")
+def delete_collection_share(
+    collection_id: int,
+    account_id: uuid.UUID,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return curation.delete_share(conn, collection_id, str(account_id))
+
+
 # --- price-stats datasets (ceny-nemovitosti) -------------------------------
 
 @app.post("/price-stats/datasets")

@@ -1955,9 +1955,10 @@ renumber.** Navigate by area:
     `or(col.is.null,col.not.in.(…))` in PostgREST), because an exclude subtracts what it MATCHES
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
     `notification_dispatches` is the **unified notification event table** (migration 206 —
-    physical name kept; conceptually "notifications"): one source-generic, **property-grain**,
-    append-only event row per `(source_kind ∈ {watchdog, collection_monitor, system_health},
-    subject, change_kind)`,
+    physical name kept; conceptually "notifications"): one source-generic, append-only event row per
+    `(source_kind ∈ {watchdog, collection_monitor, collection_share, system_health}, subject,
+    change_kind)` — **property-grain** for the first two, a text row for the last two (the
+    `SourceKind` alias in `api/notifications.py` is the list),
     deduped by a single per-event **`dedupe_key`** (`wd:{sub}:new:{property_id}` once-ever;
     `wd:{sub}:price_drop:{snapshot_id}` **per-snapshot**, so a property that keeps dropping fires
     once per real cut — and so does the collection-monitor producer). **A price step is one
@@ -2022,8 +2023,20 @@ renumber.** Navigate by area:
     when every member workflow posts a newer `workflow_run_health.last_success_at`, on
     `ops_incident_max_age_hours`, or manually (`toolkit.ops_incidents.resolve_incident`).
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
+    **A FOURTH producer is live (migration 609): `collection_share`.** `POST
+    /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
+    `share:<collection>:<recipient>`, no time: a revoke + re-share loop cannot refill an inbox) —
+    `collection_id` set, `subscription_id` NULL (`notification_dispatches_source_ck` gained the
+    arm), `change_kind = 'shared'`, `message` "<owner email> shared the collection "<name>" with
+    you" (the one stored copy of an email in the sharing model, a snapshot at share time), in-app
+    only (`target_channels` empty, never routed to email/Telegram). It is stamped to
+    the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
+    `sync_notification_dispatches_account_id()` trigger KEEPS the supplied account for this kind
+    and raises when none is supplied. Like `system_health` it is NOT property-grain
+    (`property_id` NULL), so no carrier touches it. ONE `SourceKind` alias in
+    `api/notifications.py` names the four kinds for every list/unread/mark route.
     The unified in-app **Notifications**
-    page (`/notifications`) reads all THREE producers off one LEFT-join feed (the watchdog-only
+    page (`/notifications`) reads every producer off one LEFT-join feed (the watchdog-only
     INNER join became a LEFT join + a `collections` join so monitor and system_health rows
     aren't dropped), and a red nav unread badge polls `GET /notifications/unread-count`;
     `POST /notifications/mark-all-seen` clears it.)
@@ -2216,8 +2229,9 @@ renumber.** Navigate by area:
     none and are scoped by RLS. The doctrine and its standing gates are stated once — rule #22's
     tenancy note below.**
     Same no-hard-delete spirit as the rest of the data model.
-    **Every curation route runs on the tenant pool (`tenant_conn` + `verify_jwt`), with no
-    exceptions** (hydration sprint W-1c). Until then the collection CRUD (`POST /collections`,
+    **Every curation route runs on the tenant pool (`tenant_conn` + `verify_jwt`)** (hydration
+    sprint W-1c); one gated addition: `POST /collections/{id}/shares` also opens a service-role
+    connection, in the handler and only after its tenant UPDATE gate passed (tenancy.md). Until then the collection CRUD (`POST /collections`,
     `GET`/`PATCH`/`DELETE /collections/{id}`) and every `/tags` route were still on the
     `get_db_conn` + `require_token` pair the rest of the module had already left: that pair is
     service-role (RLS off) behind the static `API_TOKEN` that shipped inside the public SPA bundle,
@@ -2233,6 +2247,27 @@ renumber.** Navigate by area:
     (`frontend/src/lib/api.ts` `authHeader`, one credential since 2026-10-13) — `verify_jwt` has not
     accepted the static token since 2026-08-04. `tests/api/test_auth.py::_jwt_gated_calls` is the test-side
     twin of this rule — a route moving back to `_gated_calls` is the regression to catch.
+    **Sharing (migration 609, `docs/design/collection-sharing.md`) widens READS, never writes.**
+    `collection_shares` holds one row per (collection, recipient account); `account_id` is the
+    owner, trigger-stamped from the collection; browser roles get SELECT + DELETE and no INSERT
+    (account uuids are learnable), so a share is created only by `POST /collections/{id}/shares`
+    (the tenant `UPDATE` is the ownership gate, then the service role resolves a CONFIRMED email
+    to the recipient's first account and writes the share + its notification), and either party
+    deletes it (`DELETE /collections/{id}/shares/{account_id}`: the owner revokes, the recipient
+    leaves). `property_notes.shared` is the author's consent mark, default private. **The
+    visibility rule, stated once:** a recipient reads a shared collection and its member rows; a
+    party X reads a note by author A on property P iff the note is marked `shared` and some share
+    between X and A names a collection that currently holds P — one A OWNS, or one A RECEIVED that
+    already existed when A marked the note (`property_notes.shared_at`, trigger-stamped; shares need
+    no acceptance, so a later share never inherits a recipient's mark) — co-recipients never see
+    each other; files follow their note. Four `FOR SELECT` `*_shared_read` policies
+    carry it and every read path inherits it; the owner's `FOR ALL` policies decide every write
+    unchanged, so a recipient's write by id matches no row (404). The API tells mine from shared
+    by ONE field, `owner_email` (null iff the row is the caller's), labelled through
+    `share_party_emails()` (the caller's counterparties only) over `account_email()`, the one
+    label definition; a shared collection reads `monitoring_enabled = false` (alerts stay the
+    owner's). A share is keyed on the collection, which a merge never changes, so it needs no
+    carrier; the `shared` mark and its `shared_at` ride the note through a merge and a split's copy.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
     groupings, a dismissal is one boolean per property, and a pseudo-collection would need a

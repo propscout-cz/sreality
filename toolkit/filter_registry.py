@@ -1672,11 +1672,12 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column=None,  # prefilter via collection_properties_public (mig 202)
             default=None,
             description=(
-                "Operator-curated collection ids. OR-semantics — a property "
+                "Collection ids the caller can read — own or shared with them "
+                "(migration 609). OR-semantics — a property "
                 "matches if it is in ANY collection in the list. Deliberately "
                 "the opposite of `tags` (AND): collections read as folders, so "
                 "two of them mean 'either folder'. Collection ids are "
-                "account-scoped and stable across renames. BROWSE-only, for "
+                "stable across renames. BROWSE-only, for "
                 "the same reasons as `pipeline`: watching a collection would "
                 "fire on the operator's own clicks, and their groupings must "
                 "never feed back into a valuation."

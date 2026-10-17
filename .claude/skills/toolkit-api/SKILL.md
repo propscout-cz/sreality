@@ -115,7 +115,7 @@ it (`api/`). They do not apply to the scraper.
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*`, dataset-write/dispatch routes on price-stats, and the manual-estimate writes (shared
    reference data, mig 290; stamp the admin into `updated_by`, + `account_id` on insert) use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*`, `/collections`, `/tags`, `/filter-presets` (per account, mig 595), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
+   `/pipeline/*`, `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 609: the tenant UPDATE gates, then the service role writes the share + its notification), `/tags`, `/filter-presets` (per account, mig 595), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,

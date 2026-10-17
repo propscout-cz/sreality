@@ -178,6 +178,14 @@ def client(monkeypatch):
         lambda conn, cid, pid: {"removed": True},
     )
     monkeypatch.setattr(
+        api_curation, "create_share",
+        lambda conn, identity_conn, cid, body: {"id": cid},
+    )
+    monkeypatch.setattr(
+        api_curation, "delete_share",
+        lambda conn, cid, account_id: {"deleted": True},
+    )
+    monkeypatch.setattr(
         api_curation, "list_notes",
         lambda conn, pid: {"data": []},
     )
@@ -326,6 +334,8 @@ def _jwt_gated_calls() -> list:
         ("GET",    "/collections/1", None),
         ("PATCH",  "/collections/1", _PATCH_COLLECTION_BODY),
         ("DELETE", "/collections/1", None),
+        ("POST",   "/collections/1/shares", {"email": "b@example.com"}),
+        ("DELETE", "/collections/1/shares/33333333-3333-3333-3333-333333333333", None),
         ("GET",    "/tags", None),
         ("POST",   "/tags", _CREATE_TAG_BODY),
         ("PATCH",  "/tags/1", _PATCH_TAG_BODY),

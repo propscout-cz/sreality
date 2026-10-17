@@ -58,8 +58,9 @@ column default would miss): `collection_properties` (parent `collections`),
 `property_note_attachments`, parent `property_notes`, migration 592). Because
 Postgres evaluates `WITH CHECK` **after** `BEFORE` triggers run, a tenant inserting a
 child row that points at another tenant's parent gets `account_id = NULL` back from the
-RLS-filtered parent lookup (the trigger runs as the invoking role) and the insert **fails
-closed** — a `with check (true)` here would instead silently write invisible orphan rows.
+RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OWNER's account when
+the parent is merely shared with it (migration 609) — and `WITH CHECK` refuses either, so the
+insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
 their parent lookups see every row.
 
@@ -76,6 +77,19 @@ their parent lookups see every row.
   winner runs the backfill, everyone else gets fresh seed data. The migration comment
   flags this as unsafe once signup is public (non-operator) — the "first signup wins"
   assumption only holds while signup is effectively single-operator.
+
+**Migration 609 — `collection_shares`**, one row per (collection, recipient account):
+`account_id` is the OWNER, stamped by a `BEFORE INSERT` trigger from the collection (292's
+function, renamed `sync_account_id_from_collection`). ONE `FOR ALL` party policy (`USING` owner
+or recipient, `WITH CHECK` owner); `grant select, delete` and **no INSERT** — account uuids are
+learnable, so a share is created only by the API (`POST /collections/{id}/shares`, service role,
+after resolving a confirmed email); either party deletes (revoke / leave). Reads widen through
+four `FOR SELECT` policies (`*_shared_read` on `collections`, `collection_properties`,
+`property_notes` — only rows the author marked `shared`, and through a share the author
+RECEIVED only if it predates `shared_at` (trigger-stamped consent time) — and
+`property_note_attachments`);
+the owner's `FOR ALL` policies decide every write, unchanged. Visibility rule:
+`docs/design/collection-sharing.md` §3.2.
 
 **Migration 536 — `property_dismissals`**, `account_id` on the row directly (the route
 names it, shape 2 below). Append-only: `grant select, insert` plus a COLUMN-scoped
@@ -229,6 +243,24 @@ admin-only service-role work.** The route does not take `tenant_conn`; it opens
 The route-scope census excludes it structurally (it reaches `verify_jwt`, not `tenant_conn`).
 `test_estimation_child_routes_ride_the_tenant_connection` holds its shape instead, and
 `tests/api/test_estimation_child_routes_tenancy.py` holds its behaviour.
+
+**Second instance — `POST /collections/{collection_id}/shares`: the tenant gate, then a
+service-role write.** Browser roles hold no INSERT on `collection_shares` (uuids are learnable)
+or on `notification_dispatches`, so the share row and the recipient's notification are written
+on the service-role connection. The order is fixed: the tenant `UPDATE collections SET
+updated_at = now()` is the ownership gate (shape 1, rowcount 0 → 404) BEFORE the service-role
+connection even opens (`deps.open_background_conn` in the handler, never a dependency; pinned by
+`test_the_share_route_opens_the_service_role_only_after_its_gate`); the email resolves on the
+service role (`tenant_pool.account_for_email`); the share and its dispatch are one service-role
+transaction; the response is re-read on the tenant connection. Unlike the feedback route it keeps
+the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
+(`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
+
+**The only `auth.users` touchpoints:** `account_email(uuid)` (migration 609; EXECUTE revoked
+from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
+counterparties only) and by the admin entitlements route; and the share route's email lookup,
+`tenant_pool.account_for_email` (service role, confirmed emails only). A share is never membership:
+`current_account_ids()` is untouched, and a recipient's identity never widens.
 
 ### The two test rules that would have caught #917
 
