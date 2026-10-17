@@ -7,13 +7,29 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
-### Phase U-SHARE: Collection sharing, view-only (approved 2026-10-17, building)
-- **Approved, in progress:** share a collection with another account by email, read-only; the recipient filters
-  Browse by it and reads its properties on every collection surface; their notes on those properties
-  reach the owner, labelled with their email. Spec + open rulings: `docs/design/collection-sharing.md`
-  (north star: a share is one row that widens READS only; `owner_email` is the one "mine vs shared"
-  marker; a note crosses a share only when its author marks it shared; no new filter, view, flag
-  or role). Six waves W1–W6; the cleanups W1–W3 pay for the additions. Rulings in §8 of the spec.
+### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
+- **Done:** share a collection with another account by email, read-only (spec + rulings:
+  `docs/design/collection-sharing.md`; a share is one row that widens READS only, `owner_email` is
+  the one "mine vs shared" marker, a note crosses a share only when its author marks it shared).
+  Six waves: W1 #1833 (the write is the gate: one UPDATE/DELETE decides ownership, probes gone),
+  W2 #1834 (dead `collections_public`/`tags_public` dropped, `account_id` NOT NULL on collections +
+  tags, migrations 607/608), W3 #1835 (three SPA hooks replace 14 copies, the property page's second
+  collection editor and the legacy note origin deleted), W4 #1837 (`collection_shares`, migration
+  609: party read policies, share/revoke/leave routes, the one share notification, Collection and
+  Note gain `owner_email` / `shared_with` / `shared`), W5 #1838 (SPA: Browse picker "Shared with
+  me", the Sharing block, viewer pages, foreign notes read-only, the "Share with …" checkbox, the
+  Shared tab, phone read-only in Czech), W6 #TBD (Chrome extension: "saved" and the save checklist
+  are mine only, foreign notes read-only "od {email}", the "Sdílet s …" checkbox + "Sdíleno" /
+  "Nesdílet" toggle on the SPA's audience rule).
+- **Next (unscheduled):**
+  - `property_notes.account_id` NOT NULL waits on the operator's ruling about the split preview's
+    bare-note case (the one pre-tenancy NULL row is attributed by #1829).
+  - `WatchdogDispatch.sreality_id` is typed `number` but is null on rows that carry no listing,
+    a `collection_share` row among them — widen the type with its readers.
+  - The pytest order-pollution issue met while building W4 (a test passes alone, fails after
+    another) — find the leaking fixture.
+  - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
+  - The operator ruling owed on the recipient-author bait-share edge (spec § 7).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
 - **Done:** one operator-typed http(s) URL per property (`property_artifact_links`, migration 599),

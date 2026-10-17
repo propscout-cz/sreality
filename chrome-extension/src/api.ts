@@ -13,6 +13,7 @@ import type {
   ExtCollection,
   ExtNote,
   ExtTag,
+  NotePatch,
   PipelineCardResult,
   PipelineStage,
   PortalListing,
@@ -341,29 +342,33 @@ export async function listNotes(property_id: number): Promise<ApiResult<ExtNote[
 }
 
 /* POST /properties/:id/notes — add an operator note to the property. The SAME
- * bearer-gated route the SPA's CurationBlock uses; `origin_listing_ref_id` records
- * the advert being viewed (display provenance only). Returns the created note. */
+ * bearer-gated route the SPA's CurationBlock uses; `shared` is the author's
+ * consent for it to cross a share (migration 609); `origin_listing_ref_id`
+ * records the advert being viewed (display provenance only). Returns the
+ * created note. */
 export async function addNote(
   property_id: number,
   body: string,
+  shared: boolean,
   origin_listing_ref_id: number | null,
 ): Promise<ApiResult<ExtNote>> {
   return request<ExtNote>(`/properties/${property_id}/notes`, {
     method: 'POST',
-    body: JSON.stringify({ body, origin_listing_ref_id }),
+    body: JSON.stringify({ body, shared, origin_listing_ref_id }),
   });
 }
 
-/* PATCH /properties/:id/notes/:note_id — edit a note's body in place. Same
- * bearer-gated route the SPA's NoteRow uses. Returns the updated note. */
+/* PATCH /properties/:id/notes/:note_id — edit a note's body or its shared mark
+ * in place (author only). Same bearer-gated route the SPA's NoteRow uses.
+ * Returns the updated note. */
 export async function updateNote(
   property_id: number,
   note_id: number,
-  body: string,
+  patch: NotePatch,
 ): Promise<ApiResult<ExtNote>> {
   return request<ExtNote>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ body }),
+    body: JSON.stringify(patch),
   });
 }
 

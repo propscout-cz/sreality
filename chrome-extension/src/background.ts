@@ -131,9 +131,9 @@ async function handleMessage(
     case 'list_notes':
       return listNotes(message.property_id);
     case 'add_note':
-      return addNote(message.property_id, message.body, message.origin_listing_ref_id);
+      return addNote(message.property_id, message.body, message.shared, message.origin_listing_ref_id);
     case 'update_note':
-      return updateNote(message.property_id, message.note_id, message.body);
+      return updateNote(message.property_id, message.note_id, message.patch);
     case 'delete_note':
       return deleteNote(message.property_id, message.note_id);
     case 'sign_in': {

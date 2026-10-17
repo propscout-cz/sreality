@@ -1,7 +1,7 @@
 # Collection sharing, view-only — spec (v2, rulings in)
 
 Status: **approved 2026-10-17** — the operator ruled on every question (§8); W1–W6 run on this text.
-W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); W5 in PR #1838 (`feature/collection-sharing-surfaces`, stacked on W4); migration 609 (#1829/#1830 renumber past it).
+W1–W3 merged; W4 in PR #1837 (`feature/collection-shares`); W5 in PR #1838 (`feature/collection-sharing-surfaces`, stacked on W4); W6 in PR #TBD (`feature/collection-sharing-extension`, stacked on W5); migration 609 (#1829/#1830 renumber past it).
 Written from a seven-reader code map, three independent designs and a three-lens judge panel (Opus),
 then verified by hand against the code and the live database, then revised to the rulings.
 
@@ -362,11 +362,13 @@ status, so no wrong mark flashes and a failed read of either shows the mark's re
   "Sbírku ze svého seznamu odeberete na počítači."; composer checkbox "Sdílet s
   {email}", mark "Sdíleno".
 - **Extension** (vanilla TS, no new message type or endpoint): `ExtCollection` drops `is_system`
-  (never read) and gains `owner_email`; `ExtNote` drops `origin_listing_id` (never read) and gains
+  (never read) and gains `owner_email` + `shared_with`; `ExtNote` drops `origin_listing_id` (never read) and gains
   `shared` + `owner_email`; the checklist lists `mine` only and `saved = |collection_ids ∩ mine|`
   replaces the double derivation; a foreign note shows "od {email}" with no edit/delete; the
-  composer gets the same checkbox when the audience (`collection_ids ∩ shared → owner emails`) is
-  non-empty.
+  composer gets the same checkbox when the audience is non-empty — the SPA's `shareAudience`,
+  mirrored line for line (`glyphs.ts`): the recipients of my collections plus the owner of each
+  one shared with me. The panel re-reads the collection list on every open (a share made in the
+  app since the tab loaded must not leave the audience or the saved mark stale).
 
 ### 3.7 Notes: semantics and attribution
 
@@ -431,8 +433,9 @@ the in-app row is the house pattern · pending invites, an acceptance step: off 
 
 **Net, plainly.** ≤ 0 on read paths (0 new), client special cases (one "is it mine" rule in one
 place instead of 16), rules (one consent predicate instead of a time rule + two anchors) and the
-Note / ExtNote / ExtCollection field counts. **Not ≤ 0:** Collection fields +2 (`is_system` would
-have paid for them; its removal is visible and deferred); database objects +1 table, +1 column, +5
+Note field count. **Not ≤ 0:** Collection fields +2 (`is_system` would
+have paid for them; its removal is visible and deferred); ExtNote +1 (−`origin_listing_id`,
++`shared`, +`owner_email`) and ExtCollection +1 (−`is_system`, +`owner_email`, +`shared_with`); database objects +1 table, +1 column, +5
 policies, +2 functions, +1 trigger branch against −2 views and −2 nullable variants (a third, `property_notes`, pending a ruling); test lines
 (the three-tenant proof). These are irreducible — the share is a genuinely new fact, the Sharing
 control is what was asked for, and proving isolation is the price of putting sharing in the

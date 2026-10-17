@@ -17,9 +17,13 @@ import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,
   bookmarkIconSvg,
+  collectionsKey,
   eyeOffIconSvg,
   funnelIconSvg,
-  sortCollections,
+  isMine,
+  savedCollections,
+  saveTargets,
+  shareAudience,
   stageAccent,
   stageBadge,
 } from './glyphs';
@@ -318,15 +322,6 @@ const COLLECTION_MENU_ID = 'collection-menu';
 const TAG_MENU_ID = 'tag-menu';
 const TAGS_LABEL = 'Štítky';
 
-/* The collection list as the panel draws it — compared this way rather than as
- * whole API rows, which also carry an `updated_at` that every add/remove bumps
- * (no reason to redraw anything). */
-function collectionsKey(collections: ExtCollection[]): string {
-  return JSON.stringify(
-    sortCollections(collections).map((c) => [c.id, c.name, c.monitoring_enabled]),
-  );
-}
-
 // ----------------------------------------------------------------------
 // Estimation-editor defaults (mirror the SPA's YieldBlock, but now seeded
 // with the subject listing's own price/area from our lookup).
@@ -596,7 +591,7 @@ function mountPanel(): {
   shadow.appendChild(panel);
 
   let lastFocusedKey:
-    | 'rent' | 'cost' | 'price' | 'renovation' | 'note' | 'note-edit'
+    | 'rent' | 'cost' | 'price' | 'renovation' | 'note' | 'note-edit' | 'note-share'
     | 'coll-toggle' | `coll-${number}` | 'tag-toggle' | `tag-${number}` | null = null;
 
   /* The ledger header band: a small copper index-mark + product wordmark, and
@@ -1036,8 +1031,10 @@ function mountPanel(): {
 
   /* The save-to-collection control for the listing's property (rule #18) — the
    * SPA listing header's CollectionSaveToggle: "Uložit do kolekce" while the
-   * property is in no collection, "V kolekci" / "V kolekcích · N" once it is,
-   * and a click opens the checklist of EVERY collection below the row. It
+   * property is in none of MY collections, "V kolekci" / "V kolekcích · N" once
+   * it is (one shared with me is not "saved"; until the list tells them apart,
+   * "Kolekce…"),
+   * and a click opens the checklist of EVERY collection of mine below the row. It
    * replaced a one-click "Sledovat" bell that could only reach one hard-picked
    * collection; the monitored collections now lead that checklist, bell-marked,
    * exactly as in the app. A separate affordance from the pipeline funnel
@@ -1046,8 +1043,8 @@ function mountPanel(): {
   function renderCollectionToggle(container: HTMLElement, state: PanelState): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
-    const memberIds = l.collection_ids ?? [];
-    const count = memberIds.length;
+    const saved = savedCollections(l.collection_ids, state.collections);
+    const count = saved?.length ?? 0;
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -1056,21 +1053,20 @@ function mountPanel(): {
     btn.setAttribute('aria-expanded', String(state.collectionsOpen));
     if (state.collectionsOpen) btn.setAttribute('aria-controls', COLLECTION_MENU_ID);
     /* No aria-label: the visible text IS the name (the SPA's label-in-name rule).
-     * The verb and — once the list is loaded — WHICH collections live in the
-     * title, so a hover answers "in what?" without opening the checklist. */
-    const names = (state.collections ?? [])
-      .filter((c) => memberIds.includes(c.id))
-      .map((c) => c.name);
+     * The verb and WHICH collections live in the title, so a hover answers
+     * "in what?" without opening the checklist. */
     btn.title = count === 0
       ? COLLECTION_SAVE_LABEL
-      : names.length > 0
-        ? `${COLLECTION_SAVE_LABEL} — ${names.join(', ')}`
-        : `${COLLECTION_SAVE_LABEL} — v ${count} ${count === 1 ? 'kolekci' : 'kolekcích'}`;
+      : `${COLLECTION_SAVE_LABEL} — ${(saved ?? []).map((c) => c.name).join(', ')}`;
     btn.innerHTML = bookmarkIconSvg(count > 0);
     const label = document.createElement('span');
-    label.textContent = count === 0
-      ? COLLECTION_SAVE_LABEL
-      : count === 1 ? 'V kolekci' : `V kolekcích · ${count}`;
+    /* Unknown is neither saved nor unsaved; the checklist it opens says why
+     * (loading, or a failed read with a retry). */
+    label.textContent = saved == null
+      ? (state.collectionsFailed ? 'Kolekce' : 'Kolekce…')
+      : count === 0
+        ? COLLECTION_SAVE_LABEL
+        : count === 1 ? 'V kolekci' : `V kolekcích · ${count}`;
     btn.appendChild(label);
     const caret = document.createElement('span');
     caret.className = 'collection-caret';
@@ -1089,7 +1085,8 @@ function mountPanel(): {
   }
 
   /* The checklist the save control opens — the SPA's CollectionSaveMenu: every
-   * collection as a checkable row, monitored ones first and bell-marked, one
+   * collection of MINE as a checkable row (a view-only one shared with me is
+   * never a save target), monitored ones first and bell-marked, one
    * click adds or removes the property. It stays open across clicks (a property
    * can sit in several collections) and closes from its trigger or Escape. It
    * opens IN the panel's flow rather than floating over it: the panel re-renders
@@ -1129,7 +1126,7 @@ function mountPanel(): {
         p.classList.add('note--loading');
       }
       menu.appendChild(p);
-    } else if (state.collections.length === 0) {
+    } else if (saveTargets(state.collections).length === 0) {
       const p = document.createElement('p');
       p.className = 'coll-state';
       p.textContent = 'Zatím nemáte žádnou kolekci.';
@@ -1137,7 +1134,7 @@ function mountPanel(): {
     } else {
       const list = document.createElement('ul');
       list.className = 'coll-list';
-      for (const c of sortCollections(state.collections)) {
+      for (const c of saveTargets(state.collections)) {
         const member = memberIds.has(c.id);
         const li = document.createElement('li');
         const row = document.createElement('button');
@@ -1196,7 +1193,7 @@ function mountPanel(): {
       manage.href = COLLECTIONS_URL;
       manage.target = '_blank';
       manage.rel = 'noopener';
-      manage.textContent = state.collections?.length === 0
+      manage.textContent = state.collections != null && saveTargets(state.collections).length === 0
         ? 'Založit kolekci v aplikaci →'
         : 'Spravovat kolekce →';
       menu.appendChild(manage);
@@ -1364,11 +1361,13 @@ function mountPanel(): {
   }
 
   /* Operator notes for the listing's property (rule #18) — shown for ANY listing
-   * we have a property for: the existing notes (most-recent-first) + an add box.
-   * A saved note carries the viewed advert as origin provenance. */
+   * we have a property for: the notes I can read (mine, plus another author's
+   * SHARED ones, migration 609; most-recent-first) + an add box. A saved note
+   * carries the viewed advert as origin provenance. */
   function renderNotes(body: HTMLElement, state: PanelState): void {
     const l = state.listing;
     if (l == null || !l.found || l.property_id == null) return;
+    const audience = noteAudience(state);
     const sec = document.createElement('div');
     sec.className = 'notes';
 
@@ -1390,9 +1389,11 @@ function mountPanel(): {
       list.className = 'notes-list';
       for (const n of state.notes) {
         list.appendChild(
-          n.id === state.noteEditingId
-            ? buildNoteEditItem(n, state)
-            : buildNoteItem(n, state),
+          !isMine(n)
+            ? buildForeignNoteItem(n)
+            : n.id === state.noteEditingId
+              ? buildNoteEditItem(n, state)
+              : buildNoteItem(n, state, audience),
         );
       }
       sec.appendChild(list);
@@ -1413,6 +1414,30 @@ function mountPanel(): {
     });
     sec.appendChild(ta);
 
+    /* Off by default (consent, ruling 1), offered only when someone would read
+     * it — and named, so the operator sees exactly who. */
+    if (audience != null && audience.length > 0) {
+      const share = document.createElement('label');
+      share.className = 'note-share';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = noteShareDraft;
+      box.disabled = state.noteBusy;
+      box.dataset.key = 'note-share';
+      box.addEventListener('focus', () => { lastFocusedKey = 'note-share'; });
+      box.addEventListener('blur', () => { if (lastFocusedKey === 'note-share') lastFocusedKey = null; });
+      box.addEventListener('change', () => { noteShareDraft = box.checked; });
+      const who = document.createElement('span');
+      who.textContent = `Sdílet s ${audience.join(', ')}`;
+      share.append(box, who);
+      sec.appendChild(share);
+    } else if (audience == null && state.collectionsFailed) {
+      // An unknown audience is not "nobody": say so and read again.
+      const line = errorLine('Sdílení se nepodařilo načíst. ');
+      line.appendChild(retryLink(() => { void loadCollections(true); }));
+      sec.appendChild(line);
+    }
+
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-primary note-save';
@@ -1424,10 +1449,43 @@ function mountPanel(): {
     body.appendChild(sec);
   }
 
-  /* A note in normal display mode: body + date/edited marker, an edit/delete
-   * icon pair, and (when this note is the one pending delete) a confirm row
-   * in place of the date — mirrors the SPA NoteRow's two-step confirm. */
-  function buildNoteItem(n: ExtNote, state: PanelState): HTMLElement {
+  /* Another author's SHARED note (they marked it; a share put it in reach):
+   * read only — no edit or delete, a neutral left rule, and the author first on
+   * its meta line (the SPA's ForeignNoteRow). */
+  function buildForeignNoteItem(n: ExtNote): HTMLElement {
+    const item = document.createElement('div');
+    item.className = 'note-item note-item--foreign';
+    item.setAttribute('role', 'group');
+    item.setAttribute('aria-label', `Poznámka od ${n.owner_email} · ${fmtNoteDate(n.created_at)}`);
+    const bodyEl = document.createElement('p');
+    bodyEl.className = 'note-body';
+    bodyEl.textContent = n.body;
+    item.appendChild(bodyEl);
+    const meta = document.createElement('div');
+    meta.className = 'note-meta';
+    const date = noteDate(n);
+    date.textContent = `od ${n.owner_email} · ${date.textContent}`;
+    meta.appendChild(date);
+    item.appendChild(meta);
+    return item;
+  }
+
+  /* The note's date/edited marker; the exact stamps on hover. */
+  function noteDate(n: ExtNote): HTMLElement {
+    const date = document.createElement('span');
+    date.className = 'note-date';
+    date.textContent = fmtNoteDate(n.created_at) + (n.updated_at != null ? ' (upraveno)' : '');
+    date.title = n.updated_at != null
+      ? `Napsáno ${n.created_at} · upraveno ${n.updated_at}`
+      : n.created_at;
+    return date;
+  }
+
+  /* One of MY notes in normal display mode: body + date/edited marker, its
+   * shared mark and toggle, an edit/delete icon pair, and (when this note is the
+   * one pending delete) a confirm row in place of the meta line — mirrors the
+   * SPA NoteRow's two-step confirm. */
+  function buildNoteItem(n: ExtNote, state: PanelState, audience: string[] | null): HTMLElement {
     const item = document.createElement('div');
     item.className = 'note-item';
 
@@ -1481,13 +1539,29 @@ function mountPanel(): {
       confirm.appendChild(no);
       item.appendChild(confirm);
     } else {
-      const date = document.createElement('span');
-      date.className = 'note-date';
-      date.textContent = fmtNoteDate(n.created_at) + (n.updated_at != null ? ' (upraveno)' : '');
-      date.title = n.updated_at != null
-        ? `Napsáno ${n.created_at} · upraveno ${n.updated_at}`
-        : n.created_at;
-      item.appendChild(date);
+      const meta = document.createElement('div');
+      meta.className = 'note-meta';
+      meta.appendChild(noteDate(n));
+      if (n.shared) {
+        const mark = document.createElement('span');
+        mark.className = 'note-shared';
+        mark.textContent = audience != null && audience.length === 0
+          ? 'Sdíleno · zatím to nikdo nevidí'
+          : 'Sdíleno';
+        meta.appendChild(mark);
+      }
+      /* Making private is always safe; sharing names who it reaches, and waits
+       * until that is known. */
+      if (n.shared || (audience != null && audience.length > 0)) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'note-share-toggle';
+        toggle.textContent = n.shared ? 'Nesdílet' : `Sdílet s ${(audience ?? []).join(', ')}`;
+        toggle.disabled = state.noteRowBusy;
+        toggle.onclick = () => { void onToggleNoteShared(n); };
+        meta.appendChild(toggle);
+      }
+      item.appendChild(meta);
     }
     return item;
   }
@@ -2444,8 +2518,8 @@ async function loadStages(): Promise<void> {
 /* The caller's collection list — loaded once per page, cached at module scope
  * and reused across panel re-opens, exactly like loadStages above (the save
  * control names the property's collections from it, the checklist lists it).
- * `refresh` re-reads it even when cached: opening the checklist does, so a
- * collection made in the app since the tab loaded shows up. Same bounded retry;
+ * `refresh` re-reads it even when cached: opening the panel or the checklist
+ * does, so a collection made or shared in the app since the tab loaded shows up. Same bounded retry;
  * when every attempt fails with nothing to show, the checklist says so and
  * offers a retry instead of loading forever. */
 let cachedCollections: ExtCollection[] | null = null;
@@ -2550,6 +2624,22 @@ let noteDraft = '';
  * edit mode opens/closes so it never bleeds onto a different note or listing. */
 let noteEditDraft = '';
 
+/* The composer's "Sdílet s …" checkbox — noteDraft's twin: off by default,
+ * reset with the draft. */
+let noteShareDraft = false;
+
+/* Who a SHARED note on the panel's property would reach — the SPA's
+ * shareAudience over the same facts (the lookup's collection_ids × the
+ * collection list). Null = not known yet (the list loading or failed), which
+ * must never read as "nobody": no checkbox, no share toggle, no "nobody" claim. */
+function noteAudience(s: PanelState): string[] | null {
+  const l = s.listing;
+  if (l == null) return null;
+  if ((l.collection_ids ?? []).length === 0) return [];
+  if (s.collections == null) return null;
+  return shareAudience(l.collection_ids ?? [], s.collections);
+}
+
 /* Notes are PER-PROPERTY (not global like stages/collections), so they're fetched
  * fresh per panel open and held in panel state — never module-cached. The dedup
  * is the per-panel `state.notes == null` guard, NOT a page-wide in-flight flag: a
@@ -2587,9 +2677,11 @@ async function onAddNote(): Promise<void> {
   const body = noteDraft.trim();
   if (body === '') return;
   const propertyId = l.property_id;
+  // Shared only while the checkbox is on screen, i.e. someone would read it.
+  const shared = noteShareDraft && (noteAudience(state)?.length ?? 0) > 0;
   setState((prev) => ({ ...prev, noteBusy: true, errorMessage: null }));
   const res = await call<ExtNote>({
-    type: 'add_note', property_id: propertyId, body,
+    type: 'add_note', property_id: propertyId, body, shared,
     origin_listing_ref_id: l.listing_id ?? null,
   });
   if (!res.ok) {
@@ -2601,7 +2693,10 @@ async function onAddNote(): Promise<void> {
   }
   // Clear the draft only if the panel still shows this property — identity-guarded
   // like the prepend, so a mid-request re-open can't wipe another listing's draft.
-  if (state.listing?.property_id === propertyId) noteDraft = '';
+  if (state.listing?.property_id === propertyId) {
+    noteDraft = '';
+    noteShareDraft = false;
+  }
   setState((prev) =>
     prev.listing?.property_id === propertyId && prev.notes != null
       ? { ...prev, noteBusy: false, notes: [res.data, ...prev.notes] }
@@ -2631,7 +2726,9 @@ async function onEditNoteSave(noteId: number): Promise<void> {
   if (body === '') return;
   const propertyId = l.property_id;
   setState((prev) => ({ ...prev, noteRowBusy: true, errorMessage: null }));
-  const res = await call<ExtNote>({ type: 'update_note', property_id: propertyId, note_id: noteId, body });
+  const res = await call<ExtNote>({
+    type: 'update_note', property_id: propertyId, note_id: noteId, patch: { body },
+  });
   if (!res.ok) {
     setState((prev) => ({
       ...prev, noteRowBusy: false,
@@ -2644,6 +2741,32 @@ async function onEditNoteSave(noteId: number): Promise<void> {
       ? {
           ...prev, noteRowBusy: false, noteEditingId: null,
           notes: (prev.notes ?? []).map((n) => (n.id === noteId ? res.data : n)),
+        }
+      : { ...prev, noteRowBusy: false });
+}
+
+/* Mark one of my notes shared, or private again (PATCH {shared}; not an edit,
+ * so `updated_at` stays). Identity-guarded like the other note writes. */
+async function onToggleNoteShared(note: ExtNote): Promise<void> {
+  const l = state.listing;
+  if (l == null || l.property_id == null || state.noteRowBusy) return;
+  const propertyId = l.property_id;
+  setState((prev) => ({ ...prev, noteRowBusy: true, errorMessage: null }));
+  const res = await call<ExtNote>({
+    type: 'update_note', property_id: propertyId, note_id: note.id, patch: { shared: !note.shared },
+  });
+  if (!res.ok) {
+    setState((prev) => ({
+      ...prev, noteRowBusy: false,
+      errorMessage: `Sdílení poznámky se nepodařilo změnit: ${friendlyDetail(res.detail)}`,
+    }));
+    return;
+  }
+  setState((prev) =>
+    prev.listing?.property_id === propertyId
+      ? {
+          ...prev, noteRowBusy: false,
+          notes: (prev.notes ?? []).map((n) => (n.id === note.id ? res.data : n)),
         }
       : { ...prev, noteRowBusy: false });
 }
@@ -2733,6 +2856,7 @@ export async function openPanel(
   render = panel.render;
   panelShadow = panel.shadow;
   noteDraft = '';  // a fresh panel starts with an empty note draft
+  noteShareDraft = false;
   noteEditDraft = '';
   state = {
     phase: 'loading', authEmail: null, listing: null, isSaleApt: null, run: null,
@@ -2811,10 +2935,14 @@ export async function openPanel(
 
   /* For a property we have, load the stage list so the in-pipeline control can
    * offer stage changes, and the collection list so the save control can name
-   * the property's collections (both non-blocking; cached across panel opens). */
+   * the property's collections (both non-blocking; cached across panel opens).
+   * The collection list is RE-READ on every open (the cached one paints first,
+   * an unchanged read redraws nothing): it decides what is saved and who a
+   * shared note reaches, and a share or collection made in the app since the
+   * tab loaded must not leave either wrong — the SPA re-reads after 30 s. */
   if (listing?.found && listing.property_id != null) {
     void loadStages();
-    void loadCollections();
+    void loadCollections(true);
     void loadTags();
     void loadNotes();  // the property's existing notes (per-property, lazy)
   }

@@ -25,6 +25,12 @@ maxima, remax, mmreality, ceskereality).
     `origin_listing_ref_id` ("written while viewing this advert"); the panel fetches
     existing notes lazily via `GET /properties/{id}/notes` on open, and a read that
     fails every try says so with **Zkusit znovu**, never as "no notes" (MS16).
+    Sharing (migration 609): another author's shared note shows read-only as
+    "od {email} · {datum}" with no edit/delete; when someone shares a collection
+    holding the property with the operator, or the operator shares one, the add
+    box offers **"Sdílet s {emails}"** (off by default) and an own note carries
+    **Sdíleno** with a **Nesdílet** / **Sdílet s …** toggle (`PATCH {shared}`) —
+    the SPA's audience rule, so the two clients never disagree.
   - The **pipeline control** is property-grain (the deal pipeline, rule #22),
     the same as the SPA's listing-detail control. Out of pipeline → a
     **"Přidat do pipeline"** button that inserts the property at the entry stage.
@@ -37,9 +43,11 @@ maxima, remax, mmreality, ceskereality).
     Hidden only while a freshly-scraped listing has no property yet (a few minutes).
   - The **save-to-collection control** is property-grain (rule #18) and is the
     SPA listing header's "Uložit do kolekce": it reads **"Uložit do kolekce"**
-    while the property is in no collection and **"V kolekci"** /
-    **"V kolekcích · N"** once it is (hovering names them). A click opens a
-    checklist of **every** collection, monitored ones first and bell-marked,
+    while the property is in none of the operator's OWN collections and
+    **"V kolekci"** / **"V kolekcích · N"** once it is (hovering names them) — a
+    collection someone shared view-only never counts as saved. A click opens a
+    checklist of **every own** collection (a shared one is never a save target),
+    monitored ones first and bell-marked,
     where one click adds or removes the property through the same bearer-gated
     `POST/DELETE /collections/{id}/properties` the SPA uses. Membership rides on
     `POST /listings/lookup` (`collection_ids`); the list comes from
@@ -74,7 +82,8 @@ maxima, remax, mmreality, ceskereality).
     property at the entry stage; in it, the funnel carries the stage badge and
     colour and a click opens the stage menu — move to another stage, or
     **Odebrat z pipeline** behind a two-step confirm. Never a remove toggle.
-  - **Bookmark** (collections, rule #18): opens the checklist of every
+  - **Bookmark** (collections, rule #18): lit, and named on the photo mark, only
+    for the operator's own collections; opens the checklist of every own
     collection, monitored ones first and bell-marked; a click on a row adds or
     removes the property. The list is re-read each time the checklist opens.
   - **Eye** (hide, migration 536): one click hides the property, one click
