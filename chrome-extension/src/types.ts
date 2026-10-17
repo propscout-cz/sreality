@@ -92,7 +92,7 @@ export interface PipelineCardResult {
 }
 
 /* One collection the caller can read (GET /collections): its own, or one
- * another account shared with it view-only (migration 609). Property-grain
+ * another account shared with it view-only (migration 610). Property-grain
  * (rule #18); `monitoring_enabled` marks it as a watchlist (always false on a
  * shared one: alerts go to its owner). `owner_email` is null exactly when it is
  * MINE — the one field mine vs shared is told by (glyphs.ts `isMine`). */
@@ -140,7 +140,7 @@ export interface TagWriteResult {
 
 /* One note about a PROPERTY (rule #18) the caller can read: its own, or
  * another author's SHARED note on a property a share puts in reach (migration
- * 609). Read via GET /properties/{id}/notes (most-recent-first). */
+ * 610). Read via GET /properties/{id}/notes (most-recent-first). */
 export interface ExtNote {
   id: number;
   property_id: number;

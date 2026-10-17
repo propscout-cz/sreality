@@ -210,7 +210,7 @@ parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... fro
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
 using/with check (account_id in (select current_account_ids()))` policy. **Grant the id
 sequence's `USAGE` too** — `GRANT INSERT` on the table does not cover it, and a `bigserial` PK
-fails every `authenticated` insert until it is added (a real bug the CI lane caught pre-deploy). **Sharing (609)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
+fails every `authenticated` insert until it is added (a real bug the CI lane caught pre-deploy). **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly

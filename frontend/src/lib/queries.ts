@@ -2268,7 +2268,7 @@ export const fetchPropertyTagMemberSet = (
 
 /* How many notes the caller can READ on each property (MS16): the note mark on
  * every Browse row, from ONE whole-set read rather than one per row.
- * property_notes_public is security_invoker over RLS (migrations 290, 393, 609),
+ * property_notes_public is security_invoker over RLS (migrations 290, 393, 610),
  * so the set is the caller's own notes plus other authors' notes marked shared
  * and in reach through a collection share. */
 export const fetchNoteCounts = async (

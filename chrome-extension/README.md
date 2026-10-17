@@ -25,7 +25,7 @@ maxima, remax, mmreality, ceskereality).
     `origin_listing_ref_id` ("written while viewing this advert"); the panel fetches
     existing notes lazily via `GET /properties/{id}/notes` on open, and a read that
     fails every try says so with **Zkusit znovu**, never as "no notes" (MS16).
-    Sharing (migration 609): another author's shared note shows read-only as
+    Sharing (migration 610): another author's shared note shows read-only as
     "od {email} · {datum}" with no edit/delete; when someone shares a collection
     holding the property with the operator, or the operator shares one, the add
     box offers **"Sdílet s {emails}"** (off by default) and an own note carries

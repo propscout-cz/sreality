@@ -343,7 +343,7 @@ export async function listNotes(property_id: number): Promise<ApiResult<ExtNote[
 
 /* POST /properties/:id/notes — add an operator note to the property. The SAME
  * bearer-gated route the SPA's CurationBlock uses; `shared` is the author's
- * consent for it to cross a share (migration 609); `origin_listing_ref_id`
+ * consent for it to cross a share (migration 610); `origin_listing_ref_id`
  * records the advert being viewed (display provenance only). Returns the
  * created note. */
 export async function addNote(

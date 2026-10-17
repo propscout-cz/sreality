@@ -51,11 +51,16 @@ def test_leaderboard_passes_params(client, monkeypatch):
     monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
 
     res = client.get("/brokers/leaderboard",
-                     params={"region_ids": [27, 116], "metric": "listing_count", "limit": 5,
+                     params={"districts": ["Praha", "Kraj Vysočina"],
+                             "districts_lvl": ["obec", "kraj"],
+                             "districts_id": [554782, 108],
+                             "districts_excl": ["false", "true"],
+                             "metric": "listing_count", "limit": 5,
                              "firm_ids": [8], "min_price_czk": 5_000_000,
                              "include_unpriced": True})
     assert res.status_code == 200
-    assert captured["region_ids"] == [27, 116]
+    assert captured["districts"] == (
+        ["Praha", "Kraj Vysočina"], [False, True], ["obec", "kraj"], [554782, 108])
     assert captured["metric"] == "listing_count"
     assert captured["limit"] == 5
     assert captured["firm_ids"] == [8]
@@ -64,7 +69,7 @@ def test_leaderboard_passes_params(client, monkeypatch):
     assert res.json()["data"] == [{"broker_id": 1}]  # no contact column, no flags
 
 
-def test_leaderboard_defaults_firm_ids_to_empty(client, monkeypatch):
+def test_leaderboard_defaults_firm_ids_and_chips_to_empty(client, monkeypatch):
     captured = {}
     def fake(conn, **kw):
         captured.update(kw)
@@ -72,6 +77,29 @@ def test_leaderboard_defaults_firm_ids_to_empty(client, monkeypatch):
     monkeypatch.setattr(broker_routes.brokers, "leaderboard", fake)
     client.get("/brokers/leaderboard")
     assert captured["firm_ids"] == []
+    assert captured["districts"] == (None, None, None, None)
+
+
+@pytest.mark.parametrize("params", [
+    {"districts": ["Praha"], "districts_lvl": ["obec"], "districts_id": [554782]},
+    {"districts": ["Praha"], "districts_lvl": ["locality"], "districts_id": [554782],
+     "districts_excl": ["false"]},
+    {"districts": ["Praha"], "districts_lvl": ["obec"], "districts_id": [0],
+     "districts_excl": ["false"]},
+    {"districts": ["Praha"], "districts_lvl": ["obec"], "districts_id": ["Praha"],
+     "districts_excl": ["false"]},
+    {"region_ids": [27]},
+], ids=["a list short", "not one of the five levels", "no code", "a name for a code",
+        "the deleted id lists"])
+def test_leaderboard_refuses_a_chip_without_a_level_and_code(client, monkeypatch, params):
+    """A chip is a (level, code) or it cannot exist (605/609): every malformed shape is a
+    422 before the toolkit runs — and so is a pre-609 bundle's `region_ids`, which ignored
+    would answer its "Praha" board with the country's brokers."""
+    calls = []
+    monkeypatch.setattr(broker_routes.brokers, "leaderboard",
+                        lambda conn, **kw: calls.append(kw) or {"data": [], "metadata": {}})
+    res = client.get("/brokers/leaderboard", params=params)
+    assert res.status_code == 422 and calls == []
 
 
 def test_leaderboard_defaults_value_filter_to_unset(client, monkeypatch):

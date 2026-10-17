@@ -119,7 +119,7 @@ describe('<MergeSelection> in the merge bar', () => {
     expect(await screen.findByText('Vezme zpět 2 rozhodnutí „Různé“.')).toBeInTheDocument();
   });
 
-  /* Sharing (migration 609): a property held only by a collection shared WITH me
+  /* Sharing (migration 610): a property held only by a collection shared WITH me
    * is not saved — the mark agrees with the save menu, which lists mine only. */
   it('draws no collection mark for a property held only by a shared collection', async () => {
     vi.mocked(api.listCollections).mockResolvedValue({

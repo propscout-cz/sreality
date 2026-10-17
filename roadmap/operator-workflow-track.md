@@ -15,7 +15,7 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   W2 #1834 (dead `collections_public`/`tags_public` dropped, `account_id` NOT NULL on collections +
   tags, migrations 607/608), W3 #1835 (three SPA hooks replace 14 copies, the property page's second
   collection editor and the legacy note origin deleted), W4 #1837 (`collection_shares`, migration
-  609: party read policies, share/revoke/leave routes, the one share notification, Collection and
+  610: party read policies, share/revoke/leave routes, the one share notification, Collection and
   Note gain `owner_email` / `shared_with` / `shared`), W5 #1838 (SPA: Browse picker "Shared with
   me", the Sharing block, viewer pages, foreign notes read-only, the "Share with …" checkbox, the
   Shared tab, phone read-only in Czech), W6 #TBD (Chrome extension: "saved" and the save checklist
@@ -26,8 +26,10 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
     bare-note case (the one pre-tenancy NULL row is attributed by #1829).
   - `WatchdogDispatch.sreality_id` is typed `number` but is null on rows that carry no listing,
     a `collection_share` row among them — widen the type with its readers.
-  - The pytest order-pollution issue met while building W4 (a test passes alone, fails after
-    another) — find the leaking fixture.
+  - pytest order pollution met in W1: `tests/api/test_curation.py`, then
+    `tests/test_curation_account_stamping.py`, then `tests/api/test_auth.py` gives 15 × 503 "Auth is
+    not configured"; each file passes alone and CI's path order (tests/api first) never hits it —
+    find the fixture that leaks the auth state.
   - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
   - The operator ruling owed on the recipient-author bait-share edge (spec § 7).
 

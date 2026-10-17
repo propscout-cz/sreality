@@ -1673,7 +1673,7 @@ def _build_registry() -> dict[str, FilterDef]:
             default=None,
             description=(
                 "Collection ids the caller can read — own or shared with them "
-                "(migration 609). OR-semantics — a property "
+                "(migration 610). OR-semantics — a property "
                 "matches if it is in ANY collection in the list. Deliberately "
                 "the opposite of `tags` (AND): collections read as folders, so "
                 "two of them mean 'either folder'. Collection ids are "

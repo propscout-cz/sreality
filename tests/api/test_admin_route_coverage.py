@@ -222,11 +222,11 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
     "POST /collections/{collection_id}/shares": (
         "the tenant UPDATE of the collection is the ownership gate (migration 290 USING); the "
         "share row it then writes on the service role takes its owner from the collection by "
-        "trigger and its recipient from a confirmed email (migration 609), so no caller account "
+        "trigger and its recipient from a confirmed email (migration 610), so no caller account "
         "is named — tenancy.md's second 'tenant gate, then a service-role write'"
     ),
     "DELETE /collections/{collection_id}/shares/{account_id}": (
-        "DELETE by key — migration 609's party policy USING (owner revokes, recipient leaves)"
+        "DELETE by key — migration 610's party policy USING (owner revokes, recipient leaves)"
     ),
     "GET /properties/{property_id}/notes": "RLS-only read (migration 290 on `property_notes`)",
     "GET /artifact-links": "RLS-only read (migration 599 on `property_artifact_links`)",

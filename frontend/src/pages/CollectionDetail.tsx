@@ -460,7 +460,7 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
 /* Sharing (owner only)                                                       */
 /* -------------------------------------------------------------------------- */
 
-/* Share by email, read-only (migration 609). A refusal (no such account, your
+/* Share by email, read-only (migration 610). A refusal (no such account, your
  * own address) is a sentence about the field, so it sits under the field. */
 function SharingBlock({ collection }: { collection: Collection }) {
   const qc = useQueryClient();

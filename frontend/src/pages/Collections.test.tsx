@@ -77,7 +77,7 @@ describe('<Collections>', () => {
     );
   });
 
-  /* Sharing (migration 609): what is shared with me is its own section, named by
+  /* Sharing (migration 610): what is shared with me is its own section, named by
    * its owner, with none of the owner's controls. */
   it('lists collections shared with me apart, and counts my recipients', async () => {
     const base = {

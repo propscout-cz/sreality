@@ -734,7 +734,7 @@ def delete_plan(
     return {"deleted": True, "key": key}
 
 
-# account_email() (migration 609) is the ONE account label: one row per account, however many members.
+# account_email() (migration 610) is the ONE account label: one row per account, however many members.
 _ENTITLEMENTS_SQL = (
     "SELECT a.id, account_email(a.id) AS email, "
     "  coalesce(e.plan, (SELECT key FROM plans WHERE is_default LIMIT 1)), "

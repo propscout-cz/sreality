@@ -7,7 +7,7 @@
  * provenance — "written while viewing this advert"). Collection membership is
  * the header's "Uložit do kolekce" (CollectionSaveToggle), not a row here.
  *
- * Notes cross a share only when their author marks them shared (migration 609,
+ * Notes cross a share only when their author marks them shared (migration 610,
  * docs/design/collection-sharing.md §3.7): the composer offers the mark when the
  * property has an AUDIENCE (lib/collectionCache `shareAudience`), and another
  * author's note reads as theirs — named, never editable here.

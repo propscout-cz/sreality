@@ -12,7 +12,6 @@ import { MemoryRouter } from 'react-router-dom';
 
 import Outreach from './Outreach';
 import * as api from '@/lib/api';
-import { GEO_UNSERVED_HINT } from '@/lib/brokers';
 import * as maps from '@/lib/maps';
 import { ROUTES } from '@/lib/routes';
 
@@ -84,43 +83,38 @@ describe('<Outreach> campaign rows are links', () => {
   });
 });
 
-/* A campaign target is stored, so it must never hold the no-match code: until
- * the leaderboard serves the finer levels (PR 2) a street chip keeps Create
- * disabled and the page says why; a town chip does not. */
-describe('<Outreach> a location the page cannot serve', () => {
-  const pickPlace = async (res: maps.LocationResolution, type: string) => {
-    vi.mocked(maps.fetchSuggest).mockResolvedValue([
-      { name: res.name ?? '', label: '', type, position: { lon: 15.77, lat: 50.03 } },
-    ]);
-    vi.mocked(maps.resolveSuggestion).mockResolvedValue(res);
-    const user = userEvent.setup();
-    await user.type(screen.getByRole('textbox', { name: 'Lokalita' }), 'Pard');
-    await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
-  };
+/* A campaign target stores the chips as picked — a street too — and the
+ * leaderboard compiles them like Browse does; no chip is the whole country. */
+describe('<Outreach> the campaign target', () => {
+  const STREET = { level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice' };
 
-  it('keeps Create disabled while a street chip is selected', async () => {
+  it('posts the picked chips in the target, Create enabled throughout', async () => {
+    vi.mocked(api.createOutreachCampaign).mockResolvedValue({ id: 5 } as api.OutreachCampaign);
+    vi.mocked(maps.fetchSuggest).mockResolvedValue([
+      { name: STREET.name, label: '', type: 'regional.street', position: { lon: 15.77, lat: 50.03 } },
+    ]);
+    vi.mocked(maps.resolveSuggestion).mockResolvedValue(STREET);
     renderPage();
-    await userEvent.setup().type(screen.getByPlaceholderText('Off-market byty Praha'), 'Kampaň');
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText('Off-market byty Praha'), 'Kampaň');
+    await user.type(screen.getByRole('textbox', { name: 'Lokalita' }), 'Na Ryb');
+    await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
+    await screen.findByRole('button', { name: 'Remove Na Rybníčkách · Pardubice (Ulice)' });
+
     const create = screen.getByRole('button', { name: 'Založit kampaň' });
     expect(create).toBeEnabled();
-
-    await pickPlace(
-      { level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice' },
-      'regional.street',
+    await user.click(create);
+    await waitFor(() =>
+      expect(api.createOutreachCampaign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: {
+            districts: [STREET],
+            category_main: 'byt',
+            category_type: 'prodej',
+            metric: 'active_property_count',
+          },
+        }),
+      ),
     );
-    await waitFor(() => expect(screen.getByText(GEO_UNSERVED_HINT)).toBeInTheDocument());
-    expect(create).toBeDisabled();
-  });
-
-  it('enables Create for a town chip', async () => {
-    renderPage();
-    await userEvent.setup().type(screen.getByPlaceholderText('Off-market byty Praha'), 'Kampaň');
-    await pickPlace(
-      { level: 'obec', id: 555134, name: 'Pardubice', context: null },
-      'regional.municipality',
-    );
-    await screen.findByRole('button', { name: 'Remove Pardubice (Obec)' });
-    expect(screen.queryByText(GEO_UNSERVED_HINT)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Založit kampaň' })).toBeEnabled();
   });
 });

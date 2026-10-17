@@ -23,7 +23,7 @@ import type { Collection } from '@/lib/types';
 
 const NO_COLLECTIONS: Collection[] = [];
 
-/* THE predicate for "mine" vs "shared with me" (migration 609): the API sets
+/* THE predicate for "mine" vs "shared with me" (migration 610): the API sets
  * owner_email to null exactly when the caller owns the thing. Notes carry the
  * same field, so one definition serves both. */
 export function isMine(x: { owner_email: string | null }): boolean {
@@ -145,7 +145,7 @@ export function useCollectionMembership(property_id: number) {
  * otherwise waste).
  *
  * `shareChanged` marks a share, revoke or leave: it changes which other
- * authors' shared notes the caller can read (migration 609), so every note
+ * authors' shared notes the caller can read (migration 610), so every note
  * list and the Browse note counts re-read too. */
 export function revalidateCollections(
   qc: QueryClient,

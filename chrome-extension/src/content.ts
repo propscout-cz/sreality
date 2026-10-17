@@ -1362,7 +1362,7 @@ function mountPanel(): {
 
   /* Operator notes for the listing's property (rule #18) — shown for ANY listing
    * we have a property for: the notes I can read (mine, plus another author's
-   * SHARED ones, migration 609; most-recent-first) + an add box. A saved note
+   * SHARED ones, migration 610; most-recent-first) + an add box. A saved note
    * carries the viewed advert as origin provenance. */
   function renderNotes(body: HTMLElement, state: PanelState): void {
     const l = state.listing;

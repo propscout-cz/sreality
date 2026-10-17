@@ -7,7 +7,7 @@ resolved at the route edge; a write by id is its own ownership gate (rowcount 0 
 SELECT probe first: a SELECT proves visibility, and a shared collection is visible, not owned).
 One transaction per write, UniqueViolation -> 409, flat dicts out.
 
-Sharing (migration 609, docs/design/collection-sharing.md) widens READS only: a shared collection
+Sharing (migration 610, docs/design/collection-sharing.md) widens READS only: a shared collection
 and the other party's notes marked `shared` arrive through the same projections, told apart by ONE
 field, `owner_email` (null iff the row is the caller's). A share row is written on the service-role
 connection (browser roles hold no INSERT on it) only after the tenant UPDATE gate passed.
@@ -290,7 +290,7 @@ def remove_property_from_collection(
     return {"removed": removed}
 
 
-# --- shares (migration 609) -------------------------------------------------
+# --- shares (migration 610) -------------------------------------------------
 
 # The ownership gate (shape 1): a recipient sees the row but its UPDATE matches nothing.
 _SHARE_GATE_SQL = "UPDATE collections SET updated_at = now() WHERE id = %s RETURNING name"

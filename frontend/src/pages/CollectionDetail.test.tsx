@@ -136,7 +136,7 @@ describe('<CollectionDetail>', () => {
     });
   });
 
-  /* Sharing (migration 609): the owner shares by email, sees every recipient,
+  /* Sharing (migration 610): the owner shares by email, sees every recipient,
    * and stops sharing in two steps; a refusal sits under the field. */
   describe('Sharing, as the owner', () => {
     const OWNED: CollectionWithProperties = {
