@@ -2273,17 +2273,17 @@ renumber.** Navigate by area:
     leaves). `property_notes.shared` is the author's consent mark, default private. **The
     visibility rule, stated once:** a recipient reads a shared collection and its member rows; a
     party X reads a note by author A on property P iff the note is marked `shared` and some share
-    between X and A names a collection that currently holds P — one A OWNS, or one A RECEIVED that
-    already existed when A marked the note (`property_notes.shared_at`, trigger-stamped; shares need
-    no acceptance, so a later share never inherits a recipient's mark) — co-recipients never see
-    each other; files follow their note. Four `FOR SELECT` `*_shared_read` policies
+    between X and A names a collection that currently holds P — one A owns or one A received,
+    made before or after the mark (ruled 2026-10-17; migration 613 dropped 610's `shared_at`
+    consent time, accepting the bait-share edge: shares need no acceptance) — co-recipients never see each
+    other; files follow their note. Four `FOR SELECT` `*_shared_read` policies
     carry it and every read path inherits it; the owner's `FOR ALL` policies decide every write
     unchanged, so a recipient's write by id matches no row (404). The API tells mine from shared
     by ONE field, `owner_email` (null iff the row is the caller's), labelled through
     `share_party_emails()` (the caller's counterparties only) over `account_email()`, the one
     label definition; a shared collection reads `monitoring_enabled = false` (alerts stay the
     owner's). A share is keyed on the collection, which a merge never changes, so it needs no
-    carrier; the `shared` mark and its `shared_at` ride the note through a merge and a split's copy.
+    carrier; the `shared` mark rides the note through a merge and a split's copy.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
     groupings, a dismissal is one boolean per property, and a pseudo-collection would need a

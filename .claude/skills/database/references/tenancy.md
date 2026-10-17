@@ -86,9 +86,9 @@ or recipient, `WITH CHECK` owner); `grant select, delete` and **no INSERT** — 
 learnable, so a share is created only by the API (`POST /collections/{id}/shares`, service role,
 after resolving a confirmed email); either party deletes (revoke / leave). Reads widen through
 four `FOR SELECT` policies (`*_shared_read` on `collections`, `collection_properties`,
-`property_notes` — only rows the author marked `shared`, and through a share the author
-RECEIVED only if it predates `shared_at` (trigger-stamped consent time) — and
-`property_note_attachments`);
+`property_notes` — only rows the author marked `shared`, through any share between the author and
+the reader that holds the property, made before or after the mark (migration 613 dropped 610's `shared_at`
+consent time by ruling) — and `property_note_attachments`);
 the owner's `FOR ALL` policies decide every write, unchanged. Visibility rule:
 `docs/design/collection-sharing.md` §3.2.
 

@@ -11,7 +11,7 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 - **Done:** share a collection with another account by email, read-only (spec + rulings:
   `docs/design/collection-sharing.md`; a share is one row that widens READS only, `owner_email` is
   the one "mine vs shared" marker, a note crosses a share only when its author marks it shared).
-  Six waves: W1 #1833 (the write is the gate: one UPDATE/DELETE decides ownership, probes gone),
+  Seven waves: W1 #1833 (the write is the gate: one UPDATE/DELETE decides ownership, probes gone),
   W2 #1834 (dead `collections_public`/`tags_public` dropped, `account_id` NOT NULL on collections +
   tags, migrations 607/608), W3 #1835 (three SPA hooks replace 14 copies, the property page's second
   collection editor and the legacy note origin deleted), W4 #1837 (`collection_shares`, migration
@@ -20,10 +20,14 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   me", the Sharing block, viewer pages, foreign notes read-only, the "Share with …" checkbox, the
   Shared tab, phone read-only in Czech), W6 #1839 (Chrome extension: "saved" and the save checklist
   are mine only, foreign notes read-only "od {email}", the "Sdílet s …" checkbox + "Sdíleno" /
-  "Nesdílet" toggle on the SPA's audience rule).
+  "Nesdílet" toggle on the SPA's audience rule). W7 PR #1840 (migration 613): the operator ruled
+  2026-10-17 that a marked note reaches shares made later too, so 610's consent-time anchor
+  (`property_notes.shared_at`, its trigger and the policy's time clause) is dropped; the bait-share
+  edge is accepted (spec §7, §8 ruling 9). 613 is applied AFTER the merge + Railway rollout.
 - **Next (unscheduled):**
-  - `property_notes.account_id` NOT NULL waits on the operator's ruling about the split preview's
-    bare-note case (the one pre-tenancy NULL row is attributed by #1829).
+  - `property_notes.account_id` NOT NULL — ruled 2026-10-17: NOT NULL after #1829 lands (it
+    attributes the one pre-tenancy NULL row); a follow-up migration numbered past 613; the split live test's bare (NULL-account) note must be
+    re-modelled first (`tests/test_property_split_live.py`).
   - `WatchdogDispatch.sreality_id` is typed `number` but is null on rows that carry no listing,
     a `collection_share` row among them — widen the type with its readers.
   - pytest order pollution met in W1: `tests/api/test_curation.py`, then
@@ -31,7 +35,6 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
     not configured"; each file passes alone and CI's path order (tests/api first) never hits it —
     find the fixture that leaks the auth state.
   - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
-  - The operator ruling owed on the recipient-author bait-share edge (spec § 7).
 
 ### Phase U-PIPE-SIGNUP: Every account starts on the default board (done, 2026-10-16)
 - **Done:** migration 612 — one signup path (account, owner membership, the 10-stage default board with codes from

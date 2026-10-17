@@ -1,4 +1,4 @@
-"""Collection sharing, view-only (migration 610), proven on the replayed schema.
+"""Collection sharing, view-only (migrations 610, 613), proven on the replayed schema.
 
 Three tenants: A owns a collection holding one property and shares it with B; C is a
 bystander. Every assertion about what a tenant can read or write runs through
@@ -345,65 +345,75 @@ def test_co_recipients_never_read_each_others_marked_notes(
     assert set(_rows(a, labels)) == {(b.acc, b.email), (c.acc, c.email)}
 
 
-def test_a_share_made_after_the_mark_does_not_widen_a_recipients_note(
+def test_a_share_made_after_the_mark_reaches_the_new_party_both_ways(
     svc: Any, tenants: dict[str, _Tenant], world: _World,
 ) -> None:
-    # Shares need no acceptance: C, a stranger who knows B's email, builds a collection holding
-    # the property B wrote on and shares it with B. B marked the note for A, before C's share
-    # existed, so C must not read it; A still does. A fresh mark consents to C too.
+    # Migration 613 (ruling 2026-10-17): a mark is not dated. B, the recipient of A's share,
+    # marks a note on a property of a collection B owns; sharing that collection with A later
+    # shows it to A. And a note B marked while A's share did not exist reaches A once it does.
+    # C, party to neither share, reads neither.
+    a, b, c = tenants["a"], tenants["b"], tenants["c"]
+    with svc.cursor() as cur:
+        cur.execute(
+            "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
+            (b.acc, f"share-{uuid.uuid4().hex[:12]}"),
+        )
+        own = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO collection_properties (collection_id, property_id) VALUES (%s, %s)",
+            (own, world.outside),
+        )
+    on_own = _note(svc, b, world.outside, shared=True)
+    assert not _sees_note(a, on_own)
+    _add_share(svc, own, a)
+    assert _sees_note(a, on_own) and not _sees_note(c, on_own)
+
+    with svc.cursor() as cur:
+        cur.execute(
+            "DELETE FROM collection_shares WHERE collection_id = %s AND recipient_account_id = %s",
+            (world.coll, b.acc),
+        )
+    on_member = _note(svc, b, world.member, shared=True)
+    assert not _sees_note(a, on_member)
+    _add_share(svc, world.coll, b)
+    assert _sees_note(a, on_member) and not _sees_note(c, on_member)
+
+
+def test_a_share_received_after_the_mark_reaches_its_owner(
+    svc: Any, tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    # The bait-share edge, accepted by the 2026-10-17 ruling (spec §7): shares need no
+    # acceptance, so C sharing a collection that holds the property with B reads what B marked
+    # earlier for A. The mitigations live outside RLS (audience named, share notification,
+    # unmark / Leave), so the policy is pinned to the ruled reach, not to the old anchor.
     a, b, c = tenants["a"], tenants["b"], tenants["c"]
     note = _note(svc, b, world.member, shared=True)
+    assert _sees_note(a, note) and not _sees_note(c, note)
     with svc.cursor() as cur:
         cur.execute(
             "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
             (c.acc, f"share-{uuid.uuid4().hex[:12]}"),
         )
-        bait = cur.fetchone()[0]
+        later = cur.fetchone()[0]
         cur.execute(
             "INSERT INTO collection_properties (collection_id, property_id) VALUES (%s, %s)",
-            (bait, world.member),
+            (later, world.member),
         )
-    _add_share(svc, bait, b)
-    assert not _sees_note(c, note)
-    assert _sees_note(a, note)
-    assert _touched(b, "UPDATE property_notes SET shared = false WHERE id = %s", (note,)) == 1
-    assert _touched(b, "UPDATE property_notes SET shared = true WHERE id = %s", (note,)) == 1
+    _add_share(svc, later, b)
     assert _sees_note(c, note) and _sees_note(a, note)
+    assert _touched(b, "UPDATE property_notes SET shared = false WHERE id = %s", (note,)) == 1
+    assert not _sees_note(c, note) and not _sees_note(a, note)
 
 
 def test_an_owners_note_marked_before_the_share_reaches_a_new_recipient(
     svc: Any, tenants: dict[str, _Tenant], world: _World,
 ) -> None:
-    # The owner chose the recipient, so its earlier marks need no fresh consent.
+    # A mark is not dated (migration 613): an earlier mark reaches a recipient added later.
     a, c = tenants["a"], tenants["c"]
     note = _note(svc, a, world.member, shared=True)
     assert not _sees_note(c, note)
     _add_share(svc, world.coll, c)
     assert _sees_note(c, note)
-
-
-def test_the_consent_time_is_stamped_on_mark_kept_on_edit_and_cleared_on_unmark(
-    svc: Any, tenants: dict[str, _Tenant], world: _World,
-) -> None:
-    b = tenants["b"]
-    note = _note(svc, b, world.member, shared=False)
-
-    def shared_at() -> Any:
-        with svc.cursor() as cur:
-            cur.execute("SELECT shared_at FROM property_notes WHERE id = %s", (note,))
-            return cur.fetchone()[0]
-
-    assert shared_at() is None
-    assert _touched(b, "UPDATE property_notes SET shared = true WHERE id = %s", (note,)) == 1
-    marked = shared_at()
-    assert marked is not None
-    assert _touched(
-        b, "UPDATE property_notes SET body = 'edited', shared_at = '2000-01-01' WHERE id = %s",
-        (note,),
-    ) == 1
-    assert shared_at() == marked, "an edit (or a hand-set value) must not move the consent time"
-    assert _touched(b, "UPDATE property_notes SET shared = false WHERE id = %s", (note,)) == 1
-    assert shared_at() is None
 
 
 def test_unmarking_removing_the_property_or_ending_the_share_hides_the_note_again(
