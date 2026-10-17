@@ -524,7 +524,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "int",
       "pg_column": "tom_days",
       "default": null,
-      "description": "Lower bound on time-on-market in days. TOM = (now - first_seen_at) for active rows, (last_seen_at - first_seen_at) for delisted rows. Inclusive.",
+      "description": "Lower bound on time-on-market in days (`measure_tom_days`, migration 617). TOM = (now - first_seen_at) for active rows, (last_seen_at - first_seen_at) for delisted rows. Inclusive.",
       "category": "Velocity",
       "ui_control": "number_input",
       "agendas": [

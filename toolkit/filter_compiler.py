@@ -31,7 +31,7 @@ from toolkit.filter_registry import (
     building_material_values,
     sql_kind,
 )
-from toolkit.measures import per_m2_sql, plot_area_sql
+from toolkit.measures import per_m2_sql, plot_area_sql, tom_days_sql
 
 Hook = Callable[[str, Any, Mapping[str, Any], dict[str, Any]], list[str]]
 # (filter id, its value — may be None, the whole values mapping, params to write) -> fragments
@@ -46,17 +46,9 @@ class FilterGrain:
     clauses: Mapping[str, str] = MappingProxyType({})  # filter id -> this relation's whole clause
 
 
-# `listings` has no tom_days column; this is the read models' `tom_days` (migration 054) spelled
-# over it, so SQL and Python agree on what "days on market" means.
-_TOM_EXPR = (
-    "(case when l.is_active "
-    "then greatest(0, floor(extract(epoch from (now() - l.first_seen_at)) / 86400)::int) "
-    "else greatest(0, floor(extract(epoch from (l.last_seen_at - l.first_seen_at)) / 86400)::int) "
-    "end)"
-)
-
-# `listings` has no price_per_m2 column, so the measure is the four-argument call there; the
-# read model PUBLISHES it, so `l.price_per_m2` is the measure on `properties_public`. Neither
+# `listings` has no price_per_m2 or tom_days column, so each measure is its function call there
+# (tom_days is not in the Watchdog's agenda); the read model PUBLISHES them, so `l.price_per_m2`
+# is the measure on `properties_public`. Neither
 # relation publishes a plot column, so both call plot_area_m2() (migration 534). A portal is
 # the canonical ad's own on `listings` (estimation comparables) and any of the property's ads
 # on `properties_public` (MS19, the `any` arm of portal_status_matches: the Watchdog has no
@@ -64,7 +56,8 @@ _TOM_EXPR = (
 LISTINGS_GRAIN = FilterGrain(
     agenda=Agenda.COMPARABLES,
     exprs=MappingProxyType({
-        "price_per_m2": per_m2_sql("l"), "plot_area_m2": plot_area_sql("l"), "tom_days": _TOM_EXPR,
+        "price_per_m2": per_m2_sql("l"), "plot_area_m2": plot_area_sql("l"),
+        "tom_days": tom_days_sql("l"),
     }),
     caller_renders=frozenset({"radius_m", "area_band_pct", "disposition_match", "floor_band",
                               "lifecycle", "max_age_days", "include_unreliable"}),
