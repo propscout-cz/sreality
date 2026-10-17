@@ -84,13 +84,15 @@ grant execute on function public.measure_tom_days(boolean, timestamptz, timestam
 --    browse_projection (590). Same columns, same order, same types -- so browse_list,
 --    properties_map_mv and the three functions typed on browse_projection's row are untouched.
 -- ---------------------------------------------------------------------------
-create temp table _tom_pre on commit drop as
-  select c.relname::text as relname,
-         regexp_replace(pg_get_viewdef(c.oid), '\s+', ' ', 'g') as def
+-- The pre-images ride in a transaction-local setting, not a temp table: the receipt parser
+-- would read a top-level CREATE TEMP TABLE as an object this migration must leave behind.
+select set_config('tom617.pre', (
+  select jsonb_object_agg(c.relname, regexp_replace(pg_get_viewdef(c.oid), '\s+', ' ', 'g'))::text
   from pg_class c
   join pg_namespace n on n.oid = c.relnamespace
   where n.nspname = 'public'
-    and c.relname in ('properties_public', 'listings_public', 'listing_feed_public', 'browse_projection');
+    and c.relname in ('properties_public', 'listings_public', 'listing_feed_public', 'browse_projection')
+), true);
 
 -- properties_public
 create or replace view properties_public as
@@ -427,7 +429,7 @@ declare
   want text;
   got text;
 begin
-  for r in select relname, def from _tom_pre order by relname loop
+  for r in select key as relname, value as def from jsonb_each_text(current_setting('tom617.pre')::jsonb) order by key loop
     want := regexp_replace(
       r.def,
       'CASE WHEN (\w+)\.is_active THEN GREATEST\(0, \(floor\(\(EXTRACT\(epoch FROM \(now\(\) - \1\.first_seen_at\)\) / \(86400\)::numeric\)\)\)::integer\) '

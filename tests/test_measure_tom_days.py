@@ -41,16 +41,28 @@ def test_a_view_publishes_tom_days_by_calling_the_measure(view: str) -> None:
     assert "86400" not in body, f"{view} spells time on market inline again"
 
 
-def test_no_python_module_renders_the_tom_arithmetic() -> None:
+_SQL_EPOCH_SPELLING = re.compile(r"epoch\s+from[\s\S]{0,120}?first_seen_at[\s\S]{0,60}?86400", re.I)
+_PYTHON_DAYS_SPELLING = re.compile(r"\bfirst_seen\w*\s*\)?\s*\.days\b")
+
+
+def test_no_python_module_spells_the_tom_arithmetic() -> None:
+    """Two spellings the old copies used: SQL `epoch ... first_seen_at ... 86400` and
+    `(now - first_seen).days`. A third (e.g. a bare timedelta subtraction) is invisible to a
+    pattern, which is why the known consumers are also pinned positively below."""
     offenders = []
     for tree in ("scraper", "toolkit", "api", "scripts"):
         for path in (_ROOT / tree).rglob("*.py"):
             if path.name == "measures.py":
                 continue
             text = path.read_text()
-            if re.search(r"epoch\s+from[^)]*first_seen_at", text) and "86400" in text:
+            if _SQL_EPOCH_SPELLING.search(text) or _PYTHON_DAYS_SPELLING.search(text):
                 offenders.append(str(path.relative_to(_ROOT)))
     assert offenders == [], f"time on market is re-spelled in {offenders}; call tom_days_sql"
+
+
+@pytest.mark.parametrize("module", ["filter_compiler", "velocity", "snapshots"])
+def test_the_known_consumers_call_the_one_face(module: str) -> None:
+    assert "tom_days_sql(" in (_ROOT / "toolkit" / f"{module}.py").read_text()
 
 
 @REQUIRED_DB

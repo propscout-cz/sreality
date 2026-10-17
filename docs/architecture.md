@@ -3257,7 +3257,8 @@ renumber.** Navigate by area:
     not a price over an area): `public.measure_tom_days(is_active, first_seen_at, last_seen_at)` is
     the one definition; the four views that publish `tom_days` call it, the compiler and the
     analytics tools render it through `toolkit.measures.tom_days_sql`, and
-    `tests/test_measure_tom_days.py` reds on a view or a Python module that spells it again. Its
+    `tests/test_measure_tom_days.py` reds on a view that spells it again, on the two Python spellings
+    the old copies used, and on a known consumer that stops calling the face. Its
     limits are the doc comment's, stated so a panel does not oversell it: an ACTIVE row is its age
     so far (a lower bound, right-censored), an INACTIVE row its closed run, so a cohort that mixes
     both mixes two things; and the anchor is OUR first sighting, because no portal supplies a
