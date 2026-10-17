@@ -872,7 +872,7 @@ rules. Identify which one a task belongs to before you start.
   deal-pipeline control (bookmark; once in, change stage via a native `<select>`, and remove
   behind the panel's two-step confirm — rule #22: no surface removes a card on one click)
   + a save-to-collection control (rule #18 — the SPA header's "Uložit do kolekce": a checklist of
-  every collection, monitored first) + **operator notes** (list existing + add a new
+  every collection of mine, monitored first — a shared one is never a save target) + **operator notes** (list existing + add a new
   one via `GET`/`POST /properties/{id}/notes`, property-grain, the viewed advert recorded as
   the note's `origin_listing_ref_id`) + an "Otevřít v aplikaci" deep-link to the SPA
   (`{VITE_APP_BASE_URL}/listing/{source}/{native}` — an advert alias that lands on the
@@ -2164,7 +2164,8 @@ renumber.** Navigate by area:
     (migration 610) the SPA checklist lists the caller's OWN collections only — a shared one is
     view-only — and every saved mark means "in one of mine" (`saved = mine.size > 0`), while cohort
     readers (Browse prefilter, Pipeline board, phone roll) keep the full visible map; the extension
-    panel still lists every visible collection until it follows (sharing wave W6).
+    follows by value (`chrome-extension/src/glyphs.ts`: `isMine`, `saveTargets`, `savedCollections`
+    over the lookup's `collection_ids`, and `shareAudience` mirroring the SPA's for its notes).
     In the SPA those affordances share ONE membership read and ONE collection list, each behind a
     hook in `lib/collectionCache.ts` (`useCollections`, `useCollectionMembers` — the whole-set map,
     `fetchPropertyCollectionMemberSet` under `curationKeys.propertyCollectionMembers` — and
