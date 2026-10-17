@@ -105,3 +105,13 @@ def test_the_view_and_the_python_emitter_agree_with_the_function(cur: Any, activ
 
     cur.execute(f"SELECT {tom_days_sql('l')} FROM listings l WHERE l.id = %s", (lid,))
     assert cur.fetchone()[0] == want
+
+
+@REQUIRED_DB
+def test_the_measure_inlines(cur: Any) -> None:
+    cur.execute(
+        "EXPLAIN (VERBOSE, COSTS OFF) "
+        "SELECT measure_tom_days(is_active, first_seen_at, last_seen_at) FROM listings"
+    )
+    plan = "\n".join(r[0] for r in cur.fetchall())
+    assert "measure_tom_days" not in plan, plan
