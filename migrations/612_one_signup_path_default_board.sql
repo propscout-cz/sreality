@@ -1,4 +1,4 @@
--- 605_one_signup_path_default_board.sql
+-- 612_one_signup_path_default_board.sql
 -- One signup path, one default board.
 --
 -- 2026-10-16: a second account's Pipeline page looked blank and its stage
@@ -48,7 +48,7 @@
 -- legacy_backfill_claim stays: read by nothing after this, and dropping a table
 -- is the operator's call (not ruled on 2026-10-16).
 --
--- Apply 606 (identity ids) BEFORE this file: until then a signed-in user could
+-- Apply 611 (identity ids) BEFORE this file: until then a signed-in user could
 -- pre-claim pipeline_stages / collections ids, and the seed's conflict would
 -- fail a signup instead of silently dropping a stage.
 

@@ -623,7 +623,7 @@ rules. Identify which one a task belongs to before you start.
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
   account, migration 595).
 - Every PostgREST read runs as `authenticated`; `anon` is granted no relation (Phase 0,
-  migrations 299/331), functions are born private since migration 605, and a CI census
+  migrations 299/331), functions are born private since migration 612, and a CI census
   (`tests/test_tenant_isolation_live.py`) keeps every `SECURITY DEFINER` function in `public`
   out of `anon`'s reach. The SPA reads the `*_public` views; the Browse/map read models
   `browse_list` (an UNLOGGED table rebuilt blue-green) and `properties_map_mv` — plain
@@ -2578,7 +2578,7 @@ renumber.** Navigate by area:
     `(account_id, property_id)` since migration 295) at one `stage_id` (`pipeline_stages`, a
     TABLE not an enum so an account can rename/reorder/add columns with no migration — the
     curated-index precedent). Every account gets its own copy of the default board at signup
-    (`seed_default_pipeline`, migration 605), and every stage reference — the card's and the
+    (`seed_default_pipeline`, migration 612), and every stage reference — the card's and the
     event ledger's `from_stage_id` / `to_stage_id` — is account-qualified (a composite FK onto
     `pipeline_stages (account_id, id)`). **A "bookmark / interested" is
     just the entry stage** (`pipeline_stages.is_entry`), not a separate flag: presence of a

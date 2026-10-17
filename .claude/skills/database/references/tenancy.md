@@ -54,7 +54,7 @@ their parent lookups see every row.
 
 **Migration 294 — pipeline tables**: `property_pipeline`, `pipeline_stages`,
 `property_pipeline_events`, plus the signup trigger:
-- **Signup** (`handle_new_user` on `auth.users`, one path since migration 605): it creates the
+- **Signup** (`handle_new_user` on `auth.users`, one path since migration 612): it creates the
   account, the owner membership, the default board (`seed_default_pipeline`: 10 stages with
   codes from the label numbers, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
   free trial. A new default is a new migration replacing that function's literal; this prints
@@ -104,7 +104,7 @@ bypass RLS: `pipeline_stages` gets a `unique (account_id, id)` index, and
 `property_pipeline.stage_id` becomes a composite FK `(account_id, stage_id) references
 pipeline_stages (account_id, id)`. Without this, a cross-account `stage_id` write would
 make the account-partitioned reconciler's keep-most-advanced step silently no-op and then
-drop the retired card — a correctness bug, not just an isolation one; since migration 605 the
+drop the retired card — a correctness bug, not just an isolation one; since migration 612 the
 event ledger's `from_stage_id` / `to_stage_id` are account-qualified the same way.
 
 ## Tenant role and pool
@@ -134,7 +134,7 @@ silently degrading to an RLS-off connection (that silent degradation is exactly 
 one definition of who the caller is, so a tenant-connection read is scoped by RLS alone.
 
 **`legacy_backfill_claim` stays, read by nothing.** It was the first-signup CAS that handed
-the pre-tenancy rows to the operator's account (claimed 2026-07-11); migration 605 removed that
+the pre-tenancy rows to the operator's account (claimed 2026-07-11); migration 612 removed that
 branch from `handle_new_user`. Dropping the table is a destructive migration the operator has
 not ruled on.
 

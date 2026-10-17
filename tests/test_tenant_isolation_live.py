@@ -340,7 +340,7 @@ def svc() -> "Iterator[Any]":
 
 @pytest.fixture(scope="module")
 def tenants(svc: Any) -> "Iterator[dict[str, uuid.UUID]]":
-    """Two auth users, each born through the real signup trigger (migration 605:
+    """Two auth users, each born through the real signup trigger (migration 612:
     the account, its owner membership, the default board, the monitoring
     collection and the trial), so every check here runs against what a signup
     actually produces."""
@@ -390,7 +390,7 @@ def _scoped(sub: uuid.UUID) -> "Iterator[Any]":
 def test_signup_seeds_the_default_board(
     svc: Any, tenants: dict[str, uuid.UUID],
 ) -> None:
-    """Migration 605: a signup is born with the default board, the monitoring
+    """Migration 612: a signup is born with the default board, the monitoring
     collection and the trial. Invariants only, never the literal — the board's
     one definition is seed_default_pipeline, and a copy here would be a second.
     Read on account B, which no fixture in this module touches (seeded_tenant_rows
@@ -437,7 +437,7 @@ def test_signup_seeds_the_default_board(
 def test_pipeline_event_cannot_name_a_foreign_stage(
     svc: Any, tenants: dict[str, uuid.UUID],
 ) -> None:
-    """Migration 605: the ledger's stage references carry the account, as the
+    """Migration 612: the ledger's stage references carry the account, as the
     card's does since 295 — FK checks bypass RLS, so the key itself must refuse
     another account's stage id."""
     import psycopg
@@ -945,7 +945,7 @@ def seeded_tenant_rows(
         cleanup.insert(0, ("DELETE FROM property_dismissals WHERE property_id = %s", (prop,)))
         where["property_dismissals_public"] = ("property_id = %s", (prop,))
 
-        # The account already has the seeded board (migration 605); one more
+        # The account already has the seeded board (migration 612); one more
         # non-entry/non-terminal stage trivially satisfies both the app-layer rule
         # and the DB CHECK (migration 357) that a stage can't be entry and terminal
         # at once. The view filters archived_at IS NULL, so leave it NULL.
@@ -1466,8 +1466,8 @@ def test_anon_holds_no_relation_grants(svc: Any) -> None:
 def test_anon_executes_no_definer_function(svc: Any) -> None:
     """The built-in PUBLIC EXECUTE reaches anon, and a revoke that names only
     anon + authenticated leaves it in place — that is how seed_trial_entitlement
-    shipped callable with the anon key (migration 362, closed by 605). Functions
-    are born private since 605; this rail covers every one created before it or
+    shipped callable with the anon key (migration 362, closed by 612). Functions
+    are born private since 612; this rail covers every one created before it or
     granted by hand. Allowlist empty, equality."""
     with svc.cursor() as cur:
         cur.execute(

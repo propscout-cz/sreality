@@ -56,7 +56,7 @@ common to all. Full plan, sequencing, and gates: `docs/design/public-release-pro
   `resolve_account_id`'s `legacy_backfill_claim` read are gone, so an unset
   `TENANT_POOL_DB_URL` now RAISES instead of silently degrading to an RLS-off connection —
   the shape that hid the bad-DSN incident below. The `legacy_backfill_claim` TABLE stays
-  (read by nothing since migration 605); no tenant-route test runs on the RLS-bypass path.
+  (read by nothing since migration 612); no tenant-route test runs on the RLS-bypass path.
 - **2026-09-11 W3 ("One Account, One Answer" — reads go RLS-only)**: the architectural payoff.
   `lookup_portal_listings` now takes NO account at all and its SQL carries no account predicate —
   `current_account_ids()` is the single membership definition, so the extension's answer IS the
@@ -124,7 +124,7 @@ common to all. Full plan, sequencing, and gates: `docs/design/public-release-pro
   increment 3 + Wave 1 (item 9 below) — the connection-swap, the account-partitioned reconciler,
   and the composite FK all predate this wave being picked up; only a DB-level invariant, an
   index, and a concurrency fix were genuinely left, shipped this pass. Its launch gate: an external
-  re-audit + a two-account pen-test, whose DB-level half runs in CI since migration 605 (the manual
+  re-audit + a two-account pen-test, whose DB-level half runs in CI since migration 612 (the manual
   SPA/API/extension half with real JWTs stays open). **Wave 3
   (watchdogs & notifications) is now in progress** (item 10 below); Wave 4 is unstarted
   (`docs/design/waves-1-4-public-features.md`).
@@ -439,7 +439,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      `handle_new_user`'s fresh-signup branch inserts a `('free','trialing', now()+7d)`
      entitlement, so every new signup gets **10 agent estimations for 7 days**, then falls to
      the free 3/mo (the resolver already honored the `trialing` arm; nothing marked signups
-     trialing before). Trial length hardcoded 7 days (operator decision). Since migration 605
+     trialing before). Trial length hardcoded 7 days (operator decision). Since migration 612
      it is one insert inside `handle_new_user` (the function is dropped). Verified live: the
      resolver returns 10 for a trialing account.
    - Remaining: **extension agent-estimate quota UX** (switch the panel's estimate from
@@ -511,7 +511,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      a product decision (invite/allowlist gate), not a code fix.
    - **Two-account pen-test half of the launch gate** ("A can't see/move/archive/reorder/inject into
      B's board"): six accounts exist live (2026-10-16); CI's `tests/test_tenant_isolation_live.py` covers the
-     DB level on two accounts born through the real signup trigger (migration 605): reads both ways, A's
+     DB level on two accounts born through the real signup trigger (migration 612): reads both ways, A's
      rename/archive/reorder/delete of B's stages matching nothing, a card planted on B's board refused, an event
      naming B's stage refused, and the anon-definer census. **Still open:** the manual pass through the SPA,
      the API and the extension with real JWTs, and registering `property_pipeline`/`property_pipeline_events`

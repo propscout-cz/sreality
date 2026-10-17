@@ -222,7 +222,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
     one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
-    stage. Stages are per account: signup seeds the default board (migration 605), the account curates it via the API. The badge is
+    stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API. The badge is
     `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline=any|<stage ids>`) is a
     property-id prefilter mirrored into `browse_stats_properties.property_ids_filter` (migration 378) and OUTSIDE preset identity; the chip LOADS
     A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable

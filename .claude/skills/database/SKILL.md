@@ -133,8 +133,8 @@ both pairs coexist harmlessly because the runner orders by filename, not the num
 prefix alone, but don't count on that.
 
 **Default privileges: a new table reaches `authenticated` read-only; a new function is born
-private (migration 605).** Tables: 299 stripped `anon` and the write verbs, and the table's
-deny-all RLS (CI-enforced) is the backstop. Functions: 605 removed the built-in PUBLIC EXECUTE
+private (migration 612).** Tables: 299 stripped `anon` and the write verbs, and the table's
+deny-all RLS (CI-enforced) is the backstop. Functions: 612 removed the built-in PUBLIC EXECUTE
 (the global form; 299's per-schema form could not) and the per-schema grant to `authenticated`,
 so a new function reaches only `postgres` + `service_role`; `CREATE OR REPLACE` keeps the ACL a
 function already has. Recipe, on every function you write: `revoke all on function <sig> from
@@ -233,7 +233,7 @@ PostgREST); read a listing's identity on the tenant conn through `listing_natura
 and market facts through a service-role connection (as `portal_lookup` does). Don't add a
 `USING (true)` policy to `listings`.
 
-**Signup** (`handle_new_user`, one path since migration 605): the Signup bullet in `references/tenancy.md`.
+**Signup** (`handle_new_user`, one path since migration 612): the Signup bullet in `references/tenancy.md`.
 
 **THE TENANCY DOCTRINE — four shapes, only four.** Full version, the table-by-table migration
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week
