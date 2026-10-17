@@ -1,41 +1,23 @@
-/* LocationTypeahead — Mapy.cz-powered address autocomplete.
+/* LocationTypeahead — Mapy.cz-powered place autocomplete.
  *
- * Supersedes DistrictTypeahead. Suggestions come from the FastAPI
- * proxy at /maps/suggest (which keeps the MAPY_CZ_API_KEY server-side)
- * so the dropdown can return streets, cities, kraj, POIs, and addresses
- * — anything Mapy.cz indexes — rather than just the limited set of
- * district names already in our listings table.
- *
- * Interaction contract matches the rest of filter-controls:
+ * Suggestions come from the FastAPI proxy at /maps/suggest (which keeps the
+ * MAPY_CZ_API_KEY server-side): kraje, okresy, towns, quarters, streets and
+ * addresses. Interaction contract matches the rest of filter-controls:
  *   value: DistrictChip[] | null  — selected chips
  *   onChange(next)                — null normalises to no constraint
  *
- * Each chip is `{name, context, excluded?, level?, id?}` and MEANS a level
- * plus a RÚIAN code: `/maps/resolve` fills `level` + `id` from the pick, and
- * every surface then tests the one predicate `<level>_id = any(codes)`
- * (lib/districtCodes, api/location_filter, migration 504). Four levels carry a
- * code — kraj, okres, obec and `cast_obce` (the quarter level, resolved by name
- * inside its obec because RÚIAN draws no polygon for it) — and a street / POI /
- * address pick carries its containing obec code. `deriveContext` walks
- * `regionalStructure` for the nearest `regional.municipality` and stores it as
- * `context`, which disambiguates a name at read time and is NOT a predicate.
- * The chip shows its level, because "Žižkov" the část obce and "Žižkov" the POI
- * that resolved to Praha select different cohorts and must not look identical.
- * INCLUDE chips OR'd (match any), then AND NOT-(OR of EXCLUDE chips). The
- * per-chip `−`/`+` button toggles `excluded` (red chip = subtract this
- * locality). This is the registry-aligned widget for both Browse and
- * Watchdog — the same component renders in both surfaces through
- * `customWidgets={{districts: LocationTypeahead}}`.
+ * What you pick is what you filter: `/maps/resolve` answers ONE RÚIAN unit at
+ * the picked level (kraj, okres, obec, část obce, ulice — an address is its
+ * street) with the register's name, and the pick becomes the chip
+ * `{name, context, level, id}` that every surface tests as
+ * `<level>_id = any(codes)` (lib/districtCodes). A pick the server cannot
+ * bind to one unit adds NO chip and says why under the input; no Mapy string is
+ * ever stored. INCLUDE chips OR'd, then AND NOT-(OR of EXCLUDE chips); the per-chip
+ * `−`/`+` button toggles `excluded`. The same component renders on every surface
+ * with a location box.
  *
- * onPick (independent of the chip filter) fires once per pick so the
- * Browse map can fly the viewport to the picked place's centre —
- * useful even when the chip itself narrows the cohort tightly.
- *
- * No count column — Mapy.cz doesn't return one, and the previous
- * count (from `fetchDistrictFacets`) was misleading: it counted every
- * listing ever seen with that district name across all categories /
- * states, not the count under the current filter set.
- */
+ * onPick fires once per pick, before it resolves, so the Browse map can fly to
+ * the picked place — also for a pick that adds no chip. */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -43,41 +25,40 @@ import { useQuery } from '@tanstack/react-query';
 import {
   fetchSuggest,
   resolveSuggestion,
+  type LocationResolution,
   type MapySuggestion,
   SUGGEST_NOT_CONFIGURED,
   typeBadge,
 } from '@/lib/maps';
 import type { DistrictChip } from '@/lib/filters';
-import { districtChipBadge, districtChipKey } from '@/lib/districtCodes';
+import { districtChipBadge, districtChipKey, isDistrictChip } from '@/lib/districtCodes';
 
 const QUERY_DEBOUNCE_MS = 150;
 const MIN_QUERY_LEN = 2;
 
-/* Mapy.cz suggestion types that ARE municipality-or-coarser. Picks
- * at any of these get `context: null` — they already name the
- * municipality (or are above it), so there's nothing finer-grained
- * to narrow against. Picks below this granularity (street, address,
- * část obce, POI) inherit the nearest `regional.municipality` from
- * the `regionalStructure` chain. */
-const MUNICIPALITY_OR_COARSER = new Set([
-  'regional.municipality',
-  'regional.region',
-  'regional.country',
-]);
+/* Why a pick added no chip, shown under the input until the next keystroke or
+ * pick. A refusal names the pick, so a notice that lands late is unambiguous. */
+const PICK_NOTICE = {
+  refused: (name: string) => `${name} can't be used as a filter — nothing was added`,
+  country: "A country can't be used as a filter",
+  failed: "Couldn't verify this place — try again",
+  duplicate: 'Already selected',
+} as const;
 
-export function deriveContext(s: MapySuggestion): string | null {
-  if (MUNICIPALITY_OR_COARSER.has(s.type)) return null;
-  const muni = (s.regionalStructure ?? []).find(
-    (e) => e.type === 'regional.municipality',
-  );
-  return muni?.name ?? null;
-}
-
-/* Chip identity is the RESOLVED UNIT when there is one — two picks that resolve
- * to the same (level, code) are the same chip however Mapy spelled them —
- * falling back to name+context for a chip with no code yet. */
 const sameChip = (a: DistrictChip, b: DistrictChip): boolean =>
   districtChipKey(a) === districtChipKey(b);
+
+/* The chip a resolve answer makes, or why it makes none. `res` null = the
+ * resolve call threw, which says nothing about the place. */
+const chipFromResolve = (
+  pick: MapySuggestion,
+  res: LocationResolution | null,
+): DistrictChip | string => {
+  if (res == null) return PICK_NOTICE.failed;
+  if (res.level == null && pick.type === 'regional.country') return PICK_NOTICE.country;
+  const chip = { name: res.name, context: res.context, level: res.level, id: res.id };
+  return isDistrictChip(chip) ? chip : PICK_NOTICE.refused(pick.name);
+};
 
 export function LocationTypeahead({
   label,
@@ -91,19 +72,33 @@ export function LocationTypeahead({
   label: string;
   value: ReadonlyArray<DistrictChip> | null;
   onChange: (next: DistrictChip[] | null) => void;
-  /* Fires once per picked suggestion. The Browse map listens for this
-   * to fly the viewport to the picked place — independent of the chip
-   * filter (which may or may not narrow the cohort, depending on
-   * whether the suggestion's place resolves to a code any listing carries).
-   * Picks without a `position` are still emitted; the
-   * receiver should no-op when `position` is missing. */
+  /* Fires once per picked suggestion, before it resolves: the Browse map flies
+   * there whether or not the pick becomes a chip. Picks without a `position`
+   * are still emitted; the receiver should no-op when it is missing. */
   onPick?: (s: MapySuggestion) => void;
 }) {
   const selected = useMemo(() => value ?? [], [value]);
 
+  /* A pick resolves asynchronously, so every edit applies to the LATEST chips —
+   * refreshed every render, and set synchronously by emit — through the latest
+   * onChange, never the ones the click closed over. */
+  const latest = useRef<ReadonlyArray<DistrictChip>>(selected);
+  latest.current = selected;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
   const [open, setOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pending, setPending] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -132,59 +127,36 @@ export function LocationTypeahead({
     suggestQ.error instanceof Error &&
     suggestQ.error.message === SUGGEST_NOT_CONFIGURED;
 
-  const matches = useMemo(() => {
-    if (!suggestQ.data) return [];
-    return suggestQ.data.filter((s) => {
-      const chip: DistrictChip = { name: s.name, context: deriveContext(s) };
-      return !selected.some((c) => sameChip(c, chip));
-    });
-  }, [suggestQ.data, selected]);
-
-  const emit = (next: DistrictChip[]) =>
-    onChange(next.length === 0 ? null : next);
-
-  /* Resolve the pick to its stable admin identity (level + id) via
-   * `/maps/resolve` — the SAME point-in-polygon that stamped every listing's
-   * obec_id, so `id = id` matching is exact (picking obec "Jihlava" can't drag
-   * in okres "Jihlava"). A street/POI/address resolves to its containing obec
-   * for a locality-text narrow. If resolve is unavailable (503 / offline), fall
-   * back to the legacy name-match chip so the pick still works. */
-  const resolveChip = async (
-    s: MapySuggestion,
-    base: DistrictChip,
-  ): Promise<DistrictChip> => {
-    try {
-      const res = await resolveSuggestion(s);
-      if (res.kind === 'admin') return { ...base, level: res.level, id: res.id };
-      if (res.kind === 'locality') {
-        return { ...base, level: 'locality', id: res.obecId };
-      }
-      return base;
-    } catch {
-      return base;
-    }
+  const emit = (next: ReadonlyArray<DistrictChip>) => {
+    latest.current = next;
+    onChangeRef.current(next.length === 0 ? null : [...next]);
   };
 
+  /* The map flies at once; the chip waits for `/maps/resolve`. Dedupe runs
+   * after resolving, because identity is the resolved unit — a re-pick changes
+   * nothing (an excluded chip stays excluded). */
   const add = async (s: MapySuggestion) => {
     onPick?.(s);
-    const base: DistrictChip = { name: s.name, context: deriveContext(s) };
-    if (selected.some((c) => sameChip(c, base))) return;
     setQuery('');
     setDebounced('');
-    const chip = await resolveChip(s, base);
-    emit([...selected, chip]);
+    setNotice(null);
+    setPending((n) => n + 1);
+    const res = await resolveSuggestion(s).catch(() => null);
+    if (!alive.current) return;
+    setPending((n) => n - 1);
+    const chip = chipFromResolve(s, res);
+    if (typeof chip === 'string') setNotice(chip);
+    else if (latest.current.some((c) => sameChip(c, chip))) setNotice(PICK_NOTICE.duplicate);
+    else emit([...latest.current, chip]);
   };
 
   const remove = (chip: DistrictChip) => {
-    emit(selected.filter((c) => !sameChip(c, chip)));
+    emit(latest.current.filter((c) => !sameChip(c, chip)));
   };
 
-  /* Flip a chip between INCLUDE and EXCLUDE. Identity is name+context
-   * (sameChip), so toggling never duplicates or drops the chip — it only
-   * subtracts/adds its matches from the cohort. */
   const toggleExclude = (chip: DistrictChip) => {
     emit(
-      selected.map((c) =>
+      latest.current.map((c) =>
         sameChip(c, chip) ? { ...c, excluded: !(c.excluded === true) } : c,
       ),
     );
@@ -194,7 +166,7 @@ export function LocationTypeahead({
   const tooShort = debounced.length > 0 && debounced.length < MIN_QUERY_LEN;
 
   return (
-    <div>
+    <div aria-busy={pending > 0}>
       <div ref={ref} className="relative">
         <input
           type="text"
@@ -202,6 +174,7 @@ export function LocationTypeahead({
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            setNotice(null);
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
@@ -215,17 +188,26 @@ export function LocationTypeahead({
           <SuggestPanel
             isLoading={isLoading}
             tooShort={tooShort}
-            matches={matches}
+            matches={suggestQ.data ?? []}
             onPick={add}
           />
         )}
       </div>
 
+      {/* Always mounted, so a screen reader hears a notice that appears. */}
+      <p
+        role="status"
+        aria-live="polite"
+        className={notice ? 'mt-1 text-[0.7rem] text-[var(--color-brick)]' : 'sr-only'}
+      >
+        {notice}
+      </p>
+
       {notConfigured && (
         <p className="mt-1 text-[0.7rem] text-[var(--color-ink-4)]">
-          Address search isn&apos;t configured for this deploy. Type a
-          place name manually below and press Enter, or use the
-          map&apos;s centre + radius mode.
+          Place search is unavailable — geocoding isn&apos;t configured for this
+          deploy, or Mapy.cz isn&apos;t answering. Reload to try again; places
+          already selected keep filtering.
         </p>
       )}
 
@@ -253,22 +235,15 @@ export function LocationTypeahead({
                     type="button"
                     onClick={() => toggleExclude(chip)}
                     className="inline-flex h-4 w-4 items-center justify-center rounded-[var(--radius-xs)] font-semibold leading-none opacity-70 hover:opacity-100 transition-opacity"
-                    aria-label={excluded ? `Include ${label}` : `Exclude ${label}`}
+                    aria-label={`${excluded ? 'Include' : 'Exclude'} ${label} (${badge})`}
                     title={excluded ? 'Click to include' : 'Click to exclude'}
                   >
                     {excluded ? '+' : '−'}
                   </button>
                   <span className="px-0.5">{excluded ? `− ${label}` : label}</span>
-                  {/* The level the chip filters on. A chip with no code says
-                    * so ("Nerozpoznáno") instead of looking like a live
-                    * filter that quietly matches nothing. */}
                   <span
                     className="shrink-0 text-[0.6rem] tracking-[0.08em] uppercase opacity-70"
-                    title={
-                      chip.id != null
-                        ? `${badge} · RÚIAN ${chip.id}`
-                        : 'Bez kódu — tento chip nic nevybírá'
-                    }
+                    title={`${badge} · RÚIAN ${chip.id}`}
                   >
                     {badge}
                   </span>
@@ -276,7 +251,7 @@ export function LocationTypeahead({
                     type="button"
                     onClick={() => remove(chip)}
                     className="inline-flex h-4 w-4 items-center justify-center rounded-[var(--radius-xs)] leading-none opacity-60 hover:opacity-100 transition-opacity"
-                    aria-label={`Remove ${label}`}
+                    aria-label={`Remove ${label} (${badge})`}
                     title="Remove"
                   >
                     ×

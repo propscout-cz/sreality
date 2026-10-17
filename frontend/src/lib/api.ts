@@ -52,7 +52,7 @@ import type {
   WatchdogSubscription,
   FilterPreset,
 } from './types';
-import type { PresetSpec } from './filters';
+import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
 import { supabase } from './supabase';
 
@@ -2554,6 +2554,20 @@ export const updateCollection = (
 export const deleteCollection = (id: number): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/collections/${id}`, { method: 'DELETE' });
 
+/* Owner only: 404 not owned; 422 "No account uses this email." / "That's your own account." */
+export const shareCollection = (id: number, email: string): Promise<Collection> =>
+  request<Collection>(`/collections/${id}/shares`, { method: 'POST', json: { email } });
+
+/* The owner revokes a recipient, or a recipient leaves (its own grant's account_id). */
+export const unshareCollection = (
+  id: number,
+  account_id: string,
+): Promise<{ deleted: true }> =>
+  request<{ deleted: true }>(
+    `/collections/${id}/shares/${encodeURIComponent(account_id)}`,
+    { method: 'DELETE' },
+  );
+
 export const addPropertiesToCollection = (
   id: number,
   property_ids: number[],
@@ -2617,30 +2631,29 @@ export const listPropertyNotes = (
 export const createPropertyNote = (
   property_id: number,
   body: string,
-  origin_listing_id?: number,
-  // Surrogate twin (migration 323/R2). origin_listing_id is the legacy
-  // sreality_id, NULL for a post-Gate-2 listing — pass the surrogate too so
-  // the note's provenance survives even when the legacy id is unavailable
-  // (api.create_note COALESCEs one from the other server-side).
+  // The viewed listing's surrogate id — the note's provenance.
   origin_listing_ref_id?: number,
+  // The author's share mark; private when omitted.
+  shared?: boolean,
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     json: {
       body,
-      ...(origin_listing_id != null ? { origin_listing_id } : {}),
+      ...(shared != null ? { shared } : {}),
       ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
     },
   });
 
+/* At least one field; marking shared leaves updated_at alone (API). */
 export const updatePropertyNote = (
   property_id: number,
   note_id: number,
-  body: string,
+  patch: { body?: string; shared?: boolean },
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
-    json: { body },
+    json: patch,
   });
 
 export const deletePropertyNote = (
@@ -3526,9 +3539,7 @@ export const runPriceStatDataset = (
  * All endpoints are bearer-gated (PII). */
 
 export interface OutreachTargetSpec {
-  region_ids?: number[];
-  okres_ids?: number[];
-  obec_ids?: number[];
+  districts?: DistrictChip[];
   category_main?: string | null;
   category_type?: string | null;
   metric?: string;
@@ -3602,7 +3613,7 @@ export const createOutreachCampaign = (input: {
   name: string;
   goal?: string | null;
   guidance?: string | null;
-  target?: OutreachTargetSpec | null;
+  target?: OutreachTargetSpec;
 }): Promise<OutreachCampaign> =>
   request<OutreachCampaign>('/outreach/campaigns', { method: 'POST', json: input });
 

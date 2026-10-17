@@ -74,9 +74,7 @@ describe('<Brokers> on the phone', () => {
     renderPage();
     const board = await screen.findByRole('list', { name: 'Žebříček makléřů' });
     expect(lastParams()).toMatchObject({
-      regionIds: [],
-      okresIds: [],
-      obecIds: [],
+      districts: [],
       categoryMain: 'byt',
       categoryType: 'prodej',
       metric: 'active_property_count',
@@ -118,6 +116,9 @@ describe('<Brokers> on the phone', () => {
     await user.click(screen.getByRole('button', { name: 'Místo: Celá ČR' }));
     const sheet = screen.getByRole('dialog', { name: 'Místo' });
     expect(within(sheet).getByRole('textbox', { name: 'Místo' })).toBeInTheDocument();
+    expect(
+      within(sheet).getByText('Kraj, okres, obec, část obce nebo ulice; bez místa platí celá ČR.'),
+    ).toBeInTheDocument();
   });
 
   it('searching by name swaps the roll for the results, clearing brings it back as it was', async () => {
@@ -148,16 +149,22 @@ describe('<Brokers> on the phone', () => {
 });
 
 describe('phone broker helpers', () => {
-  it('labels only the chips that scope the board, compactly', () => {
+  const PRAHA = { name: 'Praha', context: null, level: 'obec', id: 554782 } as const;
+  const ZIZKOV = { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 490067 } as const;
+  const STREET = { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 } as const;
+
+  it('labels the picked chips compactly, counting every level', () => {
     expect(placeLabelOf([])).toBe('Celá ČR');
-    expect(placeLabelOf([{ name: 'Praha', context: null, level: 'obec', id: 554782 }])).toBe('Praha');
-    expect(
-      placeLabelOf([
-        { name: 'Praha', context: null, level: 'obec', id: 554782 },
-        { name: 'Brno', context: null, level: 'obec', id: 582786 },
-        { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 1 },
-      ]),
-    ).toBe('Praha +1');
+    expect(placeLabelOf([PRAHA])).toBe('Praha');
+    expect(placeLabelOf([STREET])).toBe('Na Rybníčkách');
+    expect(placeLabelOf([PRAHA, ZIZKOV, STREET])).toBe('Praha +2');
+    expect(placeLabelOf([ZIZKOV, STREET])).toBe('Žižkov +1');
+  });
+
+  it('leads with an include when there is one, else with the whole country minus the excludes', () => {
+    expect(placeLabelOf([{ ...ZIZKOV, excluded: true }, PRAHA])).toBe('Praha +1');
+    expect(placeLabelOf([{ ...ZIZKOV, excluded: true }])).toBe('Celá ČR − Žižkov');
+    expect(placeLabelOf([{ ...STREET, excluded: true }, { ...ZIZKOV, excluded: true }])).toBe('Celá ČR −2');
   });
 
   it('draws initials from the first and last word of the name, degrees aside', () => {

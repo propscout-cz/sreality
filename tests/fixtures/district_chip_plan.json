@@ -7,11 +7,14 @@
     "the Watchdog came to answer the same saved filter differently; one table, read by both",
     "languages, is what makes that a failing test instead of a support ticket.",
     "",
-    "`plan` is the shared definition: codes per level, include and exclude, plus the names of",
-    "chips that carried no code. `postgrest` is the SPA's rendering, `sql_where`/`sql_params`",
-    "the API's; `rows` exercises the in-memory rendering the pipeline board uses.",
+    "`plan` is the shared definition: codes per level, include and exclude. Every chip",
+    "carries a level and a positive RUIAN code -- a chip without both cannot exist.",
+    "`postgrest` is the SPA's rendering, `sql_where`/`sql_params` the API's; `rows`",
+    "exercises the in-memory rendering the pipeline board uses, and the DB lane runs",
+    "`sql_where` over the same rows (tests/test_filter_compiler_rows_live.py).",
     "Codes are real RUIAN codes (Praha 554782, Jihlava obec 586846 / okres 3707, kraj Vysocina",
-    "108) so a reader can sanity-check them against the registry.",
+    "108, Pardubice 555134 and its street Na Rybnickach 666742) so a reader can sanity-check",
+    "them against the registry.",
     "",
     "NULL CODES UNDER AN EXCLUDE ARE THE SUBTLE CASE and every rendering is pinned here:",
     "an unresolved row (NULL code at the excluded level) is KEPT. SQL needs",
@@ -20,15 +23,13 @@
     "do for free; the bare `NOT (...)` / `not.in.` spellings drop the row, which made",
     "\"not Prague\" quietly mean \"not Prague AND located\"."
   ],
-  "no_match_code": -1,
   "cases": [
     {
       "name": "no chips is no constraint",
       "chips": [],
       "plan": {
         "include": {},
-        "exclude": {},
-        "unresolved": []
+        "exclude": {}
       },
       "postgrest": null,
       "sql_where": [],
@@ -58,8 +59,7 @@
             586846
           ]
         },
-        "exclude": {},
-        "unresolved": []
+        "exclude": {}
       },
       "postgrest": "and(or(obec_id.in.(586846)))",
       "sql_where": [
@@ -112,8 +112,7 @@
             554782
           ]
         },
-        "exclude": {},
-        "unresolved": []
+        "exclude": {}
       },
       "postgrest": "and(or(obec_id.in.(586846,554782)))",
       "sql_where": [
@@ -141,8 +140,14 @@
       ]
     },
     {
-      "name": "all four levels, coarsest arm first",
+      "name": "all five levels, coarsest arm first",
       "chips": [
+        {
+          "name": "Na Rybnickach",
+          "context": "Pardubice",
+          "level": "ulice",
+          "id": 666742
+        },
         {
           "name": "Zizkov",
           "context": "Praha",
@@ -181,14 +186,16 @@
           ],
           "cast_obce": [
             490067
+          ],
+          "ulice": [
+            666742
           ]
         },
-        "exclude": {},
-        "unresolved": []
+        "exclude": {}
       },
-      "postgrest": "and(or(region_id.in.(108),okres_id.in.(3707),obec_id.in.(554782),cast_obce_id.in.(490067)))",
+      "postgrest": "and(or(region_id.in.(108),okres_id.in.(3707),obec_id.in.(554782),cast_obce_id.in.(490067),ulice_id.in.(666742)))",
       "sql_where": [
-        "(l.region_id = ANY(%(district_codes_kraj)s) OR l.okres_id = ANY(%(district_codes_okres)s) OR l.obec_id = ANY(%(district_codes_obec)s) OR l.cast_obce_id = ANY(%(district_codes_cast_obce)s))"
+        "(l.region_id = ANY(%(district_codes_kraj)s) OR l.okres_id = ANY(%(district_codes_okres)s) OR l.obec_id = ANY(%(district_codes_obec)s) OR l.cast_obce_id = ANY(%(district_codes_cast_obce)s) OR l.ulice_id = ANY(%(district_codes_ulice)s))"
       ],
       "sql_params": {
         "district_codes_kraj": [
@@ -202,6 +209,9 @@
         ],
         "district_codes_cast_obce": [
           490067
+        ],
+        "district_codes_ulice": [
+          666742
         ]
       },
       "rows": [
@@ -219,6 +229,20 @@
         },
         {
           "row": {
+            "obec_id": 555134,
+            "ulice_id": 666742
+          },
+          "matches": true
+        },
+        {
+          "row": {
+            "obec_id": 555134,
+            "ulice_id": 1
+          },
+          "matches": false
+        },
+        {
+          "row": {
             "obec_id": 582786,
             "region_id": 116
           },
@@ -227,43 +251,53 @@
       ]
     },
     {
-      "name": "a street pick filters at its containing obec",
+      "name": "a street chip filters at its street, never its town",
+      "_why": "ulice is the fifth level: a street chip is strict equality on the RUIAN street code (Na Rybnickach 666742 inside Pardubice 555134). A row in that town whose street is unknown or another street is NOT in the cohort -- the chip is never widened to its obec.",
       "chips": [
         {
-          "name": "Pezinska",
-          "context": "Mlada Boleslav",
-          "level": "locality",
-          "id": 535419
+          "name": "Na Rybnickach",
+          "context": "Pardubice",
+          "level": "ulice",
+          "id": 666742
         }
       ],
       "plan": {
         "include": {
-          "obec": [
-            535419
+          "ulice": [
+            666742
           ]
         },
-        "exclude": {},
-        "unresolved": []
+        "exclude": {}
       },
-      "postgrest": "and(or(obec_id.in.(535419)))",
+      "postgrest": "and(or(ulice_id.in.(666742)))",
       "sql_where": [
-        "(l.obec_id = ANY(%(district_codes_obec)s))"
+        "(l.ulice_id = ANY(%(district_codes_ulice)s))"
       ],
       "sql_params": {
-        "district_codes_obec": [
-          535419
+        "district_codes_ulice": [
+          666742
         ]
       },
       "rows": [
         {
           "row": {
-            "obec_id": 535419
+            "obec_id": 555134,
+            "ulice_id": 666742
           },
           "matches": true
         },
         {
+          "_why": "same town, no street code: a street chip never widens to its obec",
           "row": {
-            "obec_id": 554782
+            "obec_id": 555134,
+            "ulice_id": null
+          },
+          "matches": false
+        },
+        {
+          "row": {
+            "obec_id": 555134,
+            "ulice_id": 1
           },
           "matches": false
         }
@@ -296,8 +330,7 @@
           "cast_obce": [
             490017
           ]
-        },
-        "unresolved": []
+        }
       },
       "postgrest": "and(or(obec_id.in.(554782)),or(cast_obce_id.is.null,cast_obce_id.not.in.(490017)))",
       "sql_where": [
@@ -360,8 +393,7 @@
           "obec": [
             554782
           ]
-        },
-        "unresolved": []
+        }
       },
       "postgrest": "and(or(obec_id.is.null,obec_id.not.in.(554782)))",
       "sql_where": [
@@ -399,134 +431,75 @@
       ]
     },
     {
-      "name": "a chip with no code matches nothing (fail closed)",
+      "name": "a street exclude subtracts only that street",
       "chips": [
         {
-          "name": "Brno",
-          "context": null
-        }
-      ],
-      "plan": {
-        "include": {
-          "obec": [
-            -1
-          ]
-        },
-        "exclude": {},
-        "unresolved": [
-          "Brno"
-        ]
-      },
-      "postgrest": "and(or(obec_id.in.(-1)))",
-      "sql_where": [
-        "(l.obec_id = ANY(%(district_codes_obec)s))"
-      ],
-      "sql_params": {
-        "district_codes_obec": [
-          -1
-        ]
-      },
-      "rows": [
-        {
-          "row": {
-            "obec_id": 582786
-          },
-          "matches": false
-        },
-        {
-          "row": {},
-          "matches": false
-        }
-      ]
-    },
-    {
-      "name": "a level with no code is not a level",
-      "chips": [
-        {
-          "name": "Brno",
+          "name": "Pardubice",
           "context": null,
           "level": "obec",
-          "id": null
-        }
-      ],
-      "plan": {
-        "include": {
-          "obec": [
-            -1
-          ]
-        },
-        "exclude": {},
-        "unresolved": [
-          "Brno"
-        ]
-      },
-      "postgrest": "and(or(obec_id.in.(-1)))",
-      "sql_where": [
-        "(l.obec_id = ANY(%(district_codes_obec)s))"
-      ],
-      "sql_params": {
-        "district_codes_obec": [
-          -1
-        ]
-      },
-      "rows": [
-        {
-          "row": {
-            "obec_id": 582786
-          },
-          "matches": false
-        }
-      ]
-    },
-    {
-      "name": "an unresolvable exclude chip subtracts nothing",
-      "chips": [
-        {
-          "name": "Praha",
-          "context": null,
-          "level": "obec",
-          "id": 554782
+          "id": 555134
         },
         {
-          "name": "U Kulataku",
-          "context": null,
+          "name": "Na Rybnickach",
+          "context": "Pardubice",
+          "level": "ulice",
+          "id": 666742,
           "excluded": true
         }
       ],
       "plan": {
         "include": {
           "obec": [
-            554782
+            555134
           ]
         },
         "exclude": {
-          "obec": [
-            -1
+          "ulice": [
+            666742
           ]
-        },
-        "unresolved": [
-          "U Kulataku"
-        ]
+        }
       },
-      "postgrest": "and(or(obec_id.in.(554782)),or(obec_id.is.null,obec_id.not.in.(-1)))",
+      "postgrest": "and(or(obec_id.in.(555134)),or(ulice_id.is.null,ulice_id.not.in.(666742)))",
       "sql_where": [
         "(l.obec_id = ANY(%(district_codes_obec)s))",
-        "NOT COALESCE(l.obec_id = ANY(%(district_codes_excl_obec)s), false)"
+        "NOT COALESCE(l.ulice_id = ANY(%(district_codes_excl_ulice)s), false)"
       ],
       "sql_params": {
         "district_codes_obec": [
-          554782
+          555134
         ],
-        "district_codes_excl_obec": [
-          -1
+        "district_codes_excl_ulice": [
+          666742
         ]
       },
       "rows": [
         {
           "row": {
-            "obec_id": 554782
+            "obec_id": 555134,
+            "ulice_id": 666742
+          },
+          "matches": false
+        },
+        {
+          "row": {
+            "obec_id": 555134,
+            "ulice_id": 1
           },
           "matches": true
+        },
+        {
+          "_why": "a row with no street code is NOT subtracted by a street exclude",
+          "row": {
+            "obec_id": 555134,
+            "ulice_id": null
+          },
+          "matches": true
+        },
+        {
+          "row": {
+            "obec_id": 582786
+          },
+          "matches": false
         }
       ]
     },
@@ -552,8 +525,7 @@
             554782
           ]
         },
-        "exclude": {},
-        "unresolved": []
+        "exclude": {}
       },
       "postgrest": "and(or(obec_id.in.(554782)))",
       "sql_where": [
@@ -570,46 +542,6 @@
             "obec_id": 554782
           },
           "matches": true
-        }
-      ]
-    },
-    {
-      "name": "a hand-typed non-positive id is not a resolved chip",
-      "_why": "RUIAN codes are positive; a URL must not be able to spell the no-match sentinel as if it were a real pick",
-      "chips": [
-        {
-          "name": "Praha",
-          "context": null,
-          "level": "obec",
-          "id": -1
-        }
-      ],
-      "plan": {
-        "include": {
-          "obec": [
-            -1
-          ]
-        },
-        "exclude": {},
-        "unresolved": [
-          "Praha"
-        ]
-      },
-      "postgrest": "and(or(obec_id.in.(-1)))",
-      "sql_where": [
-        "(l.obec_id = ANY(%(district_codes_obec)s))"
-      ],
-      "sql_params": {
-        "district_codes_obec": [
-          -1
-        ]
-      },
-      "rows": [
-        {
-          "row": {
-            "obec_id": 554782
-          },
-          "matches": false
         }
       ]
     }

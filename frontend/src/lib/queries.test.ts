@@ -323,16 +323,31 @@ describe('districtsFilterClause, re-exported by queries.ts', () => {
     ])).toBe('and(or(cast_obce_id.in.(490067)))');
   });
 
-  it('never emits a name match for a chip that carries no code', () => {
-    const got = districtsFilterClause([{ name: 'Brno', context: null }]);
-    expect(got).toBe('and(or(obec_id.in.(-1)))');
-    expect(got).not.toContain('ilike');
+  it('compiles a street chip at the street, never at its town', () => {
+    expect(districtsFilterClause([
+      { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
+    ])).toBe('and(or(ulice_id.in.(666742)))');
+  });
+
+  /* The two Stats/map RPCs compile the same CASE over the RAW level: an alias
+   * mapped here (a street sent as its town) would widen Stats and the map. */
+  it('ships each chip\'s raw level and code to the Stats/map RPCs', () => {
+    const args = buildBrowseStatsArgs({
+      ...DEFAULT_FILTERS,
+      districts: [
+        { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
+        { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 490067, excluded: true },
+      ],
+    }, { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null });
+    expect(args.districts_levels).toEqual(['ulice', 'cast_obce']);
+    expect(args.districts_ids).toEqual([666742, 490067]);
+    expect(args.districts_excluded_filter).toEqual([false, true]);
   });
 });
 
 describe('matchesDistricts, re-exported by queries.ts', () => {
   const mkRow = (o: Partial<DistrictMatchRow>): DistrictMatchRow => ({
-    obec_id: null, okres_id: null, region_id: null, cast_obce_id: null, ...o,
+    obec_id: null, okres_id: null, region_id: null, cast_obce_id: null, ulice_id: null, ...o,
   });
 
   it('matches any row when there are no chips', () => {

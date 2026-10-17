@@ -1,11 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { listBrokerMergeCandidates } from '../lib/api';
 import { useAuth } from '@/lib/auth';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import {
-  chipsToGeoArrays,
   contactState,
   fetchBrokerLeaderboard,
   LEADER_METRIC_OPTIONS,
@@ -16,6 +15,7 @@ import {
   type BrokerLeaderRow,
   type LeaderMetric,
 } from '../lib/brokers';
+import { districtChipKey } from '../lib/districtCodes';
 import type { DistrictChip } from '../lib/filters';
 import { LocationTypeahead } from '../components/filter-controls/LocationTypeahead';
 import ErrorBanner from '../components/ErrorBanner';
@@ -112,8 +112,6 @@ function BrokersDesktop() {
     setCategoryType(next);
   };
 
-  const geo = useMemo(() => chipsToGeoArrays(districts), [districts]);
-
   // reason_counts is the whole queue; `count` is only the page, so the badge used
   // to pin at its own 100-row limit (and paid for 100 enriched rows to show one
   // number). Ask for a single row and read the counts.
@@ -139,7 +137,7 @@ function BrokersDesktop() {
   const boardQ = useQuery<{ rows: BrokerLeaderRow[]; placeLabel: string }>({
     queryKey: [
       'broker-leaderboard',
-      geo.regionIds, geo.okresIds, geo.obecIds,
+      districts.map((d) => [districtChipKey(d), d.excluded === true]),
       categoryMain, categoryType, metric, limit, firmIds, minPriceCzk, includeUnpriced,
       subtypes, includeUnknownSubtype,
     ],
@@ -149,7 +147,7 @@ function BrokersDesktop() {
     queryFn: ({ signal }) =>
       fetchBrokerLeaderboard(
         {
-          ...geo, categoryMain, categoryType, metric, limit, firmIds,
+          districts, categoryMain, categoryType, metric, limit, firmIds,
           minPriceCzk, includeUnpriced, subtypes, includeUnknownSubtype,
         },
         signal,
@@ -163,9 +161,11 @@ function BrokersDesktop() {
   });
 
   const rows = boardQ.data?.rows ?? [];
-  const resolved = districts.filter((d) => d.id != null && !d.excluded);
-  const placeLabel =
-    resolved.length === 0 ? 'Celá ČR' : resolved.map((d) => d.name).join(' + ');
+  // "Praha + Brno − Žižkov"; with no include chip the base is the whole country.
+  const placeLabel = [
+    districts.filter((d) => !d.excluded).map((d) => d.name).join(' + ') || 'Celá ČR',
+    ...districts.filter((d) => d.excluded).map((d) => d.name),
+  ].join(' − ');
   // What the rows on screen were fetched under; falls back to the live label
   // only when there is nothing on screen yet (first load, error, empty).
   const shownPlaceLabel = boardQ.data?.placeLabel ?? placeLabel;

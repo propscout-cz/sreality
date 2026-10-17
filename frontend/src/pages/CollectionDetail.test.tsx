@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -23,6 +23,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     getCollection: vi.fn(),
     removePropertyFromCollection: vi.fn(),
+    shareCollection: vi.fn(),
+    unshareCollection: vi.fn(),
   };
 });
 
@@ -37,6 +39,8 @@ const DATA: CollectionWithProperties = {
     monitoring_enabled: false,
     notify_channels: [],
     is_system: false,
+    owner_email: null,
+    shared_with: [],
   },
   properties: [],
 };
@@ -65,6 +69,7 @@ function renderPage() {
       <MemoryRouter initialEntries={['/collections/1']}>
         <Routes>
           <Route path="/collections/:id" element={<CollectionDetail />} />
+          <Route path="/collections" element={<p>collections list</p>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -129,5 +134,135 @@ describe('<CollectionDetail>', () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: curationKeys.collection(1),
     });
+  });
+
+  /* Sharing (migration 610): the owner shares by email, sees every recipient,
+   * and stops sharing in two steps; a refusal sits under the field. */
+  describe('Sharing, as the owner', () => {
+    const OWNED: CollectionWithProperties = {
+      ...DATA,
+      collection: {
+        ...DATA.collection,
+        shared_with: [{ account_id: 'acc-b', email: 'petr@example.cz' }],
+      },
+    };
+
+    it('shares with a typed email and revalidates the collection', async () => {
+      vi.mocked(api.shareCollection).mockResolvedValue(OWNED.collection);
+      const { invalidate } = renderPage();
+      expect(await screen.findByText('Sharing')).toBeInTheDocument();
+      expect(screen.getByText('Not shared with anyone.')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByRole('textbox', { name: 'Email' }), {
+        target: { value: ' petr@example.cz ' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      await waitFor(() =>
+        expect(api.shareCollection).toHaveBeenCalledWith(1, 'petr@example.cz'),
+      );
+      await waitFor(() =>
+        expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collection(1) }),
+      );
+    });
+
+    it('shows a 422 inline under the field', async () => {
+      vi.mocked(api.shareCollection).mockRejectedValue(
+        new api.ApiError('No account uses this email.', 422, null),
+      );
+      renderPage();
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Email' }), {
+        target: { value: 'nikdo@example.cz' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('No account uses this email.');
+    });
+
+    it('lists the recipients and stops sharing only after a confirm', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(OWNED);
+      vi.mocked(api.unshareCollection).mockResolvedValue({ deleted: true });
+      renderPage();
+
+      const list = await screen.findByRole('list', { name: 'Shared with' });
+      expect(within(list).getByText('petr@example.cz')).toBeInTheDocument();
+      fireEvent.click(within(list).getByRole('button', { name: 'Stop sharing with petr@example.cz' }));
+      expect(api.unshareCollection).not.toHaveBeenCalled();
+      fireEvent.click(within(list).getByRole('button', { name: 'Stop sharing' }));
+      await waitFor(() => expect(api.unshareCollection).toHaveBeenCalledWith(1, 'acc-b'));
+    });
+  });
+
+  /* The recipient's view: read-only, with one write — leaving. */
+  describe('as a viewer of a collection shared with me', () => {
+    const SHARED: CollectionWithProperties = {
+      collection: {
+        ...DATA.collection,
+        owner_email: 'petr@example.cz',
+        shared_with: [{ account_id: 'acc-me', email: null }],
+      },
+      properties: [MEMBER],
+    };
+
+    it('names the owner, hides every owner control, and keeps the table', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(SHARED);
+      renderPage();
+
+      expect(await screen.findByText('petr@example.cz')).toBeInTheDocument();
+      expect(screen.getByText(/view only/)).toBeInTheDocument();
+      expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull();
+      expect(screen.queryByRole('switch', { name: 'Monitoring' })).toBeNull();
+      expect(screen.queryByText('Sharing')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Remove listing from collection' })).toBeNull();
+      expect(screen.getByRole('link', { name: '900' })).toBeInTheDocument();
+    });
+
+    it('says nothing about adding when the shared collection is empty', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue({ ...SHARED, properties: [] });
+      renderPage();
+      expect(await screen.findByText('No properties in this collection yet.')).toBeInTheDocument();
+      expect(screen.queryByText(/Add to collection/)).toBeNull();
+    });
+
+    it('leaves through its own grant, after a confirm', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(SHARED);
+      vi.mocked(api.unshareCollection).mockResolvedValue({ deleted: true });
+      const { invalidate } = renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove from my list' }));
+      expect(api.unshareCollection).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      await waitFor(() => expect(api.unshareCollection).toHaveBeenCalledWith(1, 'acc-me'));
+      // Back to the list, which re-reads without the collection.
+      expect(await screen.findByText('collections list')).toBeInTheDocument();
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: curationKeys.collections });
+    });
+
+    it('does not let a double-click through the confirm', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(SHARED);
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove from my list' }), { detail: 1 });
+      // The second click of the double-click lands on the confirm that just appeared.
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }), { detail: 2 });
+      expect(api.unshareCollection).not.toHaveBeenCalled();
+    });
+
+    it('says why leaving failed and stays on the page', async () => {
+      vi.mocked(api.getCollection).mockResolvedValue(SHARED);
+      vi.mocked(api.unshareCollection).mockRejectedValue(new api.ApiError('Not found', 404, null));
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove from my list' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+      expect(await screen.findByText('Not found')).toBeInTheDocument();
+      expect(screen.queryByText('collections list')).toBeNull();
+    });
+  });
+
+  it('says a missing collection may no longer be shared with you', async () => {
+    vi.mocked(api.getCollection).mockRejectedValue(new api.ApiError('Not found', 404, null));
+    renderPage();
+    expect(
+      await screen.findByText(/or it is no longer shared with you/),
+    ).toBeInTheDocument();
   });
 });

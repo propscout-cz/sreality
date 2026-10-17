@@ -91,15 +91,20 @@ export interface PipelineCardResult {
   removed?: boolean;
 }
 
-/* One operator-curated collection (GET /collections). Property-grain
- * (rule #18); `monitoring_enabled` marks it as a watchlist, `is_system` marks
- * the default "monitoring" collection. The panel lists every one in its
- * save-to-collection checklist, monitored ones first. */
+/* One collection the caller can read (GET /collections): its own, or one
+ * another account shared with it view-only (migration 610). Property-grain
+ * (rule #18); `monitoring_enabled` marks it as a watchlist (always false on a
+ * shared one: alerts go to its owner). `owner_email` is null exactly when it is
+ * MINE — the one field mine vs shared is told by (glyphs.ts `isMine`). */
 export interface ExtCollection {
   id: number;
   name: string;
   monitoring_enabled: boolean;
-  is_system: boolean;
+  owner_email: string | null;
+  /* Who else reads it: on mine, every recipient; on a shared one, only my own
+   * grant (`email` null = me). Read for a note's share audience; absent from
+   * an API that predates sharing (same posture as `tag_ids`). */
+  shared_with?: { account_id: string; email: string | null }[];
 }
 
 /* A tag (GET /tags, rule #18): a name in one of the stage palette's colours. */
@@ -133,17 +138,27 @@ export interface TagWriteResult {
   detached?: boolean;
 }
 
-/* One operator note about a PROPERTY (rule #18). `origin_listing_id` is the
- * advert the operator was viewing when they wrote it — display provenance only,
- * not a grouping key. Read via GET /properties/{id}/notes (most-recent-first). */
+/* One note about a PROPERTY (rule #18) the caller can read: its own, or
+ * another author's SHARED note on a property a share puts in reach (migration
+ * 610). Read via GET /properties/{id}/notes (most-recent-first). */
 export interface ExtNote {
   id: number;
   property_id: number;
   body: string;
-  origin_listing_id: number | null;
+  /* The author's consent for it to cross a share (default false). A foreign
+   * note is always shared — else it would not be readable. */
+  shared: boolean;
   created_at: string;
-  /* Null until the operator edits the note; stamped on every PATCH. */
+  /* Null until the operator edits the note's body (marking it shared is not an edit). */
   updated_at: string | null;
+  /* The author's email; null exactly when the note is mine (read-only otherwise). */
+  owner_email: string | null;
+}
+
+/* PATCH /properties/{id}/notes/{note_id}: at least one field (author only). */
+export interface NotePatch {
+  body?: string;
+  shared?: boolean;
 }
 
 /* One entry from POST /listings/lookup — our scraped facts for a portal
@@ -228,8 +243,10 @@ export interface PortalListing {
     gross_yield_pct: number | null;
   } | null;
   pipeline: PipelineMembership | null;
-  /* Collection memberships of the listing's property (rule #18). Null when the
-   * listing has no property yet (same posture as `pipeline`). */
+  /* Collection memberships of the listing's property (rule #18): mine AND
+   * those shared with me — "saved" is only the mine part (glyphs.ts
+   * `savedCollections`). Null when the listing has no property yet (same
+   * posture as `pipeline`). */
   collection_ids: number[] | null;
   /* The property's tags (rule #18), same posture; absent from an API that
    * predates the field. Names + colours come from `list_tags`. */
@@ -280,8 +297,11 @@ export type ApiMessage =
   | { type: 'add_to_collection'; collection_id: number; property_id: number }
   | { type: 'remove_from_collection'; collection_id: number; property_id: number }
   | { type: 'list_notes'; property_id: number }
-  | { type: 'add_note'; property_id: number; body: string; origin_listing_ref_id: number | null }
-  | { type: 'update_note'; property_id: number; note_id: number; body: string }
+  | {
+      type: 'add_note'; property_id: number; body: string; shared: boolean;
+      origin_listing_ref_id: number | null;
+    }
+  | { type: 'update_note'; property_id: number; note_id: number; patch: NotePatch }
   | { type: 'delete_note'; property_id: number; note_id: number }
   | { type: 'sign_in' }
   | { type: 'sign_out' }

@@ -279,15 +279,11 @@ export default function PropertyDetail() {
           </div>
         }
         curationSlot={
-          /* Collections / tags / notes — property-grain (rule #18), directly
+          /* Tags / artifact link / notes — property-grain (rule #18), directly
              under the description and above the estimates: what the operator
              has already decided about this property comes before the numbers. */
           <Suspense fallback={<Skeleton height={140} />}>
-            <CurationBlock
-              property_id={propertyId}
-              sreality_id={property.sreality_id}
-              listing_id={property.id}
-            />
+            <CurationBlock property_id={propertyId} listing_id={property.id} />
           </Suspense>
         }
         estimatesSlot={

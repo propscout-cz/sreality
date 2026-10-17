@@ -734,23 +734,25 @@ def delete_plan(
     return {"deleted": True, "key": key}
 
 
+# account_email() (migration 610) is the ONE account label: one row per account, however many members.
+_ENTITLEMENTS_SQL = (
+    "SELECT a.id, account_email(a.id) AS email, "
+    "  coalesce(e.plan, (SELECT key FROM plans WHERE is_default LIMIT 1)), "
+    "  coalesce(e.status, 'active'), e.current_period_end, "
+    "  (e.account_id IS NOT NULL) "
+    "FROM accounts a "
+    "LEFT JOIN entitlements e ON e.account_id = a.id "
+    "WHERE a.kind = 'personal' "
+    "ORDER BY email"
+)
+
+
 @router.get("/entitlements")
 def get_entitlements(conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
     """Every personal account with its effective plan (explicit row or the
     default) — the admin tier-assignment table."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT a.id, coalesce(u.email, a.name), "
-            "  coalesce(e.plan, (SELECT key FROM plans WHERE is_default LIMIT 1)), "
-            "  coalesce(e.status, 'active'), e.current_period_end, "
-            "  (e.account_id IS NOT NULL) "
-            "FROM accounts a "
-            "LEFT JOIN entitlements e ON e.account_id = a.id "
-            "LEFT JOIN account_members m ON m.account_id = a.id "
-            "LEFT JOIN auth.users u ON u.id = m.user_id "
-            "WHERE a.kind = 'personal' "
-            "ORDER BY coalesce(u.email, a.name)"
-        )
+        cur.execute(_ENTITLEMENTS_SQL)
         rows = cur.fetchall()
     return {
         "data": [
