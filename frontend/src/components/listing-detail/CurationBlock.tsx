@@ -7,6 +7,11 @@
  * provenance — "written while viewing this advert"). Collection membership is
  * the header's "Uložit do kolekce" (CollectionSaveToggle), not a row here.
  *
+ * Notes cross a share only when their author marks them shared (migration 610,
+ * docs/design/collection-sharing.md §3.7): the composer offers the mark when the
+ * property has an AUDIENCE (lib/collectionCache `shareAudience`), and another
+ * author's note reads as theirs — named, never editable here.
+ *
  * Reads run as the signed-in user: the tag index and the notes through the
  * JWT-gated API, the "does THIS property carry tag X" map from
  * `property_tags_public`, a security_invoker view over the account-scoped RLS.
@@ -29,10 +34,15 @@ import {
   uploadNoteAttachment,
 } from '@/lib/api';
 import { curationKeys, fetchPropertyTagMemberSet } from '@/lib/queries';
+import {
+  isMine,
+  shareAudience,
+  useCollectionMembership,
+} from '@/lib/collectionCache';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import type { Note } from '@/lib/types';
 import ErrorBanner from '@/components/ErrorBanner';
-import { readFailed } from '@/components/ReadFailedMark';
+import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { TagAssignList } from '@/components/curation/TagAssignList';
 import { PencilIcon, TrashIcon } from '@/components/icons';
 import { SectionLabel } from '@/components/section';
@@ -87,6 +97,7 @@ export function PhoneTagsAndNotes({
         property_id={property_id}
         listing_id={listing_id}
         label="Poznámky"
+        lang="cs"
         alwaysOpen
       />
     </div>
@@ -138,19 +149,59 @@ function TagsRow({ property_id, label = 'Tags' }: { property_id: number; label?:
 /* Notes                                                                      */
 /* -------------------------------------------------------------------------- */
 
+/* The note rows' words in each page's language (ruling 8): English on the
+ * desktop property page, Czech on the phone. */
+const NOTE_WORDS = {
+  en: {
+    shareWith: (who: string) => `Share with ${who}`,
+    shared: 'Shared',
+    sharedNobody: 'Shared · nobody can see it yet',
+    unshare: 'Make private',
+    noteFrom: 'Note from',
+    noteBy: 'Note by',
+    edited: 'edited',
+  },
+  cs: {
+    shareWith: (who: string) => `Sdílet s ${who}`,
+    shared: 'Sdíleno',
+    sharedNobody: 'Sdíleno · zatím to nikdo nevidí',
+    unshare: 'Nesdílet',
+    noteFrom: 'Poznámka z',
+    noteBy: 'Poznámka od',
+    edited: 'upraveno',
+  },
+} as const;
+type NoteWords = (typeof NOTE_WORDS)[keyof typeof NOTE_WORDS];
+
 function NotesRow({
   property_id,
   listing_id,
   label = 'Notes',
+  lang = 'en',
   alwaysOpen = false,
 }: {
   property_id: number;
   listing_id: number;
   label?: string;
+  lang?: keyof typeof NOTE_WORDS;
   /* The phone keeps the composer in view: its curation row's "Poznámka" scrolls here. */
   alwaysOpen?: boolean;
 }) {
   const qc = useQueryClient();
+  const words = NOTE_WORDS[lang];
+  /* Who a SHARED note here would reach: the counterparties of every share whose
+   * collection holds this property. Empty = nobody, so no checkbox is offered;
+   * null = not known yet (a read loading or failed), which must never read as
+   * "nobody" — no checkbox, no share toggle, no "nobody can see it" claim. */
+  const membership = useCollectionMembership(property_id);
+  const audienceFailed = readFailed(membership.query);
+  const { ids: collectionIds, byId, ready: audienceReady } = membership;
+  const audience = useMemo(
+    () => (audienceReady ? shareAudience(collectionIds, byId) : null),
+    [audienceReady, collectionIds, byId],
+  );
+  const canShare = audience != null && audience.length > 0;
+  const [shareNew, setShareNew] = useState(false);
   const [body, setBody] = useState('');
   const [error, setError] = useState<string | null>(null);
   // Files waiting for the note to be saved, and what a drop or an upload could not take.
@@ -172,7 +223,9 @@ function NotesRow({
     /* The note first, then its files one by one; a file that fails leaves the note saved and
      * is reported by name (drop it onto the note to try again). */
     mutationFn: async ({ text, files }: { text: string; files: File[] }) => {
-      const note = await createPropertyNote(property_id, text, listing_id);
+      const note = await createPropertyNote(
+        property_id, text, listing_id, shareNew && canShare,
+      );
       const failed: string[] = [];
       for (const [i, file] of files.entries()) {
         setProgress({ done: i, total: files.length });
@@ -186,6 +239,7 @@ function NotesRow({
     },
     onSuccess: (failed) => {
       setBody('');
+      setShareNew(false);
       setStaged([]);
       setError(null);
       setProblems(failed);
@@ -264,6 +318,27 @@ function NotesRow({
           onRemove={(file) => setStaged((prev) => prev.filter((f) => f !== file))}
           disabled={create.isPending}
         />
+        {canShare && (
+          <label className="mt-2 flex items-center gap-2 w-fit text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={shareNew}
+              onChange={(e) => setShareNew(e.target.checked)}
+              disabled={create.isPending}
+              className="accent-[var(--color-ink-2)]"
+            />
+            <span>{words.shareWith(audience.join(', '))}</span>
+          </label>
+        )}
+        {audienceFailed && (
+          <div className="mt-2">
+            <ReadFailedMark
+              what="Sdílení"
+              variant="header"
+              onRetry={() => void membership.query.refetch()}
+            />
+          </div>
+        )}
         <div className="mt-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <AttachButton
@@ -310,7 +385,12 @@ function NotesRow({
               <NoteRow
                 property_id={property_id}
                 note={n}
-                onSave={(text) => updatePropertyNote(property_id, n.id, text).then(refreshNotes)}
+                audience={audience}
+                words={words}
+                onSave={(text) => updatePropertyNote(property_id, n.id, { body: text }).then(refreshNotes)}
+                onToggleShared={() =>
+                  updatePropertyNote(property_id, n.id, { shared: !n.shared }).then(refreshNotes)
+                }
                 onDelete={() =>
                   deletePropertyNote(property_id, n.id).then(() => {
                     refreshNotes();
@@ -330,13 +410,118 @@ function NotesRow({
 function NoteRow({
   property_id,
   note,
+  audience,
+  words,
   onSave,
+  onToggleShared,
   onDelete,
   onFilesChanged,
 }: {
   property_id: number;
   note: Note;
+  audience: readonly string[] | null;
+  words: NoteWords;
   onSave: (body: string) => Promise<unknown>;
+  onToggleShared: () => Promise<unknown>;
+  onDelete: () => Promise<unknown>;
+  onFilesChanged: () => Promise<unknown>;
+}) {
+  if (!isMine(note)) {
+    return <ForeignNoteRow property_id={property_id} note={note} words={words} />;
+  }
+  return (
+    <OwnNoteRow
+      property_id={property_id}
+      note={note}
+      audience={audience}
+      words={words}
+      onSave={onSave}
+      onToggleShared={onToggleShared}
+      onDelete={onDelete}
+      onFilesChanged={onFilesChanged}
+    />
+  );
+}
+
+/* Another author's SHARED note (they marked it; a share put it in reach): read
+ * only — no attach, edit, delete or drop zone, files open but carry no ×. A
+ * neutral border, not copper: it is not mine to work. */
+function ForeignNoteRow({
+  property_id,
+  note,
+  words,
+}: {
+  property_id: number;
+  note: Note;
+  words: NoteWords;
+}) {
+  return (
+    <div
+      className="relative border-l-2 border-[var(--color-rule-strong)] pl-3"
+      aria-label={`${words.noteBy} ${note.owner_email} · ${fmtAbsolute(note.created_at)}`}
+      role="group"
+    >
+      <p className="text-sm text-[var(--color-ink)] whitespace-pre-wrap break-words">{note.body}</p>
+      <NoteAttachmentList
+        propertyId={property_id}
+        noteId={note.id}
+        attachments={note.attachments ?? []}
+        uploading={[]}
+      />
+      <div className="mt-1">
+        <NoteMeta note={note} words={words} author={note.owner_email} />
+      </div>
+    </div>
+  );
+}
+
+/* A note's time line: relative, the exact dates on hover, the author first on
+ * another author's note. */
+function NoteMeta({
+  note,
+  words,
+  author,
+}: {
+  note: Note;
+  words: NoteWords;
+  author?: string | null;
+}) {
+  return (
+    <p
+      className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help"
+      title={
+        note.updated_at
+          ? `Written ${fmtAbsolute(note.created_at)} · edited ${fmtAbsolute(note.updated_at)}`
+          : fmtAbsolute(note.created_at)
+      }
+    >
+      {author != null && (
+        <>
+          <span className="text-[var(--color-ink-3)]">{author}</span> ·{' '}
+        </>
+      )}
+      {fmtRelative(note.created_at)}
+      {note.updated_at && ` (${words.edited})`}
+    </p>
+  );
+}
+
+function OwnNoteRow({
+  property_id,
+  note,
+  audience,
+  words,
+  onSave,
+  onToggleShared,
+  onDelete,
+  onFilesChanged,
+}: {
+  property_id: number;
+  note: Note;
+  audience: readonly string[] | null;
+  words: NoteWords;
+  onSave: (body: string) => Promise<unknown>;
+  onToggleShared: () => Promise<unknown>;
   onDelete: () => Promise<unknown>;
   onFilesChanged: () => Promise<unknown>;
 }) {
@@ -390,7 +575,7 @@ function NoteRow({
   return (
     <div
       className="group relative border-l-2 border-[var(--color-copper)]/40 pl-3"
-      aria-label={`Note from ${fmtAbsolute(note.created_at)}`}
+      aria-label={`${words.noteFrom} ${fmtAbsolute(note.created_at)}`}
       role="group"
       {...drop.handlers}
     >
@@ -517,17 +702,33 @@ function NoteRow({
               </button>
             </div>
           ) : (
-            <p
-              className="mt-1 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help"
-              title={
-                note.updated_at
-                  ? `Written ${fmtAbsolute(note.created_at)} · edited ${fmtAbsolute(note.updated_at)}`
-                  : fmtAbsolute(note.created_at)
-              }
-            >
-              {fmtRelative(note.created_at)}
-              {note.updated_at && ' (edited)'}
-            </p>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <NoteMeta note={note} words={words} />
+              {note.shared && (
+                <span className="text-[0.62rem] tracking-[0.12em] uppercase text-[var(--color-ink-3)]">
+                  {audience != null && audience.length === 0 ? words.sharedNobody : words.shared}
+                </span>
+              )}
+              {/* Making private is always safe; sharing names who it reaches, and
+                  waits until that is known. */}
+              {(note.shared || (audience != null && audience.length > 0)) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBusy(true);
+                    setError(null);
+                    onToggleShared()
+                      .catch((err: ApiError | Error) =>
+                        setError(err.message || 'Failed to update note'))
+                      .finally(() => setBusy(false));
+                  }}
+                  disabled={busy}
+                  className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] underline-offset-2 hover:text-[var(--color-ink)] hover:underline disabled:opacity-50"
+                >
+                  {note.shared ? words.unshare : words.shareWith((audience ?? []).join(', '))}
+                </button>
+              )}
+            </div>
           )}
           {error && !confirmingDelete && (
             <p className="mt-1.5 text-[0.7rem] text-[var(--color-brick)]">{error}</p>

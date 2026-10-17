@@ -33,8 +33,9 @@ export default function CollectionSaveToggle({
   /* Stable so the popover's positioning effect doesn't re-subscribe each render. */
   const close = useCallback(() => setOpen(false), []);
 
-  const { ids: memberIds, query: membershipQ } = useCollectionMembership(property_id);
-  const count = memberIds.size;
+  /* The count is MINE: the menu lists my collections only, so the header agrees. */
+  const { ids: memberIds, mine, query: membershipQ } = useCollectionMembership(property_id);
+  const count = mine.size;
 
   /* Matches PipelineToggle's skeleton so the two never jump relative to each
    * other while the header's reads land. */

@@ -16,13 +16,56 @@ vi.mock('./queries', async (orig) => ({
 
 import { listCollections } from './api';
 import {
+  collectionLabel,
+  isMine,
   revalidateCollections,
+  shareAudience,
   useCollectionMembership,
   useCollections,
 } from './collectionCache';
 import { browseKeys } from './browseKeys';
 import { curationKeys, fetchPropertyCollectionMemberSet } from './queries';
 import type { Collection } from './types';
+
+const own = (over: Partial<Collection> = {}): Collection => ({
+  id: 1, name: 'Šortlist', description: null, created_at: '2026-10-01T00:00:00Z',
+  updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
+  notify_channels: [], is_system: false, owner_email: null, shared_with: [], ...over,
+});
+const sharedBy = (email: string, over: Partial<Collection> = {}): Collection =>
+  own({ owner_email: email, shared_with: [{ account_id: 'me', email: null }], ...over });
+
+describe('mine vs shared: one predicate, one label, one audience', () => {
+  it('isMine is owner_email == null', () => {
+    expect(isMine(own())).toBe(true);
+    expect(isMine(sharedBy('petr@example.cz'))).toBe(false);
+    expect(isMine({ owner_email: null })).toBe(true);
+  });
+
+  it('collectionLabel names the owner of a shared collection only', () => {
+    expect(collectionLabel(own({ name: 'monitoring' }))).toBe('monitoring');
+    expect(collectionLabel(sharedBy('petr@example.cz', { name: 'monitoring' })))
+      .toBe('monitoring · petr@example.cz');
+  });
+
+  it('shareAudience: my recipients and the owners of what is shared with me, sorted, once each', () => {
+    const byId = new Map<number, Collection>([
+      [1, own({ id: 1, shared_with: [
+        { account_id: 'b', email: 'zuzana@example.cz' },
+        { account_id: 'c', email: 'adam@example.cz' },
+      ] })],
+      [2, sharedBy('petr@example.cz', { id: 2 })],
+      [3, sharedBy('adam@example.cz', { id: 3 })],
+      [4, own({ id: 4 })],
+    ]);
+    expect(shareAudience([1, 2, 3, 4], byId)).toEqual([
+      'adam@example.cz', 'petr@example.cz', 'zuzana@example.cz',
+    ]);
+    // An unshared collection, or an id the list does not know, has no audience.
+    expect(shareAudience([4, 99], byId)).toEqual([]);
+    expect(shareAudience([2], byId)).toEqual(['petr@example.cz']);
+  });
+});
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -41,6 +84,10 @@ describe('collection read hooks', () => {
   });
 
   it('useCollectionMembership is not ready until the member map lands', async () => {
+    vi.mocked(listCollections).mockResolvedValue({
+      data: [own({ id: 7 }), own({ id: 9 })],
+      total: 2,
+    });
     vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7, 9]]]));
     const { result } = renderHook(() => useCollectionMembership(42), { wrapper: wrapper() });
     expect(result.current.ready).toBe(false);
@@ -48,6 +95,47 @@ describe('collection read hooks', () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect([...result.current.ids]).toEqual([7, 9]);
     expect(result.current.saved).toBe(true);
+  });
+
+  /* The split needs the owners, so a resolved map alone must not paint a mark. */
+  it('useCollectionMembership waits for the collection list too', async () => {
+    vi.mocked(listCollections).mockReturnValue(new Promise(() => {}));
+    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    const { result } = renderHook(() => useCollectionMembership(42), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.ids.size).toBe(1));
+    expect(result.current.ready).toBe(false);
+    expect(result.current.saved).toBe(false);
+  });
+
+  it('partitions a property\'s collections into mine and shared; saved means mine', async () => {
+    vi.mocked(listCollections).mockResolvedValue({
+      data: [own({ id: 7 }), sharedBy('petr@example.cz', { id: 9 })],
+      total: 2,
+    });
+    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(
+      // 404: an id the list does not know (a stale cache) lands in neither half.
+      new Map([[42, [7, 9, 404]], [43, [9]]]),
+    );
+    const both = renderHook(() => useCollectionMembership(42), { wrapper: wrapper() });
+    await waitFor(() => expect(both.result.current.ready).toBe(true));
+    expect([...both.result.current.ids]).toEqual([7, 9, 404]);
+    expect([...both.result.current.mine]).toEqual([7]);
+    expect([...both.result.current.shared]).toEqual([9]);
+    expect(both.result.current.saved).toBe(true);
+
+    const sharedOnly = renderHook(() => useCollectionMembership(43), { wrapper: wrapper() });
+    await waitFor(() => expect(sharedOnly.result.current.ready).toBe(true));
+    expect(sharedOnly.result.current.saved).toBe(false);
+  });
+
+  it('useCollections splits the list by owner', async () => {
+    const a = own({ id: 7 });
+    const b = sharedBy('petr@example.cz', { id: 9 });
+    vi.mocked(listCollections).mockResolvedValue({ data: [a, b], total: 2 });
+    const { result } = renderHook(() => useCollections(), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.collections).toHaveLength(2));
+    expect(result.current.mine).toEqual([a]);
+    expect(result.current.shared).toEqual([b]);
   });
 
   /* MS16: a failed read is a retry, never "in no collection". */

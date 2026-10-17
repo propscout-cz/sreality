@@ -864,6 +864,18 @@ export interface Collection {
   monitoring_enabled: boolean;
   notify_channels: string[];
   is_system: boolean;
+  /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
+   * the collection (lib/collectionCache `isMine`); on a shared row monitoring
+   * reads off and notify_channels empty — the alerts are the owner's. */
+  owner_email: string | null;
+  /* The owner sees every recipient; a recipient sees only its own grant, with
+   * `email: null` (= you) — that account_id is the key to leave. */
+  shared_with: CollectionShare[];
+}
+
+export interface CollectionShare {
+  account_id: string;
+  email: string | null;
 }
 
 export interface Tag {
@@ -879,8 +891,13 @@ export interface Note {
   property_id: number;
   body: string;
   created_at: string;
-  /* Null until the operator edits the note; stamped on every PATCH. */
+  /* Null until the author edits the body; marking shared is not an edit. */
   updated_at: string | null;
+  /* The author's consent for the people they share this property with to read
+   * it (migration 610); a foreign note is always shared. */
+  shared: boolean;
+  /* Null iff the caller wrote it; else the author's email (read-only here). */
+  owner_email: string | null;
   /* Its files, oldest first (migration 592). Only the list read carries them. */
   attachments?: NoteAttachment[];
 }
@@ -1395,6 +1412,9 @@ export interface FilterPreset {
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
+  /* A collection was shared with the caller (migration 610): collection_id
+   * set, change_kind 'shared', no listing subject — the `message` text. */
+  | 'collection_share'
   /* System-health alerts (migration 273/274 producer): pipeline stalls, credit
    * outages, etc. No listing subject — the payload is the `message` text. */
   | 'system_health';
@@ -1415,9 +1435,12 @@ export interface WatchdogDispatch {
    * property's representative listing (what the feed links to). */
   property_id: number | null;
   change_kind: string;
-  /* Free-text body for source_kind='system_health' rows (change_kind=
-   * 'system_alert'); null on watchdog / collection_monitor rows, which describe
-   * a listing subject instead. */
+  /* Free-text body for the rows with no listing subject: source_kind=
+   * 'system_health' (change_kind 'system_alert') and 'collection_share'
+   * (change_kind 'shared'); null on watchdog / collection_monitor rows, which
+   * describe a listing subject instead. Those two kinds also carry no listing,
+   * so their `sreality_id` is null at runtime despite the type (widening it
+   * touches pages/Watchdog.tsx; owed). */
   message: string | null;
   dispatched_at: string;
   seen_at: string | null;
@@ -1481,6 +1504,7 @@ export interface WatchdogDispatchesResponse {
 export interface NotificationUnreadCount {
   watchdog: number;
   collection_monitor: number;
+  collection_share: number;
   system_health: number;
   /* `total` sums EVERY source_kind (incl. system_health); the nav bell badge
    * reads `unread_count` (= total when unscoped), so system alerts count too. */

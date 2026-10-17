@@ -2554,6 +2554,20 @@ export const updateCollection = (
 export const deleteCollection = (id: number): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/collections/${id}`, { method: 'DELETE' });
 
+/* Owner only: 404 not owned; 422 "No account uses this email." / "That's your own account." */
+export const shareCollection = (id: number, email: string): Promise<Collection> =>
+  request<Collection>(`/collections/${id}/shares`, { method: 'POST', json: { email } });
+
+/* The owner revokes a recipient, or a recipient leaves (its own grant's account_id). */
+export const unshareCollection = (
+  id: number,
+  account_id: string,
+): Promise<{ deleted: true }> =>
+  request<{ deleted: true }>(
+    `/collections/${id}/shares/${encodeURIComponent(account_id)}`,
+    { method: 'DELETE' },
+  );
+
 export const addPropertiesToCollection = (
   id: number,
   property_ids: number[],
@@ -2619,23 +2633,27 @@ export const createPropertyNote = (
   body: string,
   // The viewed listing's surrogate id — the note's provenance.
   origin_listing_ref_id?: number,
+  // The author's share mark; private when omitted.
+  shared?: boolean,
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
     json: {
       body,
+      ...(shared != null ? { shared } : {}),
       ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
     },
   });
 
+/* At least one field; marking shared leaves updated_at alone (API). */
 export const updatePropertyNote = (
   property_id: number,
   note_id: number,
-  body: string,
+  patch: { body?: string; shared?: boolean },
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
-    json: { body },
+    json: patch,
   });
 
 export const deletePropertyNote = (

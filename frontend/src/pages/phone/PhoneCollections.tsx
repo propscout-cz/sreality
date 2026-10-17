@@ -6,8 +6,9 @@
  * Reads and writes are the desktop page's own: `useCollections`,
  * `createCollection` (monitoring off — monitoring and its channels are set on
  * the desktop, Q11), then `revalidateCollections` so every collection glyph on
- * every card hears about the new list. Rename, delete and monitoring have no
- * control here on purpose; the footer says where they live. */
+ * every card hears about the new list. Rename, delete, monitoring and sharing
+ * have no control here on purpose; the footer says where they live. Collections
+ * someone shared with me follow under "Sdílené se mnou", read-only. */
 
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -18,14 +19,16 @@ import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import { RollEmpty } from '@/components/phone/RollParts';
 import { BellIcon, ChevronIcon, PlusIcon } from '@/components/phone/phoneIcons';
 import { createCollection } from '@/lib/api';
-import { revalidateCollections, useCollections } from '@/lib/collectionCache';
+import { isMine, revalidateCollections, useCollections } from '@/lib/collectionCache';
 import { dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import { czPlural, fmtCount } from '@/lib/format';
 import { ROUTES } from '@/lib/routes';
 import { pushToast } from '@/lib/toast';
 import type { Collection } from '@/lib/types';
 
-export const DESKTOP_ONLY_NOTE = 'Přejmenování, smazání a sledování nastavíte na počítači.';
+export const DESKTOP_ONLY_NOTE = 'Přejmenování, smazání, sledování a sdílení nastavíte na počítači.';
+/* A collection shared with me: nothing of it is mine to manage but my place in it. */
+export const VIEWER_NOTE = 'Sbírku ze svého seznamu odeberete na počítači.';
 
 export const propertiesWord = (n: number): string =>
   czPlural(n, 'nemovitost', 'nemovitosti', 'nemovitostí');
@@ -35,6 +38,10 @@ export const propertiesWord = (n: number): string =>
 export function foundedLabel(createdAt: string, now: number = Date.now()): string {
   return `založena ${dayRuleLabel(pragueDayKey(createdAt), pragueDayKey(now)).toLowerCase()}`;
 }
+
+/* "sdílí jana@…" for a collection shared with me; null for my own. */
+export const sharedByLabel = (c: Collection): string | null =>
+  isMine(c) ? null : `sdílí ${c.owner_email}`;
 
 /* The small monitored mark: ink, never the accent (colour on the phone means
  * the stage). */
@@ -52,8 +59,10 @@ export function MonitoredMark() {
 
 export default function PhoneCollections() {
   const [creating, setCreating] = useState(false);
-  const { collections: items, query: listQ } = useCollections();
-  const total = listQ.data?.total ?? null;
+  const sharedHeadingId = useId();
+  const { mine, shared, query: listQ } = useCollections();
+  /* Mine only: the shared ones are counted by their own group. */
+  const total = listQ.data ? mine.length : null;
 
   usePhoneHeaderAside(
     total != null && total > 0 ? `${fmtCount(total)} ${czPlural(total, 'sbírka', 'sbírky', 'sbírek')}` : null,
@@ -82,19 +91,40 @@ export default function PhoneCollections() {
             detail="Spojení nebo server teď neodpověděly. Zkuste to znovu."
             action={{ label: 'Zkusit znovu', onClick: () => void listQ.refetch() }}
           />
-        ) : items.length === 0 ? (
-          <RollEmpty
-            title="Zatím žádná sbírka."
-            detail="Založte první; nemovitost do ní uložíte záložkou na kartě v Nových."
-          />
         ) : (
-          <ul aria-label="Sbírky" className="border-b border-[var(--color-rule)]">
-            {items.map((c) => (
-              <li key={c.id}>
-                <CollectionRow c={c} />
-              </li>
-            ))}
-          </ul>
+          <>
+            {mine.length === 0 ? (
+              <RollEmpty
+                title={shared.length > 0 ? 'Zatím žádná vlastní sbírka.' : 'Zatím žádná sbírka.'}
+                detail="Založte první; nemovitost do ní uložíte záložkou na kartě v Nových."
+              />
+            ) : (
+              <ul aria-label="Sbírky" className="border-b border-[var(--color-rule)]">
+                {mine.map((c) => (
+                  <li key={c.id}>
+                    <CollectionRow c={c} />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {shared.length > 0 && (
+              <section aria-labelledby={sharedHeadingId} className="mt-6">
+                <h3
+                  id={sharedHeadingId}
+                  className="px-4 pb-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]"
+                >
+                  Sdílené se mnou
+                </h3>
+                <ul aria-label="Sdílené se mnou" className="border-b border-[var(--color-rule)]">
+                  {shared.map((c) => (
+                    <li key={c.id}>
+                      <CollectionRow c={c} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </>
         )}
       </div>
 
@@ -102,7 +132,7 @@ export default function PhoneCollections() {
 
       {creating && (
         <NewCollectionSheet
-          existing={items.map((c) => c.name.toLowerCase())}
+          existing={mine.map((c) => c.name.toLowerCase())}
           onClose={() => setCreating(false)}
         />
       )}
@@ -110,6 +140,9 @@ export default function PhoneCollections() {
   );
 }
 
+/* One row for both groups; a shared one names its owner ("sdílí …") where an
+ * own one names its founding day, and never carries the monitored mark (the
+ * alerts are the owner's). */
 function CollectionRow({ c }: { c: Collection }) {
   return (
     <Link
@@ -119,14 +152,15 @@ function CollectionRow({ c }: { c: Collection }) {
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className="truncate font-display text-[19px] leading-snug text-[var(--color-ink)]">{c.name}</span>
-          {c.monitoring_enabled && <MonitoredMark />}
+          {isMine(c) && c.monitoring_enabled && <MonitoredMark />}
         </span>
         {c.description && (
           <span className="mt-0.5 block truncate text-[13px] text-[var(--color-ink-2)]">{c.description}</span>
         )}
         <span className="mt-0.5 block text-[12px] text-[var(--color-ink-3)]">
           <span className="font-mono tabular-nums text-[var(--color-ink-2)]">{fmtCount(c.listing_count)}</span>{' '}
-          {propertiesWord(c.listing_count)} · {foundedLabel(c.created_at)}
+          {propertiesWord(c.listing_count)} ·{' '}
+          {sharedByLabel(c) ?? foundedLabel(c.created_at)}
         </span>
       </span>
       <ChevronIcon className="h-4 w-4 shrink-0 text-[var(--color-ink-4)]" />

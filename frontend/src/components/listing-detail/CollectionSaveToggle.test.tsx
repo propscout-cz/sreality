@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -162,15 +162,17 @@ describe('<CollectionSaveToggle>', () => {
 
   /* The panel used to answer a failed list and an empty one with the same
      "Create a collection →" — which tells an operator whose collections exist
-     that they have none. Same distinction the property page's broker list draws. */
+     that they have none. Since sharing, "saved" means saved in MY collections, so
+     the header itself needs the list: a failed list is a retry right there. */
   it('says the list failed instead of offering to create a first collection', async () => {
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
     vi.mocked(api.listCollections).mockRejectedValue(new Error('HTTP 500'));
     renderToggle();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Uložit do kolekce' }));
-
-    expect(await screen.findByText('Kolekce se nepodařilo načíst')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Uložit do kolekce' })).toBeNull();
     expect(screen.queryByRole('link', { name: /Create a collection/ })).toBeNull();
   });
 
@@ -186,15 +188,36 @@ describe('<CollectionSaveToggle>', () => {
     expect(await screen.findByRole('button', { name: 'V kolekci' })).toBeInTheDocument();
   });
 
-  it('retries a failed collection list from inside the panel', async () => {
+  it('retries a failed collection list, then opens the panel on it', async () => {
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
     vi.mocked(api.listCollections).mockRejectedValueOnce(new Error('HTTP 500'));
     renderToggle();
 
+    fireEvent.click(await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Uložit do kolekce' }));
-    const failed = await screen.findByText('Kolekce se nepodařilo načíst');
-    fireEvent.click(within(failed).getByRole('button', { name: 'Zkusit znovu' }));
     expect(await screen.findByRole('button', { name: /Sledované/ })).toBeInTheDocument();
+  });
+
+  /* Sharing (migration 610): a collection shared WITH me is view-only, so it is
+     never a save target, and a property held only there is not "saved". */
+  it('counts and offers my collections only, never one shared with me', async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [
+        ...COLLECTIONS,
+        collection({ id: 11, name: 'Od Petra', owner_email: 'petr@example.cz' }),
+      ],
+      total: 3,
+    });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
+      new Map([[42, [11]]]),
+    );
+    renderToggle();
+
+    const btn = await screen.findByRole('button', { name: 'Uložit do kolekce' });
+    fireEvent.click(btn);
+    await screen.findByRole('button', { name: /Sledované/ });
+    expect(screen.queryByRole('button', { name: /Od Petra/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /Sledované|Praha 5/ })).toHaveLength(2);
   });
 
   it('Escape closes the panel and hands focus back to the trigger', async () => {

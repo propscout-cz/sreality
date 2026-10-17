@@ -18,7 +18,7 @@ import {
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
-import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
+import { collectionLabel, useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
   curationKeys,
   fetchPropertyTagMemberSet,
@@ -201,7 +201,7 @@ function PipelineBoardPage() {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
       collections: [
-        ...offered.options.map((c) => ({ value: c.id, label: c.name })),
+        ...offered.options.map((c) => ({ value: c.id, label: collectionLabel(c) })),
         ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
       ],
       showCollections: offered.show,

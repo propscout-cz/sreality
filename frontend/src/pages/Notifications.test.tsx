@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -77,8 +77,22 @@ const feed: WatchdogDispatchesResponse = {
       subscription_id: null,
       subscription_name: null,
     },
+    {
+      ...baseDispatch,
+      id: 'd4',
+      source_kind: 'collection_share',
+      change_kind: 'shared',
+      message: 'owner@example.com shared the collection "Vinohrady" with you',
+      subscription_id: null,
+      subscription_name: null,
+      collection_id: 42,
+      collection_name: 'Vinohrady',
+      property_id: null,
+      display_label: null,
+      price_czk: null,
+    },
   ],
-  total: 3,
+  total: 4,
   limit: 100,
   offset: 0,
   next_cursor: null,
@@ -87,6 +101,7 @@ const feed: WatchdogDispatchesResponse = {
 const counts: NotificationUnreadCount = {
   watchdog: 2,
   collection_monitor: 0,
+  collection_share: 0,
   system_health: 0,
   total: 2,
   unread_count: 2,
@@ -102,6 +117,7 @@ vi.mock('@/lib/api', async (orig) => ({
   markWatchdogDispatchSeen: vi.fn(),
 }));
 
+import { listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
 import Notifications from './Notifications';
 
 function renderPage() {
@@ -134,5 +150,34 @@ describe('<Notifications> row names', () => {
     renderPage();
     const alert = screen.getByRole('button', { name: /^System Ingest stalled/ });
     expect(alert).toHaveAccessibleDescription('unread');
+  });
+});
+
+describe('<Notifications> collection share row', () => {
+  it('shows the message and links to the shared collection', () => {
+    renderPage();
+    const text = screen.getByRole('button', { name: /^Shared owner@example\.com shared the collection "Vinohrady"/ });
+    expect(text).toHaveAccessibleDescription('unread');
+    expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute(
+      'href',
+      '/collection/42',
+    );
+  });
+
+  it('marks the share read when the collection is opened', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, id: 'd4', seen_at: '2026-05-12T12:00:00+00:00' });
+    renderPage();
+    fireEvent.click(screen.getByRole('link', { name: 'Open collection' }));
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledWith('d4'));
+  });
+
+  it('offers a Shared source tab that asks for collection_share', async () => {
+    vi.mocked(listNotifications).mockResolvedValue({ data: [], total: 0 } as never);
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Shared' }));
+    await waitFor(() =>
+      expect(listNotifications).toHaveBeenLastCalledWith(
+        expect.objectContaining({ source_kind: 'collection_share' }),
+      ));
   });
 });

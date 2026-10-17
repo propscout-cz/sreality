@@ -3,7 +3,9 @@
  * the funnel files, the eye hides, and the bookmark opens the collection sheet,
  * where unchecking THIS collection is the removal (the shared
  * `CollectionSaveList`, so the write is `removePropertyFromCollection` and the
- * revalidation is `revalidateCollections`, the desktop row's own pair).
+ * revalidation is `revalidateCollections`, the desktop row's own pair). A
+ * collection shared with me is read-only: the sheet lists only my own
+ * collections, so it offers no removal here, and the header says whose it is.
  *
  * THE CARDS ARE BROWSE'S READ: `fetchListingsForCards` with the collection as
  * its property-id prefilter (`collections: [id]`, resolved through
@@ -24,7 +26,7 @@ import DayRule from '@/components/phone/DayRule';
 import { ChevronIcon } from '@/components/phone/phoneIcons';
 import { ApiError, getCollection } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
-import { useCollectionMembers } from '@/lib/collectionCache';
+import { isMine, useCollectionMembers } from '@/lib/collectionCache';
 import { listingKindLabel } from '@/lib/enums';
 import { FEED_ALL_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
@@ -43,7 +45,14 @@ import { ROUTES } from '@/lib/routes';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 
-import { DESKTOP_ONLY_NOTE, MonitoredMark, foundedLabel, propertiesWord } from './PhoneCollections';
+import {
+  DESKTOP_ONLY_NOTE,
+  MonitoredMark,
+  VIEWER_NOTE,
+  foundedLabel,
+  propertiesWord,
+  sharedByLabel,
+} from './PhoneCollections';
 
 /* The collection as a Browse cohort: no category, sale and rent, any status,
  * hidden included, scoped to this one collection. */
@@ -71,7 +80,7 @@ export default function PhoneCollectionDetail() {
       <div className="pt-4">
         <RollEmpty
           title="Taková sbírka není."
-          detail="Odkaz je špatně, nebo byla sbírka na počítači smazána."
+          detail="Odkaz je špatně, sbírka byla na počítači smazána, nebo už s vámi není sdílená."
           action={backToList}
         />
       </div>
@@ -122,8 +131,15 @@ function Header({ collection }: { collection: Collection }) {
           {propertiesWord(collection.listing_count)}
         </span>
         <span aria-hidden>·</span>
-        <span>{foundedLabel(collection.created_at)}</span>
-        {collection.monitoring_enabled && (
+        {isMine(collection) ? (
+          <span>{foundedLabel(collection.created_at)}</span>
+        ) : (
+          <span>
+            {sharedByLabel(collection)}
+            <span className="text-[var(--color-ink-4)]"> · jen ke čtení</span>
+          </span>
+        )}
+        {isMine(collection) && collection.monitoring_enabled && (
           <>
             <span aria-hidden>·</span>
             <MonitoredMark />
@@ -172,17 +188,22 @@ function Members({ collection, members }: { collection: Collection; members: Col
         errorTitle="Nemovitosti se nepodařilo načíst."
         endLabel={uncarded.length > 0 ? 'Další jsou níže, bez karty.' : 'Víc nemovitostí v této sbírce není.'}
         empty={
-          uncarded.length > 0 ? null : (
+          uncarded.length > 0 ? null : isMine(collection) ? (
             <RollEmpty
               title="Sbírka je prázdná."
               detail="Nemovitost sem uložíte záložkou na kartě v Nových nebo na stránce nemovitosti."
               action={{ label: 'Otevřít Nové', onClick: () => navigate(ROUTES.feed.build()) }}
             />
+          ) : (
+            <RollEmpty title="Sbírka je zatím prázdná." detail="Až do ní majitel něco uloží, uvidíte to tady." />
           )
         }
       />
       {uncarded.length > 0 && <Uncarded rows={uncarded} />}
-      <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">{DESKTOP_ONLY_NOTE}</p>
+      {/* A viewer manages nothing; its one write, leaving, lives on the desktop too. */}
+      <p className="px-4 pb-6 pt-4 text-[12px] text-[var(--color-ink-3)]">
+        {isMine(collection) ? DESKTOP_ONLY_NOTE : VIEWER_NOTE}
+      </p>
     </div>
   );
 }
