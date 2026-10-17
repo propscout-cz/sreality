@@ -1,4 +1,4 @@
-"""Tenant ids are system-generated (migration 606), against the replayed schema.
+"""Tenant ids are system-generated (migration 611), against the replayed schema.
 
 RLS's WITH CHECK tests only account_id, so an integer id a browser role may write can be
 pre-claimed just above its sequence, and every account's next insert then fails on the

@@ -28,7 +28,7 @@ Every table below follows: `revoke all on <table> from anon, authenticated` →
 `grant select, insert, update, delete on <table> to authenticated` (or a narrower verb
 set where the table is genuinely add/remove-only) → a `for all using (...) with check
 (...)` policy testing `account_id in (select current_account_ids())`. An integer surrogate id is `bigint
-generated always as identity` (606), never `bigserial`: ALWAYS refuses, with no USAGE grant, the caller-chosen id
+generated always as identity` (611), never `bigserial`: ALWAYS refuses, with no USAGE grant, the caller-chosen id
 that would pre-claim the sequence; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is.
 
 **Migration 290 — curation tables**, `account_id` on the row directly (not

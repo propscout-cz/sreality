@@ -1,4 +1,4 @@
--- 606: tenant ids are system-generated (GENERATED ALWAYS AS IDENTITY).
+-- 611: tenant ids are system-generated (GENERATED ALWAYS AS IDENTITY).
 --
 -- WHY. Twelve tenant tables kept the bigserial ids they were born with, and `authenticated` -- every
 -- browser JWT through PostgREST, and the API's tenant_conn after SET LOCAL ROLE -- may INSERT (on
@@ -42,7 +42,7 @@ begin
                     where attrelid = rel::regclass and attname = 'id') = 'a';
     seq := pg_get_serial_sequence(rel, 'id');
     if seq is null then
-      raise exception '606: %.id is neither an identity nor a serial column', rel;
+      raise exception '611: %.id is neither an identity nor a serial column', rel;
     end if;
     execute format('alter table %s alter column id drop default', rel);
     execute format('select coalesce(max(id), 0) from %s', rel) into nxt;
@@ -70,7 +70,7 @@ begin
      and (has_column_privilege(r.role, c.oid, a.attnum, 'INSERT')
           or has_column_privilege(r.role, c.oid, a.attnum, 'UPDATE'));
   if bad is not null then
-    raise exception '606 did not land: a browser role can write the id of %', bad;
+    raise exception '611 did not land: a browser role can write the id of %', bad;
   end if;
 end
 $post$;
