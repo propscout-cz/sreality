@@ -1043,8 +1043,8 @@ def _record_lane_failure(source: str, lane: str, exc: BaseException) -> None:
     `time.sleep(10.0)` between), and `is_transient_db_error` is true for every
     `OperationalError`, so on a pooler outage a bare call sleeps ~20s per source ON THE
     EVENT LOOP. A drain pass iterates all nine sources, and the 30s heartbeat lane is a
-    sibling coroutine on the same loop — i.e. the recorder would blind `worker_liveness`
-    and `worker_lane_stall` during exactly the DB incident it exists to record."""
+    sibling coroutine on the same loop — i.e. the recorder would blind the watcher's
+    `worker` cell and `worker_lane_stall` during exactly the DB incident it exists to record."""
     try:
         with db.connect() as conn:
             portal_runner.record_failure_signature(conn, exc, source=source, lane=lane)

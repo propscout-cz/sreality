@@ -1978,8 +1978,8 @@ export const fetchDerivedArtifacts = async (
   }));
 };
 
-/* Migration 178 — failed GitHub Actions runs recorded by the 30-min poller
- * (monitor_workflow_failures.yml). */
+/* Migration 178 — failed GitHub Actions runs recorded by the hourly health
+ * canary's poller step (verify_pipeline.yml). */
 export interface WorkflowFailureRow {
   workflow_name: string;
   conclusion: string;

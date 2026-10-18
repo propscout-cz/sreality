@@ -49,6 +49,7 @@ import requests
 
 from scraper import sreality_url
 from scraper.sreality_url import critical_segments
+from scripts.checks.clock import fetchall
 
 LOG = logging.getLogger(__name__)
 
@@ -164,13 +165,10 @@ def classify(samples: list[tuple[Sample, bool]], thresholds: dict[str, Any]) -> 
 def draw_samples(conn: Any, week: int) -> list[Sample]:
     """This ISO week's sample, in an order shuffled by the week so no portal queues last."""
     out: list[Sample] = []
-    with conn.cursor() as cur:
-        for cb in codes_for_week(week):
-            cur.execute(_SREALITY_SAMPLE_SQL, {"cb": cb, "n": ROWS_PER_CB})
-            out.extend(Sample(*r) for r in cur.fetchall())
-        for source in CRAWLER_SOURCES:
-            cur.execute(_CRAWLER_SAMPLE_SQL, {"source": source})
-            out.extend(Sample(*r) for r in cur.fetchall())
+    for cb in codes_for_week(week):
+        out.extend(Sample(*r) for r in fetchall(conn, _SREALITY_SAMPLE_SQL, {"cb": cb, "n": ROWS_PER_CB}))
+    for source in CRAWLER_SOURCES:
+        out.extend(Sample(*r) for r in fetchall(conn, _CRAWLER_SAMPLE_SQL, {"source": source}))
     random.Random(week).shuffle(out)
     return out
 

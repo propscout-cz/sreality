@@ -71,6 +71,8 @@ separately would only create merge-order pain:
   `currently_failing` is derived from `last_ok_at < last_err_at` instead of a 90-minute
   staleness window; `llm_burn_rate` gains a per-`called_for` starvation arm; the acute
   lane persists each check as it completes under per-check and total wall-clock budgets.
+  (The per-check budget bound each statement, not the check, until the Health dashboard
+  sprint's wave 2 made it a deadline on 2026-10-18; that closes W0.4.)
 
 **Risk carried into the wave:** ~~W0.3 reds the acute lane until the OpenAI account is
 topped up~~ — **resolved 2026-08-30: credits topped up, pipeline verified healthy** (595
@@ -256,5 +258,49 @@ Owed items this absorbs:
   30 days of results. The `llm_errors` any-provider rate arm and `worker_lane_stall`'s unalarmed
   `failed_passes` move to wave 3 (the llm and jobs checks); delivery follows Q1 (bell only for now).
 
-**Next:** wave 2 — `health_liveness()` on pg_cron every 5 minutes and one hourly GitHub canary
-(migration 620).
+~~**Next:** wave 2 — `health_liveness()` on pg_cron every 5 minutes and one hourly GitHub canary
+(migration 620).~~ Done 2026-10-18 (wave 2, below).
+
+## 2026-10-18 — Health dashboard sprint, wave 2 (shipped with this PR)
+
+Watchers: everything that measures or tells now has an observer that does not run inside it, and
+GitHub's failure email is the one path to the operator that needs neither Supabase's scheduler nor
+Railway. Plan: [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 2,
+and its "As built" note.
+
+What wave 2 changed:
+- **The watcher.** `public.health_liveness()` (migration 620) runs on pg_cron every 5 minutes and
+  writes one `liveness` result, told by the API's ladder like any check: the worker's heartbeat
+  (Problem past 10 min), the worker's health lane (from wave 3), every alarm past its staleness
+  budget, the API's background loops (the watchdog matcher's lease) and any measured Problem left
+  without an incident. It replaces the `worker_liveness` check, a 5-minute limit GitHub sampled
+  about every 4.9 hours, and the 24 h dead-man job `emit-verification-stale-alert`, which never
+  fired (unscheduled; migration 624 drops its function).
+- **The canary.** `verify_pipeline.yml` is the one monitoring workflow ("Monitoring: health canary
+  (hourly)"): it records failed workflow runs (the poller, moved forward from wave 3, so
+  `monitor_workflow_failures.yml` is deleted), measures the GitHub-hosted checks, and then
+  `scripts/health_canary.py` asserts that the database answers, the watcher ran in the last 30
+  min, its failing cells have incidents, and no alarm's notice has sat unread and undelivered for
+  15 min while its incident is open and unacknowledged. A failing check never reds the run; the assertions do (and a crash of the poller or the harness, or
+  the harness step overrunning its 27 minutes), so with
+  the bell the only channel (Q1) an unread alarm reaches the operator as GitHub's failure email at
+  the next canary run. `llm_health.yml` and the 6-hourly lane are gone, and with them
+  `--exit-nonzero-on-fail`: a failing check no longer reds a run.
+- **A real time budget per check.** The harness's `run_due` measures a host's due checks, alarms
+  first, and each statement's timeout is now the check's remaining budget, so a check of several
+  statements can no longer take several budgets (`dual_write_parity` ran a p50 of 57 s on 45 s).
+  A check that runs out of time is Not measured, with its budget and the time it spent; a check
+  the run never reached writes nothing and stays due; `migration_drift` with no migration files
+  is Not measured, never OK.
+
+Owed items this closes:
+- **W0.4, graceful degradation of the acute lane (2026-08):** its per-check wall-clock budget
+  bound each statement rather than the check until this wave's per-check deadline; the acute lane
+  itself is gone.
+
+To check after the merge: the first red canary run's email arrives (GitHub emails a red scheduled
+run to whoever last changed its cron line).
+
+**Next:** wave 3 — the platform checks (jobs, capacity, llm) and the worker's health lane, which
+calls `run_due` every 60 s; the poller's production filter and reason lines; the signature engine
+retires (migration 621).

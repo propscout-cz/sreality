@@ -228,7 +228,7 @@ def test_lane_failure_recording_never_runs_on_the_event_loop(monkeypatch):
     3 attempts with `time.sleep(10.0)` between, and `is_transient_db_error` is true for
     every OperationalError. A bare call therefore sleeps ~20s per source ON THE LOOP
     during a pooler outage — nine sources per drain pass, with the 30s heartbeat lane a
-    sibling coroutine — i.e. it would blind `worker_liveness` during exactly the DB
+    sibling coroutine — i.e. it would blind the watcher's `worker` cell during exactly the DB
     incident it exists to record. Every other DB touch in both passes is offloaded."""
     monkeypatch.setattr(rw, "_read_disabled_sources", lambda: set())
     loop_thread: list[bool] = []
