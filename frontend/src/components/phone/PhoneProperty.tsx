@@ -31,6 +31,7 @@ import type {
   PropertySource,
 } from '@/lib/types';
 
+import { NO_FOCUS_ZOOM } from './chips';
 import CurationRow from './CurationRow';
 import {
   feedDelta,
@@ -63,9 +64,6 @@ export const NOTES_SECTION_ID = 'poznamky';
  * rendered nothing) takes no room and draws no rule. */
 const BLOCK = 'min-w-0 px-4 py-4 empty:hidden';
 
-/* iOS zooms the page into any focused field under 16 px; the reused blocks'
- * fields (the note composer, the tag picker) are 14 px on the desktop. */
-const NO_FOCUS_ZOOM = '[&_input]:text-[16px] [&_select]:text-[16px] [&_textarea]:text-[16px]';
 
 /* "Na trhu 12 dní · 3 portály · cena snížena 7. 10." */
 export function metaLine({

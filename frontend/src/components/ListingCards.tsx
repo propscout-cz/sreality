@@ -27,6 +27,7 @@ import { taggedImageUrls, useCardHydration } from '@/lib/hydration';
 import { COVER_OPTIONS, coverIndex, type CoverTag } from '@/lib/imageTags';
 import { useCollectionMembership } from '@/lib/collectionCache';
 import {
+  CARD_SORTS,
   sortToParam,
   type CardRow,
   type SortSpec,
@@ -814,26 +815,6 @@ function CardBadge({
   );
 }
 
-/* Headline sort orders for the cards lane. Two bookend the file by
- * date (first_seen_at — when the listing entered our archive), two
- * by price, two by price/m², two by MF gross yield. The default keeps
- * last_seen_at desc so the dropdown's "selected" option matches the
- * URL on a fresh load even though that order isn't in the menu —
- * operators land on "newest in archive" mentally and the existing
- * default already approximates that. mf_gross_yield_pct is only
- * populated for sale apartments; the query orders nullsFirst:false so
- * every rental / non-apartment listing sorts to the end either way. */
-const SORT_PRESETS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
-  { label: 'Newest first',      spec: { field: 'first_seen_at', direction: 'desc' } },
-  { label: 'Oldest first',      spec: { field: 'first_seen_at', direction: 'asc'  } },
-  { label: 'Price: low → high', spec: { field: 'price_czk',     direction: 'asc'  } },
-  { label: 'Price: high → low', spec: { field: 'price_czk',     direction: 'desc' } },
-  { label: 'Price/m²: low → high', spec: { field: 'price_per_m2', direction: 'asc'  } },
-  { label: 'Price/m²: high → low', spec: { field: 'price_per_m2', direction: 'desc' } },
-  { label: 'Výnos MF: high → low', spec: { field: 'mf_gross_yield_pct', direction: 'desc' } },
-  { label: 'Výnos MF: low → high', spec: { field: 'mf_gross_yield_pct', direction: 'asc'  } },
-];
-
 function SortDropdown({
   sort,
   onChange,
@@ -850,17 +831,17 @@ function SortDropdown({
       <select
         value={current}
         onChange={(e) => {
-          const picked = SORT_PRESETS.find(
+          const picked = CARD_SORTS.find(
             (p) => sortToParam(p.spec) === e.target.value,
           );
           if (picked) onChange(picked.spec);
         }}
         className="px-2 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] transition-colors"
       >
-        {!SORT_PRESETS.some((p) => sortToParam(p.spec) === current) && (
+        {!CARD_SORTS.some((p) => sortToParam(p.spec) === current) && (
           <option value={current}>Default</option>
         )}
-        {SORT_PRESETS.map((p) => (
+        {CARD_SORTS.map((p) => (
           <option key={sortToParam(p.spec)} value={sortToParam(p.spec)}>
             {p.label}
           </option>

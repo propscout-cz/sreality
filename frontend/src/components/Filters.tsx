@@ -1,4 +1,4 @@
-import { Suspense, useRef, type ReactNode } from 'react';
+import { Fragment, Suspense, useRef, type ReactNode } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import {
   type CenterRadius,
@@ -7,8 +7,14 @@ import {
   DEFAULT_FILTERS,
   isDefault,
   listingFiltersToRegistryView,
-  applyRegistryUpdates,
+  applySidebarUpdates,
 } from '@/lib/filters';
+import {
+  BROWSE_FILTER_BANDS,
+  subtypeOptions,
+  type CustomBlock,
+  type FilterBlock,
+} from '@/lib/filterLayout';
 import type { MapySuggestion } from '@/lib/maps';
 import { CollapsibleGroup, ControlGroup, PickButton, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
@@ -23,7 +29,7 @@ import {
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { collectionLabel, useCollections } from '@/lib/collectionCache';
 import { browseKeys } from '@/lib/browseKeys';
-import { FilterForm } from '@/components/FilterForm';
+import { FilterForm, type CustomFilterWidget } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
@@ -42,7 +48,6 @@ const LocationControl = lazyChunk(() =>
     default: m.LocationControl,
   })),
 );
-import { SUBTYPE_LABELS_BY_MAIN } from '@/lib/enums';
 
 interface SidebarProps {
   filters: ListingFilters;
@@ -61,46 +66,6 @@ interface SidebarProps {
    * offset, which would mis-position it within a modal panel). */
   layout?: 'page' | 'modal';
 }
-
-/* Which `ListingFilters` keys live in each collapsible band. Used only to
- * light the copper "active" dot on a collapsed band — the band's content
- * still reads from the shared registry. `bounds` is deliberately omitted
- * from Essentials: the viewport bbox changes on every map pan, so counting
- * it would pin the dot permanently on. */
-const ESSENTIALS_KEYS = [
-  'categoryMain', 'categoryType', 'status',
-  'recentlyAddedDays', 'recentlyChangedDays',
-  'districts',
-  'dispositions', 'subtype',
-  'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax',
-  'usableAreaMin', 'usableAreaMax',
-  'conditionMatch', 'buildingMaterial',
-  'buildingConditionLevelMin', 'buildingConditionLevelMax',
-  'apartmentConditionLevelMin', 'apartmentConditionLevelMax',
-  'priceMin', 'priceMax', 'pricePerM2Min', 'pricePerM2Max',
-  'priceChangeCountMin', 'priceChangeWindowDays', 'totalPriceChangePct',
-  'mfGrossYieldPctMin', 'mfGrossYieldPctMax',
-] as const satisfies ReadonlyArray<keyof ListingFilters>;
-
-const FEATURES_KEYS = [
-  'furnished', 'ownership',
-  'hasBalcony', 'hasLift', 'hasParking', 'terrace', 'cellar', 'garage',
-  'parkingLotsMin',
-] as const satisfies ReadonlyArray<keyof ListingFilters>;
-
-const CURATION_KEYS = [
-  'pipeline', 'tags', 'tagsExcluded', 'collections', 'withEstimates', 'showDismissed',
-  'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
-  'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
-  'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
-  'priceGrowthRules',
-] as const satisfies ReadonlyArray<keyof ListingFilters>;
-
-const OTHER_KEYS = [
-  'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
-  'firstSeenMinDays', 'firstSeenMaxDays',
-  'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
-] as const satisfies ReadonlyArray<keyof ListingFilters>;
 
 const bandActive = (
   f: ListingFilters,
@@ -129,7 +94,7 @@ const bandActive = (
  * re-includes them. Disabled (greyed) until a bound is set, because with no
  * bound they're already shown — the toggle would be a no-op. The count of
  * affected listings is fetched lazily and degrades to nothing on error. */
-function IncludeNoPriceToggle({
+export function IncludeNoPriceToggle({
   filters,
   onChange,
 }: {
@@ -266,7 +231,7 @@ function PickerGroup({ label, children }: { label: string | null; children: Reac
  * difference of the two cohort totals, one of which is the header's own cached
  * count. Nothing extra is fetched until the caller has dismissed something, and
  * an approximate total yields no number rather than a wrong one. */
-function ShowDismissedToggle({
+export function ShowDismissedToggle({
   filters,
   onChange,
 }: {
@@ -319,6 +284,31 @@ function ShowDismissedToggle({
   );
 }
 
+/* The unit a Kč/m² bound is authored IN, resolved from the cohort the filters
+ * pin (rule 23). The registry declares "CZK/m²" — right on a sale cohort, wrong
+ * by ~300x on the DEFAULT Browse cohort (byt + pronájem), where the measure is a
+ * monthly rent per m² running ~319: typing 90 000 there returns nothing. A
+ * cohort spanning bases has no single unit, so the hint says so rather than
+ * picking one. Every surface that authors or summarises the bound reads this. */
+export const ppm2BoundUnit = (f: Pick<ListingFilters, 'categoryMain' | 'categoryType'>): string => {
+  const basis = ppm2BasisOfCohort({ categoryMain: f.categoryMain, categoryType: f.categoryType });
+  return basis == null || basis === 'mixed' ? 'per m² (smíšený základ)' : PPM2_UNIT[basis];
+};
+
+/* The registry form's per-row unit overrides: the per-m² pair follows the cohort. */
+export const sidebarUnits = (f: ListingFilters): Record<string, string> => {
+  const unit = ppm2BoundUnit(f);
+  return { min_price_per_m2: unit, max_price_per_m2: unit };
+};
+
+/* Rich widgets the registry form cannot express generically, keyed by registry
+ * id; each owns its own reads, the form wires value / onChange through. */
+export const SIDEBAR_WIDGETS: Record<string, CustomFilterWidget> = {
+  collections: CollectionsPicker as never,
+  city_index_rules: CityIndexRulesPicker as never,
+  pipeline: PipelineScopePicker as never,
+};
+
 export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, layout = 'page' }: SidebarProps) {
   // <FilterForm> reads snake_case registry ids; Browse keeps the
   // camelCase `ListingFilters` shape its queries / URL serialisation
@@ -329,17 +319,7 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
   // the LATEST filters, never the ones the click closed over.
   const latestFilters = useRef(filters);
   latestFilters.current = filters;
-  // The unit the Kč/m² bound is authored IN, resolved from the cohort the
-  // operator is currently looking at. A cohort spanning bases has no single
-  // unit, so the hint says so rather than picking one.
-  const ppm2CohortBasis = ppm2BasisOfCohort({
-    categoryMain: filters.categoryMain,
-    categoryType: filters.categoryType,
-  });
-  const ppm2UnitHint =
-    ppm2CohortBasis == null || ppm2CohortBasis === 'mixed'
-      ? 'per m² (smíšený základ)'
-      : PPM2_UNIT[ppm2CohortBasis];
+  const units = sidebarUnits(filters);
   // Batched apply: every <FilterForm> emission ships an array of
   // updates, so paired range edits (min + max in one slider drag)
   // apply atomically. Without this, sequential id/value callbacks
@@ -348,37 +328,82 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
   // that refuses to move and a number input that swallows keystrokes.
   const handleRegistryChange = (
     updates: ReadonlyArray<{ id: string; value: unknown }>,
-  ) => {
-    let next = applyRegistryUpdates(filters, updates);
-    // Yield only applies to sale apartments; clear it when leaving Prodej so
-    // a hidden, still-active filter never silently zeroes the rent cohort.
-    if (
-      next.categoryType !== 'prodej' &&
-      (next.mfGrossYieldPctMin != null || next.mfGrossYieldPctMax != null)
-    ) {
-      next = { ...next, mfGrossYieldPctMin: null, mfGrossYieldPctMax: null };
+  ) => onChange(applySidebarUpdates(filters, updates));
+
+  const renderCustom = (b: CustomBlock): ReactNode => {
+    switch (b.key) {
+      case 'subtype':
+        return (
+          <MultiselectChips
+            value={filters.subtype}
+            options={subtypeOptions(filters.categoryMain)}
+            onChange={(next) => handleRegistryChange([{ id: 'subtype', value: next }])}
+          />
+        );
+      case 'districts':
+        return (
+          <LocationTypeahead
+            label={b.label}
+            value={filters.districts}
+            onChange={(next) => {
+              latestFilters.current = { ...latestFilters.current, districts: next ?? [] };
+              onChange(latestFilters.current);
+            }}
+            onPick={onLocationPick}
+          />
+        );
+      case 'include_no_price':
+        return <IncludeNoPriceToggle filters={filters} onChange={onChange} />;
+      case 'tags':
+        return (
+          <AccountTagFilter value={filters} onChange={(next) => onChange({ ...filters, ...next })} />
+        );
+      case 'show_dismissed':
+        return <ShowDismissedToggle filters={filters} onChange={onChange} />;
+      case 'city_population_hint':
+        return <CityPopulationHint />;
+      case 'market_growth':
+        return (
+          <MarketGrowthFilter
+            value={filters.priceGrowthRules}
+            onChange={(next) => onChange({ ...filters, priceGrowthRules: next })}
+          />
+        );
+      case 'portals':
+        return (
+          <PortalFilterControl value={filters} onChange={(next) => onChange({ ...filters, ...next })} />
+        );
+      case 'location_mode':
+        return (
+          <LocationModeSection
+            mode={filters.locationMode}
+            centerRadius={filters.centerRadius}
+            onModeChange={(mode) => onChange({ ...filters, locationMode: mode })}
+            onCenterRadiusChange={(cr) => onChange({ ...filters, centerRadius: cr })}
+          />
+        );
     }
-    // Subtype only applies to houses / commercial; clear it when NONE of the
-    // selected categories is dum/komercni so a hidden, still-active filter
-    // never silently empties the cohort.
-    if (
-      !next.categoryMain.some((c) => c === 'dum' || c === 'komercni') &&
-      next.subtype.length > 0
-    ) {
-      next = { ...next, subtype: [] };
-    }
-    onChange(next);
   };
 
-  // Rich widgets the controls library can't generically express get
-  // plugged in via customWidgets — keyed by registry id. The widgets
-  // own their own data fetching; FilterForm just wires the value /
-  // onChange through. The District field renders inline (below) so it
-  // can also surface its picked-suggestion side channel to Browse.
-  const customWidgets = {
-    collections: CollectionsPicker as never,
-    city_index_rules: CityIndexRulesPicker as never,
-    pipeline: PipelineScopePicker as never,
+  const renderBlock = (b: FilterBlock, i: number): ReactNode => {
+    if (b.kind === 'form') {
+      return (
+        <FilterForm
+          key={i}
+          scope="browse"
+          state={registryView}
+          onChange={handleRegistryChange}
+          includeOnly={b.ids}
+          labels={b.labels}
+          units={units}
+          customWidgets={SIDEBAR_WIDGETS}
+          flat
+        />
+      );
+    }
+    const body = b.caption ? <Section label={b.label}>{renderCustom(b)}</Section> : renderCustom(b);
+    // A spanning block takes a row of its own in a grid group, never a cramped cell.
+    return b.span ? <div key={i} className="[grid-column:1/-1]">{body}</div> : <Fragment key={i}>{body}</Fragment>;
   };
 
   return (
@@ -405,389 +430,27 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         )}
       </div>
 
+      {/* Three tiers from one table (lib/filterLayout, shared with the phone's
+          Filtry sheet): collapsible bands → ControlGroups (bordered={false},
+          the band owns separation) → rows. The registry decides each form
+          row's widget, so a `toolkit/filter_registry.py` edit flows through. */}
       <div className="px-5">
-        {/* Three-tier hierarchy: collapsible bands (top) → ControlGroups
-            (mid, bordered={false} so the band owns separation) → Section
-            labels. Most groups are driven by <FilterForm>: the registry
-            decides which widget renders per filter, so touching
-            `toolkit/filter_registry.py` flows through here without edits.
-            The hand-written sections (district picker, tags picker) wrap
-            rich widgets <FilterForm> doesn't yet cover. */}
-
-        <CollapsibleGroup
-          title="Essentials"
-          defaultOpen
-          active={bandActive(filters, ESSENTIALS_KEYS)}
-        >
-          <ControlGroup title="Category" bordered={false}>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['category_main_in', 'category_type']}
-              labels={{
-                category_main_in: 'Type',
-                category_type: 'Listing for',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          {/* Subtype sits directly under Type — it's a refinement of the
-              chosen category (houses / commercial), so it belongs next to it
-              rather than further down the band. Shown when ANY selected
-              category is dum/komercni; options union over those selected. */}
-          {(() => {
-            const subMains = filters.categoryMain.filter(
-              (c): c is 'dum' | 'komercni' => c === 'dum' || c === 'komercni',
-            );
-            if (subMains.length === 0) return null;
-            const seen = new Set<string>();
-            const options = subMains
-              .flatMap((c) => SUBTYPE_LABELS_BY_MAIN[c])
-              .filter((o) => (seen.has(o.slug) ? false : (seen.add(o.slug), true)))
-              .map((o) => ({ value: o.slug, label: o.label }));
-            return (
-              <ControlGroup title="Subtype" bordered={false}>
-                <MultiselectChips
-                  value={filters.subtype}
-                  options={options}
-                  onChange={(next) =>
-                    handleRegistryChange([{ id: 'subtype', value: next }])
-                  }
-                />
-              </ControlGroup>
-            );
-          })()}
-
-          <ControlGroup title="Status" bordered={false}>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['status', 'recently_added_days', 'recently_changed_days']}
-              labels={{
-                status: 'Status',
-                recently_added_days: 'Recently added',
-                recently_changed_days: 'Recently changed',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Location" bordered={false}>
-            <Section label="District">
-              <LocationTypeahead
-                label="District"
-                value={filters.districts}
-                onChange={(next) => {
-                  latestFilters.current = { ...latestFilters.current, districts: next ?? [] };
-                  onChange(latestFilters.current);
-                }}
-                onPick={onLocationPick}
-              />
-            </Section>
-          </ControlGroup>
-
-          <ControlGroup title="Disposition" bordered={false}>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['dispositions']}
-              labels={{
-                dispositions: 'Disposition',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Size" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['min_area_m2', 'min_estate_area', 'min_usable_area']}
-              labels={{
-                min_area_m2: 'Area',
-                min_estate_area: 'Lot area',
-                min_usable_area: 'Usable area',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Condition & material" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={[
-                'condition_match', 'building_material',
-                'building_condition_level_min', 'apartment_condition_level_min',
-              ]}
-              labels={{
-                condition_match: 'Condition (Stav objektu)',
-                building_material: 'Building material',
-                building_condition_level_min: 'Building condition (1–5)',
-                apartment_condition_level_min: 'Apartment condition (1–5)',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Price" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['min_price_czk']}
-              labels={{ min_price_czk: 'Price' }}
-              flat
-            />
-            {/* Sits directly below the Price (Kč) inputs it modifies. Spans
-                every grid column so it's its own row, not a cramped cell. */}
-            <div className="[grid-column:1/-1]">
-              <IncludeNoPriceToggle filters={filters} onChange={onChange} />
-            </div>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={[
-                'min_price_per_m2',
-                'price_change_count_min', 'price_change_window_days',
-                'total_price_change_pct',
-              ]}
-              /* The ONE place the operator AUTHORS a Kč/m² bound, so it is the
-                 one place the unit must not be a static guess. The registry
-                 declares "CZK/m²" — correct on a sale cohort, wrong by ~300x on
-                 the DEFAULT Browse cohort (byt + pronájem), where the measure is
-                 a monthly rent per m² running ~319. Typing 90 000 there returns
-                 nothing and the old hint gave no clue why; the saved watchdog
-                 then summarised the same number as Kč/m²/měs, two surfaces
-                 describing one stored value two ways. */
-              units={{
-                min_price_per_m2: ppm2UnitHint,
-                max_price_per_m2: ppm2UnitHint,
-              }}
-              labels={{
-                min_price_per_m2: 'Price / m²',
-                price_change_count_min: 'Price changed N+ times',
-                price_change_window_days: 'Price change window',
-                total_price_change_pct: 'Total price change % (− = drop)',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          {/* Yield is the MF reference rent ÷ asking price — only meaningful
-              for sale apartments, so it's offered on the Prodej tab only.
-              (Rentals have no asking price; their yield is always NULL.) */}
-          {filters.categoryType === 'prodej' && (
-            <ControlGroup title="Yield" bordered={false}>
-              <FilterForm
-                scope="browse"
-                state={registryView}
-                onChange={handleRegistryChange}
-                includeOnly={['min_mf_gross_yield_pct']}
-                labels={{
-                  min_mf_gross_yield_pct: 'MF gross yield %',
-                }}
-                flat
-              />
-            </ControlGroup>
-          )}
-        </CollapsibleGroup>
-
-        {/* Listing-level features. Deliberately NOT headed "Property": these
-            columns live on `listings` (per-listing portal attributes, mirrored
-            onto the property display row) and apply to an apartment as much as
-            to a house — furnished / ownership / amenities describe the unit,
-            not a building entity (the schema has none). */}
-        <CollapsibleGroup
-          title="Features"
-          active={bandActive(filters, FEATURES_KEYS)}
-        >
-          <ControlGroup title="Unit" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['furnished', 'ownership']}
-              labels={{
-                furnished: 'Furnished',
-                ownership: 'Ownership',
-              }}
-              flat
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Amenities" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={[
-                'has_balcony', 'has_lift', 'has_parking',
-                'terrace', 'cellar', 'garage',
-                'min_parking_lots',
-              ]}
-              labels={{
-                has_balcony: 'Balcony',
-                has_lift: 'Lift',
-                has_parking: 'Parking',
-                terrace: 'Terrace',
-                cellar: 'Cellar',
-                garage: 'Garage',
-                min_parking_lots: 'Min parking spaces',
-              }}
-              flat
-            />
-          </ControlGroup>
-        </CollapsibleGroup>
-
-        <CollapsibleGroup
-          title="Curation & quality"
-          active={bandActive(filters, CURATION_KEYS)}
-        >
-          <ControlGroup title="Curation" bordered={false}>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['pipeline', 'collections', 'with_estimates']}
-              labels={{
-                pipeline: 'Pipeline',
-                collections: 'Kolekce',
-                with_estimates: 'With estimates',
-              }}
-              customWidgets={customWidgets}
-              flat
-            />
-            {/* Two registry ids, one control (the portal control's shape below):
-                rendered beside the form rather than through it. */}
-            <Section label="Tags">
-              <AccountTagFilter
-                value={filters}
-                onChange={(next) => onChange({ ...filters, ...next })}
-              />
-            </Section>
-            <ShowDismissedToggle filters={filters} onChange={onChange} />
-          </ControlGroup>
-
-          <ControlGroup title="City quality" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={[
-                'min_city_population',
-                'max_city_population',
-                'near_pop_5km_min',
-                'near_pop_15km_min',
-                'near_jobs_5km_min',
-                'near_jobs_15km_min',
-                'near_youth_5km_min',
-                'near_youth_15km_min',
-                'near_overall_5km_min',
-                'near_overall_15km_min',
-              ]}
-              labels={{
-                min_city_population: 'Min population (own city)',
-                max_city_population: 'Max population (own city)',
-                near_pop_5km_min: 'Pop ≥ N within 5 km',
-                near_pop_15km_min: 'Pop ≥ N within 15 km',
-                near_jobs_5km_min: 'Jobs index ≥ T within 5 km',
-                near_jobs_15km_min: 'Jobs index ≥ T within 15 km',
-                near_youth_5km_min: 'Young-migration ≥ T within 5 km',
-                near_youth_15km_min: 'Young-migration ≥ T within 15 km',
-                near_overall_5km_min: 'Overall index ≥ T within 5 km',
-                near_overall_15km_min: 'Overall index ≥ T within 15 km',
-              }}
-              customWidgets={customWidgets}
-              flat
-            />
-            {/* Hint spans the full grid width so it never wedges into a
-                single narrow column beside the population inputs. */}
-            <div className="[grid-column:1/-1]">
-              <CityPopulationHint />
-            </div>
-          </ControlGroup>
-
-          {/* Legacy flexible filter — kept for the ~30 indexes the fast
-              predefined filters above don't cover (bezpečnost, lékárny,
-              školy, …). Matches inside the curated-city footprint via the
-              city-quality RPC (slower than the precomputed columns above). */}
-          <ControlGroup title="Advanced city-quality rules" bordered={false}>
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={['city_index_rules']}
-              labels={{
-                city_index_rules:
-                  'Curated city must satisfy all rules (any of ~30 indexes)',
-              }}
-              customWidgets={customWidgets}
-              flat
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Market growth (datasets)" bordered={false}>
-            <MarketGrowthFilter
-              value={filters.priceGrowthRules}
-              onChange={(next) => onChange({ ...filters, priceGrowthRules: next })}
-            />
-          </ControlGroup>
-        </CollapsibleGroup>
-
-        {/* Rarely-touched knobs, parked at the bottom by design: the source
-            portal, the viewport-vs-centre spatial mode, and the velocity
-            (seen / time-on-market) day ranges. */}
-        <CollapsibleGroup
-          title="Other"
-          active={bandActive(filters, OTHER_KEYS)}
-        >
-          <ControlGroup title="Source portal" bordered={false}>
-            <PortalFilterControl
-              value={filters}
-              onChange={(next) => onChange({ ...filters, ...next })}
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Map filter" bordered={false}>
-            <LocationModeSection
-              mode={filters.locationMode}
-              centerRadius={filters.centerRadius}
-              onModeChange={(mode) =>
-                onChange({ ...filters, locationMode: mode })
-              }
-              onCenterRadiusChange={(cr) =>
-                onChange({ ...filters, centerRadius: cr })
-              }
-            />
-          </ControlGroup>
-
-          <ControlGroup title="Velocity" bordered={false} layout="grid">
-            <FilterForm
-              scope="browse"
-              state={registryView}
-              onChange={handleRegistryChange}
-              includeOnly={[
-                'first_seen_min_days',
-                'last_seen_min_days',
-                'tom_days_min',
-              ]}
-              labels={{
-                first_seen_min_days: 'First seen (days ago)',
-                last_seen_min_days: 'Last seen (days ago)',
-                tom_days_min: 'Time on market (days)',
-              }}
-              flat
-            />
-          </ControlGroup>
-        </CollapsibleGroup>
+        {BROWSE_FILTER_BANDS.map((band) => (
+          <CollapsibleGroup
+            key={band.title}
+            title={band.title}
+            defaultOpen={band.defaultOpen}
+            active={bandActive(filters, band.keys)}
+          >
+            {band.groups
+              .filter((g) => !g.when || g.when(filters))
+              .map((g) => (
+                <ControlGroup key={g.title} title={g.title} bordered={false} layout={g.layout}>
+                  {g.blocks.map(renderBlock)}
+                </ControlGroup>
+              ))}
+          </CollapsibleGroup>
+        ))}
       </div>
     </aside>
   );
@@ -806,7 +469,7 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
 /* unstick it.                                                                */
 /* -------------------------------------------------------------------------- */
 
-function CityPopulationHint() {
+export function CityPopulationHint() {
   const { data } = useQuery<{ withPop: number; total: number }, Error>({
     queryKey: ['curated_cities_population_status'],
     /* A hint, never an error: a failed read leaves `data` empty and the

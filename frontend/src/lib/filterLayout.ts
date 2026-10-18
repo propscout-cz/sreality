@@ -1,0 +1,294 @@
+/* Browse's filter set as LAYOUT DATA: bands → groups → blocks, in the order and
+ * under the words the desktop sidebar draws them. Two surfaces render this one
+ * table — `FilterSidebar` (components/Filters.tsx) and the phone's Filtry sheet
+ * (components/phone/FilterSheet.tsx) — so the phone shows the same filters,
+ * grouped, ordered, labelled and optioned the same, and a filter placed here
+ * lands on both. Nothing here decides what a filter MEANS: that is the registry
+ * (filterRegistry.generated), the URL contract (filters.ts toSearchParams) and
+ * the reads (queries.ts), rule 16.
+ *
+ * A `form` block is one <FilterForm> slice: its ids render in REGISTRY order with
+ * min/max pairs folded into one row (FilterForm `formRows`), whatever order they
+ * are listed in here. A `custom` block is a control the registry form cannot
+ * draw (the place typeahead, the two-sided tag and portal chips, …); what it
+ * edits is the phone's concern (components/phone/filterRows `CUSTOM_REACH`),
+ * kept out of here so the desktop's first visit does not carry it. */
+
+import { SUBTYPE_LABELS_BY_MAIN } from './enums';
+import type { ListingFilters } from './filters';
+
+export type CustomBlockKey =
+  | 'subtype'
+  | 'districts'
+  | 'include_no_price'
+  | 'tags'
+  | 'show_dismissed'
+  | 'city_population_hint'
+  | 'market_growth'
+  | 'portals'
+  | 'location_mode';
+
+export interface FormBlock {
+  kind: 'form';
+  ids: readonly string[];
+  labels: Readonly<Record<string, string>>;
+}
+
+export interface CustomBlock {
+  kind: 'custom';
+  key: CustomBlockKey;
+  /* The words that name it: the sidebar's caption when `caption` is set, and
+   * the phone row's label always. */
+  label: string;
+  caption?: boolean;
+  /* Spans every column of a grid group. */
+  span?: boolean;
+  /* Not a filter: a note beside the filters. */
+  note?: boolean;
+}
+
+export type FilterBlock = FormBlock | CustomBlock;
+
+export interface FilterGroup {
+  title: string;
+  layout?: 'grid';
+  /* Drawn only while the cohort gives the group a meaning. */
+  when?: (f: ListingFilters) => boolean;
+  /* Drives the full-page map's spatial mode: the phone has no map. */
+  mapOnly?: boolean;
+  blocks: readonly FilterBlock[];
+}
+
+export interface FilterBand {
+  title: string;
+  defaultOpen?: boolean;
+  /* The keys that light the band's "active" dot while it is folded. `bounds` is
+   * deliberately absent: the viewport changes on every pan, so counting it
+   * would pin the dot on. */
+  keys: readonly (keyof ListingFilters)[];
+  groups: readonly FilterGroup[];
+}
+
+/* Subtype refines houses and commercial units; the options are the union over
+ * whichever of the two the cohort selects. */
+export const subtypeMains = (categoryMain: ReadonlyArray<string>): Array<'dum' | 'komercni'> =>
+  categoryMain.filter((c): c is 'dum' | 'komercni' => c === 'dum' || c === 'komercni');
+
+export const subtypeOptions = (
+  categoryMain: ReadonlyArray<string>,
+): Array<{ value: string; label: string }> => {
+  const seen = new Set<string>();
+  return subtypeMains(categoryMain)
+    .flatMap((c) => SUBTYPE_LABELS_BY_MAIN[c])
+    .filter((o) => (seen.has(o.slug) ? false : (seen.add(o.slug), true)))
+    .map((o) => ({ value: o.slug, label: o.label }));
+};
+
+const form = (labels: Record<string, string>): FormBlock => ({
+  kind: 'form',
+  ids: Object.keys(labels),
+  labels,
+});
+
+export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
+  {
+    title: 'Essentials',
+    defaultOpen: true,
+    keys: [
+      'categoryMain', 'categoryType', 'status',
+      'recentlyAddedDays', 'recentlyChangedDays',
+      'districts',
+      'dispositions', 'subtype',
+      'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax',
+      'usableAreaMin', 'usableAreaMax',
+      'conditionMatch', 'buildingMaterial',
+      'buildingConditionLevelMin', 'buildingConditionLevelMax',
+      'apartmentConditionLevelMin', 'apartmentConditionLevelMax',
+      'priceMin', 'priceMax', 'pricePerM2Min', 'pricePerM2Max',
+      'priceChangeCountMin', 'priceChangeWindowDays', 'totalPriceChangePct',
+      'mfGrossYieldPctMin', 'mfGrossYieldPctMax',
+    ],
+    groups: [
+      { title: 'Category', blocks: [form({ category_main_in: 'Type', category_type: 'Listing for' })] },
+      /* Directly under Type: it refines the chosen category. Cleared with the
+       * last house / commercial category (applySidebarUpdates). */
+      {
+        title: 'Subtype',
+        when: (f) => subtypeMains(f.categoryMain).length > 0,
+        blocks: [{ kind: 'custom', key: 'subtype', label: 'Subtype' }],
+      },
+      {
+        title: 'Status',
+        blocks: [
+          form({
+            status: 'Status',
+            recently_added_days: 'Recently added',
+            recently_changed_days: 'Recently changed',
+          }),
+        ],
+      },
+      {
+        title: 'Location',
+        blocks: [
+          { kind: 'custom', key: 'districts', label: 'District', caption: true },
+        ],
+      },
+      { title: 'Disposition', blocks: [form({ dispositions: 'Disposition' })] },
+      {
+        title: 'Size',
+        layout: 'grid',
+        blocks: [form({ min_area_m2: 'Area', min_estate_area: 'Lot area', min_usable_area: 'Usable area' })],
+      },
+      {
+        title: 'Condition & material',
+        layout: 'grid',
+        blocks: [
+          form({
+            condition_match: 'Condition (Stav objektu)',
+            building_material: 'Building material',
+            building_condition_level_min: 'Building condition (1–5)',
+            apartment_condition_level_min: 'Apartment condition (1–5)',
+          }),
+        ],
+      },
+      {
+        title: 'Price',
+        layout: 'grid',
+        blocks: [
+          form({ min_price_czk: 'Price' }),
+          /* Directly below the Kč inputs it modifies, on a row of its own. */
+          { kind: 'custom', key: 'include_no_price', label: 'Include listings without a price', span: true },
+          /* The Kč/m² bound's unit follows the cohort (rule 23): both surfaces
+           * pass `ppm2BoundUnit`, never the registry's static string. */
+          form({
+            min_price_per_m2: 'Price / m²',
+            price_change_count_min: 'Price changed N+ times',
+            price_change_window_days: 'Price change window',
+            total_price_change_pct: 'Total price change % (− = drop)',
+          }),
+        ],
+      },
+      /* MF reference rent ÷ asking price: sale flats only, so Prodej only;
+       * cleared on leaving Prodej (applySidebarUpdates). */
+      {
+        title: 'Yield',
+        when: (f) => f.categoryType === 'prodej',
+        blocks: [form({ min_mf_gross_yield_pct: 'MF gross yield %' })],
+      },
+    ],
+  },
+  /* Listing-level features — per-advert portal attributes, so NOT "Property". */
+  {
+    title: 'Features',
+    keys: [
+      'furnished', 'ownership',
+      'hasBalcony', 'hasLift', 'hasParking', 'terrace', 'cellar', 'garage',
+      'parkingLotsMin',
+    ],
+    groups: [
+      { title: 'Unit', layout: 'grid', blocks: [form({ furnished: 'Furnished', ownership: 'Ownership' })] },
+      {
+        title: 'Amenities',
+        layout: 'grid',
+        blocks: [
+          form({
+            has_balcony: 'Balcony',
+            has_lift: 'Lift',
+            has_parking: 'Parking',
+            terrace: 'Terrace',
+            cellar: 'Cellar',
+            garage: 'Garage',
+            min_parking_lots: 'Min parking spaces',
+          }),
+        ],
+      },
+    ],
+  },
+  {
+    title: 'Curation & quality',
+    keys: [
+      'pipeline', 'tags', 'tagsExcluded', 'collections', 'withEstimates', 'showDismissed',
+      'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
+      'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
+      'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
+      'priceGrowthRules',
+    ],
+    groups: [
+      {
+        title: 'Curation',
+        blocks: [
+          form({ pipeline: 'Pipeline', collections: 'Kolekce', with_estimates: 'With estimates' }),
+          /* Two registry ids, one two-sided control (the portal control's shape). */
+          { kind: 'custom', key: 'tags', label: 'Tags', caption: true },
+          { kind: 'custom', key: 'show_dismissed', label: 'Show dismissed properties' },
+        ],
+      },
+      {
+        title: 'City quality',
+        layout: 'grid',
+        blocks: [
+          form({
+            min_city_population: 'Min population (own city)',
+            max_city_population: 'Max population (own city)',
+            near_pop_5km_min: 'Pop ≥ N within 5 km',
+            near_pop_15km_min: 'Pop ≥ N within 15 km',
+            near_jobs_5km_min: 'Jobs index ≥ T within 5 km',
+            near_jobs_15km_min: 'Jobs index ≥ T within 15 km',
+            near_youth_5km_min: 'Young-migration ≥ T within 5 km',
+            near_youth_15km_min: 'Young-migration ≥ T within 15 km',
+            near_overall_5km_min: 'Overall index ≥ T within 5 km',
+            near_overall_15km_min: 'Overall index ≥ T within 15 km',
+          }),
+          { kind: 'custom', key: 'city_population_hint', label: 'Population data', span: true, note: true },
+        ],
+      },
+      /* The flexible legacy filter for the ~30 indexes the precomputed columns
+       * above do not cover; matched inside the curated-city footprint. */
+      {
+        title: 'Advanced city-quality rules',
+        blocks: [form({ city_index_rules: 'Curated city must satisfy all rules (any of ~30 indexes)' })],
+      },
+      {
+        title: 'Market growth (datasets)',
+        blocks: [
+          { kind: 'custom', key: 'market_growth', label: 'Market growth (datasets)' },
+        ],
+      },
+    ],
+  },
+  /* Rarely touched, parked at the bottom by design. */
+  {
+    title: 'Other',
+    keys: [
+      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
+      'firstSeenMinDays', 'firstSeenMaxDays',
+      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
+    ],
+    groups: [
+      {
+        title: 'Source portal',
+        blocks: [
+          { kind: 'custom', key: 'portals', label: 'Source portal' },
+        ],
+      },
+      {
+        title: 'Map filter',
+        mapOnly: true,
+        blocks: [
+          { kind: 'custom', key: 'location_mode', label: 'Mode' },
+        ],
+      },
+      {
+        title: 'Velocity',
+        layout: 'grid',
+        blocks: [
+          form({
+            first_seen_min_days: 'First seen (days ago)',
+            last_seen_min_days: 'Last seen (days ago)',
+            tom_days_min: 'Time on market (days)',
+          }),
+        ],
+      },
+    ],
+  },
+];

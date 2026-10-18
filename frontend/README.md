@@ -177,8 +177,10 @@ account sheet's "Desktopová verze" sets a per-device override
 (`localStorage` `sreality.phone.desktopView`) and the desktop account menu's
 "Mobilní verze" clears it. Pages are not forked: a route without a phone
 design renders its desktop page inside the frame. The feed (`/feed`,
-`src/pages/Feed.tsx`) reuses Browse's read layer; its cards are
-`src/components/phone/FeedCard.tsx`. The property page draws
+`src/pages/Feed.tsx`) reuses Browse's read layer and keeps its scope in the
+URL as Browse does; its cards are `src/components/phone/FeedCard.tsx`, and
+its Filtry sheet (`src/components/phone/FilterSheet.tsx`) draws Browse's
+filter set from the sidebar's own layout table (`src/lib/filterLayout.ts`). The property page draws
 `src/components/phone/PhoneProperty.tsx` from `PropertyDetail`'s own reads;
 Odkaz (`src/pages/Link.tsx`) takes a pasted portal link to
 `/listing/:source/:nativeId`. To see the frame on a desktop browser, narrow
