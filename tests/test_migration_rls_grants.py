@@ -398,6 +398,10 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # EXECUTE revoked from every browser role and annotated `ci-allow-ungated` there; the
     # browser reaches a label only through share_party_emails(), counterparties only.
     "auth.users",
+    # The health check registry and the incident table (migrations 619 / 462): the browser
+    # reads both only through the admin-gated pipeline_checks_public.
+    "health_checks",
+    "ops_incidents",
 })
 
 _CREATE_GATED_OBJ = re.compile(

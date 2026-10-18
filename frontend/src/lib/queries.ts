@@ -1887,7 +1887,8 @@ export const fetchScraperHealthChecks = async (
  * (ratios, minutes, counts — see scripts/verify_pipeline.py). */
 export interface PipelineCheckRow {
   check_key: string;
-  status: string;
+  /* null for a registered check that was never measured (migration 619). */
+  status: string | null;
   value: number | null;
   details: Record<string, unknown> | null;
   run_at: string | null;

@@ -239,6 +239,14 @@ def test_max_age_close_uses_the_operator_hours() -> None:
     assert "last_seen_at <" in sql
 
 
+def test_neither_resolver_can_close_a_cell_incident() -> None:
+    """Cell incidents belong to toolkit.system_alerts.reconcile; this engine never closes one."""
+    # psycopg sends the parametrized one's %% as %; the other reaches Postgres as %%, the same
+    # LIKE wildcard (a lone % would fail tests/test_sql_placeholders.py).
+    assert "AND signature NOT LIKE 'cell:%'" in oi._RESOLVE_MAX_AGE_SQL % {"hours": 168}
+    assert "AND i.signature NOT LIKE 'cell:%%'" in oi._RESOLVE_ON_SUCCESS_SQL
+
+
 def test_resolution_notifies_only_incidents_that_actually_rang() -> None:
     conn = _Conn(
         resolved_by_success=[(7, SIG, _T0), (8, "quiet|thing", None)],

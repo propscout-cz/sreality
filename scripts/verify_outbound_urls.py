@@ -4,48 +4,42 @@ The portal-URL contract (docs/design/portal-listing-url.md) makes `listings.sour
 stored fact for all nine portals; sreality's is assembled from a closed codebook of its
 own sub-category slugs. Two offline rails already guard it — the codebook test and the
 weekly re-derivation parity — but neither asks the portal. This one does, once a week,
-with ~44 HEAD requests: it samples ACTIVE rows, sends `HEAD` to each stored URL, and
+with ~44 HEAD requests: it samples ACTIVE ads, sends `HEAD` to each stored URL, and
 records what came back.
 
-Deliberately its own script and workflow (never inside verify_pipeline's per-check
-wall-clock budget): outbound third-party HTTP is slow and flaky in ways a DB check is
-not. Status-code HEAD only — never follow a redirect, never read a body, never
-authenticate, never reuse this as an ingest surface (sreality's SSR page 302s into a
-login.seznam.cz chain; the scraper reaches sreality by id through /api/v1/estates).
+A registered check of scripts/verify_pipeline.py (cadence one week, budget 120 s), run when
+due from the GitHub lanes, so the probe leaves from an address other than the scrapers'.
+Status-code HEAD only — never follow a redirect, never read a body, never authenticate,
+never reuse this as an ingest surface (sreality's SSR page 302s into a login.seznam.cz
+chain; the scraper reaches sreality by id through /api/v1/estates).
 
 Sampling is STRATIFIED and ROTATING, not uniform: uniform sampling would never test a
 rare code. Each run covers a quarter of the sreality codebook chosen by the ISO week
 (so the whole codebook is covered every four weeks with no new state table), three
-random active rows per code, plus one active row per crawler portal.
+random active ads per code, plus one active ad per crawler portal.
 
-Thresholding is by CONCENTRATION, not raw rate. A 404 on a single row is most likely a
-delisting rule #3 has not caught up with; a URL-SHAPE defect is systematic — every row
+Thresholding is by CONCENTRATION, not raw rate. A 404 on a single ad is most likely a
+delisting rule #3 has not caught up with; a URL-SHAPE defect is systematic — every ad
 of one (category_main, category_sub_cb) cell fails together. So: `fail` when any cell
 with >= cell_min samples is >= cell_fail_share non-conforming; `warn` when the overall
-non-conformance exceeds warn_share; `ok` otherwise. Active rows only — a delisted
-sreality page 404s at any URL, so the archive is guarded by the offline rails, not this.
-
-Required env: SUPABASE_DB_URL. `--dry-run` probes and logs, writes nothing.
+non-conformance exceeds warn_share; `ok` otherwise; `unknown` when nothing was drawn.
+Active ads only — a delisted sreality page 404s at any URL, so the archive is guarded by
+the offline rails, not this.
 """
 
 from __future__ import annotations
 
-import argparse
 import datetime as _dt
 import logging
-import os
-import sys
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 
-from scraper import db, sreality_url
+from scraper import sreality_url
 from scraper.sreality_url import critical_segments
-from scripts.verify_pipeline import insert_result, load_thresholds
-from toolkit.system_alerts import AlertPolicy, check_states, emit_transition_alerts
 
 LOG = logging.getLogger(__name__)
 
@@ -133,8 +127,10 @@ def classify(samples: list[tuple[Sample, bool]], thresholds: dict[str, Any]) -> 
         "details": {
             "sampled": total, "non_conforming": bad_total,
             "failed_cells": failed_cells,
-            "cells": [{"source": k[0], "category_main": k[1], "category_sub_cb": k[2],
-                       "sampled": len(v), "failed": v.count(False)} for k, v in cells.items()],
+            # Not `cells`: that key is the health ladder's per-cell verdict contract.
+            "sampled_cells": [{"source": k[0], "category_main": k[1], "category_sub_cb": k[2],
+                               "sampled": len(v), "failed": v.count(False)}
+                              for k, v in cells.items()],
             "warn_share": warn_share, "cell_min": cell_min, "cell_fail_share": cell_fail,
         },
         "message": (
@@ -182,42 +178,20 @@ def probe_all(samples: list[Sample]) -> list[tuple[Sample, bool]]:
     return results
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Probe + log only; write no result row, send no alert.")
-    parser.add_argument("--week", type=int, default=None,
-                        help="Override the ISO week that picks the codebook quarter.")
-    parser.add_argument("--verbose", action="store_true")
-    args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    if not os.environ.get("SUPABASE_DB_URL"):
-        print("ERROR: SUPABASE_DB_URL is not set.", file=sys.stderr)
-        return 2
-
-    run_at = _dt.datetime.now(_dt.timezone.utc)
-    week = args.week if args.week is not None else run_at.isocalendar().week
-    with db.connect() as conn:
-        thresholds = load_thresholds(conn)
-        samples = draw_samples(conn, week)
-        LOG.info("CONFORMANCE week=%d codes=%s sampled=%d", week, codes_for_week(week), len(samples))
-        results = probe_all(samples)
-        result = classify(results, thresholds)
-        by_code: Counter[str] = Counter("ok" if ok else "fail" for _, ok in results)
-        LOG.info("CONFORMANCE status=%s value=%s%% %s", result["status"], result["value"], dict(by_code))
-        if args.dry_run:
-            return 0
-        policy = AlertPolicy.from_thresholds(thresholds)
-        states = check_states(conn, policy=policy)
-        prev = {k: s.status for k, s in states.items() if s.status is not None}
-        insert_result(conn, result, run_at)
-        emitted = emit_transition_alerts(conn, [result], prev, run_at, states=states, policy=policy)
-        LOG.info("CONFORMANCE wrote 1 row, alerts=%s", emitted)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+def check_outbound_url_conformance(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """This ISO week's sample of stored portal URLs, probed by HEAD and judged by concentration."""
+    week = _dt.datetime.now(_dt.timezone.utc).isocalendar().week
+    codes = codes_for_week(week)
+    samples = draw_samples(conn, week)
+    LOG.info("CONFORMANCE week=%d codes=%s sampled=%d", week, codes, len(samples))
+    if not samples:
+        detail = (f"no active ad with a stored URL was drawn for ISO week {week}, so "
+                  "nothing was verified")
+        return {
+            "check_key": CHECK_KEY, "status": "unknown", "value": None,
+            "details": {"skipped": detail, "week": week, "codes": codes},
+            "message": f"Portal URL conformance verified NOTHING — {detail}.",
+        }
+    result = classify(probe_all(samples), thresholds)
+    result["details"].update({"week": week, "codes": codes})
+    return result

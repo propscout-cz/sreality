@@ -23,6 +23,11 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      # The monitoring workflows install `.` alone, with no extra: an import that needs
+      # one would turn every one of their runs red, so prove the import here first.
+      - name: Import the monitoring entry points with runtime deps only
+        run: pip install -e . && python -c "import scripts.verify_pipeline, scripts.record_workflow_failures"
+
       - name: Install
         run: pip install -e ".[dev,api,geo]"
 

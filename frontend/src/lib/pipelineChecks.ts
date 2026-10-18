@@ -2,11 +2,11 @@ import type { PipelineCheckRow } from './queries';
 import { fmtCount } from './format';
 
 /* Presentation + rollup helpers for the pipeline verification checks
- * (migration 274, pipeline_checks_public). One latest row per check_key; the
- * DB already emits an ok/warn/fail status, so these helpers only humanize the
- * key/value and roll the statuses up for the Health panel's header badge. */
+ * (migration 274, pipeline_checks_public). One row per registered check (migration
+ * 619), stamped ok/warn/fail when measured and unknown when not, so these helpers only
+ * humanize the key/value and roll the statuses up for the Health panel's header badge. */
 
-export type PipelineCheckStatus = 'ok' | 'warn' | 'fail';
+export type PipelineCheckStatus = 'ok' | 'warn' | 'fail' | 'unknown';
 
 /* The keys scripts/verify_pipeline.py still emits. Historical rows from retired
  * checks (the dedup decision-engine ones) fall through to the humanizer below. */
@@ -63,34 +63,33 @@ export function pipelineCheckValueLabel(value: number | null, checkKey?: string)
   return shown + (checkKey ? (CHECK_VALUE_UNIT[checkKey] ?? '') : '');
 }
 
-/* Anything the DB didn't stamp warn/fail is treated as ok, so an unknown future
- * status never renders as a false alarm. */
-export function normalizePipelineStatus(status: string): PipelineCheckStatus {
-  return status === 'fail' || status === 'warn' ? status : 'ok';
+/* Only a measured ok/warn/fail passes through. Anything else (unknown, the null status of
+ * a registered check with no result yet, a future word) is Not measured, never ok. */
+export function normalizePipelineStatus(status: string | null | undefined): PipelineCheckStatus {
+  return status === 'ok' || status === 'warn' || status === 'fail' ? status : 'unknown';
 }
 
 export interface PipelineChecksSummary {
   ok: number;
   warn: number;
   fail: number;
+  unknown: number;
   worst: PipelineCheckStatus;
 }
 
+// Worst first: Problem, Watch, Not measured, OK.
+const WORST_FIRST: readonly PipelineCheckStatus[] = ['fail', 'warn', 'unknown', 'ok'];
+
+/* An empty set measured nothing, so its worst is unknown rather than ok. */
 export function summarizePipelineChecks(rows: PipelineCheckRow[]): PipelineChecksSummary {
-  const acc: Record<PipelineCheckStatus, number> = { ok: 0, warn: 0, fail: 0 };
+  const acc: Record<PipelineCheckStatus, number> = { ok: 0, warn: 0, fail: 0, unknown: 0 };
   for (const r of rows) acc[normalizePipelineStatus(r.status)] += 1;
-  const worst: PipelineCheckStatus = acc.fail > 0 ? 'fail' : acc.warn > 0 ? 'warn' : 'ok';
-  return { ok: acc.ok, warn: acc.warn, fail: acc.fail, worst };
+  const worst = WORST_FIRST.find((s) => acc[s] > 0) ?? 'unknown';
+  return { ...acc, worst };
 }
 
-// fail first, then warn, then ok; stable by check_key inside a status band.
-const STATUS_ORDER: Record<PipelineCheckStatus, number> = { fail: 0, warn: 1, ok: 2 };
-
+// Worst first, stable by check_key inside a status band.
 export function sortPipelineChecks(rows: PipelineCheckRow[]): PipelineCheckRow[] {
-  return [...rows].sort(
-    (a, b) =>
-      STATUS_ORDER[normalizePipelineStatus(a.status)] -
-        STATUS_ORDER[normalizePipelineStatus(b.status)] ||
-      a.check_key.localeCompare(b.check_key),
-  );
+  const rank = (r: PipelineCheckRow) => WORST_FIRST.indexOf(normalizePipelineStatus(r.status));
+  return [...rows].sort((a, b) => rank(a) - rank(b) || a.check_key.localeCompare(b.check_key));
 }

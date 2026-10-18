@@ -101,6 +101,11 @@ class SetEntitlementIn(BaseModel):
     status: Literal["active", "trialing", "past_due", "canceled"] = "active"
 
 
+class AcknowledgeIn(BaseModel):
+    # The pattern also keeps LIKE's `%` and the `:` separator out of the signature prefix.
+    key: str = Field(pattern=r"^[a-z0-9_]+$", max_length=80)
+
+
 # --- skills ---------------------------------------------------------------
 
 @router.get("/skills")
@@ -822,6 +827,25 @@ def _fetch_plan(conn: "psycopg.Connection", key: str) -> dict[str, Any]:
         row = cur.fetchone()
     assert row is not None
     return _plan_to_dict(row)
+
+
+# --- health: acknowledge a check's open incidents (migration 619) -----------
+
+@router.post("/health/acknowledge")
+def post_health_acknowledge(
+    body: AcknowledgeIn,
+    conn: Any = Depends(deps.get_db_conn),
+) -> dict[str, Any]:
+    """Stop the reminders of one check's open incidents; each still closes on a measured OK."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ops_incidents SET acknowledged_at = now() "
+            "WHERE resolved_at IS NULL AND acknowledged_at IS NULL "
+            "AND starts_with(signature, 'cell:' || %s::text || ':')",
+            (body.key,),
+        )
+        acknowledged = cur.rowcount
+    return {"key": body.key, "acknowledged": acknowledged}
 
 
 # --- helpers --------------------------------------------------------------

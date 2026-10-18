@@ -1,24 +1,19 @@
 name: "Monitoring: acute health (hourly)"
 
-# The fast lane of verify_pipeline: runs the ACUTE checks — LLM errors, LLM burn rate,
-# DB saturation (pg_cron failure rate), realtime-worker liveness, property-
-# maintenance staleness (sweep death / stranded lease), broker-resolution
-# freshness (budget-truncated daily sweep / frozen dirty drain) and the broker
-# merge-suppression invariant (an operator NO bypassed; O(1)) — hourly, and exits
-# non-zero when any is `fail` so GitHub emails the operator on a red scheduled run. This
-# is the belt-and-braces channel for when the in-app bell path itself is down; the bell
-# is rung (edge-triggered) by the checks via emit_transition_alerts, so an incident
-# alerts once — not per run — and clears on recovery. The 6h full verify_pipeline run
-# additionally covers these (shared emitter keys → no double-alert) plus the slower
-# structural checks (dedup debt, latency, engine cycle).
+# The hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the
+# check registry into health_checks, measures every check that is due by its own cadence,
+# stores each result, and exits non-zero when an alarm reads Problem (`fail`), so GitHub
+# emails the operator. GitHub throttles this cron to about five runs a day, so "hourly" is a
+# ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical without the exit
+# flag; both fold into one canary in wave 2. Telling is the API's: its ladder
+# (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.
 #
-# Replaces the standalone scripts/check_llm_health.py (WS4 alerting rebuild): one
-# detection codepath, one bell namespace — no more duplicate llm_health vs llm_errors.
-# The worker + DB checks close the two blind spots the 2026-07 incident exposed
-# (a dead worker and DB saturation each produced zero alerts).
+# Both lanes share one concurrency group, so a check is measured once per cadence even when
+# GitHub delivers the two together. A gauge never reds this run: it is a standing condition
+# the ladder tells once a day.
 #
-# Read-only; needs ONLY SUPABASE_DB_URL — deliberately not the Anthropic key, so it
-# keeps working when the API is the thing that's down.
+# Read-only apart from its own result and registry rows; needs ONLY SUPABASE_DB_URL —
+# deliberately not the Anthropic key, so it keeps working when the API is what is down.
 #
 # Required GitHub secret: SUPABASE_DB_URL.
 
@@ -28,13 +23,15 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: llm-health
+  group: pipeline-verification
   cancel-in-progress: false
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Every check can be due at once (the first run after a deploy): the registry's summed
+    # budgets plus headroom must fit (test_every_lane_budget_fits_its_job).
+    timeout-minutes: 30
     permissions:
       contents: read
     env:
@@ -51,7 +48,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Check acute health (LLM errors + burn rate, DB saturation, worker + property maintenance)
-        run: python -m scripts.verify_pipeline --only llm_errors,llm_burn_rate,db_saturation,worker_liveness,property_maintenance,broker_resolution_freshness,broker_merge_suppression --exit-nonzero-on-fail
-        # property_maintenance is O(1) by design (completion stamp + dirty-queue
-        # age) — never add a properties-scale scan to this 5-min-timeout lane.
+      - name: Run the due health checks (red on a failing alarm)
+        run: python -m scripts.verify_pipeline --exit-nonzero-on-fail

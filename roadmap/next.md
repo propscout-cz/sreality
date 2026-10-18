@@ -59,7 +59,7 @@ scans, monitors).
 
 **Still open:** the Wave C worker prerequisites (create the Railway service, flip
 `shared_rate_limiter` on, images-first inline pHash + warm-CLIP + matcher wake); **W5b** (SLO-scaled
-health + push alerting + silent-green closures — deferred, see `realtime-scrapers.md` § Sequencing);
+health + push alerting + silent-green closures — superseded 2026-10-18 by the Health dashboard sprint, `roadmap/reliability-track.md`);
 the sreality BFF sort HAR spike.
 
 ### Phase B1: Building decomposition — URL ingest + unit extractor + confirmation UI (active)

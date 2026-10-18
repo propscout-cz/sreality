@@ -1,8 +1,8 @@
-"""Hermetic tests for scripts.verify_pipeline — pure status logic + thresholds.
+"""Hermetic tests for scripts.verify_pipeline — the registry, the harness, the checks.
 
-No DB: the check functions' SQL is exercised in production; here we test the pure
-status-derivation helpers, thresholds loading/fallback, and the one-failing-check
-isolation of run_checks.
+No DB: the check functions' SQL is exercised in production (and PREPAREd in CI's schema
+sweep); here we test the registry metadata, due selection, the registry projection, the
+unmeasured paths, persistence, and the pure status-derivation helpers.
 """
 
 from __future__ import annotations
@@ -17,8 +17,10 @@ from pathlib import Path
 
 from scripts.migration_objects import load_migrations
 from scripts.verify_pipeline import (
+    CHECKS,
     DEFAULT_THRESHOLDS,
     _SAFE_IDENT,
+    Check,
     check_acquisition_lag,
     check_false_delist_share,
     check_migration_drift,
@@ -35,6 +37,26 @@ from scripts.verify_pipeline import (
 
 T = DEFAULT_THRESHOLDS
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+
+
+def _registered(*keys: str) -> list[Check]:
+    """The registered checks with these keys, in registry order."""
+    return [c for c in CHECKS if c.key in keys]
+
+
+def _by_key(key: str) -> Check:
+    (check,) = _registered(key)
+    return check
+
+
+def _keys() -> list[str]:
+    return [c.key for c in CHECKS]
+
+
+def _stub(key: str, fn: Any, *, budget_s: float = 45.0, cls: str = "alarm",
+          host: str = "github-actions", cadence_s: int = 3600) -> Check:
+    """An unregistered check for exercising the harness itself."""
+    return Check(key, fn, "platform", cls, host, cadence_s, key, budget_s=budget_s)
 
 
 # --- llm_errors ------------------------------------------------------------
@@ -245,8 +267,8 @@ def test_broker_resolution_catches_the_rotation_that_stopped_advancing() -> None
 
 def test_broker_sweep_axis_is_reachable_as_fail_before_any_lap_closes() -> None:
     """Without the open-lap fallback a rotation that NEVER completes a lap would sit
-    on the missing-stamp warn forever, and warn rings nothing: emit_transition_alerts
-    only fires on fail, and --exit-nonzero-on-fail only exits on fail. The check
+    on the missing-stamp warn forever, and warn rings nothing: the ladder opens an
+    incident on fail only, and --exit-nonzero-on-fail only exits on an alarm's fail. The check
     would have been inert for exactly the condition it was written for."""
     from scripts.verify_pipeline import _status_for_broker_resolution
 
@@ -327,7 +349,7 @@ def test_one_missed_night_warns_and_two_fail() -> None:
     """The calibration this axis was sized for, pinned on BOTH sides. A single
     missed night is 48h plus the finish spread — up to ~50.5h — so a fail line at
     50 fired the hourly acute lane for it: an onset alert from
-    emit_transition_alerts plus a non-zero exit from --exit-nonzero-on-fail, a
+    the ladder plus a non-zero exit from --exit-nonzero-on-fail, a
     second email for the night the sweep's own red run already reported. Two missed
     nights are >=69.5h even when the recovery run finishes at its earliest, so the
     fail line has to live strictly between the two — which is what makes the axis
@@ -483,39 +505,16 @@ def test_a_lifted_suppression_is_not_a_violation() -> None:
 
 def test_broker_suppression_check_is_registered() -> None:
     """An unregistered check is dead code that never writes a row."""
-    from scripts.verify_pipeline import _CHECKS, check_broker_merge_suppression
+    from scripts.verify_pipeline import check_broker_merge_suppression
 
-    assert ("broker_merge_suppression", check_broker_merge_suppression) in _CHECKS
+    assert _by_key("broker_merge_suppression").fn is check_broker_merge_suppression
 
 
 def test_broker_check_is_registered() -> None:
     """An unregistered check is dead code that never writes a row."""
-    from scripts.verify_pipeline import _CHECKS, check_broker_resolution_freshness
+    from scripts.verify_pipeline import check_broker_resolution_freshness
 
-    assert ("broker_resolution_freshness", check_broker_resolution_freshness) in _CHECKS
-
-
-def test_acute_lane_only_list_resolves_to_registered_checks() -> None:
-    """Registration in _CHECKS alone only buys the 6-hourly full run, which rings
-    the in-app bell and nothing else. `--exit-nonzero-on-fail` — the channel that
-    actually emails the operator — runs in llm_health.yml's hourly lane, and its
-    `--only` list is a string in a yml nothing pinned: dropping a key from it left
-    the whole suite green while the check silently fell back to bell-only."""
-    import pathlib
-    import re
-
-    from scripts.verify_pipeline import _CHECKS
-
-    yml = (pathlib.Path(__file__).resolve().parents[2]
-           / ".github/workflows/llm_health.yml").read_text()
-    only = re.search(r"--only\s+([\w,]+)", yml)[1].split(",")
-    registered = {key for key, _ in _CHECKS}
-    assert set(only) <= registered, set(only) - registered
-    assert "broker_resolution_freshness" in only
-    # the suppression invariant is O(1) and binary: registration alone would leave it
-    # ringing the in-app bell only, and a bypassed operator NO never emails anyone
-    assert "broker_merge_suppression" in only
-    assert "--exit-nonzero-on-fail" in yml
+    assert _by_key("broker_resolution_freshness").fn is check_broker_resolution_freshness
 
 
 # --- thresholds ------------------------------------------------------------
@@ -567,8 +566,9 @@ def test_thresholds_ignores_non_numeric_values() -> None:
 # --- run_checks isolation --------------------------------------------------
 
 
-def test_one_failing_check_does_not_abort_the_run(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
+def test_one_erroring_check_is_unknown_and_does_not_abort_the_run() -> None:
+    """A check that raised measured nothing: unknown with the error kept, never a fail
+    that reads as a measured Problem, and the lane goes on to the next check."""
 
     def ok_check(conn: Any, thresholds: Any) -> dict[str, Any]:
         return {"check_key": "ok_one", "status": "ok", "value": 1, "details": {}}
@@ -576,27 +576,42 @@ def test_one_failing_check_does_not_abort_the_run(monkeypatch: Any) -> None:
     def boom_check(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("kaboom")
 
-    monkeypatch.setattr(vp, "_CHECKS", [("ok_one", ok_check), ("boom", boom_check)])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
-
-    results = run_checks(conn=None, thresholds={}, weekly=False)
+    results = run_checks(conn=None, thresholds={},
+                         checks=[_stub("ok_one", ok_check), _stub("boom", boom_check)])
     by_key = {r["check_key"]: r for r in results}
     assert by_key["ok_one"]["status"] == "ok"
-    assert by_key["boom"]["status"] == "fail"
+    assert by_key["boom"]["status"] == "unknown"
+    assert by_key["boom"]["details"]["errored"] is True
     assert "kaboom" in by_key["boom"]["details"]["error"]
+    assert "boom" in by_key["boom"]["message"] and "kaboom" in by_key["boom"]["message"]
 
 
-def test_weekly_flag_adds_weekly_checks(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
+def test_run_checks_runs_exactly_the_checks_it_is_handed_in_order() -> None:
+    def _one(key: str) -> Check:
+        return _stub(key, lambda c, t: {"check_key": key, "status": "ok", "value": 0,
+                                        "details": {}})
 
-    monkeypatch.setattr(vp, "_CHECKS", [])
-    monkeypatch.setattr(
-        vp, "_WEEKLY_CHECKS",
-        [("weekly_one", lambda c, t: {"check_key": "weekly_one", "status": "ok",
-                                      "value": 0, "details": {}})],
-    )
-    assert run_checks(None, {}, weekly=False) == []
-    assert [r["check_key"] for r in run_checks(None, {}, weekly=True)] == ["weekly_one"]
+    assert run_checks(None, {}, checks=[]) == []
+    out = run_checks(None, {}, checks=[_one("b"), _one("a")])
+    assert [r["check_key"] for r in out] == ["b", "a"]
+
+
+def test_every_result_carries_the_time_its_check_took() -> None:
+    import time
+
+    def _slow(conn: Any, thresholds: Any) -> dict[str, Any]:
+        time.sleep(0.02)
+        return {"check_key": "slow", "status": "ok", "value": 0}
+
+    def _boom(conn: Any, thresholds: Any) -> dict[str, Any]:
+        raise RuntimeError("x")
+
+    slow, boom = run_checks(None, {}, checks=[_stub("slow", _slow), _stub("boom", _boom)])
+    assert isinstance(slow["details"]["elapsed_ms"], int)
+    assert slow["details"]["elapsed_ms"] >= 20
+    assert isinstance(boom["details"]["elapsed_ms"], int)
+    (unreached,) = run_checks(None, {}, checks=[_stub("late", _slow)], lane_budget_s=-1.0)
+    assert unreached["details"]["elapsed_ms"] == 0
 
 
 # --- W0.3: currently_failing is derived from STATE, not recency -------------
@@ -758,7 +773,7 @@ def test_one_providers_success_never_clears_anothers_credit_outage() -> None:
     assert per["anthropic"]["credit_live"] is False
     # The rate arm's gate still reads the newest call of any provider: Anthropic's success.
     assert out["details"]["currently_failing"] is False
-    # Patterns bound as values (psycopg-%-safe), and details stay JSON for write_results.
+    # Patterns bound as values (psycopg-%-safe), and details stay JSON for insert_result.
     assert conn.provider_params == _CREDIT_ERROR_PATTERNS
     json.dumps(out["details"])
 
@@ -875,104 +890,88 @@ def test_poller_liveness_check_handles_no_row() -> None:
 
 
 def test_poller_liveness_is_registered() -> None:
-    from scripts.verify_pipeline import _CHECKS
+    from scripts.verify_pipeline import check_workflow_poller_liveness
 
-    assert "workflow_poller_liveness" in {k for k, _ in _CHECKS}
+    assert _by_key("workflow_poller_liveness").fn is check_workflow_poller_liveness
 
 
 # --- W0.4: the acute lane degrades gracefully ------------------------------
 
 
-def test_results_are_persisted_as_each_check_completes(monkeypatch: Any) -> None:
+def test_results_are_persisted_as_each_check_completes() -> None:
     """The W0.4 fix: a job killed mid-lane must keep the results it already computed.
-    Before this, run_checks computed ALL results before write_results persisted ANY, so
-    a 5-min timeout wrote zero rows and fired zero alerts."""
-    import scripts.verify_pipeline as vp
-
+    Before this, run_checks computed ALL results before persisting ANY, so a 5-min
+    timeout wrote zero rows."""
     persisted: list[str] = []
 
     def slow_then_boom(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("the lane died here")
 
-    monkeypatch.setattr(vp, "_CHECKS", [
-        ("first", lambda c, t: {"check_key": "first", "status": "ok", "value": 1,
-                                "details": {}}),
-        ("second", lambda c, t: {"check_key": "second", "status": "ok", "value": 2,
-                                 "details": {}}),
-        ("third", slow_then_boom),
-    ])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
-
-    results = run_checks(None, {}, on_result=lambda r: persisted.append(r["check_key"]))
+    checks = [
+        _stub("first", lambda c, t: {"check_key": "first", "status": "ok", "value": 1,
+                                     "details": {}}),
+        _stub("second", lambda c, t: {"check_key": "second", "status": "ok", "value": 2,
+                                      "details": {}}),
+        _stub("third", slow_then_boom),
+    ]
+    results = run_checks(None, {}, checks=checks,
+                         on_result=lambda r: persisted.append(r["check_key"]))
     # Every result reached the sink at the moment it completed, in order.
     assert persisted == ["first", "second", "third"]
-    assert [r["status"] for r in results] == ["ok", "ok", "fail"]
+    assert [r["status"] for r in results] == ["ok", "ok", "unknown"]
 
 
-def test_a_failing_sink_does_not_end_the_lane(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_CHECKS", [
-        ("a", lambda c, t: {"check_key": "a", "status": "ok", "value": 1, "details": {}}),
-        ("b", lambda c, t: {"check_key": "b", "status": "ok", "value": 1, "details": {}}),
-    ])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
+def test_a_failing_sink_does_not_end_the_lane() -> None:
+    checks = [
+        _stub("a", lambda c, t: {"check_key": "a", "status": "ok", "value": 1, "details": {}}),
+        _stub("b", lambda c, t: {"check_key": "b", "status": "ok", "value": 1, "details": {}}),
+    ]
 
     def _explode(_r: dict[str, Any]) -> None:
         raise RuntimeError("insert failed")
 
-    results = run_checks(None, {}, on_result=_explode)
+    results = run_checks(None, {}, checks=checks, on_result=_explode)
     assert [r["check_key"] for r in results] == ["a", "b"]
 
 
-def test_a_timed_out_check_warns_rather_than_failing(monkeypatch: Any) -> None:
+def test_a_timed_out_check_is_unknown_rather_than_failing() -> None:
     """"I could not measure this" is a different claim from "this is broken". Under DB
     pressure a fail-on-timeout rule manufactures a wall of false reds at exactly the
     moment the operator needs to read the real one."""
-    import scripts.verify_pipeline as vp
 
     def _cancelled(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("canceling statement due to statement timeout")
 
-    monkeypatch.setattr(vp, "_CHECKS", [("slow", _cancelled)])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
-
-    (result,) = run_checks(None, {})
-    assert result["status"] == "warn"
+    (result,) = run_checks(None, {}, checks=[_stub("slow", _cancelled)])
+    assert result["status"] == "unknown"
     assert result["details"]["timed_out"] is True
     assert "UNKNOWN" in result["message"]
 
 
-def test_lane_budget_exhaustion_marks_the_rest_unknown_not_healthy(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_CHECKS", [
-        ("first", lambda c, t: {"check_key": "first", "status": "ok", "value": 1,
-                                "details": {}}),
-        ("second", lambda c, t: {"check_key": "second", "status": "ok", "value": 1,
-                                 "details": {}}),
-    ])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
-
+def test_lane_budget_exhaustion_marks_the_rest_unknown_not_healthy() -> None:
+    checks = [
+        _stub("first", lambda c, t: {"check_key": "first", "status": "ok", "value": 1,
+                                     "details": {}}),
+        _stub("second", lambda c, t: {"check_key": "second", "status": "ok", "value": 1,
+                                      "details": {}}),
+    ]
     # A budget already spent by the time the loop starts.
-    results = run_checks(None, {}, lane_budget_s=-1.0)
-    assert [r["status"] for r in results] == ["warn", "warn"]
+    results = run_checks(None, {}, checks=checks, lane_budget_s=-1.0)
+    assert [r["status"] for r in results] == ["unknown", "unknown"]
     assert all(r["details"]["not_run"] for r in results)
 
 
-def test_lane_budget_is_reset_after_a_run(monkeypatch: Any) -> None:
+def test_lane_budget_is_reset_after_a_run() -> None:
     """State leaking between runs would silently shrink a later lane's statement
     timeout to whatever the previous run had left."""
     import scripts.verify_pipeline as vp
 
-    monkeypatch.setattr(vp, "_CHECKS", [])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
-    run_checks(None, {}, lane_budget_s=5.0)
+    run_checks(None, {}, checks=[], lane_budget_s=5.0)
     assert vp._LANE.deadline is None
     assert vp._LANE.statement_timeout_ms == vp._DEFAULT_STATEMENT_TIMEOUT_MS
 
 
-def test_per_check_statement_timeout_is_capped_by_the_lane_remainder(monkeypatch: Any) -> None:
+def test_per_check_statement_timeout_is_capped_by_the_lane_remainder() -> None:
     import scripts.verify_pipeline as vp
 
     seen: list[float] = []
@@ -981,11 +980,386 @@ def test_per_check_statement_timeout_is_capped_by_the_lane_remainder(monkeypatch
         seen.append(vp._LANE.statement_timeout_ms)
         return {"check_key": "peek", "status": "ok", "value": 0, "details": {}}
 
-    monkeypatch.setattr(vp, "_CHECKS", [("peek", _peek)])
-    monkeypatch.setattr(vp, "_WEEKLY_CHECKS", [])
-    # Lane has 2s left but the per-check budget is 45s -> the lane wins.
-    run_checks(None, {}, lane_budget_s=2.0, check_budget_s=45.0)
+    # Lane has 2s left but the check's own budget is 45s -> the lane wins.
+    run_checks(None, {}, checks=[_stub("peek", _peek, budget_s=45.0)], lane_budget_s=2.0)
     assert 0 < seen[0] <= 2000
+
+
+def test_each_check_runs_under_its_own_budget() -> None:
+    """The outbound probes get 120 s, the database checks 45 s: the statement timeout a
+    check runs under is ITS budget, not one lane-wide number."""
+    import scripts.verify_pipeline as vp
+
+    seen: dict[str, float] = {}
+
+    def _peek(key: str) -> Any:
+        def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+            seen[key] = vp._LANE.statement_timeout_ms
+            return {"check_key": key, "status": "ok", "value": 0}
+        return _fn
+
+    checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
+    run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
+    assert seen["db"] == 45_000
+    assert 119_000 < seen["probe"] <= 120_000
+    assert _by_key("sreality_image_template").budget_s == 120.0
+    assert _by_key("outbound_url_conformance").budget_s == 120.0
+    assert {c.budget_s for c in CHECKS[:-2]} == {vp._CHECK_BUDGET_S}
+
+
+# --- the registry ------------------------------------------------------------
+
+
+def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
+    from scripts import verify_pipeline as vp
+
+    keys = _keys()
+    assert len(keys) == len(set(keys)) == 29
+    for c in CHECKS:
+        assert c.label.strip(), c.key
+        assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
+        assert c.domain in vp.DOMAINS, c.key
+        assert c.host in vp.HOSTS, c.key
+        assert c.host == "github-actions", f"{c.key}: wave 1 moves no check off GitHub"
+        assert isinstance(c.cadence_s, int) and c.cadence_s > 0, c.key
+        assert c.budget_s > 0, c.key
+        assert c.owner_path == "" or c.owner_path.startswith("/"), c.key
+        # a body wired under the wrong key would store its rows under another check's name
+        assert c.fn.__name__ == f"check_{c.key}", c.key
+
+
+def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() -> None:
+    """Q2 (2026-10-18): these eight are standing conditions, read as gauges; every other
+    key — the quiet regression detectors included — stays an alarm."""
+    assert {c.key for c in CHECKS if c.cls == "gauge"} == {
+        "location_town_coverage", "ppm2_basis_floor_share", "area_vs_usable_divergence",
+        "outbound_url_coverage", "text_extraction_lag", "floor_convention", "walk_coverage",
+        "delist_flip_refused",
+    }
+
+
+def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
+    """Wave 1 moves no measurement: the hourly lane's seven stay hourly, the image probe
+    daily, the URL probe weekly, everything else 6-hourly."""
+    hourly = {c.key for c in CHECKS if c.cadence_s == 3_600}
+    assert hourly == {
+        "llm_errors", "llm_burn_rate", "db_saturation", "worker_liveness",
+        "property_maintenance", "broker_resolution_freshness", "broker_merge_suppression",
+    }
+    assert _by_key("sreality_image_template").cadence_s == 86_400
+    assert _by_key("outbound_url_conformance").cadence_s == 604_800
+    rest = set(_keys()) - hourly - {"sreality_image_template", "outbound_url_conformance"}
+    assert {_by_key(k).cadence_s for k in rest} == {21_600}
+
+
+def test_staleness_budget_is_three_cadences_or_the_cadence_plus_githubs_delay() -> None:
+    """GitHub delivers a cron up to ~13 h late, so its keys get cadence + 18 h; the worker
+    and pg_cron keep time and get three cadences."""
+    assert _stub("a", None, host="github-actions", cadence_s=3_600).staleness_budget \
+        == _dt.timedelta(hours=19)
+    assert _stub("b", None, host="realtime-worker", cadence_s=600).staleness_budget \
+        == _dt.timedelta(minutes=30)
+    assert _stub("c", None, host="pg_cron", cadence_s=300).staleness_budget \
+        == _dt.timedelta(minutes=15)
+
+
+# --- due selection -------------------------------------------------------------
+
+
+class _DueConn:
+    """Answers the newest-run_at-per-key read from a {key: run_at} map."""
+
+    def __init__(self, newest: dict[str, Any]) -> None:
+        self._newest = newest
+        self.executed: list[tuple[str, Any]] = []
+        self._rows: list[tuple[Any, ...]] = []
+
+    def cursor(self) -> "_DueConn":
+        return self
+
+    def __enter__(self) -> "_DueConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self.executed.append((sql, params))
+        self._rows = [(k, self._newest.get(k)) for k in params["keys"]]
+
+    def fetchall(self) -> Any:
+        return self._rows
+
+
+_NOW = _dt.datetime(2026, 10, 18, 12, 0, tzinfo=_dt.timezone.utc)
+
+
+def test_a_check_with_no_result_is_due() -> None:
+    from scripts.verify_pipeline import due_checks
+
+    assert [c.key for c in due_checks(_DueConn({}), "github-actions", _NOW)] == _keys()
+
+
+def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
+    from scripts.verify_pipeline import due_checks
+
+    def ago(**kw: float) -> _dt.datetime:
+        return _NOW - _dt.timedelta(**kw)
+
+    conn = _DueConn({
+        "llm_errors": ago(minutes=30),        # hourly, half a cadence old: not due
+        "llm_burn_rate": ago(minutes=61),     # hourly, over a cadence old: due
+        "walk_coverage": ago(hours=5),        # 6-hourly: not due
+        "acquisition_lag": ago(hours=7),      # 6-hourly: due
+        "outbound_url_conformance": ago(days=6),  # weekly: not due
+    })
+    due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
+    assert "llm_errors" not in due and "walk_coverage" not in due
+    assert "outbound_url_conformance" not in due
+    assert "llm_burn_rate" in due and "acquisition_lag" in due
+    assert due == [k for k in _keys() if k in due], "registry order is the run order"
+    assert len(due) == len(CHECKS) - 3
+    (sql, params), = conn.executed  # one round trip for the whole host
+    assert "max(r.run_at)" in sql and "unnest(%(keys)s::text[])" in sql
+    assert params["keys"] == _keys()
+
+
+def test_due_selection_never_reaches_another_hosts_checks(monkeypatch: Any) -> None:
+    import scripts.verify_pipeline as vp
+
+    worker = _stub("worker_only", None, host="realtime-worker")
+    monkeypatch.setattr(vp, "CHECKS", (*vp.CHECKS, worker))
+    conn = _DueConn({})
+    assert "worker_only" not in [c.key for c in vp.due_checks(conn, "github-actions", _NOW)]
+    assert "worker_only" not in conn.executed[0][1]["keys"]
+    assert vp.due_checks(_DueConn({}), "realtime-worker", _NOW) == [worker]
+    assert vp.due_checks(_DueConn({}), "pg_cron", _NOW) == []
+
+
+# --- the registry projection -----------------------------------------------------
+
+
+class _HealthChecksConn:
+    """An in-memory health_checks table behind project_registry's three statements."""
+
+    def __init__(self, table: dict[str, dict[str, Any]] | None = None) -> None:
+        self.table = {k: dict(v) for k, v in (table or {}).items()}
+        self.in_transaction = False
+        self.rowcount = -1
+        self._rows: list[tuple[Any, ...]] = []
+
+    def transaction(self) -> Any:
+        conn = self
+
+        class _Txn:
+            def __enter__(self) -> None:
+                conn.in_transaction = True
+
+            def __exit__(self, *exc: Any) -> bool:
+                conn.in_transaction = False
+                return False
+
+        return _Txn()
+
+    def cursor(self) -> "_HealthChecksConn":
+        return self
+
+    def __enter__(self) -> "_HealthChecksConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        assert self.in_transaction, "the projection is one transaction"
+        head = " ".join(sql.split())
+        if head.startswith("select key, host, cadence_s, declared_at from health_checks"):
+            self._rows = [(k, r["host"], r["cadence_s"], r["declared_at"])
+                          for k, r in self.table.items() if k in params["keys"]]
+        elif head.startswith("delete from health_checks where host = %(host)s"):
+            gone = [k for k, r in self.table.items()
+                    if r["host"] == params["host"] and k not in params["keys"]]
+            for k in gone:
+                del self.table[k]
+            self.rowcount = len(gone)
+        else:  # pragma: no cover - a statement the projection never sends
+            raise AssertionError(sql)
+
+    def executemany(self, sql: str, rows: list[dict[str, Any]]) -> None:
+        assert self.in_transaction and "on conflict (key) do update" in sql
+        for row in rows:
+            self.table[row["key"]] = dict(row)
+
+    def fetchall(self) -> Any:
+        return self._rows
+
+
+def test_projection_inserts_every_check_of_its_host_with_its_metadata() -> None:
+    from scripts.verify_pipeline import project_registry
+
+    conn = _HealthChecksConn()
+    assert project_registry(conn, "github-actions", _NOW) == {"upserted": 29, "deleted": 0}
+    assert list(conn.table) == _keys()
+    for sort, c in enumerate(CHECKS):
+        row = conn.table[c.key]
+        assert (row["domain"], row["class"], row["host"], row["cadence_s"]) == (
+            c.domain, c.cls, "github-actions", c.cadence_s)
+        assert (row["label"], row["unit"], row["owner_path"], row["sort"]) == (
+            c.label, c.unit, c.owner_path, sort)
+        assert row["staleness_budget"] == _dt.timedelta(seconds=c.cadence_s + 18 * 3_600)
+        assert row["declared_at"] == _NOW
+
+
+def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> None:
+    from scripts.verify_pipeline import project_registry
+
+    then = _NOW - _dt.timedelta(days=3)
+    conn = _HealthChecksConn({
+        "llm_errors": {"host": "github-actions", "cadence_s": 3_600, "declared_at": then},
+        "walk_coverage": {"host": "github-actions", "cadence_s": 3_600, "declared_at": then},
+        "db_saturation": {"host": "realtime-worker", "cadence_s": 3_600, "declared_at": then},
+    })
+    project_registry(conn, "github-actions", _NOW)
+    assert conn.table["llm_errors"]["declared_at"] == then        # unchanged: kept
+    assert conn.table["walk_coverage"]["declared_at"] == _NOW     # cadence moved
+    assert conn.table["db_saturation"]["declared_at"] == _NOW     # host moved
+    assert conn.table["db_saturation"]["host"] == "github-actions"
+    project_registry(conn, "github-actions", _NOW + _dt.timedelta(hours=1))
+    assert conn.table["walk_coverage"]["declared_at"] == _NOW, "a re-projection is a no-op"
+
+
+def test_projection_retires_only_its_own_hosts_undeclared_keys() -> None:
+    from scripts.verify_pipeline import project_registry
+
+    conn = _HealthChecksConn({
+        "outbound_url_parity": {"host": "github-actions", "cadence_s": 604_800,
+                                "declared_at": _NOW},
+        "health_lane": {"host": "realtime-worker", "cadence_s": 600, "declared_at": _NOW},
+        "liveness": {"host": "pg_cron", "cadence_s": 300, "declared_at": _NOW},
+    })
+    assert project_registry(conn, "github-actions", _NOW)["deleted"] == 1
+    assert "outbound_url_parity" not in conn.table
+    assert {"health_lane", "liveness"} <= set(conn.table)
+
+
+# --- persistence --------------------------------------------------------------------
+
+
+class _InsertConn:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    def cursor(self) -> "_InsertConn":
+        return self
+
+    def __enter__(self) -> "_InsertConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self.calls.append((sql, params))
+
+
+def test_a_stored_result_keeps_its_message_and_cells_inside_details() -> None:
+    """The message used to be dropped on the floor: the page and the ladder read it here."""
+    from scripts.verify_pipeline import insert_result
+
+    cells = [{"subject": "bazos", "portal": "bazos", "status": "fail", "value": 3,
+              "unit": "h", "message": "bazos 3 h behind", "facts": {}}]
+    details = {"cells": cells, "elapsed_ms": 12}
+    conn = _InsertConn()
+    insert_result(conn, {"check_key": "k", "status": "fail", "value": 3.0,
+                         "details": details, "message": "bazos is 3 h behind"}, _NOW)
+    (sql, params), = conn.calls
+    assert "INSERT INTO pipeline_check_results" in sql
+    assert params[:4] == (_NOW, "k", "fail", 3.0)
+    stored = json.loads(params[4])
+    assert stored == {"cells": cells, "elapsed_ms": 12, "message": "bazos is 3 h behind"}
+    assert "message" not in details, "the check's own dict is not mutated"
+
+
+def test_a_stored_result_without_a_message_adds_none() -> None:
+    from scripts.verify_pipeline import insert_result
+
+    conn = _InsertConn()
+    insert_result(conn, {"check_key": "k", "status": "ok", "value": None, "details": None},
+                  _NOW)
+    assert json.loads(conn.calls[0][1][4]) == {}
+
+
+# --- main(): one flow, and only an alarm reds the run ------------------------------------
+
+
+class _MainConn:
+    def __enter__(self) -> "_MainConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+
+def _run_main(monkeypatch: Any, argv: list[str], due: list[Check]) -> tuple[int, dict[str, Any]]:
+    import sys
+
+    import scripts.verify_pipeline as vp
+
+    seen: dict[str, Any] = {"order": [], "inserted": []}
+
+    def _project(conn: Any, host: str, now: Any) -> dict[str, int]:
+        seen["order"].append(f"project:{host}")
+        return {"upserted": len(due), "deleted": 0}
+
+    def _due(conn: Any, host: str, now: Any) -> list[Check]:
+        seen["order"].append(f"due:{host}")
+        return due
+
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://unused")
+    monkeypatch.setattr(vp, "connect", lambda: _MainConn())
+    monkeypatch.setattr(vp, "load_thresholds", lambda conn: dict(T))
+    monkeypatch.setattr(vp, "project_registry", _project)
+    monkeypatch.setattr(vp, "due_checks", _due)
+    monkeypatch.setattr(vp, "insert_result",
+                        lambda conn, r, run_at: seen["inserted"].append(r["check_key"]))
+    monkeypatch.setattr(sys, "argv", ["verify_pipeline", *argv])
+    return vp.main(), seen
+
+
+def _returning(key: str, status: str, *, cls: str = "alarm") -> Check:
+    return _stub(key, lambda c, t: {"check_key": key, "status": status, "value": 1,
+                                    "details": {}, "message": f"{key} {status}"}, cls=cls)
+
+
+def test_main_projects_the_registry_then_measures_and_stores_the_due_checks(
+    monkeypatch: Any, caplog: Any,
+) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO, logger="verify_pipeline")
+    code, seen = _run_main(monkeypatch, [], [_returning("a", "ok"), _returning("b", "warn")])
+    assert code == 0
+    assert seen["order"] == ["project:github-actions", "due:github-actions"]
+    assert seen["inserted"] == ["a", "b"]
+    assert "CHECK a status=ok value=1" in caplog.text  # failure_signature reads this line
+
+
+def test_main_dry_run_projects_nothing_and_stores_nothing(monkeypatch: Any) -> None:
+    code, seen = _run_main(monkeypatch, ["--dry-run"], [_returning("a", "fail")])
+    assert code == 0
+    assert seen["order"] == ["due:github-actions"] and seen["inserted"] == []
+
+
+def test_only_a_failing_alarm_reds_the_run(monkeypatch: Any) -> None:
+    """The hourly lane now measures every due check, standing gauges included; a gauge is
+    told once a day by the ladder and must not turn GitHub's failure email into noise."""
+    flag = ["--exit-nonzero-on-fail"]
+    gauge = _returning("g", "fail", cls="gauge")
+    assert _run_main(monkeypatch, flag, [gauge, _returning("a", "ok")])[0] == 0
+    assert _run_main(monkeypatch, flag, [gauge, _returning("a", "fail")])[0] == 1
+    assert _run_main(monkeypatch, flag, [_returning("a", "warn"),
+                                         _returning("b", "unknown")])[0] == 0
+    assert _run_main(monkeypatch, [], [_returning("a", "fail")])[0] == 0
 
 
 # --- R2 dual-write parity --------------------------------------------------
@@ -1576,7 +1950,7 @@ def test_measure_checks_share_one_read_of_the_plausibility_view() -> None:
     import scripts.verify_pipeline as vp
 
     conn = _PlausibilityConn(_LIVE_DUM_CELLS + _LIVE_FLOOR_CELLS, None, 1.0)
-    results = run_checks(conn, T, only=_MEASURE_CHECK_KEYS)
+    results = run_checks(conn, T, checks=_registered(*_MEASURE_CHECK_KEYS))
     assert len(results) == 4
     assert sum("measure_plausibility_by_source" in s for s in conn.executed) == 1
     assert not vp._PLAUSIBILITY_CACHE or "cells" in vp._PLAUSIBILITY_CACHE
@@ -1585,15 +1959,15 @@ def test_measure_checks_share_one_read_of_the_plausibility_view() -> None:
 def test_run_checks_clears_the_plausibility_cache_between_runs() -> None:
     """A stale corpus would make every measure check certify last run's data."""
     first = _PlausibilityConn(_LIVE_DUM_CELLS, None, 1.0)
-    run_checks(first, T, only={"area_vs_usable_divergence"})
+    run_checks(first, T, checks=_registered("area_vs_usable_divergence"))
     healed = [dict(c, area_divergence_share=0.0, area_divergence_share_7d=0.0)
               for c in _LIVE_DUM_CELLS]
     second = _PlausibilityConn(healed, None, 1.0)
-    out = run_checks(second, T, only={"area_vs_usable_divergence"})
+    out = run_checks(second, T, checks=_registered("area_vs_usable_divergence"))
     assert out[0]["status"] == "ok"
 
 
-def test_empty_plausibility_view_is_warn_never_ok() -> None:
+def test_empty_plausibility_view_is_unknown_never_ok() -> None:
     """The view is gated on is_platform_admin(); read it from a role that fails the
     gate and it returns zero rows. That is an INERT check, not a clean bill of health —
     exactly the db_saturation precedent."""
@@ -1605,7 +1979,8 @@ def test_empty_plausibility_view_is_warn_never_ok() -> None:
     for fn in (check_area_vs_usable_divergence, check_ppm2_basis_floor_share,
                check_ppm2_median_shift, check_ppm2_measure_coverage):
         res = fn(_fresh(_PlausibilityConn([])), T)
-        assert res["status"] == "warn" and "INERT" in res["message"]
+        assert res["status"] == "unknown" and "INERT" in res["message"]
+        assert res["details"]["skipped"]
 
 
 class _BrokenViewConn(_PlausibilityConn):
@@ -1617,12 +1992,12 @@ class _BrokenViewConn(_PlausibilityConn):
         super().execute(sql, params)
 
 
-def test_missing_view_is_warn_and_names_the_migration_not_three_red_tiles() -> None:
+def test_missing_view_is_unknown_and_names_the_migration_not_three_red_tiles() -> None:
     """Between merging this PR and applying migration 427 the view does not exist. Three
     checks red with `relation does not exist` are indistinguishable from three real
     defects, so the read is reported, never raised — the db_saturation precedent."""
-    results = run_checks(_BrokenViewConn([]), T, only=_MEASURE_CHECK_KEYS)
-    assert [r["status"] for r in results] == ["warn"] * 4
+    results = run_checks(_BrokenViewConn([]), T, checks=_registered(*_MEASURE_CHECK_KEYS))
+    assert [r["status"] for r in results] == ["unknown"] * 4
     for r in results:
         assert "INERT" in r["message"] and "427" in r["message"]
         assert "does not exist" in r["details"]["skipped"]
@@ -1740,14 +2115,18 @@ def test_every_measure_axis_refuses_to_certify_a_corpus_it_cannot_measure() -> N
         for c in dead
     }
     results = run_checks(
-        _PlausibilityConn(dead, baseline, 30.0), T, only=_MEASURE_CHECK_KEYS)
-    assert {r["status"] for r in results} == {"warn", "fail"}
+        _PlausibilityConn(dead, baseline, 30.0), T, checks=_registered(*_MEASURE_CHECK_KEYS))
+    assert {r["status"] for r in results} == {"unknown", "warn", "fail"}
     by_key = {r["check_key"]: r for r in results}
     for key in ("ppm2_basis_floor_share", "area_vs_usable_divergence",
                 "ppm2_median_shift"):
-        assert by_key[key]["status"] == "warn", key
         assert by_key[key]["value"] is None, key
         assert "NOTHING" in by_key[key]["message"], key
+    # scored nothing = not measured; the median shift's own "compared nothing" stays a
+    # warn until wave 6 rewrites it
+    assert by_key["ppm2_basis_floor_share"]["status"] == "unknown"
+    assert by_key["area_vs_usable_divergence"]["status"] == "unknown"
+    assert by_key["ppm2_median_shift"]["status"] == "warn"
     # the corpus went dark THIS WEEK: coverage is the axis that says so out loud
     assert by_key["ppm2_measure_coverage"]["status"] == "fail"
 
@@ -1757,7 +2136,7 @@ def test_a_measured_and_clean_corpus_still_reports_ok() -> None:
     must not make a measurable one amber."""
     results = run_checks(
         _PlausibilityConn(_LIVE_DUM_CELLS + [_clean_scored("remax")], None, 1.0), T,
-        only={"ppm2_basis_floor_share", "ppm2_measure_coverage"})
+        checks=_registered("ppm2_basis_floor_share", "ppm2_measure_coverage"))
     assert [r["status"] for r in results] == ["ok", "ok"]
 
 
@@ -2041,9 +2420,10 @@ def test_walk_end_streak_names_a_null_label_rather_than_crashing() -> None:
 
 
 def test_walk_end_streak_with_no_finished_walk_measured_nothing() -> None:
-    """No rows is not a clean bill of health: value None and an amber row, never a 0."""
+    """No rows is not a clean bill of health: value None and Not measured, never a 0."""
     out = check_walk_end_streak(_RowsConn([]), T)
-    assert out["status"] == "warn" and out["value"] is None
+    assert out["status"] == "unknown" and out["value"] is None
+    assert "nothing was verified" in out["details"]["skipped"]
     assert out["details"]["per_category"] == [] and out["details"]["offenders"] == []
     assert "measured nothing" in out["message"]
 
@@ -2054,7 +2434,7 @@ def test_walk_end_streak_with_no_recorded_verdict_measured_nothing() -> None:
     rows = [r for cm in ("byt", "dum", "pozemek")
             for r in _walks("sreality", cm, "prodej", [None] * 24)]
     out = check_walk_end_streak(_RowsConn(rows), T)
-    assert out["status"] == "warn" and out["value"] is None
+    assert out["status"] == "unknown" and out["value"] is None
     assert "measured nothing" in out["message"] and "3 categories read" in out["message"]
 
 
@@ -2074,10 +2454,8 @@ def test_walk_end_streak_reads_finished_index_walks_in_the_window_only() -> None
 
 
 def test_walk_end_streak_is_registered_beside_walk_coverage() -> None:
-    from scripts.verify_pipeline import _CHECKS
-
-    keys = [k for k, _ in _CHECKS]
-    assert ("walk_end_streak", check_walk_end_streak) in _CHECKS
+    keys = _keys()
+    assert _by_key("walk_end_streak").fn is check_walk_end_streak
     assert keys.index("walk_end_streak") == keys.index("walk_coverage") + 1
 
 
@@ -2242,16 +2620,15 @@ def test_worker_lane_stall_does_not_double_alarm_a_dead_worker() -> None:
 
 
 def test_location_town_coverage_is_registered_and_runs_first() -> None:
-    """Registration is not enough, and 2026-09-11 21:02 is why: the lane runs `_CHECKS` in
+    """Registration is not enough, and 2026-09-11 21:02 is why: the lane runs `CHECKS` in
     order under a 120 s budget and stamped the last seven `not_run`, this one among them.
     The invariant the location programme is measured by cannot be the measurement that gets
     starved — it is one indexed join, so it goes first."""
-    from scripts.verify_pipeline import _CHECKS, check_location_town_coverage
+    from scripts.verify_pipeline import check_location_town_coverage
 
-    assert ("location_town_coverage", check_location_town_coverage) in _CHECKS
-    keys = [key for key, _ in _CHECKS]
-    assert keys.count("location_town_coverage") == 1
-    assert keys[0] == "location_town_coverage"
+    assert CHECKS[0].key == "location_town_coverage"
+    assert CHECKS[0].fn is check_location_town_coverage
+    assert _keys().count("location_town_coverage") == 1
 
 
 def test_location_town_coverage_is_red_while_any_czech_listing_lacks_a_town() -> None:
@@ -2292,8 +2669,9 @@ def test_location_town_coverage_measures_every_listing_not_only_the_live_ones() 
     assert out["value"] == 4_200
     assert out["details"]["cz_no_town"] == 0
     assert out["details"]["listings"] == 70_000
-    assert out["details"]["cells"][1]["listings"] == 30_000
-    assert out["details"]["cells"][1]["town_share"] == 25_800 / 30_000
+    assert out["details"]["per_source"][1]["listings"] == 30_000
+    assert out["details"]["per_source"][1]["town_share"] == 25_800 / 30_000
+    assert "cells" not in out["details"]  # the ladder's key: a legacy check emits none
     assert "remax: 4,200 without a row, 0 Czech without a town (of 30,000)" in out["message"]
     assert "bazos" not in out["message"]
 
@@ -2306,7 +2684,7 @@ def test_location_town_coverage_is_ok_only_at_zero() -> None:
     assert out["status"] == "ok" and out["value"] == 0
     assert out["details"]["hidden"] == 0
     assert "Consumers currently hide" not in out["message"]
-    assert out["details"]["cells"][1]["town_share"] == 10_000 / 30_000
+    assert out["details"]["per_source"][1]["town_share"] == 10_000 / 30_000
     assert "Every one of 70,000 listings" in out["message"]
 
 
@@ -2477,9 +2855,9 @@ class _TownCoverageConn(_ShapeDriftConn):
 
 def test_location_payload_shape_drift_is_registered() -> None:
     """An unregistered check is dead code that never writes a row."""
-    from scripts.verify_pipeline import _CHECKS, check_location_payload_shape_drift
+    from scripts.verify_pipeline import check_location_payload_shape_drift
 
-    assert ("location_payload_shape_drift", check_location_payload_shape_drift) in _CHECKS
+    assert _by_key("location_payload_shape_drift").fn is check_location_payload_shape_drift
 
 
 def test_location_payload_shape_drift_reds_on_a_source_side_shape_change() -> None:
@@ -2494,6 +2872,8 @@ def test_location_payload_shape_drift_reds_on_a_source_side_shape_change() -> No
     assert "sreality" in out["message"] and "sreality_payload_shape" in out["message"]
     assert "bezrealitky" not in out["details"]["offenders"][0]
     assert out["details"]["window_hours"] == 48
+    assert [c["source"] for c in out["details"]["per_source"]] == ["sreality", "bezrealitky"]
+    assert "cells" not in out["details"]  # the ladder's key: a legacy check emits none
     assert any("statement_timeout" in s for s in conn.executed)
 
 
@@ -2534,9 +2914,10 @@ def test_location_payload_shape_drift_refuses_ok_when_nothing_reached_min_rows()
     from scripts.verify_pipeline import check_location_payload_shape_drift
 
     out = check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 10, 10)]), T)
-    assert out["status"] == "warn"
+    assert out["status"] == "unknown"
     assert out["value"] is None
     assert out["details"]["arms_scored"] == 0
+    assert "nothing was verified" in out["details"]["skipped"]
 
 
 def test_location_payload_shape_drift_sql_shares_the_gate_classifier_and_reads_the_fresh_arm() -> None:
@@ -2673,17 +3054,18 @@ def _live_seam(cdn: tuple[int, bytes] | Exception, calls: list[str]) -> Any:
 
 def test_sreality_image_template_is_registered_and_last_outbound() -> None:
     """An unregistered check is dead code that never writes a row. The ordering rule:
-    the only check that leaves the DB must sit after every DB check, so a lane-budget
-    exhaustion drops the outbound probe rather than a DB measurement."""
-    from scripts.verify_pipeline import _CHECKS, check_sreality_image_template
+    the checks that leave the DB sit after every DB check, so a lane-budget exhaustion
+    drops an outbound probe rather than a DB measurement."""
+    from scripts.verify_outbound_urls import check_outbound_url_conformance
+    from scripts.verify_pipeline import check_sreality_image_template
 
-    keys = [key for key, _ in _CHECKS]
-    assert ("sreality_image_template", check_sreality_image_template) in _CHECKS
-    assert keys.count("sreality_image_template") == 1
-    assert keys.index("sreality_image_template") == len(keys) - 1, (
-        "sreality_image_template is the harness' only outbound check and must stay "
-        "AFTER every database check in _CHECKS; append new DB checks before it"
+    keys = _keys()
+    assert _by_key("sreality_image_template").fn is check_sreality_image_template
+    assert keys[-2:] == ["sreality_image_template", "outbound_url_conformance"], (
+        "the two outbound checks must stay AFTER every database check in CHECKS; "
+        "append new DB checks before them"
     )
+    assert CHECKS[-1].fn is check_outbound_url_conformance
 
 
 def test_sreality_image_template_thresholds_have_code_defaults() -> None:
@@ -2729,6 +3111,9 @@ def test_sreality_image_template_ok_on_a_full_size_frame(monkeypatch: Any) -> No
     assert (r["details"]["expected_width"], r["details"]["expected_height"]) == _PROBE_SOURCE
     assert r["details"]["http_status"] == 200 and r["details"]["bytes"] > 0
     assert "skipped" not in r["details"]
+    # the CDN leg's own latency; `elapsed_ms` is the harness's stamp for the whole check
+    assert isinstance(r["details"]["cdn_elapsed_ms"], int)
+    assert "elapsed_ms" not in r["details"]
 
 
 def test_sreality_image_template_probes_the_deployed_transform(monkeypatch: Any) -> None:
@@ -2823,7 +3208,7 @@ def test_sreality_image_template_fails_when_the_cdn_refuses_the_template(monkeyp
 
 
 @pytest.mark.parametrize("status_code", [403, 429, 502, 503])
-def test_sreality_image_template_warns_when_the_cdn_throttles_or_errors(
+def test_sreality_image_template_is_unknown_when_the_cdn_throttles_or_errors(
     monkeypatch: Any, status_code: int
 ) -> None:
     """403/429 is how sreality throttles and a 5xx is theirs — neither says anything
@@ -2832,11 +3217,13 @@ def test_sreality_image_template_warns_when_the_cdn_throttles_or_errors(
 
     monkeypatch.setattr(vp, "_fetch_sreality_probe", _live_seam((status_code, b""), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["skipped"] is True
+    assert r["status"] == "unknown" and "throttled or errored" in r["details"]["skipped"]
     assert r["details"]["http_status"] == status_code
 
 
-def test_sreality_image_template_warns_when_the_image_left_the_cdn_host(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_when_the_image_left_the_cdn_host(
+    monkeypatch: Any,
+) -> None:
     """with_transform is a no-op off sdn.cz, so a host migration would serve a normal
     photo and green a template that was never exercised."""
     import scripts.verify_pipeline as vp
@@ -2847,12 +3234,14 @@ def test_sreality_image_template_warns_when_the_image_left_the_cdn_host(monkeypa
         (200, _detail_body(1280, 853, url="//images.example.com/d_18/abc.jpeg")),
         (200, _jpeg_bytes(1280, 853)), calls))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["skipped"] is True
-    assert "not on the sreality CDN host" in r["details"]["reason"]
+    assert r["status"] == "unknown"
+    assert "not on the sreality CDN host" in r["details"]["skipped"]
     assert len(calls) == 2, "the CDN must not be probed with an untransformed URL"
 
 
-def test_sreality_image_template_warns_when_the_index_is_unreachable(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_when_the_index_is_unreachable(
+    monkeypatch: Any,
+) -> None:
     """A network error verified nothing, so it can never be a fail — a flaky lane must
     not read as 'sreality rejected our template'."""
     import requests
@@ -2862,12 +3251,14 @@ def test_sreality_image_template_warns_when_the_index_is_unreachable(monkeypatch
     monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
         requests.ConnectionError("boom"), (200, b""), (200, b""), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["value"] is None
-    assert r["details"]["skipped"] is True
+    assert r["status"] == "unknown" and r["value"] is None
+    assert "index is unreachable" in r["details"]["skipped"]
     assert "verified NOTHING" in r["message"]
 
 
-def test_sreality_image_template_warns_when_the_detail_is_unreachable(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_when_the_detail_is_unreachable(
+    monkeypatch: Any,
+) -> None:
     import requests
 
     import scripts.verify_pipeline as vp
@@ -2875,11 +3266,13 @@ def test_sreality_image_template_warns_when_the_detail_is_unreachable(monkeypatc
     monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
         (200, _PROBE_INDEX_BODY), requests.Timeout("slow"), (200, b""), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["skipped"] is True
-    assert "detail endpoint is unreachable" in r["details"]["reason"]
+    assert r["status"] == "unknown"
+    assert "detail endpoint is unreachable" in r["details"]["skipped"]
 
 
-def test_sreality_image_template_warns_when_the_cdn_is_unreachable(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_when_the_cdn_is_unreachable(
+    monkeypatch: Any,
+) -> None:
     import requests
 
     import scripts.verify_pipeline as vp
@@ -2887,38 +3280,40 @@ def test_sreality_image_template_warns_when_the_cdn_is_unreachable(monkeypatch: 
     monkeypatch.setattr(vp, "_fetch_sreality_probe",
                         _live_seam(requests.Timeout("slow"), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["skipped"] is True
+    assert r["status"] == "unknown" and "CDN is unreachable" in r["details"]["skipped"]
     assert r["details"]["transform"].endswith("fl=res,1800,1800,1|shr,,20|jpg,80")
 
 
-def test_sreality_image_template_warns_on_an_empty_index(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_on_an_empty_index(monkeypatch: Any) -> None:
     import scripts.verify_pipeline as vp
 
     monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
         (200, json.dumps({"results": []}).encode()), (200, b""), (200, b""), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["skipped"] is True
-    assert "no estates" in r["details"]["reason"]
+    assert r["status"] == "unknown"
+    assert "no estates" in r["details"]["skipped"]
 
 
-def test_sreality_image_template_warns_on_an_estate_with_no_images(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_on_an_estate_with_no_images(
+    monkeypatch: Any,
+) -> None:
     import scripts.verify_pipeline as vp
 
     estate = {k: v for k, v in _DETAIL_FIXTURE.items() if k != "advert_images"}
     monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
         (200, _PROBE_INDEX_BODY), (200, json.dumps(estate).encode()), (200, b""), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["skipped"] is True
-    assert "no images" in r["details"]["reason"]
+    assert r["status"] == "unknown"
+    assert "no images" in r["details"]["skipped"]
 
 
-def test_sreality_image_template_warns_on_a_non_200_index(monkeypatch: Any) -> None:
+def test_sreality_image_template_is_unknown_on_a_non_200_index(monkeypatch: Any) -> None:
     import scripts.verify_pipeline as vp
 
     monkeypatch.setattr(vp, "_fetch_sreality_probe",
                         _probe_seam((503, b""), (200, b""), (200, b""), []))
     r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "warn" and r["details"]["http_status"] == 503
+    assert r["status"] == "unknown" and r["details"]["http_status"] == 503
 
 
 def test_sreality_probe_seam_stops_on_its_wall_clock_deadline(monkeypatch: Any) -> None:
@@ -2978,9 +3373,9 @@ def _live_matrix_rows(**moved: int) -> list[tuple[Any, ...]]:
 
 
 def test_field_fill_matrix_is_registered() -> None:
-    from scripts.verify_pipeline import _CHECKS, check_field_fill_matrix
+    from scripts.verify_pipeline import check_field_fill_matrix
 
-    assert ("field_fill_matrix", check_field_fill_matrix) in _CHECKS
+    assert _by_key("field_fill_matrix").fn is check_field_fill_matrix
 
 
 def test_field_fill_matrix_reproduces_the_known_zero_cells() -> None:
@@ -3058,25 +3453,27 @@ def test_field_fill_matrix_warns_on_a_stale_census(monkeypatch: Any) -> None:
     assert out["details"]["stale_census"] and "remax" in out["message"]
 
 
-def test_full_lane_budget_owes_every_check_its_own_budget() -> None:
+def test_a_lane_owes_every_check_it_runs_its_own_budget() -> None:
     from scripts import verify_pipeline as vp
 
-    assert vp.full_lane_budget_s(weekly=False) == len(vp._CHECKS) * vp._CHECK_BUDGET_S
-    assert vp.full_lane_budget_s(weekly=True) == (
-        (len(vp._CHECKS) + len(vp._WEEKLY_CHECKS)) * vp._CHECK_BUDGET_S)
+    assert vp.lane_budget_for([]) == 0.0
+    assert vp.lane_budget_for(CHECKS) == sum(c.budget_s for c in CHECKS)
+    assert vp.lane_budget_for(_registered("llm_errors", "outbound_url_conformance")) == 165.0
 
 
-def test_full_lane_budget_fits_its_job() -> None:
-    """A registry that outgrows verify_pipeline.yml's timeout must fail HERE, not go quiet
-    in production: the shared 120 s budget left 7-17 of 24 checks unrun for weeks."""
+@pytest.mark.parametrize("workflow", ["llm_health.yml", "verify_pipeline.yml"])
+def test_every_lane_budget_fits_its_job(workflow: str) -> None:
+    """Either GitHub lane may find every check due at once (the first run after a deploy),
+    so a registry that outgrows a lane's job timeout must fail HERE, not go quiet in
+    production: the shared 120 s budget left 7-17 of 24 checks unrun for weeks."""
     import re
-    from pathlib import Path
 
     from scripts import verify_pipeline as vp
 
-    workflow = Path(__file__).resolve().parents[2] / ".github/workflows/verify_pipeline.yml"
-    minutes = int(re.search(r"timeout-minutes:\s*(\d+)", workflow.read_text()).group(1))
-    assert vp.full_lane_budget_s(weekly=True) + vp._JOB_HEADROOM_S <= minutes * 60
+    text = (Path(__file__).resolve().parents[2] / ".github/workflows" / workflow).read_text()
+    minutes = int(re.search(r"timeout-minutes:\s*(\d+)", text).group(1))
+    hosted = [c for c in CHECKS if c.host == "github-actions"]
+    assert vp.lane_budget_for(hosted) + vp._JOB_HEADROOM_S <= minutes * 60
 
 
 # --- floor_convention (field capture W8) -----------------------------------
@@ -3098,9 +3495,9 @@ def _live_floor_rows() -> list[tuple[Any, ...]]:
 
 
 def test_floor_convention_is_registered() -> None:
-    from scripts.verify_pipeline import _CHECKS, check_floor_convention
+    from scripts.verify_pipeline import check_floor_convention
 
-    assert ("floor_convention", check_floor_convention) in _CHECKS
+    assert _by_key("floor_convention").fn is check_floor_convention
 
 
 def test_floor_convention_fails_on_todays_pre_heal_corpus() -> None:
@@ -3139,13 +3536,14 @@ def test_floor_convention_is_ok_once_every_portal_reads_the_same_scale() -> None
     assert out["details"]["offenders"] == []
 
 
-def test_floor_convention_warns_rather_than_passing_when_nothing_scored() -> None:
+def test_floor_convention_is_unknown_rather_than_passing_when_nothing_scored() -> None:
     """A thin sample certifies nothing; `value` stays None so the tile reads em-dash,
     never a 0 that looks like agreement."""
     from scripts.verify_pipeline import check_floor_convention
 
     out = check_floor_convention(_FloorConn([("maxima", 12, 0.9)]), T)
-    assert out["status"] == "warn"
+    assert out["status"] == "unknown"
+    assert "sibling pairs" in out["details"]["skipped"]
     assert out["value"] is None
     assert "verified NOTHING" in out["message"]
 
@@ -3346,3 +3744,79 @@ def test_false_delist_share_reads_flipped_rows_only() -> None:
     sql, _params = conn.executed[0]
     assert "outcome = 'flipped'" in sql and "detail_queue_completions" in sql
     assert "'gone'" not in sql
+
+
+# --- the unmeasured rail (health wave 1) ----------------------------------------
+#
+# A measurement that did not happen is Not measured: never ok, and never a warn that the
+# ladder would read as a measured Watch holding an incident open.
+
+_UNMEASURED_MARKERS = {"timed_out", "not_run", "errored", "skipped"}
+
+
+class _CronUnreadableConn(_ShapeDriftConn):
+    def execute(self, sql: str, params: Any = None) -> None:
+        if "cron.job_run_details" in sql:
+            raise RuntimeError("permission denied for schema cron")
+        super().execute(sql, params)
+
+
+def _unmeasured_results() -> list[dict[str, Any]]:
+    """One result from every path that measures nothing."""
+    import scripts.verify_pipeline as vp
+    from scripts.verify_outbound_urls import check_outbound_url_conformance
+
+    def _boom(conn: Any, thresholds: Any) -> dict[str, Any]:
+        raise RuntimeError("kaboom")
+
+    def _cancelled(conn: Any, thresholds: Any) -> dict[str, Any]:
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    def _never_reached(conn: Any, thresholds: Any) -> dict[str, Any]:  # pragma: no cover
+        raise AssertionError("an exhausted lane must not start a check")
+
+    return [
+        *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled)]),
+        *run_checks(None, {}, checks=[_stub("late", _never_reached)], lane_budget_s=-1.0),
+        vp.check_db_saturation(_CronUnreadableConn([]), T),
+        vp._inert_measure_check("ppm2_basis_floor_share", None),
+        vp._inert_measure_check("ppm2_basis_floor_share", "relation does not exist"),
+        vp._unmeasured_check("area_vs_usable_divergence", 3, "100+ rows with both areas"),
+        vp.check_floor_convention(_FloorConn([("maxima", 12, 0.9)]), T),
+        check_walk_end_streak(_RowsConn([]), T),
+        vp.check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 10, 10)]), T),
+        vp._probe_skipped("the sreality index is unreachable (boom)"),
+        check_outbound_url_conformance(_ShapeDriftConn([]), T),
+    ]
+
+
+def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
+    results = _unmeasured_results()
+    assert len(results) == 12
+    errored, timed_out, not_run = results[:3]
+    assert errored["details"]["errored"] is True and "kaboom" in errored["details"]["error"]
+    assert timed_out["details"]["timed_out"] is True
+    assert not_run["details"]["not_run"] is True
+    for r in results:
+        markers = _UNMEASURED_MARKERS & set(r["details"])
+        assert markers, r["check_key"]
+        assert r["status"] == "unknown", (r["check_key"], r["status"])
+        assert r["value"] is None and r["message"], r["check_key"]
+        if "skipped" in markers:  # the reason as text, never a bare flag
+            assert isinstance(r["details"]["skipped"], str), r["check_key"]
+            assert r["details"]["skipped"].strip(), r["check_key"]
+
+
+def test_no_unmeasured_result_reads_as_a_measured_watch() -> None:
+    """The rail. Before wave 1 every one of these was a `warn`, which the ladder read as a
+    measured Watch: in 30 days 34 of 88 'Recovered' notices followed an unmeasured run."""
+    for r in _unmeasured_results():
+        assert not (r["status"] == "warn" and _UNMEASURED_MARKERS & set(r["details"])), r
+
+
+def test_a_stalled_registry_is_a_problem_even_when_no_listing_was_read() -> None:
+    from scripts.verify_pipeline import check_location_town_coverage
+
+    out = check_location_town_coverage(
+        _TownCoverageConn([], registry=("ruian:2026-07-01", 80, None, None)), T)
+    assert out["status"] == "fail" and "Registry stalled" in out["message"]

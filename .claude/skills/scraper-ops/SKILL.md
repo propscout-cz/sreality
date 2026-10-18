@@ -202,9 +202,9 @@ Monitor/alerting workflows watch the rest: `monitor_workflow_failures.yml` ("Mon
 failures", cron `*/30` — records failed / timed-out / startup-failed runs into `workflow_failures`
 for the Health page, since GitHub only emails about failed *scheduled* runs; a never-started
 supersession cancel is distinguished from a real failure; cursor + timeout-kill captured) and `llm_health.yml` ("Monitoring: acute health", hourly
-— verify_pipeline's acute lane: `llm_errors`, `llm_burn_rate`, `db_saturation`,
-`worker_liveness`, `property_maintenance`, `broker_resolution_freshness`, with
-`--exit-nonzero-on-fail` so any `fail` goes red and emails). A credit-balance error alarms
+— verify_pipeline's hourly lane: every check DUE by its registry cadence, so the hourly
+ones (`llm_errors`, `llm_burn_rate`, `db_saturation`, `worker_liveness`, …) are due each time, with
+`--exit-nonzero-on-fail` so a failing alarm goes red and emails; a gauge never does). A credit-balance error alarms
 immediately and PER PROVIDER (each its own account: one provider's success never clears another's credit error; the alert names that provider, its failing models and jobs, where 2026-10-02..10 it named every paid job and no provider), and the LLM failure probe is INDEPENDENT of pending work (a quiet-queue blind spot
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
 provider exception, so the check needs no key of its own.
@@ -400,52 +400,18 @@ Per-lane notes:
 
 ## Pipeline verification (migration 274)
 
-**No publication gate any more.** Migration 273's `properties.published_at` gate died with the
-dedup engine in the 2026-08 cutoff (rule #15); the columns are frozen history and Watchdog's "new
-property" cursor is back on `listings.first_seen_at`. Durable lesson: a `SECURITY DEFINER` function
-in a view's `WHERE` needs a scalar subquery, never a bare call — `database` skill, InitPlan gotcha.
-
-**Pipeline verification harness** (`scripts/verify_pipeline.py`, migration 274, PR #703) — a
-scheduled job that writes one `pipeline_check_results` row per health metric (`ok`/`warn`/`fail`) and
-is the origin of the notification system's third producer, `system_health` (`docs/architecture.md`
-rule #16) — a `fail` rings the same in-app bell the SPA nav badge polls, once per INCIDENT: onset,
-then 6h/24h/72h/weekly while red, then one recovery (W3.4's ladder + flap cooldown in
-`toolkit/system_alerts`, inherited by every check). Born from the 2026-07 two-day silent stall
-(Anthropic credit exhaustion, 38k+ failed LLM calls) whose only alarm was a cron the operator missed.
-Two lanes: `llm_health.yml` hourly (the acute checks, `--only ... --exit-nonzero-on-fail`, so a
-`fail` also reds the run and emails) and `verify_pipeline.yml` 6-hourly (everything). Live checks:
-`llm_errors`, `llm_burn_rate`, `db_saturation`, `worker_liveness`,
-`dual_write_parity`, `property_maintenance`, `broker_resolution_freshness`,
-`broker_merge_suppression`, and two 6-hourly-only groups — migration 437's
-`long_open_transaction` (warn-only: the llm-cost rollup's 3h trailing re-scan stops self-healing
-once a transaction outlives it), and the per-m² program's four plausibility checks over
-`measure_plausibility_by_source` (migration 427) — `ppm2_median_shift`, `ppm2_basis_floor_share`,
-`area_vs_usable_divergence` and the denominator arm `ppm2_measure_coverage`, whose three siblings
-are ratios that skip a cell with no inputs and would read clean on a corpus gone dark. **`acquisition_lag` + `walk_coverage`
-(2026-08-27)** close the ingestion blind spot: until then every scraper health signal compared our
-data to our own data and rendered as a dot on a page, so sreality ingested ZERO new listings for
-nine days without anything leaving the database. `acquisition_lag` reads the oldest unclaimed never-fetched `listing_detail_queue` row per portal — deliberately the QUEUE and not `listings.first_seen_at`, because a "no new rows in N hours" check needs a baseline that the outage itself erodes (nine days of zeros makes zero the expected value). **`text_extraction_lag`** (field capture W7) is its twin one layer later — oldest ELIGIBLE-unextracted advert + waiting count per portal, plus a wedge arm (rows eligible, lane claiming none, or the lane absent from the heartbeat) and an abort arm (the provider stopped the last pass: `fail` quoting its `fatal`, whatever the backlog's age or `claimed`; 2026-10-02..10 the lane claimed 500 a pass for eight days and wrote nothing) — and it is computed from the text lane's OWN selector predicate, because the outage it replaces was a lane and its three monitors disagreeing about who was eligible. `walk_coverage` is the only
-comparison against EXTERNAL truth: collected vs the portal's advertised total from the latest
-COMPLETED index run's `by_category`, plus a truncation arm (categories walked vs that portal's own
-7-day best) because a budget-stopped walk leaves no entry for the categories it never reached and
-so makes the gap look BETTER. remax and maxima derive their total as `len(seen)` and mmreality
-reports none — all three are reported `verifiable: false` rather than 100%. **`walk_end_streak`** (2026-10-13) is its per-category twin: finished walks in a row in which one (source, category) was walked and did NOT reach the portal's end, i.e. nominated nothing (rule #3) — warn 3 walks (~1 day at the real cron cadence for a category walked every run), fail 6; a run that skipped the category is not counted, and a category its portal has not walked in 6 walks warns (starved or dropped); a window with no verdict is `warn`, value None, never `ok`. Born of ceskereality byt/prodej missing the end for 89 walks (13,373 active vs 9,771 listed) while the portal-wide gap read 4.6%, under warn; detail in `references/pipeline-verification.md`. **`worker_lane_stall`** closes the gap `worker_liveness` structurally cannot see — a worker that is ALIVE with a wedged lane. The realtime worker beat every 30 s for nine hours while its drain lane completed ONE pass and its images lane completed 486; a pass was recorded only on COMPLETION, so a hung lane and an idle lane published byte-identical state. The worker now stamps when a pass BEGINS and the heartbeat resolves it to `in_flight_s`, and `_lane_loop` bounds every pass with `LANE_PASS_TIMEOUT_SECONDS` (1800) — containment, not a diagnosis: it stops one hang costing every later pass, and repeated timeouts on one lane are themselves the diagnosis. Caveat worth knowing: a pass blocked inside `asyncio.to_thread` keeps running after cancellation (Python cannot kill a thread), so the lane is freed but the thread is not — hence the pass locks and the watchdog in the worker section above. **`migration_drift`** closes a different silent gap: it probes the live catalog for the objects the newest 25 migrations declare, so a migration merged but never applied is caught in one tick instead of the 29 h it took on 2026-08-25 (see the `database` skill). **`workflow_poller_liveness`** (W0.1, registered in the 6h lane only for now — promote it into `llm_health.yml`'s `--only` list after a soak) keys on the AGE of `app_settings.workflow_failures_cursor`: `record_workflow_failures.py` excludes its own runs from `workflow_failures`, so a dead poller cannot appear in the table it feeds — it just stops adding rows, which is byte-identical to a quiet week. **Three rules the harness now enforces on itself** (W0 of `docs/design/reliability-program.md`; evidence in the reference below): **silence is not recovery** — a failure is superseded only by a newer SUCCESS, never by elapsed time, so never reintroduce a recency window into a state check; **a zero is ambiguous, so name the arm** — `llm_burn_rate` carries `details.arm` (`starved`/`idle`/`runaway`/`ok`), evaluated per `called_for`; and **results are persisted AND alerted per check as each completes**, under a per-check budget and a lane budget — the acute lane's 120s `_LANE_BUDGET_S` out of its 300s job, the full lane's `full_lane_budget_s` (one per-check budget per registered check, CI-bounded by the 30-min job) (an overrun is `warn` "timed out", an unreached check `warn` "not run" — neither is ever `ok`). **`field_fill_matrix`** (field capture W1) reads the VALUES, not just presence — the half
-`data_quality_by_source` structurally cannot see: per (source, field) over EVERY active row — a
-sampled cohort cannot be compared with itself a week later, the newest-1,000 slice rotated 30+ pp on
-untouched parsers — it rings when fill collapses against the blessed baseline in
-`data/field_capture/`, when the off-canon share against `toolkit/filter_registry` rises, or when a
-blessed cell stops being measured at all; today's zeros are blessed KNOWN and named on every run, and
-a census older than 30 d warns (a CI test would red `main` on a date, not on a defect). Re-blessing is
-the OPERATOR's (step 4 above), both goldens' tests are subset assertions so an unblessed new field or
-portal reds nothing, and it owns no thresholds (sized on that cohort's measured drift) — every other
-check's live in `app_settings.pipeline_check_thresholds` over code defaults in `DEFAULT_THRESHOLDS`.
-**`floor_convention`** (field capture W8) asks what no fill or validity measure can — whether a
-populated, plausible integer is on the RIGHT SCALE: `mean(portal floor − idnes floor)` over active
-`byt` rows sharing a (price, area, disposition) key, warn 0.35 / fail 0.50 / min 40 pairs. It is the
-lane's costliest check (11-35 s, registered last among the DB checks) and the ONE that ships RED on
-purpose — the six ground = 1 portals stay +0.8..+1.1 until the operator has run the six
-`scripts/reparse.py --fields floor` heal passes in the W8 hand-over § 7.
-**Per-check rationale, incidents and threshold sizing: `references/pipeline-verification.md`.**
+**Health check harness** (`scripts/verify_pipeline.py`; plan: `docs/design/health-dashboard.md`) — ONE registry, `CHECKS`:
+each `Check` declares key, class (`alarm`/`gauge`), host (all `github-actions` in wave 1), `cadence_s`, budget, label,
+unit and owner page; `project_registry` mirrors the host's keys into `health_checks` (migration 619). FOUR statuses,
+`ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, a not-run, an error or a check's own
+could-not-measure path is `unknown`, reason in `details` (`timed_out`/`not_run`/`errored`/`skipped`), never `ok`. Both
+GitHub lanes run only the DUE checks (newest row older than `cadence_s`): `llm_health.yml` hourly with
+`--exit-nonzero-on-fail` (a failing alarm reds the run and emails; a gauge never does), `verify_pipeline.yml` 6-hourly without; the daily sreality
+image probe and the weekly outbound-URL probe are cadences, not workflows. A row keeps `details.message`, `elapsed_ms`
+and any `cells` (one verdict per portal/job/lane). The lanes never alert: the ONE ladder, `toolkit/system_alerts.reconcile`,
+runs in the API every 60 s — one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per
+check, reminders until acknowledged on Health (alarm 6 h / 24 h / 72 h then weekly, gauge daily), one recovery once a
+measured `ok` holds `max(2 × cadence, 30 min)`; `unknown` is inert. **Rationale, ladder, sizing: `references/pipeline-verification.md`.**
 
 ## Reading the logs
 

@@ -465,7 +465,7 @@ distribution, completeness) for the *assertions*, evaluated **per partition** (s
 cohort), alerting on **state transitions** rather than every red run.
 
 **Where it fits.** The transition-alerting spine (`pipeline_check_results` +
-`toolkit/system_alerts.emit_transition_alerts` — onset/recovery edges, dedupe keys, `ON CONFLICT`
+`toolkit/system_alerts.emit_transition_alerts` (replaced 2026-10-18 by `reconcile`, one incident per failing cell — see docs/design/health-dashboard.md) — onset/recovery edges, dedupe keys, `ON CONFLICT`
 idempotence) is genuinely good and needs a *producer*, not a rewrite.
 
 **Where it does NOT fit — say it out loud.** GE/dbt assume you own the producer and can assert a
@@ -540,7 +540,7 @@ isolation, same `pipeline_check_results` row, same transition alerting.
 | scalar fields vs `min_pct` floor | below floor, n ≥ 50 | **remax description (64 days undetected)** | ~0 once seeded from observed reality |
 | volume vs trailing-14d median | below 25% of median | a category dropping out / a WAF block | low; needs a wide band (portal seasonality is real) |
 
-**Surfacing.** `pipeline_check_results` → `emit_transition_alerts` → one `notification_dispatches`
+**Surfacing.** `pipeline_check_results` → `toolkit/system_alerts.reconcile` (since 2026-10-18; was `emit_transition_alerts`) → one `notification_dispatches`
 row → the SPA nav bell, plus per-source detail on `/health`. **Note:**
 `app_settings.system_health_channels` is currently `[]`, so today every system alert is
 in-app-bell-only — no email, no Telegram. That is an operator decision (§6 Q3), not a gap.

@@ -344,11 +344,11 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_derived_artifacts_stamping.py -q
 
-      # 422 replaced /health's `distinct on` with a recursive key-hop, which is subtle in
-      # ways a shape assertion cannot see: the hop terminates by emitting a NULL, the seek
-      # is a strict `>`, and an empty table must yield no rows rather than error. Executed
-      # against the replayed schema, in a transaction that always rolls back.
-      - name: /health pipeline checks stay latest-per-key (migration 422)
+      # 619 drives /health's pipeline_checks_public from the health_checks registry: a
+      # registered key that never ran reads not measured, an undeclared key is not served, a
+      # stale or unmeasured newest row reads unknown, and each row carries its cell incidents.
+      # Executed against the replayed schema, in a transaction that always rolls back.
+      - name: /health pipeline checks serve the registry (migration 619)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_pipeline_checks_latest_per_key.py -q

@@ -1,17 +1,15 @@
 name: "Monitoring: pipeline verification"
 
-# Computes pipeline-health metrics — street/geo dedup debt, the per-source
-# eligibility funnel, merge latency, dedup-engine cycle health, and the LLM
-# error rate — into `pipeline_check_results`, and rings the in-app notification
-# bell (a `system_health` notification_dispatches row) for every `fail`. Born
-# from the 2026-07 incident where the pipeline stalled silently for two days
-# (Anthropic credit exhaustion) with no in-app signal and ~39k suspect unmerged
-# byt pairs sat invisible. On Mondays it also records a random merge-precision
-# sample for operator spot-review.
+# The 6-hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the
+# check registry into health_checks, measures every check that is due by its own cadence and
+# stores each result in pipeline_check_results. It is the hourly lane (llm_health.yml)
+# without the exit flag, so a Problem never reds this run; both fold into one canary in wave
+# 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored
+# results into incidents and notices.
 #
-# Read-mostly (writes only its own result + alert rows); needs ONLY
-# SUPABASE_DB_URL. Each check is isolated — one failing check writes a `fail`
-# row, never aborts the run.
+# Read-only apart from its own result and registry rows; needs ONLY SUPABASE_DB_URL. Each
+# check is isolated: one that errors, times out or is not reached is stored Not measured
+# (`unknown`) and the run goes on.
 #
 # Required GitHub secret: SUPABASE_DB_URL.
 
@@ -21,10 +19,11 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Compute + log only; write no result rows and send no alerts"
+        description: "Compute and log the due checks only; write no result or registry rows"
         type: boolean
         default: false
 
+# Shared with llm_health.yml, so the two lanes take turns instead of measuring twice.
 concurrency:
   group: pipeline-verification
   cancel-in-progress: false
@@ -54,9 +53,6 @@ jobs:
           ARGS=""
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
-          fi
-          if [ "$(date +%u)" = "1" ]; then
-            ARGS="$ARGS --weekly"
           fi
           echo "verify_pipeline args:${ARGS}"
           python -m scripts.verify_pipeline $ARGS

@@ -60,11 +60,17 @@ describe('pipelineCheckValueLabel', () => {
 });
 
 describe('normalizePipelineStatus', () => {
-  it('passes warn/fail through and folds everything else to ok', () => {
+  it('passes a measured ok/warn/fail through', () => {
     expect(normalizePipelineStatus('fail')).toBe('fail');
     expect(normalizePipelineStatus('warn')).toBe('warn');
     expect(normalizePipelineStatus('ok')).toBe('ok');
-    expect(normalizePipelineStatus('mystery')).toBe('ok');
+  });
+  it('reads everything else as not measured, never as ok', () => {
+    expect(normalizePipelineStatus('unknown')).toBe('unknown');
+    expect(normalizePipelineStatus('mystery')).toBe('unknown');
+    // A registered check with no result yet is served with a null status (migration 619).
+    expect(normalizePipelineStatus(null)).toBe('unknown');
+    expect(normalizePipelineStatus('')).toBe('unknown');
   });
 });
 
@@ -75,25 +81,37 @@ describe('summarizePipelineChecks', () => {
       check('b', 'warn'),
       check('c', 'fail'),
       check('d', 'ok'),
+      check('e', 'unknown'),
     ]);
-    expect(s).toEqual({ ok: 2, warn: 1, fail: 1, worst: 'fail' });
+    expect(s).toEqual({ ok: 2, warn: 1, fail: 1, unknown: 1, worst: 'fail' });
   });
   it('worst is warn when there are no fails', () => {
-    expect(summarizePipelineChecks([check('a', 'ok'), check('b', 'warn')]).worst).toBe('warn');
+    expect(summarizePipelineChecks([check('a', 'unknown'), check('b', 'warn')]).worst).toBe('warn');
   });
-  it('worst is ok on an empty set', () => {
-    expect(summarizePipelineChecks([]).worst).toBe('ok');
+  it('an unmeasured check outranks ok, so the set never reads all clear', () => {
+    const s = summarizePipelineChecks([check('a', 'ok'), check('b', 'mystery')]);
+    expect(s).toEqual({ ok: 1, warn: 0, fail: 0, unknown: 1, worst: 'unknown' });
+  });
+  it('worst is ok only when every check measured ok', () => {
+    expect(summarizePipelineChecks([check('a', 'ok'), check('b', 'ok')]).worst).toBe('ok');
+  });
+  it('an empty set measured nothing, so its worst is unknown', () => {
+    expect(summarizePipelineChecks([]).worst).toBe('unknown');
   });
 });
 
 describe('sortPipelineChecks', () => {
-  it('orders fail, then warn, then ok, stable by key', () => {
+  it('orders fail, then warn, then not measured, then ok, stable by key', () => {
     const sorted = sortPipelineChecks([
       check('zeta', 'ok'),
       check('alpha', 'ok'),
+      check('epsilon', 'mystery'),
       check('beta', 'fail'),
+      check('delta', 'unknown'),
       check('gamma', 'warn'),
     ]);
-    expect(sorted.map((c) => c.check_key)).toEqual(['beta', 'gamma', 'alpha', 'zeta']);
+    expect(sorted.map((c) => c.check_key)).toEqual([
+      'beta', 'gamma', 'delta', 'epsilon', 'alpha', 'zeta',
+    ]);
   });
 });

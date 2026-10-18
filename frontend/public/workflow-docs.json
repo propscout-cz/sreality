@@ -2711,7 +2711,7 @@
     {
       "filename": "llm_health.yml",
       "name": "Monitoring: acute health (hourly)",
-      "description": "The fast lane of verify_pipeline: runs the ACUTE checks — LLM errors, LLM burn rate, DB saturation (pg_cron failure rate), realtime-worker liveness, property- maintenance staleness (sweep death / stranded lease), broker-resolution freshness (budget-truncated daily sweep / frozen dirty drain) and the broker merge-suppression invariant (an operator NO bypassed; O(1)) — hourly, and exits non-zero when any is `fail` so GitHub emails the operator on a red scheduled run. This is the belt-and-braces channel for when the in-app bell path itself is down; the bell is rung (edge-triggered) by the checks via emit_transition_alerts, so an incident alerts once — not per run — and clears on recovery. The 6h full verify_pipeline run additionally covers these (shared emitter keys → no double-alert) plus the slower structural checks (dedup debt, latency, engine cycle).",
+      "description": "The hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence, stores each result, and exits non-zero when an alarm reads Problem (`fail`), so GitHub emails the operator. GitHub throttles this cron to about five runs a day, so \"hourly\" is a ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical without the exit flag; both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
       "portal": null,
       "manual": true,
       "schedules": [
@@ -2727,9 +2727,9 @@
       "secrets": [
         "SUPABASE_DB_URL"
       ],
-      "concurrencyGroup": "llm-health",
+      "concurrencyGroup": "pipeline-verification",
       "cancelInProgress": false,
-      "timeoutMinutes": 5,
+      "timeoutMinutes": 30,
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/llm_health.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/llm_health.yml"
@@ -4527,32 +4527,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/smoke_agent.yml"
     },
     {
-      "filename": "sreality_image_canary.yml",
-      "name": "Monitoring: sreality image template (daily)",
-      "description": "Runs the ONE outbound check of the verify harness — `sreality_image_template`, which requests a fresh sreality photo through the deployed download template (`scraper/image_storage.IMAGE_TRANSFORM_OPS`) and judges the served frame against the estate's declared size — on a lane of its own. It is registered LAST in verify_pipeline's registry so a slow CDN can never starve a database check, but that also means the 6-hourly verify lane routinely exhausts its 120 s budget before reaching it (observed on its first run). Here it has the budget to itself, once a day, the way `llm_health.yml` gives the acute checks theirs. A `fail` reds this run and rings the incident ladder; a throttle, a network error or an empty index is a `warn` that verified nothing.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "40 5 * * *",
-          "human": "Daily at 05:40 UTC"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-image-canary",
-      "cancelInProgress": false,
-      "timeoutMinutes": 10,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/sreality_image_canary.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/sreality_image_canary.yml"
-    },
-    {
       "filename": "sreality_image_remaster.yml",
       "name": "Jobs: sreality image re-master",
       "description": "Re-downloads stored sreality photos at the whole-frame `SQUARE_1800_JPG` master template and OVERWRITES each row's existing R2 object in place, under the `images.storage_path` the row already carries — the ~3.55M rows with `rendition IS NULL` hold the superseded `res,749,562,3` CROP, which cost ~85% of photos their edges. sreality ROTATES image URLs when a listing is edited, so a 404/410 (or a dead-URL 400/401/415) on the stored URL is re-resolved from the listing's CURRENT detail payload by image `order`, and the fresh URL is stored with the bytes. Every success stamps `rendition` + decoded dimensions and re-arms the phash/CLIP lanes; bytes that come back as the 749x562 crop are an anomaly and are never stamped.",
@@ -5013,44 +4987,9 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/text_extraction_bakeoff.yml"
     },
     {
-      "filename": "verify_outbound_urls.yml",
-      "name": "Monitoring: portal URL conformance",
-      "description": "Weekly live check that the stored portal URLs still resolve (W3 of the portal-URL contract, docs/design/portal-listing-url.md). Samples ACTIVE rows — a rotating quarter of sreality's sub-category codebook chosen by the ISO week (three rows per code) plus one row per crawler portal — and sends ~44 HEAD requests at <= 2/s. Status-code HEAD only: never follows a redirect, never reads a body, never authenticates. Writes one `outbound_url_conformance` row into pipeline_check_results and rings the in-app bell through the shared transition alerts. Thresholds by CONCENTRATION: a whole (category, sub-code) cell failing together is a slug defect; a scattered 404 is a delisting the presence check has not reached. Its own lane, deliberately outside verify_pipeline's DB-only budget.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "17 5 * * 2",
-          "human": "17 5 * * 2"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Probe + log only; write no result row and send no alert",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "portal-url-conformance",
-      "cancelInProgress": false,
-      "timeoutMinutes": 15,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_outbound_urls.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_outbound_urls.yml"
-    },
-    {
       "filename": "verify_pipeline.yml",
       "name": "Monitoring: pipeline verification",
-      "description": "Computes pipeline-health metrics — street/geo dedup debt, the per-source eligibility funnel, merge latency, dedup-engine cycle health, and the LLM error rate — into `pipeline_check_results`, and rings the in-app notification bell (a `system_health` notification_dispatches row) for every `fail`. Born from the 2026-07 incident where the pipeline stalled silently for two days (Anthropic credit exhaustion) with no in-app signal and ~39k suspect unmerged byt pairs sat invisible. On Mondays it also records a random merge-precision sample for operator spot-review.",
+      "description": "The 6-hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence and stores each result in pipeline_check_results. It is the hourly lane (llm_health.yml) without the exit flag, so a Problem never reds this run; both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
       "portal": null,
       "manual": true,
       "schedules": [
@@ -5065,7 +5004,7 @@
       "inputs": [
         {
           "name": "dry_run",
-          "description": "Compute + log only; write no result rows and send no alerts",
+          "description": "Compute and log the due checks only; write no result or registry rows",
           "required": false,
           "type": "boolean",
           "default": "false",

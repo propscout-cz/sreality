@@ -36,8 +36,10 @@ _UNWRAP = (
     r"\(\s*SELECT\s+is_platform_admin\(\)(\s+AS\s+is_platform_admin)?\s*\)"
 )
 
-_EXPECTED_POLICIES = 10
-_EXPECTED_SITES = 11
+# 431's 10 policies / 11 sites, plus migration 619's notification_dispatches_admin_update
+# (the SYSTEM-account arm, gated in both USING and WITH CHECK).
+_EXPECTED_POLICIES = 11
+_EXPECTED_SITES = 13
 
 # Their with_check has NO admin arm and must never acquire one — that would be a
 # privilege change wearing a performance change's clothes.

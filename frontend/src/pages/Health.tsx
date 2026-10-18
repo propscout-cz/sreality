@@ -724,6 +724,7 @@ const PIPELINE_DOT: Record<PipelineCheckStatus, string> = {
   ok: 'var(--color-sage)',
   warn: 'var(--color-ochre)',
   fail: 'var(--color-brick)',
+  unknown: 'var(--color-ink-4)',
 };
 
 function PipelineChecksSection() {
@@ -746,6 +747,7 @@ function PipelineChecksSection() {
             <PipelineChecksBadge
               fail={summary.fail}
               warn={summary.warn}
+              unknown={summary.unknown}
               hasData={checks.length > 0}
             />
           }
@@ -764,10 +766,12 @@ function PipelineChecksSection() {
 function PipelineChecksBadge({
   fail,
   warn,
+  unknown,
   hasData,
 }: {
   fail: number;
   warn: number;
+  unknown: number;
   hasData: boolean;
 }) {
   if (!hasData) return null;
@@ -778,6 +782,9 @@ function PipelineChecksBadge({
   }
   if (warn > 0) {
     return <span className={base + 'bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]'}>{warn} watch</span>;
+  }
+  if (unknown > 0) {
+    return <span className={base + 'bg-[var(--color-rule-soft)] text-[var(--color-ink-3)]'}>{unknown} not measured</span>;
   }
   return <span className={base + 'bg-[var(--color-sage-soft)] text-[var(--color-sage)]'}>OK</span>;
 }
