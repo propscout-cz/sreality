@@ -15,3 +15,8 @@ export const CHIP_ROW =
   'flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
 /* The thin upright rule that separates groups inside one chip row. */
 export const CHIP_DIVIDER = 'my-1 w-px shrink-0 bg-[var(--color-rule-strong)]';
+
+/* iOS zooms the page into any focused field under 16 px, and the desktop
+ * controls the phone reuses (the note composer, the tag picker, the filter
+ * inputs) are 14 px. On a container, it lifts every field inside to 16 px. */
+export const NO_FOCUS_ZOOM = '[&_input]:text-[16px] [&_select]:text-[16px] [&_textarea]:text-[16px]';

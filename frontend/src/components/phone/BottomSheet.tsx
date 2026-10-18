@@ -16,6 +16,8 @@ import { useDialog } from '@/lib/useDialog';
 /* The scrim is ink in light mode and black after dusk; `light-dark()` follows the
  * html `color-scheme` the theme switch already sets. */
 const SCRIM = 'light-dark(rgba(26, 28, 34, 0.32), rgba(0, 0, 0, 0.55))';
+const SCROLLS = 'overflow-y-auto overscroll-contain';
+const SAFE_BOTTOM = 'max(16px, env(safe-area-inset-bottom))';
 
 export interface BottomSheetProps {
   /* The dialog's accessible name and the micro heading beside "Hotovo". */
@@ -23,10 +25,23 @@ export interface BottomSheetProps {
   onClose: () => void;
   /* A context line under the heading (what the sheet acts on). */
   context?: ReactNode;
+  /* The close word: "Hotovo" for a menu that acts as you tap, "Zavřít" for a
+   * sheet that holds a draft and lets it go. */
+  closeLabel?: string;
+  /* Makes the sheet a TALL one (the feed's Filtry): the body scrolls between
+   * the heading and this footer, both pinned. */
+  footer?: ReactNode;
   children: ReactNode;
 }
 
-export default function BottomSheet({ label, onClose, context, children }: BottomSheetProps) {
+export default function BottomSheet({
+  label,
+  onClose,
+  context,
+  closeLabel = 'Hotovo',
+  footer,
+  children,
+}: BottomSheetProps) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const scrimRef = useRef<HTMLDivElement>(null);
   /* The app's modal contract (lib/useDialog): the layered Escape, the focus trap
@@ -49,8 +64,8 @@ export default function BottomSheet({ label, onClose, context, children }: Botto
         aria-modal="true"
         aria-label={label}
         tabIndex={-1}
-        className="max-h-[85dvh] overflow-y-auto overscroll-contain rounded-t-[var(--radius-lg)] border-t border-[var(--color-rule-strong)] bg-[var(--color-paper-3)] pt-2 text-[var(--color-ink)] outline-none"
-        style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}
+        className={`${footer ? 'flex h-[92dvh] flex-col' : `max-h-[85dvh] ${SCROLLS}`} rounded-t-[var(--radius-lg)] border-t border-[var(--color-rule-strong)] bg-[var(--color-paper-3)] pt-2 text-[var(--color-ink)] outline-none`}
+        style={footer ? undefined : { paddingBottom: SAFE_BOTTOM }}
       >
         <div aria-hidden className="mx-auto mb-1 h-1 w-9 rounded-[2px] bg-[var(--color-ink-4)]" />
         <div className="flex h-10 items-center justify-between gap-2 pl-4 pr-2">
@@ -63,11 +78,20 @@ export default function BottomSheet({ label, onClose, context, children }: Botto
             data-dialog-close
             className="h-10 px-2 text-[15px] font-medium text-[var(--color-copper)]"
           >
-            Hotovo
+            {closeLabel}
           </button>
         </div>
         {context}
-        {children}
+        {footer ? (
+          <>
+            <div className={`min-h-0 flex-1 ${SCROLLS}`}>{children}</div>
+            <div className="border-t border-[var(--color-rule)] pt-3" style={{ paddingBottom: SAFE_BOTTOM }}>
+              {footer}
+            </div>
+          </>
+        ) : (
+          children
+        )}
       </div>
     </div>,
     document.body,
