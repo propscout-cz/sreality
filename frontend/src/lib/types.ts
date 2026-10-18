@@ -100,9 +100,9 @@ export interface ListingPublic {
   garage: boolean | null;
   parking_lots: number | null;
   ownership: Ownership | null;
-  /* Migration 052 — "turned in" (TOM) in whole days. now() -
-   * first_seen_at for active listings (right-censored, growing);
-   * last_seen_at - first_seen_at for delisted. */
+  /* Time on market in whole days, the one measure (measure_tom_days, migration
+   * 617): now() - first_seen_at for active ads (right-censored, growing);
+   * last_seen_at - first_seen_at for inactive. */
   tom_days: number | null;
   /* Migration 084 — original sreality "Popis" free-text description.
    * Promoted from raw_json->'text'->>'value' to a typed column +

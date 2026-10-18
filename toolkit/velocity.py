@@ -4,8 +4,8 @@ TOM (time on market) per listing:
   - active listing: now() - first_seen_at  (still going, right-censored)
   - delisted:       last_seen_at - first_seen_at  (final sojourn)
 
-The SQL only fetches the three timestamp columns per listing; statistics
-and classification happen in Python.
+The SQL returns each ad's tom_days from the one measure (measure_tom_days,
+migration 617); statistics and classification happen in Python.
 
 Active vs delisted matters interpretively: TOM-so-far on active listings
 is right-censored (they haven't finished yet), while delisted TOM is
@@ -57,7 +57,7 @@ def build_market_velocity_query(
     params.update(life_params)
 
     sql = (
-        f"SELECT l.sreality_id, l.first_seen_at, l.last_seen_at, l.is_active,\n"
+        "SELECT l.sreality_id, l.first_seen_at, l.last_seen_at, l.is_active,\n"
         f"  {tom_days_sql('l')} AS tom_days\n"
         "FROM listings l\n"
         # W4-a: the radius in _shared_filter_where reads `ll`.
@@ -97,19 +97,15 @@ def compute_market_velocity(
 
     active_count = sum(1 for c in cohort if c["is_active"])
     delisted_count = len(cohort) - active_count
-    tom_values = [c["tom_days"] for c in cohort if c["tom_days"] is not None]
+    tom_values = [c["tom_days"] for c in cohort]
     tom_stats = _stats(tom_values)
 
     cutoff = now.timestamp() - trend_split_days * 86400
     recent_tom = [
-        c["tom_days"] for c in cohort
-        if c["tom_days"] is not None
-        and c["first_seen_at"].timestamp() > cutoff
+        c["tom_days"] for c in cohort if c["first_seen_at"].timestamp() > cutoff
     ]
     older_tom = [
-        c["tom_days"] for c in cohort
-        if c["tom_days"] is not None
-        and c["first_seen_at"].timestamp() <= cutoff
+        c["tom_days"] for c in cohort if c["first_seen_at"].timestamp() <= cutoff
     ]
 
     notes: list[str] = []
@@ -233,11 +229,9 @@ def compute_listing_velocity(
         cur.execute(sql, params)
         peer_rows = cur.fetchall()
 
-    peer_toms = [r[4] for r in peer_rows if r[4] is not None]
+    peer_toms = [r[4] for r in peer_rows]
 
-    percentile = _percentile_rank(target_tom, peer_toms) if (
-        target_tom is not None and peer_toms
-    ) else None
+    percentile = _percentile_rank(target_tom, peer_toms) if peer_toms else None
 
     classification = _classify_velocity(percentile)
 
@@ -280,7 +274,7 @@ def _fetch_listing_for_velocity(
     )
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT l.first_seen_at, l.last_seen_at, l.is_active, l.disposition,\n"
+            "SELECT l.is_active, l.disposition,\n"
             "  ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng,\n"
             "  l.category_main, l.category_type, l.id,\n"
             f"  {tom_days_sql('l')} AS tom_days\n"
@@ -293,16 +287,14 @@ def _fetch_listing_for_velocity(
     if not row:
         return None
     return {
-        "first_seen_at": row[0],
-        "last_seen_at": row[1],
-        "is_active": row[2],
-        "disposition": row[3],
-        "lat": float(row[4]) if row[4] is not None else None,
-        "lng": float(row[5]) if row[5] is not None else None,
-        "category_main": row[6],
-        "category_type": row[7],
-        "id": int(row[8]),
-        "tom_days": row[9],
+        "is_active": row[0],
+        "disposition": row[1],
+        "lat": float(row[2]) if row[2] is not None else None,
+        "lng": float(row[3]) if row[3] is not None else None,
+        "category_main": row[4],
+        "category_type": row[5],
+        "id": int(row[6]),
+        "tom_days": row[7],
     }
 
 

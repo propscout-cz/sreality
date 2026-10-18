@@ -139,7 +139,7 @@ def _fetch_tom_days(
             (id_val,),
         )
         row = cur.fetchone()
-    return row[0] if row and row[0] is not None else 0
+    return row[0] if row else 0
 
 
 def _build_trajectory(

@@ -111,9 +111,9 @@ class ComparableFilters:
     building_condition_level_max: int | None = None
     apartment_condition_level_min: int | None = None
     apartment_condition_level_max: int | None = None
-    # TOM ("turned in") = time on market in days. Mirrors migration 052's
-    # listings_public.tom_days: now() - first_seen_at for active rows,
-    # last_seen_at - first_seen_at for delisted. Inclusive bounds.
+    # TOM = time on market in days, the one measure (measure_tom_days, migration 617):
+    # now() - first_seen_at for active ads, last_seen_at - first_seen_at for inactive.
+    # Inclusive bounds.
     tom_days_min: int | None = None
     tom_days_max: int | None = None
     # Days-ago ranges on the source timestamps. min_days = most recent
