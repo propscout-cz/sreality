@@ -19,6 +19,7 @@ from autodedup.text_facts import (
     subject_floors,
     subject_floors_by_form,
     unit_designators,
+    widest_directions,
 )
 
 
@@ -179,6 +180,15 @@ STROMECEK_SOUTH = ("a samostatnou ložnicí o ploše 12,1 m². Jižní orientace
         ("Byt má jihozápadní a severovýchodní orientaci.", {"jihozapad", "severovychod"}),
         # An adjective that qualifies another noun is not the unit's orientation.
         ("Dům stojí na jihozápadní straně ulice, byt má orientaci do klidného dvora.", set()),
+        # A hyphenated compound is not its last element.
+        ("Byt má severo-jižní orientaci.", set()),
+        ("Byt má východo-západní orientaci.", set()),
+        # A garden's, a plot's or one room's facing is the part's.
+        ("Rodinný dům, zahrada s jižní orientací.", set()),
+        ("Pozemek s jižní orientací, mírně svažitý.", set()),
+        ("Obývací pokoj s kuchyní má západní orientaci.", set()),
+        ("Ložnice má východní orientaci do klidného dvora.", set()),
+        ("Byt s jižní orientací a balkonem.", {"jih"}),
     ],
 )
 def test_orientations_reads_the_adjective_in_front_of_the_noun(
@@ -191,6 +201,34 @@ def test_compass_points_split_a_compound_direction() -> None:
     assert compass_points({"jihozapad"}) == {"jih", "zapad"}
     assert compass_points({"sever", "zapad"}) == {"sever", "zapad"}
     assert compass_points(set()) == frozenset()
+
+
+def test_widest_directions_drop_a_stem_a_wider_one_names() -> None:
+    assert widest_directions({"jih", "jihovychod"}) == {"jihovychod"}
+    assert widest_directions({"jih", "sever"}) == {"jih", "sever"}
+    assert widest_directions({"jihovychod", "jihozapad"}) == {"jihovychod", "jihozapad"}
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # `situován v …` places the house in the country.
+        ("Byt je situován v jihozápadní části Prahy, nedaleko metra.", set()),
+        ("Byt je situován v západní části Brna.", set()),
+        ("Byt je situován v severočeském městě Liberec.", set()),
+        ("Byt je situovaný na jih do klidné ulice.", {"jih"}),
+        # `východ na balkon` is a way out; `na východ do zahrady` is still a facing.
+        ("Byt je orientován do dvora, z obývacího pokoje je východ na balkon.", set()),
+        ("Byt je orientován na východ do zahrady.", {"vychod"}),
+        # `orientační cena` is an indicative price.
+        ("Orientační cena za pronájem, východ na terasu z obývacího pokoje.", set()),
+        ("Orientačně 15 minut od centra, směrem na západ.", set()),
+    ],
+)
+def test_orientations_reads_no_location_exit_or_indicative_price(
+    text: str, expected: set[str]
+) -> None:
+    assert orientations(text) == expected
 
 
 # --- E966: a co-living room's code ---------------------------------------------------------

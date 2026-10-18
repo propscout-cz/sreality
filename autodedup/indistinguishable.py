@@ -179,6 +179,7 @@ from autodedup.text_facts import (
     printed_unit_codes,
     further_areas,
     unit_designators,
+    widest_directions,
 )
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -2789,12 +2790,15 @@ def distinguishing_facts(
 
     # The compass direction, which is what separates two otherwise identical flats in one
     # Petřiny building (28145 x 528717: `na jihovýchod` against `na východ`). One direction
-    # against one is read exactly. A body that lists two is describing a through-flat, so it
-    # differs only where the two sides share no cardinal point at all (E968): U Stromečku's
-    # `na sever a západ` against `Jižní orientace` are two flats, `na jih i na sever` against
-    # `na jih` may be one.
+    # against one is read exactly — after a stem a wider one of the same body already names is
+    # dropped (`Jižní orientace obýváku, ložnice na jihovýchod` is the one direction jihovýchod),
+    # and only where the two bodies name no stem in common. A body that lists two is describing
+    # a through-flat, so it differs only where the two sides share no cardinal point at all
+    # (E968): U Stromečku's `na sever a západ` against `Jižní orientace` are two flats, `na jih i
+    # na sever` against `na jih` may be one.
     dirs_a, dirs_b = orientations(a.description), orientations(b.description)
-    if ((len(dirs_a) == 1 and len(dirs_b) == 1 and dirs_a != dirs_b)
+    one_a, one_b = widest_directions(dirs_a), widest_directions(dirs_b)
+    if ((len(one_a) == 1 and len(one_b) == 1 and one_a != one_b and not (dirs_a & dirs_b))
             or _set_conflict(compass_points(dirs_a), compass_points(dirs_b))):
         add("orientation", ", ".join(sorted(dirs_a)), ", ".join(sorted(dirs_b)))
 

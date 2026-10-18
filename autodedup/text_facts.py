@@ -812,12 +812,20 @@ def _offered_room_counts(text: str) -> frozenset[int]:
 # orientovaný na jihozápad`, `situovaný na sever`. Longest stem first, because `jihovýchod`
 # contains `východ` and a shorter match would read one flat's south-east as another's east.
 # The keyword is mandatory — a body also names the direction of the motorway and of the park.
-_COMPASS_STEMS: tuple[str, ...] = (
-    "severovychod", "severozapad", "jihovychod", "jihozapad",
-    "sever", "jih", "vychod", "zapad",
-)
-_ORIENTATION_KEYWORD = re.compile(r"orientac\w*|orientovan\w*|situovan\w*")
+# `orientační` / `orientačně` is an indicative price, not a facing, and `situován v jihozápadní
+# části Prahy` / `v severočeském městě` places the house in the country, so a `situovan` clause
+# that opens with `v` / `ve` is not read (E968's review).
+_CARDINALS: tuple[str, ...] = ("sever", "jih", "vychod", "zapad")
+_COMPASS_STEMS: tuple[str, ...] = tuple(
+    f"{north_south}o{east_west}" for north_south in _CARDINALS[:2]
+    for east_west in _CARDINALS[2:]) + _CARDINALS
+_ORIENTATION_KEYWORD = re.compile(r"orientac(?!n)\w*|orientovan\w*|(situovan\w*)")
+_LOCATION_CLAUSE = re.compile(r"\s*,?\s*(?:v|ve)\b")
 _ORIENTATION_WINDOW: int = 44
+# `z obývacího pokoje je východ na balkon` is a way OUT, not a facing; `orientován na východ do
+# zahrady` keeps its `na` in front and is still read.
+_COMPASS_EXIT = re.compile(
+    r"(?<!na )\bvychod\w*(?=\s+(?:na|do)\s+(?:teras|balkon|zahrad|lodzi|lodgi))")
 _COMPASS_WORD = re.compile(
     r"\b(severovychod\w*|severozapad\w*|jihovychod\w*|jihozapad\w*"
     r"|sever\w*|jizni|jih|vychod\w*|zapad\w*)\b"
@@ -825,12 +833,19 @@ _COMPASS_WORD = re.compile(
 # E968: Czech also puts the direction IN FRONT of the noun, as an adjective — `má jihozápadní
 # orientaci`, `Jižní orientace`. Only adjectives directly qualifying the keyword are read, joined
 # by nothing but a coordinator, so `na jihozápadní straně ulice … orientace` is not.
+# A hyphen joins two WHOLE adjectives only: `severo-jižní` is a compound of its own, and reading
+# its last element would make a north-south flat a south-facing one. An adjective of a garden,
+# a terrace, a plot or one room (`zahrada s jižní orientací`, `Ložnice má východní orientaci`)
+# is the part's facing, not the unit's.
 _COMPASS_ADJECTIVE: str = r"(?:(?:severo|jiho)?(?:vychod|zapad)ni|jizni|severni)"
 _COMPASS_BEFORE = re.compile(
-    r"(?<![a-z])(" + _COMPASS_ADJECTIVE + r"(?:(?:\s+[ai]\s+|\s*[-/,]\s*)"
+    r"(?<![a-z])(?<![a-z]-)(" + _COMPASS_ADJECTIVE + r"(?:(?:\s+[ai]\s+|\s*[-/,]\s*)"
     + _COMPASS_ADJECTIVE + r")*)\s+$"
 )
-_CARDINALS: tuple[str, ...] = ("sever", "jih", "vychod", "zapad")
+_ORIENTED_PART = re.compile(
+    r"\b(?:zahrad|teras|balkon|lodzi|lodgi|pozem|svah|obyvak|obyvaci\s+pokoj|loznic|kuchyn)\w*"
+    r"\s+(?:s|se|ma)\s+$")
+_ORIENTED_PART_WINDOW: int = 40
 
 
 def _compass_stem(word: str) -> str | None:
@@ -851,14 +866,19 @@ def orientations(text: str | None) -> set[str]:
     if not text:
         return set()
     folded = fold(text)
+    exits = {match.start() for match in _COMPASS_EXIT.finditer(folded)}
     out: set[str] = set()
     for keyword in _ORIENTATION_KEYWORD.finditer(folded):
+        if keyword.group(1) and _LOCATION_CLAUSE.match(folded, keyword.end()):
+            continue
         clause = folded[keyword.end(): keyword.end() + _ORIENTATION_WINDOW]
         clause = re.split(r"[.;!?]", clause, maxsplit=1)[0]
-        words = [match.group(1) for match in _COMPASS_WORD.finditer(clause)]
+        words = [match.group(1) for match in _COMPASS_WORD.finditer(clause)
+                 if keyword.end() + match.start(1) not in exits]
         before = _COMPASS_BEFORE.search(
             folded, max(0, keyword.start() - _ORIENTATION_WINDOW), keyword.start())
-        if before is not None:
+        if before is not None and not _ORIENTED_PART.search(
+                folded, max(0, before.start(1) - _ORIENTED_PART_WINDOW), before.start(1)):
             words += [match.group(1) for match in _COMPASS_WORD.finditer(before.group(1))]
         out |= {stem for stem in map(_compass_stem, words) if stem is not None}
     return out
@@ -867,6 +887,13 @@ def orientations(text: str | None) -> set[str]:
 def compass_points(directions: Iterable[str]) -> frozenset[str]:
     """The cardinal points the stems name: `jihozapad` is `jih` and `zapad`."""
     return frozenset(point for stem in directions for point in _CARDINALS if point in stem)
+
+
+def widest_directions(directions: Iterable[str]) -> frozenset[str]:
+    """The stems no wider stem of the set already names: `{jih, jihovychod}` is `{jihovychod}`."""
+    stems = frozenset(directions)
+    return frozenset(stem for stem in stems if not any(
+        compass_points((stem,)) < compass_points((other,)) for other in stems))
 
 
 def _area_value(raw: str) -> float | None:

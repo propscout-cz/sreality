@@ -243,6 +243,51 @@ def test_north_and_west_against_south_is_two_flats() -> None:
     assert "orientation" in stated(a, b, PROMOTE)
 
 
+def test_a_room_adjective_does_not_hide_the_one_direction() -> None:
+    """The adjective in front of `orientace` adds `jih` beside `jihovýchod`; the wider stem is
+    the body's one direction, and it is not `východ`."""
+    a = listing(1, description="Jižní orientace obýváku, ložnice orientována na jihovýchod.")
+    b = listing(2, source="idnes", description="Byt je orientován na východ.")
+    assert "orientation" in names(a, b)
+    c = listing(3, source="idnes", description="Byt je orientován na jih.")
+    assert "orientation" not in names(a, c)
+
+
+@pytest.mark.parametrize(
+    "body_a, body_b",
+    [
+        ("Byt je situován v jihozápadní části Prahy, nedaleko metra.",
+         "Byt je orientován na sever a východ, je tedy příjemně světlý."),
+        ("Byt je situován v západní části Brna.",
+         "Díky orientaci na jih i na sever byt přirozeně větrá."),
+        ("Byt je orientován do dvora, z obývacího pokoje je východ na balkon.",
+         "Orientace bytu na jih a západ."),
+        ("Orientační cena za pronájem, východ na terasu z obývacího pokoje.",
+         "Orientace na západ a jih."),
+        ("Obývací pokoj s kuchyní má západní orientaci.",
+         "Ložnice má východní orientaci do klidného dvora."),
+        ("Byt má severo-jižní orientaci.", "Byt je orientován na sever."),
+    ],
+)
+def test_a_location_an_exit_or_a_room_is_no_orientation(body_a: str, body_b: str) -> None:
+    a = listing(1, description=body_a)
+    b = listing(2, source="idnes", description=body_b)
+    assert "orientation" not in names(a, b)
+
+
+def test_a_garden_or_a_plot_facing_is_no_orientation() -> None:
+    house = listing(1, category_main="dum", disposition=None,
+                    description="Rodinný dům, zahrada s jižní orientací.")
+    other = listing(2, source="idnes", category_main="dum", disposition=None,
+                    description="Rodinný dům je orientován na východ.")
+    assert "orientation" not in names(house, other)
+    plot = listing(3, category_main="pozemek", disposition=None,
+                   description="Pozemek s jižní orientací, mírně svažitý.")
+    sloped = listing(4, source="idnes", category_main="pozemek", disposition=None,
+                     description="Pozemek je orientován na východ a sever.")
+    assert "orientation" not in names(plot, sloped)
+
+
 def test_an_abbreviated_orientation_is_not_read() -> None:
     a = listing(1, description="Novy byt 2+kk, orientovany na J/Z, vybaveny kuchynskou linkou.")
     b = listing(2, description="Byt s vyhledem orientovanym na jihozapad.")
