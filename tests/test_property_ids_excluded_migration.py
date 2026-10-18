@@ -101,8 +101,8 @@ def test_the_latest_definitions() -> None:
     """602 restated browse_map_cells (world tiles) with this file's signature and predicate
     verbatim (tests/test_602_browse_map_cells_world_tiles_migration.py); 605 restated both
     except the chip arms (tests/test_one_place_predicate.py)."""
-    assert latest_definition("browse_stats_properties").name == "605_street_chip_level.sql"
-    assert latest_definition("browse_map_cells").name == "605_street_chip_level.sql"
+    assert latest_definition("browse_stats_properties").name == "625_tom_observed.sql"
+    assert latest_definition("browse_map_cells").name == "625_tom_observed.sql"
     assert latest_definition("portal_status_matches").name == "597_portal_exclusion.sql"
 
 

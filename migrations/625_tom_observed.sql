@@ -29,7 +29,8 @@
 -- ORDER (584's recipe for an appended column, then 597/598's for a defaulted RPC parameter):
 --   0. preconditions (md5 of every body restated, read live 2026-10-18; skipped in the replay);
 --   1. both rebuild locks, queued, then fail fast;
---   2. TX A: the bulk-day set (a matview, unique-indexed, refreshed nightly) and the measure;
+--   2. TX A: the bulk-day set (a matview, unique-indexed, registered in derived_artifacts and
+--      populated + refreshed nightly through refresh_matview, 578) and the measure;
 --   3. TX B: browse_list gains the column FIRST (sync_browse_list's positional insert, and
 --      browse_list_visible()'s `l.*`, must never see the table narrower than the view), then the
 --      projection with the column appended LAST, then properties_map_visible() bridged with
@@ -121,7 +122,7 @@ select d.source, d.category_main, d.category_type, d.day, d.sightings,
 from days d
 join pairs p using (source, category_main, category_type)
 where d.day = p.first_day or d.sightings > greatest(100, 4 * p.median_sightings)
-with data;
+with no data;
 
 create unique index if not exists ingest_bulk_days_key
   on public.ingest_bulk_days (source, category_main, category_type, day);
@@ -132,10 +133,23 @@ comment on materialized view public.ingest_bulk_days is
   'or a day with more than greatest(100, 4 x the pair''s median daily sightings). Validated on the '
   'two portals that publish a listing date (2026-10-18): our sighting lags the portal by a median '
   '0.6 d on ordinary days and 16-77 d on these. Refreshed nightly (pg_cron refresh-ingest-bulk-days); '
-  'read only through measure_tom_observed(). The extra columns say why a day is here.';
+  'read only through measure_tom_observed(); published through refresh_matview(), which stamps '
+  'derived_artifacts. The extra columns say why a day is here.';
 
 revoke all on public.ingest_bulk_days from public, anon;
 grant select on public.ingest_bulk_days to authenticated, service_role;
+
+-- Corollary E: the artifact declares its producer, cadence and budget before it is ever
+-- populated (refresh_matview refuses an unregistered name). Two nights plus grace.
+insert into public.derived_artifacts
+  (name, producer, host, cadence, staleness_budget, is_serving)
+values ('ingest_bulk_days', 'refresh_matview', 'pg_cron',
+        '40 3 * * *', interval '50 hours', true)
+on conflict (name) do nothing;
+
+-- First populate through the ONE publication path (578): plain refresh when unpopulated,
+-- CONCURRENTLY afterwards, stamped either way.
+select public.refresh_matview('ingest_bulk_days');
 
 create or replace function public.measure_tom_observed(
   p_source text,
@@ -905,10 +919,10 @@ begin
   perform cron.schedule(
     'refresh-ingest-bulk-days',
     '40 3 * * *',
-    $$set statement_timeout='300s'; refresh materialized view concurrently public.ingest_bulk_days;$$
+    $$set statement_timeout='300s'; select public.refresh_matview('ingest_bulk_days');$$
   );
 exception when others then
-  raise notice 'pg_cron unavailable; refresh-ingest-bulk-days not scheduled (%). Refresh ingest_bulk_days on another scheduler.', sqlerrm;
+  raise notice 'pg_cron unavailable; refresh-ingest-bulk-days not scheduled (%). Call refresh_matview(''ingest_bulk_days'') from another scheduler.', sqlerrm;
 end
 $cron$;
 
@@ -938,6 +952,10 @@ begin
   if coalesce((select md5(prosrc) from pg_proc
                  where oid = to_regprocedure('public.properties_map_visible()')), '') <> '87ac5ed4f4c1eaaef58a06c9a4e42071' then
     raise exception '625: properties_map_visible() is not 590''s body after the map rebuild';
+  end if;
+  if not exists (select 1 from public.derived_artifacts
+                  where name = 'ingest_bulk_days' and last_succeeded_at is not null) then
+    raise exception '625: ingest_bulk_days is not registered and stamped';
   end if;
   select count(*) = 100000 into populated
     from (select 1 from public.properties limit 100000) probe;

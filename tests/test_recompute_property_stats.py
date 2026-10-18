@@ -1318,7 +1318,11 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
 
     codes = [o.value for o in PORTAL_OPTIONS]
     view = _latest_migration_defining("browse_projection").name
-    assert _columns(_sql(view), "browse_projection")[-(len(codes) + 3):] == [
+    columns = _columns(_sql(view), "browse_projection")
+    # One contiguous block, in PORTAL_OPTIONS order; later columns may follow it (584's recipe
+    # appends every new projection column LAST, so the block cannot be pinned to the end).
+    at = columns.index("all_sources")
+    assert columns[at:at + len(codes) + 3] == [
         "all_sources", "active_sources", "source_count", *(f"newest_ad_at_{c}" for c in codes)]
     rebuild = " ".join(latest_definition("rebuild_browse_list").read_text(encoding="utf-8").split())
     for c in codes:
