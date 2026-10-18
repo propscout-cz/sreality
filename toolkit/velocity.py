@@ -402,6 +402,7 @@ def _filters_used(
         "include_unreliable": filters.include_unreliable,
         "tom_days_min": filters.tom_days_min,
         "tom_days_max": filters.tom_days_max,
+        "tom_observed_only": filters.tom_observed_only,
         "last_seen_min_days": filters.last_seen_min_days,
         "last_seen_max_days": filters.last_seen_max_days,
         "first_seen_min_days": filters.first_seen_min_days,

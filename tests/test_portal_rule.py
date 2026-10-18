@@ -229,5 +229,8 @@ def test_the_projection_and_both_read_models_have_one_shape(conn) -> None:
     assert shapes["browse_list"] == shapes["browse_projection"] == shapes["properties_map_mv"]
     names = [n for n, _ in shapes["browse_projection"]]
     assert "asset_id" not in names
-    assert names[-12:] == ["all_sources", "active_sources", "source_count",
-                           *(f"newest_ad_at_{p}" for p in _PORTALS)]
+    # One contiguous block in portal order; later columns may follow it (584's recipe appends
+    # every new projection column LAST, so the block is not pinned to the end).
+    at = names.index("all_sources")
+    assert names[at:at + 12] == ["all_sources", "active_sources", "source_count",
+                                 *(f"newest_ad_at_{p}" for p in _PORTALS)]

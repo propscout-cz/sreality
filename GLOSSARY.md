@@ -54,6 +54,14 @@ _Avoid_: site, source (in prose)
 One kept version of an ad's content. A new snapshot exists only when the content changed.
 _Avoid_: version, revision, scrape
 
+**Sweep**:
+A day on which the platform first saw a portal category's existing stock all at once, rather than ads appearing one by one: the first walk of that category, or a catch-up after a gap.
+_Avoid_: backfill day, horizon, go-live day
+
+**Newly listed ad**:
+An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
+_Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
+
 ### Changing what belongs together
 
 **Merge**:

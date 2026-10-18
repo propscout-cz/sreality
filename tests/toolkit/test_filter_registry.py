@@ -132,6 +132,9 @@ def test_pg_columns_subset_of_known_listings_columns() -> None:
         # Migration 054 — time on market, published by every read model; the compiler spells
         # it over `listings` (LISTINGS_GRAIN.exprs).
         "tom_days",
+        # Migration 625 — "observed from the start", a Browse read-model column; the
+        # compiler spells measure_tom_observed() over `listings`.
+        "tom_observed",
         # Property-grain derived columns (migrations 091/095/173), exposed via
         # properties_public and filtered by the Browse property-grain RPC.
         # Not on `listings` — they aggregate across a property's children.
@@ -484,7 +487,7 @@ def test_sql_kind_snapshot() -> None:
     from collections import Counter
 
     counts = Counter(fr.sql_kind(f) for f in fr.all_filters())
-    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 32}
+    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 33}
     numeric_eq = {
         f.id for f in fr.all_filters()
         if f.type in (fr.FilterType.INT, fr.FilterType.FLOAT) and fr.sql_kind(f) == "eq"

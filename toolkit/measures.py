@@ -162,6 +162,16 @@ def tom_days_sql(alias: str) -> str:
     )
 
 
+def tom_observed_sql(alias: str) -> str:
+    """THE "observed from the start" measure over a `listings`-shaped alias (migration 625): true
+    when the ad's first sighting fell on no sweep day of its portal and category, so its TOM
+    counts from the day it appeared. The read model publishes it as `tom_observed`."""
+    return (
+        f"measure_tom_observed({alias}.source, {alias}.category_main, "
+        f"{alias}.category_type, {alias}.first_seen_at)"
+    )
+
+
 # --- the Python mirror ----------------------------------------------------
 
 

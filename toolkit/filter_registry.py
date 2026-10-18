@@ -388,7 +388,9 @@ SqlKind = Literal["eq", "any", "enum_or_unknown", "gte", "lte"]
 
 # Column-backed filters whose SQL is NOT "<column> <kind-op> value": a bucket that expands to
 # several column values, or a bound another filter rewrites. sql_kind() is None for them.
-COMPILED_BY_HOOK: frozenset[str] = frozenset({"building_material", "min_price_czk", "max_price_czk"})
+COMPILED_BY_HOOK: frozenset[str] = frozenset({
+    "building_material", "min_price_czk", "max_price_czk", "tom_observed_only",
+})
 
 
 def sql_kind(f: FilterDef) -> SqlKind | None:
@@ -833,6 +835,21 @@ def _build_registry() -> dict[str, FilterDef]:
             agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
             constraints={"min": 0},
             unit="days",
+        ),
+        FilterDef(
+            id="tom_observed_only",
+            type=FilterType.BOOL,
+            pg_column="tom_observed",  # a Browse read-model column; `listings` spells the measure (compiler hook)
+            default=False,
+            description=(
+                "When true, only ads whose time on market is observed from the start: "
+                "first seen on an ordinary day, not in a portal's first or catch-up sweep "
+                "of their category, so TOM counts from the day the ad appeared. "
+                "False or unset: no constraint."
+            ),
+            category=CATEGORY_VELOCITY,
+            ui_control=UiControl.BOOLEAN,
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
         ),
         FilterDef(
             id="last_seen_min_days",

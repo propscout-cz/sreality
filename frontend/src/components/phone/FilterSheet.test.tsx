@@ -207,6 +207,7 @@ const FILLED: ListingFilters = {
   lastSeenMaxDays: 2,
   tomDaysMin: 5,
   tomDaysMax: 60,
+  tomObservedOnly: true,
 };
 
 describe('a filled sheet in the URL', () => {

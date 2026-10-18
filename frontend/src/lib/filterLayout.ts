@@ -262,7 +262,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     keys: [
       'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
       'firstSeenMinDays', 'firstSeenMaxDays',
-      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
+      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax', 'tomObservedOnly',
     ],
     groups: [
       {
@@ -286,6 +286,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
             first_seen_min_days: 'First seen (days ago)',
             last_seen_min_days: 'Last seen (days ago)',
             tom_days_min: 'Time on market (days)',
+            tom_observed_only: 'Newly listed only',
           }),
         ],
       },

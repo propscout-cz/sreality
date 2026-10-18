@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
-from toolkit.measures import tom_days_sql
+from toolkit.measures import tom_days_sql, tom_observed_sql
 
 _ROOT = Path(__file__).resolve().parents[1]
 # 617 restated a fourth, listing_feed_public; migration 618 (merge sprint W6) dropped it.
@@ -112,3 +112,71 @@ def test_the_measure_inlines(cur: Any) -> None:
     )
     plan = "\n".join(r[0] for r in cur.fetchall())
     assert "measure_tom_days" not in plan, plan
+
+
+# --- "observed from the start" (migration 625) --------------------------------------------
+
+def test_the_projection_publishes_tom_observed_through_the_measure() -> None:
+    body = _effective_definition("browse_projection")
+    assert re.search(r"measure_tom_observed\(k\.source, k\.category_main, k\.category_type, k\.first_seen_at\)", body)
+    assert "as tom_observed" in body
+
+
+def test_the_only_filter_narrows_when_true_and_is_silent_otherwise() -> None:
+    from toolkit.filter_compiler import LISTINGS_GRAIN, compile_filter_where
+    from toolkit.measures import tom_observed_sql
+
+    assert compile_filter_where({"tom_observed_only": True}, LISTINGS_GRAIN) == (
+        [tom_observed_sql("l")], {})
+    for off in (False, None):
+        assert compile_filter_where({"tom_observed_only": off}, LISTINGS_GRAIN) == ([], {})
+
+
+@REQUIRED_DB
+def test_sweep_days_are_the_first_day_and_the_outliers(cur: Any) -> None:
+    """Seed one (portal, category) pair over three UTC days: the first day is a sweep by
+    definition, the next lone sighting is ordinary, and a 150-ad day beats greatest(100, 4 x the
+    pair's median) so it is a sweep too. Refreshed inside the rolled-back transaction."""
+    from tests._live_property import _advert, _property
+
+    source, main, kind = "maxima", "ostatni", "drazba"
+    cur.execute(
+        "SELECT count(*) FROM listings WHERE source = %s AND category_main = %s AND category_type = %s",
+        (source, main, kind),
+    )
+    assert cur.fetchone()[0] == 0, "the seeded pair must be empty for the medians to be known"
+
+    def seed(day: str, n: int) -> list[int]:
+        ids = []
+        for _ in range(n):
+            lid = _advert(cur, _property(cur), source=source)
+            cur.execute(
+                "UPDATE listings SET category_main = %s, category_type = %s, "
+                "first_seen_at = %s::timestamptz + interval '12 hours' WHERE id = %s",
+                (main, kind, day, lid),
+            )
+            ids.append(lid)
+        return ids
+
+    first_day, ordinary, sweep = seed("2026-03-01", 2), seed("2026-03-02", 1), seed("2026-03-03", 150)
+    cur.execute("REFRESH MATERIALIZED VIEW public.ingest_bulk_days")
+    cur.execute(
+        "SELECT day::text, is_first_day, sightings FROM ingest_bulk_days "
+        "WHERE source = %s AND category_main = %s AND category_type = %s ORDER BY day",
+        (source, main, kind),
+    )
+    assert cur.fetchall() == [("2026-03-01", True, 2), ("2026-03-03", False, 150)]
+
+    def observed(lid: int) -> bool:
+        cur.execute(
+            "SELECT measure_tom_observed(source, category_main, category_type, first_seen_at) "
+            "FROM listings WHERE id = %s", (lid,),
+        )
+        return cur.fetchone()[0]
+
+    assert observed(ordinary[0]) is True
+    assert observed(first_day[0]) is False
+    assert observed(sweep[0]) is False
+
+    cur.execute(f"SELECT {tom_observed_sql('l')} FROM listings l WHERE l.id = %s", (ordinary[0],))
+    assert cur.fetchone()[0] is True

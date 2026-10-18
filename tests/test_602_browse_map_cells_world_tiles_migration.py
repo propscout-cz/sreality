@@ -116,9 +116,10 @@ def test_the_answer_is_four_keys_and_bounded_by_construction() -> None:
 
 def test_the_latest_definitions() -> None:
     """605 restated both RPCs with this file's map body except the chip arms
-    (tests/test_one_place_predicate.py pins the swap)."""
-    assert latest_definition(FN).name == "605_street_chip_level.sql"
-    assert latest_definition("browse_stats_properties").name == "605_street_chip_level.sql"
+    (tests/test_one_place_predicate.py pins the swap); 625 restated 605's with one appended
+    parameter and one predicate (tom_observed_only)."""
+    assert latest_definition(FN).name == "625_tom_observed.sql"
+    assert latest_definition("browse_stats_properties").name == "625_tom_observed.sql"
 
 
 def test_the_receipt_probes_the_function() -> None:

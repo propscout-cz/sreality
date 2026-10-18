@@ -83,8 +83,8 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # pick filtered at its TOWN) became `ulice` (tests below). Re-read the chip arms
 # when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "605_street_chip_level.sql",
-    "browse_map_cells": "605_street_chip_level.sql",
+    "browse_stats_properties": "625_tom_observed.sql",
+    "browse_map_cells": "625_tom_observed.sql",
 }
 
 
@@ -207,7 +207,7 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
         assert new == [p for p in old if p not in gone] + [
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
-            "property_ids_excluded",
+            "property_ids_excluded", "tom_observed_only",
         ], f"{func}: parameter list changed"
         for chip_param in (
             "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",

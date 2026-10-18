@@ -412,6 +412,8 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
   if (f.lastSeenMinDays != null) r = r.lte('last_seen_at', isoNDaysAgo(f.lastSeenMinDays));
   if (f.firstSeenMaxDays != null) r = r.gte('first_seen_at', isoNDaysAgo(f.firstSeenMaxDays));
   if (f.firstSeenMinDays != null) r = r.lte('first_seen_at', isoNDaysAgo(f.firstSeenMinDays));
+  /* On/off: only ads whose TOM is observed from the start (migration 625). */
+  if (f.tomObservedOnly) r = r.eq('tom_observed', true);
   /* Status-section recency presets. "added" = first seen within N days;
    * "changed" = newest content snapshot (last_change_at) within N days. */
   if (f.recentlyAddedDays != null) r = r.gte('first_seen_at', isoNDaysAgo(f.recentlyAddedDays));
@@ -1301,6 +1303,7 @@ export const buildBrowseStatsArgs = (
     recently_changed_days:   f.recentlyChangedDays,
     tom_days_min:            f.tomDaysMin,
     tom_days_max:            f.tomDaysMax,
+    tom_observed_only:       f.tomObservedOnly,
     has_balcony_filter:      triToBool(f.hasBalcony),
     has_lift_filter:         triToBool(f.hasLift),
     has_parking_filter:      triToBool(f.hasParking),

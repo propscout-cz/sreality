@@ -274,11 +274,12 @@ def test_one_grain_serves_comparables_and_estimation() -> None:
 
 def test_velocity_compiles_under_comparables_on_purpose() -> None:
     """The agent's velocity tool passes the estimation's base filters, which carry the six
-    tom/seen bounds VELOCITY does not declare: gating on VELOCITY would raise there and
-    silently change agent estimates (api/agent.py turns the raise into a tool error)."""
+    tom/seen bounds and the observed-only switch VELOCITY does not declare: gating on VELOCITY
+    would raise there and silently change agent estimates (api/agent.py turns the raise into a
+    tool error)."""
     assert _ids(fr.Agenda.COMPARABLES) - _ids(fr.Agenda.VELOCITY) == {
-        "tom_days_min", "tom_days_max", "last_seen_min_days", "last_seen_max_days",
-        "first_seen_min_days", "first_seen_max_days",
+        "tom_days_min", "tom_days_max", "tom_observed_only", "last_seen_min_days",
+        "last_seen_max_days", "first_seen_min_days", "first_seen_max_days",
     }
     assert LISTINGS_GRAIN.agenda is fr.Agenda.COMPARABLES
 
