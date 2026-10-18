@@ -14,7 +14,10 @@ from autodedup.text_facts import (
     printed_floors_by_form,
     printed_unit_codes,
     reference_codes,
+    same_form_floor_gap,
     stated_areas,
+    subject_floors,
+    subject_floors_by_form,
     unit_designators,
 )
 
@@ -240,9 +243,37 @@ def test_the_np_noun_is_read_numbered_and_worded() -> None:
     october = "moderní stylový byt 3kk, který se nachází ve čtvrtém nadzemním podlaží secesního domu"
     assert printed_floors_by_form(may, True)["np"] == {3}
     assert printed_floors_by_form(october, True)["np"] == {4}
+    # The placement window reaches past the spelled-out noun.
+    assert subject_floors_by_form(may, True)["np"] == {3}
+    assert subject_floors_by_form(october, True)["np"] == {4}
 
 
-def test_a_bare_podlazi_is_not_the_np_noun() -> None:
-    """`v prvním podlaží` is written for the ground floor and for the one above it."""
-    assert printed_floors("bydlení je situováno v prvním podlaží", True) == frozenset()
-    assert printed_floors("byt ve třetím podlaží domu", True) == frozenset()
+def test_a_bare_podlazi_is_a_noun_of_its_own_on_the_np_scale() -> None:
+    """`v prvním podlaží` is written for the ground floor and for the one above it: it is read
+    as a storey, on the NP scale for a gap, and never as the NP noun itself."""
+    situated = printed_floors_by_form("bydlení je situováno v prvním podlaží", True)
+    assert situated["podlazi"] == {1} and situated["np"] == frozenset()
+    assert printed_floors("byt ve třetím podlaží domu", True) == {3}
+    assert subject_floors("Byt se nachází ve třetím podlaží domu.", True) == {3}
+    assert same_form_floor_gap(printed_floors_by_form("ve třetím podlaží", True),
+                               printed_floors_by_form("v 1. NP", True)) == 2
+    assert same_form_floor_gap(printed_floors_by_form("ve třetím podlaží", True),
+                               printed_floors_by_form("ve 3. patře", True)) is None
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Mezonetový byt 4+kk ve 2.-3. NP cihlového domu.", {2, 3}),
+        ("Mezonetový byt ve 2. a 3. NP.", {2, 3}),
+        ("Mezonet ve 2. – 3. NP.", {2, 3}),
+        ("Mezonet ve třetím a čtvrtém nadzemním podlaží.", {3, 4}),
+    ],
+)
+def test_a_maisonette_range_reads_both_storeys(text: str, expected: set[int]) -> None:
+    """E967: the last storey alone would split the range from the advert naming the entry."""
+    assert printed_floors(text, True) == expected
+
+
+def test_a_maisonette_range_is_placed_whole() -> None:
+    assert subject_floors("Mezonetový byt se nachází ve 2.-3. NP domu.", True) == {2, 3}
