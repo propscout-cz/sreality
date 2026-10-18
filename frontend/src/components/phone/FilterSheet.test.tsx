@@ -1,6 +1,7 @@
 /* The Filtry sheet: Browse's whole registry filter set on the phone, grouped as
  * the desktop sidebar groups it, every filter reachable (the registry walk), a
- * filled sheet surviving the URL, and Browse's count of the DRAFT in the footer. */
+ * filled sheet surviving the URL, Browse's count of the DRAFT in the footer, and
+ * save / update through the preset API in the shapes Browse writes. */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,11 +11,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as api from '@/lib/api';
 import { FEED_ALL_FILTERS, feedSearch, feedViewOf } from '@/lib/feed';
 import { BROWSE_FILTER_BANDS } from '@/lib/filterLayout';
 import { FILTER_REGISTRY } from '@/lib/filterRegistry.generated';
-import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
+import { DEFAULT_FILTERS, filtersForPreset, type ListingFilters } from '@/lib/filters';
 import * as queries from '@/lib/queries';
+import type { FilterPreset } from '@/lib/types';
 
 import FilterSheet from './FilterSheet';
 import { sheetBands } from './filterRows';
@@ -22,6 +25,8 @@ import { sheetBands } from './filterRows';
 const never = vi.hoisted(() => () => new Promise<never>(() => {}));
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
+  createFilterPreset: vi.fn(),
+  updateFilterPreset: vi.fn(),
   listCollections: vi.fn(never),
   listTags: vi.fn(never),
 }));
@@ -46,6 +51,16 @@ const NOT_ON_SHEET: Record<string, string> = {
 
 /* Every cohort-conditional group open: a house cohort shows Subtype, Prodej shows Yield. */
 const HOUSES_FOR_SALE: ListingFilters = { ...DEFAULT_FILTERS, categoryMain: ['dum'], categoryType: 'prodej' };
+
+const PRESET: FilterPreset = {
+  id: 'vys',
+  name: 'Vysočany byty',
+  filter_spec: { filters: { ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] }, sort: '-price_czk' },
+  created_at: '2026-10-01T00:00:00Z',
+  updated_at: '2026-10-01T00:00:00Z',
+  position: 0,
+  color: null,
+};
 
 beforeEach(() => {
   vi.mocked(queries.fetchBrowseCount).mockResolvedValue(42);
@@ -252,6 +267,65 @@ describe('the footer', () => {
     expect(within(sheet()).getByRole('button', { name: 'Vymazat' })).toBeDisabled();
     await user.click(within(sheet()).getByRole('button', { name: /^Zobrazit/ }));
     expect(onApply.mock.calls[0][0].filters).toEqual(base);
+  });
+
+  it('offers the preset menu only once the draft differs from its scope', async () => {
+    const user = userEvent.setup();
+    renderSheet();
+    expect(within(sheet()).queryByRole('button', { name: 'Předvolba' })).toBeNull();
+    await user.click(within(sheet()).getByRole('button', { name: /^Disposition/ }));
+    await user.click(within(sheet()).getByRole('button', { name: '2+kk' }));
+    expect(within(sheet()).getByRole('button', { name: 'Předvolba' })).toBeInTheDocument();
+  });
+});
+
+describe('presets from the phone', () => {
+  const presetBase = filtersForPreset({ ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] }, true);
+  const draft: ListingFilters = { ...presetBase, priceMax: 6_000_000, pipeline: { stage_ids: [] } };
+
+  it('saves the draft as a new preset — filters (lenses dropped) and the order — and selects it', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createFilterPreset).mockResolvedValue({ ...PRESET, id: 'new', name: 'Do 6 M' });
+    const { onApply } = renderSheet({ filters: draft, base: presetBase, preset: PRESET });
+    await user.click(within(sheet()).getByRole('button', { name: 'Předvolba' }));
+    const menu = screen.getByRole('dialog', { name: 'Předvolba' });
+    await user.type(within(menu).getByRole('textbox', { name: 'Název předvolby' }), 'Do 6 M');
+    await user.click(within(menu).getByRole('button', { name: 'Uložit' }));
+    await waitFor(() => expect(api.createFilterPreset).toHaveBeenCalled());
+    expect(vi.mocked(api.createFilterPreset).mock.calls[0][0]).toEqual({
+      name: 'Do 6 M',
+      filter_spec: { filters: filtersForPreset(draft, true), sort: '-first_seen_at' },
+      color: null,
+    });
+    /* The pipeline scope never rides into a preset (rule 22). */
+    expect(vi.mocked(api.createFilterPreset).mock.calls[0][0].filter_spec.filters.pipeline).toBeNull();
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'new' })));
+  });
+
+  it('updates the chosen preset in two steps, keeping its stored order', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.updateFilterPreset).mockResolvedValue(PRESET);
+    const { onApply } = renderSheet({ filters: draft, base: presetBase, preset: PRESET });
+    await user.click(within(sheet()).getByRole('button', { name: 'Předvolba' }));
+    const menu = screen.getByRole('dialog', { name: 'Předvolba' });
+    await user.click(within(menu).getByRole('button', { name: 'Aktualizovat předvolbu' }));
+    expect(api.updateFilterPreset).not.toHaveBeenCalled();
+    await user.click(within(menu).getByRole('button', { name: 'Přepsat' }));
+    await waitFor(() => expect(api.updateFilterPreset).toHaveBeenCalled());
+    expect(vi.mocked(api.updateFilterPreset).mock.calls[0]).toEqual([
+      'vys',
+      { filter_spec: { filters: filtersForPreset(draft, true), sort: '-price_czk' } },
+    ]);
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'vys' })));
+  });
+
+  it('offers no update while Vše is the scope', async () => {
+    const user = userEvent.setup();
+    renderSheet({ filters: { ...FEED_ALL_FILTERS, priceMax: 6_000_000 } });
+    await user.click(within(sheet()).getByRole('button', { name: 'Předvolba' }));
+    const menu = screen.getByRole('dialog', { name: 'Předvolba' });
+    expect(within(menu).queryByRole('button', { name: 'Aktualizovat předvolbu' })).toBeNull();
+    expect(within(menu).getByRole('textbox', { name: 'Název předvolby' })).toBeInTheDocument();
   });
 });
 

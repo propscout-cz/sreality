@@ -8,10 +8,16 @@
  * and every edit applies through the sidebar's `applySidebarUpdates`. The sheet
  * holds a DRAFT: "Zobrazit N nemovitostí" (N is Browse's count of the draft)
  * applies it to the feed's URL; "Zavřít" lets it go. The map-only group stays
- * out: the phone has no map. */
+ * out: the phone has no map.
+ *
+ * The footer's menu saves the draft as a new preset or writes it back into the
+ * chosen one (two steps), through the preset API Browse uses. A preset is its
+ * FILTERS on the phone (the feed opens every scope newest first), so an update
+ * keeps the preset's stored order; the pipeline scope and the dismissed reveal
+ * never ride into one (`filtersForPreset`, rule 22). */
 
-import { useEffect, useId, useState, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { FilterForm } from '@/components/FilterForm';
 import {
@@ -26,12 +32,16 @@ import { Segmented } from '@/components/controls';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import { AccountTagFilter } from '@/components/filter-controls/TagFilterControl';
+import { ApiError, createFilterPreset, updateFilterPreset } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { isNewestFirst, sortLabel, type FeedView } from '@/lib/feed';
 import { subtypeOptions } from '@/lib/filterLayout';
 import {
   applySidebarUpdates,
+  filtersEqualForPreset,
+  filtersForPreset,
   listingFiltersToRegistryView,
+  readPresetSpec,
   type ListingFilters,
 } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
@@ -39,6 +49,7 @@ import {
   CARD_SORTS,
   DEFAULT_SORT,
   fetchBrowseCount,
+  filterPresetKeys,
   parseSort,
   sortToParam,
   type SortSpec,
@@ -68,6 +79,8 @@ const COUNT_DEBOUNCE_MS = 350;
 
 const SORT_OPTIONS = CARD_SORTS.map((o) => ({ value: sortToParam(o.spec), label: o.label }));
 
+type PresetsResponse = { data: FilterPreset[]; total: number };
+
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
   useEffect(() => {
@@ -82,6 +95,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
   const [draftSort, setDraftSort] = useState(sort);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const [placeOpen, setPlaceOpen] = useState(false);
+  const [presetOpen, setPresetOpen] = useState(false);
 
   const settled = useDebounced(draft, COUNT_DEBOUNCE_MS);
   const countQ = useQuery({
@@ -104,9 +118,10 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
       return next;
     });
 
+  const modified = !filtersEqualForPreset(draft, base);
   const clearable = filtersBeyond(draft, base) > 0 || !isNewestFirst(draftSort);
-  const apply = () => {
-    onApply({ filters: draft, sort: draftSort, presetId: preset?.id ?? null });
+  const apply = (presetId: string | null = preset?.id ?? null) => {
+    onApply({ filters: draft, sort: draftSort, presetId });
     onClose();
   };
 
@@ -182,6 +197,17 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
       >
         Vymazat
       </button>
+      {modified && (
+        <button
+          type="button"
+          onClick={() => setPresetOpen(true)}
+          aria-haspopup="dialog"
+          aria-label="Předvolba"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] text-[var(--color-ink-2)] active:bg-[var(--color-inset)]"
+        >
+          <MoreIcon />
+        </button>
+      )}
       <button
         type="button"
         onClick={() => apply()}
@@ -268,6 +294,16 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
           </div>
         </BottomSheet>
       )}
+
+      {presetOpen && (
+        <PresetSheet
+          draft={draft}
+          sort={draftSort}
+          preset={preset}
+          onSaved={(id) => apply(id)}
+          onClose={() => setPresetOpen(false)}
+        />
+      )}
     </BottomSheet>
   );
 }
@@ -336,5 +372,143 @@ function Row({
         </div>
       )}
     </div>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden fill="currentColor">
+      <circle cx="5.5" cy="12" r="1.6" />
+      <circle cx="12" cy="12" r="1.6" />
+      <circle cx="18.5" cy="12" r="1.6" />
+    </svg>
+  );
+}
+
+const ROW = 'flex h-12 w-full items-center px-4 text-left text-[15px] text-[var(--color-ink-2)] active:bg-[var(--color-paper-2)]';
+const DIVIDER =
+  'border-t border-[var(--color-rule-soft)] px-4 pb-1 pt-3 text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)] first:border-t-0';
+const BUTTON =
+  'inline-flex h-9 items-center rounded-[var(--radius-sm)] border px-3 text-[13px] disabled:opacity-50';
+
+/* Save the draft as a new preset, or write it back into the chosen one. A tall
+ * sheet with the name field near the top, so the keyboard leaves it in view. */
+function PresetSheet({
+  draft,
+  sort,
+  preset,
+  onSaved,
+  onClose,
+}: {
+  draft: ListingFilters;
+  sort: SortSpec;
+  preset: FilterPreset | null;
+  onSaved: (presetId: string) => void;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  /* The cached list adopts the answer at once, so the chip is unmarked the moment the sheet closes. */
+  const adopt = (row: FilterPreset) => {
+    qc.setQueryData<PresetsResponse>(filterPresetKeys.all, (prev) => {
+      if (!prev) return prev;
+      const data = prev.data.some((p) => p.id === row.id)
+        ? prev.data.map((p) => (p.id === row.id ? row : p))
+        : [...prev.data, row];
+      return { data, total: data.length };
+    });
+    void qc.invalidateQueries({ queryKey: filterPresetKeys.all });
+    onSaved(row.id);
+  };
+  const create = useMutation({
+    mutationFn: (presetName: string) =>
+      createFilterPreset({
+        name: presetName,
+        filter_spec: { filters: filtersForPreset(draft, true), sort: sortToParam(sort) },
+        color: null,
+      }),
+    onSuccess: adopt,
+  });
+  const update = useMutation({
+    mutationFn: (p: FilterPreset) =>
+      updateFilterPreset(p.id, {
+        filter_spec: { filters: filtersForPreset(draft, true), sort: readPresetSpec(p.filter_spec).sort },
+      }),
+    onSuccess: adopt,
+  });
+  const failed = create.error ?? update.error;
+  const busy = create.isPending || update.isPending;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (name.trim()) create.mutate(name.trim());
+  };
+
+  return (
+    <BottomSheet label="Předvolba" onClose={onClose}>
+      <div className={`min-h-[60dvh] pb-2 ${NO_FOCUS_ZOOM}`}>
+        {preset && (
+          <>
+            <p className={DIVIDER}>„{preset.name}“</p>
+            {confirming ? (
+              <div className="flex flex-col gap-1 px-4 pb-1 pt-2">
+                <p className="text-[14px] font-medium text-[var(--color-ink)]">Přepsat předvolbu těmito filtry?</p>
+                <p className="text-[12px] leading-[1.45] text-[var(--color-ink-3)]">
+                  „{preset.name}“ bude všude, i na počítači, vybírat podle filtrů z tohoto okna.
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    autoFocus
+                    disabled={busy}
+                    onClick={() => update.mutate(preset)}
+                    className={`${BUTTON} border-[var(--color-copper)] bg-[var(--color-copper)] text-white`}
+                  >
+                    Přepsat
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirming(false)}
+                    className={`${BUTTON} border-[var(--color-rule-strong)] bg-[var(--color-paper)] text-[var(--color-ink-2)]`}
+                  >
+                    Zrušit
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setConfirming(true)} className={ROW}>
+                Aktualizovat předvolbu
+              </button>
+            )}
+          </>
+        )}
+        <p className={DIVIDER}>Uložit jako předvolbu</p>
+        <form onSubmit={submit} className="flex items-center gap-2 px-4 pt-2">
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            aria-label="Název předvolby"
+            placeholder="Název předvolby"
+            maxLength={200}
+            enterKeyHint="done"
+            className="h-11 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-3 text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
+          />
+          <button
+            type="submit"
+            disabled={busy || !name.trim()}
+            className={`${BUTTON} h-11 border-[var(--color-copper)] bg-[var(--color-copper)] text-white`}
+          >
+            Uložit
+          </button>
+        </form>
+        {failed && (
+          <p role="alert" className="px-4 pt-3 text-[13px] text-[var(--color-brick)]">
+            {failed instanceof ApiError ? failed.message : 'Předvolbu se nepodařilo uložit.'}
+          </p>
+        )}
+      </div>
+    </BottomSheet>
   );
 }
