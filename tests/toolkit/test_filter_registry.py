@@ -124,10 +124,10 @@ def test_pg_columns_subset_of_known_listings_columns() -> None:
         # Migration 133 — MF gross rental yield % (sale apartments).
         "mf_gross_yield_pct",
         # Migrations 534/535 — THE plot measure, published as a column on the
-        # Browse read model (browse_projection -> browse_list, properties_map_mv,
-        # listing_feed_public) because `area_m2` is the parcel for pozemek and
-        # `estate_area` is NULL on a third of active land. Not on `listings`:
-        # the API-side readers call plot_area_m2(...) there (toolkit.measures).
+        # Browse read model (browse_projection -> browse_list, properties_map_mv)
+        # because `area_m2` is the parcel for pozemek and `estate_area` is NULL
+        # on a third of active land. Not on `listings`: the API-side readers
+        # call plot_area_m2(...) there (toolkit.measures).
         "plot_area_m2",
         # Migration 054 — time on market, published by every read model; the compiler spells
         # it over `listings` (LISTINGS_GRAIN.exprs).
@@ -137,8 +137,7 @@ def test_pg_columns_subset_of_known_listings_columns() -> None:
         # Not on `listings` — they aggregate across a property's children.
         # (The merged price-change filters are synthetic — pg_column=None —
         # because the window picks among four count columns at query time.)
-        "distinct_site_count", "price_drop_count", "price_rise_count",
-        "max_price_drop_pct",
+        "price_drop_count", "price_rise_count", "max_price_drop_pct",
         # Source portal (migration 091); exposed on listings_public and
         # properties_public, filtered by the `portals` multiselect.
         "source",
