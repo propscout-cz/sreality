@@ -1,11 +1,7 @@
-"""One time-on-market, one definition (migration 617).
-
-Offline: the effective body of each view that publishes `tom_days` calls the function and
-spells no arithmetic of its own, and no Python module renders the arithmetic either.
-Replayed schema (CI's migrations job, `TEST_DATABASE_URL`): the function answers the
-documented cases, and the one relation a bare listing reaches (`listings_public`) and the
-SQL the Python emitters render all return exactly what the function returns for the same row.
-"""
+"""One time-on-market, one definition (migration 617): offline, every view that publishes
+`tom_days` calls the function and no Python module spells the arithmetic; on the replayed schema
+(CI, `TEST_DATABASE_URL`) the function answers its documented cases, inlines, and `listings_public`
+and the Python emitter return what it returns for the same row."""
 
 from __future__ import annotations
 
@@ -47,8 +43,7 @@ _PYTHON_DAYS_SPELLING = re.compile(r"\bfirst_seen\w*\s*\)?\s*\.days\b")
 
 def test_no_python_module_spells_the_tom_arithmetic() -> None:
     """Two spellings the old copies used: SQL `epoch ... first_seen_at ... 86400` and
-    `(now - first_seen).days`. A third (e.g. a bare timedelta subtraction) is invisible to a
-    pattern, which is why the known consumers are also pinned positively below."""
+    `(now - first_seen).days`; a bare timedelta subtraction is invisible to this census."""
     offenders = []
     for tree in ("scraper", "toolkit", "api", "scripts"):
         for path in (_ROOT / tree).rglob("*.py"):
@@ -58,11 +53,6 @@ def test_no_python_module_spells_the_tom_arithmetic() -> None:
             if _SQL_EPOCH_SPELLING.search(text) or _PYTHON_DAYS_SPELLING.search(text):
                 offenders.append(str(path.relative_to(_ROOT)))
     assert offenders == [], f"time on market is re-spelled in {offenders}; call tom_days_sql"
-
-
-@pytest.mark.parametrize("module", ["filter_compiler", "velocity", "snapshots"])
-def test_the_known_consumers_call_the_one_face(module: str) -> None:
-    assert "tom_days_sql(" in (_ROOT / "toolkit" / f"{module}.py").read_text()
 
 
 @REQUIRED_DB

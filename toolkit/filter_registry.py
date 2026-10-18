@@ -808,9 +808,9 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column="tom_days",  # a column of every read model; `listings` has none (compiler `exprs`)
             default=None,
             description=(
-                "Lower bound on time-on-market in days (`measure_tom_days`, migration 617). "
-                "TOM = (now - first_seen_at) for active rows, "
-                "(last_seen_at - first_seen_at) for delisted rows. "
+                "Lower bound on time-on-market in days. TOM = "
+                "(now - first_seen_at) for active ads, "
+                "(last_seen_at - first_seen_at) for inactive ads. "
                 "Inclusive."
             ),
             category=CATEGORY_VELOCITY,

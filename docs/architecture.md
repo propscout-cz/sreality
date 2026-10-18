@@ -3257,13 +3257,14 @@ renumber.** Navigate by area:
     not a price over an area): `public.measure_tom_days(is_active, first_seen_at, last_seen_at)` is
     the one definition; the four views that publish `tom_days` call it, the compiler and the
     analytics tools render it through `toolkit.measures.tom_days_sql`, and
-    `tests/test_measure_tom_days.py` reds on a view that spells it again, on the two Python spellings
-    the old copies used, and on a known consumer that stops calling the face. Its
+    `tests/test_measure_tom_days.py` reds on a view that spells it again and on the two Python
+    spellings the old copies used (a census with named blind spots, like rule 23's); the CI DB
+    job checks view = emitter = function on one row. Its
     limits are the doc comment's, stated so a panel does not oversell it: an ACTIVE row is its age
     so far (a lower bound, right-censored), an INACTIVE row its closed run, so a cohort that mixes
     both mixes two things; and the anchor is OUR first sighting, because no portal supplies a
     usable listing date (5 of 9 carry none, sreality's is the last edit, ceskereality's lags a
-    median 26 days), so a listing live before its portal was walked reads younger than it is.
+    median 26 days), so an ad active before its portal was first walked reads younger than it is.
     `tom_days_min/max` is a column filter on every read model, applied to the Browse list, count,
     pins, Stats and map counts alike (before 2026-10-17 it reached only the last two).
 

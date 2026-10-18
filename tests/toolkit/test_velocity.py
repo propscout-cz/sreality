@@ -232,11 +232,8 @@ def test_listing_velocity_listing_not_found():
 
 def test_listing_velocity_classification_fast():
     """Target listing with TOM lower than 25% of peers → 'fast'."""
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=2),    # first_seen: target TOM = 2
-        n,                        # last_seen
         True,                     # is_active
         "2+kk",
         50.0, 14.0,               # lat, lng
@@ -260,11 +257,8 @@ def test_listing_velocity_classification_fast():
 
 
 def test_listing_velocity_classification_stuck():
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=200),
-        n,
         True,
         "2+kk",
         50.0, 14.0,
@@ -285,11 +279,8 @@ def test_listing_velocity_classification_stuck():
 
 
 def test_listing_velocity_classification_typical():
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=20),
-        n,
         True,
         "2+kk",
         50.0, 14.0,
@@ -310,10 +301,9 @@ def test_listing_velocity_classification_typical():
 def test_listing_velocity_leaves_out_the_subjects_property():
     """Addressed by sreality_id, the subject's surrogate (read with it) leaves its whole
     property out of the peer cohort (decision 13)."""
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=10), n, True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
+        True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
     )
     peer_cur = _FakeCursor([])
     conn = _FakeConn(listing_cur, peer_cur)
@@ -325,10 +315,9 @@ def test_listing_velocity_leaves_out_the_subjects_property():
 
 
 def test_listing_velocity_thresholds_in_data():
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=10), n, True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
+        True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
     )
     peer_rows = [_row(i + 1, 10, 0, True) for i in range(10)]
     peer_cur = _FakeCursor(peer_rows)
@@ -343,10 +332,9 @@ def test_listing_velocity_all_tied_with_peers_is_typical():
 
     Pre-fix this was 100 (sum(p<=v)/n) and classified as 'stuck'.
     """
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=15), n, True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 15,
+        True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 15,
     )
     peer_rows = [_row(i + 1, 15, 0, True) for i in range(20)]
     peer_cur = _FakeCursor(peer_rows)
@@ -362,10 +350,9 @@ def test_listing_velocity_all_tied_with_peers_is_typical():
 
 def test_listing_velocity_median_among_mixed_peers_is_about_50():
     """Target TOM at the median of a mixed cohort lands near percentile 50."""
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=15), n, True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 15,
+        True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 15,
     )
     # 10 peers with TOM<15, 10 peers with TOM>15 -> mid-rank = 50
     peer_rows = (
@@ -383,10 +370,9 @@ def test_listing_velocity_median_among_mixed_peers_is_about_50():
 
 def test_listing_velocity_null_geom_returns_envelope_with_zero_cohort():
     """Listing with no geom can't build a peer cohort — return graceful envelope."""
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=12), n, True, "2+kk", None, None, "byt", "pronajem", 42, 12,
+        True, "2+kk", None, None, "byt", "pronajem", 42, 12,
     )
     conn = _FakeConn(listing_cur)
     res = compute_listing_velocity(conn, sreality_id=42)  # type: ignore[arg-type]
@@ -410,10 +396,9 @@ def test_listing_velocity_cohort_uses_subject_category():
     ComparableFilters: compute_listing_velocity now carries the
     subject's own category into the peer-cohort query.
     """
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=10), n, True, "4+1", 50.0, 14.0, "dum", "prodej", 42, 10,
+        True, "4+1", 50.0, 14.0, "dum", "prodej", 42, 10,
     )
     peer_cur = _FakeCursor([])
     conn = _FakeConn(listing_cur, peer_cur)
@@ -427,10 +412,9 @@ def test_listing_velocity_cohort_uses_subject_category():
 
 
 def test_listing_velocity_small_peer_cohort_emits_note():
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=10), n, True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
+        True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
     )
     peer_rows = [_row(i + 1, 10, 0, True) for i in range(3)]
     peer_cur = _FakeCursor(peer_rows)
@@ -447,10 +431,9 @@ def test_listing_velocity_small_peer_cohort_emits_note():
 def test_listing_velocity_by_listing_id_uses_id_arm_and_surrogate_exclude():
     """Addressed by listing_id: subject fetched via listings.id and its property excluded
     from its own peer cohort."""
-    n = _now()
     listing_cur = _FakeCursor()
     listing_cur._fetchone_row = (
-        n - timedelta(days=10), n, True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
+        True, "2+kk", 50.0, 14.0, "byt", "pronajem", 42, 10,
     )
     peer_cur = _FakeCursor([])
     conn = _FakeConn(listing_cur, peer_cur)
