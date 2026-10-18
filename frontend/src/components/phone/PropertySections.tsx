@@ -12,7 +12,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { SectionLabel } from '@/components/section';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
-import { contactState, prettyPhone, propertyBrokers, type ContactState } from '@/lib/brokers';
+import { prettyPhone, propertyBrokers } from '@/lib/brokers';
 import { listingKindParts } from '@/lib/enums';
 import {
   fmtArea,
@@ -299,25 +299,20 @@ export async function copyText(text: string, node: HTMLElement | null, what: str
 
 function ContactLine({
   kind,
-  state,
+  value,
 }: {
   kind: 'tel' | 'mailto';
-  state: ContactState;
+  value: string | null;
 }) {
   const ref = useRef<HTMLAnchorElement>(null);
   const word = kind === 'tel' ? 'telefon' : 'e-mail';
-  if (state.state === 'none') return null;
-  if (state.state === 'masked') {
-    return (
-      <p className="mt-2 font-mono text-[12px] text-[var(--color-ink-4)]">{word} · kontakt na vyžádání</p>
-    );
-  }
-  const shown = kind === 'tel' ? prettyPhone(state.value) : state.value;
+  if (!value) return null;
+  const shown = kind === 'tel' ? prettyPhone(value) : value;
   return (
     <div className="mt-2 flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] py-1 pl-3 pr-1">
       <a
         ref={ref}
-        href={`${kind}:${state.value}`}
+        href={`${kind}:${value}`}
         className="min-w-0 truncate font-mono text-[14px] tabular-nums text-[var(--color-ink)] [-webkit-user-select:all] [user-select:all]"
       >
         {shown}
@@ -392,8 +387,8 @@ export function BrokersSection({
                 </p>
               </div>
             </div>
-            <ContactLine kind="tel" state={contactState(b.primary_phone, b.has_phone)} />
-            <ContactLine kind="mailto" state={contactState(b.primary_email, b.has_email)} />
+            <ContactLine kind="tel" value={b.primary_phone} />
+            <ContactLine kind="mailto" value={b.primary_email} />
           </li>
         ))}
       </ul>

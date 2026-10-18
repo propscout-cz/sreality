@@ -2863,9 +2863,10 @@ renumber.** Navigate by area:
     buffers for step 1, then 207 execution + 436 planning buffers for step 2) and paid a second
     Railway round trip's ~270–410 ms floor to do it, serialized behind the first because its
     `broker_id`s came out of that response. The route itself stays for non-SPA consumers.
-    Widening it is not a PII widening: `listing_broker_public` is API-only under A6 (below) and
-    `toolkit.brokers.apply_pii_policy` masks on the column NAME, so both columns are swapped for
-    `has_email` / `has_phone` for every non-admin caller with no route change. **Migration 398 settles that for good:**
+    `listing_broker_public` is API-only under A6 (below). **Since 2026-10-18 (operator ruling) this
+    route is the one `/brokers` read that does NOT mask:** every signed-in caller gets the contact
+    values on the property page and the board card; the leaderboard, search and broker dossier still
+    swap them for `has_email` / `has_phone` for a non-admin. **Migration 398 settles that for good:**
     `listings_public`/`properties_public` still carry `broker_email`/`broker_phone` as columns
     (so PostgREST answers `?select=` with nulls instead of a 400, and the five matviews depending
     on `listings_public` survive) but project them as `null::text` — they were owner-rights views
@@ -2882,8 +2883,8 @@ renumber.** Navigate by area:
     no longer an *expected* failure, and the 42501 special case is gone. The read stays isolated
     from the board (broker data is an enrichment; a failure must not take stages/cards/images down)
     but every failure is now `console.error`'d, never silently expected (pinned by
-    `frontend/src/lib/pipelineBoard.test.ts`). A masked card keeps its broker name + firm and its
-    hover box says the contact is admin-only rather than omitting it. The helper chunks its id
+    `frontend/src/lib/pipelineBoard.test.ts`). The card's hover box lists name, firm and contact
+    (unmasked for every signed-in caller since 2026-10-18). The helper chunks its id
     list below the route's `MAX_BATCH` (1000) cap, which is a 422 on the whole batch — unchunked,
     a board past that size would lose EVERY card's broker rather than the overflow — and rejects a
     200 that carries no envelope (an SPA-fallback HTML page), a guard inherited from the deleted

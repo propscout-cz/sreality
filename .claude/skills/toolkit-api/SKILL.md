@@ -127,6 +127,9 @@ it (`api/`). They do not apply to the scraper.
    `has_email` / `has_phone` (matched on the column NAME, so a widened view can't leak)
    and stamps `metadata.pii_masked`, unless the caller is admin; `GET
    /brokers/{id}/contacts` is `require_admin` outright — there is no masked variant.
+   **One exception (operator ruling 2026-10-18):** `POST /brokers/by-listings` (property page + board card
+   broker list) unmasks for EVERY signed-in caller — `ListingBroker` carries `primary_*`, NULL = no channel;
+   `_UNMASKED_CALLS` in `tests/api/test_broker_routes.py` lists it, and every new `/brokers` route lands there or masked.
    Under the name rule sits a **shape rule**: a string value that is an email, or that is
    wholly a phone number, is redacted whichever column it arrives in (live brokers whose
    `display_name` IS their email address). The shape rule also reaches the PREDICATE, not
@@ -155,9 +158,8 @@ it (`api/`). They do not apply to the scraper.
    **deleted** (hydration sprint W6): migration 419 put `primary_email`/`primary_phone` on
    `listing_broker_public`, so `POST /brokers/by-listings` answers identity AND contact in
    one row and the SPA no longer chains a second, serialized `GET /brokers?ids=` to fetch
-   what the first read's join had already touched. `apply_pii_policy` covers the two new
-   columns automatically — it masks on the column NAME, which is exactly why widening a view
-   behind these routes needs no route change. `GET /brokers?ids=` itself stays, for the agent
+   what the first read's join had already touched. Its contact pair is unmasked for every
+   signed-in caller (the 2026-10-18 exception above). `GET /brokers?ids=` itself stays, for the agent
    and other non-SPA consumers; and
    the client treats 404 as an answer only when the body carries this module's own
    `broker not found` detail — any other 404 (edge, stale base URL, renamed route) must

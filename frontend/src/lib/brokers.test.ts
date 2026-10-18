@@ -278,6 +278,8 @@ describe('propertyBrokers', () => {
     broker_id,
     broker_display_name: `Makléř ${broker_id}`,
     broker_firm_label: null,
+    primary_email: null,
+    primary_phone: null,
   });
   const ad = (id: number, is_active = true) => ({ id, is_active });
 
