@@ -775,6 +775,12 @@ rules. Identify which one a task belongs to before you start.
   "Skryté" roll (`fetchDismissedCards`): Browse has no hidden-only lens, and the dismissed set
   may not ride in a URL, so it reads one page of the caller's dismissals at a time and those
   properties' card rows from the plain `browse_list`.
+  The feed's view lives in the URL exactly as Browse's (`lib/feed.ts` `feedSearch`: `toSearchParams`
+  + `sort` + `preset`, so one query string is one scope on either device; only an empty query
+  differs — on the feed it reopens the device's last view), and its Filtry sheet
+  (`components/phone/FilterSheet.tsx`, a lazy chunk) renders Browse's registry filters from the
+  sidebar's own layout table (`lib/filterLayout.ts`, which `FilterSidebar` draws too), each row the
+  desktop control applied through `applySidebarUpdates` — no phone-only semantics.
   `/pipeline` on the phone frame is `components/phone/PhonePipeline.tsx`, one swiped page per
   stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
   not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
