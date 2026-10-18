@@ -3,7 +3,7 @@
 **Program document. This file is the program's source of truth.**
 Status: decisions taken by the operator in a design interview on 2026-10-02/03 (four rounds, 48
 questions, Q1 left blank (MS2); the later Q49 and Q51: §8). **Approved by the operator on 2026-10-06 (PR
-#1693); the build is under way, wave by wave (roadmap/merge-sprint.md).** Rules MS1–MS23 are binding once approved and
+#1693); delivered: W0–W5 live 2026-10-03..08, W6 applied and merged 2026-10-18 (roadmap/merge-sprint.md).** Rules MS1–MS23 are binding once approved and
 supersede any design text, code comment or docstring that differs. Design detail per wave (inputs,
 not rules) is kept outside the repo in `~/merge-sprint-artifacts/`: `wf2/` designs and their
 skeptics, `wf3/` the non-interference check, `wf5/` and `wf7/` this plan's two reviews, `wf6/` the
@@ -507,7 +507,7 @@ that session; the two never-used indexes come from migrations 198 and 275.
 6. **Closed (W4).** The three properties that awaited splits (14655, 120548, 687023) were split by
    the operator with the letter split on 2026-10-04 (dedup addendum 6c). Since W4 a split routes
    every account's curation per letter and records only "different", only across letters.
-7. **W6 is built (2026-10-08) and waits for the operator's day** (`W6_RUNBOOK.md`). One ruling rides
+7. **W6 applied 2026-10-18 06:46 UTC (migration 618) and merged (PR #1732)** (`W6_RUNBOOK.md`). One ruling rides
    with it: `browse_list_mf(bigint)` is read only by `listing_feed_public` and is an orphan once the
    view goes; dropping it is one statement in 618's section 3 and one post-condition *(default:
    it stays)*. Built with it: the drift check retires an object a later migration drops
