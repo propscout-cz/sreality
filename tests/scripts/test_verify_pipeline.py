@@ -7,9 +7,11 @@ unmeasured paths, persistence, and the pure status-derivation helpers.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import io
 import json
+import re
 import pytest
 from typing import Any
 
@@ -30,7 +32,6 @@ from scripts.verify_pipeline import (
     _status_for_cron,
     _status_for_burn,
     _status_for_llm_errors,
-    _status_for_worker,
     load_thresholds,
     run_checks,
 )
@@ -104,7 +105,7 @@ def test_burn_rate_thresholds() -> None:
     assert _status_for_burn(fail + 1, warn, fail) == "fail"    # runaway burn -> email
 
 
-# --- db_saturation / worker_liveness (new blind-spot detectors) ------------
+# --- db_saturation (a blind-spot detector) ---------------------------------
 
 
 def test_cron_flags_only_jobs_over_rate_with_enough_runs() -> None:
@@ -122,13 +123,6 @@ def test_cron_all_healthy_is_ok() -> None:
     jobs = [{"jobname": "browse-list-rebuild", "ok": 71, "failed": 1}]
     assert _status_for_cron(jobs, 0.5) == ("ok", [])
     assert _status_for_cron([], 0.5) == ("ok", [])  # no jobs in window → ok
-
-
-def test_worker_liveness_fails_only_when_stale() -> None:
-    assert _status_for_worker([("realtime-worker", 0.2)], stale_minutes=5) == ("ok", [])
-    assert _status_for_worker([], 5) == ("ok", [])  # no worker deployed → not this check's job
-    status, stale = _status_for_worker([("realtime-worker", 42.0)], 5)
-    assert status == "fail" and stale == ["realtime-worker (42m)"]
 
 
 def test_property_maintenance_healthy_day_is_ok() -> None:
@@ -268,8 +262,8 @@ def test_broker_resolution_catches_the_rotation_that_stopped_advancing() -> None
 def test_broker_sweep_axis_is_reachable_as_fail_before_any_lap_closes() -> None:
     """Without the open-lap fallback a rotation that NEVER completes a lap would sit
     on the missing-stamp warn forever, and warn rings nothing: the ladder opens an
-    incident on fail only, and --exit-nonzero-on-fail only exits on an alarm's fail. The check
-    would have been inert for exactly the condition it was written for."""
+    incident on fail only. The check would have been inert for exactly the condition it
+    was written for."""
     from scripts.verify_pipeline import _status_for_broker_resolution
 
     label = "open rotation lap (no lap closed yet)"
@@ -348,9 +342,8 @@ _FINISH_SPREAD_H = 2.5
 def test_one_missed_night_warns_and_two_fail() -> None:
     """The calibration this axis was sized for, pinned on BOTH sides. A single
     missed night is 48h plus the finish spread — up to ~50.5h — so a fail line at
-    50 failed the alarm for it: an onset notice from
-    the ladder plus a non-zero exit from --exit-nonzero-on-fail, a
-    second email for the night the sweep's own red run already reported. Two missed
+    50 failed the alarm for it: an onset notice from the ladder for the night the
+    sweep's own red run already reported. Two missed
     nights are >=69.5h even when the recovery run finishes at its earliest, so the
     fail line has to live strictly between the two — which is what makes the axis
     mean 'the tail has stopped', not 'a night was skipped'."""
@@ -610,8 +603,6 @@ def test_every_result_carries_the_time_its_check_took() -> None:
     assert isinstance(slow["details"]["elapsed_ms"], int)
     assert slow["details"]["elapsed_ms"] >= 20
     assert isinstance(boom["details"]["elapsed_ms"], int)
-    (unreached,) = run_checks(None, {}, checks=[_stub("late", _slow)], lane_budget_s=-1.0)
-    assert unreached["details"]["elapsed_ms"] == 0
 
 
 # --- W0.3: currently_failing is derived from STATE, not recency -------------
@@ -945,20 +936,146 @@ def test_a_timed_out_check_is_unknown_rather_than_failing() -> None:
     (result,) = run_checks(None, {}, checks=[_stub("slow", _cancelled)])
     assert result["status"] == "unknown"
     assert result["details"]["timed_out"] is True
+    assert result["details"]["budget_seconds"] == 45.0
+    assert result["details"]["elapsed_seconds"] >= 0
     assert "Not measured" in result["message"]
 
 
-def test_lane_budget_exhaustion_marks_the_rest_unknown_not_healthy() -> None:
-    checks = [
-        _stub("first", lambda c, t: {"check_key": "first", "status": "ok", "value": 1,
-                                     "details": {}}),
-        _stub("second", lambda c, t: {"check_key": "second", "status": "ok", "value": 1,
-                                      "details": {}}),
-    ]
-    # A budget already spent by the time the loop starts.
-    results = run_checks(None, {}, checks=checks, lane_budget_s=-1.0)
-    assert [r["status"] for r in results] == ["unknown", "unknown"]
-    assert all(r["details"]["not_run"] for r in results)
+class _Clock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def _on_the_clock(monkeypatch: Any) -> _Clock:
+    """Point the harness's wall clock at a fake one."""
+    import types
+
+    import scripts.verify_pipeline as vp
+
+    clock = _Clock()
+    from scripts.checks import clock as lane_clock
+
+    fake = types.SimpleNamespace(monotonic=clock.monotonic)
+    monkeypatch.setattr(vp, "_time", fake)
+    monkeypatch.setattr(lane_clock, "_time", fake)  # the lane's deadlines live in the clock module
+    return clock
+
+
+class _TimedConn:
+    """Each statement takes its scripted seconds on the fake clock and, like Postgres, is
+    cancelled once they pass the SET LOCAL statement_timeout armed before it."""
+
+    def __init__(self, clock: _Clock, seconds: list[float]) -> None:
+        self.clock = clock
+        self.seconds = list(seconds)
+        self.timeouts_ms: list[int] = []
+        self.ran: list[str] = []
+
+    def transaction(self) -> "_TimedConn":
+        return self
+
+    def cursor(self) -> "_TimedConn":
+        return self
+
+    def __enter__(self) -> "_TimedConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        import psycopg
+
+        armed = re.fullmatch(r"SET LOCAL statement_timeout = '(\d+)ms'", sql)
+        if armed:
+            self.timeouts_ms.append(int(armed.group(1)))
+            return
+        took, limit = self.seconds.pop(0), self.timeouts_ms[-1] / 1000.0
+        if took > limit:
+            self.clock.now += limit
+            raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+        self.clock.now += took
+        self.ran.append(sql)
+
+    def fetchall(self) -> list[Any]:
+        return []
+
+
+def _statements(key: str, n: int, *, budget_s: float = 45.0) -> Check:
+    """A check that sends `n` statements through the harness's bounded helper."""
+    import scripts.verify_pipeline as vp
+
+    def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+        for i in range(n):
+            vp._fetchall(conn, f"select {i} -- {key}")
+        return {"check_key": key, "status": "ok", "value": n, "details": {}}
+
+    return _stub(key, _fn, budget_s=budget_s)
+
+
+def test_a_check_spends_its_budget_once_across_all_its_statements(monkeypatch: Any) -> None:
+    """One fixed timeout per statement let a check of N statements take N budgets
+    (dual_write_parity ran p50 57 s on 45 s). Each statement now gets what the check has
+    LEFT, never under 1 s (0 would switch the timeout off): the first of three statements
+    takes 1.5 of a 2 s budget, so the second gets the 1 s floor, is cancelled there, and the
+    check stops 0.5 s past its budget instead of running on to the third."""
+    import scripts.verify_pipeline as vp
+
+    conn = _TimedConn(_on_the_clock(monkeypatch), [1.5, 1.5, 0.1])
+    checks = [_statements("three", 3, budget_s=2.0)]
+    stored: list[dict[str, Any]] = []
+    (result,) = run_checks(conn, {}, checks=checks, on_result=stored.append,
+                           lane_budget_s=vp.lane_budget_for(checks))
+    assert conn.timeouts_ms == [2000, 1000]
+    assert conn.ran == ["select 0 -- three"]
+    assert result["status"] == "unknown" and result["details"]["timed_out"] is True
+    assert result["details"]["budget_seconds"] == 2.0
+    assert result["details"]["elapsed_seconds"] == 2.5  # >= the 1.5 s it had spent
+    assert stored == [result], "a timed-out check is stored: it ran and measured nothing"
+
+
+def test_the_lane_remainder_still_caps_a_checks_deadline(monkeypatch: Any) -> None:
+    """A check is owed its own budget only while the lane still has it: the second check
+    below is declared 45 s but starts with 2 s of the lane left."""
+    conn = _TimedConn(_on_the_clock(monkeypatch), [2.0, 0.5])
+    out = run_checks(conn, {}, checks=[_statements("first", 1), _statements("second", 1)],
+                     lane_budget_s=4.0)
+    assert conn.timeouts_ms == [4000, 2000]
+    assert [r["status"] for r in out] == ["ok", "ok"]
+
+
+def test_a_budget_exhausted_lane_writes_no_row_for_the_checks_it_did_not_reach(
+    monkeypatch: Any, caplog: Any,
+) -> None:
+    """A check the lane never reached measured nothing and stores nothing, so it stays due
+    and the next run (on the worker, the next minute) measures it. Its old `not_run` row
+    made it look measured and pushed its next measurement a whole cadence out."""
+    import logging
+
+    clock = _on_the_clock(monkeypatch)
+
+    def _spends(key: str, seconds: float) -> Check:
+        def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+            clock.now += seconds  # Python-side time no statement_timeout can cut short
+            return {"check_key": key, "status": "ok", "value": 1, "details": {}}
+        return _stub(key, _fn, budget_s=2.0)
+
+    caplog.set_level(logging.WARNING, logger="verify_pipeline")
+    stored: list[str] = []
+    checks = [_spends("first", 6.5), _spends("second", 0.1), _spends("third", 0.1)]
+    results = run_checks(None, {}, checks=checks, lane_budget_s=6.0,
+                         on_result=lambda r: stored.append(r["check_key"]))
+    assert [r["check_key"] for r in results] == stored == ["first"]
+    assert "not reached, so still due: second, third" in caplog.text
+    # A budget already spent by the time the loop starts reaches nothing at all.
+    assert run_checks(None, {}, checks=checks, lane_budget_s=-1.0,
+                      on_result=lambda r: stored.append(r["check_key"])) == []
+    assert stored == ["first"]
 
 
 def test_lane_budget_is_reset_after_a_run() -> None:
@@ -966,42 +1083,30 @@ def test_lane_budget_is_reset_after_a_run() -> None:
     timeout to whatever the previous run had left."""
     import scripts.verify_pipeline as vp
 
-    run_checks(None, {}, checks=[], lane_budget_s=5.0)
-    assert vp._LANE.deadline is None
-    assert vp._LANE.statement_timeout_ms == vp._DEFAULT_STATEMENT_TIMEOUT_MS
+    run_checks(None, {}, checks=[_stub("a", lambda c, t: {"check_key": "a", "status": "ok",
+                                                          "value": 0, "details": {}})],
+               lane_budget_s=5.0)
+    assert vp._LANE.deadline is None and vp._LANE.check_deadline is None
+    assert vp._LANE.statement_timeout_ms() == vp._DEFAULT_STATEMENT_TIMEOUT_MS
 
 
-def test_per_check_statement_timeout_is_capped_by_the_lane_remainder() -> None:
-    import scripts.verify_pipeline as vp
-
-    seen: list[float] = []
-
-    def _peek(conn: Any, thresholds: Any) -> dict[str, Any]:
-        seen.append(vp._LANE.statement_timeout_ms)
-        return {"check_key": "peek", "status": "ok", "value": 0, "details": {}}
-
-    # Lane has 2s left but the check's own budget is 45s -> the lane wins.
-    run_checks(None, {}, checks=[_stub("peek", _peek, budget_s=45.0)], lane_budget_s=2.0)
-    assert 0 < seen[0] <= 2000
-
-
-def test_each_check_runs_under_its_own_budget() -> None:
+def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     """The outbound probes get 120 s, the database checks 45 s: the statement timeout a
     check runs under is ITS budget, not one lane-wide number."""
     import scripts.verify_pipeline as vp
 
-    seen: dict[str, float] = {}
+    _on_the_clock(monkeypatch)
+    seen: dict[str, str] = {}
 
     def _peek(key: str) -> Any:
         def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
-            seen[key] = vp._LANE.statement_timeout_ms
+            seen[key] = vp._statement_timeout_clause()
             return {"check_key": key, "status": "ok", "value": 0}
         return _fn
 
     checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
-    assert seen["db"] == 45_000
-    assert 119_000 < seen["probe"] <= 120_000
+    assert seen == {"db": "45000ms", "probe": "120000ms"}
     assert _by_key("sreality_image_template").budget_s == 120.0
     assert _by_key("outbound_url_conformance").budget_s == 120.0
     assert {c.budget_s for c in CHECKS[:-2]} == {vp._CHECK_BUDGET_S}
@@ -1014,18 +1119,30 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     from scripts import verify_pipeline as vp
 
     keys = _keys()
-    assert len(keys) == len(set(keys)) == 29
+    assert len(keys) == len(set(keys)) == 28
     for c in CHECKS:
         assert c.label.strip(), c.key
         assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
         assert c.domain in vp.DOMAINS, c.key
         assert c.host in vp.HOSTS, c.key
-        assert c.host == "github-actions", f"{c.key}: wave 1 moves no check off GitHub"
+        assert c.host == "github-actions", f"{c.key}: waves 1-2 move no check off GitHub"
         assert isinstance(c.cadence_s, int) and c.cadence_s > 0, c.key
         assert c.budget_s > 0, c.key
         assert c.owner_path == "" or c.owner_path.startswith("/"), c.key
         # a body wired under the wrong key would store its rows under another check's name
         assert c.fn.__name__ == f"check_{c.key}", c.key
+
+
+def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
+    """Wave 2: the pg_cron watcher's `worker` cell (migration 620) reads the heartbeat every
+    5 min; the GitHub-hosted check sampled it every ~4.9 h, so it caught an outage of length
+    D with a probability of about D / 4.9 h. The three hosts stay as they are."""
+    from scripts import verify_pipeline as vp
+
+    assert "worker_liveness" not in _keys()
+    assert "worker_stale_fail_minutes" not in DEFAULT_THRESHOLDS
+    assert not hasattr(vp, "check_worker_liveness")
+    assert vp.HOSTS == ("realtime-worker", "github-actions", "pg_cron")
 
 
 def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() -> None:
@@ -1039,12 +1156,12 @@ def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() 
 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
-    """Wave 1 moves no measurement: the hourly lane's seven stay hourly, the image probe
-    daily, the URL probe weekly, everything else 6-hourly."""
+    """Waves 1-2 move no measurement: the hourly lane's six left stay hourly, the image
+    probe daily, the URL probe weekly, everything else 6-hourly."""
     hourly = {c.key for c in CHECKS if c.cadence_s == 3_600}
     assert hourly == {
-        "llm_errors", "llm_burn_rate", "db_saturation", "worker_liveness",
-        "property_maintenance", "broker_resolution_freshness", "broker_merge_suppression",
+        "llm_errors", "llm_burn_rate", "db_saturation", "property_maintenance",
+        "broker_resolution_freshness", "broker_merge_suppression",
     }
     assert _by_key("sreality_image_template").cadence_s == 86_400
     assert _by_key("outbound_url_conformance").cadence_s == 604_800
@@ -1249,7 +1366,7 @@ def test_projection_inserts_every_check_of_its_host_with_its_metadata() -> None:
     from scripts.verify_pipeline import project_registry
 
     conn = _HealthChecksConn()
-    assert project_registry(conn, "github-actions", _NOW) == {"upserted": 29, "deleted": 0}
+    assert project_registry(conn, "github-actions", _NOW) == {"upserted": 28, "deleted": 0}
     assert list(conn.table) == _keys()
     for sort, c in enumerate(CHECKS):
         row = conn.table[c.key]
@@ -1340,7 +1457,145 @@ def test_a_stored_result_without_a_message_adds_none() -> None:
     assert json.loads(conn.calls[0][1][4]) == {}
 
 
-# --- main(): one flow, and only an alarm reds the run ------------------------------------
+# --- run_due: what is due, alarms first, stored as it lands ---------------------------------
+
+
+class _ResultsConn:
+    """An in-memory pipeline_check_results behind due_checks' read and insert_result's write."""
+
+    def __init__(self, newest: dict[str, _dt.datetime] | None = None) -> None:
+        self.rows: list[tuple[str, _dt.datetime]] = list((newest or {}).items())
+        self._out: list[tuple[Any, ...]] = []
+
+    def cursor(self) -> "_ResultsConn":
+        return self
+
+    def __enter__(self) -> "_ResultsConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        if sql.startswith("INSERT INTO pipeline_check_results"):
+            self.rows.append((params[1], params[0]))
+            return
+        assert "max(r.run_at)" in sql, sql
+        self._out = [(k, max((at for key, at in self.rows if key == k), default=None))
+                     for k in params["keys"]]
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._out
+
+
+def _logging_check(key: str, log: list[str], *, cls: str = "alarm",
+                   host: str = "github-actions") -> Check:
+    """A stub check that notes when it runs."""
+    def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+        log.append(f"run:{key}")
+        return {"check_key": key, "status": "ok", "value": 0, "details": {}}
+
+    return _stub(key, _fn, cls=cls, host=host)
+
+
+def test_the_harness_projects_only_hosts_that_declare_a_check(monkeypatch: Any) -> None:
+    """pg_cron's registry row is the watcher's own (migration 620): projecting that host would
+    retire it, and the ladder would silently close every open liveness incident as retired."""
+    from scripts import verify_pipeline as vp
+
+    assert "github-actions" in vp._HARNESS_HOSTS and "pg_cron" not in vp._HARNESS_HOSTS
+    with pytest.raises(ValueError, match="pg_cron"):
+        vp.project_registry(object(), "pg_cron", _NOW)
+    with pytest.raises(SystemExit):
+        _run_main(monkeypatch, ["--host", "pg_cron"], [])
+
+
+def test_run_due_measures_only_the_due_checks_alarms_before_gauges(monkeypatch: Any) -> None:
+    """Alarms are what a red means, so a pass that runs short spends its budget on them;
+    inside each class the registry order is the priority."""
+    import scripts.verify_pipeline as vp
+
+    log: list[str] = []
+    monkeypatch.setattr(vp, "CHECKS", (
+        _logging_check("gauge_a", log, cls="gauge"), _logging_check("alarm_a", log),
+        _logging_check("fresh", log), _logging_check("gauge_b", log, cls="gauge"),
+        _logging_check("alarm_b", log), _logging_check("worker", log, host="realtime-worker"),
+    ))
+    conn = _ResultsConn({"fresh": _NOW - _dt.timedelta(minutes=10)})
+    out = vp.run_due(conn, {}, "github-actions", now=_NOW)
+    assert log == ["run:alarm_a", "run:alarm_b", "run:gauge_a", "run:gauge_b"]
+    assert [r["check_key"] for r in out] == ["alarm_a", "alarm_b", "gauge_a", "gauge_b"]
+
+
+def test_run_due_hands_each_result_on_the_moment_it_completes(monkeypatch: Any) -> None:
+    import scripts.verify_pipeline as vp
+
+    log: list[str] = []
+    monkeypatch.setattr(vp, "CHECKS", (_logging_check("a", log), _logging_check("b", log)))
+
+    def _sink(conn: Any, result: dict[str, Any], run_at: _dt.datetime) -> None:
+        assert run_at == _NOW, "every row carries its run's start"
+        log.append(f"stored:{result['check_key']}")
+
+    vp.run_due(_ResultsConn(), {}, "github-actions", now=_NOW, on_result=_sink)
+    assert log == ["run:a", "stored:a", "run:b", "stored:b"]
+
+
+def test_run_due_caps_the_pass_at_the_lane_budget_it_is_given(monkeypatch: Any) -> None:
+    """The worker's health lane (wave 3) runs it under a 300 s pass; by default the due budgets sum."""
+    import scripts.verify_pipeline as vp
+
+    log: list[str] = []
+    monkeypatch.setattr(vp, "CHECKS", (_logging_check("a", log), _logging_check("b", log)))
+    seen: list[float] = []
+    real = vp.run_checks
+
+    def _spy(conn: Any, thresholds: Any, **kw: Any) -> Any:
+        seen.append(kw["lane_budget_s"])
+        return real(conn, thresholds, **kw)
+
+    monkeypatch.setattr(vp, "run_checks", _spy)
+    vp.run_due(_ResultsConn(), {}, "github-actions", now=_NOW)
+    vp.run_due(_ResultsConn(), {}, "github-actions", now=_NOW, lane_budget_s=10.0)
+    assert seen == [2 * vp._CHECK_BUDGET_S, 10.0]
+
+
+def test_a_restarted_lane_measures_nothing_twice(monkeypatch: Any) -> None:
+    """Due-ness is read from the stored results, never held in the process, so a lane that
+    restarts (a deploy, a crash, the next 60 s tick) re-measures nothing it already measured
+    this cadence, and measures it again once the cadence has passed."""
+    import scripts.verify_pipeline as vp
+
+    log: list[str] = []
+    monkeypatch.setattr(vp, "CHECKS", (_logging_check("a", log), _logging_check("b", log)))
+    conn = _ResultsConn()
+    assert [r["check_key"] for r in vp.run_due(conn, {}, "github-actions", now=_NOW)] == ["a", "b"]
+    assert vp.run_due(conn, {}, "github-actions", now=_NOW + _dt.timedelta(minutes=1)) == []
+    assert log == ["run:a", "run:b"]
+    vp.run_due(conn, {}, "github-actions", now=_NOW + _dt.timedelta(hours=1))
+    assert log == ["run:a", "run:b", "run:a", "run:b"]
+
+
+def test_a_check_the_budget_did_not_reach_is_due_on_the_next_run(monkeypatch: Any) -> None:
+    import scripts.verify_pipeline as vp
+
+    clock = _on_the_clock(monkeypatch)
+    log: list[str] = []
+
+    def _overruns(conn: Any, thresholds: Any) -> dict[str, Any]:
+        clock.now += 100.0  # past the whole pass budget, outside any statement
+        return {"check_key": "slow", "status": "ok", "value": 0, "details": {}}
+
+    monkeypatch.setattr(vp, "CHECKS", (_stub("slow", _overruns), _logging_check("late", log)))
+    conn = _ResultsConn()
+    assert [r["check_key"] for r in vp.run_due(conn, {}, "github-actions", now=_NOW)] == ["slow"]
+    assert [key for key, _ in conn.rows] == ["slow"] and log == []
+    later = _NOW + _dt.timedelta(minutes=1)
+    assert [c.key for c in vp.due_checks(conn, "github-actions", later)] == ["late"]
+    assert [r["check_key"] for r in vp.run_due(conn, {}, "github-actions", now=later)] == ["late"]
+
+
+# --- main(): one flow, and its exit code never reflects a check ----------------------------
 
 
 class _MainConn:
@@ -1423,16 +1678,16 @@ def test_main_dry_run_projects_nothing_and_stores_nothing(monkeypatch: Any) -> N
     assert seen["order"] == ["due:github-actions"] and seen["inserted"] == []
 
 
-def test_only_a_failing_alarm_reds_the_run(monkeypatch: Any) -> None:
-    """The hourly lane now measures every due check, standing gauges included; a gauge is
-    told once a day by the ladder and must not turn GitHub's failure email into noise."""
-    flag = ["--exit-nonzero-on-fail"]
+def test_no_measured_status_reds_the_run(monkeypatch: Any) -> None:
+    """The canary's assertions (scripts/health_canary.py) are the one way a monitoring run
+    goes red; a measured Problem is the ladder's to tell. The exit flag is gone, so passing
+    it is refused rather than silently ignored."""
     gauge = _returning("g", "fail", cls="gauge")
-    assert _run_main(monkeypatch, flag, [gauge, _returning("a", "ok")])[0] == 0
-    assert _run_main(monkeypatch, flag, [gauge, _returning("a", "fail")])[0] == 1
-    assert _run_main(monkeypatch, flag, [_returning("a", "warn"),
-                                         _returning("b", "unknown")])[0] == 0
-    assert _run_main(monkeypatch, [], [_returning("a", "fail")])[0] == 0
+    assert _run_main(monkeypatch, [], [gauge, _returning("a", "fail")])[0] == 0
+    assert _run_main(monkeypatch, [], [_returning("a", "warn"),
+                                       _returning("b", "unknown")])[0] == 0
+    with pytest.raises(SystemExit):
+        _run_main(monkeypatch, ["--exit-nonzero-on-fail"], [_returning("a", "fail")])
 
 
 # --- R2 dual-write parity --------------------------------------------------
@@ -2258,6 +2513,12 @@ class _RowsConn:
         return list(self._rows)
 
 
+def _queries(conn: _RowsConn) -> list[tuple[str, Any]]:
+    """The statements a check sent, less the SET LOCAL statement_timeout armed before each."""
+    return [(sql, params) for sql, params in conn.executed
+            if not sql.startswith("SET LOCAL statement_timeout")]
+
+
 def test_acquisition_lag_ok_when_every_portal_is_current() -> None:
     conn = _RowsConn([("bazos", 8, 1.6, 1.3), ("realitymix", 123, 0.8, 0.1)])
     out = check_acquisition_lag(conn, T)
@@ -2290,7 +2551,7 @@ def test_acquisition_lag_queries_the_new_class_only() -> None:
     hours" check needs a baseline that the outage itself erodes."""
     conn = _RowsConn([])
     check_acquisition_lag(conn, T)
-    sql, params = conn.executed[0]
+    (sql, params), = _queries(conn)
     assert "listing_detail_queue" in sql
     assert "claimed_at is null" in sql and "given_up = false" in sql
     assert params == (0,)  # db.QUEUE_PRIORITY_NEW
@@ -2543,6 +2804,9 @@ class _DriftConn:
         self._default = default
         self.probed: list[tuple[str, str]] = []
 
+    def transaction(self) -> "_DriftConn":
+        return self
+
     def cursor(self) -> "_DriftConn":
         return self
 
@@ -2553,6 +2817,8 @@ class _DriftConn:
         return None
 
     def execute(self, sql: str, params: Any = None) -> None:
+        if sql.startswith("SET LOCAL statement_timeout"):
+            return
         self.probed = list(zip(params["kinds"], params["idents"]))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
@@ -2617,6 +2883,26 @@ def test_migration_drift_reports_its_own_blind_spot() -> None:
     assert all(f.endswith(".sql") for f in out["details"]["unverifiable"])
 
 
+@pytest.mark.parametrize("folder", ["missing", "empty"])
+def test_migration_drift_with_no_migration_files_is_not_measured(
+    folder: str, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    """The worker image ships no migrations/ folder. Zero files probed is zero files
+    verified: it read `ok` ("All 0 checkable of the newest 0 migrations are present")."""
+    import scripts.verify_pipeline as vp
+
+    target = tmp_path / "migrations"
+    if folder == "empty":
+        target.mkdir()
+    monkeypatch.setattr(vp, "_MIGRATIONS_DIR", target)
+    conn = _DriftConn({}, default=True)
+    out = check_migration_drift(conn, T)
+    assert out["status"] == "unknown" and out["value"] is None
+    assert out["details"]["skipped"] == "no migration files on this host"
+    assert "Not measured" in out["message"]
+    assert conn.probed == [], "nothing to probe, so no statement is sent"
+
+
 def test_migration_drift_probes_only_safe_identifiers() -> None:
     """to_regclass raises on a malformed identifier instead of returning NULL,
     which would turn one odd migration into a crashed check."""
@@ -2632,6 +2918,9 @@ def test_migration_drift_probes_only_safe_identifiers() -> None:
 class _LaneConn:
     def __init__(self, rows: list[tuple[Any, ...]]) -> None:
         self._rows = rows
+
+    def transaction(self) -> "_LaneConn":
+        return self
 
     def cursor(self) -> "_LaneConn":
         return self
@@ -2661,8 +2950,8 @@ def test_worker_lane_stall_ok_when_lanes_are_idle_or_briefly_busy() -> None:
 
 def test_worker_lane_stall_fails_on_the_observed_wedge() -> None:
     """The live signature: heartbeat healthy, images lane at 486 passes, drain
-    lane stuck inside a single pass for hours. worker_liveness reads this as
-    perfectly fine, because the worker IS alive."""
+    lane stuck inside a single pass for hours. The liveness watcher's worker cell
+    reads this as perfectly fine, because the worker IS alive."""
     out = check_worker_lane_stall(
         _LaneConn([_lane("images", None, passes=486), _lane("drain", 9 * 3600.0, passes=1)]), T)
     assert out["status"] == "fail"
@@ -2682,27 +2971,29 @@ def test_worker_lane_stall_tolerates_a_long_but_legitimate_drain_pass() -> None:
 
 
 def test_worker_lane_stall_does_not_double_alarm_a_dead_worker() -> None:
-    """No heartbeat at all is worker_liveness's job. Claiming ok would be a lie,
-    claiming fail would ring two bells for one fault, and a warn would hold an
-    incident open as a measured Watch: no lane was measured."""
+    """No heartbeat at all is the liveness watcher's worker cell to judge. Claiming ok
+    would be a lie, claiming fail would ring two bells for one fault, and a warn would
+    hold an incident open as a measured Watch: no lane was measured."""
     out = check_worker_lane_stall(_LaneConn([]), T)
     assert out["status"] == "unknown" and out["value"] is None
     assert "heartbeat" in out["details"]["skipped"]
-    assert "worker_liveness" in out["message"]
+    assert "liveness watcher's worker cell" in out["message"]
 
 
 # --- location_town_coverage (rule 25's invariant; every listing since W15) --------
 
 
-def test_location_town_coverage_is_registered_and_runs_first() -> None:
-    """Registration is not enough, and 2026-09-11 21:02 is why: the lane runs `CHECKS` in
-    order under a 120 s budget and stamped the last seven `not_run`, this one among them.
+def test_location_town_coverage_is_registered_and_runs_first_of_the_gauges() -> None:
+    """Registration is not enough, and 2026-09-11 21:02 is why: the lane ran `CHECKS` in
+    order under a 120 s budget and left the last seven unmeasured, this one among them.
     The invariant the location programme is measured by cannot be the measurement that gets
-    starved — it is one indexed join, so it goes first."""
+    starved — it is one indexed join, so it goes first of the gauges (`run_due` runs the
+    due alarms before them) and first on the page."""
     from scripts.verify_pipeline import check_location_town_coverage
 
     assert CHECKS[0].key == "location_town_coverage"
     assert CHECKS[0].fn is check_location_town_coverage
+    assert [c.key for c in CHECKS if c.cls == "gauge"][0] == "location_town_coverage"
     assert _keys().count("location_town_coverage") == 1
 
 
@@ -3014,6 +3305,9 @@ class _UrlCoverageConn:
     def __init__(self, rows):
         self._rows = rows
 
+    def transaction(self):
+        return contextlib.nullcontext()
+
     def cursor(self):
         conn = self
 
@@ -3025,6 +3319,8 @@ class _UrlCoverageConn:
                 return False
 
             def execute(self_inner, sql, params=None):
+                if sql.startswith("SET LOCAL statement_timeout"):
+                    return
                 assert "source_url IS NULL" in sql
 
             def fetchall(self_inner):
@@ -3129,8 +3425,9 @@ def _live_seam(cdn: tuple[int, bytes] | Exception, calls: list[str]) -> Any:
 
 def test_sreality_image_template_is_registered_and_last_outbound() -> None:
     """An unregistered check is dead code that never writes a row. The ordering rule:
-    the checks that leave the DB sit after every DB check, so a lane-budget exhaustion
-    drops an outbound probe rather than a DB measurement."""
+    the checks that leave the DB sit after every DB check of their class (both are alarms,
+    which `run_due` runs first), so a lane-budget exhaustion drops an outbound probe before
+    any database alarm."""
     from scripts.verify_outbound_urls import check_outbound_url_conformance
     from scripts.verify_pipeline import check_sreality_image_template
 
@@ -3536,43 +3833,54 @@ def test_a_lane_owes_every_check_it_runs_its_own_budget() -> None:
     assert vp.lane_budget_for(_registered("llm_errors", "outbound_url_conformance")) == 165.0
 
 
-@pytest.mark.parametrize("workflow", ["llm_health.yml", "verify_pipeline.yml"])
-def test_every_lane_budget_fits_its_job(workflow: str) -> None:
-    """Either GitHub lane may find every check due at once (the first run after a deploy),
-    so a registry that outgrows a lane's job timeout must fail HERE, not go quiet in
-    production: the shared 120 s budget left 7-17 of 24 checks unrun for weeks."""
-    import re
+_WORKFLOWS = Path(__file__).resolve().parents[2] / ".github/workflows"
 
+
+# Checkout, setup-python and `pip install -e .` take about two minutes; the assertions, seconds.
+_SETUP_AND_ASSERTIONS_S = 480
+
+
+def test_the_canary_job_fits_every_github_check_due_at_once() -> None:
+    """The canary may find every GitHub-hosted check due at once (after a long gap or a registry
+    change), so a registry that outgrows its step must fail HERE, not go quiet in production:
+    the shared 120 s budget left 7-17 of 24 checks unrun for weeks. The harness step's own
+    limit makes an overrun a red step, not a silent job kill; the poller runs first under its own."""
+    import yaml
     from scripts import verify_pipeline as vp
 
-    text = (Path(__file__).resolve().parents[2] / ".github/workflows" / workflow).read_text()
-    minutes = int(re.search(r"timeout-minutes:\s*(\d+)", text).group(1))
+    workflow = yaml.safe_load((_WORKFLOWS / "verify_pipeline.yml").read_text())
+    (job,) = workflow["jobs"].values()
+    steps = {s["name"]: s for s in job["steps"] if "name" in s}
+    poller, harness = steps["Record failed workflow runs"], steps["Measure the GitHub-hosted checks"]
     hosted = [c for c in CHECKS if c.host == "github-actions"]
-    assert vp.lane_budget_for(hosted) + vp._JOB_HEADROOM_S <= minutes * 60
+    assert vp.lane_budget_for(hosted) + vp._JOB_HEADROOM_S <= harness["timeout-minutes"] * 60
+    assert ((poller["timeout-minutes"] + harness["timeout-minutes"]) * 60 + _SETUP_AND_ASSERTIONS_S
+            <= job["timeout-minutes"] * 60)
 
 
-@pytest.mark.parametrize("workflow", ["llm_health.yml", "verify_pipeline.yml"])
-def test_both_lanes_red_their_run_on_a_failing_alarm(workflow: str) -> None:
-    """The lanes are identical: whichever finds an alarm failing first is the one that
-    measured it (the 6-hourly lane takes every 6-hourly key it finds due), and a lane without
-    the flag stored that Problem in silence."""
+def test_no_workflow_passes_a_flag_the_harness_deleted() -> None:
+    """--exit-nonzero-on-fail went in wave 2 (the canary's assertions red a run), --only and
+    --weekly in wave 1. argparse refuses them, so a workflow still passing one would crash
+    its harness step on every run instead of measuring."""
     import yaml
 
-    path = Path(__file__).resolve().parents[2] / ".github/workflows" / workflow
-    jobs = yaml.safe_load(path.read_text())["jobs"].values()
-    (run,) = [step["run"] for job in jobs for step in job["steps"]
-              if "scripts.verify_pipeline" in step.get("run", "")]
-    assert "--exit-nonzero-on-fail" in run
+    runs = [step["run"] for path in sorted(_WORKFLOWS.glob("*.yml"))
+            for job in (yaml.safe_load(path.read_text()).get("jobs") or {}).values()
+            for step in job.get("steps") or []
+            if "scripts.verify_pipeline" in step.get("run", "")]
+    assert runs, "a workflow runs the harness"
+    for run in runs:
+        for flag in ("--exit-nonzero-on-fail", "--only", "--weekly"):
+            assert not re.search(rf"{flag}(?![\w-])", run), (flag, run)
 
 
-@pytest.mark.parametrize("workflow", ["llm_health.yml", "verify_pipeline.yml"])
-def test_both_lanes_share_one_concurrency_group(workflow: str) -> None:
-    """One group, so the lanes take turns and a due check is measured once per cadence,
-    never twice when GitHub fires both crons together."""
+def test_the_canary_keeps_the_monitoring_concurrency_group() -> None:
+    """One group, so a dispatched run waits for the scheduled one instead of measuring the
+    same due checks twice beside it."""
     import yaml
 
-    path = Path(__file__).resolve().parents[2] / ".github/workflows" / workflow
-    assert yaml.safe_load(path.read_text())["concurrency"]["group"] == "pipeline-verification"
+    workflow = yaml.safe_load((_WORKFLOWS / "verify_pipeline.yml").read_text())
+    assert workflow["concurrency"]["group"] == "pipeline-verification"
 
 
 # --- floor_convention (field capture W8) -----------------------------------
@@ -3670,6 +3978,9 @@ class _ScriptedConn:
     def __init__(self, answers: dict[str, Any]) -> None:
         self._answers = answers
         self._last: Any = None
+
+    def transaction(self) -> "_ScriptedConn":
+        return self
 
     def cursor(self) -> "_ScriptedConn":
         return self
@@ -3842,7 +4153,7 @@ def test_false_delist_share_reads_flipped_rows_only() -> None:
     working. Only a confirmed flip that came back is a false delisting."""
     conn = _RowsConn([])
     check_false_delist_share(conn, T)
-    sql, _params = conn.executed[0]
+    (sql, _params), = _queries(conn)
     assert "outcome = 'flipped'" in sql and "detail_queue_completions" in sql
     assert "'gone'" not in sql
 
@@ -3852,7 +4163,7 @@ def test_false_delist_share_reads_flipped_rows_only() -> None:
 # A measurement that did not happen is Not measured: never ok, and never a warn that the
 # ladder would read as a measured Watch holding an incident open.
 
-_UNMEASURED_MARKERS = {"timed_out", "not_run", "errored", "skipped"}
+_UNMEASURED_MARKERS = {"timed_out", "errored", "skipped"}
 
 
 class _CronUnreadableConn(_ShapeDriftConn):
@@ -3863,7 +4174,10 @@ class _CronUnreadableConn(_ShapeDriftConn):
 
 
 def _unmeasured_results() -> list[dict[str, Any]]:
-    """One result from every path that measures nothing."""
+    """One result from every path that measures nothing (a check the lane budget does not
+    reach writes no result at all, so it has none here)."""
+    from unittest import mock
+
     import scripts.verify_pipeline as vp
     from scripts.verify_outbound_urls import check_outbound_url_conformance
 
@@ -3873,13 +4187,12 @@ def _unmeasured_results() -> list[dict[str, Any]]:
     def _cancelled(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("canceling statement due to statement timeout")
 
-    def _never_reached(conn: Any, thresholds: Any) -> dict[str, Any]:  # pragma: no cover
-        raise AssertionError("an exhausted lane must not start a check")
-
     sampled = _ShapeDriftConn([(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")])
+    with mock.patch.object(vp, "_MIGRATIONS_DIR", Path("/no-such-checkout/migrations")):
+        no_migration_files = check_migration_drift(_DriftConn({}), T)
     return [
         *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled)]),
-        *run_checks(None, {}, checks=[_stub("late", _never_reached)], lane_budget_s=-1.0),
+        no_migration_files,
         vp.check_db_saturation(_CronUnreadableConn([]), T),
         vp._inert_measure_check("ppm2_basis_floor_share", None),
         vp._inert_measure_check("ppm2_basis_floor_share", "relation does not exist"),
@@ -3899,10 +4212,9 @@ def _unmeasured_results() -> list[dict[str, Any]]:
 def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
     results = _unmeasured_results()
     assert len(results) == 16
-    errored, timed_out, not_run = results[:3]
+    errored, timed_out = results[:2]
     assert errored["details"]["errored"] is True and "kaboom" in errored["details"]["error"]
     assert timed_out["details"]["timed_out"] is True
-    assert not_run["details"]["not_run"] is True
     for r in results:
         markers = _UNMEASURED_MARKERS & set(r["details"])
         assert markers, r["check_key"]
@@ -3927,3 +4239,89 @@ def test_a_stalled_registry_is_a_problem_even_when_no_listing_was_read() -> None
     out = check_location_town_coverage(
         _TownCoverageConn([], registry=("ruian:2026-07-01", 80, None, None)), T)
     assert out["status"] == "fail" and "Registry stalled" in out["message"]
+
+
+# --- the checks that read on a raw cursor now spend their own wall clock (health wave 2) ---
+
+
+class _BoundConn:
+    """Records each statement and whether a SET LOCAL statement_timeout armed it inside the
+    same transaction; answers by SQL fragment, else with no rows."""
+
+    def __init__(self, answers: dict[str, list[Any]] | None = None) -> None:
+        self._answers = answers or {}
+        self.sent: list[tuple[str, bool]] = []
+        self._in_transaction = False
+        self._armed = False
+        self._rows: list[Any] = []
+
+    @contextlib.contextmanager
+    def transaction(self) -> Any:
+        self._in_transaction = True
+        try:
+            yield
+        finally:
+            self._in_transaction = self._armed = False
+
+    def cursor(self) -> "_BoundConn":
+        return self
+
+    def __enter__(self) -> "_BoundConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        if sql.startswith("SET LOCAL statement_timeout"):
+            self._armed = self._in_transaction
+            return
+        self.sent.append((sql, self._armed))
+        self._armed = False
+        self._rows = next((v for k, v in self._answers.items() if k in sql), [])
+
+    def fetchall(self) -> list[Any]:
+        return list(self._rows)
+
+    def fetchone(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+
+def _own_sql(key: str) -> list[str]:
+    """The statements each formerly raw-cursor check sends, as the code spells them."""
+    import scripts.verify_pipeline as vp
+    from toolkit import description_extraction as text_lane
+
+    return {
+        "acquisition_lag": [vp._ACQUISITION_LAG_SQL],
+        "text_extraction_lag": ["SELECT value FROM app_settings WHERE key = %s",  # resolve_model
+                                text_lane.LLM_TEXT_SOURCES_SQL,  # lane_scope
+                                text_lane.ELIGIBLE_LAG_SQL, text_lane.EXTRACTION_LATENCY_SQL,
+                                vp._TEXT_EXTRACT_LANE_SQL],
+        "walk_coverage": [vp._WALK_COVERAGE_SQL],
+        "migration_drift": [vp._MIGRATION_OBJECT_PROBE_SQL],
+        "worker_lane_stall": [vp._WORKER_LANE_SQL],
+        "delist_flip_refused": [vp._DELIST_REFUSAL_SQL],
+        "false_delist_share": [vp._FALSE_DELIST_SQL],
+        "outbound_url_coverage": [vp._OUTBOUND_URL_COVERAGE_SQL],
+    }[key]
+
+
+@pytest.mark.parametrize("key", [
+    "acquisition_lag", "text_extraction_lag", "walk_coverage", "migration_drift",
+    "worker_lane_stall", "delist_flip_refused", "false_delist_share", "outbound_url_coverage",
+])
+def test_each_formerly_raw_cursor_check_sends_its_sql_on_its_own_wall_clock(
+    key: str, monkeypatch: Any,
+) -> None:
+    """These eight read on a raw cursor, under the connection's default timeout and past any
+    budget. Each now sends the same SQL through _fetchone/_fetchall, every statement armed
+    with what its check has left."""
+    answers: dict[str, list[Any]] = {}
+    if key == "text_extraction_lag":
+        _open_one_gate(monkeypatch)
+        answers = {"FROM app_settings": [("gpt-5-mini",)]}
+    conn = _BoundConn(answers)
+    _by_key(key).fn(conn, T)
+    assert [sql for sql, armed in conn.sent if armed] == _own_sql(key)
+    assert all(armed for _, armed in conn.sent), key

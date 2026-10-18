@@ -300,13 +300,13 @@ def test_a_stale_fail_neither_opens_nor_reminds() -> None:
 def test_a_stale_ok_never_recovers_nor_starts_a_hold() -> None:
     conn = _FakeConn()
     conn.register("llm_errors")  # hourly: a 108-minute hold, a 19 h budget
-    conn.register("worker_liveness")
+    conn.register("worker_lane_stall")
     held = conn.seed("llm_errors", first=_T0 - _h(48), last=_T0 - _h(30),
                      ok_since=_T0 - _h(25))
-    unheld = conn.seed("worker_liveness", first=_T0 - _h(48), last=_T0 - _h(30))
+    unheld = conn.seed("worker_lane_stall", first=_T0 - _h(48), last=_T0 - _h(30))
     conn.result("llm_errors", _T0 - _h(25), "ok")
     conn.result("llm_errors", _T0 - _h(20), "ok")  # measured across the hold, but stale now
-    conn.result("worker_liveness", _T0 - _h(20), "ok")
+    conn.result("worker_lane_stall", _T0 - _h(20), "ok")
     assert reconcile(conn, now=_T0) == _ZERO
     assert held["resolved_at"] is None and unheld["ok_since"] is None
     assert conn.writes() == []
@@ -610,14 +610,14 @@ def test_cells_of_one_check_reminded_in_different_passes_are_each_told() -> None
 
 def test_a_second_pass_over_the_same_state_writes_and_tells_nothing() -> None:
     conn = _FakeConn()
-    for key in ("llm_errors", "llm_burn_rate", "worker_liveness", "db_saturation"):
+    for key in ("llm_errors", "llm_burn_rate", "worker_lane_stall", "db_saturation"):
         conn.register(key)
     conn.result("llm_errors", _T0, "fail")
     conn.seed("llm_burn_rate", first=_T0 - _h(7))
     conn.result("llm_burn_rate", _T0, "fail")
-    conn.seed("worker_liveness", first=_T0 - _h(5), ok_since=_T0 - _h(3))
-    conn.result("worker_liveness", _T0 - _h(3), "ok")
-    conn.result("worker_liveness", _T0 - _h(1), "ok")
+    conn.seed("worker_lane_stall", first=_T0 - _h(5), ok_since=_T0 - _h(3))
+    conn.result("worker_lane_stall", _T0 - _h(3), "ok")
+    conn.result("worker_lane_stall", _T0 - _h(1), "ok")
     conn.seed("db_saturation", "cron", first=_T0 - _h(400), last=_T0 - _h(200))
     conn.seed("outbound_url_parity", first=_T0 - _h(9))
     assert reconcile(conn, now=_T0) == {
@@ -625,7 +625,7 @@ def test_a_second_pass_over_the_same_state_writes_and_tells_nothing() -> None:
     assert [d[1] for d in conn.dispatches] == [
         "sys:llm_errors:onset:2026-10-18T06:00:00Z",
         "sys:llm_burn_rate:reminder:6h:2026-10-17T23:00:00Z:1x1",
-        "sys:worker_liveness:recovery:2026-10-18T01:00:00Z:2x1",
+        "sys:worker_lane_stall:recovery:2026-10-18T01:00:00Z:2x1",
     ]
     writes = len(conn.writes())
     assert reconcile(conn, now=_T0 + _dt.timedelta(seconds=60)) == _ZERO

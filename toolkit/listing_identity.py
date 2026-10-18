@@ -63,7 +63,7 @@ R2_CARRIERS: list[dict[str, Any]] = [
     {"table": "building_runs", "cursor": "id",
      "cols": [("input_sreality_id", "input_listing_id")]},
     # `system_health` rows are bell alerts, not listing events: the producers
-    # (toolkit/system_alerts.emit_system_alert + emit_verification_stale_alert, mig 274)
+    # (toolkit/system_alerts.emit_system_alert, mig 274; the ladder since mig 619)
     # name neither id column, and notification_dispatches_source_ck makes that structural.
     # Without the skip the parity check counts every alert as an orphan — including its
     # OWN recovery alert, which re-broke the check one run after each recovery.

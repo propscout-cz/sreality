@@ -1,0 +1,271 @@
+"""`health_liveness()`, the pg_cron watcher, writes one `liveness` row of cells (migration 620).
+
+Executed against the replayed schema inside a transaction that always rolls back. Runs in CI's migrations
+lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import pytest
+
+_DB_URL = os.environ.get("TEST_DATABASE_URL")
+_REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
+
+pytestmark = pytest.mark.skipif(
+    not _DB_URL and not _REQUIRED,
+    reason="TEST_DATABASE_URL not set — this rail runs in CI's migrations lane",
+)
+
+
+@pytest.fixture()
+def cur():
+    """One transaction per test, always rolled back: the tests empty and reseed real tables."""
+    if not _DB_URL:
+        pytest.fail("DB_RAILS_REQUIRED=1 but TEST_DATABASE_URL is not set — the migrations lane is "
+                    "misconfigured and this rail would otherwise have skipped green.")
+    import psycopg
+
+    conn = psycopg.connect(_DB_URL)
+    try:
+        with conn.cursor() as c:
+            c.execute("delete from pipeline_check_results")
+            c.execute("delete from health_checks")
+            c.execute("delete from ops_incidents where signature like 'cell:%'")
+            c.execute("delete from worker_heartbeats")
+            _lease(c, "10 minutes")
+            _interval(c, 300)
+            yield c
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def _lease(cur: Any, offset: str | None) -> None:
+    """The matcher lease expiring `offset` from now, or released (NULL) when offset is None."""
+    if offset is None:
+        cur.execute("update notification_matcher_lease set holder = null, expires_at = null where id = 1")
+    else:
+        cur.execute("update notification_matcher_lease set holder = 'matcher:test', "
+                    "expires_at = now() + %s::interval where id = 1", (offset,))
+
+
+def _interval(cur: Any, seconds: int) -> None:
+    """The matcher interval the API reads from app_settings."""
+    cur.execute("insert into app_settings (key, value) values ('notifications_matcher_interval_seconds', %s::jsonb) "
+                "on conflict (key) do update set value = excluded.value", (str(seconds),))
+
+
+def _beat(cur: Any, worker: str, age: str) -> None:
+    """A worker whose last heartbeat is `age` old."""
+    cur.execute("insert into worker_heartbeats (worker, beat_at, started_at) "
+                "values (%s, now() - %s::interval, now() - interval '1 day')", (worker, age))
+
+
+def _check(cur: Any, key: str, *, cls: str = "alarm", host: str = "github-actions", cadence_s: int = 3600,
+           budget: str = "19 hours", declared: str = "30 days") -> None:
+    """A registry row declared `declared` ago."""
+    cur.execute("insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+                "values (%s, 'platform', %s, %s, %s, %s::interval, %s, now() - %s::interval)",
+                (key, cls, host, cadence_s, budget, key, declared))
+
+
+def _result(cur: Any, key: str, status: str, age: str, cells: list[dict[str, str]] | None = None) -> None:
+    """A stored result `age` old, with explicit cells when given."""
+    from psycopg.types.json import Jsonb
+
+    details = Jsonb({"cells": cells}) if cells is not None else None
+    cur.execute("insert into pipeline_check_results (run_at, check_key, status, details) "
+                "values (now() - %s::interval, %s, %s, %s)", (age, key, status, details))
+
+
+def _incident(cur: Any, signature: str, *, acknowledged: bool = False) -> None:
+    """An open cell incident."""
+    cur.execute("insert into ops_incidents (signature, acknowledged_at) values (%s, case when %s then now() end)",
+                (signature, acknowledged))
+
+
+def _liveness(cur: Any) -> tuple[str, Any, dict[str, Any], dict[str, list[dict[str, Any]]]]:
+    """Call the watcher once; its newest row as (status, value, details, cells by subject)."""
+    cur.execute("select public.health_liveness()")
+    cur.execute("select status, value, details from pipeline_check_results where check_key = 'liveness' "
+                "order by run_at desc, id desc limit 1")
+    status, value, details = cur.fetchone()
+    by_subject: dict[str, list[dict[str, Any]]] = {}
+    for cell in details["cells"]:
+        assert set(cell) == {"subject", "portal", "status", "value", "unit", "message", "facts"}, cell
+        by_subject.setdefault(cell["subject"], []).append(cell)
+    return status, value, details, by_subject
+
+
+def _counts(cur: Any) -> tuple[int, int]:
+    """Incidents and notices: the watcher writes neither."""
+    cur.execute("select (select count(*) from ops_incidents), (select count(*) from notification_dispatches)")
+    return cur.fetchone()
+
+
+def test_each_dead_watcher_fails_one_cell(cur):
+    _beat(cur, "liveness-test-stale", "20 minutes")
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    _check(cur, "aaa_stale")
+    _result(cur, "aaa_stale", "ok", "20 hours")
+    _check(cur, "bbb_untold")
+    _result(cur, "bbb_untold", "fail", "3 hours")
+    _lease(cur, "-30 minutes")
+    before = _counts(cur)
+
+    _liveness(cur)
+    status, value, details, cells = _liveness(cur)
+
+    cur.execute("select count(*) from pipeline_check_results where check_key = 'liveness'")
+    assert cur.fetchone()[0] == 2
+    assert _counts(cur) == before
+    assert status == "fail"
+    assert float(value) == 0.0
+    assert {c["facts"]["worker"]: c["status"] for c in cells["worker"]} == {
+        "liveness-test-stale": "fail", "liveness-test-fresh": "ok"}
+    assert [c["message"] for c in cells["stale:aaa_stale"]] == ["aaa_stale not measured for 20.0 h (budget 19 h)"]
+    assert "stale:bbb_untold" not in cells
+    assert [(c["status"], c["message"]) for c in cells["api"]] == [
+        ("fail", "the API's background loops have not renewed their lease; it expired 30 min ago")]
+    [untold] = cells["unalerted"]
+    assert untold["status"] == "fail"
+    assert untold["facts"] == {"keys": ["bbb_untold"], "cells": ["bbb_untold:bbb_untold"]}
+    assert untold["message"] == "bbb_untold: a measured Problem has no incident; the teller is not telling"
+    for cell in details["cells"]:
+        if cell["status"] == "fail":
+            assert cell["message"] in details["message"]
+    assert isinstance(details["elapsed_ms"], int)
+    cur.execute("select host, class, cadence_s, staleness_budget = interval '15 minutes', label, unit, sort "
+                "from health_checks where key = 'liveness'")
+    assert cur.fetchone() == ("pg_cron", "alarm", 300, True, "Watchers", "min", 999)
+
+
+def test_everything_alive_writes_one_ok_row(cur):
+    _beat(cur, "liveness-test-fresh", "1 minute")
+    _check(cur, "aaa_fresh")
+    _result(cur, "aaa_fresh", "ok", "10 minutes")
+
+    status, _value, details, cells = _liveness(cur)
+
+    assert status == "ok"
+    assert details["message"] == "Watchers: all alive"
+    assert set(cells) == {"worker", "api"}
+    assert all(c["status"] == "ok" for c in details["cells"])
+
+
+def test_the_health_lane_is_judged_once_the_worker_hosts_checks(cur):
+    _beat(cur, "realtime-worker", "0 minutes")
+    assert "health_lane" not in _liveness(cur)[3]
+
+    _check(cur, "ccc_lane", host="realtime-worker", cadence_s=600, budget="30 minutes")
+    _result(cur, "ccc_lane", "ok", "2 minutes")
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["message"]) == ("ok", "the worker's health lane measured 2 min ago")
+
+    cur.execute("update pipeline_check_results set run_at = now() - interval '15 minutes' "
+                "where check_key = 'ccc_lane'")
+    status, _value, _details, cells = _liveness(cur)
+    assert status == "fail"
+    assert [(c["status"], c["message"]) for c in cells["health_lane"]] == [
+        ("fail", "the worker's health lane has not measured for 15 min")]
+    assert "stale:ccc_lane" not in cells
+
+
+def test_a_dead_worker_folds_its_keys_and_its_lane_into_its_cell(cur):
+    _beat(cur, "realtime-worker", "20 minutes")
+    _check(cur, "ccc_lane", host="realtime-worker", cadence_s=600, budget="30 minutes")
+    _result(cur, "ccc_lane", "ok", "40 minutes")
+    _check(cur, "aaa_stale")
+    _result(cur, "aaa_stale", "ok", "20 hours")
+    _incident(cur, "cell:liveness:stale:ccc_lane")
+
+    status, _value, _details, cells = _liveness(cur)
+
+    assert status == "fail"
+    assert [c["status"] for c in cells["worker"]] == ["fail"]
+    assert "stale:aaa_stale" in cells
+    assert "stale:ccc_lane" not in cells
+    assert "health_lane" not in cells
+
+
+def test_the_lease_reads_released_as_not_measured_and_interval_zero_as_off(cur):
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    _lease(cur, "-5 minutes")
+    [api] = _liveness(cur)[3]["api"]
+    assert (api["status"], api["message"]) == ("ok", "the API's lease expired 5 min ago; a Problem after 11 min")
+
+    _lease(cur, None)
+    status, _value, details, cells = _liveness(cur)
+    assert status == "unknown"
+    assert [(c["status"], c["facts"]) for c in cells["api"]] == [("unknown", {"state": "released"})]
+    assert details["message"] == "lease released; a clean API shutdown"
+
+    _interval(cur, 0)
+    status, _value, _details, cells = _liveness(cur)
+    assert status == "ok"
+    assert [(c["status"], c["facts"]) for c in cells["api"]] == [("ok", {"state": "off"})]
+
+
+def test_an_open_incident_gets_a_verdict_every_run_so_it_can_recover(cur):
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    _check(cur, "aaa_fresh")
+    _result(cur, "aaa_fresh", "ok", "10 minutes")
+    _incident(cur, "cell:liveness:stale:aaa_fresh")
+    _incident(cur, "cell:liveness:unalerted")
+
+    status, _value, _details, cells = _liveness(cur)
+
+    assert status == "ok"
+    assert [c["status"] for c in cells["stale:aaa_fresh"]] == ["ok"]
+    assert [c["status"] for c in cells["unalerted"]] == ["ok"]
+
+
+def test_only_a_measured_problem_failing_for_two_cadences_without_an_incident_is_unalerted(cur):
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    for key in ("k_told", "k_acked", "k_stale", "k_unknown", "k_new", "k_cells"):
+        _check(cur, key)
+    _check(cur, "k_gauge", cls="gauge")
+    _check(cur, "k_declared", declared="1 hour")
+    for key in ("k_told", "k_acked", "k_unknown", "k_gauge", "k_declared"):
+        _result(cur, key, "fail", "3 hours")
+    _incident(cur, "cell:k_told:k_told")
+    _incident(cur, "cell:k_acked:k_acked", acknowledged=True)
+    _result(cur, "k_stale", "fail", "20 hours")
+    _result(cur, "k_unknown", "unknown", "10 minutes")
+    _result(cur, "k_new", "fail", "30 minutes")
+    _result(cur, "k_cells", "fail", "3 hours",
+            [{"subject": "x", "status": "fail"}, {"subject": "y", "status": "ok"}])
+    _result(cur, "k_cells", "fail", "10 minutes",
+            [{"subject": "x", "status": "fail"}, {"subject": "y", "status": "fail"}, {"subject": "z", "status": "ok"}])
+
+    [untold] = _liveness(cur)[3]["unalerted"]
+
+    assert untold["facts"] == {"keys": ["k_cells"], "cells": ["k_cells:x"]}
+
+
+def test_stale_is_judged_on_the_last_measured_result_never_on_unmeasured_rows(cur):
+    """A key whose every run is Not measured (errored, timed out, skipped) goes stale from its last
+    measurement, or from its declared_at when it never measured, so it is told by someone."""
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    _check(cur, "k_measured_then_unknown")
+    _result(cur, "k_measured_then_unknown", "ok", "30 hours")
+    _result(cur, "k_measured_then_unknown", "unknown", "1 hour")
+    _check(cur, "k_never_measured")
+    _result(cur, "k_never_measured", "unknown", "1 hour")
+    _check(cur, "k_fresh")
+    _result(cur, "k_fresh", "warn", "2 hours")
+    _result(cur, "k_fresh", "unknown", "10 minutes")
+    _check(cur, "k_young", declared="5 minutes")
+
+    status, _value, _details, cells = _liveness(cur)
+
+    assert status == "fail"
+    assert {s for s in cells if s.startswith("stale:")} == {"stale:k_measured_then_unknown",
+                                                            "stale:k_never_measured"}
+    [measured] = cells["stale:k_measured_then_unknown"]
+    assert measured["facts"]["last_measured_at"] is not None and 29.9 <= measured["value"] <= 30.1
+    [never] = cells["stale:k_never_measured"]
+    assert never["facts"]["last_measured_at"] is None and never["value"] >= 24 * 29

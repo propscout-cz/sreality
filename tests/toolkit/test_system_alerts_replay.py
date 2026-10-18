@@ -31,11 +31,13 @@ _TICK = _dt.timedelta(minutes=10)
 # Check.staleness_budget on the github-actions host, where every key of the window ran.
 _GITHUB_SLACK = _dt.timedelta(hours=18)
 
-# The wave-1 registry (scripts/verify_pipeline.py CHECKS) the history was measured under.
+# The registry (scripts/verify_pipeline.py CHECKS). The window also measured `worker_liveness`,
+# deleted in wave 2 for the watcher's `worker` cell; the loader drops a retired key's rows, as
+# the ladder reads none of them.
 _REGISTRY: dict[str, tuple[str, int]] = {
     "location_town_coverage": ("gauge", 21600), "llm_errors": ("alarm", 3600),
     "llm_burn_rate": ("alarm", 3600), "long_open_transaction": ("alarm", 21600),
-    "db_saturation": ("alarm", 3600), "worker_liveness": ("alarm", 3600),
+    "db_saturation": ("alarm", 3600),
     "dual_write_parity": ("alarm", 21600), "property_maintenance": ("alarm", 3600),
     "broker_resolution_freshness": ("alarm", 3600), "broker_merge_suppression": ("alarm", 3600),
     "workflow_poller_liveness": ("alarm", 21600), "ppm2_median_shift": ("alarm", 21600),
@@ -84,7 +86,7 @@ def _history() -> dict[str, _Rows]:
             step = (end - start) / (n - 1) if n > 1 else _dt.timedelta(0)
             history.setdefault(run["check_key"], []).extend(
                 (start + step * i, run["status"]) for i in range(n))
-    return {key: sorted(rows) for key, rows in history.items()}
+    return {key: sorted(rows) for key, rows in history.items() if key in _REGISTRY}
 
 
 def _passes(history: dict[str, _Rows]) -> list[_dt.datetime]:

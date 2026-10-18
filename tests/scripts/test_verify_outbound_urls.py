@@ -5,6 +5,7 @@ connection draws the samples and a fake session answers the HEAD requests)."""
 from __future__ import annotations
 
 import ast
+import contextlib
 import datetime as _dt
 import inspect
 from typing import Any
@@ -34,6 +35,10 @@ class _SampleConn:
         self.executed: list[tuple[str, Any]] = []
         self._rows: list[tuple[Any, ...]] = []
 
+    @contextlib.contextmanager
+    def transaction(self) -> Any:
+        yield
+
     def cursor(self) -> "_SampleConn":
         return self
 
@@ -44,6 +49,8 @@ class _SampleConn:
         return None
 
     def execute(self, sql: str, params: Any = None) -> None:
+        if sql.startswith("SET LOCAL statement_timeout"):
+            return
         self.executed.append((sql, params))
         if "category_sub_cb = %(cb)s" in sql:
             cb = params["cb"]
@@ -120,6 +127,16 @@ def test_the_sample_is_three_ads_per_code_of_the_week_plus_one_per_crawler() -> 
     assert crawlers == list(mod.CRAWLER_SOURCES)
     assert len(samples) == 3 * len(codes) + len(mod.CRAWLER_SOURCES)
     assert all(isinstance(s, mod.Sample) and s.source_url for s in samples)
+
+
+def test_the_draw_runs_on_the_check_clock_like_every_other_statement() -> None:
+    """Wave 2: the sample's reads were raw-cursor statements outside the per-check budget."""
+    from tests.scripts.test_verify_pipeline import _BoundConn
+
+    conn = _BoundConn()
+    assert mod.draw_samples(conn, 37) == []
+    assert len(conn.sent) == len(mod.codes_for_week(37)) + len(mod.CRAWLER_SOURCES)
+    assert all(armed for _, armed in conn.sent)
 
 
 def _ids(samples: list[mod.Sample]) -> list[tuple[str, int]]:
