@@ -94,6 +94,14 @@ _INLINE_STAMP = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# The same chokepoint called from SQL with a literal name — a pg_cron command spelled in a
+# migration (625's hourly `select public.refresh_matview('ingest_bulk_days')`). The stamp
+# happens inside the function, exactly as for the Python form above.
+_SQL_REFRESH_CALL = re.compile(
+    r"(?:perform|select)\s+(?:public\.)?refresh_matview\s*\(\s*(?P<arg>'[^']*'|[^,)]+)",
+    re.IGNORECASE,
+)
+
 _REFRESH_OR_STAMP = re.compile(
     r"refresh\s+materialized\s+view\s+concurrently\s+(?P<refresh>[a-z0-9_]+)"
     r"|stamp_derived_artifact\s*\(\s*'(?P<stamp>[a-z0-9_]+)'",
@@ -184,7 +192,8 @@ def _repo_call_sites() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
         if path.suffix == ".sql":
             text = _drop_sql_comment_lines(text)
         patterns = (
-            (_SQL_CALL,) if path.suffix == ".sql" else (_PY_CALL, _PY_REFRESH_CALL)
+            (_SQL_CALL, _SQL_REFRESH_CALL) if path.suffix == ".sql"
+            else (_PY_CALL, _PY_REFRESH_CALL)
         )
         for pattern in patterns:
             for m in pattern.finditer(text):
@@ -332,11 +341,12 @@ def test_every_registry_row_is_stamped_by_something(registry, function_bodies):
     producers, one of the six inside `refresh_health_matviews`, or one of the three
     pre-441 inline `update derived_artifacts ... where name = '...'` blocks.
 
-    Four stamp shapes count, because four genuinely exist: a literal-name call of the
+    Five stamp shapes count, because five genuinely exist: a literal-name call of the
     SQL stamp helper (migration text and catalog bodies), a literal-name
-    `db.refresh_matview(conn, ...)` call (the migration-578 chokepoint stamps inside),
-    `scripts/refresh_image_stats.py`'s loop over `_MVS`, and the inline UPDATE that
-    `refresh_llm_cost_rollups` and both blue-green rebuilds keep (the rollup cannot use
+    `db.refresh_matview(conn, ...)` call (the migration-578 chokepoint stamps inside), the
+    same chokepoint called from SQL with a literal name (a pg_cron command in migration
+    text, 625), `scripts/refresh_image_stats.py`'s loop over `_MVS`, and the inline UPDATE
+    that `refresh_llm_cost_rollups` and both blue-green rebuilds keep (the rollup cannot use
     the helper — it must pass its own watermark as `complete_through`).
     """
     literal, _ = _repo_call_sites()

@@ -262,7 +262,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     keys: [
       'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
       'firstSeenMinDays', 'firstSeenMaxDays',
-      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
+      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax', 'tomObservedOnly',
     ],
     groups: [
       {

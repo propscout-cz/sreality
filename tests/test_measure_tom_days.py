@@ -180,13 +180,3 @@ def test_sweep_days_are_the_first_day_and_the_outliers(cur: Any) -> None:
 
     cur.execute(f"SELECT {tom_observed_sql('l')} FROM listings l WHERE l.id = %s", (ordinary[0],))
     assert cur.fetchone()[0] is True
-
-
-@REQUIRED_DB
-def test_the_observed_measure_inlines(cur: Any) -> None:
-    cur.execute(
-        "EXPLAIN (VERBOSE, COSTS OFF) "
-        "SELECT measure_tom_observed(source, category_main, category_type, first_seen_at) FROM listings"
-    )
-    plan = "\n".join(r[0] for r in cur.fetchall())
-    assert "measure_tom_observed" not in plan, plan

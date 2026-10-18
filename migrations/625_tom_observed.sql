@@ -17,11 +17,15 @@
 -- THE RULE (ingest_bulk_days, one definition, re-derived nightly): a (portal, category) day is a
 -- SWEEP when it is that pair's first day of sightings, or when its sightings exceed
 -- greatest(100, 4 x the pair's median daily count). An ad is OBSERVED FROM THE START
--- (measure_tom_observed = true) when its first sighting fell on no sweep day. Residue, stated: a
--- small pair's spill-over days after its first day (< 100 ads, < 4 x median) pass as ordinary.
+-- (measure_tom_observed = true) when its first sighting fell on no sweep day. Residue, stated
+-- both ways (read live 2026-10-18, 285 sweep days): a sweep's spill-over days just under the
+-- threshold pass as ordinary (bazos byt/prodej 2026-05-31: 1,034 ads against 1,058; several pairs
+-- leave 0.7-2.4k such ads), and a single seller's batch upload on a small pair reads as a sweep
+-- (sreality pozemek/drazba 2026-09-17: 165 ads, 158 from one seller; ~1.1k ads, 0.1 % of the
+-- corpus). One rule, no second signal; the operator may refine it.
 --
 -- WHAT IS PUBLISHED. Only browse_projection (-> browse_list, properties_map_mv) gains the column,
--- as the property's EARLIEST ad's answer (its first sighting is the property's TOM start): the
+-- as the property's EARLIEST ad with a category's answer (an ad without one cannot be judged): the
 -- Browse list, count, pins, Stats and map counts filter it; estimation cohorts compile the
 -- function over `listings` (toolkit.measures.tom_observed_sql). properties_public / listings_public
 -- are untouched: the Watchdog agenda carries no TOM filter and no detail surface renders the flag.
@@ -30,7 +34,10 @@
 --   0. preconditions (md5 of every body restated, read live 2026-10-18; skipped in the replay);
 --   1. both rebuild locks, queued, then fail fast;
 --   2. TX A: the bulk-day set (a matview, unique-indexed, registered in derived_artifacts and
---      populated + refreshed nightly through refresh_matview, 578) and the measure;
+--      populated + refreshed HOURLY through refresh_matview, 578: a sweep that starts today must
+--      stop reading as ordinary within the hour, not the next night; the body takes ~1.6 s) and
+--      the measure, which is NOT inlinable (a sub-select never is) and runs as a call per row:
+--      a few microseconds against a ~300-row matview, paid once per rebuild;
 --   3. TX B: browse_list gains the column FIRST (sync_browse_list's positional insert, and
 --      browse_list_visible()'s `l.*`, must never see the table narrower than the view), then the
 --      projection with the column appended LAST, then properties_map_visible() bridged with
@@ -40,7 +47,7 @@
 --   6. the two aggregate RPCs re-signed with `tom_observed_only boolean default false` (a new
 --      DEFAULTED parameter may precede the SPA: it keeps calling without it) and the predicate
 --      `(not tom_observed_only or l.tom_observed)` beside the tom_days bounds;
---   7. the nightly refresh (pg_cron; guarded, the replay has none); 8. post-conditions; 9. unlock.
+--   7. the hourly refresh (pg_cron; guarded, the replay has none); 8. post-conditions; 9. unlock.
 -- Re-runnable: every step is idempotent and the gates accept this file's own bodies.
 -- ROLLBACK: none needed (additive): drop the parameter by re-creating 605's RPC bodies, the
 -- column by 590's recipe; the matview and the function may stay.
@@ -132,7 +139,7 @@ comment on materialized view public.ingest_bulk_days is
   'discovered the existing stock rather than saw ads appear -- the pair''s first day of sightings, '
   'or a day with more than greatest(100, 4 x the pair''s median daily sightings). Validated on the '
   'two portals that publish a listing date (2026-10-18): our sighting lags the portal by a median '
-  '0.6 d on ordinary days and 16-77 d on these. Refreshed nightly (pg_cron refresh-ingest-bulk-days); '
+  '0.6 d on ordinary days and 16-77 d on these. Refreshed hourly (pg_cron refresh-ingest-bulk-days); '
   'read only through measure_tom_observed(); published through refresh_matview(), which stamps '
   'derived_artifacts. The extra columns say why a day is here.';
 
@@ -140,11 +147,11 @@ revoke all on public.ingest_bulk_days from public, anon;
 grant select on public.ingest_bulk_days to authenticated, service_role;
 
 -- Corollary E: the artifact declares its producer, cadence and budget before it is ever
--- populated (refresh_matview refuses an unregistered name). Two nights plus grace.
+-- populated (refresh_matview refuses an unregistered name). Three hourly ticks of grace.
 insert into public.derived_artifacts
   (name, producer, host, cadence, staleness_budget, is_serving)
 values ('ingest_bulk_days', 'refresh_matview', 'pg_cron',
-        '40 3 * * *', interval '50 hours', true)
+        '50 * * * *', interval '3 hours', true)
 on conflict (name) do nothing;
 
 -- First populate through the ONE publication path (578): plain refresh when unpopulated,
@@ -175,8 +182,9 @@ comment on function public.measure_tom_observed(text, text, text, timestamptz) i
   'no sweep day of its (portal, category) in ingest_bulk_days, so measure_tom_days counts from the '
   'day the ad appeared; false when the sighting was part of a sweep and the TOM is a lower bound on '
   'an older start. An ad with no category cannot be judged and reads true. A property takes its '
-  'EARLIEST ad''s answer (browse_projection). Python face: toolkit.measures.tom_observed_sql. No SET '
-  'search_path: a SET clause blocks inlining.';
+  'EARLIEST ad with a category''s answer (browse_projection). Python face: '
+  'toolkit.measures.tom_observed_sql. Not inlinable (the body is a sub-select): a call per row, a few '
+  'microseconds against a ~300-row matview, paid once per read-model rebuild.';
 
 revoke all on function public.measure_tom_observed(text, text, text, timestamptz)
   from public, anon, authenticated;
@@ -275,7 +283,8 @@ create or replace view browse_projection as
       p.newest_ad_at_realitymix,
       (select measure_tom_observed(k.source, k.category_main, k.category_type, k.first_seen_at)
          from listings k where k.property_id = p.id
-        order by k.first_seen_at, k.id limit 1) as tom_observed
+        order by (k.category_main is null or k.category_type is null), k.first_seen_at, k.id
+        limit 1) as tom_observed
   from properties p
        left join listing_location ll on ll.listing_id = p.repr_listing_ref_id
        left join location_granularity_rank gr on gr.granularity = ll.granularity
@@ -912,13 +921,13 @@ grant execute on function public.browse_map_cells(text[], text[], integer, integ
 commit;
 
 -- ---------------------------------------------------------------------------
--- 7. The nightly refresh. Guarded like 620: the CI replay has no pg_cron.
+-- 7. The hourly refresh. Guarded like 620: the CI replay has no pg_cron.
 -- ---------------------------------------------------------------------------
 do $cron$
 begin
   perform cron.schedule(
     'refresh-ingest-bulk-days',
-    '40 3 * * *',
+    '50 * * * *',
     $$set statement_timeout='300s'; select public.refresh_matview('ingest_bulk_days');$$
   );
 exception when others then
@@ -960,7 +969,7 @@ begin
   select count(*) = 100000 into populated
     from (select 1 from public.properties limit 100000) probe;
   if populated and (select count(*) from public.ingest_bulk_days) < 50 then
-    raise exception '625: ingest_bulk_days holds % rows; expected the ~210 sweep days read on 2026-10-18',
+    raise exception '625: ingest_bulk_days holds % rows; expected the ~285 sweep days read on 2026-10-18',
       (select count(*) from public.ingest_bulk_days);
   end if;
 end

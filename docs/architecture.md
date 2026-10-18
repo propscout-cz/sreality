@@ -3329,15 +3329,22 @@ renumber.** Navigate by area:
     on sweep days. Sweeps are not one go-live date per portal (sreality's largest was a land
     expansion six weeks after launch; 2026-08-27 hit every portal), so the unit is the (portal,
     category, day): `ingest_bulk_days` (a matview, one rule — the pair's first day, or more than
-    `greatest(100, 4 ×` its median daily sightings`)` — refreshed nightly by pg_cron) and ONE
+    `greatest(100, 4 ×` its median daily sightings`)` — refreshed hourly by pg_cron through
+    `refresh_matview`, so a sweep that starts today stops reading as ordinary within the hour) and ONE
     measure `measure_tom_observed(source, category_main, category_type, first_seen_at)`.
-    `browse_projection` publishes it as `tom_observed`, the property's EARLIEST ad's answer;
+    `browse_projection` publishes it as `tom_observed`, the property's earliest ad with a category's
+    answer (the function is not inlinable — a sub-select never is — and runs as a call per row, paid
+    once per rebuild);
     `tom_observed_only` is an on/off registry filter (Browse + the cohort agendas; the Watchdog
     carries no TOM) compiled by a hook on `listings` and hand-coded in the SPA, because an
     auto-dispatched `false` would select the sweep ads instead of nothing. `properties_public` and
-    `listings_public` do not carry it: no consumer of theirs filters on it. Stated residue: a small
-    pair's spill-over days after its first day pass as ordinary; mixing active and inactive ads
-    (the first half) is unchanged and the operator's to live with.
+    `listings_public` do not carry it: no consumer of theirs filters on it. Stated residue, one rule
+    and no second signal: a sweep's spill-over days just under the threshold read as ordinary
+    (bazos byt/prodej 2026-05-31: 1 034 ads against 1 058), and a single seller's batch upload on a
+    small pair reads as a sweep (sreality pozemek/drazba 2026-09-17: 158 of 165 ads from one seller;
+    ~1.1k ads, 0.1 % of the corpus); the flag of an ad first seen TODAY can flip when the hour's
+    refresh learns the day was a sweep; mixing active and inactive ads (the first half) is
+    unchanged and the operator's to live with.
 
 24. **Folded into 25.** The number is kept because rules are cited by number and never renumbered;
     the two-paths-until-W6 rule it used to state ended when W4-c dropped the legacy store.
