@@ -278,8 +278,11 @@ _FLOOR_ORDINAL_WORDS: dict[str, int] = {
 }
 _ORDINAL_ALTERNATION: str = "|".join(
     sorted(_FLOOR_ORDINAL_WORDS, key=len, reverse=True))
+# E967: the NP noun only, as `_PROSE_NP` reads it. A bare `v prvním podlaží` is written for the
+# ground floor and for the first floor above it (one Prague 1+kk is `ve druhém patře` on sreality
+# and `v prvním podlaží` on bezrealitky), and the NP noun is now read at any gap.
 _WORD_NP = re.compile(
-    r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:nadzemnim\s+)?(?:podlazi|np)\b")
+    r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:nadzemnim\s+podlazi|np)\b")
 _WORD_PATRO = re.compile(r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|patro|poschodi)\b")
 
 

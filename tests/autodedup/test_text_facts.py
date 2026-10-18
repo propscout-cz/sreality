@@ -9,6 +9,8 @@ from autodedup.text_facts import (
     address_block_key,
     mask_codes,
     orientations,
+    printed_floors,
+    printed_floors_by_form,
     printed_unit_codes,
     reference_codes,
     stated_areas,
@@ -191,3 +193,20 @@ def test_printed_unit_codes_reads_a_co_living_room_code(text: str, expected: set
 )
 def test_printed_unit_codes_reads_no_range_and_no_room_number(text: str) -> None:
     assert printed_unit_codes(text) == frozenset()
+
+
+# --- E967: the NP noun is the explicit one ---------------------------------------------------
+
+
+def test_the_np_noun_is_read_numbered_and_worded() -> None:
+    """náměstí Jiřího z Poděbrad: sreality 14936 in May against idnes 19241736 in October."""
+    may = "nabídli nezařízený byt, který se nachází ve 3 nadzemním podlaží secesního domu"
+    october = "moderní stylový byt 3kk, který se nachází ve čtvrtém nadzemním podlaží secesního domu"
+    assert printed_floors_by_form(may, True)["np"] == {3}
+    assert printed_floors_by_form(october, True)["np"] == {4}
+
+
+def test_a_bare_podlazi_is_not_the_np_noun() -> None:
+    """`v prvním podlaží` is written for the ground floor and for the one above it."""
+    assert printed_floors("bydlení je situováno v prvním podlaží", True) == frozenset()
+    assert printed_floors("byt ve třetím podlaží domu", True) == frozenset()

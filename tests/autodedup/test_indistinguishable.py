@@ -287,6 +287,58 @@ def test_a_subset_of_room_codes_is_not_a_conflict() -> None:
     assert "unit_code" not in stated(room(12273170, ROOMS_403_303), only)
 
 
+# --- E967: the storey stated in the NP noun on both sides ------------------------------------
+# náměstí Jiřího z Poděbrad: one agency's 93 m² 3+kk on NP 3 (sreality 14936, May) and the flat
+# above it on NP 4 (idnes 19241736, October); every stored floor column reads 3. The prices are
+# levelled here so the storey is the only thing left to read.
+NP_3 = ("Rádi bychom Vám nabídli nezařízený byt, který se nachází ve 3 nadzemním podlaží "
+        "secesního domu s výtahem.")
+NP_4 = ("Nabízíme k pronájmu moderní stylový byt 3kk, který se nachází ve čtvrtém nadzemním "
+        "podlaží secesního domu s výtahem.")
+PATRO_3 = ("Nabízíme Vám k pronájmu velmi moderní a luxusní byt po rekonstrukci na náměstí Jiřího "
+           "z Poděbrad, 3+kk, 93m2, ve 3. patře v domě s výtahem.")
+PATRO_4_WORDED = ("Nabízíme k pronájmu byt 3+kk o užitné ploše 93 m² ve čtvrtém patře historického "
+                  "činžovního domu s výtahem.")
+
+
+def flat(listing_id: int, body: str, source: str = "sreality", first: str = "2026-05-01",
+         last: str = "2026-06-01", **fields: object) -> Listing:
+    return listing(listing_id, source=source, category_type="pronajem", disposition="3+kk",
+                   area_m2=93.0, floor=3, price=44_800.0, description=body,
+                   first_seen_at=f"{first}T00:00:00+00:00", last_seen_at=f"{last}T00:00:00+00:00",
+                   **fields)
+
+
+def test_one_storey_apart_in_the_np_noun_is_a_fact_across_portals() -> None:
+    a = flat(14936, NP_3, broker_key="phone-a")
+    b = flat(19241736, NP_4, source="idnes", first="2026-10-01", last="2026-10-18")
+    for mode in (PROMOTE, CLUSTER):
+        assert "prose_floor" in stated(a, b, mode)
+
+
+def test_np_against_patro_is_still_the_two_nouns() -> None:
+    """sreality 14936 `ve 3 nadzemním podlaží` against sreality 19241633 `ve 3. patře`: on the
+    NP scale one storey apart, across the two nouns, never on sale together, two brokers."""
+    a = flat(14936, NP_3, broker_key="phone-a")
+    b = flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18", broker_key="identity-b")
+    assert "prose_floor" not in stated(a, b)
+
+
+def test_one_storey_apart_in_the_patro_noun_stays_the_vocabulary() -> None:
+    """sreality 19241633 `ve 3. patře` against idnes 19250437 `ve čtvrtém patře`."""
+    a = flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18")
+    b = flat(19250437, PATRO_4_WORDED, source="idnes", first="2026-10-01", last="2026-10-18")
+    assert "prose_floor" not in stated(a, b)
+
+
+def test_a_house_names_its_storeys_as_rooms_even_in_the_np_noun() -> None:
+    a = listing(1, category_main="dum", disposition=None,
+                description="V 1. NP se nachází kuchyně s obývacím pokojem.")
+    b = listing(2, source="idnes", category_main="dum", disposition=None,
+                description="Ve 2. NP jsou dvě ložnice a koupelna.")
+    assert "prose_floor" not in stated(a, b)
+
+
 # --- image facts, which come only from the engine's own feature row --------------------------
 
 

@@ -60,7 +60,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, Mapping, Sequence
+from typing import Callable, Iterable, Mapping, Sequence
 
 from autodedup.body_align import (
     aligned_difference,
@@ -2841,7 +2841,8 @@ def distinguishing_facts(
     # a building and every flat in it shares it — and an empty set is never a conflict.
     # E166: the storey the BODY prints, read under the SAME rule as the column — a gap of two
     # is a fact anywhere, a gap of one only inside one feed, because `přízemí` is written both
-    # ways and 45 % of cross-portal known duplicates carry a one-storey gap for that reason. It
+    # ways and 45 % of cross-portal known duplicates carry a one-storey gap for that reason
+    # (E967: not where both bodies write the NP noun, which has no `přízemí` to blame). It
     # is read because the stored column is null on one side of a third of the corpus, and
     # because `body_align` must not read a storey (E163: doing so newly split 126 certain
     # duplicates of two cohorts on nothing else).
@@ -2850,8 +2851,8 @@ def distinguishing_facts(
     # nachází dvě samostatné místnosti` rewritten as `V přízemí najdete dvě samostatné
     # místnosti`, one house, one price path, two storey words. The worded readings are
     # therefore not read at all where either side is a whole building or a plot.
-    words = cfg.d43_prose_floor_words and not (
-        {a.category_main, b.category_main} & PLOT_EXACT_CATEGORIES)
+    whole_building = bool({a.category_main, b.category_main} & PLOT_EXACT_CATEGORIES)
+    words = cfg.d43_prose_floor_words and not whole_building
 
     def worded_gap(reader, numbered, left: Listing, right: Listing) -> int | None:
         """The storey gap the two bodies state, or None when they state none.
@@ -2862,6 +2863,7 @@ def distinguishing_facts(
         written for the second storey and for the second floor above it by different authors —
         one Rokytnice 2+kk is `v druhém patře` and, re-posted by the same broker at the same
         9,800 Kč, `ve 1. patře (2. NP)` — so a worded ordinal cannot carry a one-storey claim.
+        The NP noun on both sides is `np_apart`'s, at any gap.
         """
         plain_a, plain_b = numbered(left.description), numbered(right.description)
         if plain_a and plain_b and not (plain_a & plain_b):
@@ -2882,27 +2884,47 @@ def distinguishing_facts(
                                   reader(right.description, True))
         return gap if gap is not None and gap >= 2 else None
 
+    def np_apart(reader: Callable[[str | None, bool], Mapping[str, frozenset[int]]],
+                 left: Listing, right: Listing) -> bool:
+        """E967: do both bodies state the storey in the NP noun, and state two different ones?
+
+        `N. NP`, `N nadzemním podlaží` and `čtvrtém nadzemním podlaží` leave nothing to excuse:
+        the two-storey bar and the one-storey camp and feed tests exist for `patro` and
+        `přízemí`, and the NP noun has neither, so its gap is a storey at any size between any
+        two feeds. One náměstí Jiřího z Poděbrad agency lets one 93 m² 3+kk `ve 3 nadzemním
+        podlaží` in May and the one above it `ve čtvrtém nadzemním podlaží` in October, on four
+        portals. A storey the two bodies share across both nouns still vetoes it (E210), and a
+        whole building's storey is a room's address (E201).
+        """
+        if whole_building:
+            return False
+        np_left = reader(left.description, words).get("np", frozenset())
+        np_right = reader(right.description, words).get("np", frozenset())
+        return bool(np_left and np_right and not (np_left & np_right)
+                    and not (printed_floors(left.description, True)
+                             & printed_floors(right.description, True)))
+
+    def gap_is_a_storey(gap: int) -> bool:
+        """The column's rule: two storeys anywhere, one inside a camp or inside one feed."""
+        return _rounded_floors(a, b, cfg, gap) or (gap == 1 and _same_feed(
+            a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed))
+
     if cfg.d43_prose_floor:
         prose_gap = worded_gap(printed_floors_by_form, printed_floors, a, b)
-        if prose_gap is not None:
-            floors_a = printed_floors(a.description, words)
-            floors_b = printed_floors(b.description, words)
-            feed = _same_feed(a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed)
-            if (_rounded_floors(a, b, cfg, prose_gap)
-                    or (prose_gap == 1 and feed)):
-                add("prose_floor", sorted(floors_a), sorted(floors_b))
+        if np_apart(printed_floors_by_form, a, b) or (
+                prose_gap is not None and gap_is_a_storey(prose_gap)):
+            add("prose_floor", sorted(printed_floors(a.description, words)),
+                sorted(printed_floors(b.description, words)))
 
     # E181: the storey stated OF THE OFFERED UNIT. `prose_floor` is a set of every storey the
     # body names, and one Dašice mill advert names its own 2.NP and a WC in 1.NP, so the sets
     # meet and the two floors of one mill never contradict. The placement clause names one.
     if cfg.d43_subject_floor:
         subject_gap = worded_gap(subject_floors_by_form, subject_floors, a, b)
-        if subject_gap is not None:
-            subject_a = subject_floors(a.description, words)
-            subject_b = subject_floors(b.description, words)
-            feed = _same_feed(a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed)
-            if _rounded_floors(a, b, cfg, subject_gap) or (subject_gap == 1 and feed):
-                add("subject_floor", sorted(subject_a), sorted(subject_b))
+        if np_apart(subject_floors_by_form, a, b) or (
+                subject_gap is not None and gap_is_a_storey(subject_gap)):
+            add("subject_floor", sorted(subject_floors(a.description, words)),
+                sorted(subject_floors(b.description, words)))
 
     # E181: the storey written in WORDS. `v přízemí` against `v patře` carries no digit, so no
     # numbered reader sees it — and it needs no camp table either, because `přízemí` is the

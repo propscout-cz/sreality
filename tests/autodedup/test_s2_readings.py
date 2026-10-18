@@ -293,9 +293,17 @@ def test_np_and_patro_are_one_storey_for_the_prose_fact() -> None:
     }
 
 
-def test_a_one_storey_gap_across_portals_is_vocabulary_not_a_fact() -> None:
+def test_a_one_storey_gap_across_portals_is_vocabulary_only_outside_the_np_noun() -> None:
+    """E967: `přízemí` is what makes a one-storey gap across portals a vocabulary, and the NP
+    noun has none — `2. NP` against `3. NP` is a storey; `2. patře` against `3. patře` is not."""
     a = listing(1, description=_pad("Byt se nachází ve 2. NP cihlového domu."), source="idnes")
     b = listing(2, description=_pad("Byt se nachází ve 3. NP cihlového domu."),
+                source="bezrealitky")
+    assert "prose_floor" in {
+        fact.name for fact in distinguishing_facts(a, b, None, s2())
+    }
+    a = listing(1, description=_pad("Byt se nachází ve 2. patře cihlového domu."), source="idnes")
+    b = listing(2, description=_pad("Byt se nachází ve 3. patře cihlového domu."),
                 source="bezrealitky")
     assert "prose_floor" not in {
         fact.name for fact in distinguishing_facts(a, b, None, s2())
