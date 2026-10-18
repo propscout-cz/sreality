@@ -1067,10 +1067,13 @@ def test_staleness_budget_is_three_cadences_or_the_cadence_plus_githubs_delay() 
 
 
 class _DueConn:
-    """Answers the newest-run_at-per-key read from a {key: run_at} map."""
+    """Answers the newest-run_at-per-key read from a {key: run_at} map; a newest row older than
+    its key's `declared` stamp is dropped where the statement guards on declared_at."""
 
-    def __init__(self, newest: dict[str, Any]) -> None:
+    def __init__(self, newest: dict[str, Any],
+                 declared: dict[str, _dt.datetime] | None = None) -> None:
         self._newest = newest
+        self._declared = declared or {}
         self.executed: list[tuple[str, Any]] = []
         self._rows: list[tuple[Any, ...]] = []
 
@@ -1085,7 +1088,15 @@ class _DueConn:
 
     def execute(self, sql: str, params: Any = None) -> None:
         self.executed.append((sql, params))
-        self._rows = [(k, self._newest.get(k)) for k in params["keys"]]
+        guarded = "r.run_at >= coalesce(h.declared_at" in " ".join(sql.split())
+
+        def newest(key: str) -> Any:
+            at, floor = self._newest.get(key), self._declared.get(key)
+            if guarded and at is not None and floor is not None and at < floor:
+                return None  # the newest row predates the registration, so every row does
+            return at
+
+        self._rows = [(k, newest(k)) for k in params["keys"]]
 
     def fetchall(self) -> Any:
         return self._rows
@@ -1142,6 +1153,26 @@ def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measure
     assert due("outbound_url_conformance", days=7, minutes=-10)
     assert not due("outbound_url_conformance", days=7, minutes=-16)
     assert {c.cadence_s - c.due_after_s for c in CHECKS} == {360, 900}
+
+
+def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
+    """The page and the ladder ignore rows older than declared_at, so a key whose newest row
+    predates its registration read Not measured for a whole cadence before the lanes measured
+    it: the daily image probe and the weekly URL probe, last measured before wave 1."""
+    from scripts.verify_pipeline import due_checks
+
+    registered = _NOW - _dt.timedelta(minutes=1)  # project_registry runs first in main()
+    conn = _DueConn({"outbound_url_conformance": _NOW - _dt.timedelta(days=2),
+                     "sreality_image_template": _NOW - _dt.timedelta(hours=3),
+                     "llm_errors": _NOW - _dt.timedelta(seconds=30)},
+                    declared=dict.fromkeys(
+                        ("outbound_url_conformance", "sreality_image_template", "llm_errors"),
+                        registered))
+    due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
+    assert "outbound_url_conformance" in due and "sreality_image_template" in due
+    assert "llm_errors" not in due, "a row written since the registration still counts"
+    (sql, _params), = conn.executed
+    assert "left join health_checks h on h.key = k.key" in " ".join(sql.split())
 
 
 def test_due_selection_never_reaches_another_hosts_checks(monkeypatch: Any) -> None:
@@ -3802,7 +3833,8 @@ def test_false_delist_share_skips_a_small_portal_rather_than_scoring_it_clean() 
     assert "50+ ads" in out["details"]["skipped"]
     assert out["details"]["unscored"] == ["maxima"]
     assert out["details"]["per_source"]["maxima"]["scored"] is False
-    assert "verified for nothing" in out["message"]
+    # Not measured states what was not scored, never a diagnosis of a quiet drain.
+    assert out["message"] == "No portal closed 50+ ads in the last 7 days; nothing to score."
 
 
 def test_false_delist_share_reads_flipped_rows_only() -> None:

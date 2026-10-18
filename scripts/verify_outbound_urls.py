@@ -10,8 +10,9 @@ records what came back.
 A registered check of scripts/verify_pipeline.py (cadence one week, budget `PROBE_BUDGET_S`),
 run when due from the GitHub lanes, so the probe leaves from an address other than the
 scrapers'. The HEAD loop keeps that budget itself, since nothing outside can preempt a request:
-each request waits at most 20 s or what is left, and the URLs it did not reach are reported as
-`unprobed`, never as failures.
+each HEAD's connect and read timeouts are min(20 s, time left); DNS is not bounded, so one
+request can run past it, and the job's 180 s headroom absorbs that. The URLs it did not reach
+are reported as `unprobed`, never as failures.
 Status-code HEAD only — never follow a redirect, never read a body, never authenticate,
 never reuse this as an ingest surface (sreality's SSR page 302s into a login.seznam.cz
 chain; the scraper reaches sreality by id through /api/v1/estates).
@@ -19,14 +20,17 @@ chain; the scraper reaches sreality by id through /api/v1/estates).
 Sampling is STRATIFIED and ROTATING, not uniform: uniform sampling would never test a
 rare code. Each run covers a quarter of the sreality codebook chosen by the ISO week
 (so the whole codebook is covered every four weeks with no new state table), three
-random active ads per code, plus one active ad per crawler portal.
+random active ads per code, plus one active ad per crawler portal. The draw is probed in an
+order shuffled by the ISO week (reproducible within it), so a slow sreality never starves the
+crawler portals that used to queue behind every sreality code.
 
 Thresholding is by CONCENTRATION, not raw rate. A 404 on a single ad is most likely a
 delisting rule #3 has not caught up with; a URL-SHAPE defect is systematic — every ad
 of one (category_main, category_sub_cb) cell fails together. So: `fail` when any cell
 with >= cell_min samples is >= cell_fail_share non-conforming; `warn` when the overall
 non-conformance exceeds warn_share; `ok` otherwise; `unknown` when nothing was drawn, or the
-budget ran out before the first URL was probed.
+budget ran out before half of the draw was probed (a verdict over a sliver of the sample could
+read a slug defect it never reached as OK).
 Active ads only — a delisted sreality page 404s at any URL, so the archive is guarded by
 the offline rails, not this.
 """
@@ -35,6 +39,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -53,6 +58,9 @@ ROWS_PER_CB = 3
 CRAWLER_SOURCES = ("bazos", "bezrealitky", "idnes", "mmreality", "remax",
                    "ceskereality", "realitymix", "maxima")
 _PROBE_INTERVAL_S = 0.5
+# A verdict needs at least this share of the draw probed: the concentration rule judges whole
+# cells, and the cells the budget never reached could hold the defect.
+_MIN_PROBED_SHARE = 0.5
 # The check's whole budget, sampling included: verify_pipeline registers the check with it.
 PROBE_BUDGET_S = 120.0
 _REQUEST_TIMEOUT_S = 20.0
@@ -154,6 +162,7 @@ def classify(samples: list[tuple[Sample, bool]], thresholds: dict[str, Any]) -> 
 
 
 def draw_samples(conn: Any, week: int) -> list[Sample]:
+    """This ISO week's sample, in an order shuffled by the week so no portal queues last."""
     out: list[Sample] = []
     with conn.cursor() as cur:
         for cb in codes_for_week(week):
@@ -162,6 +171,7 @@ def draw_samples(conn: Any, week: int) -> list[Sample]:
         for source in CRAWLER_SOURCES:
             cur.execute(_CRAWLER_SAMPLE_SQL, {"source": source})
             out.extend(Sample(*r) for r in cur.fetchall())
+    random.Random(week).shuffle(out)
     return out
 
 
@@ -206,7 +216,7 @@ def probe_all(samples: list[Sample], budget_s: float) -> list[tuple[Sample, bool
 def check_outbound_url_conformance(conn: Any, thresholds: dict[str, Any], *,
                                    budget_s: float = PROBE_BUDGET_S) -> dict[str, Any]:
     """This ISO week's sample of stored portal URLs, probed by HEAD within `budget_s` and
-    judged by concentration over the URLs it reached."""
+    judged by concentration over the URLs it reached, once those are half the draw or more."""
     started = time.monotonic()
     week = _dt.datetime.now(_dt.timezone.utc).isocalendar().week
     codes = codes_for_week(week)
@@ -223,13 +233,14 @@ def check_outbound_url_conformance(conn: Any, thresholds: dict[str, Any], *,
     probed = probe_all(samples, budget_s - (time.monotonic() - started))
     spent = {"week": week, "codes": codes, "unprobed": len(samples) - len(probed),
              "budget_seconds": round(budget_s, 1)}
-    if not probed:
-        detail = (f"the {budget_s:.0f} s budget was spent before any of the {len(samples)} "
-                  "sampled URLs was probed")
+    if len(probed) < len(samples) * _MIN_PROBED_SHARE:
+        detail = (f"probed {len(probed)} of {len(samples)} sampled URLs before the "
+                  f"{budget_s:.0f} s budget ran out")
         return {
             "check_key": CHECK_KEY, "status": "unknown", "value": None,
             "details": {"skipped": detail, **spent},
-            "message": f"Portal URL conformance verified NOTHING — {detail}.",
+            "message": (f"Portal URL conformance is Not measured: {detail}, under the half "
+                        "of the draw a verdict needs."),
         }
     result = classify(probed, thresholds)
     result["details"].update(spent)

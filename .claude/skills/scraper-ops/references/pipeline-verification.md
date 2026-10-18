@@ -17,17 +17,23 @@ from main: a `workflow_dispatch` from a branch, `GITHUB_REF_NAME` ≠ main, meas
 projects, so a branch's `CHECKS` cannot delete main's keys; a local run without the variable counts as main); a run
 writes one `pipeline_check_results` row per check it ran, carrying `details.message`,
 `details.elapsed_ms` and, when the check emits them, `details.cells`. Both GitHub lanes run
-only the checks that are DUE: newest row older than `cadence_s` less a slack of min(cadence /
-10, 15 min), so a run that comes a few minutes short of a full cadence after the last one does
-not skip a whole cadence. The two lanes are identical but for their crons — `llm_health.yml`
-hourly, `verify_pipeline.yml` 6-hourly (it also takes a manual `dry_run`) — and both carry
-`--exit-nonzero-on-fail`, so a failing alarm on either reds its run and GitHub emails (a gauge
-never reds a run); they share one concurrency group (`pipeline-verification`), so they take
-turns instead of measuring a check twice, and the daily `sreality_image_template` and weekly
-`outbound_url_conformance` probes ride whichever lane finds them due. The URL probe keeps its own 120 s
-budget (`PROBE_BUDGET_S` in `scripts/verify_outbound_urls.py`, its `Check.budget_s`): each HEAD waits
-min(20 s, time left), URLs it did not reach are `details.unprobed` (with `details.budget_seconds`), never
-failures, and none probed is `unknown`. A timeout, a not-run, an
+only the checks that are DUE: newest row older than `cadence_s` less a slack of min(cadence / 10, 15
+min) (`toolkit/system_alerts.due_after_s`, the interval the recovery hold doubles), so a run that
+comes a few minutes short of a full cadence after the last one does not skip a whole cadence. Only
+rows written since the key's `declared_at` count, as for the page and the ladder, so a newly
+registered or re-declared key is due in the run that projects it. The two lanes are identical but
+for their crons — `llm_health.yml` hourly, `verify_pipeline.yml` 6-hourly (it also takes a manual
+`dry_run`) — and both carry `--exit-nonzero-on-fail`, so a failing alarm on either reds its run and
+GitHub emails (a gauge never reds a run); they share one concurrency group
+(`pipeline-verification`), so they take turns instead of measuring a check twice, and the daily
+`sreality_image_template` and weekly `outbound_url_conformance` probes ride whichever lane finds
+them due. The URL probe keeps its own 120 s budget (`PROBE_BUDGET_S` in
+`scripts/verify_outbound_urls.py`, its `Check.budget_s`): each HEAD's connect and read timeouts are
+min(20 s, time left); DNS is not bounded, so one request can run past it, and the job's 180 s
+headroom absorbs that. It probes its draw in an order shuffled by the ISO week, so a slow sreality
+cannot starve the crawler portals; URLs it did not reach are `details.unprobed` (with
+`details.budget_seconds`), never failures, and a probe that reached fewer than half of its draw is
+`unknown` ("probed N of M …" in `details.skipped`). A timeout, a not-run, an
 error or a check's own could-not-measure path is `unknown` with its reason in `details`
 (`timed_out`, `not_run`, `errored`, `skipped`). One "verified nothing" path still reads `warn`
 until wave 6 replaces its check: `ppm2_median_shift`'s "compared NOTHING";
@@ -469,8 +475,9 @@ Until W7 ships it, `llm_errors` still catches "calls are failing" (from state, n
 ## `ops_incidents` — the failure-signature producer (W3, migration 462)
 
 **Fenced from cell incidents since wave 1 of the Health dashboard sprint (both of its
-auto-resolve statements skip `signature LIKE 'cell:%'`, and the poller ignores `check:`
-signatures: a failing check is the ladder's to tell), and retiring in wave 3.**
+auto-resolve statements skip `signature LIKE 'cell:%'`, and the poller opens no incident for a
+`check:<key>|fail` signature on a run that concluded `failure`: a failing check is the ladder's
+to tell; a timed-out, cancelled or interrupted lane still opens one), and retiring in wave 3.**
 
 The verification harness measures the 29 registered checks and rings nothing itself; the ladder
 below reads their results. Neither says anything about the ~40 workflow failures/day that never
@@ -486,7 +493,7 @@ the whole mechanism, and it is why six portals failing on one `CheckViolation` a
 
 ```
 checkviolation|new row for relation listings violates check constraint listings_area_basis_check
-check:property_maintenance|fail          # verify_pipeline's own CHECK line, one key per check (ignored by the poller since wave 1)
+check:property_maintenance|fail          # verify_pipeline's own CHECK line, one key per check (the poller skips it on a `failure` run since wave 1)
 aborting|consecutive errors provider outage   # scripts that catch their own error and exit 1
 step:run tests|exit:timed_out@.github/workflows/test.yml   # unreadable red — the ONE scoped key
 ```
@@ -582,8 +589,9 @@ outbox delivers the rows once a transport is configured. A pass is one transacti
 `pg_try_advisory_xact_lock(hashtext('health_reconcile'))` — a second caller returns zeros and
 writes nothing — and returns `{opened, reminded, recovered, closed_silently, notices}`, logged
 when any is non-zero. Its values are module constants in `toolkit/system_alerts`, spelled once
-(`ALARM_RUNGS_H`, `ALARM_WEEKLY_H`, `GAUGE_RUNG_H`, `RECOVERY_HOLD_MIN_S`,
-`UNMEASURED_CLOSE_DAYS`, `MESSAGE_MAX_CHARS`); no setting overrides them.
+(`ALARM_RUNGS_H`, `ALARM_WEEKLY_H`, `GAUGE_RUNG_H`, `DUE_SLACK_MAX_S`, `RECOVERY_HOLD_MIN_S`,
+`UNMEASURED_CLOSE_DAYS`, `MESSAGE_MAX_CHARS`); no setting overrides them. The harness's due
+selection imports `due_after_s` from it, so the due slack and the hold built on it cannot drift.
 
 **What it reads.** The registry (`health_checks`: key, class, cadence, staleness budget, label,
 unit), the newest `pipeline_check_results` row per registered key written since the key's
@@ -603,12 +611,14 @@ unique index allows one open row per cell. A measured `fail` opens it (`first_se
 `last_seen_at` = the result's `run_at`) or, when it is open, advances `last_seen_at` and clears
 `ok_since`. A `warn` keeps an open incident open (clears `ok_since`) and opens nothing. A
 measured `ok` starts `ok_since` at the first OK, and the incident resolves
-(`resolve_reason = 'measured ok'`) only on an OK measured across the hold,
-`max(2 × cadence, 30 min)`: the newest OK's `run_at` must be at least the hold after the first
-OK; one lone OK never recovers. Two closes send nothing: an incident whose key left the registry
-(`retired`), and a cell unmeasured for max(7 d, 2 × cadence) — its `last_seen_at` older than that
-and its cell in no measured row inside it — which closes silently (`unmeasured 7d`; two weeks for
-the weekly URL probe). Not measured never opens, recovers or ages an incident.
+(`resolve_reason = 'measured ok'`) only on an OK measured across the hold, two cadences less the
+due slack, never under 30 min (`max(2 × due_after_s(cadence), 30 min)`: a lane measures a check
+up to the slack early, so two measured intervals can sum to under two cadences): the newest OK's
+`run_at` must be at least the hold after the first OK; one lone OK never recovers. Two closes send
+nothing: an incident whose key left the registry (`retired`), and a cell unmeasured for max(7 d,
+2 × cadence) — its `last_seen_at` older than that and its cell in no measured row inside it
+written since the key's `declared_at` — which closes silently (`unmeasured 7d`; two weeks for the
+weekly URL probe). Not measured never opens, recovers or ages an incident.
 
 **What it tells.** Each notice is one `notification_dispatches` row written by
 `emit_system_alert(conn, check_key, message, *, dedupe_key)`, which stamps `target_channels` from

@@ -230,8 +230,8 @@ What wave 1 changed:
 - **One ladder.** `toolkit/system_alerts.reconcile`, run by the API every 60 s, keeps one
   `ops_incidents` row per failing cell (`cell:<key>:<subject>`), sends one grouped onset per check,
   reminds until acknowledged on Health — an alarm at 6 h, 24 h, 72 h and then weekly, a gauge once
-  a day (the Q2 ruling) — and sends one recovery once an OK is measured across
-  `max(2 × cadence, 30 min)`. The 30-day re-derivation, the flap cooldown, the day-keyed alerts
+  a day (the Q2 ruling) — and sends one recovery once an OK is measured across two cadences less
+  the due slack, never under 30 min. The 30-day re-derivation, the flap cooldown, the day-keyed alerts
   and the weekly heartbeat are deleted. The GitHub lanes write no system alert; a failing alarm
   still reds either lane, so GitHub emails.
 - **Read is not acknowledged.** Platform admins can now mark a system alert read (migration 619's
@@ -242,7 +242,8 @@ What wave 1 changed:
   its effective status (Not measured once stale) and its incidents; keys outside the registry, such
   as the frozen `outbound_url_parity`, leave the page.
 - The retiring signature engine is fenced: it can never close or "recover" a cell incident, and
-  its poller ignores the `check:` signatures of a red lane.
+  its poller opens no incident for a lane that exited 1 on a failing check (`check:<key>|fail` on a
+  `failure` run); a timed-out, cancelled or interrupted lane still opens one.
 
 Owed items this absorbs:
 - **`docs/design/realtime-scrapers.md`'s deferred W5b** (SLO-scaled health, push alerting,

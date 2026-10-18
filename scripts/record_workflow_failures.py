@@ -223,8 +223,12 @@ _JOB_FAIL_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "startup
 
 # A red whose reason is verify_pipeline's own failing CHECK line is a check verdict, and since
 # wave 1 of the Health sprint the ladder (toolkit/system_alerts.reconcile) tells those from the
-# stored result: an incident here would ring the same Problem twice. Crashes keep flowing.
+# stored result: an incident here would ring the same Problem twice. Only a `fail` verdict on a
+# `failure` run (the `--exit-nonzero-on-fail` exit) is the ladder's: a lane that timed out, was
+# cancelled or was interrupted logs no exception, so its reason reads as a warn/unknown CHECK
+# line, yet its red is the kill, which the ladder never tells; it keeps flowing, as crashes do.
 _LADDER_OWNED_PREFIX = "check:"
+_LADDER_OWNED_SUFFIX = "|fail"
 
 # Wall-clock ceiling for the whole incident pass. MAX_LOG_FETCHES alone is not a time
 # budget: each fetch is up to 4 round trips (jobs list, the 302, then _fetch_blob_tail's
@@ -258,6 +262,12 @@ def _gh_request(url: str, token: str) -> urllib.request.Request:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
+
+
+def _is_ladder_owned(signature: str, conclusion: str | None) -> bool:
+    """A red that exited 1 on a failing check's verdict: the health ladder's to tell."""
+    return (conclusion == "failure" and signature.startswith(_LADDER_OWNED_PREFIX)
+            and signature.endswith(_LADDER_OWNED_SUFFIX))
 
 
 def select_failed_job(jobs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -349,7 +359,7 @@ def record_incidents(
 ) -> dict[str, int]:
     """Give every newly recorded red a REASON, and close the ones the fleet answered.
 
-    A red whose reason is a failing check is the health ladder's (`_LADDER_OWNED_PREFIX`):
+    A red that exited 1 on a failing check's verdict is the health ladder's (`_is_ladder_owned`):
     it keeps its `workflow_failures` row and opens no incident here.
 
     The API-budget saver is the RUN CLAIM (`ops_incident_runs`, migration 463), not a
@@ -409,7 +419,7 @@ def record_incidents(
         if text:
             stats["fetched"] += 1
             signature = failure_signature.signature_from_log(text)
-            if signature is not None and signature.startswith(_LADDER_OWNED_PREFIX):
+            if signature is not None and _is_ladder_owned(signature, f.get("conclusion")):
                 stats["ladder_owned"] += 1
                 ladder_owned.append(signature)
                 continue

@@ -2027,9 +2027,9 @@ renumber.** Navigate by area:
     lane, which emails). The ONE teller is `toolkit/system_alerts.reconcile`, run by the API every
     60 s beside the watchdog matcher (the outbox delivers its rows once a transport is configured):
     it keeps one `ops_incidents` row per failing cell (signature `cell:<key>:<subject>`) — a
-    measured `fail` opens it, `warn` keeps it open, an OK measured across the hold
-    `max(2 × cadence, 30 min)` closes it (the newest OK's `run_at` at least the hold after the first
-    OK's; one lone OK never recovers), Not measured never touches it — and emits
+    measured `fail` opens it, `warn` keeps it open, an OK measured across the hold — two cadences
+    less the due slack, never under 30 min — closes it (the newest OK's `run_at` at least the hold
+    after the first OK's; one lone OK never recovers), Not measured never touches it — and emits
     `source_kind='system_health'` dispatches, at most one onset, one reminder and one recovery per
     check per pass (dedupe `sys:<key>:<onset|reminder|recovery>:…`), reminding at 6 h / 24 h / 72 h
     then weekly for an alarm and every 24 h for a gauge: `subscription_id` and `collection_id` both
@@ -2056,7 +2056,8 @@ renumber.** Navigate by area:
     `scripts/record_workflow_failures.py`'s job-log backstop, one dispatch per incident — no second
     alert table, no parallel bell namespace. **It is fenced from cell incidents** (both of its
     auto-resolve statements skip `signature LIKE 'cell:%'`, so it can never close or "recover" one,
-    and the poller ignores `check:` signatures, a failing check being the ladder's to tell)
+    and the poller opens nothing for a `check:<key>|fail` signature on a `failure` run, a failing
+    check being the ladder's to tell; a timed-out, cancelled or interrupted lane still opens one)
     **and retires in wave 3**, leaving one incident model.
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
     **A FOURTH producer is live (migration 610): `collection_share`.** `POST

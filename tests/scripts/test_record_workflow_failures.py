@@ -10,6 +10,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pytest
+
 from scripts.record_workflow_failures import (
     CANCELLED_MIN_DURATION_MINUTES,
     MAX_PAGES,
@@ -530,6 +532,38 @@ _CRASH_LOG = (
     "statement timeout\n"
     "2026-10-18T06:00:04.4000000Z ##[error]Process completed with exit code 1.\n"
 )
+# A lane killed by its job timeout: CHECK lines up to the kill, none failing, no exception.
+_KILLED_LOG = (
+    "2026-10-18T06:00:01.1000000Z 2026-10-18 06:00:01,100 INFO verify_pipeline "
+    "CHECK llm_burn_rate status=warn value=95.0\n"
+    "2026-10-18T06:00:02.2000000Z 2026-10-18 06:00:02,200 INFO verify_pipeline "
+    "CHECK db_saturation status=unknown value=None\n"
+    "2026-10-18T06:30:00.0000000Z ##[error]The operation was canceled.\n"
+)
+
+
+@pytest.mark.parametrize(("log", "conclusion", "fenced"), [
+    (_CHECK_LOG, "failure", True),        # exited 1 on a failing alarm: the ladder tells it
+    (_CHECK_LOG, "cancelled", False),     # a verdict on file, but the red is the kill
+    (_KILLED_LOG, "cancelled", False),    # a timeout-minutes kill (GitHub says cancelled)
+    (_KILLED_LOG, "timed_out", False),
+    (_KILLED_LOG, "failure", False),      # interrupted: only warn/unknown verdicts on file
+], ids=["fail-on-failure", "fail-on-cancelled", "warn-on-cancelled", "warn-on-timed-out",
+        "warn-on-failure"])
+def test_only_a_fail_verdict_on_a_failure_run_is_the_ladders(monkeypatch, log, conclusion,
+                                                               fenced):
+    """A warn or unknown CHECK line names no failing alarm, and no other conclusion is the
+    exit-1 path, so those reds open an incident: the ladder tells none of them."""
+    calls = _patch_incidents(monkeypatch)
+    monkeypatch.setattr(rwf, "_fetch_failed_job", lambda *_a: {
+        "job_id": 5, "step_name": "Run checks", "exit_code": conclusion})
+    monkeypatch.setattr(rwf, "fetch_job_log", lambda *_a, **_k: log)
+    stats = rwf.record_incidents(_IncidentConn(), "r", "t", [_failure(conclusion=conclusion)])
+    assert (stats["ladder_owned"], stats["recorded"]) == ((1, 0) if fenced else (0, 1))
+    if not fenced:
+        (call,) = calls
+        assert call["origin"] == f"actions/{conclusion}"
+        assert call["sig"].startswith("check:")
 
 
 def test_a_red_run_failing_only_on_a_check_verdict_opens_no_incident(monkeypatch, caplog):

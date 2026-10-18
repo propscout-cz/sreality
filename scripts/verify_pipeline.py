@@ -57,6 +57,7 @@ from scraper.sreality_client import (
 )
 from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
 from toolkit.listing_identity import R2_CARRIERS as _PARITY_CARRIERS
+from toolkit.system_alerts import due_after_s as _due_after_s
 
 
 # The SQL mirror of `location_data.claims_common.sreality_payload_shape`, inlined here when
@@ -3140,12 +3141,8 @@ def check_false_delist_share(conn: Any, thresholds: dict[str, Any]) -> dict[str,
         return {
             "check_key": "false_delist_share", "status": "unknown", "value": None,
             "details": {**details,
-                        "skipped": f"no portal closed {min_flips}+ ads in 7 days"},
-            "message": (
-                f"No portal closed {min_flips}+ ads in 7 days -- the false-delist share "
-                "was verified for nothing (expected right after migration 594 ships; "
-                "a quiet week later it means the drain is not flipping at all)."
-            ),
+                        "skipped": f"no portal closed {min_flips}+ ads in the last 7 days"},
+            "message": f"No portal closed {min_flips}+ ads in the last 7 days; nothing to score.",
         }
     if offenders:
         message = (
@@ -3769,11 +3766,6 @@ _HOURLY, _SIX_HOURLY, _DAILY, _WEEKLY = 3_600, 21_600, 86_400, 604_800
 # its cadence plus this slack; the worker and pg_cron keep time, so theirs is 3 cadences.
 _GITHUB_DELIVERY_SLACK_S = 18 * 3_600
 _STALE_CADENCES = 3
-# A key is due once its newest row is a cadence old less a tenth of the cadence, at most
-# 15 min: every row carries its run's START, so the next hourly run, started a minute
-# earlier in its slot, would find a 59-minute-old row not due and measure the key only
-# every second run.
-_DUE_SLACK_MAX_S = 900
 # The two checks that leave the database wait on third-party round trips, not on Postgres.
 # The URL probe's budget is declared beside its HEAD loop, which stops itself at it (nothing
 # outside can preempt a request); the image probe gets the same.
@@ -3805,7 +3797,8 @@ class Check:
     @property
     def due_after_s(self) -> int:
         """How old the newest result must be before a lane measures this check again."""
-        return self.cadence_s - min(self.cadence_s // 10, _DUE_SLACK_MAX_S)
+        # Spelled in the ladder, whose recovery hold is two of these intervals.
+        return _due_after_s(self.cadence_s)
 
 
 # A lane runs CHECKS in this order under its budget and stamps whatever it does not reach
@@ -3888,10 +3881,15 @@ CHECKS: tuple[Check, ...] = (
 
 # --- the harness ---------------------------------------------------------------
 
+# Only rows since the key's declared_at count, as for the page and the ladder: a newly registered
+# or re-declared key is due in the very run that projects it, not a cadence later.
 _DUE_SQL = """
 select k.key,
-       (select max(r.run_at) from pipeline_check_results r where r.check_key = k.key)
+       (select max(r.run_at) from pipeline_check_results r
+         where r.check_key = k.key
+           and r.run_at >= coalesce(h.declared_at, '-infinity'::timestamptz))
   from unnest(%(keys)s::text[]) as k(key)
+  left join health_checks h on h.key = k.key
 """
 
 _HEALTH_CHECKS_ROWS_SQL = """
@@ -3920,8 +3918,8 @@ delete from health_checks
 
 
 def due_checks(conn: Any, host: str, now: _dt.datetime) -> list[Check]:
-    """This host's checks, in registry order, whose newest result (any status) is absent or
-    at least `due_after_s` old."""
+    """This host's checks, in registry order, whose newest result since their declared_at (any
+    status) is absent or at least `due_after_s` old."""
     mine = [c for c in CHECKS if c.host == host]
     if not mine:
         return []

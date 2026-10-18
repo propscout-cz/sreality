@@ -1923,6 +1923,10 @@ export interface PipelineCheckRow {
   run_at: string | null;
   effective_status: string | null;
   incidents: PipelineCheckIncident[];
+  /* The registry's operator-facing name and unit (health_checks via the view); the page
+   * keeps no table of its own. */
+  label: string | null;
+  unit: string | null;
 }
 
 export const fetchPipelineChecks = async (
@@ -1931,7 +1935,7 @@ export const fetchPipelineChecks = async (
   const { data } = await pgRead<PipelineCheckRow[] | null>(
     supabase
       .from('pipeline_checks_public')
-      .select('check_key,status,value,details,run_at,effective_status,incidents')
+      .select('check_key,status,value,details,run_at,effective_status,incidents,label,unit')
       .order('check_key', { ascending: true }),
     { signal },
   );

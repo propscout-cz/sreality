@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tests.toolkit.test_system_alerts import _FakeConn
-from toolkit.system_alerts import RECOVERY_HOLD_MIN_S, reconcile
+from toolkit.system_alerts import RECOVERY_HOLD_MIN_S, due_after_s, reconcile
 
 _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "health_replay_14d.csv"
 # Production reconciles every 60 s; every row's arrival plus a 10-minute tick resolves holds of
-# two hours and more, and keeps the replay well under a second.
+# 108 minutes and more, and keeps the replay well under a second.
 _TICK = _dt.timedelta(minutes=10)
 # Check.staleness_budget on the github-actions host, where every key of the window ran.
 _GITHUB_SLACK = _dt.timedelta(hours=18)
@@ -69,7 +69,8 @@ def _budget(key: str) -> _dt.timedelta:
 
 
 def _hold(key: str) -> _dt.timedelta:
-    return _dt.timedelta(seconds=max(2 * _REGISTRY[key][1], RECOVERY_HOLD_MIN_S))
+    """Two due intervals (a cadence less its due slack), never under the floor."""
+    return _dt.timedelta(seconds=max(2 * due_after_s(_REGISTRY[key][1]), RECOVERY_HOLD_MIN_S))
 
 
 def _history() -> dict[str, _Rows]:
