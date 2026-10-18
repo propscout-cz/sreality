@@ -1,11 +1,14 @@
-"""record_workflow_failures.py — poll the Actions API, persist failed runs.
+"""record_workflow_failures.py — poll the Actions API, persist the production runs' record.
 
-GitHub only emails the operator about failed SCHEDULED runs, so push- and
-dispatch-triggered failures stay invisible unless someone opens the Actions
-tab. This poller (the first step of the hourly health canary, verify_pipeline.yml)
-lists recently completed runs, keeps the failed-ish ones, and inserts them into
-`workflow_failures` (migration 178) — idempotent via ON CONFLICT (run_id) DO NOTHING.
-The Health page surfaces the table.
+The jobs check's GitHub record. This poller (the first step of the hourly health canary,
+verify_pipeline.yml) lists recently completed runs and keeps the PRODUCTION ones: event
+`schedule`, or `push` on main. A pull request, a branch push or a dispatch is attended and stays
+in the Actions tab, and the canary's own runs are never kept. A workflow that dispatches itself
+is recorded by its cron run only: every chained hop is a dispatch. Each failed-ish run goes into
+`workflow_failures` (migration 178) with its event, branch and reason line, idempotent via
+ON CONFLICT (run_id) DO NOTHING; each workflow seen gets its `workflow_run_health` row: its last
+success, its newest scheduled start times (a push has no cadence to be overdue against), its
+Actions state and whether its file is on main.
 
 Windowing is a HIGH-WATER-MARK CURSOR (`app_settings.workflow_failures_cursor`),
 not a fixed lookback. The canary's cron is hourly but the GitHub Actions throttle
@@ -18,7 +21,7 @@ first has an uncovered window and holds the cursor instead (see _advance_cursor)
 
 A dead poller is invisible in `workflow_failures` itself — it just stops
 accumulating rows, which looks exactly like "nothing failed". The liveness signal is
-the AGE of this cursor, watched by verify_pipeline's `workflow_poller_liveness`.
+the AGE of this cursor, the jobs check's `gh/poller` cell.
 
 `cancelled` is recorded ONLY when the run ran at least
 `CANCELLED_MIN_DURATION_MINUTES`: a `timeout-minutes` kill (which GitHub reports as
@@ -27,7 +30,7 @@ killed in seconds. Without this gate, enabling cancel-in-progress anywhere would
 flood the table with superseded runs.
 
 Needs GITHUB_REPOSITORY + GITHUB_TOKEN (the default Actions token with
-`actions: read`) + SUPABASE_DB_URL.
+`actions: read`) + SUPABASE_DB_URL. A run from a branch other than main writes nothing.
 """
 
 from __future__ import annotations
@@ -40,7 +43,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+
+from scripts.failure_signature import reason_line
 
 LOG = logging.getLogger("record_workflow_failures")
 
@@ -62,8 +68,57 @@ PER_PAGE = 100
 # past `since`, so the extra pages are only ever fetched when they are actually needed.
 MAX_PAGES = 10
 CURSOR_KEY = "workflow_failures_cursor"
+# The scheduled start-gap history the jobs check reads (its p90 arm needs 10); no backfill, it
+# accumulates.
+RECENT_STARTS_KEPT = 20
 
 API_TIMEOUT_S = 30
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# One row per production workflow, born on its first production run (a failure too). A stale page
+# never lowers last_success_at (greatest() also skips a failure-only row's NULL), and the starts
+# are a union with the stored ones.
+_UPSERT_HEALTH_SQL = """
+INSERT INTO workflow_run_health
+  (workflow_path, workflow_name, last_success_at, last_success_run_id, recent_starts, updated_at)
+VALUES (%(path)s, %(name)s, %(success_at)s, %(success_run_id)s, %(starts)s::timestamptz[], now())
+ON CONFLICT (workflow_path) DO UPDATE SET
+  workflow_name = excluded.workflow_name,
+  last_success_at = greatest(workflow_run_health.last_success_at, excluded.last_success_at),
+  last_success_run_id = CASE
+    WHEN excluded.last_success_at >=
+         coalesce(workflow_run_health.last_success_at, '-infinity'::timestamptz)
+    THEN excluded.last_success_run_id
+    ELSE workflow_run_health.last_success_run_id END,
+  recent_starts = array(
+    SELECT DISTINCT s FROM unnest(workflow_run_health.recent_starts || excluded.recent_starts) AS u(s)
+    ORDER BY s DESC LIMIT %(kept)s),
+  updated_at = now()
+"""
+
+_INSERT_FAILURE_SQL = """
+INSERT INTO workflow_failures
+  (run_id, workflow_name, workflow_path, conclusion, run_started_at, html_url, event, head_branch)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (run_id) DO NOTHING
+"""
+
+# A row is a job's once a production run claimed it (on_main set). A legacy row of a dispatch-only
+# workflow never is, so it never gets a cell.
+_CLAIMED_PATHS_SQL = "SELECT workflow_path FROM workflow_run_health WHERE on_main IS NOT NULL"
+
+# Refreshed on every poll, not only for the workflows seen: a disabled workflow or one whose file
+# left main has no new runs to report it.
+_REFRESH_FACTS_SQL = """
+UPDATE workflow_run_health AS h
+SET on_main = v.on_main, state = coalesce(v.state, h.state), updated_at = now()
+FROM unnest(%s::text[], %s::boolean[], %s::text[]) AS v(workflow_path, on_main, state)
+WHERE h.workflow_path = v.workflow_path
+  AND (h.on_main IS DISTINCT FROM v.on_main OR h.state IS DISTINCT FROM coalesce(v.state, h.state))
+"""
+
+_STORE_REASON_SQL = "UPDATE workflow_failures SET reason = %s WHERE run_id = %s"
 
 
 def parse_ts(value: str | None) -> datetime | None:
@@ -85,18 +140,25 @@ def _duration_minutes(run: dict[str, Any]) -> float | None:
     return (completed - started).total_seconds() / 60.0
 
 
+def is_production_run(run: dict[str, Any]) -> bool:
+    """A job's record: a scheduled run or a push to main, never the canary's own run."""
+    if run.get("name") == MONITOR_WORKFLOW_NAME:
+        return False
+    event = run.get("event")
+    return event == "schedule" or (event == "push" and run.get("head_branch") == "main")
+
+
 def select_failed_runs(
     runs: list[dict[str, Any]],
     *,
     since: datetime,
-    exclude_name: str = MONITOR_WORKFLOW_NAME,
     cancelled_min_duration: float = CANCELLED_MIN_DURATION_MINUTES,
     started_check: Any = None,
 ) -> list[dict[str, Any]]:
     """Pure filter over parsed `/actions/runs` JSON (no network, testable).
 
-    Keeps runs completed at/after `since` (completion ≈ `updated_at`) with an alerting
-    conclusion, excluding the monitor workflow. `cancelled` is kept only when the run ran
+    Keeps production runs (`is_production_run`) completed at/after `since` (completion ≈
+    `updated_at`) with an alerting conclusion. `cancelled` is kept only when the run ran
     >= `cancelled_min_duration` minutes — a timeout-minutes kill, not a quick supersession.
 
     `started_check(run_id) -> bool` closes the duration gate's blind spot: a superseded run
@@ -108,7 +170,7 @@ def select_failed_runs(
     """
     out: list[dict[str, Any]] = []
     for run in runs:
-        if run.get("name") == exclude_name:
+        if not is_production_run(run):
             continue
         completed_at = parse_ts(run.get("updated_at"))
         if completed_at is None or completed_at < since:
@@ -132,45 +194,43 @@ def select_failed_runs(
                 "conclusion": conclusion,
                 "run_started_at": parse_ts(run.get("run_started_at")),
                 "html_url": run.get("html_url"),
+                "event": run.get("event"),
+                "head_branch": run.get("head_branch"),
             }
         )
     return out
 
 
-def select_latest_successes(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Latest SUCCESS run per workflow path (no network, testable).
-
-    Feeds workflow_run_health so the streak resets when a job recovers. Keyed on
-    the stable `.path`; runs without a path or a success conclusion are skipped.
-    """
-    best: dict[str, dict[str, Any]] = {}
+def select_workflow_health(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One workflow_run_health row per production workflow in the pages, starts from schedules."""
+    rows: dict[str, dict[str, Any]] = {}
     for run in runs:
-        if run.get("conclusion") != "success":
-            continue
         path = run.get("path")
-        if not path:
+        if not path or not is_production_run(run):
             continue
+        # The API lists newest first, so the first run seen names the workflow.
+        row = rows.setdefault(path, {
+            "workflow_path": path, "workflow_name": run.get("name") or "(unnamed)",
+            "last_success_run_id": None, "last_success_at": None, "recent_starts": set(),
+        })
         started = parse_ts(run.get("run_started_at"))
-        cur = best.get(path)
-        if cur is None or (
-            started is not None
-            and (cur["last_success_at"] is None or started > cur["last_success_at"])
+        # A push lands when someone merges; only a schedule has a gap the jobs check can judge.
+        if started is not None and run.get("event") == "schedule":
+            row["recent_starts"].add(started)
+        if run.get("conclusion") == "success" and (
+            row["last_success_run_id"] is None
+            or (started is not None
+                and (row["last_success_at"] is None or started > row["last_success_at"]))
         ):
-            best[path] = {
-                "workflow_path": path,
-                "workflow_name": run.get("name") or "(unnamed)",
-                "last_success_run_id": int(run["id"]),
-                "last_success_at": started,
-            }
-    return list(best.values())
+            row["last_success_run_id"] = int(run["id"])
+            row["last_success_at"] = started
+    for row in rows.values():
+        row["recent_starts"] = sorted(row["recent_starts"], reverse=True)[:RECENT_STARTS_KEPT]
+    return list(rows.values())
 
 
-def _fetch_runs_page(repo: str, token: str, page: int) -> list[dict[str, Any]]:
-    url = (
-        f"https://api.github.com/repos/{repo}/actions/runs"
-        f"?status=completed&per_page={PER_PAGE}&page={page}"
-    )
-    req = urllib.request.Request(
+def _gh_request(url: str, token: str) -> urllib.request.Request:
+    return urllib.request.Request(
         url,
         headers={
             "Authorization": f"Bearer {token}",
@@ -178,7 +238,14 @@ def _fetch_runs_page(repo: str, token: str, page: int) -> list[dict[str, Any]]:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(req, timeout=API_TIMEOUT_S) as resp:
+
+
+def _fetch_runs_page(repo: str, token: str, page: int) -> list[dict[str, Any]]:
+    url = (
+        f"https://api.github.com/repos/{repo}/actions/runs"
+        f"?status=completed&per_page={PER_PAGE}&page={page}"
+    )
+    with urllib.request.urlopen(_gh_request(url, token), timeout=API_TIMEOUT_S) as resp:
         payload = json.load(resp)
     return payload.get("workflow_runs", []) or []
 
@@ -190,16 +257,8 @@ def _run_started_any_job(repo: str, token: str, run_id: int) -> bool:
     On API failure, err on the side of recording (True) — a dropped real timeout-kill is
     worse than one noisy row."""
     url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs?per_page=50"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=API_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(_gh_request(url, token), timeout=API_TIMEOUT_S) as resp:
             payload = json.load(resp)
     except Exception as exc:  # noqa: BLE001 — network flake must not drop a real failure
         LOG.warning("jobs fetch failed for run %d (%s); recording anyway", run_id, exc)
@@ -208,33 +267,58 @@ def _run_started_any_job(repo: str, token: str, run_id: int) -> bool:
     return any(j.get("started_at") for j in jobs)
 
 
-# --- W3.1 backstop: read WHY a run went red -------------------------------
+def _fetch_workflow_states(repo: str, token: str) -> dict[str, str] | None:
+    """Each workflow's Actions state by path (`active`, `disabled_manually`, …); None if unread."""
+    states: dict[str, str] = {}
+    try:
+        for page in range(1, MAX_PAGES + 1):
+            url = (f"https://api.github.com/repos/{repo}/actions/workflows"
+                   f"?per_page={PER_PAGE}&page={page}")
+            with urllib.request.urlopen(_gh_request(url, token), timeout=API_TIMEOUT_S) as resp:
+                batch = json.load(resp).get("workflows") or []
+            states.update({w["path"]: w["state"] for w in batch if w.get("path") and w.get("state")})
+            if len(batch) < PER_PAGE:
+                break
+    except Exception as exc:  # noqa: BLE001 — a missed listing keeps the stored states
+        LOG.warning("workflow states fetch failed (%s); stored states kept", exc)
+        return None
+    return states
+
+
+def _on_main(workflow_path: str) -> bool:
+    """Is the workflow's file in this checkout (main's: only a run from main writes)?"""
+    return (_REPO_ROOT / workflow_path).is_file()
+
+
+def _refresh_workflow_facts(conn: Any, states: dict[str, str] | None, seen: set[str]) -> int:
+    """Set state and on_main on the claimed rows and the rows this poll saw; rows changed."""
+    with conn.cursor() as cur:
+        cur.execute(_CLAIMED_PATHS_SQL)
+        paths = sorted(seen | {row[0] for row in cur.fetchall()})
+        cur.execute(_REFRESH_FACTS_SQL, (
+            paths,
+            [_on_main(p) for p in paths],
+            [(states or {}).get(p) for p in paths],
+        ))
+        return cur.rowcount
+
+
+# --- the reason line: read WHY a run went red ------------------------------
 #
-# `workflow_failures` stores which workflow is red and no failure reason of any kind.
-# The chokepoint producer (scraper.portal_runner) covers portal crashes at t+0 with no
-# API cost, but portal workflows are only ~22% of the failure corpus — CI, backfills,
-# jobs and the LLM lanes are the other 78%, and reds with no Python exception at all
-# (timeouts, startup_failure) have no in-process path by definition. So this lane pulls
-# the failed job's log and extracts the terminal error.
+# A red run's row says which workflow failed, not why. This pass pulls the failed job's
+# log tail and stores its reason line (scripts/failure_signature.reason_line), which the
+# jobs cell shows. A timeout kill with no Python exception still has its `##[error]`
+# annotation; a startup_failure ran no job, so it has no log and its reason stays NULL.
 
 MAX_LOG_FETCHES = 25          # Actions API budget guard: one poll, at most this many logs
 LOG_TAIL_BYTES = 64 * 1024    # measured job logs run 27KB-172KB; a drain log is far larger
 _JOB_FAIL_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "startup_failure"})
 
-# A red whose reason is verify_pipeline's own failing CHECK line is a check verdict, and since
-# wave 1 of the Health sprint the ladder (toolkit/system_alerts.reconcile) tells those from the
-# stored result: an incident here would ring the same Problem twice. Dead since wave 2: the canary
-# is the only workflow that prints CHECK lines and this poller skips it by name
-# (MONITOR_WORKFLOW_NAME), so no `check:` signature arrives; the fence and its tests go with the
-# wave-3 poller rewrite, which owns this file's logic.
-_LADDER_OWNED_PREFIX = "check:"
-_LADDER_OWNED_SUFFIX = "|fail"
-
-# Wall-clock ceiling for the whole incident pass. MAX_LOG_FETCHES alone is not a time
+# Wall-clock ceiling for the whole reason pass. MAX_LOG_FETCHES alone is not a time
 # budget: each fetch is up to 4 round trips (jobs list, the 302, then _fetch_blob_tail's
 # two ranged reads) at API_TIMEOUT_S=30 each, so 25 of them is a ~50-minute worst case
 # inside the canary's poller step, `timeout-minutes: 5`. A killed step is not caught by any try/except.
-INCIDENT_PASS_BUDGET_S = 90.0
+REASON_PASS_BUDGET_S = 90.0
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -253,53 +337,20 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def _gh_request(url: str, token: str) -> urllib.request.Request:
-    return urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-
-
-def _is_ladder_owned(signature: str, conclusion: str | None) -> bool:
-    """A red that exited 1 on a failing check's verdict: the health ladder's to tell."""
-    return (conclusion == "failure" and signature.startswith(_LADDER_OWNED_PREFIX)
-            and signature.endswith(_LADDER_OWNED_SUFFIX))
-
-
-def select_failed_job(jobs: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The job whose log is worth reading, plus the step that broke (pure, testable)."""
+def select_failed_job(jobs: list[dict[str, Any]]) -> int | None:
+    """The id of the first failed job, whose log is worth reading (pure, testable)."""
     for job in jobs:
-        if job.get("conclusion") not in _JOB_FAIL_CONCLUSIONS:
-            continue
-        step_name = None
-        step_status = None
-        for step in job.get("steps") or []:
-            if step.get("conclusion") in _JOB_FAIL_CONCLUSIONS:
-                step_name = step.get("name")
-                step_status = step.get("conclusion")
-                break
-        return {
-            "job_id": int(job["id"]),
-            "job_name": job.get("name"),
-            "step_name": step_name or job.get("name"),
-            # The Actions API never exposes a process exit code; the step's conclusion
-            # is the closest honest stand-in, and it is what distinguishes a timeout
-            # kill from a plain non-zero exit in the fallback key.
-            "exit_code": step_status or job.get("conclusion"),
-        }
+        if job.get("conclusion") in _JOB_FAIL_CONCLUSIONS:
+            return int(job["id"])
     return None
 
 
-def _fetch_failed_job(repo: str, token: str, run_id: int) -> dict[str, Any] | None:
+def _fetch_failed_job(repo: str, token: str, run_id: int) -> int | None:
     url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs?per_page=50"
     try:
         with urllib.request.urlopen(_gh_request(url, token), timeout=API_TIMEOUT_S) as resp:
             payload = json.load(resp)
-    except Exception as exc:  # noqa: BLE001 — no log is a degraded incident, not a crash
+    except Exception as exc:  # noqa: BLE001 — no log is a NULL reason, not a crash
         LOG.warning("jobs fetch failed for run %d (%s)", run_id, exc)
         return None
     return select_failed_job(payload.get("jobs", []) or [])
@@ -353,103 +404,33 @@ def fetch_job_log(repo: str, token: str, job_id: int, *, cap_bytes: int = LOG_TA
         return None
 
 
-def record_incidents(
+def record_reasons(
     conn: Any, repo: str, token: str, failures: list[dict[str, Any]],
-    *, budget_seconds: float = INCIDENT_PASS_BUDGET_S,
+    *, budget_seconds: float = REASON_PASS_BUDGET_S,
 ) -> dict[str, int]:
-    """Give every newly recorded red a REASON, and close the ones the fleet answered.
-
-    A red that exited 1 on a failing check's verdict is the health ladder's (`_is_ladder_owned`):
-    it keeps its `workflow_failures` row and opens no incident here.
-
-    The API-budget saver is the RUN CLAIM (`ops_incident_runs`, migration 463), not a
-    workflow→signature guess: a run the in-process producer already recorded costs zero
-    fetches here and — the part that matters — cannot be counted a second time. The
-    earlier `open_signature_by_workflow` reuse did neither. It was keyed on
-    `workflow_path` alone with no run correlation, so it (a) still fell through to the
-    unconditional `failure_count + 1` bump, double-counting every portal crash, and
-    (b) folded a NEW reason into whatever incident last touched that workflow within the
-    hour — a workflow that opened a CheckViolation incident at 10:00 and then timed out
-    at 10:30 recorded the timeout as a CheckViolation, and the timeout's own signature
-    was never derived, so it could never alert.
-
-    `budget_seconds` bounds the pass: the caller's step has `timeout-minutes: 5` and a
-    kill is not an exception, so overrunning here would cost the poller its cursor
-    advance (the input-coverage guarantee W3 rests on).
-    """
-    from scripts import failure_signature
-    from toolkit import ops_incidents
-
-    stats = {"recorded": 0, "already_recorded": 0, "fetched": 0,
-             "unreadable": 0, "skipped": 0, "expired": 0, "ladder_owned": 0}
-    if not failures:
-        return {**stats, **ops_incidents.auto_resolve(conn)}
-
-    excerpt_cap = ops_incidents.excerpt_byte_budget(conn)
+    """Store each red's reason line within the fetch and wall-clock budgets; past them it stays NULL."""
+    stats = {"stored": 0, "fetched": 0, "unreadable": 0, "skipped": 0, "expired": 0}
     budget = MAX_LOG_FETCHES
     deadline = time.monotonic() + float(budget_seconds)
-    ladder_owned: list[str] = []
-
     for f in failures:
-        path = f.get("workflow_path")
-        run_id = f.get("run_id")
-        # Claim first: it is both the dedupe and the cheapest possible skip.
-        try:
-            if not ops_incidents.claim_run(conn, run_id):
-                stats["already_recorded"] += 1
-                continue
-        except Exception as exc:  # noqa: BLE001 — incidents must never break the poller
-            LOG.warning("ops incident claim failed for run %s: %r", run_id, exc)
-            continue
-        signature: str | None = None
-        excerpt: str | None = None
         if time.monotonic() >= deadline:
-            # Out of wall clock, not out of API budget. Same disposition as `skipped`:
-            # the run stays in workflow_failures with no incident asserting nothing.
             stats["expired"] += 1
             continue
         if budget <= 0:
-            # Not "unreadable" — unread. A scoped fallback key here would open an
-            # incident asserting nothing, so the run stays in workflow_failures only.
             stats["skipped"] += 1
             continue
         budget -= 1
-        job = _fetch_failed_job(repo, token, run_id)
-        text = fetch_job_log(repo, token, job["job_id"]) if job else None
-        if text:
-            stats["fetched"] += 1
-            signature = failure_signature.signature_from_log(text)
-            if signature is not None and _is_ladder_owned(signature, f.get("conclusion")):
-                stats["ladder_owned"] += 1
-                ladder_owned.append(signature)
-                continue
-            excerpt = failure_signature.excerpt_from_log(text, max_bytes=excerpt_cap)
-        if signature is None:
+        job_id = _fetch_failed_job(repo, token, f["run_id"])
+        text = fetch_job_log(repo, token, job_id) if job_id is not None else None
+        stats["fetched"] += text is not None
+        reason = reason_line(text)
+        if reason is None:
             stats["unreadable"] += 1
-            signature = failure_signature.fallback_signature(
-                workflow_path=path,
-                step_name=(job or {}).get("step_name"),
-                exit_code=(job or {}).get("exit_code"),
-            )
-        try:
-            ops_incidents.record_failure_signature(
-                conn, signature,
-                workflow_path=path,
-                origin=f"actions/{f.get('conclusion')}",
-                sample_run_url=f.get("html_url"),
-                sample_excerpt=excerpt,
-                run_id=run_id,
-                run_claimed=True,
-            )
-            stats["recorded"] += 1
-        except Exception as exc:  # noqa: BLE001 — incidents must never break the poller
-            LOG.warning("ops incident write failed for run %s: %r", run_id, exc)
-
-    if ladder_owned:
-        LOG.info("OPS_INCIDENTS ladder_owned=%d: red runs whose reason is a failing check open "
-                 "no incident; the health ladder tells them (%s)",
-                 len(ladder_owned), ", ".join(sorted(set(ladder_owned))))
-    return {**stats, **ops_incidents.auto_resolve(conn)}
+            continue
+        with conn.cursor() as cur:
+            cur.execute(_STORE_REASON_SQL, (reason, f["run_id"]))
+        stats["stored"] += 1
+    return stats
 
 
 def _read_cursor(conn: Any) -> datetime | None:
@@ -530,12 +511,18 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    # The registry's rule: a dispatch from a branch checks that branch out, so its on_main would
+    # describe the branch, and its poll would move main's cursor.
+    ref = os.environ.get("GITHUB_REF_NAME", "main")
+    if ref != "main":
+        LOG.info("WORKFLOW_FAILURES not recorded: this run is from %s, not main", ref)
+        return 0
 
     import psycopg
 
     inserted = 0
     newly_recorded: list[dict[str, Any]] = []
-    incidents: dict[str, int] = {}
+    reasons: dict[str, int] = {}
     with psycopg.connect(db_url, autocommit=True, prepare_threshold=None) as conn:
         now = datetime.now(timezone.utc)
         cursor_ts = _read_cursor(conn) or (now - timedelta(minutes=BOOTSTRAP_MINUTES))
@@ -545,42 +532,24 @@ def main() -> int:
         failed = select_failed_runs(
             runs, since=since,
             started_check=lambda run_id: _run_started_any_job(repo, token, run_id))
-        # Successes are NOT windowed: the latest success anywhere in the pages resets the
-        # streak. workflow_run_health is one upserted row per workflow, so a stale
-        # page-success can never regress last_success_at (greatest() guard below).
-        successes = select_latest_successes(runs)
+        # Not windowed: every production run in the pages is history, and the upsert only ever
+        # merges (greatest() for the last success, a union for the starts).
+        health = select_workflow_health(runs)
+        states = _fetch_workflow_states(repo, token)
 
         with conn.cursor() as cur:
-            for s in successes:
-                cur.execute(
-                    "INSERT INTO workflow_run_health "
-                    "  (workflow_path, workflow_name, last_success_at, "
-                    "   last_success_run_id, updated_at) "
-                    "VALUES (%s, %s, %s, %s, now()) "
-                    "ON CONFLICT (workflow_path) DO UPDATE SET "
-                    "  workflow_name = excluded.workflow_name, "
-                    "  last_success_at = greatest("
-                    "    workflow_run_health.last_success_at, excluded.last_success_at), "
-                    "  last_success_run_id = CASE "
-                    "    WHEN excluded.last_success_at >= "
-                    "         coalesce(workflow_run_health.last_success_at, '-infinity'::timestamptz) "
-                    "    THEN excluded.last_success_run_id "
-                    "    ELSE workflow_run_health.last_success_run_id END, "
-                    "  updated_at = now()",
-                    (
-                        s["workflow_path"],
-                        s["workflow_name"],
-                        s["last_success_at"],
-                        s["last_success_run_id"],
-                    ),
-                )
+            for h in health:
+                cur.execute(_UPSERT_HEALTH_SQL, {
+                    "path": h["workflow_path"],
+                    "name": h["workflow_name"],
+                    "success_at": h["last_success_at"],
+                    "success_run_id": h["last_success_run_id"],
+                    "starts": h["recent_starts"],
+                    "kept": RECENT_STARTS_KEPT,
+                })
             for f in failed:
                 cur.execute(
-                    "INSERT INTO workflow_failures "
-                    "  (run_id, workflow_name, workflow_path, conclusion, "
-                    "   run_started_at, html_url) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (run_id) DO NOTHING",
+                    _INSERT_FAILURE_SQL,
                     (
                         f["run_id"],
                         f["workflow_name"],
@@ -588,19 +557,20 @@ def main() -> int:
                         f["conclusion"],
                         f["run_started_at"],
                         f["html_url"],
+                        f["event"],
+                        f["head_branch"],
                     ),
                 )
                 if cur.rowcount:
                     inserted += cur.rowcount
                     newly_recorded.append(f)
+        facts_changed = _refresh_workflow_facts(conn, states, {h["workflow_path"] for h in health})
 
-        # The cursor advance goes FIRST, before the incident pass. record_incidents
-        # talks to the Actions API and to Azure blob storage inside a step with
-        # `timeout-minutes: 5`, and a step kill is not an exception the try/except below
-        # can catch — so anything slow there used to cost the poller its cursor advance,
-        # which is the input-coverage guarantee the whole W3 clustering rests on.
-        # Incidents are best-effort bookkeeping over rows already committed above;
-        # the cursor is not.
+        # The cursor advance goes FIRST, before the reason pass. record_reasons talks to
+        # the Actions API and to Azure blob storage inside a step with `timeout-minutes: 5`,
+        # and a step kill is not an exception the try/except below can catch — so anything
+        # slow there would cost the poller its cursor advance, which is its input-coverage
+        # guarantee. Reasons annotate rows already committed above; the cursor is not.
         completions = [c for c in (parse_ts(r.get("updated_at")) for r in runs) if c is not None]
         new_cursor = _advance_cursor(completions, reached_since=reached_since)
         if new_cursor is not None:
@@ -615,21 +585,19 @@ def main() -> int:
                 MAX_PAGES, MAX_PAGES * PER_PAGE, since, min(completions), gap_min,
             )
 
-        # Only NEWLY inserted rows: a re-scanned run inside the cursor overlap has
-        # already had its reason recorded, and re-counting it would inflate the
-        # incident's failure_count past the number of real failures. (The run claim in
-        # record_incidents enforces that across producers too, not just across polls.)
+        # Only NEWLY inserted rows: a re-scanned run inside the cursor overlap had its turn.
         try:
-            incidents = record_incidents(conn, repo, token, newly_recorded)
+            reasons = record_reasons(conn, repo, token, newly_recorded)
         except Exception as exc:  # noqa: BLE001 — the poller's own job comes first
-            LOG.warning("ops incident pass failed: %r", exc)
+            LOG.warning("reason pass failed: %r", exc)
 
     LOG.info(
-        "WORKFLOW_FAILURES scanned=%d failed=%d inserted=%d successes_tracked=%d reached_since=%s",
-        len(runs), len(failed), inserted, len(successes), reached_since,
+        "WORKFLOW_FAILURES scanned=%d failed=%d inserted=%d workflows=%d facts_changed=%d "
+        "reached_since=%s",
+        len(runs), len(failed), inserted, len(health), facts_changed, reached_since,
     )
-    if incidents:
-        LOG.info("OPS_INCIDENTS %s", " ".join(f"{k}={v}" for k, v in sorted(incidents.items())))
+    if reasons:
+        LOG.info("WORKFLOW_REASONS %s", " ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
     return 0
 
 

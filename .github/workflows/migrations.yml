@@ -363,6 +363,27 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_health_liveness_live.py -q
 
+      # 621 gives the canary's poller its production facts (workflow_failures.reason/event/head_branch,
+      # workflow_run_health.state/on_main/recent_starts, nullable: NULL means not seen yet) and retires the
+      # signature engine by predicate. The tests run the file's own UPDATE and post-condition: a signature row
+      # closes, a cell row stays open, a closed row keeps its verdict, and no browser role gains access.
+      # Executed against the replayed schema, in a transaction that always rolls back.
+      - name: The poller's facts and the signature engine's retirement (migration 621)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_platform_checks_live.py -q
+
+      # The jobs and capacity checks read pg_cron's tables, which the replay does not have, so PREPARE skips
+      # them. This lane stubs cron.job and cron.job_run_details inside a transaction that always rolls back,
+      # seeds runs and executes the checks' own statements: finished runs only, each job's 7 days counted from
+      # its newest start, 2 of the last 3, whole reference weeks; and the artifact read's GitHub delivery slack.
+      - name: The platform checks' pg_cron reads count what they claim (wave 3)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_platform_cron_sql_live.py -q
+
       # 06 W2a gate (b) — "a deliberately changed page appends a second body; an
       # unchanged refetch appends none" — is a property of one ON CONFLICT clause
       # and two retention statements. PREPARE proves they compile; only executing

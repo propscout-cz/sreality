@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from api import notification_outbox as ob
 from api.transports.base import RenderedMessage
 
@@ -56,15 +58,59 @@ def test_compose_deep_link_falls_back_to_legacy_without_natural_key(monkeypatch:
     assert msg.deep_link == "https://app.example/listing/123"
 
 
-def test_compose_system_health_uses_verbatim_message(monkeypatch: Any) -> None:
-    monkeypatch.setenv("SPA_BASE_URL", "https://app.example")
-    msg = ob.compose_message({
-        "source_kind": "system_health", "message": "Pipeline verification is stale",
+_ONSET = ("Jobs: Problem — gh/detail_drain: 3 production reds since 08:12 "
+          "(OperationalError: server closed the connection unexpectedly)")
+
+
+def _system(message: str | None, dedupe_key: str | None = "sys:jobs:onset:2026-10-18T08:20:00Z") -> RenderedMessage:
+    """A system alert as either drain pass hands it to the composer."""
+    return ob.compose_message({
+        "source_kind": "system_health", "message": message, "dedupe_key": dedupe_key,
         "change_kind": "system_alert", "sreality_id": None,
     })
-    assert msg.subject == "Systémové upozornění"
-    assert msg.body_text == "Pipeline verification is stale"
-    assert msg.deep_link == "https://app.example/notifications"
+
+
+def test_compose_system_health_subject_is_the_notice_head(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SPA_BASE_URL", "https://app.example/")
+    msg = _system(_ONSET)
+    assert msg.subject == "Jobs: Problem"
+    assert msg.body_text == _ONSET
+    assert msg.deep_link == "https://app.example/health#jobs"
+
+
+def test_compose_system_health_subject_without_a_head_is_the_first_120_characters() -> None:
+    recovery = "✓ Jobs: gh/detail_drain recovered after 5 h"
+    assert _system(recovery).subject == recovery
+    long = "Capacity: " + "x" * 200
+    assert _system(long).subject == long[:120]
+    assert _system(long).body_text == long
+
+
+def test_compose_system_health_subject_never_spans_two_lines() -> None:
+    """The retired engine wrote multi-line notices (53 stored on 2026-10-18); a header holds one line."""
+    legacy = ("Ops incident #7: checkviolation|listings_area_basis_check\n"
+              "2 failures since 2026-09-02 10:58 UTC\n---\nnew row — violates check constraint")
+    msg = _system(legacy, "sys:ops_incident:7:onset")
+    assert msg.subject == "Ops incident #7: checkviolation|listings_area_basis_check"
+    assert msg.body_text == legacy
+
+
+def test_compose_system_health_empty_message_reads_system_alert() -> None:
+    for message in (None, "", "\nno first line"):
+        assert _system(message).subject == "System alert"
+    assert _system(None).body_text == "System alert"
+
+
+@pytest.mark.parametrize("dedupe_key", [None, "", "notif:dab-1:email", "sys:Bad-Key:onset:x", "sys:jobs"])
+def test_compose_system_health_links_bare_health_without_a_check_key(monkeypatch: Any, dedupe_key: str | None) -> None:
+    monkeypatch.setenv("SPA_BASE_URL", "https://app.example")
+    assert _system(_ONSET, dedupe_key).deep_link == "https://app.example/health"
+
+
+def test_compose_system_health_has_no_link_without_an_spa_base(monkeypatch: Any) -> None:
+    """A relative link leads nowhere from an inbox, so an unset SPA_BASE_URL sends none."""
+    monkeypatch.delenv("SPA_BASE_URL", raising=False)
+    assert _system(_ONSET).deep_link == ""
 
 
 def test_compose_price_drop_shows_prev_to_new(monkeypatch: Any) -> None:
@@ -143,10 +189,11 @@ class _FakeClient:
 def _new_row(ch: str = "email") -> tuple:
     # (dispatch_id, source_kind, change_kind, sreality_id, subscription_id,
     #  collection_id, trigger_price, prev_price, display_label, disposition,
-    #  price_czk, price_unit, category_main, source, source_id_native, message, ch)
+    #  price_czk, price_unit, category_main, source, source_id_native, message,
+    #  dedupe_key, ch)
     return ("dab-1", "watchdog", "new", 123, "sub-1", None,
             None, None, "Praha 2", "2+kk", 6_900_000, None, "byt",
-            "sreality", "123", None, ch)
+            "sreality", "123", None, "wd:sub-1:new:123", ch)
 
 
 def test_drain_noop_without_configured_channels() -> None:
@@ -185,7 +232,7 @@ def test_drain_collection_monitor_routes_collection_id_as_source() -> None:
     client = _FakeClient(configured={"email"})
     row = ("dab-2", "collection_monitor", "price_drop", 55, None, 7,
            4_000_000, 4_500_000, "Plzeň", "1+kk", 4_000_000, None, "byt",
-           "sreality", "55", None, "email")
+           "sreality", "55", None, "cm:7:price_drop:991", "email")
     conn = _Conn(recipient="op@example.cz", new_rows=[row], retry_rows=[])
     ob.drain_once(conn, client)  # type: ignore[arg-type]
     call = client.sends[0]
@@ -197,10 +244,10 @@ def test_drain_retries_failed_due_rows() -> None:
     client = _FakeClient(configured={"email"})
     # (send_id, channel, recipient, consumer, source_kind, change_kind, sreality_id,
     #  trigger_price, prev_price, display_label, disposition, price_czk, price_unit,
-    #  category_main, source, source_id_native, message)
+    #  category_main, source, source_id_native, message, dedupe_key)
     retry_row = (42, "email", "op@example.cz", "watchdog", "watchdog", "new", 5,
                  None, None, "Ostrava", "2+1", 3_000_000, None, "byt",
-                 "sreality", "5", None)
+                 "sreality", "5", None, "wd:sub-1:new:5")
     conn = _Conn(recipient="op@example.cz", new_rows=[], retry_rows=[retry_row])
     stats = ob.drain_once(conn, client)  # type: ignore[arg-type]
     assert stats["retried"] == 1
@@ -225,10 +272,12 @@ def test_retry_pass_has_no_consumer_allowlist() -> None:
     assert "JOIN notification_dispatches d ON d.id = cs.notification_id" in retry_sql
 
 
-def test_drain_retries_a_system_health_send() -> None:
+def test_drain_retries_a_system_health_send(monkeypatch: Any) -> None:
+    monkeypatch.setenv("SPA_BASE_URL", "https://app.example")
     retry_row = (77, "email", "op@example.cz", "system_health", "system_health",
                  "system_alert", None, None, None, None, None, None, None, None,
-                 None, None, "Ops incident #7: checkviolation|listings_area_basis_check")
+                 None, None, "Ops incident #7: checkviolation|listings_area_basis_check",
+                 "sys:ops_incident:7:onset")
     client = _FakeClient(configured={"email"})
     conn = _Conn(recipient="op@example.cz", new_rows=[], retry_rows=[retry_row])
     stats = ob.drain_once(conn, client)  # type: ignore[arg-type]
@@ -237,8 +286,32 @@ def test_drain_retries_a_system_health_send() -> None:
     assert call["send_id"] == 77
     # The composer's system_health branch must survive the retry path too: the message
     # is rendered verbatim, not squeezed into a listing template.
-    assert call["message"].subject == "Systémové upozornění"
+    assert call["message"].subject == "Ops incident #7: checkviolation|listings_area_basis_check"
     assert "checkviolation" in call["message"].body_text
+    assert call["message"].deep_link == "https://app.example/health#ops_incident"
+
+
+def test_both_passes_hand_the_dispatch_key_to_the_composer(monkeypatch: Any) -> None:
+    """The link names the check from the DISPATCH's key; the send keeps its own `notif:` key."""
+    monkeypatch.setenv("SPA_BASE_URL", "https://app.example")
+    new_row = ("dab-3", "system_health", "system_alert", None, None, None, None, None,
+               None, None, None, None, None, None, None, _ONSET,
+               "sys:jobs:onset:2026-10-18T08:20:00Z", "email")
+    retry_row = (78, "email", "op@example.cz", "system_health", "system_health",
+                 "system_alert", None, None, None, None, None, None, None, None,
+                 None, None, "Capacity: still Problem for 6 h — cron/browse-list-rebuild",
+                 "sys:capacity:reminder:6h:2026-10-18T02:00:00Z:41x1")
+    client = _FakeClient(configured={"email"})
+    conn = _Conn(recipient="op@example.cz", new_rows=[new_row], retry_rows=[retry_row])
+    ob.drain_once(conn, client)  # type: ignore[arg-type]
+    for sql in (next(s for s in conn.executed if "CROSS JOIN LATERAL" in s),
+                next(s for s in conn.executed if "FROM channel_sends cs JOIN" in s)):
+        assert "d.dedupe_key" in sql
+    sent, retried = client.sends[0], client.retries[0]
+    assert sent["dedupe_key"] == "notif:dab-3:email"
+    assert (sent["message"].subject, sent["message"].deep_link) == ("Jobs: Problem", "https://app.example/health#jobs")
+    assert (retried["message"].subject, retried["message"].deep_link) == (
+        "Capacity: still Problem for 6 h", "https://app.example/health#capacity")
 
 
 def test_system_health_is_a_declared_consumer() -> None:

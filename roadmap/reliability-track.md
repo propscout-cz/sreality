@@ -51,7 +51,7 @@ truth enforced only in production, and N identical emails for one cause.
 | W0.5 the second week's fires | (a) ceskereality contract v4 + contract-immutability lockfile rail in `test.yml` — un-wedges the intake lane, closes the merged≠enforced gap for portal contracts; (b) `llm_liveness` recalibrated 4h → 13h to the real (post-dedup) producer cadence | 🟡 in progress (2026-08-31, shipped as hotfix PRs ahead of wave order — the lane was down) |
 | W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks) | ⚪ proposed — needs operator sign-off |
 | W2 migration file as contract | `-- apply:` / `-- assert:` header tokens above a watermark (≥ 444), asserts executed inside `migrations.yml`'s existing per-file apply loop and *validated as able to fail*, plus schema-vocabulary parity and the hot-DDL doctrine rails. **W2.3's live-catalog drift check shipped in parallel as PR #1204 (`check_migration_drift`)** — remaining W2.3 scope is hardening it, not building it | ⚪ proposed — needs operator sign-off (part shipped in parallel) |
-| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) awaits the operator — until flipped, incidents ring the in-app bell only. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1; the signature engine retires in its wave 3 |
+| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) awaits the operator — until flipped, incidents ring the in-app bell only. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
 | W4 apply becomes a job | Hot-table DDL applied out-of-band by a tested, extracted lock primitive (`attempts=1`, fail fast, escalate to a window — the retry-loop pattern is retired, not tuned); the existing PK-swap applier generalised into a dispatchable maintenance window | ⚪ proposed — needs operator sign-off + one human step (`REALTIME_WORKER_ENABLED`) |
 | W5 constraint-only catalog diff | Named successor: diff CI's replayed schema against the live catalog. Catches 438 exactly, plus the ~241 migrations with no ledger row and no assert, plus the reverse drift direction W2 structurally cannot see — with zero per-migration convention | ⚪ named only, not built (open question 8) |
 
@@ -195,8 +195,8 @@ OpenAI ran out of credit on 2026-10-02; the alarms fired but pointed the wrong w
 
 Next:
 - ~~`verify_pipeline`: a timed-out warn counts as "not failing", closes the incident and sends a false "Recovered" (`text_extraction_lag` did it 6 times since 10-02); a timeout must keep the incident open.~~ Done 2026-10-18 (Health dashboard sprint wave 1: a timeout is `unknown`).
-- `llm_errors` rate arm: `currently_failing` still reads the newest call of ANY provider; for ~24 h after a top-up a stray error can turn the check red again. → Health dashboard sprint wave 3 (the llm check).
-- `worker_lane_stall` reports `failed_passes` but never alarms on it. → wave 3 (the jobs check's lane cells).
+- ~~`llm_errors` rate arm: `currently_failing` still reads the newest call of ANY provider; for ~24 h after a top-up a stray error can turn the check red again. → Health dashboard sprint wave 3 (the llm check).~~ Done 2026-10-19 (wave 3: the `llm` check judges the error share per provider).
+- ~~`worker_lane_stall` reports `failed_passes` but never alarms on it. → wave 3 (the jobs check's lane cells).~~ Done 2026-10-19 (wave 3: a lane cell judges failing spells and flapping).
 - Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; wave 7 keeps email and Telegram ready.
 
 ## 2026-10-18 — Health dashboard sprint, wave 1 (shipped with this PR)
@@ -282,7 +282,7 @@ What wave 2 changed:
   `scripts/health_canary.py` asserts that the database answers, the watcher ran in the last 30
   min, its failing cells have incidents, and no alarm's notice has sat unread and undelivered for
   15 min while its incident is open and unacknowledged. A failing check never reds the run; the assertions do (and a crash of the poller or the harness, or
-  the harness step overrunning its 27 minutes), so with
+  the harness step overrunning its 21 minutes), so with
   the bell the only channel (Q1) an unread alarm reaches the operator as GitHub's failure email at
   the next canary run. `llm_health.yml` and the 6-hourly lane are gone, and with them
   `--exit-nonzero-on-fail`: a failing check no longer reds a run.
@@ -301,6 +301,90 @@ Owed items this closes:
 To check after the merge: the first red canary run's email arrives (GitHub emails a red scheduled
 run to whoever last changed its cron line).
 
-**Next:** wave 3 — the platform checks (jobs, capacity, llm) and the worker's health lane, which
+~~**Next:** wave 3 — the platform checks (jobs, capacity, llm) and the worker's health lane, which
 calls `run_due` every 60 s; the poller's production filter and reason lines; the signature engine
-retires (migration 621).
+retires (migration 621).~~ Done 2026-10-19 (wave 3, below).
+
+## 2026-10-19 — Health dashboard sprint, wave 3 (shipped with this PR)
+
+Platform checks and the worker's health lane: every scheduled machine on every runtime, the
+database and the LLM providers are judged once, per job or provider, every 10 minutes from the
+worker, and a red run carries its reason. The signature engine retires, leaving one incident
+model. Plan: [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 3,
+and its "As built" note.
+
+What wave 3 changed:
+- **The health lane.** A new worker lane, `health`, runs the due worker-hosted checks every
+  60 s within a 300 s pass, projects the worker's registry rows on each process's first pass, and
+  deletes check results older than 35 days once a day (Q5). The watcher's `health_lane` cell now
+  judges it.
+- **`jobs`** (every 10 min): one cell per production GitHub workflow (with the failing run's reason
+  line), the GitHub poller, every pg_cron job, every worker lane (and each portal failing inside
+  the probe or drain lane) and every derived artifact. It replaces `worker_lane_stall`,
+  `workflow_poller_liveness` and `broker_resolution_freshness`.
+- **`capacity`** (every 30 min): pg_cron run times against a reference the incident cannot erode
+  (each job's lowest weekly p50 since 2026-10-17), check timeouts per host, the oldest open
+  transaction, connections and the worker's memory. It replaces `db_saturation` and
+  `long_open_transaction`.
+- **`llm`** (every 10 min): a credit outage per provider over 72 h, error share and starvation per
+  provider and caller (`called_for`), and 24 h spend. One provider's success no longer hides another's outage. It
+  replaces `llm_errors` and `llm_burn_rate`. `dual_write_parity` is deleted (Q6).
+- **One home for thresholds.** `THRESHOLDS` in code, each with its basis; the
+  `pipeline_check_thresholds` settings row is read by nothing (migration 624 deletes it).
+- **The heartbeat remembers.** Each lane reports its interval (so an off lane reads off), a
+  failing spell with its last error, and, in the probe and drain lanes, each failing portal; at
+  boot the worker carries its counters over from the previous heartbeat, so deploys reset nothing.
+- **The poller** records production runs only (scheduled, or a push on `main`), each red with its
+  reason line, and per workflow its state, whether its file is on `main` and its recent scheduled
+  starts.
+- **System alerts are ready for delivery**: subject from the message, link to `/health#<check>`
+  (the bell stays the one channel, Q1).
+- **Migration 621** adds the poller's columns and closes the signature engine's open incidents;
+  the engine's code (`toolkit/ops_incidents.py`, the crash-path and lane writers, the poller's
+  incident pass) and its signature tiers are deleted.
+- **The review's corrections** (draft #1871, 2026-10-19): the worker's memory is judged only from
+  a pass of the running process; an artifact built on GitHub gets GitHub's 18 h delivery slack;
+  check timeouts are judged per host; a database session hidden from the checks' role makes the
+  connection and open-transaction cells Not measured; a lane entry the pre-wave-3 worker wrote
+  reads Not measured during the first deploy, not "never woke"; the boot seed does not carry a
+  lane's interval, so a lane that never wakes reads "never woke"; a CI rail fails once the
+  capacity reference date is more than 90 days old; the pg_cron queries run for real in CI; a Health link
+  scrolls to its check. All twelve are in the design's As built note.
+
+Owed items this closes:
+- **From the 2026-10-10 Next list:** the `llm_errors` any-provider rate arm (now per provider) and
+  `worker_lane_stall`'s unalarmed `failed_passes` (now a lane cell's failing and flapping arms).
+- **From wave 2:** the poller's dead ladder fence goes with its rewrite; `MAX_LOG_FETCHES` stays
+  at 25 a poll, and a red past the budget keeps no reason (below).
+
+Owed and stated (also in the design's "As built" note):
+- The start-gap arm of a GitHub cell is Not measured until the workflow has 10 recorded scheduled
+  starts (about two weeks for a daily job), and the long-cycle arm until it has 2 (one to two
+  cycles for a weekly or monthly job): the starts accumulate from wave 3 on, with no history
+  import. Only a scheduled run records a start (a push has no cadence), so a workflow that only
+  runs on push has neither arm: a lone red is Watch, 3 reds a Problem. The overdue arm is judged
+  as of the poller's cursor, not now.
+- A provider's credit outage is told twice until wave 6: by the `llm` check's credit cell and by
+  the text lane's `jobs` cell, because a pass the provider stopped is a failed pass.
+- A workflow that dispatches itself is recorded by its cron run only: its chained hops are
+  dispatch runs, outside the production filter.
+- The replay rails' quiet windows are what the data allows: 8 days for pg_cron, one week for
+  capacity (its relative arm Not measured), a fortnight for the LLM providers, none for GitHub
+  workflows (only each workflow's newest success was stored before wave 3).
+- A red run past the poller's reason budget (25 logs or 90 s a poll) keeps no reason line and is
+  not retried.
+- A pg_cron tick that skips itself counts as a run and pulls the median down; the sticky
+  reference only makes the comparison stricter.
+- Read by nothing after this wave, for migration 624 to drop: `app_settings.broker_resolution_last_complete`
+  (still written by `scripts/resolve_brokers.py`; brokers territory) and the `dual_write_watermark`
+  table.
+- At merge the retired keys' open incidents close silently at the canary's first run from `main`,
+  and the new `llm` check opens a fresh onset for any outage still under way.
+- Wave 2's rulings (the `api` cell's 26 min, the NULL lease, the red held through a recovery) are
+  unchanged.
+
+To check after the merge: the worker's `health` lane passes in the heartbeat, `health_checks` holds
+the three `realtime-worker` keys, and Health shows their cells within 10 minutes of the deploy.
+
+**Next:** wave 4 — the portal checks (scraping, publishing, delisting and the coverage gauge),
+built on ledgers that see the worker's work (migration 622).

@@ -4936,7 +4936,7 @@
     {
       "filename": "verify_pipeline.yml",
       "name": "Monitoring: health canary (hourly)",
-      "description": "The health canary: the one monitoring workflow, and the one alarm path that needs neither Supabase's scheduler (pg_cron) nor Railway. Each run records failed workflow runs, measures the GitHub-hosted health checks that are due, then asserts that the watchers and the teller are alive. Only those assertions are meant to turn a run red, and GitHub emails the operator about a red scheduled run.",
+      "description": "The health canary: the one monitoring workflow, and the one alarm path that needs neither Supabase's scheduler (pg_cron) nor Railway. Each run records failed production runs, measures the GitHub-hosted health checks that are due, then asserts that the watchers and the teller are alive. Only those assertions are meant to turn a run red, and GitHub emails the operator about a red scheduled run.",
       "portal": null,
       "manual": true,
       "schedules": [
@@ -4964,7 +4964,7 @@
       ],
       "concurrencyGroup": "pipeline-verification",
       "cancelInProgress": false,
-      "timeoutMinutes": 40,
+      "timeoutMinutes": 35,
       "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_pipeline.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_pipeline.yml"

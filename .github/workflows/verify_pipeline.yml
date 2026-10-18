@@ -1,7 +1,7 @@
 name: "Monitoring: health canary (hourly)"
 
 # The health canary: the one monitoring workflow, and the one alarm path that needs neither
-# Supabase's scheduler (pg_cron) nor Railway. Each run records failed workflow runs, measures
+# Supabase's scheduler (pg_cron) nor Railway. Each run records failed production runs, measures
 # the GitHub-hosted health checks that are due, then asserts that the watchers and the teller
 # are alive. Only those assertions are meant to turn a run red, and GitHub emails the operator
 # about a red scheduled run.
@@ -20,12 +20,13 @@ name: "Monitoring: health canary (hourly)"
 #
 # GitHub delivers this hourly cron about five times a day (median gap ~4.9 h), so the email
 # can trail a problem by hours; the watchers themselves run every 5 min and every 60 s. GitHub
-# sends it to whoever last edited the cron line. Wave 3 moves the other checks to the worker's
-# health lane; the two that need GitHub stay in this step: migration_drift reads the checkout,
-# and the portal-link probe needs an address other than the scrapers'.
+# sends it to whoever last edited the cron line. The platform checks moved to the worker's
+# health lane in wave 3 and waves 4-6 move the rest; the two that need GitHub stay in this step:
+# migration_drift reads the checkout, and the portal-link probe needs an address other than
+# the scrapers'.
 #
-# A dispatch from a branch other than main measures but never projects the registry. Writes
-# only its result, registry and poller rows. Required GitHub secret: SUPABASE_DB_URL; the
+# A dispatch from a branch other than main measures but never projects the registry, and its
+# poller step writes nothing. Writes only its result, registry and poller rows. Required GitHub secret: SUPABASE_DB_URL; the
 # default GITHUB_TOKEN (actions: read) covers the poller's reads of the Actions API.
 
 on:
@@ -45,11 +46,11 @@ concurrency:
 jobs:
   canary:
     runs-on: ubuntu-latest
-    # The harness still carries the legacy checks until waves 3-6 move them, and every one can be
+    # The harness still carries the legacy checks until waves 4-6 move them, and every one can be
     # due at once (after a long gap, or when the registry changes). The rail in
     # test_verify_pipeline.py fits the poller step's limit, the harness step's limit and eight
     # minutes for setup and the assertions under this number.
-    timeout-minutes: 40
+    timeout-minutes: 35
     permissions:
       contents: read
       actions: read
@@ -73,12 +74,12 @@ jobs:
         timeout-minutes: 5
         run: python -m scripts.record_workflow_failures
 
-      # Its own limit holds 28 check budgets (1,410 s) plus 180 s headroom, so an overrun fails this
+      # Its own limit holds 20 check budgets (1,050 s) plus 180 s headroom, so an overrun fails this
       # step, which reds the run, instead of the job's kill, which is silent. It runs after a failed
       # poll, not after a cancel.
       - name: Measure the GitHub-hosted checks
         if: ${{ !cancelled() }}
-        timeout-minutes: 27
+        timeout-minutes: 21
         run: |
           ARGS="--host github-actions"
           if [ "${{ inputs.dry_run }}" = "true" ]; then

@@ -234,12 +234,31 @@ _Avoid_: monitor, meta-check, dead-man switch, heartbeat check
 
 **Canary**:
 The one monitoring workflow on GitHub, an hourly cron that GitHub delivers about five times a day:
-it records failed workflow runs, measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
+it records the production runs of the other workflows (those run on schedule or by a push to the main branch, each failure
+with its reason line), measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
 that no alarm's system alert has gone unread and undelivered while its incident is open and
 unacknowledged. A failing check never fails its run; the assertions do (so does a crash of the
-poller or the harness, or the harness step overrunning its 27 minutes), so GitHub's failure email is the one path to
+poller or the harness, or the harness step overrunning its 21 minutes), so GitHub's failure email is the one path to
 the operator that needs neither the database's scheduler nor Railway.
 _Avoid_: monitoring lane, acute lane, health workflow, smoke test
+
+**Health lane**:
+The realtime worker's lane that measures the checks hosted on the worker: every minute it runs
+those that are due, within a five-minute pass, and once a day it deletes check results older than
+35 days. The watcher judges whether it is running.
+_Avoid_: health worker, check lane, monitor lane
+
+**Job cell**:
+One cell of the jobs check, about one scheduled machine: a GitHub workflow, the GitHub poller, a
+database cron job, a realtime-worker lane (or one portal inside its probe or drain lane), or a
+derived artifact. A failing workflow's cell shows its run's reason line.
+_Avoid_: job check, workflow status, task
+
+**Reason line**:
+The one log line that explains why a GitHub run failed: its last failing CHECK line, else its last
+error that is not the runner's own setup output, else GitHub's last error annotation. It is stored
+with the failure and shown in that job's cell.
+_Avoid_: signature, error summary, failure reason
 
 ### Where users meet the platform
 

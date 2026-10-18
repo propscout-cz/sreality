@@ -7,6 +7,7 @@ run_index_probe / run_detail_drain / db.connect are monkeypatched.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import io
 import logging
@@ -15,6 +16,8 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +107,75 @@ def test_lane_loop_interval_zero_idles_without_pass():
         return calls
 
     assert asyncio.run(scenario()) == []
+
+
+def test_every_wake_records_its_interval_the_idle_one_included():
+    """interval <= 0 is off, and off must be visible: an idled lane still says what it read,
+    and a completed pass carries it."""
+    async def idle() -> dict[str, Any]:
+        stop = asyncio.Event()
+        state = rw._new_state()
+
+        async def never() -> None:
+            raise AssertionError("an idled lane runs no pass")
+
+        task = asyncio.create_task(rw._lane_loop(
+            "t", stop, lambda: 0, never, state, default_interval=300, idle_seconds=0.01))
+        await asyncio.sleep(0.05)
+        stop.set()
+        await task
+        return state
+
+    assert asyncio.run(idle())["lanes"]["t"] == {"interval_s": 0.0}
+
+    async def running() -> dict[str, Any]:
+        stop = asyncio.Event()
+        state = rw._new_state()
+
+        async def run_pass() -> None:
+            rw._record_pass(state, "t", {"ok": True})
+            stop.set()
+
+        await rw._lane_loop("t", stop, lambda: 300, run_pass, state, default_interval=300)
+        return state
+
+    lane = asyncio.run(running())["lanes"]["t"]
+    assert (lane["interval_s"], lane["passes"]) == (300.0, 1)
+
+
+def test_a_raised_or_abandoned_pass_records_why(monkeypatch):
+    """last_error says why the newest pass failed; failing_since stays the streak's onset; a
+    TimeoutError the pass raises itself is a raise, not the cap (the two are one class)."""
+    monkeypatch.setattr(rw, "LANE_PASS_TIMEOUT_SECONDS", 0.05)
+    state = rw._new_state()
+
+    async def lane(fail: Any) -> None:
+        stop = asyncio.Event()
+
+        async def run_pass() -> None:
+            stop.set()
+            await fail()
+
+        await rw._lane_loop("t", stop, lambda: 60, run_pass, state, default_interval=60)
+
+    async def boom() -> None:
+        raise RuntimeError("boom")
+
+    asyncio.run(lane(boom))
+    onset = state["lanes"]["t"]["failing_since"]
+    assert onset and state["lanes"]["t"]["last_error"] == "RuntimeError: boom"
+
+    asyncio.run(lane(lambda: asyncio.sleep(5)))
+    assert state["lanes"]["t"]["last_error"] == f"pass exceeded {rw.LANE_PASS_TIMEOUT_SECONDS} s"
+    assert state["lanes"]["t"]["failing_since"] == onset
+    assert state["lanes"]["t"]["failed_passes"] == 2
+
+    async def own_timeout() -> None:
+        raise TimeoutError("read timed out")
+
+    asyncio.run(lane(own_timeout))
+    assert state["lanes"]["t"]["last_error"] == "TimeoutError: read timed out"
+    assert state["lanes"]["t"]["failed_passes"] == 3
 
 
 def test_lane_loop_pass_exception_does_not_kill_the_lane():
@@ -223,24 +295,74 @@ def test_probe_pass_portal_error_never_ends_the_pass(monkeypatch):
     assert state["lanes"]["probe"]["last"]["portals"] == len(rw.REALTIME_SOURCES) - 1
 
 
-def test_lane_failure_recording_never_runs_on_the_event_loop(monkeypatch):
-    """`_record_lane_failure` calls `db.connect()`, which is `_connect_with_retry`:
-    3 attempts with `time.sleep(10.0)` between, and `is_transient_db_error` is true for
-    every OperationalError. A bare call therefore sleeps ~20s per source ON THE LOOP
-    during a pooler outage — nine sources per drain pass, with the 30s heartbeat lane a
-    sibling coroutine — i.e. it would blind the watcher's `worker` cell during exactly the DB
-    incident it exists to record. Every other DB touch in both passes is offloaded."""
+def test_a_failing_portal_stays_on_the_lane_until_its_next_success(monkeypatch):
+    """portal_errors: a portal that raised keeps its streak's onset across passes, a probe
+    portal whose every category failed (rc 1, no raise) counts as raised, and a success
+    clears the portal. The pass's portal lists never reach `last`."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
     monkeypatch.setattr(rw, "_read_disabled_sources", lambda: set())
-    loop_thread: list[bool] = []
+    outcome: dict[str, Any] = {"idnes": RuntimeError("portal blocked"), "remax": 1}
 
-    def _blocking(source: str, lane: str, exc: BaseException) -> None:
-        loop_thread.append(threading.current_thread() is threading.main_thread())
+    def fake_probe(source: str) -> dict[str, Any]:
+        result = outcome.get(source, 0)
+        if isinstance(result, Exception):
+            raise result
+        return _probe_agg(rc=result)
 
-    monkeypatch.setattr(rw, "_record_lane_failure", _blocking)
-    monkeypatch.setattr(rw, "_run_probe_sync",
-                        lambda s: (_ for _ in ()).throw(RuntimeError("db down")))
-    asyncio.run(rw._probe_pass(asyncio.Event(), rw._new_state()))
-    assert loop_thread and not any(loop_thread)
+    monkeypatch.setattr(rw, "_run_probe_sync", fake_probe)
+    state = rw._new_state()
+    asyncio.run(rw._probe_pass(asyncio.Event(), state))
+    lane = state["lanes"]["probe"]
+    assert set(lane["portal_errors"]) == {"idnes", "remax"}
+    assert lane["portal_errors"]["idnes"]["last_error"] == "RuntimeError: portal blocked"
+    assert lane["portal_errors"]["remax"]["last_error"] == "every category failed"
+    assert not {"attempted", "raised"} & set(lane["last"])
+    onset = lane["portal_errors"]["idnes"]["failing_since"]
+
+    outcome = {"idnes": RuntimeError("still blocked")}
+    asyncio.run(rw._probe_pass(asyncio.Event(), state))
+    errors = state["lanes"]["probe"]["portal_errors"]
+    assert set(errors) == {"idnes"}, "a success clears its portal"
+    assert errors["idnes"] == {"failing_since": onset, "last_error": "RuntimeError: still blocked"}
+
+
+_STALE_PORTAL_ERROR = {"failing_since": "2026-10-18T00:00:00+00:00",
+                       "last_error": "RuntimeError: x"}
+
+
+def test_a_portal_the_pass_skipped_keeps_its_entry_unless_it_is_disabled(monkeypatch):
+    monkeypatch.delenv("SCRAPER_PROXY_URL", raising=False)
+    monkeypatch.setattr(rw, "_PROXY_WARNED", set())
+    monkeypatch.setattr(rw, "_read_disabled_sources", lambda: {"bazos"})
+    monkeypatch.setattr(rw, "_run_probe_sync", lambda s: _probe_agg())
+    state = rw._new_state()
+    state["lanes"]["probe"] = {"portal_errors": {
+        p: dict(_STALE_PORTAL_ERROR) for p in ("ceskereality", "bazos", "idnes")}}
+    asyncio.run(rw._probe_pass(asyncio.Event(), state))
+    # ceskereality is proxied and the proxy is unset, so it was not attempted: kept. bazos is
+    # disabled: gone. idnes passed: gone.
+    assert state["lanes"]["probe"]["portal_errors"] == {"ceskereality": _STALE_PORTAL_ERROR}
+
+
+def test_the_drain_keeps_a_portal_error_while_that_queue_is_empty(monkeypatch):
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: {"remax"})
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"idnes": 5, "remax": 3})
+
+    def fake_drain(source: str, max_claims: int) -> dict[str, Any]:
+        raise RuntimeError(f"{source} broke")
+
+    monkeypatch.setattr(rw, "_run_drain_sync", fake_drain)
+    state = rw._new_state()
+    state["lanes"]["drain"] = {"portal_errors": {
+        p: dict(_STALE_PORTAL_ERROR) for p in ("sreality", "remax")}}
+    asyncio.run(rw._drain_pass(asyncio.Event(), state))
+    errors = state["lanes"]["drain"]["portal_errors"]
+    assert set(errors) == {"sreality", "idnes"}, "nothing claimable keeps; disabled clears"
+    assert errors["sreality"] == _STALE_PORTAL_ERROR
+    assert errors["idnes"]["last_error"] == "RuntimeError: idnes broke"
+    assert state["lanes"]["drain"]["last"]["errors"] == 1
 
 
 # --- drain pass ----------------------------------------------------------------
@@ -307,13 +429,18 @@ def test_drain_pass_filters_drain_disabled_source(monkeypatch):
     assert state["lanes"]["drain"]["last"]["sources"] == 2
 
 
-def test_drain_pass_slice_zero_skips_entirely(monkeypatch):
+def test_drain_pass_slice_zero_records_an_off_pass(monkeypatch):
+    # The slice is a second kill switch beside the interval: the pass is recorded as
+    # skipped, so the lane reads off, never late or in flight.
     monkeypatch.setattr(rw, "_read_drain_slice", lambda: 0)
     monkeypatch.setattr(rw, "_claimable_by_source", lambda: pytest.fail(
         "slice<=0 must skip the pass before the queue count"))
     state = rw._new_state()
+    rw._record_pass_start(state, "drain")
     asyncio.run(rw._drain_pass(asyncio.Event(), state))
-    assert "drain" not in state["lanes"]
+    lane = state["lanes"]["drain"]
+    assert lane["last"] == {"skipped": "slice<=0"}
+    assert lane["passes"] == 1 and lane["started_at"] is None
 
 
 # --- images pass -----------------------------------------------------------------
@@ -353,13 +480,16 @@ def test_images_pass_heartbeat_carries_inline_phash_misses(monkeypatch):
     assert state["lanes"]["images"]["last"]["phash_missed"] == 3
 
 
-def test_images_pass_slice_zero_skips_entirely(monkeypatch):
+def test_images_pass_slice_zero_records_an_off_pass(monkeypatch):
     monkeypatch.setattr(rw, "_read_images_slice", lambda: 0)
     monkeypatch.setattr(rw.image_storage, "is_configured", lambda: pytest.fail(
         "slice<=0 must skip the pass before touching R2 config"))
     state = rw._new_state()
+    rw._record_pass_start(state, "images")
     asyncio.run(rw._images_pass(asyncio.Event(), state))
-    assert "images" not in state["lanes"]
+    lane = state["lanes"]["images"]
+    assert lane["last"] == {"skipped": "slice<=0"}
+    assert lane["passes"] == 1 and lane["started_at"] is None
 
 
 def test_images_pass_without_r2_logs_once_and_idles(monkeypatch, caplog):
@@ -415,7 +545,7 @@ class _FakeCursor:
     def __exit__(self, *a: Any) -> None:
         return None
 
-    def execute(self, sql: str, params: dict[str, Any]) -> None:
+    def execute(self, sql: str, params: Any = None) -> None:
         self._calls.append((sql, params))
 
 
@@ -447,6 +577,328 @@ def test_heartbeat_upserts_latest_wins_row(monkeypatch):
     assert params["started_at"] == state["started_at"]
     assert isinstance(params["details"], Jsonb)
     assert params["details"].obj["probe"]["last"] == {"portals": 4}
+
+
+def test_the_heartbeat_lane_records_its_own_pass(monkeypatch):
+    """No pseudo-lane: the heartbeat's entry has every lane's shape, and the next beat says so."""
+    conn = _FakeConn()
+    monkeypatch.setattr(rw.db, "connect", lambda **_: conn)
+    state = rw._new_state()
+    rw._record_pass_start(state, "heartbeat")
+    asyncio.run(rw._heartbeat_pass(state))
+    lane = state["lanes"]["heartbeat"]
+    assert (lane["passes"], lane["last"], lane["started_at"]) == (1, {"beat": True}, None)
+    assert lane["last_pass_at"] and lane["failing_since"] is None
+    rw._beat_sync(state)
+    assert conn.calls[-1][1]["details"].obj["heartbeat"]["passes"] == 1
+
+
+def test_a_failing_streak_keeps_its_onset_and_a_completed_pass_ends_it():
+    """failing_since is set once per streak, last_error is the newest (cut to 300), and a
+    completed pass clears both while carrying every key it does not set."""
+    state = rw._new_state()
+    carried = {"interval_s": 30.0, "portal_errors": {"idnes": dict(_STALE_PORTAL_ERROR)},
+               "recut": {"digest": "b"}}
+    state["lanes"]["drain"] = dict(carried)
+    rw._record_pass_failed(state, "drain", 1.0, "RuntimeError: first")
+    onset = state["lanes"]["drain"]["failing_since"]
+    rw._record_pass_failed(state, "drain", 2.0, "X" * 1000)
+    lane = state["lanes"]["drain"]
+    assert onset and lane["failing_since"] == onset
+    assert lane["last_error"] == "X" * rw.LAST_ERROR_CHARS == "X" * 300
+    assert lane["failed_passes"] == 2
+
+    rw._record_pass(state, "drain", {"new": 1})
+    lane = state["lanes"]["drain"]
+    assert lane["failing_since"] is None and lane["last_error"] is None
+    assert lane["failed_passes"] == 2, "the count is carried, not reset"
+    assert {k: lane[k] for k in carried} == carried
+    assert "last_failure_at" not in lane
+
+
+def test_last_error_is_one_line_folded_before_the_cut():
+    """A psycopg error's DETAIL and HINT lines would split a cell's one-line message, so the
+    lane's and each portal's last_error fold every whitespace run to one space, then cut."""
+    state = rw._new_state()
+    rw._record_pass_failed(state, "drain", 1.0,
+                           'OperationalError: connection failed\nDETAIL:  role "x"\tdenied\n')
+    assert state["lanes"]["drain"]["last_error"] == (
+        'OperationalError: connection failed DETAIL: role "x" denied')
+    rw._record_portal_errors(state, "drain", ["idnes"], {"idnes": "boom\n" * 100}, set())
+    text = state["lanes"]["drain"]["portal_errors"]["idnes"]["last_error"]
+    assert len(text) == rw.LAST_ERROR_CHARS and "\n" not in text
+
+
+class _SeedCursor(_FakeCursor):
+    def __init__(self, calls: list[tuple[str, Any]], row: Any) -> None:
+        super().__init__(calls)
+        self._row = row
+
+    def fetchone(self) -> Any:
+        return self._row
+
+
+class _SeedConn(_FakeConn):
+    """worker_heartbeats as the boot seed reads it: the previous `details`, or no row."""
+
+    def __init__(self, details: dict[str, Any] | None) -> None:
+        super().__init__()
+        self._row = None if details is None else (details,)
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[None]:
+        self.calls.append(("BEGIN", None))
+        yield
+        self.calls.append(("COMMIT", None))
+
+    def cursor(self) -> _SeedCursor:
+        return _SeedCursor(self.calls, self._row)
+
+
+def test_the_boot_seed_carries_every_lane_field_but_a_dead_pass(monkeypatch):
+    """~11 deploys a day reset nothing: counters, streaks, portal errors and autodedup's recut
+    carry over; the dead process's pass in flight, its interval (re-read on this process's first
+    wake, so a lane that never wakes reads "never woke") and the retired last_failure_at do not.
+    The server bounds the read, not only the connect: the boot waits on it."""
+    dropped = {"started_at": "2026-10-18T10:01:00+00:00", "in_flight_s": 12.0,
+               "interval_s": 180.0, "last_failure_at": "2026-10-18T09:00:00+00:00"}
+    probe = {"passes": 7, "failed_passes": 2, "last_pass_at": "2026-10-18T10:00:00+00:00",
+             "last_duration_s": 4.2, "last": {"portals": 9},
+             "failing_since": "2026-10-18T09:00:00+00:00", "last_error": "RuntimeError: x",
+             "portal_errors": {"idnes": dict(_STALE_PORTAL_ERROR)}}
+    previous = {"probe": {**probe, **dropped},
+                "autodedup": {"passes": 3, "recut": {"digest": "b"}},
+                "retired_lane": {"passes": 1}, "heartbeat": "not an object"}
+    seen: dict[str, Any] = {}
+    conn = _SeedConn(previous)
+
+    def connect(**kwargs: Any) -> _SeedConn:
+        seen.update(kwargs)
+        return conn
+
+    monkeypatch.setattr(rw.db, "connect", connect)
+    state = rw._new_state()
+    for lane in rw.LANES:
+        state["lanes"][lane] = {"interval_s": None}
+    rw._seed_from_previous_beat(state)
+
+    assert state["lanes"]["probe"] == {**probe, "interval_s": None}
+    assert state["lanes"]["autodedup"] == {"interval_s": None, "passes": 3,
+                                           "recut": {"digest": "b"}}
+    assert state["lanes"]["heartbeat"] == {"interval_s": None}
+    assert "retired_lane" not in state["lanes"]
+    assert seen == {"attempts": 1, "connect_timeout": rw.HEARTBEAT_CONNECT_TIMEOUT_SECONDS}
+    assert [sql for sql, _ in conn.calls] == [
+        "BEGIN", "SET LOCAL statement_timeout = '10s'", rw._PREVIOUS_BEAT_SQL, "COMMIT"]
+    assert conn.closed
+
+
+def test_a_missed_seed_seeds_nothing_and_says_so_once(monkeypatch, caplog):
+    def down(**kwargs: Any) -> Any:
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(rw.db, "connect", down)
+    state = rw._new_state()
+    state["lanes"]["probe"] = {"interval_s": None}
+    with caplog.at_level(logging.WARNING, logger="scraper.realtime_worker"):
+        rw._seed_from_previous_beat(state)
+    assert state["lanes"] == {"probe": {"interval_s": None}}
+    assert sum("heartbeat seed" in r.getMessage() for r in caplog.records) == 1
+    # The very first boot has no row: nothing to carry, nothing wrong.
+    monkeypatch.setattr(rw.db, "connect", lambda **_: _SeedConn(None))
+    rw._seed_from_previous_beat(state)
+    assert state["lanes"] == {"probe": {"interval_s": None}}
+
+
+def test_the_worker_seeds_every_lane_before_any_lane_starts(monkeypatch):
+    """The first beat replaces the row the seed reads, so the seed runs before every lane;
+    every lane has an entry from boot; and LANES is what _amain registers, in its order."""
+    events: list[Any] = []
+    monkeypatch.setattr(rw, "_watchdog", lambda state: None)
+    monkeypatch.setattr(rw, "_seed_from_previous_beat",
+                        lambda state: events.append(("seed", dict(state["lanes"]))))
+
+    async def lane_loop(name: str, *args: Any, **kwargs: Any) -> None:
+        events.append(("lane", name))
+
+    monkeypatch.setattr(rw, "_lane_loop", lane_loop)
+    assert asyncio.run(rw._amain()) == 0
+    assert events[0] == ("seed", {lane: {"interval_s": None} for lane in rw.LANES})
+    assert events[1:] == [("lane", lane) for lane in rw.LANES]
+    assert len(set(rw.LANES)) == len(rw.LANES) == 15
+
+
+# --- health lane (Health dashboard W3) ----------------------------------------------------
+
+
+class _Harness:
+    """scripts.verify_pipeline as the health lane uses it."""
+
+    def __init__(self, due: list[str]) -> None:
+        self.THRESHOLDS = {"jobs_lane_inflight_warn_s": 1200}
+        self.due = due
+        self.projected: list[tuple[str, Any]] = []
+        self.ran: list[dict[str, Any]] = []
+        self.project_error: Exception | None = None
+
+    def project_registry(self, conn: Any, host: str, now: Any) -> dict[str, int]:
+        if self.project_error is not None:
+            error, self.project_error = self.project_error, None
+            raise error
+        self.projected.append((host, now))
+        return {"upserted": 3, "deleted": 0}
+
+    def run_due(self, conn: Any, thresholds: Any, host: str, *, now: Any,
+                lane_budget_s: float | None = None) -> list[dict[str, Any]]:
+        self.ran.append({"thresholds": thresholds, "host": host, "now": now,
+                         "lane_budget_s": lane_budget_s})
+        return [{"check_key": key, "status": "ok"} for key in self.due]
+
+
+@pytest.fixture
+def harness(monkeypatch: pytest.MonkeyPatch) -> _Harness:
+    """A stand-in for the harness, THRESHOLDS included, and a fresh lane."""
+    import scripts
+
+    fake = _Harness(["jobs", "llm"])
+    monkeypatch.setitem(sys.modules, "scripts.verify_pipeline", fake)
+    monkeypatch.setattr(scripts, "verify_pipeline", fake, raising=False)
+    monkeypatch.setattr(rw, "_HEALTH_PASS_LOCK", rw._PassLock("health"))
+    monkeypatch.setattr(rw, "_HEALTH_REGISTRY_PROJECTED", False)
+    monkeypatch.setattr(rw, "_HEALTH_PRUNED_AT", None)
+    return fake
+
+
+class _PruneConn:
+    """Answers the prune's DELETEs with the given row counts, in order."""
+
+    def __init__(self, rowcounts: list[int]) -> None:
+        self.rowcounts = list(rowcounts)
+        self.statements: list[tuple[str, Any]] = []
+        self.closed = False
+
+    def cursor(self) -> Any:
+        conn = self
+
+        class _Cur:
+            rowcount = -1
+
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *a: Any) -> None:
+                return None
+
+            def execute(self, sql: str, params: Any = None) -> None:
+                conn.statements.append((" ".join(sql.split()), params))
+                self.rowcount = conn.rowcounts.pop(0)
+
+        return _Cur()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None:
+    """The text_extract lane's shape: nothing read, so nothing to fail; the brake is a deploy."""
+    lane = inspect.getsource(rw._amain).split('("health"', 1)[1].split(")),", 1)[0]
+    assert "lambda: HEALTH_TICK_SECONDS" in lane
+    assert "default_interval=HEALTH_TICK_SECONDS" in lane
+    assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 300.0)
+    at = rw.LANES.index("health")
+    assert rw.LANES[at - 1:at + 2] == ("text_extract", "health", "autodedup")
+    for forbidden in ("app_settings", "os.environ"):
+        assert forbidden not in inspect.getsource(rw._health_sync)
+
+
+def test_an_abandoned_health_pass_is_never_overlapped(harness, monkeypatch) -> None:
+    """The harness keeps per-run module state, so one pass at a time per process."""
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: pytest.fail(
+        "a skipped pass must not open a connection"))
+    assert rw._HEALTH_PASS_LOCK.try_enter()
+    try:
+        assert rw._health_sync() == {"previous_pass_running": True}
+    finally:
+        rw._HEALTH_PASS_LOCK.release()
+    assert harness.ran == [] and harness.projected == []
+
+
+def test_the_health_lane_projects_its_own_host_once_and_measures_every_pass(
+        harness, monkeypatch) -> None:
+    conns: list[_PruneConn] = []
+
+    def connect(*a: Any, **k: Any) -> _PruneConn:
+        conns.append(_PruneConn([0]))
+        return conns[-1]
+
+    monkeypatch.setattr(rw.db, "connect", connect)
+    first, second = rw._health_sync(), rw._health_sync()
+
+    assert rw.WORKER_NAME == "realtime-worker"
+    assert [host for host, _ in harness.projected] == ["realtime-worker"]
+    assert [run["host"] for run in harness.ran] == ["realtime-worker", "realtime-worker"]
+    assert harness.projected[0][1] is harness.ran[0]["now"] and harness.ran[0]["now"].tzinfo
+    for run in harness.ran:
+        assert run["thresholds"] is harness.THRESHOLDS
+        assert run["lane_budget_s"] == rw.HEALTH_PASS_BUDGET_SECONDS
+    assert first == {"measured": ["jobs", "llm"], "pruned": 0}
+    assert second == {"measured": ["jobs", "llm"], "pruned": None}, "the prune is daily"
+    assert all(conn.closed for conn in conns)
+
+
+def test_a_failed_projection_is_retried_on_the_next_pass(harness, monkeypatch) -> None:
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: _PruneConn([0]))
+    harness.project_error = RuntimeError("pooler blip")
+    with pytest.raises(RuntimeError, match="pooler blip"):
+        rw._health_sync()
+    assert harness.ran == []
+    rw._health_sync()
+    assert [host for host, _ in harness.projected] == ["realtime-worker"]
+    assert rw._HEALTH_PASS_LOCK.try_enter(), "the pass lock leaked"
+    rw._HEALTH_PASS_LOCK.release()
+
+
+def test_the_health_lane_prunes_once_a_day_in_batches(harness, monkeypatch) -> None:
+    """Q5: results older than 35 days go, a bounded batch per statement until none is left."""
+    monkeypatch.setattr(rw, "HEALTH_PRUNE_BATCH_ROWS", 2)
+    conn = _PruneConn([2, 2, 1])
+    monkeypatch.setattr(rw.db, "connect", lambda *a, **k: conn)
+
+    assert rw._health_sync()["pruned"] == 5
+    assert [params for _, params in conn.statements] == [{"batch": 2}] * 3
+    sql = conn.statements[0][0]
+    assert sql.startswith("DELETE FROM pipeline_check_results")
+    assert "ctid" in sql and "interval '35 days'" in sql
+    assert rw._health_sync()["pruned"] is None, "once a day, not once a pass"
+
+    monkeypatch.setattr(rw, "_HEALTH_PRUNED_AT",
+                        rw._HEALTH_PRUNED_AT - rw.HEALTH_PRUNE_INTERVAL_SECONDS)
+    conn.rowcounts = [0]
+    assert rw._health_sync()["pruned"] == 0
+    assert len(conn.statements) == 4
+
+
+def test_the_health_pass_records_its_heartbeat_shape(monkeypatch) -> None:
+    monkeypatch.setattr(rw, "_health_sync", lambda: {"measured": ["jobs"], "pruned": None})
+    state = rw._new_state()
+    rw._record_pass_start(state, "health")
+    asyncio.run(rw._health_pass(asyncio.Event(), state))
+    lane = state["lanes"]["health"]
+    assert (lane["passes"], lane["started_at"]) == (1, None)
+    assert lane["last"] == {"measured": ["jobs"], "pruned": None}
+    Jsonb(rw._lane_snapshot(state["lanes"]))
+
+
+def test_the_lanes_calls_bind_to_the_real_harness() -> None:
+    """The fake above mirrors two signatures; binding the lane's calls to the real ones keeps a
+    harness rename from leaving this suite green."""
+    from scripts import verify_pipeline
+
+    now = datetime.now(timezone.utc)
+    inspect.signature(verify_pipeline.run_due).bind(
+        None, verify_pipeline.THRESHOLDS, rw.WORKER_NAME, now=now,
+        lane_budget_s=rw.HEALTH_PASS_BUDGET_SECONDS)
+    inspect.signature(verify_pipeline.project_registry).bind(None, rw.WORKER_NAME, now)
 
 
 # --- registry ------------------------------------------------------------------
@@ -837,7 +1289,8 @@ def test_a_raised_pass_clears_in_flight_rather_than_looking_hung():
     lane = state["lanes"]["drain"]
     assert lane["started_at"] is None
     assert lane["failed_passes"] == 1
-    assert lane["last_failure_at"] is not None
+    assert lane["failing_since"] is not None and lane["last_error"] is None
+    assert "last_failure_at" not in lane
 
 
 def test_a_hung_pass_is_abandoned_and_the_lane_keeps_going(monkeypatch):
@@ -874,7 +1327,7 @@ def test_a_hung_pass_is_abandoned_and_the_lane_keeps_going(monkeypatch):
 # The lane is a CALLER of location_data.resolver.drain — never a copy of it. The
 # two things a test must pin are therefore identity (the shared JOB_NAME lease on
 # the drain's own connection, so the GH lane and this one can never drain at
-# once) and boundedness (a budget that stays under the stall warn and the lane
+# once) and boundedness (a budget that stays under the in-flight Watch and the lane
 # pass timeout). Hermetic: drain.run / lease.held / open_connection are stubbed.
 
 
@@ -954,13 +1407,16 @@ def test_location_resolve_interval_uses_configured_when_enabled(monkeypatch):
 
 def test_location_resolve_max_seconds_is_clamped_below_the_lane_pass_timeout(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # A HEALTHY pass must never read as a stall (1200 s warn) and must never be
-    # abandoned by the lane loop. The lease is NOT bounded by this — see
+    # A HEALTHY pass must never read as a stall (the jobs check's in-flight Watch) and
+    # must never be abandoned by the lane loop. The lease is NOT bounded by this — see
     # test_location_resolve_lease_ttl_covers_the_budget_plus_one_batch.
+    from scripts import verify_pipeline
+
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 99999)
     clamped = rw._read_location_resolve_max_seconds()
     assert clamped == rw.LOCATION_RESOLVE_MAX_SECONDS_CEILING
-    assert clamped < 1200, "a healthy pass would trip check_worker_lane_stall"
+    assert clamped < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"], (
+        "a healthy pass would read as in flight too long")
     assert clamped < rw.LANE_PASS_TIMEOUT_SECONDS
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 60)
     assert rw._read_location_resolve_max_seconds() == 60
@@ -1305,7 +1761,10 @@ def test_location_intake_fast_knobs_are_env_vars_and_clamped(
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "99999")
     assert rw._read_location_intake_fast_budget() == rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
     # A healthy pass must never read as a stall, nor be abandoned by the lane loop.
-    assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < 1200
+    from scripts import verify_pipeline
+
+    assert (rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
+            < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"])
     assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < rw.LANE_PASS_TIMEOUT_SECONDS
     # A typo must not stop a lane that ships live.
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "forty-five")
@@ -1419,9 +1878,10 @@ def test_location_intake_fast_pass_records_the_heartbeat_shape(
     assert lane["last"]["listings"] == 12
     assert lane["last"]["cursor"] == 987654
     assert lane["last"]["bodies_mined"] == 5
-    # check_worker_lane_stall reads every lane key off `details`, so the new lane is
-    # covered the moment it beats — no threshold change for a 60 s lane.
-    assert set(lane) >= {"last_pass_at", "passes", "last_duration_s", "failed_passes"}
+    # The jobs check reads every lane key off `details`, so the lane is judged the
+    # moment it beats — no threshold change for a 60 s lane.
+    assert set(lane) >= {"last_pass_at", "passes", "last_duration_s", "failed_passes",
+                         "failing_since", "last_error"}
 
 
 def test_location_intake_fast_pass_returns_early_when_stopping(
@@ -1707,17 +2167,6 @@ def test_a_first_delay_holds_the_pass_and_still_stops_cleanly() -> None:
 
     assert asyncio.run(scenario()) == []
     assert rw.LOCATION_REFETCH_FIRST_DELAY_SECONDS > 0
-
-
-def test_the_daily_lane_never_reads_as_a_stalled_one() -> None:
-    # check_worker_lane_stall alarms on in_flight_s — a pass RUNNING too long — and
-    # never on the gap between passes, so a lane that ticks once a day is skipped by
-    # the check while it idles. This pins that contract from the worker's side.
-    from scripts import verify_pipeline
-
-    src = inspect.getsource(verify_pipeline.check_worker_lane_stall)
-    assert "if elapsed is None:\n            continue" in src
-    assert "last_pass_at" not in src
 
 
 # --- sold_comps lane (sold-comps W2) ------------------------------------------
@@ -2123,7 +2572,8 @@ def test_a_pass_the_provider_stopped_is_a_failed_pass(
 
     lane = state["lanes"]["text_extract"]
     assert passes == [1], "the failed pass was retried before the lane's interval"
-    assert lane["failed_passes"] == 1 and lane["last_failure_at"]
+    assert lane["failed_passes"] == 1 and lane["failing_since"]
+    assert lane["last_error"] == _PROVIDER_STOPPED["fatal"]
     assert lane.get("passes", 0) == 0, "a pass the provider stopped is not a completed one"
     assert lane["started_at"] is None
     assert lane["last"]["aborted"] is True
@@ -2148,7 +2598,8 @@ def test_a_pass_that_ran_or_met_its_ceiling_is_not_a_failed_one(
 
     lane = state["lanes"]["text_extract"]
     assert lane["passes"] == 1
-    assert lane["failed_passes"] == 0 and lane["last_failure_at"] is None
+    assert lane["failed_passes"] == 0
+    assert lane["failing_since"] is None and lane["last_error"] is None
     assert lane["last"] == last
 
 
@@ -2226,8 +2677,8 @@ def test_a_second_drain_pass_while_one_is_in_flight_is_skipped_and_counted(monke
 def test_a_lane_wedged_behind_its_pass_lock_stays_in_flight(monkeypatch):
     # _lane_loop abandons the pass at LANE_PASS_TIMEOUT_SECONDS and clears its stamp, and
     # every later pass is skipped in ~0 s: without the lock's age the heartbeat would show
-    # a lane passing happily while its one thread sits stuck, and worker_lane_stall, which
-    # reads in_flight_s, would never see it.
+    # a lane passing happily while its one thread sits stuck, and the jobs check's
+    # in-flight arm, which reads in_flight_s, would never see it.
     monkeypatch.setattr(rw, "_PASS_LOCKS_HELD", {})
     monkeypatch.setattr(rw, "_PROBE_PASS_LOCK", rw._PassLock("probe"))
     monkeypatch.setattr(rw, "_read_disabled_sources", lambda: set())
