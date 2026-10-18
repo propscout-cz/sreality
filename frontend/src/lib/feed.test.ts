@@ -11,10 +11,11 @@ import {
   groupByDay,
   pragueClock,
   pragueDayKey,
-  withPortals,
+  feedSearch,
+  feedViewOf,
+  isNewestFirst,
 } from './feed';
-import { NO_PORTALS } from './portals';
-import type { CardRow } from './queries';
+import { DEFAULT_SORT, type CardRow } from './queries';
 import type { FilterPreset } from './types';
 
 const preset = (filter_spec: FilterPreset['filter_spec']): FilterPreset => ({
@@ -85,12 +86,31 @@ describe('scope → filters', () => {
     expect(f.categoryMain).toEqual(['dum']);
   });
 
-  it("lets the portal chips replace the scope's own portal filter, both sides, only when set", () => {
-    const f = { ...FEED_ALL_FILTERS, portals: ['bazos'], portalsExcluded: ['sreality'] };
-    expect(withPortals(f, null)).toEqual(f);
-    const chosen = { portals: ['idnes'], portalsExcluded: [], portalsExcludedActiveOnly: false };
-    expect(withPortals(f, chosen)).toEqual({ ...f, ...chosen });
-    expect(withPortals(f, NO_PORTALS)).toEqual({ ...f, ...NO_PORTALS });
+});
+
+describe("the view in the URL — Browse's contract", () => {
+  it('writes Vše as an explicit all-categories, any-deal, live-ads query', () => {
+    const sp = feedSearch({ filters: FEED_ALL_FILTERS, sort: DEFAULT_SORT, presetId: null });
+    expect(sp.toString()).toBe('cat=&deal=any&status=active');
+    expect(feedViewOf(sp)).toEqual({ filters: FEED_ALL_FILTERS, sort: DEFAULT_SORT, presetId: null });
+  });
+
+  it('carries the chosen preset and a non-default order, as Browse spells them', () => {
+    const view = {
+      filters: { ...DEFAULT_FILTERS, categoryType: 'prodej' as const, dispositions: ['2+kk' as const] },
+      sort: { field: 'price_czk' as const, direction: 'asc' as const },
+      presetId: 'vys',
+    };
+    const sp = feedSearch(view);
+    expect(sp.get('sort')).toBe('price_czk');
+    expect(sp.get('preset')).toBe('vys');
+    expect(feedViewOf(sp)).toEqual(view);
+  });
+
+  it('cuts only newest first into days', () => {
+    expect(isNewestFirst(DEFAULT_SORT)).toBe(true);
+    expect(isNewestFirst({ field: 'first_seen_at', direction: 'asc' })).toBe(false);
+    expect(isNewestFirst({ field: 'price_czk', direction: 'desc' })).toBe(false);
   });
 });
 

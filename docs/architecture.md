@@ -775,6 +775,12 @@ rules. Identify which one a task belongs to before you start.
   "Skryté" roll (`fetchDismissedCards`): Browse has no hidden-only lens, and the dismissed set
   may not ride in a URL, so it reads one page of the caller's dismissals at a time and those
   properties' card rows from the plain `browse_list`.
+  The feed's view lives in the URL exactly as Browse's (`lib/feed.ts` `feedSearch`: `toSearchParams`
+  + `sort` + `preset`, so one query string is one scope on either device; only an empty query
+  differs — on the feed it reopens the device's last view), and its Filtry sheet
+  (`components/phone/FilterSheet.tsx`, a lazy chunk) renders Browse's registry filters from the
+  sidebar's own layout table (`lib/filterLayout.ts`, which `FilterSidebar` draws too), each row the
+  desktop control applied through `applySidebarUpdates` — no phone-only semantics.
   `/pipeline` on the phone frame is `components/phone/PhonePipeline.tsx`, one swiped page per
   stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
   not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
@@ -2012,18 +2018,23 @@ renumber.** Navigate by area:
     (migration 274; reshaped by migration 619 in wave 1 of the Health dashboard sprint,
     `docs/design/health-dashboard.md`): `system_health`.** Its measurer is ONE registry,
     `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
-    `gauge`), host, cadence, label, unit and owner page, and each host projects its own keys into
-    `health_checks`. A `pipeline_check_results` row carries one of FOUR statuses — `ok` / `warn` /
-    `fail` / `unknown`, shown as OK / Watch / Problem / Not measured — where `unknown` means the
-    measurement did not happen (timed out, not run, errored, nothing to score) and is never OK; the
-    row keeps the check's `message` and, when the check emits them, its `cells` (one verdict per
-    portal, job or lane). Measuring writes no system alert (a failing alarm only reds its GitHub
-    lane, which emails). The ONE teller is `toolkit/system_alerts.reconcile`, run by the API every
-    60 s beside the watchdog matcher (the outbox delivers its rows once a transport is configured):
+    `gauge`), host, cadence, label, unit and owner page, and each host projects (and deletes) only
+    its own keys in `health_checks`. Hosts: `github-actions` — every `CHECKS` key until wave 3
+    starts moving them, measured by the hourly canary's `run_due`; `pg_cron` — the watcher's one
+    `liveness` key; `realtime-worker` — the worker's health lane from wave 3. A
+    `pipeline_check_results` row carries one of FOUR statuses — `ok` / `warn` / `fail` / `unknown`,
+    shown as OK / Watch / Problem / Not measured — where `unknown` means the measurement did not
+    happen (timed out, errored, nothing to score) and is never OK; a check a run never reached
+    writes no row and stays due. The row keeps the check's `message` and, when the check emits
+    them, its `cells` (one verdict per portal, job or lane). Each check runs under a real wall
+    clock: every statement's `statement_timeout` is the check's remaining budget (wave 2).
+    Measuring writes no system alert and reds no run. The ONE teller is
+    `toolkit/system_alerts.reconcile`, run by the API every 60 s beside the watchdog matcher (the
+    outbox delivers its rows once a transport is configured):
     it keeps one `ops_incidents` row per failing cell (signature `cell:<key>:<subject>`) — a
-    measured `fail` opens it, `warn` keeps it open, an OK measured across the hold
-    `max(2 × cadence, 30 min)` closes it (the newest OK's `run_at` at least the hold after the first
-    OK's; one lone OK never recovers), Not measured never touches it — and emits
+    measured `fail` opens it, `warn` keeps it open, an OK measured across the hold — two cadences
+    less the due slack, never under 30 min — closes it (the newest OK's `run_at` at least the hold
+    after the first OK's; one lone OK never recovers), Not measured never touches it — and emits
     `source_kind='system_health'` dispatches, at most one onset, one reminder and one recovery per
     check per pass (dedupe `sys:<key>:<onset|reminder|recovery>:…`), reminding at 6 h / 24 h / 72 h
     then weekly for an alarm and every 24 h for a gauge: `subscription_id` and `collection_id` both
@@ -2037,9 +2048,31 @@ renumber.** Navigate by area:
     with its newest result, its `effective_status` (`unknown` when there is no row, the newest row is
     `unknown`, or it is older than the key's `staleness_budget` by `public.health_stale`; a result
     past its staleness budget is Not measured for the ladder as well as the page) and its
-    incidents. Until wave 2 the dead-man switch is migration 274's SECURITY DEFINER
-    `emit_verification_stale_alert` (the migration-136 exception-guarded pg_cron pattern, hourly):
-    it rings when the newest result row of ANY key is older than 24 h. **The `system_health` arm is
+    incidents. **Every watcher is watched by another (wave 2, migration 620).** The watcher,
+    `public.health_liveness()` (SECURITY DEFINER, execute revoked from the browser roles; pg_cron
+    job `health-liveness`, every 5 min, under a 60 s statement timeout), runs outside the worker
+    and the API and writes ONE `liveness` result per call (host `pg_cron`; no incident, no notice —
+    the teller tells it like any check): a `worker` cell per worker (heartbeat over 10 min old), a
+    `health_lane` cell once `realtime-worker` keys exist (wave 3), a `stale:<key>` cell per alarm
+    past its staleness budget (worker keys fold into a failing `worker` cell), an `api` cell (the
+    watchdog matcher's lease lapsed; a NULL lease left by a clean shutdown is Not measured;
+    interval 0 = off) and an `unalerted` cell (an alarm cell measured failing now and two cadences
+    ago with no open incident); a subject that stops failing reads `ok` while its incident is open,
+    so it recovers with a notice. It replaced the `worker_liveness` check and migration 274's 24 h
+    dead-man job (`emit-verification-stale-alert`, unscheduled by 620; its function goes in 624). **The
+    canary** is the ONE monitoring workflow, `verify_pipeline.yml` (cron hourly; GitHub delivers
+    about five runs a day): it records failed workflow runs (the poller), measures the
+    `github-actions` checks, then `scripts/health_canary.py` asserts that the database answers
+    (exit 2), the newest `liveness` row is under 30 min old, every failing liveness cell has an
+    open incident after 15 min, and every alarm onset or reminder sent 15 min to 12 h ago was
+    seen or delivered, or its key's cell incidents are all acknowledged or closed (exit 1; gauge
+    notices are never asserted). A failing check never reds the run; the assertions do, as does a crash
+    of the poller or the harness or the harness step overrunning its 27 minutes, so GitHub's failure email is
+    the one path to the operator that needs neither Supabase's scheduler nor Railway — with the
+    bell the only channel (2026-10-18 ruling), it is how an unread alarm leaves the app. Who
+    watches whom: pg_cron watches the worker, the API's loops, the teller and every alarm's
+    freshness (the canary's own keys included); the API tells; the canary watches pg_cron, the
+    teller and whether an alarm was heard. **The `system_health` arm is
     one of the two producers (with `collection_share`) that are NOT property-grain** — it is about
     the pipeline, not a listing, so `listing_id` / `sreality_id` / `subscription_id` /
     `collection_id` are all NULL, the operator-state merge reconciler has nothing to re-point on it,
@@ -2050,9 +2083,11 @@ renumber.** Navigate by area:
     `scripts/record_workflow_failures.py`'s job-log backstop, one dispatch per incident — no second
     alert table, no parallel bell namespace. **It is fenced from cell incidents** (both of its
     auto-resolve statements skip `signature LIKE 'cell:%'`, so it can never close or "recover" one,
-    and the poller ignores `check:` signatures, a failing check being the ladder's to tell)
+    and since wave 2 no health run reaches it: the poller skips the canary, its own workflow, by
+    name, and GitHub's email is a red canary's path, so its `check:` fence is dead until the wave-3
+    poller rewrite deletes it)
     **and retires in wave 3**, leaving one incident model.
-    Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
+    Delivery, watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
     **A FOURTH producer is live (migration 610): `collection_share`.** `POST
     /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
     `share:<collection>:<recipient>`, no time: a revoke + re-share loop cannot refill an inbox) —
@@ -3473,7 +3508,7 @@ wins outright — but only for pairs it actually brings together (`lo.broker_id 
 lifting an already-co-located pair would silently clear the evidence of a bypass rather than overrule
 a decision. `GET /broker-review/suppressions` (active first) and `POST
 /broker-review/suppressions/{id}/lift` make the ledger readable and clearable through the product.
-`verify_pipeline`'s `broker_merge_suppression` check — in the hourly emailing lane, O(1) — fails on
+`verify_pipeline`'s `broker_merge_suppression` check — an hourly alarm, O(1) — fails on
 any active suppression whose identities share a broker. It matters MORE now that no portal
 allowlist gates the engine: remax contacts are email-only and ceskereality's phone-only, so one
 shared contact plus a name match is the entire case for those merges.

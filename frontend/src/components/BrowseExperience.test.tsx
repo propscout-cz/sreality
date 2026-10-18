@@ -30,6 +30,12 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
   fetchIsDismissed: vi.fn(async () => false),
   fetchNoteCounts: vi.fn(async () => new Map()),
 }));
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
+  listCollections: vi.fn(() => new Promise<never>(() => {})),
+  listTags: vi.fn(() => new Promise<never>(() => {})),
+}));
+vi.mock('@/lib/pgRead', () => ({ pgRead: vi.fn(() => new Promise<never>(() => {})) }));
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
@@ -62,13 +68,21 @@ const ROW = {
   newest_ad_at_idnes: IDNES_DAY,
 } as unknown as CardRow;
 
-function Host({ filters, sort }: { filters: ListingFilters; sort: SortSpec }) {
+function Host({
+  filters,
+  sort,
+  sidebar = false,
+}: {
+  filters: ListingFilters;
+  sort: SortSpec;
+  sidebar?: boolean;
+}) {
   const view = useMemoryBrowseState({ filters, sort, tab: 'map' });
   return (
     <BrowseExperience
       view={view}
       layout="modal"
-      features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar: false }}
+      features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar }}
     />
   );
 }
@@ -167,5 +181,35 @@ describe('<BrowseExperience> the cards\' cover photo', () => {
     localStorage.setItem(COVER_KEY, 'kitchen');
     renderBrowse([]);
     expect(await screen.findByText(counterIs('3 / 4'))).toBeInTheDocument();
+  });
+});
+
+describe('<BrowseExperience> the filters column', () => {
+  const SIDEBAR_COLLAPSED = 'sreality.browse.sidebarCollapsed';
+  const renderWithSidebar = () =>
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <Host filters={DEFAULT_FILTERS} sort={DEFAULT_SORT} sidebar />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  afterEach(() => localStorage.removeItem(SIDEBAR_COLLAPSED));
+
+  it('folds to a rail and unfolds again, and remembers the fold for this browser', async () => {
+    const first = renderWithSidebar();
+    expect(await screen.findByRole('heading', { name: 'Filters' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show filters' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide filters' }));
+    expect(screen.queryByRole('heading', { name: 'Filters' })).toBeNull();
+    expect(screen.queryByRole('separator', { name: /Resize the filters sidebar/ })).toBeNull();
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED)).toBe('1');
+    first.unmount();
+
+    renderWithSidebar();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show filters' }));
+    expect(await screen.findByRole('heading', { name: 'Filters' })).toBeInTheDocument();
+    expect(localStorage.getItem(SIDEBAR_COLLAPSED)).toBe('0');
   });
 });

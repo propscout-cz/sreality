@@ -11,7 +11,7 @@ import {
 /* Persisted layout preferences for the Browse page. The three columns are the
  * filter sidebar (column 1) and, on the Listings/map tab, the cards list
  * (column 2) and the map (column 3). The operator can drag the two dividers
- * between them, and collapse the map away entirely; we remember the result
+ * between them, and collapse the sidebar or the map away entirely; we remember the result
  * per-browser in localStorage so the layout survives a reload. The card
  * image size (small/large) is the same kind of per-browser display
  * preference — not a column — so Browse's key for it lives here too, as does
@@ -33,6 +33,7 @@ import {
 const SIDEBAR_KEY = 'sreality.browse.sidebarWidth';
 const MAP_SPLIT_KEY = 'sreality.browse.mapSplitFraction';
 const MAP_COLLAPSED_KEY = 'sreality.browse.mapCollapsed';
+const SIDEBAR_COLLAPSED_KEY = 'sreality.browse.sidebarCollapsed';
 const CARD_IMAGE_LARGE_KEY = 'sreality.browse.cardImageLarge';
 const CARD_COVER_TAG_KEY = 'sreality.browse.cardCoverTag';
 
@@ -125,6 +126,13 @@ export const useMapSplitFraction = (): PersistedWidth =>
  * for Browse's own consumers; the machinery itself now lives in
  * `@/lib/persistedFlag`, shared with the surfaces outside Browse. */
 export { readFlag, type PersistedFlag } from '@/lib/persistedFlag';
+
+/* Whether the operator has folded the filter sidebar down to its slim rail,
+ * giving the results the width. Default false (the sidebar shows). Separate
+ * from the sidebar's remembered WIDTH, so expanding restores the size they
+ * had dragged it to. */
+export const useSidebarCollapsed = (): PersistedFlag =>
+  usePersistedFlag(SIDEBAR_COLLAPSED_KEY, false);
 
 /* Whether the operator has folded the map panel away on the Listings tab,
  * giving the cards the full width. Default false (the map shows). */

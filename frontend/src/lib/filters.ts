@@ -1398,6 +1398,32 @@ export function applyRegistryUpdates(
   return next;
 }
 
+/** The sidebar's apply: a batch of registry updates plus the two clean-ups the
+ *  filter UI owes the cohort, so a filter the UI no longer shows can never stay
+ *  active and silently empty it. Yield exists for sale flats only, so it goes
+ *  when the cohort leaves Prodej; a subtype refines houses / commercial units,
+ *  so it goes with the last of them. Browse's sidebar and the phone's Filtry
+ *  sheet both apply through this. */
+export function applySidebarUpdates(
+  filters: ListingFilters,
+  updates: ReadonlyArray<{ id: string; value: unknown }>,
+): ListingFilters {
+  let next = applyRegistryUpdates(filters, updates);
+  if (
+    next.categoryType !== 'prodej' &&
+    (next.mfGrossYieldPctMin != null || next.mfGrossYieldPctMax != null)
+  ) {
+    next = { ...next, mfGrossYieldPctMin: null, mfGrossYieldPctMax: null };
+  }
+  if (
+    !next.categoryMain.some((c) => c === 'dum' || c === 'komercni') &&
+    next.subtype.length > 0
+  ) {
+    next = { ...next, subtype: [] };
+  }
+  return next;
+}
+
 /* ------------------------------------------------------------------------- *
  * Browse filters → Watchdog spec (Create-watchdog-from-Browse).
  *

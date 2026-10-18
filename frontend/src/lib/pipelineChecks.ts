@@ -17,59 +17,18 @@ export const PIPELINE_STATUS_WORD: Record<PipelineCheckStatus, string> = {
   unknown: 'Not measured',
 };
 
-/* The keys scripts/verify_pipeline.py still emits. Historical rows from retired
- * checks (the dedup decision-engine ones) fall through to the humanizer below. */
-const CHECK_LABELS: Record<string, string> = {
-  llm_errors: 'LLM errors',
-  llm_burn_rate: 'LLM burn rate',
-  long_open_transaction: 'Oldest open transaction',
-  db_saturation: 'DB saturation',
-  worker_liveness: 'Worker liveness',
-  dual_write_parity: 'Dual-write parity',
-  property_maintenance: 'Property maintenance',
-  broker_resolution_freshness: 'Broker resolution',
-  ppm2_median_shift: 'Kč/m² median shift',
-  ppm2_basis_floor_share: 'Kč/m² price floor',
-  area_vs_usable_divergence: 'Area vs usable area',
-  ppm2_measure_coverage: 'Kč/m² coverage',
-  location_payload_shape_drift: 'Location payload shape',
-  outbound_url_coverage: 'Portal URL coverage',
-  outbound_url_parity: 'Portal URL parity',
-  outbound_url_conformance: 'Portal URL conformance',
-  sreality_image_template: 'Sreality image template',
-  false_delist_share: 'False delist share',
-};
-
-/* The four per-m² plausibility checks emit a share or a ratio, and the number is
- * meaningless without its unit — "20.03" reads as a count. Every older check's value
- * is a bare count/rate whose meaning lives in its own message, so they stay bare. */
-const CHECK_VALUE_UNIT: Record<string, string> = {
-  /* The image canary's value is the measured width of the frame the CDN served \u2014
-   * "1600" alone reads as a count of something. */
-  sreality_image_template: 'px',
-  ppm2_median_shift: '\u00d7',
-  ppm2_basis_floor_share: '%',
-  area_vs_usable_divergence: '%',
-  ppm2_measure_coverage: '%',
-  location_payload_shape_drift: '%',
-  outbound_url_conformance: '%',
-  false_delist_share: '%',
-};
-
-export function pipelineCheckLabel(key: string): string {
-  return (
-    CHECK_LABELS[key] ??
-    key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-  );
+/* The registry (health_checks, served by the view) names every check; a row without a
+ * label is served for a key the registry does not know, so its key stands in. */
+export function pipelineCheckLabel(row: Pick<PipelineCheckRow, 'check_key' | 'label'>): string {
+  return row.label || row.check_key;
 }
 
-/* Every surviving check's `value` is a ratio / percentage / count / minutes whose
- * unit lives in the check itself, so we show the bare number (integers compact,
- * decimals to 2 dp). */
-export function pipelineCheckValueLabel(value: number | null, checkKey?: string): string {
+/* A value with the unit the registry declares for it ('%', '×', 'h', 'px', ...); integers
+ * compact, decimals to 2 dp, an em-dash when nothing was measured. */
+export function pipelineCheckValueLabel(value: number | null, unit?: string | null): string {
   if (value == null) return '—';
   const shown = Number.isInteger(value) ? fmtCount(value) : value.toFixed(2);
-  return shown + (checkKey ? (CHECK_VALUE_UNIT[checkKey] ?? '') : '');
+  return shown + (unit ?? '');
 }
 
 /* Only a measured ok/warn/fail passes through. Anything else (unknown, the null status of

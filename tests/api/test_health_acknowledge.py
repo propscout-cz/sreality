@@ -41,14 +41,14 @@ def make_client():
 
 def test_acknowledge_stamps_the_open_unacknowledged_incidents_of_one_check(make_client) -> None:
     conn = ScriptConn([(_is_acknowledge, [(), ()])])
-    res = make_client(conn).post(_ROUTE, json={"key": "worker_liveness"})
+    res = make_client(conn).post(_ROUTE, json={"key": "worker_lane_stall"})
     assert res.status_code == 200, res.text
-    assert res.json() == {"key": "worker_liveness", "acknowledged": 2}
+    assert res.json() == {"key": "worker_lane_stall", "acknowledged": 2}
     [(sql, params)] = conn.executed
     assert "WHERE resolved_at IS NULL AND acknowledged_at IS NULL" in sql
     # starts_with, not LIKE: every key holds `_`, a LIKE wildcard (the view uses the same form).
     assert sql.endswith("AND starts_with(signature, 'cell:' || %s::text || ':')")
-    assert params == ("worker_liveness",)
+    assert params == ("worker_lane_stall",)
     assert conn.tx == ["commit"]
 
 

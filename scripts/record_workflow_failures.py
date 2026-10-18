@@ -2,14 +2,14 @@
 
 GitHub only emails the operator about failed SCHEDULED runs, so push- and
 dispatch-triggered failures stay invisible unless someone opens the Actions
-tab. This poller (monitor_workflow_failures.yml) lists recently completed runs,
-keeps the failed-ish ones, and inserts them into `workflow_failures` (migration
-178) — idempotent via ON CONFLICT (run_id) DO NOTHING. The Health page surfaces
-the table.
+tab. This poller (the first step of the hourly health canary, verify_pipeline.yml)
+lists recently completed runs, keeps the failed-ish ones, and inserts them into
+`workflow_failures` (migration 178) — idempotent via ON CONFLICT (run_id) DO NOTHING.
+The Health page surfaces the table.
 
 Windowing is a HIGH-WATER-MARK CURSOR (`app_settings.workflow_failures_cursor`),
-not a fixed lookback. The monitor's cron is `*/30` but the GitHub Actions throttle
-runs it 80–256 min apart, so the old fixed 40-min lookback silently dropped every
+not a fixed lookback. The canary's cron is hourly but the GitHub Actions throttle
+delivers about five runs a day, so the old fixed 40-min lookback silently dropped every
 red run that completed in the uncovered gap (13 liveness reds → only 2 recorded).
 The cursor advances to the newest run seen each poll and pages back until it
 reaches the previous cursor, so no completed run is skipped. Crucially, it advances
@@ -46,7 +46,7 @@ LOG = logging.getLogger("record_workflow_failures")
 
 # Must match the workflow's `name:` — the poller never records its own runs,
 # or one red poll would keep re-alarming the surface it feeds.
-MONITOR_WORKFLOW_NAME = "Monitoring: workflow failures"
+MONITOR_WORKFLOW_NAME = "Monitoring: health canary (hourly)"
 
 # Always-record conclusions. `cancelled` is handled conditionally (duration gate).
 ALERT_CONCLUSIONS = frozenset({"failure", "timed_out", "startup_failure"})
@@ -223,13 +223,17 @@ _JOB_FAIL_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "startup
 
 # A red whose reason is verify_pipeline's own failing CHECK line is a check verdict, and since
 # wave 1 of the Health sprint the ladder (toolkit/system_alerts.reconcile) tells those from the
-# stored result: an incident here would ring the same Problem twice. Crashes keep flowing.
+# stored result: an incident here would ring the same Problem twice. Dead since wave 2: the canary
+# is the only workflow that prints CHECK lines and this poller skips it by name
+# (MONITOR_WORKFLOW_NAME), so no `check:` signature arrives; the fence and its tests go with the
+# wave-3 poller rewrite, which owns this file's logic.
 _LADDER_OWNED_PREFIX = "check:"
+_LADDER_OWNED_SUFFIX = "|fail"
 
 # Wall-clock ceiling for the whole incident pass. MAX_LOG_FETCHES alone is not a time
 # budget: each fetch is up to 4 round trips (jobs list, the 302, then _fetch_blob_tail's
 # two ranged reads) at API_TIMEOUT_S=30 each, so 25 of them is a ~50-minute worst case
-# inside a job with `timeout-minutes: 5`. A killed job is not caught by any try/except.
+# inside the canary's poller step, `timeout-minutes: 5`. A killed step is not caught by any try/except.
 INCIDENT_PASS_BUDGET_S = 90.0
 
 
@@ -258,6 +262,12 @@ def _gh_request(url: str, token: str) -> urllib.request.Request:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
+
+
+def _is_ladder_owned(signature: str, conclusion: str | None) -> bool:
+    """A red that exited 1 on a failing check's verdict: the health ladder's to tell."""
+    return (conclusion == "failure" and signature.startswith(_LADDER_OWNED_PREFIX)
+            and signature.endswith(_LADDER_OWNED_SUFFIX))
 
 
 def select_failed_job(jobs: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -349,7 +359,7 @@ def record_incidents(
 ) -> dict[str, int]:
     """Give every newly recorded red a REASON, and close the ones the fleet answered.
 
-    A red whose reason is a failing check is the health ladder's (`_LADDER_OWNED_PREFIX`):
+    A red that exited 1 on a failing check's verdict is the health ladder's (`_is_ladder_owned`):
     it keeps its `workflow_failures` row and opens no incident here.
 
     The API-budget saver is the RUN CLAIM (`ops_incident_runs`, migration 463), not a
@@ -363,7 +373,7 @@ def record_incidents(
     at 10:30 recorded the timeout as a CheckViolation, and the timeout's own signature
     was never derived, so it could never alert.
 
-    `budget_seconds` bounds the pass: the caller's job has `timeout-minutes: 5` and a
+    `budget_seconds` bounds the pass: the caller's step has `timeout-minutes: 5` and a
     kill is not an exception, so overrunning here would cost the poller its cursor
     advance (the input-coverage guarantee W3 rests on).
     """
@@ -409,7 +419,7 @@ def record_incidents(
         if text:
             stats["fetched"] += 1
             signature = failure_signature.signature_from_log(text)
-            if signature is not None and signature.startswith(_LADDER_OWNED_PREFIX):
+            if signature is not None and _is_ladder_owned(signature, f.get("conclusion")):
                 stats["ladder_owned"] += 1
                 ladder_owned.append(signature)
                 continue
@@ -585,8 +595,8 @@ def main() -> int:
                     newly_recorded.append(f)
 
         # The cursor advance goes FIRST, before the incident pass. record_incidents
-        # talks to the Actions API and to Azure blob storage inside a job with
-        # `timeout-minutes: 5`, and a job kill is not an exception the try/except below
+        # talks to the Actions API and to Azure blob storage inside a step with
+        # `timeout-minutes: 5`, and a step kill is not an exception the try/except below
         # can catch — so anything slow there used to cost the poller its cursor advance,
         # which is the input-coverage guarantee the whole W3 clustering rests on.
         # Incidents are best-effort bookkeeping over rows already committed above;
