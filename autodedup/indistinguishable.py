@@ -19,12 +19,14 @@ each is on the record:
 
     fact                    fires on 1 unit   fires on 1 project, 2 units
     obec                         0.0 %                      0.0 %
-    orientation                  0.0 %                     50.0 % (n=4)
+    orientation (E968)           0.0 %                     18.2 % (2 of 11)
     price, same portal >60 %     0.0 %                     12.5 %
     unit designator (E61)        0.0 %                (no labelled case)
+    unit code (E966)             0.0 %                (no labelled case)
     stated areas disjoint        0.4 %                     15.5 %
     disposition                  0.3 %              (vetoed before labelling)
     floorplan + rooms weak       0.7 %                     16.7 %
+    subject floor (E967)         0.5 % / 1.0 %             25.0 % (3 of 12)
     floor                        1.1 % / 2.5 %             18.6 %
     area                         1.6 %                     32.8 %
     street                       1.7 %                      0.0 %
@@ -32,11 +34,18 @@ each is on the record:
     price, cross-portal          2.6 %                     27.0 %
     total floors                 4.2 %                     35.0 %
 
-Three changed facts are owed a re-measure on the w14 known duplicates (`fact_power2.py`, a
-cohort run): `unit_code` with a co-living room's `pokoj 303-2` (E966), the storey under E967
-(`subject_floor` at a one-storey gap where both bodies place the unit in the NP noun and write
-no other storey vocabulary), and the `orientation` row, measured on the reader before E968 (the
-adjective in front of the keyword, and two sets with no cardinal point in common).
+The orientation, unit code and subject floor rows were measured on 2026-10-19 for E966–E968
+(`w16/e966_prague_facts/fact_power_e966.json`): this cohort's classes and dev side, reproduced
+to the pair, read through `distinguishing_facts` itself under `w31`; subject floor is quoted
+one portal / two portals. E968's reader finds a direction on both sides of 146 known
+duplicates (115 before) and 11 hazard pairs (4 before), and fires on none of the first and on
+the same 2 of the second. No w14 advert prints a co-living room's code, so `unit_code` is
+unchanged (0 of the 23 known duplicates that print a code on both sides). E967 and its wider
+placement reader add two known-duplicate firings: 334845 x 335879, one `byt (č.9)` body at
+`ve 4.` and `v 5. nadzemním podlaží` on bazoš and sreality, and 78591 x 10129497, one storey
+apart inside one sreality feed. Main already tells both apart on other facts, so no known
+duplicate becomes distinguishable, while one hazard pair does (95325 x 274541, `v 2. NP`
+against `ve 3. nadzemním podlaží`).
 
 The `street` and `obec` rows look inert against the hazard class, and are supposed to: two
 units of one project share a street. They are here because they separate the OTHER kind of
