@@ -1,4 +1,4 @@
--- 615_merge_sprint_w6_drops.sql -- MERGE SPRINT W6, THE ONE DESTRUCTIVE WINDOW
+-- 618_merge_sprint_w6_drops.sql -- MERGE SPRINT W6, THE ONE DESTRUCTIVE WINDOW
 -- (docs/design/merge-sprint/PROGRAM.md §6's table, §5's W6 gate, §7's brake). Rule 0 is met: since W1b,
 -- W2a and W5 (#1717, #1719, #1723) no code on the API, the worker or the scheduled scrapers names
 -- anything below.
@@ -38,8 +38,8 @@
 --   5. Nothing: this section is gone. Migration 597 (portal exclusion, applied 2026-10-13) already
 --      re-created browse_map_cells without listing_ids_filter, and 597 owns that function's body and
 --      ACL. This file does not restate, pin or drop it; section 8 only calls it. Renumbered 593 -> 615 on
---      2026-10-17: 605's guard reads listing_feed_public, so the replay must run this file after 605.
---      Sections 6 to 8 keep their numbers.
+--      2026-10-17 (605's guard reads listing_feed_public) and 615 -> 618 on 2026-10-18 (617 re-created that
+--      view): the replay must run this file after 605 and 617. Sections 6 to 8 keep their numbers.
 --   6. property_pipeline.note (0 of 133 cards hold one): SKIPPED with a notice if any card holds one; else
 --      pipeline_board_public and property_pipeline_public are re-created without it first (outer view first,
 --      the order a board read takes its locks), security_invoker and SELECT for authenticated only.
@@ -75,7 +75,7 @@ begin
   if md5(pg_get_viewdef('public.pipeline_board_public'::regclass)) <> '06c950df3e18e0f58c4be6b06973600e'
      or md5(pg_get_viewdef('public.property_pipeline_public'::regclass))
         not in ('54671707e2d2c12d1a47971325e9a784', '88093f6916bb54a0a9e4333fbf0cd544') then
-    raise exception '615 refused: pipeline_board_public / property_pipeline_public are not 590''s / 377''s bodies';
+    raise exception '618 refused: pipeline_board_public / property_pipeline_public are not 590''s / 377''s bodies';
   end if;
 
   -- The three indexes are plain: no constraint stands on them.
@@ -89,33 +89,33 @@ begin
           or exists (select 1 from pg_depend d where d.refclassid = 'pg_class'::regclass
                                                 and d.refobjid = i.indexrelid and d.deptype = 'n'));
   if v_bad is not null then
-    raise exception '615 refused: % carries a constraint or a dependant', v_bad;
+    raise exception '618 refused: % carries a constraint or a dependant', v_bad;
   end if;
 
   -- Production only (the CI replay container has < 100k properties, no engine and no stats).
   select count(*) = 100000 into v_populated from (select 1 from public.properties limit 100000) probe;
   if not v_populated then
-    raise notice '615: replay container (corpus < 100k properties), production preconditions skipped';
+    raise notice '618: replay container (corpus < 100k properties), production preconditions skipped';
     return;
   end if;
   if coalesce((select value #>> '{}' from public.app_settings
                 where key = 'realtime_autodedup_interval_seconds'), '0') <> '0' then
-    raise exception '615 refused: the engine is not braked (realtime_autodedup_interval_seconds is not 0)';
+    raise exception '618 refused: the engine is not braked (realtime_autodedup_interval_seconds is not 0)';
   end if;
   if exists (select 1 from autodedup.rt_lease where expires_at > now()) then
-    raise exception '615 refused: autodedup.rt_lease is still held; wait for it to expire';
+    raise exception '618 refused: autodedup.rt_lease is still held; wait for it to expire';
   end if;
   if exists (select 1 from public.property_maintenance_lease
               where holder like 'full:%' and expires_at > now()) then
-    raise exception '615 refused: the daily recompute holds the maintenance lease';
+    raise exception '618 refused: the daily recompute holds the maintenance lease';
   end if;
   if to_regclass('public.listings_source_id_idx') is null then
-    raise exception '615 refused: listings_source_id_idx is missing; it takes over the feed index''s prefix readers (the broker lane on four small portals)';
+    raise exception '618 refused: listings_source_id_idx is missing; it takes over the feed index''s prefix readers (the broker lane on four small portals)';
   end if;
   if exists (select 1 from pg_stat_user_indexes
               where indexrelname in ('properties_cat_last_seen_keyset_idx', 'properties_last_seen_keyset_idx')
                 and idx_scan > 0) then
-    raise exception '615 refused: a last-seen keyset index has been read: find the reader';
+    raise exception '618 refused: a last-seen keyset index has been read: find the reader';
   end if;
 end
 $pre$;
@@ -148,7 +148,7 @@ begin
      and to_regprocedure('public.price_per_m2_source_id(numeric, numeric, bigint)') is null
      and not exists (select 1 from pg_trigger
                       where tgrelid = 'public.properties'::regclass and tgname = 'properties_log_status_event') then
-    raise notice '615: section 2 already applied';
+    raise notice '618: section 2 already applied';
     return;
   end if;
 
@@ -202,7 +202,7 @@ begin
                                                           to_regclass('public.assets')]::oid[]))))
   ) deps;
   if v_bad is not null then
-    raise exception '615 refused: % depend(s) on the status log, the asset links or a write-only column', v_bad;
+    raise exception '618 refused: % depend(s) on the status log, the asset links or a write-only column', v_bad;
   end if;
 
   lock table public.properties in access exclusive mode;
@@ -233,7 +233,7 @@ begin
   if v_col is null
      and to_regprocedure('public.listing_feed_visible()') is null
      and to_regclass('public.listing_feed_public') is null then
-    raise notice '615: section 3 already applied';
+    raise notice '618: section 3 already applied';
     return;
   end if;
 
@@ -276,7 +276,7 @@ begin
              and d.objid is distinct from to_regprocedure('public.listing_feed_visible()')))
   ) deps;
   if v_bad is not null then
-    raise exception '615 refused: % depend(s) on the feed or on listings.discovery_seq', v_bad;
+    raise exception '618 refused: % depend(s) on the feed or on listings.discovery_seq', v_bad;
   end if;
 
   drop function if exists public.listing_feed_visible();
@@ -296,12 +296,12 @@ begin
   select attnum into v_col from pg_attribute
    where attrelid = 'public.listing_detail_queue'::regclass and attname = 'discovery_seq' and not attisdropped;
   if v_col is null and to_regclass('public.listing_discovery_seq') is null then
-    raise notice '615: section 4 already applied';
+    raise notice '618: section 4 already applied';
     return;
   end if;
   if exists (select 1 from pg_attribute
               where attrelid = 'public.listings'::regclass and attname = 'discovery_seq' and not attisdropped) then
-    raise exception '615 refused: listings.discovery_seq is still there (section 3 runs first)';
+    raise exception '618 refused: listings.discovery_seq is still there (section 3 runs first)';
   end if;
 
   select string_agg(x, ', ') into v_bad from (
@@ -333,7 +333,7 @@ begin
        and p.prosrc ~* 'discovery_seq'
   ) deps;
   if v_bad is not null then
-    raise exception '615 refused: % depend(s) on the queue''s discovery_seq or listing_discovery_seq', v_bad;
+    raise exception '618 refused: % depend(s) on the queue''s discovery_seq or listing_discovery_seq', v_bad;
   end if;
 
   alter table public.listing_detail_queue drop column if exists discovery_seq;
@@ -354,12 +354,12 @@ begin
   select attnum into v_note from pg_attribute
    where attrelid = 'public.property_pipeline'::regclass and attname = 'note' and not attisdropped;
   if v_note is null then
-    raise notice '615: section 6 already applied';
+    raise notice '618: section 6 already applied';
     return;
   end if;
   select count(*) into v_cards from public.property_pipeline where note is not null;
   if v_cards > 0 then
-    raise notice '615: property_pipeline.note KEPT, % card(s) hold a note (PROGRAM.md §5): a later migration drops it', v_cards;
+    raise notice '618: property_pipeline.note KEPT, % card(s) hold a note (PROGRAM.md §5): a later migration drops it', v_cards;
     return;
   end if;
 
@@ -407,7 +407,7 @@ begin
                                    where t.tgrelid = 'public.property_pipeline'::regclass))))
   ) deps;
   if v_bad is not null then
-    raise exception '615 refused: % depend(s) on the note or on the two pipeline views', v_bad;
+    raise exception '618 refused: % depend(s) on the note or on the two pipeline views', v_bad;
   end if;
 
   drop view public.pipeline_board_public;
@@ -506,12 +506,12 @@ begin
              and attname = 'discovery_seq'))
   ) still;
   if v_left is not null then
-    raise exception '615 did not land: still present: %', v_left;
+    raise exception '618 did not land: still present: %', v_left;
   end if;
 
   if exists (select 1 from pg_attribute
               where attrelid = 'public.property_pipeline'::regclass and attname = 'note' and not attisdropped) then
-    raise notice '615: property_pipeline.note kept (section 6 said why)';
+    raise notice '618: property_pipeline.note kept (section 6 said why)';
   elsif md5(pg_get_viewdef('public.property_pipeline_public'::regclass)) is distinct from '88093f6916bb54a0a9e4333fbf0cd544'
      or md5(pg_get_viewdef('public.pipeline_board_public'::regclass)) is distinct from '06c950df3e18e0f58c4be6b06973600e'
      or not (select coalesce(reloptions, '{}') @> array['security_invoker=true'] from pg_class
@@ -524,7 +524,7 @@ begin
      or not has_table_privilege('authenticated', 'public.pipeline_board_public', 'select')
      or has_table_privilege('authenticated', 'public.property_pipeline_public', 'insert,update,delete,truncate')
      or has_table_privilege('authenticated', 'public.pipeline_board_public', 'insert,update,delete,truncate') then
-    raise exception '615 did not land: the two pipeline views are not as written (body, invoker or grants)';
+    raise exception '618 did not land: the two pipeline views are not as written (body, invoker or grants)';
   end if;
 
   perform * from public.property_pipeline_public limit 1;
@@ -534,7 +534,7 @@ begin
   perform public.browse_map_cells(category_main_filter => array['byt'], category_type_filter => 'prodej',
                                   bbox_west => 14.40, bbox_south => 50.05, bbox_east => 14.45,
                                   bbox_north => 50.10, point_budget => 0);
-  raise notice '615: landed';
+  raise notice '618: landed';
 end
 $post$;
 

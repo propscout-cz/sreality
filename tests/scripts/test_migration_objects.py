@@ -121,9 +121,9 @@ def _declared(root: Path) -> list[list[str]]:
 
 
 def test_a_later_drop_retires_the_earlier_declaration(tmp_path):
-    """W6 (migration 615) drops a view 567 and 584 declared: its absence is 615's doing, not
-    a sign 567 was never applied, so 567 stops declaring it. A drop in prose or inside a
-    function body is not a drop."""
+    """W6 (migration 618) drops a view 567, 584 and 617 declared: its absence is 618's doing,
+    not a sign those files were never applied, so they stop declaring it. A drop in prose or
+    inside a function body is not a drop."""
     (tmp_path / "001_a.sql").write_text(
         "create view public.feed as select 1;\n"
         "create or replace function public.feed_visible() returns int as $$ select 1 $$"
@@ -141,7 +141,7 @@ def test_a_later_drop_retires_the_earlier_declaration(tmp_path):
 
 
 def test_a_file_that_drops_and_recreates_keeps_declaring(tmp_path):
-    """615's pipeline views, 597's map function, 590's views: dropped and created in one file.
+    """618's pipeline views, 597's map function, 590's views: dropped and created in one file.
     The re-created object exists after the later file, so the earlier declaration stays probed."""
     (tmp_path / "001_a.sql").write_text("create view v as select 1;")
     (tmp_path / "002_b.sql").write_text("drop view if exists v; create view v as select 2;")

@@ -1582,7 +1582,7 @@ renumber.** Navigate by area:
     back every original property in any order (tests/test_detach_listing.py, executed in
     tests/test_merge_safety_live.py). Callers serialize per-property on the row locks.
     **There is no status log.** Merge sprint W6 dropped migration 392's per-property status
-    history (`property_status_events`, its view, trigger and function; migration 615): nothing
+    history (`property_status_events`, its view, trigger and function; migration 618): nothing
     read it after W2b, where the chart started drawing every advert's own line. A detach restores
     `is_active` in the statement that clears `merged_away` (active exactly when one of its ads
     is). **Apply 559 before its code merges**
@@ -2408,7 +2408,7 @@ renumber.** Navigate by area:
     write (full analysis: `docs/design/portal-order-fidelity.md`). `listing_detail_queue.discovery_seq`
     / `listings.discovery_seq` (migration 368) carried a sequence value from enqueue to write for
     the per-ad Browse lane until W5 (merge sprint, MS19); W6 dropped both columns and the
-    sequence (migration 615).
+    sequence (migration 618).
     **`listings.discovered_at` (migration 444) is the claim's time** — the claimed row's
     `enqueued_at`, carried through `claim_detail_batch` → `listing_write.write_listings` and
     written **once**, never on a later re-fetch (`COALESCE(listings.discovered_at,
@@ -3252,7 +3252,7 @@ renumber.** Navigate by area:
 
     **Sibling measure — time on market (2026-10-17, migration 617).** Same shape, no census (it is
     not a price over an area): `public.measure_tom_days(is_active, first_seen_at, last_seen_at)` is
-    the one definition; the four views that publish `tom_days` call it, the compiler and the
+    the one definition; the three views that publish `tom_days` call it, the compiler and the
     analytics tools render it through `toolkit.measures.tom_days_sql`, and
     `tests/test_measure_tom_days.py` reds on a view that spells it again, on the two Python spellings
     the old copies used, and on a known consumer that stops calling the face. Its
@@ -3973,7 +3973,7 @@ such pin at once — with ~87 % of active pins below building level it buried th
 A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public` (gone
-since 615), and so to both read models — served for the street chip level, read by no filter
+since 618), and so to both read models — served for the street chip level, read by no filter
 until its RPC arm lands.
 **Appending is the only legal edit here** — `browse_list` and `properties_map_mv` materialize
 `select * from browse_projection` and `toolkit/browse_read_model.sync_browse_list` re-inserts

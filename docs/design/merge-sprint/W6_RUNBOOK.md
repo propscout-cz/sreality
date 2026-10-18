@@ -1,7 +1,7 @@
-# W6 runbook: the one destructive window (migration 615)
+# W6 runbook: the one destructive window (migration 618)
 
 The order for the day the operator names (PROGRAM.md §5's W6 gate, §6's list, §7's brake). The file is
-`migrations/615_merge_sprint_w6_drops.sql` on branch `feature/merge-sprint-w6`. Every SQL read below
+`migrations/618_merge_sprint_w6_drops.sql` on branch `feature/merge-sprint-w6`. Every SQL read below
 goes through MCP `execute_sql` and starts with `SET statement_timeout='30s';`. `execute_sql` returns only
 the last result set and collapses columns that share a name, so run each SELECT of C2, C4's second
 block, C6, C10 and step 14 as its own call, each starting with that SET, or fold a check into one
@@ -12,8 +12,8 @@ been refused by the permission check before; the apply (step 10), which runs onl
 The reload and the drop need the operator's OK too. Baselines were read on 2026-10-08 between 03:51 and 06:29 UTC,
 except those dated 2026-10-10 or later.
 
-615 does not touch `browse_map_cells`. Migration 597 (portal exclusion, applied 2026-10-13) already
-re-created it without `listing_ids_filter`, so 615's section 5 is gone and 597 owns the function's
+618 does not touch `browse_map_cells`. Migration 597 (portal exclusion, applied 2026-10-13) already
+re-created it without `listing_ids_filter`, so 618's section 5 is gone and 597 owns the function's
 body and ACL; no check below pins it, and only the smoke reads call it.
 
 ```bash
@@ -22,11 +22,11 @@ TARGETS="property_status_events assets asset_membership_events properties:id,ass
 
 ## D−1, off-peak (not 05:00–05:40, not 10:30–12:45 UTC)
 
-1. **CI is green on the PR.** The migrations job replays 615 and its log shows `615: landed`.
+1. **CI is green on the PR.** The migrations job replays 618 and its log shows `618: landed`.
 2. **Plan and connectivity:**
-   `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=615_merge_sprint_w6_drops.sql -f dry_run=true`,
+   `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=618_merge_sprint_w6_drops.sql -f dry_run=true`,
    then `gh run list --workflow apply_migration.yml --limit 1 --json databaseId` and `gh run watch <id> --exit-status`.
-   Expect `615_merge_sprint_w6_drops.sql: 112 statement(s), 2 probeable object(s)` and one connectivity row.
+   Expect `618_merge_sprint_w6_drops.sql: 112 statement(s), 2 probeable object(s)` and one connectivity row.
    Then run C1 and C2 once: each answers, and C1's `interval_s` reads 60 until the brake (null: a wrong key).
 3. **Backup rehearsal.** The column-CSV path has never run in production.
    `gh workflow run backup_before_drop.yml --ref main -f label=merge-sprint-w6-rehearsal -f targets="$TARGETS"`,
@@ -45,7 +45,7 @@ first.
 - Until the apply, no ad-hoc read that filters, sorts or aggregates `properties.last_seen_at`, and none
   that names `property_status_events_public`, `listing_feed_public` or `listing_feed_visible` as an
   identifier. The keyset-index gate in section 0 is one-way: one planner probe of
-  `properties_last_seen_keyset_idx` makes 615 refuse until a stats reset. C6 counts every statement that
+  `properties_last_seen_keyset_idx` makes 618 refuse until a stats reset. C6 counts every statement that
   names those three.
 
 3b. **04:40–04:45, the bootstrap gate.** Read the build flag, the lease and the worker in one call:
@@ -96,7 +96,7 @@ first.
    Expect `live_lease` null, `bootstrap` false (true on a morning under step 3b's override), and the same
    `passes` and `last_pass_at` in both reads with `in_flight_s` null. If `bootstrap` is true without that
    override, move the window a day (the dedup session's rule). Section 0 refuses unless the brake is 0,
-   and until a held lease expires (615:105-107). A pass ends by itself within 17.5 minutes; a lease from
+   and until a held lease expires (618:105-107). A pass ends by itself within 17.5 minutes; a lease from
    a pass that died lasts up to 40 minutes, and a `dispatch:` or seed holder up to 5 hours. If a lease
    will outlast the dispatch, re-time the dispatch to 05:31:30–05:36:30, between the 05:30 rebuilds and
    the 05:37 map rebuild, or move the day.
@@ -216,21 +216,25 @@ first.
   ```
 - **C8, the pinned bodies.** Section 0 checks these too. Expect `board_md5`
   `06c950df3e18e0f58c4be6b06973600e` and `card_md5` `54671707e2d2c12d1a47971325e9a784` (both unchanged
-  on 2026-10-14). Any other value means another session restated a body: regenerate section 6 from
+  on 2026-10-18, with 617 applied). Any other value means another session restated a body: regenerate section 6 from
   the live text. The map function is not pinned: 597 owns it.
   ```sql
   select md5(pg_get_viewdef('public.pipeline_board_public'::regclass)) board_md5, md5(pg_get_viewdef('public.property_pipeline_public'::regclass)) card_md5;
   ```
-  Then run `git fetch origin` and the two commands below. On main (read 2026-10-14) the grep may show only
-  `.github/workflows/migrations.yml:504` (a comment), `frontend/src/lib/measure.ts:12`,
-  `toolkit/filter_registry.py:1926` and `property_carriers.py`'s three NOT_CARRIED entries, which this PR
-  removes. Any other hit is a new reader, but read a bare `asset_id` hit (such as `photo_asset_id`) before
-  it stops the window. The `ls-tree` must show only `migrations/594_gone_ledger_hysteresis.sql`,
-  `migrations/595_filter_presets_per_account.sql`, `migrations/596_autodedup_reject_ledger.sql` and
-  `migrations/597_portal_exclusion.sql`.
+  Then run `git fetch origin` and the two commands below. On main with #1849/#1850 merged (read
+  2026-10-18 on `origin/fix/measure-tom-days`, which is main plus both) the grep may show only: comments
+  at `.github/workflows/migrations.yml:519`, `api/location_filter.py:41`,
+  `frontend/src/lib/districtCodes.ts:27`, `frontend/src/lib/measure.ts:12` and
+  `toolkit/filter_registry.py:1939`; `property_carriers.py`'s three NOT_CARRIED entries; and two applied
+  migrations, 605 (a comment and its guard's view list, lines 24 and 85) and 617 (it re-created
+  `listing_feed_public` with `discovery_seq`: lines 7, 83, 94, 237-238, 281 and 294). This PR removes
+  all of them but the `filter_registry.py` comment (old Watchdog keys) and the two migrations (applied,
+  rule 1). Any other hit is a new reader, but read a bare `asset_id` hit (such as `photo_asset_id`)
+  before it stops the window. The `ls-tree` must show only migrations 594 to 602, 604 to 614 and 617;
+  read any other file (616 is reserved by another session) for these objects before the window.
   ```bash
-  git grep -n -E -e 'property_status_events|asset_membership_events|asset_id|listing_feed_(public|visible)|discovery_seq|price_per_m2_source|distinct_site_count|last_seen_keyset|portal_feed_idx' -e 'pp\.note\b|property_pipeline[a-z_]*.{0,80}\bnote\b' -e '(from|join|into|update)\s+(public\.)?assets\b' origin/main -- api toolkit scraper scripts autodedup location_data frontend/src chrome-extension .github/workflows 'migrations/59[5-9]_*'
-  git ls-tree --name-only origin/main migrations/ | grep -E '/59[3-9]_'
+  git grep -n -E -e 'property_status_events|asset_membership_events|asset_id|listing_feed_(public|visible)|discovery_seq|price_per_m2_source|distinct_site_count|last_seen_keyset|portal_feed_idx' -e 'pp\.note\b|property_pipeline[a-z_]*.{0,80}\bnote\b' -e '(from|join|into|update)\s+(public\.)?assets\b' origin/main -- api toolkit scraper scripts autodedup location_data frontend/src chrome-extension .github/workflows 'migrations/59[5-9]_*' 'migrations/6[0-9][0-9]_*'
+  git ls-tree --name-only origin/main migrations/ | grep -E '/(59[3-9]|6[0-9][0-9])_'
   ```
 - **C9, the size baseline.** On 2026-10-10 18:03 these were 137,149,631,635, 3,171,336,192 and 12,058,083,328 bytes.
   ```sql
@@ -254,7 +258,7 @@ first.
    where backend_type = 'client backend' and state <> 'idle' and xact_start < now() - interval '10 seconds' order by age desc;
   ```
 - **C11, the PR, read at 05:15.** `gh pr view 1732 --json isDraft,mergeable,mergeStateStatus,headRefOid`
-  must read `true`, `MERGEABLE`, `CLEAN` and the head that CI last passed. #1732 stays a draft until 615
+  must read `true`, `MERGEABLE`, `CLEAN` and the head that CI last passed. #1732 stays a draft until 618
   has landed (step 12).
 
 ### 05:20:30, the apply
@@ -263,22 +267,22 @@ first.
    run completed, and only when `gh run list --workflow apply_migration.yml --limit 5 --json status,databaseId`
    shows nothing queued or in progress: the concurrency group `apply-migration` (cancel-in-progress false,
    apply_migration.yml:45-47) lets a newer dispatch cancel an older pending one.
-10. **Apply:** `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=615_merge_sprint_w6_drops.sql -f dry_run=false -f confirm=APPLY`,
+10. **Apply:** `gh workflow run apply_migration.yml --ref feature/merge-sprint-w6 -f file=618_merge_sprint_w6_drops.sql -f dry_run=false -f confirm=APPLY`,
     then `gh run watch <id> --exit-status`. psql starts about 33 s after the dispatch, and its NOTICEs,
-    `615: landed` among them, print only after psql exits. Write down the `headSha` of the run that prints
-    `615: landed` (`gh run view <id> --json headSha --jq .headSha`).
-    - **What the log shows.** On success: `615: landed`, `applied migrations/615_merge_sprint_w6_drops.sql`,
+    `618: landed` among them, print only after psql exits. Write down the `headSha` of the run that prints
+    `618: landed` (`gh run view <id> --json headSha --jq .headSha`).
+    - **What the log shows.** On success: `618: landed`, `applied migrations/618_merge_sprint_w6_drops.sql`,
       then the receipt `receipt OK: 2 object(s) present`. The receipt proves nothing about the drops,
-      because those two views existed before: the proof is `615: landed` plus step 11's P1.
+      because those two views existed before: the proof is `618: landed` plus step 11's P1.
     - **`canceling statement due to lock timeout`.** This is the retry working (30 tries, 20 s apart). A
       concurrent index drop that times out leaves its index invalid until the next try.
-    - **`615 refused: …`, or any other error** (`deadlock detected` is not retried). Its section and
+    - **`618 refused: …`, or any other error** (`deadlock detected` is not retried). Its section and
       every later section did not run, and every earlier one stands. Read the message, fix the cause,
       and dispatch again: the file is idempotent.
     - **`property_pipeline.note KEPT`.** Section 6 skipped because a card holds a note. A later migration drops the note.
 11. **The receipt, by hand (P1).** Expect every relation, function and trigger null or 0, and `cols_left` null
     (`property_pipeline.note` if section 6 skipped), and `pp_md5` `88093f6916bb54a0a9e4333fbf0cd544`
-    (`54671707…` if section 6 skipped). The map function is not 615's to check: 597 owns it.
+    (`54671707…` if section 6 skipped). The map function is not 618's to check: 597 owns it.
     ```sql
     select to_regclass('public.property_status_events') pse, to_regclass('public.property_status_events_public') psev, to_regclass('public.assets') a,
            to_regclass('public.asset_membership_events') ame, to_regclass('public.listing_feed_public') feed, to_regclass('public.listing_discovery_seq') seq,
@@ -295,11 +299,11 @@ first.
 
 ### The merge, still braked
 
-12. **Merge the PR** as W5 was (never `--admin`), only if the branch's 615 is the text production ran
-    (else stop, rule 1). #1732 stays a draft until 615 has landed (C11); marking it ready re-runs no
+12. **Merge the PR** as W5 was (never `--admin`), only if the branch's 618 is the text production ran
+    (else stop, rule 1). #1732 stays a draft until 618 has landed (C11); marking it ready re-runs no
     required check, because those workflows trigger on a bare `pull_request`:
     ```bash
-    git fetch origin && git diff --quiet <headSha> origin/feature/merge-sprint-w6 -- migrations/615_merge_sprint_w6_drops.sql && gh pr ready 1732 && gh pr merge 1732 --squash
+    git fetch origin && git diff --quiet <headSha> origin/feature/merge-sprint-w6 -- migrations/618_merge_sprint_w6_drops.sql && gh pr ready 1732 && gh pr merge 1732 --squash
     ```
     The merge redeploys the worker, and a pass killed mid-flight would strand the lease for up to 40
     minutes. Confirm the rollout with
@@ -331,7 +335,7 @@ first.
       move after 05:30, and `dirty_properties` drains.
     - The Postgres logs since 05:20 (MCP `query_logs`, source `postgres_logs`) show no `does not exist` naming a dropped object.
 16. **PostgREST has reloaded.** The file ends with `pg_notify('pgrst', 'reload schema')`, and the DDL
-    event triggers reload too. 615 changes no surviving function's parameter list (597 changed the
+    event triggers reload too. 618 changes no surviving function's parameter list (597 changed the
     map's on 2026-10-13), so the reload is about the dropped relations, columns and functions and the
     two re-created pipeline views: a fresh tab's `/pipeline` and property page answer. If PostgREST
     still names a dropped object, send `select pg_notify('pgrst', 'reload schema');` once, with the OK.
@@ -345,14 +349,15 @@ first.
     1.36 GB, the status log 230 MB, the feed index 149 MB. Expect `properties` at about 1.81 GB.
     About 13 MB of dropped column bytes are reused as rows are rewritten.
 19. **The drift check.** Dispatch `verify_pipeline.yml`; `migration_drift` should read ok. A run between
-    the apply and the merge reads WARN on 567 and 584 (`listing_feed_public`) until main carries 615.
+    the apply and the merge reads WARN on 617 (`listing_feed_public`, which 617 re-created) until main
+    carries 618. 567 and 584 declare that view too, but they now sit outside the 25-migration drift window.
 20. **The hand-over note.** Write the times of the brake, the apply, the merge, the brake off and the first
     pass into `merge-sprint-handover-to-autodedup`, and record there:
     - The status-log rows written between the dump and the apply, which no backup holds (roughly 20–50, step 4).
     - The dedup session's `properties.published_at` drop is unblocked, but `properties_gate_cover_idx`
       includes that column, so its replacement comes first.
     - #1655 rebases.
-    - #1634 removes its `listing_feed_public` reads (its 575 pre- and post-conditions) and takes a number above 615.
+    - #1634 removes its `listing_feed_public` reads (its 575 pre- and post-conditions) and takes a number above 618.
     Then mark W6 applied in PROGRAM.md §4, §5 and §6 and in `roadmap/merge-sprint.md`.
 21. **The sampler's table goes, with the operator's OK.** The reader hunt's per-minute job (2026-10-08/09)
     was unscheduled on 2026-10-09 once it had confirmed the reader; its unlogged table (41 MB) is not part

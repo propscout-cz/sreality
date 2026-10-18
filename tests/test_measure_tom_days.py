@@ -19,7 +19,8 @@ from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the 
 from toolkit.measures import tom_days_sql
 
 _ROOT = Path(__file__).resolve().parents[1]
-_VIEWS = ("properties_public", "listings_public", "listing_feed_public", "browse_projection")
+# 617 restated a fourth, listing_feed_public; migration 618 (merge sprint W6) dropped it.
+_VIEWS = ("properties_public", "listings_public", "browse_projection")
 
 
 def _effective_definition(view: str) -> str:
