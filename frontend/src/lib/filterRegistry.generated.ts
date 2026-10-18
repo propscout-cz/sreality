@@ -566,6 +566,27 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "sql_kind": "lte"
     },
     {
+      "id": "tom_observed_only",
+      "type": "bool",
+      "pg_column": "tom_observed",
+      "default": false,
+      "description": "When true, only ads whose time on market is observed from the start: first seen on an ordinary day, not in a portal's first or catch-up sweep of their category, so TOM counts from the day the ad appeared. False or unset: no constraint.",
+      "category": "Velocity",
+      "ui_control": "boolean",
+      "agendas": [
+        "browse",
+        "comparables",
+        "estimation"
+      ],
+      "constraints": null,
+      "unit": null,
+      "basis": null,
+      "enum_values": null,
+      "aliases": [],
+      "nullable": false,
+      "sql_kind": null
+    },
+    {
       "id": "last_seen_min_days",
       "type": "int",
       "pg_column": null,

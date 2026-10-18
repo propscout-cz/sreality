@@ -80,6 +80,7 @@ class FindComparablesIn(BaseModel):
     apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -180,6 +181,7 @@ class ComputeMarketVelocityIn(BaseModel):
     apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -381,6 +383,7 @@ class CreateEstimationIn(BaseModel):
     apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None
@@ -495,6 +498,7 @@ class EstimateYieldIn(BaseModel):
     apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     last_seen_min_days: int | None = None
     last_seen_max_days: int | None = None
     first_seen_min_days: int | None = None

@@ -2123,6 +2123,7 @@ def _build_filters(
         apartment_condition_level_max=body.apartment_condition_level_max,
         tom_days_min=body.tom_days_min,
         tom_days_max=body.tom_days_max,
+        tom_observed_only=body.tom_observed_only,
         last_seen_min_days=body.last_seen_min_days,
         last_seen_max_days=body.last_seen_max_days,
         first_seen_min_days=body.first_seen_min_days,

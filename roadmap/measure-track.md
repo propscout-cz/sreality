@@ -597,6 +597,15 @@ applied it (Stats and map counts did), and "days on market" had six spellings.
 - **Done — #1850 (migration 617):** `public.measure_tom_days()` is the one definition; four views and
   `toolkit.measures.tom_days_sql` (compiler, velocity, `compare_snapshots`) call it. `compare_snapshots`
   no longer ages a closed listing.
+- **Done — "Newly listed only" (PR TBD, migration 625):** operator ruling 10-18 (Part A "user needs to be
+  aware" = no change; Part B = a checkbox). One rule derives the sweep days per (portal, category) into
+  `ingest_bulk_days` (first day of sightings, or > greatest(100, 4 × the pair's median); validated: our
+  sighting lags the portal's date by a median 0.6 d on ordinary days vs 16–77 d on sweep days); one measure
+  `measure_tom_observed()`; `browse_projection` publishes `tom_observed` (the earliest ad's answer); registry
+  filter `tom_observed_only` (Browse + cohorts), applied by the list, pins, Stats and map counts; the two
+  aggregate RPCs gained the defaulted parameter. **Owed (operator kept them 10-18):** `first_seen_min_days` /
+  `first_seen_max_days` — unused in presets, watchdogs and runs, twins of `recently_added_days` / `max_age_days` —
+  were the deletion that would have paid for this filter.
 - **Open (semantics, needs an operator ruling before any code):** under `status=all` a TOM bound mixes
   active ads' age-so-far with closed ads' completed durations (right-censored vs complete), and Stats'
   median TOM inherits that bias; the anchor is our first sighting, so a listing live before its portal

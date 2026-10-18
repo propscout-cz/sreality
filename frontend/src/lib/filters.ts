@@ -187,6 +187,9 @@ export interface ListingFilters {
    * (migration 054), which the Browse list, count, map and Stats all filter. */
   tomDaysMin: number | null;
   tomDaysMax: number | null;
+  /* Only ads whose TOM is observed from the start (read-model `tom_observed`,
+   * migration 625): first seen on an ordinary day, not in a sweep. */
+  tomObservedOnly: boolean;
   hasBalcony: TriState;
   hasLift: TriState;
   hasParking: TriState;
@@ -325,6 +328,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   recentlyChangedDays: null,
   tomDaysMin: null,
   tomDaysMax: null,
+  tomObservedOnly: false,
   hasBalcony: 'any',
   hasLift: 'any',
   hasParking: 'any',
@@ -580,6 +584,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     recentlyChangedDays: parseIntOrNull(sp.get('changed')),
     tomDaysMin: tomMin,
     tomDaysMax: tomMax,
+    tomObservedOnly: sp.get('observed') === '1',
     hasBalcony: enumOr(sp.get('balcony'), TRI_VALUES, 'any'),
     hasLift: enumOr(sp.get('lift'), TRI_VALUES, 'any'),
     hasParking: enumOr(sp.get('parking'), TRI_VALUES, 'any'),
@@ -813,6 +818,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.tomDaysMin != null || f.tomDaysMax != null) {
     sp.set('tom', fmtRange(f.tomDaysMin, f.tomDaysMax));
   }
+  if (f.tomObservedOnly) sp.set('observed', '1');
   if (f.hasBalcony !== 'any') sp.set('balcony', f.hasBalcony);
   if (f.hasLift !== 'any') sp.set('lift', f.hasLift);
   if (f.hasParking !== 'any') sp.set('parking', f.hasParking);
@@ -995,6 +1001,7 @@ export const summarise = (f: ListingFilters, count: number | null): string => {
   if (f.recentlyChangedDays != null) bits.push(`changed ≤ ${f.recentlyChangedDays} d`);
   const tomLabel = fmtDaysRange(f.tomDaysMin, f.tomDaysMax);
   if (tomLabel) bits.push(`TOM ${tomLabel}`);
+  if (f.tomObservedOnly) bits.push('newly listed');
   if (f.pipeline) {
     const n = f.pipeline.stage_ids.length;
     bits.push(n === 0 ? 'in pipeline' : `in pipeline (${n} stage${n > 1 ? 's' : ''})`);
@@ -1309,6 +1316,7 @@ export const REGISTRY_KEY_MAP = {
   collections: 'collections',
   tom_days_min: 'tomDaysMin',
   tom_days_max: 'tomDaysMax',
+  tom_observed_only: 'tomObservedOnly',
   last_seen_min_days: 'lastSeenMinDays',
   last_seen_max_days: 'lastSeenMaxDays',
   first_seen_min_days: 'firstSeenMinDays',
@@ -1466,6 +1474,7 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
     label: 'recently added/changed',
   },
   { test: (f) => f.tomDaysMin != null || f.tomDaysMax != null, label: 'time on market' },
+  { test: (f) => f.tomObservedOnly, label: 'newly listed only' },
   { test: (f) => f.tags.length > 0 || f.tagsExcluded.length > 0, label: 'tags' },
   { test: (f) => f.priceGrowthRules.length > 0, label: 'market growth (datasets)' },
   { test: (f) => f.withEstimates, label: 'with estimates' },

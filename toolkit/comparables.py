@@ -116,6 +116,7 @@ class ComparableFilters:
     # Inclusive bounds.
     tom_days_min: int | None = None
     tom_days_max: int | None = None
+    tom_observed_only: bool | None = None
     # Days-ago ranges on the source timestamps. min_days = most recent
     # allowed (e.g. min=3 means "seen >= 3 days ago", so excludes
     # listings seen in the last 2 days). max_days = oldest allowed.
@@ -433,6 +434,7 @@ def _filters_used(
         "apartment_condition_level_max": filters.apartment_condition_level_max,
         "tom_days_min": filters.tom_days_min,
         "tom_days_max": filters.tom_days_max,
+        "tom_observed_only": filters.tom_observed_only,
         "last_seen_min_days": filters.last_seen_min_days,
         "last_seen_max_days": filters.last_seen_max_days,
         "first_seen_min_days": filters.first_seen_min_days,

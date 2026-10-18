@@ -31,7 +31,7 @@ from toolkit.filter_registry import (
     building_material_values,
     sql_kind,
 )
-from toolkit.measures import per_m2_sql, plot_area_sql, tom_days_sql
+from toolkit.measures import per_m2_sql, plot_area_sql, tom_days_sql, tom_observed_sql
 
 Hook = Callable[[str, Any, Mapping[str, Any], dict[str, Any]], list[str]]
 # (filter id, its value — may be None, the whole values mapping, params to write) -> fragments
@@ -144,6 +144,11 @@ def _price_bound(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, 
     return [f"l.price_czk {op} %({fid})s"]
 
 
+def _only(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any]) -> list[str]:
+    """A BOOL "only" filter: true narrows to the measure, false or None is no constraint."""
+    return [tom_observed_sql("l")] if v else []
+
+
 def _modifier(fid: str, v: Any, values: Mapping[str, Any], params: dict[str, Any]) -> list[str]:
     """include_no_price / price_change_window_days: read by the hook they modify."""
     return []
@@ -227,6 +232,7 @@ _HOOKS: Mapping[str, Hook] = MappingProxyType({
     "min_price_czk": _price_bound,
     "max_price_czk": _price_bound,
     "include_no_price": _modifier,
+    "tom_observed_only": _only,
     "price_change_window_days": _modifier,
     "portals_excluded_active_only": _modifier,
     **{fid: _seen_days for fid in _SEEN_DAYS},

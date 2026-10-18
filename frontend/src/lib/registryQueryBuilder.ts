@@ -58,6 +58,9 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // first_seen_at / last_change_at.
   'recently_added_days',
   'recently_changed_days',
+  // An on/off "only" filter: on → `tom_observed = true`, off → no predicate
+  // (an auto-dispatched false would select the sweep-discovered ads instead).
+  'tom_observed_only',
   // One enum → IN over multiple building_type values (cihla/panel/smisena/ostatni-bucket).
   'building_material',
   // Multi-chip → RUIAN code equality per level (districtCodes.districtsFilterClause).
