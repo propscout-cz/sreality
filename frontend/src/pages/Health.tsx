@@ -849,11 +849,11 @@ function PipelineChecksPanel({
               }
             />
             <span className="text-[var(--color-ink)] flex-1 truncate" title={c.check_key}>
-              {pipelineCheckLabel(c.check_key)}
+              {pipelineCheckLabel(c)}
             </span>
             {hasUnacknowledgedIncident(c) && <AcknowledgeButton checkKey={c.check_key} />}
             <span className="font-mono tabular-nums text-[var(--color-ink-2)] whitespace-nowrap">
-              {pipelineCheckValueLabel(c.value, c.check_key)}
+              {pipelineCheckValueLabel(c.value, c.unit)}
             </span>
             <span
               className="shrink-0 tabular-nums text-[0.7rem] text-[var(--color-ink-4)] w-16 text-right cursor-help"

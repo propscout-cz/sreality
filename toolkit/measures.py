@@ -609,16 +609,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "fresh by scripts/generate_filter_registry --check in CI.",
     ),
     RegisteredSite(
-        path="frontend/src/lib/pipelineChecks.ts",
-        arm="unit",
-        hits=3,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="The operator-facing display names of W9's three per-m² pipeline "
-        "checks, so the health surface names the same quantity the check "
-        "does.",
-    ),
-    RegisteredSite(
         path="frontend/src/components/region/DispositionBoxPlots.tsx",
         arm="unit",
         hits=2,

@@ -403,18 +403,17 @@ Per-lane notes:
 **Health check harness** (`scripts/verify_pipeline.py`; plan: `docs/design/health-dashboard.md`) — ONE registry, `CHECKS`:
 each `Check` declares key, class (`alarm`/`gauge`), host (all `github-actions` in wave 1), `cadence_s`, budget, label,
 unit and owner page; `project_registry` mirrors the host's keys into `health_checks` (migration 619). FOUR statuses,
-`ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, a not-run, an error or a check's own
-could-not-measure path is `unknown`, reason in `details` (`timed_out`/`not_run`/`errored`/`skipped`), never `ok` (one
-holdout until wave 6: `ppm2_median_shift`'s "compared NOTHING" still reads `warn`). The two GitHub lanes are identical
-but for their crons (`llm_health.yml` hourly, `verify_pipeline.yml` 6-hourly, one concurrency group): each runs only the
-DUE checks (newest row older than `cadence_s` less min(cadence / 10, 15 min)) with `--exit-nonzero-on-fail`, so a failing
-alarm on either reds its run and emails (a gauge never does); the daily sreality image probe and the weekly outbound-URL
-probe are cadences, not workflows. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per
-portal/job/lane). The lanes write no system alert: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
-one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per check, reminders until
-acknowledged on Health (a minimal Acknowledge button on the pipeline-checks card; the rebuilt page in wave 8) — alarm
-6 h / 24 h / 72 h then weekly, gauge daily — and one recovery once an OK is measured across `max(2 × cadence, 30 min)`;
-`unknown`, or a result past its staleness budget, is inert. **Rationale, ladder, sizing: `references/pipeline-verification.md`.**
+`ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, not-run, error or could-not-measure path is
+`unknown`, reason in `details` (`timed_out`/`not_run`/`errored`/`skipped`), never `ok` (until wave 6 `ppm2_median_shift`'s
+"compared NOTHING" stays `warn`). Both GitHub lanes (`llm_health.yml` hourly, `verify_pipeline.yml` 6-hourly, one
+concurrency group) run only the DUE checks (newest row since `declared_at` older than `cadence_s` less the due slack,
+min(cadence / 10, 15 min), or none) with `--exit-nonzero-on-fail`, so a failing alarm on either reds its run and emails (a
+gauge never does); the daily sreality image probe and the weekly outbound-URL probe are cadences, not workflows. Rows keep
+`details.message`, `elapsed_ms` and any `cells`. No lane writes a system alert: the ONE ladder,
+`toolkit/system_alerts.reconcile`, runs in the API every 60 s — one `ops_incidents` row per failing cell
+(`cell:<key>:<subject>`), one grouped onset per check, reminders until acknowledged on Health (alarm 6 h / 24 h / 72 h
+then weekly, gauge daily), one recovery once an OK is measured across two cadences less the due slack, never under 30 min;
+an `unknown` or stale result is inert. **Rationale, ladder, sizing: `references/pipeline-verification.md`.**
 
 ## Reading the logs
 

@@ -17,6 +17,9 @@ _DECLARED = _dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc)
 # Check.staleness_budget on the github-actions host: a cadence plus GitHub's 18 h delivery slack.
 _GITHUB_SLACK_S = 18 * 3600
 _CUTOVER = "c.run_at >= hc.declared_at"
+_MEASURED_CUTOVER = "r.run_at >= hc.declared_at"
+# An hourly key's hold: two 54-minute due intervals (a cadence less its 6-minute due slack).
+_HOURLY_HOLD = _dt.timedelta(minutes=108)
 _ZERO = {"opened": 0, "reminded": 0, "recovered": 0, "closed_silently": 0, "notices": 0}
 _INCIDENT_COLUMNS = ("id", "signature", "first_seen_at", "last_seen_at", "alert_count",
                      "alerted_at", "ok_since", "acknowledged_at")
@@ -75,10 +78,12 @@ class _FakeCursor:
             self._rows = [tuple(i[col] for col in _INCIDENT_COLUMNS) for i in c.open_incidents()
                           if i["signature"].startswith(prefix)]
         elif "FROM pipeline_check_results" in norm:
+            guarded = _MEASURED_CUTOVER in norm  # again only where the statement states it
             self._rows = [(key, at, status, details.get("cells"))
                           for key in params["keys"]
                           for at, status, _value, details in c.results.get(key, [])
-                          if status != "unknown" and at >= params["since"]]
+                          if status != "unknown" and at >= params["since"]
+                          and not (guarded and at < c.registry[key]["declared_at"])]
         elif norm.startswith("UPDATE ops_incidents"):
             self.rowcount = c.update(norm, params)
         else:
@@ -294,7 +299,7 @@ def test_a_stale_fail_neither_opens_nor_reminds() -> None:
 
 def test_a_stale_ok_never_recovers_nor_starts_a_hold() -> None:
     conn = _FakeConn()
-    conn.register("llm_errors")  # hourly: a two-hour hold, a 19 h budget
+    conn.register("llm_errors")  # hourly: a 108-minute hold, a 19 h budget
     conn.register("worker_liveness")
     held = conn.seed("llm_errors", first=_T0 - _h(48), last=_T0 - _h(30),
                      ok_since=_T0 - _h(25))
@@ -345,6 +350,19 @@ def test_a_cell_unmeasured_for_seven_days_closes_silently() -> None:
     assert reconcile(conn, now=_T0) == {**_ZERO, "closed_silently": 2}
     assert gone["resolve_reason"] == dark["resolve_reason"] == "unmeasured 7d"
     assert holding["resolved_at"] is None  # measured OK inside the week, still in its hold
+    assert conn.dispatches == []
+
+
+def test_rows_from_before_the_keys_registration_never_hold_off_the_silent_close() -> None:
+    """Rows the ladder ignores everywhere else must not keep a cell it no longer measures open,
+    never told, until they age out of the window."""
+    conn = _FakeConn()
+    conn.register("dual_write_parity", cadence_s=21600, declared_at=_T0 - _h(24))  # re-declared
+    inc = conn.seed("dual_write_parity", first=_T0 - _h(240), last=_T0 - _h(200),
+                    ok_since=_T0 - _h(72))
+    conn.result("dual_write_parity", _T0 - _h(72), "ok")  # a lone OK of the earlier declaration
+    assert reconcile(conn, now=_T0) == {**_ZERO, "closed_silently": 1}
+    assert inc["resolve_reason"] == "unmeasured 7d"
     assert conn.dispatches == []
 
 
@@ -401,17 +419,18 @@ def test_warn_keeps_an_incident_open_resets_its_hold_and_never_recovers_it() -> 
 
 def test_a_measured_ok_recovers_only_after_the_hold() -> None:
     conn = _FakeConn()
-    conn.register("llm_errors", label="LLM errors")  # hourly, so the hold is two hours
+    conn.register("llm_errors", label="LLM errors")  # hourly: a 108-minute hold
     first = _T0 - _h(30)
     inc = conn.seed("llm_errors", first=first, last=_T0 - _h(1), alerted=_T0 - _h(6))
     conn.result("llm_errors", _T0, "ok")
     assert reconcile(conn, now=_T0) == _ZERO
     assert inc["ok_since"] == _T0
-    conn.result("llm_errors", _T0 + _h(2) - _s(1), "ok")
-    assert reconcile(conn, now=_T0 + _h(2)) == _ZERO  # measured one second short of the hold
-    conn.result("llm_errors", _T0 + _h(2), "ok")
-    assert reconcile(conn, now=_T0 + _h(2)) == {**_ZERO, "recovered": 1, "notices": 1}
-    assert (inc["resolved_at"], inc["resolve_reason"]) == (_T0 + _h(2), "measured ok")
+    conn.result("llm_errors", _T0 + _HOURLY_HOLD - _s(1), "ok")
+    # measured one second short of the hold
+    assert reconcile(conn, now=_T0 + _HOURLY_HOLD) == _ZERO
+    conn.result("llm_errors", _T0 + _HOURLY_HOLD, "ok")
+    assert reconcile(conn, now=_T0 + _HOURLY_HOLD) == {**_ZERO, "recovered": 1, "notices": 1}
+    assert (inc["resolved_at"], inc["resolve_reason"]) == (_T0 + _HOURLY_HOLD, "measured ok")
     assert conn.dispatches == [("✓ LLM errors: recovered after 30 h",
                                 f"sys:llm_errors:recovery:{_iso(first)}:{inc['id']}x1", [])]
 
@@ -419,7 +438,7 @@ def test_a_measured_ok_recovers_only_after_the_hold() -> None:
 def test_a_lone_ok_followed_by_silence_never_recovers() -> None:
     """The hold is measured, not wall-clock: a second OK must arrive across it."""
     conn = _FakeConn()
-    conn.register("llm_errors")  # hourly: a two-hour hold
+    conn.register("llm_errors")  # hourly: a 108-minute hold
     conn.result("llm_errors", _T0, "fail")
     reconcile(conn, now=_T0)
     (inc,) = conn.open_incidents()
@@ -431,7 +450,7 @@ def test_a_lone_ok_followed_by_silence_never_recovers() -> None:
 
 def test_a_second_ok_measured_across_the_hold_recovers() -> None:
     conn = _FakeConn()
-    conn.register("llm_errors")  # hourly: a two-hour hold
+    conn.register("llm_errors")  # hourly: a 108-minute hold
     conn.result("llm_errors", _T0, "fail")
     reconcile(conn, now=_T0)
     (inc,) = conn.open_incidents()
@@ -442,21 +461,40 @@ def test_a_second_ok_measured_across_the_hold_recovers() -> None:
     assert (inc["resolved_at"], inc["resolve_reason"]) == (_T0 + _h(3), "measured ok")
 
 
-@pytest.mark.parametrize(("cadence_s", "hold_h"), [(300, 0.5), (3600, 2.0), (21600, 12.0)])
-def test_the_hold_is_two_cadences_and_never_under_thirty_minutes(
-    cadence_s: int, hold_h: float,
+@pytest.mark.parametrize(("cadence_s", "hold_s"), [
+    (300, 1800),                    # two 270 s intervals, so the 30-minute floor
+    (3600, 2 * (3600 - 360)),       # the slack is a tenth of the cadence ...
+    (21600, 2 * (21600 - 900)),     # ... at most 15 minutes
+    (604800, 2 * (604800 - 900)),
+])
+def test_the_hold_is_two_cadences_less_the_due_slack_and_never_under_thirty_minutes(
+    cadence_s: int, hold_s: int,
 ) -> None:
     conn = _FakeConn()
     conn.register("db_saturation", cadence_s=cadence_s)
     inc = conn.seed("db_saturation", first=_T0 - _h(1))
     conn.result("db_saturation", _T0, "ok")
     reconcile(conn, now=_T0)
-    conn.result("db_saturation", _T0 + _h(hold_h) - _s(1), "ok")
-    reconcile(conn, now=_T0 + _h(hold_h) - _s(1))
+    conn.result("db_saturation", _T0 + _s(hold_s) - _s(1), "ok")
+    reconcile(conn, now=_T0 + _s(hold_s) - _s(1))
     assert inc["resolved_at"] is None
-    conn.result("db_saturation", _T0 + _h(hold_h), "ok")
-    reconcile(conn, now=_T0 + _h(hold_h))
+    conn.result("db_saturation", _T0 + _s(hold_s), "ok")
+    reconcile(conn, now=_T0 + _s(hold_s))
     assert inc["resolve_reason"] == "measured ok"
+
+
+def test_oks_measured_a_due_interval_apart_recover_at_the_third() -> None:
+    """A lane measures an hourly check once its row is 54 minutes old, so its OKs can land 59
+    minutes apart: a two-cadence hold made those wait for a fourth OK."""
+    conn = _FakeConn()
+    conn.register("llm_errors")  # hourly
+    inc = conn.seed("llm_errors", first=_T0 - _h(5))
+    for n in range(3):
+        at = _T0 + _dt.timedelta(minutes=59 * n)
+        conn.result("llm_errors", at, "ok")
+        assert reconcile(conn, now=at)["recovered"] == int(n == 2), n
+    assert (inc["resolved_at"], inc["resolve_reason"]) == (
+        _T0 + _dt.timedelta(minutes=118), "measured ok")
 
 
 # --- reminders -------------------------------------------------------------
@@ -524,7 +562,7 @@ def test_reminders_and_recoveries_group_a_checks_cells_into_one_notice() -> None
         "Walks not reaching the end: still Problem for 30 h — bazos, sreality",
         f"sys:walk_end_streak:reminder:24h:{_iso(first)}:{sreality['id']}x2", [])]
     assert sreality["alert_count"] == bazos["alert_count"] == 2
-    for hours in (1, 13):  # the six-hourly hold is twelve hours
+    for hours in (1, 13):  # the six-hourly hold is 11.5 hours
         conn.result("walk_end_streak", _T0 + _h(hours), "ok",
                     cells=[_cell("sreality", "ok"), _cell("bazos", "ok")])
         reconcile(conn, now=_T0 + _h(hours))
@@ -536,7 +574,7 @@ def test_reminders_and_recoveries_group_a_checks_cells_into_one_notice() -> None
 
 def test_cells_of_one_check_that_recover_in_different_passes_are_each_told() -> None:
     conn = _FakeConn()
-    conn.register("walk_end_streak", cadence_s=21600, label="Walks")  # a twelve-hour hold
+    conn.register("walk_end_streak", cadence_s=21600, label="Walks")  # an 11.5-hour hold
     for hours, sreality, bazos in ((0, "fail", "fail"), (1, "ok", "fail"), (13, "ok", "ok"),
                                    (25, "ok", "ok")):
         worst = "fail" if "fail" in (sreality, bazos) else "ok"

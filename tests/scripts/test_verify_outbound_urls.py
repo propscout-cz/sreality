@@ -9,6 +9,7 @@ import datetime as _dt
 import inspect
 from typing import Any
 
+import pytest
 import requests
 
 from scraper import sreality_url
@@ -75,9 +76,11 @@ class _Clock:
         self.now += seconds
 
 
-def _slow_portal(clock: _Clock, timeouts: list[float]) -> type:
-    """A portal that answers every HEAD 200 after 20 s, so 44 URLs need ~15 minutes; a
-    request given less than 20 s times out when its timeout runs out."""
+def _slow_portal(clock: _Clock, timeouts: list[float], answer_s: float = 20.0,
+                 fast: str | None = None) -> type:
+    """A portal that answers every HEAD 200 after `answer_s` (20 s: 44 URLs need ~15 minutes),
+    or after 1 s for a URL containing `fast`; a request given less times out when its timeout
+    runs out."""
 
     class _Resp:
         status_code, headers = 200, {}
@@ -86,8 +89,9 @@ def _slow_portal(clock: _Clock, timeouts: list[float]) -> type:
         def head(self, url: str, *, headers: Any, allow_redirects: bool,
                  timeout: float) -> _Resp:
             timeouts.append(timeout)
-            clock.now += min(timeout, 20.0)
-            if timeout < 20.0:
+            needs = 1.0 if fast and fast in url else answer_s
+            clock.now += min(timeout, needs)
+            if timeout < needs:
                 raise requests.ReadTimeout(f"{url}: read timed out")
             return _Resp()
 
@@ -116,6 +120,32 @@ def test_the_sample_is_three_ads_per_code_of_the_week_plus_one_per_crawler() -> 
     assert crawlers == list(mod.CRAWLER_SOURCES)
     assert len(samples) == 3 * len(codes) + len(mod.CRAWLER_SOURCES)
     assert all(isinstance(s, mod.Sample) and s.source_url for s in samples)
+
+
+def _ids(samples: list[mod.Sample]) -> list[tuple[str, int]]:
+    return [(s.source, s.id) for s in samples]
+
+
+def test_the_draw_is_shuffled_by_its_week_so_no_portal_queues_last() -> None:
+    """In draw order the eight crawler portals queued behind every sreality code."""
+    week37 = mod.draw_samples(_SampleConn(per_cb=3, crawlers=True), 37)
+    assert _ids(week37) == _ids(mod.draw_samples(_SampleConn(per_cb=3, crawlers=True), 37))
+    week41 = mod.draw_samples(_SampleConn(per_cb=3, crawlers=True), 41)  # the same quarter
+    assert sorted(_ids(week41)) == sorted(_ids(week37)) and _ids(week41) != _ids(week37)
+    first_half = week37[: len(week37) // 2]
+    assert {s.source for s in first_half} - {"sreality"}, "a crawler portal is asked early"
+
+
+def test_a_slow_sreality_no_longer_spends_the_budget_before_any_crawler_is_asked(
+        monkeypatch: Any) -> None:
+    clock, timeouts = _Clock(), []
+    monkeypatch.setattr(mod, "time", clock)
+    monkeypatch.setattr(mod.requests, "Session",
+                        _slow_portal(clock, timeouts, fast=".example/"))
+    # Week 37's order (fixed by its seed) asks a crawler third; in draw order, after 36 URLs.
+    probed = mod.probe_all(mod.draw_samples(_SampleConn(per_cb=3, crawlers=True), 37),
+                           mod.PROBE_BUDGET_S)
+    assert [s.source for s, _ in probed if s.source != "sreality"]
 
 
 # --- the conformance rule --------------------------------------------------------
@@ -247,8 +277,24 @@ def test_the_check_probes_this_iso_weeks_sample_and_judges_it(monkeypatch: Any) 
     assert "not probed" not in out["message"]
 
 
-def test_the_check_judges_what_its_budget_reached_and_reports_the_rest(
+def test_the_check_judges_what_its_budget_reached_once_that_is_half_the_draw(
         monkeypatch: Any) -> None:
+    clock, timeouts = _Clock(), []
+    monkeypatch.setattr(mod, "time", clock)
+    monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts, answer_s=3.0))
+    out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
+    drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
+    assert clock.now <= mod.PROBE_BUDGET_S
+    # 3 s a URL plus the 0.5 s pacing: 34 fit in 120 s, past half of the draw.
+    assert out["status"] == "ok" and out["details"]["sampled"] == 34
+    assert out["details"]["unprobed"] == drawn - 34
+    assert out["details"]["budget_seconds"] == 120.0
+    assert f"{drawn - 34} of {drawn} sampled URLs were not probed" in out["message"]
+
+
+def test_a_check_that_probed_under_half_its_draw_is_not_measured(monkeypatch: Any) -> None:
+    """Five of 44 URLs once judged the week OK: a verdict over a sliver of the draw cannot see
+    a slug defect in the cells the budget never reached."""
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
     monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts))
@@ -256,10 +302,22 @@ def test_the_check_judges_what_its_budget_reached_and_reports_the_rest(
     drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
     assert drawn * 20.0 >= 14 * 60, "the whole draw would need about 15 minutes"
     assert clock.now <= mod.PROBE_BUDGET_S
-    assert out["status"] == "ok" and out["details"]["sampled"] == 5
+    assert out["status"] == "unknown" and out["value"] is None
+    assert out["details"]["skipped"] == (
+        f"probed 5 of {drawn} sampled URLs before the 120 s budget ran out")
     assert out["details"]["unprobed"] == drawn - 5
-    assert out["details"]["budget_seconds"] == 120.0
-    assert f"{drawn - 5} of {drawn} sampled URLs were not probed" in out["message"]
+    assert "Not measured" in out["message"]
+
+
+@pytest.mark.parametrize(("short", "status"), [(0, "ok"), (1, "unknown")])
+def test_half_the_draw_is_the_least_a_verdict_needs(
+        monkeypatch: Any, short: int, status: str) -> None:
+    def _half(samples: list[mod.Sample], budget_s: float) -> list[tuple[mod.Sample, bool]]:
+        return [(s, True) for s in samples[: (len(samples) + 1) // 2 - short]]
+
+    monkeypatch.setattr(mod, "probe_all", _half)
+    out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
+    assert out["status"] == status
 
 
 def test_a_check_whose_budget_is_spent_before_any_probe_is_not_measured(
@@ -275,9 +333,9 @@ def test_a_check_whose_budget_is_spent_before_any_probe_is_not_measured(
                                              budget_s=0.0)
     drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
     assert out["status"] == "unknown" and out["value"] is None
-    assert "budget was spent before any" in out["details"]["skipped"]
+    assert out["details"]["skipped"].startswith(f"probed 0 of {drawn} sampled URLs")
     assert out["details"]["unprobed"] == drawn
-    assert "verified NOTHING" in out["message"]
+    assert "Not measured" in out["message"]
 
 
 def test_the_check_is_unknown_when_no_sample_was_drawn(monkeypatch: Any) -> None:

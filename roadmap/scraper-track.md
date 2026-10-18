@@ -76,8 +76,9 @@ Independent of the analytical, UI, and map tracks.
   dropped from the config — capped at warn so a retired one cannot hold the bell red).
   Warn ≥ 3 walks (~1 day at the real 6–9 h cron cadence for a category walked every run), fail ≥ 6;
   each offender names its last reached end, or "at least N walks (not reached in 14 d)". A window
-  with no verdict is an unmeasured warn (value None), never ok. It also catches a mapped category's
-  `DESCENT residue` (the residue slice stays `ceiling`, so the walk reads `reached_end=false`), which
+  with no verdict reads Not measured (`unknown`, value None) since Health W1, never ok. It also
+  catches a mapped category's `DESCENT residue` (the residue slice stays `ceiling`, so the walk
+  reads `reached_end=false`), which
   `index_completeness` cannot see. 6 h lane + in-app bell; the hourly `--only` promotion is
   superseded 2026-10-18 (Health W1: the lanes run due checks; any failing alarm on either lane emails).
 - **Next:** ~~soak, then promote into the hourly `--only` list (the emailing lane)~~ superseded
@@ -97,8 +98,8 @@ Independent of the analytical, UI, and map tracks.
   HTML not-found body scan, `freshness._record_gone`'s own flip (nominates at VERIFY instead).
 - **Done (same day):** `verify_pipeline` `false_delist_share` — per portal, the share of `flipped`
   ledger rows (7 d) active again; warn ≥5%, fail ≥20%, under 50 flips unscored, nothing scored =
-  unmeasured warn; 6 h lane + bell; the hourly `--only` promotion is superseded
-  2026-10-18 (Health W1: the lanes run due checks; any failing alarm on either lane emails).
+  Not measured (`unknown`) since Health W1; 6 h lane + bell; the hourly `--only` promotion is
+  superseded 2026-10-18 (Health W1: the lanes run due checks; any failing alarm on either lane emails).
 - **Next:** C2-2 (below) deletes the last legacy flip caller; one-off heal — re-verify the rows a
   single pre-594 verdict closed (sreality 10.7k, idnes 9.5k, bezrealitky 0.9k, remax 0.4k,
   mmreality 0.6k over 14 d) at VERIFY priority, pilot 25/portal then release.
