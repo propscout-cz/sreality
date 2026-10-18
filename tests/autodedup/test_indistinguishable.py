@@ -315,6 +315,12 @@ def test_one_room_on_two_portals_is_one_room() -> None:
                                      room(12298064, ROOMS_403_303, source="idnes"))
 
 
+def test_a_room_price_list_reposted_at_new_prices_is_one_room() -> None:
+    first = room(1, "Volné pokoje: Pokoj 1 - 12 000 Kč, Pokoj 2 - 11 500 Kč.")
+    again = room(2, "Volné pokoje: Pokoj 1 - 11 000 Kč, Pokoj 2 - 10 500 Kč.", source="idnes")
+    assert "unit_code" not in stated(first, again)
+
+
 def test_a_subset_of_room_codes_is_not_a_conflict() -> None:
     only = room(2, "Dostupnost: Pokoj 403-1 (4. patro) od 24.8.2026")
     assert "unit_code" not in stated(room(12273170, ROOMS_403_303), only)

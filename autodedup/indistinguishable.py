@@ -32,11 +32,11 @@ each is on the record:
     price, cross-portal          2.6 %                     27.0 %
     total floors                 4.2 %                     35.0 %
 
-Two changed facts are owed a re-measure on the w14 known duplicates (`fact_power2.py`, a cohort
-run): the storey under E967 (`subject_floor` at a one-storey gap where both bodies place the
-unit in the NP noun and write no other storey vocabulary), and the `orientation` row, measured
-on the reader before E968 (the adjective in front of the keyword, and two sets with no cardinal
-point in common).
+Three changed facts are owed a re-measure on the w14 known duplicates (`fact_power2.py`, a
+cohort run): `unit_code` with a co-living room's `pokoj 303-2` (E966), the storey under E967
+(`subject_floor` at a one-storey gap where both bodies place the unit in the NP noun and write
+no other storey vocabulary), and the `orientation` row, measured on the reader before E968 (the
+adjective in front of the keyword, and two sets with no cardinal point in common).
 
 The `street` and `obec` rows look inert against the hazard class, and are supposed to: two
 units of one project share a street. They are here because they separate the OTHER kind of

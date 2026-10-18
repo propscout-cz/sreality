@@ -228,6 +228,19 @@ def test_printed_unit_codes_reads_a_co_living_room_code(text: str, expected: set
         # A room list's size is not a code, and a single room number is a room inside one flat.
         "Dispozice: pokoj 1 - 12,5 m2, pokoj 2 - 14 m2, kuchyň 9 m2.",
         "Pronajmu pokoj č. 2 v bytě 3+1.",
+        "Pokoj 1 - 12 metrů, pokoj 2 - 14 metrů.",
+        "Pokoj č. 1 - 2. patro, pokoj č. 2 - 3. patro.",
+        # Beds, persons, terms, hours and prices after the room noun are not its code.
+        "Ubytovna nabízí pokoje 2-3 lůžkové se sociálním zařízením.",
+        "Pokoj 1-2 osoby, kuchyň společná.",
+        "Pronájem: pokoj 2-3 osoby, kuchyňka.",
+        "pokoje 2-3 jsou průchozí",
+        "Pronájem pokoje 2-3 měsíce.",
+        "Možnost prohlídky pokoje 10-12 hod.",
+        "Cena za pokoj 8-9 000 Kč měsíčně.",
+        "Volné pokoje: Pokoj 1 - 12 000 Kč, Pokoj 2 - 11 500 Kč.",
+        "Pokoj 12 - 9 000 Kč.",
+        "Pokoj 12-3 lůžkový se sprchou.",
     ],
 )
 def test_printed_unit_codes_reads_no_range_and_no_room_number(text: str) -> None:

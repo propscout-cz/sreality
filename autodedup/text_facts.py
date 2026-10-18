@@ -207,9 +207,14 @@ _PRINTED_UNIT_CODE = re.compile(_UNIT_NOUN + r"\s+" + _UNIT_MARKER + _UNIT_CODE_
 # joined by a hyphen — `pokoj č. 303-2` against `Pokoj 301-3`, one Za Pohořelcem template at one
 # rent. Its own pattern, never `_UNIT_NOUN`: two bare numbers joined by a hyphen after `byt` are
 # a range (`byt 2-3 pokoje`), and the dotted, Roman, word and letter forms after `pokoj` are a
-# room's size or its label inside one flat. `[.,]\d` keeps a room list's `pokoj 1 - 12,5 m2` out.
-_PRINTED_ROOM_CODE = re.compile(r"\bpokoj\w*\s+\(?\s*" + _UNIT_MARKER
-                                + r"(\d{1,3}\s?-\s?\d{1,3})(?![\d+]|[.,]\d|\s*m2)")
+# room's size or its label inside one flat. The code is the shape the template prints, a flat of
+# two or three digits and a one-digit room (303-2, 301-3, 403-1, 303-1, 201-3): any other pair
+# after `pokoj` is a count, a term, an hour or a price list (`pokoje 2-3 lůžkové`, `pokoj 1-2
+# osoby`, `prohlídky pokoje 10-12 hod.`, `Pokoj 1 - 12 000 Kč`). The tail refuses a decimal, an
+# area, a thousands group and a price or occupancy unit after it (`Pokoj 12 - 9 000 Kč`).
+_PRINTED_ROOM_CODE = re.compile(
+    r"\bpokoj\w*\s+\(?\s*" + _UNIT_MARKER
+    + r"(\d{2,3}\s?-\s?\d)(?![\d+]|[.,]\d|\s*m2|\s\d{3}\b|\s*(?:kc|osob|luzk))")
 # The three forms the segment reader cannot see. Each needs an EXPLICIT marker, because a bare
 # letter or numeral after a noun is Czech grammar: `dům i zahrada` is a house and a garden, not
 # unit I, and `byt a garáž` is a flat and a garage.
