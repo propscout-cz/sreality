@@ -120,16 +120,10 @@ function CardTags({ property_id }: { property_id: number }) {
 
 /* Native-title hover box for a card's broker — name, firm, and contact on one
  * line (the codebase's tooltip convention). The name itself links to the broker
- * page for the full record.
- *
- * A non-admin session gets has_email/has_phone instead of the values, so the
- * tooltip says the contact exists but is admin-only rather than omitting it and
- * implying the broker has none. Exported for its test. */
+ * page for the full record. Exported for its test. */
 export function brokerHoverTitle(b: ListingBroker, fromInactive = false): string {
   const parts = [b.broker_display_name, b.broker_firm_label, b.primary_phone, b.primary_email]
     .filter(Boolean);
-  const hidden = (b.has_phone && !b.primary_phone) || (b.has_email && !b.primary_email);
-  if (hidden) parts.push('kontakt jen pro adminy');
   if (fromInactive && parts.length > 0) parts.push('z neaktivních inzerátů');
   return parts.join(' · ') || 'Zobrazit makléře';
 }

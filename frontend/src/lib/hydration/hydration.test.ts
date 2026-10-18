@@ -134,7 +134,8 @@ describe('makeHydration lookup', () => {
   const brokers = new Map([
     [42, {
       brokers: [{ sreality_id: null, listing_id: 7, broker_id: 3,
-                  broker_display_name: 'A', broker_firm_label: null }],
+                  broker_display_name: 'A', broker_firm_label: null,
+                  primary_email: null, primary_phone: null }],
       fromInactive: false,
     }],
   ]);

@@ -432,13 +432,15 @@ describe('<AdvertRedirect> old advert addresses', () => {
    (105054) are deliberately different values; that difference is what pins the
    link below to the BROKER dossier rather than a listing-id-shaped route. */
 const attribution = (
-  contact: Partial<brokers.BrokerContactFields> = {},
+  contact: Partial<Pick<brokers.ListingBroker, 'primary_email' | 'primary_phone'>> = {},
 ): brokers.ListingBroker => ({
   sreality_id: 999,
   listing_id: 105054,
   broker_id: 7,
   broker_display_name: 'Jan Novák',
   broker_firm_label: 'RE/MAX Alfa',
+  primary_email: null,
+  primary_phone: null,
   ...contact,
 });
 const EVA = { ...attribution(), listing_id: 105053, broker_id: 8, broker_display_name: 'Eva Malá' };
@@ -452,11 +454,11 @@ describe('<BrokerList>', () => {
 
   const renderListing = () => renderAt('/property/774');
 
-  function withContact(contact: Partial<brokers.BrokerContactFields>) {
+  function withContact(contact: Parameters<typeof attribution>[0]) {
     vi.mocked(brokers.fetchListingBrokersByIds).mockResolvedValue(byAdvert(attribution(contact)));
   }
 
-  it('shows the real contact for an admin session, keyed on the attributed broker', async () => {
+  it('shows the contact to every signed-in user, keyed on the attributed broker', async () => {
     withContact({ primary_phone: '420777123456', primary_email: 'jan@remax.cz' });
 
     renderListing();
@@ -495,21 +497,8 @@ describe('<BrokerList>', () => {
     expect(screen.queryByText('Kontakt se nepodařilo načíst')).toBeNull();
   });
 
-  /* A non-admin gets has_* instead of the values; an em-dash there would claim
-     the broker is unreachable. Same three states as /brokers/:id, same copy. */
-  it('says a masked contact is on file rather than showing the empty dash', async () => {
-    withContact({ has_phone: true, has_email: true });
-
-    renderListing();
-
-    expect(
-      await screen.findByText(/telefon · kontakt na vyžádání/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/e-mail · kontakt na vyžádání/)).toBeInTheDocument();
-  });
-
   it('keeps the plain dash when the broker genuinely has no contact', async () => {
-    withContact({ has_phone: false, has_email: false });
+    withContact({});
 
     renderListing();
 

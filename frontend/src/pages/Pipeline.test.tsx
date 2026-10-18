@@ -104,17 +104,15 @@ const CARDS: PipelineBoardCard[] = [
 
 /* The decoration fixtures, keyed on listing_id like the real layer. */
 /* W6: identity AND contact are one row now (migration 419), so there is no second
-   fixture to pair with this one — `masked` picks which half of the contact pair the
-   API sent, which is a property of the CALLER, not of the row. */
-const listingBroker = (masked: boolean) => ({
+   fixture to pair with this one. */
+const listingBroker = () => ({
   sreality_id: 111,
   listing_id: 111,
   broker_id: 7,
   broker_display_name: 'Jan Novák',
   broker_firm_label: 'RE/MAX',
-  ...(masked
-    ? { has_email: true, has_phone: true }
-    : { primary_email: 'jan@remax.cz', primary_phone: '420777123456' }),
+  primary_email: 'jan@remax.cz',
+  primary_phone: '420777123456',
 });
 
 /* Each card's ads, for its broker line (MS7). */
@@ -256,7 +254,7 @@ describe('<Pipeline> board', () => {
       new Map([[42, [ad(111, 42)]]]),
     );
     vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(
-      new Map([[111, listingBroker(false)]]),
+      new Map([[111, listingBroker()]]),
     );
     vi.mocked(api.listCollections).mockResolvedValue({
       data: COLLECTIONS,
@@ -421,32 +419,17 @@ describe('<Pipeline> board', () => {
     expect(screen.queryByText('Načítání…')).not.toBeInTheDocument();
   });
 
-  /* The non-admin shape: the API sends has_email/has_phone INSTEAD of the
-     values. The card must keep the broker and say the contact is admin-only —
-     dropping it renders identically to a broker with no contact at all. */
-  it('marks a masked contact as admin-only instead of omitting it', async () => {
-    vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(
-      new Map([[111, listingBroker(true)]]),
-    );
-    renderBoard();
-    const broker = await screen.findByText('Jan Novák');
-    expect(broker.closest('a')).toHaveAttribute(
-      'title',
-      'Jan Novák · RE/MAX · kontakt jen pro adminy',
-    );
-  });
-
   /* MS7: the property's list, compact — the canonical ad's broker first, "+N"
      for the rest (an inactive ad's hidden while one is active), from two batched
      reads for the whole board. */
   it('shows the first broker of the property and counts the others', async () => {
     const other = (listing_id: number, broker_id: number, broker_display_name: string) =>
-      ({ ...listingBroker(false), listing_id, broker_id, broker_display_name });
+      ({ ...listingBroker(), listing_id, broker_id, broker_display_name });
     vi.mocked(queries.fetchPropertySourcesByPropertyIds)
       .mockClear()
       .mockResolvedValue(new Map([[42, [ad(110, 42), ad(111, 42), ad(112, 42, false)]]]));
     vi.mocked(brokersApi.fetchListingBrokersByIds).mockClear().mockResolvedValue(
-      new Map([[110, other(110, 8, 'Eva Malá')], [111, listingBroker(false)], [112, other(112, 9, 'Petr')]]),
+      new Map([[110, other(110, 8, 'Eva Malá')], [111, listingBroker()], [112, other(112, 9, 'Petr')]]),
     );
     renderBoard();
     expect((await screen.findByText('Jan Novák')).closest('a')).toHaveAttribute('href', '/brokers/7');

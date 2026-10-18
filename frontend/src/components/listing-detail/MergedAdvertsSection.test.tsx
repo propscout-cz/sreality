@@ -229,6 +229,8 @@ beforeEach(() => {
         broker_id: 7,
         broker_display_name: 'Jana Nováková',
         broker_firm_label: 'RE/MAX Alfa',
+        primary_email: null,
+        primary_phone: null,
       }],
     ]),
   );

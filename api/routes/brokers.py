@@ -7,7 +7,9 @@ bundle, so anyone holding the public bundle could pull 2000 brokers' unmasked em
 phone off the leaderboard (D1/D2 of the 2026-08-12 broker E2E review). Any logged-in user now reads the broker graph with
 contact PII replaced by has_email / has_phone flags — `apply_pii_policy`, applied
 to every envelope so a widened view can't leak through an un-guarded route — and
-only an admin gets the values. The dedicated contacts endpoint is `require_admin`.
+only an admin gets the values. The one exception is `POST /brokers/by-listings`, the
+property page's and board card's broker list: every signed-in caller gets the values
+there (operator ruling 2026-10-18). The dedicated contacts endpoint is `require_admin`.
 
 Thin HTTP layer over `toolkit.brokers`; every response is the standard envelope.
 """
@@ -133,9 +135,10 @@ def get_geo_options(
 def post_listing_brokers(
     body: ListingIdsIn,
     conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.verify_jwt),
+    _: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
-    return _policy(brokers.listing_brokers(conn, body.listing_ids), claims)
+    return brokers.apply_pii_policy(brokers.listing_brokers(conn, body.listing_ids),
+                                    include_pii=True)
 
 
 @router.get("/{broker_id}")
