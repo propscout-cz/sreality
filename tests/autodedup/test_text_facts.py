@@ -7,6 +7,7 @@ import pytest
 from autodedup.dataset import Listing, Location, live_end_stamp
 from autodedup.text_facts import (
     address_block_key,
+    compass_points,
     mask_codes,
     orientations,
     printed_floors,
@@ -152,6 +153,41 @@ def test_orientations_prefers_the_longer_compass_stem() -> None:
     """`jihovýchod` contains `východ`; reading the short stem would merge two flats."""
     assert orientations("Byt je orientován na jihovýchod.") == {"jihovychod"}
     assert orientations("Byt je orientován na severozápad.") == {"severozapad"}
+
+
+# E968: the direction written as an ADJECTIVE in front of the noun. Rezidence Medkova 16900 and
+# 113982 are one template apart by that word; U Stromečku 62766 writes its south that way.
+MEDKOVA_SW = ("Byt se nachází v 1. nadzemním podlaží, má jihozápadní orientaci a bude připraven "
+              "k nastěhování cca v 6/2027.")
+MEDKOVA_NE = ("Byt se nachází v 1. nadzemním podlaží, má severovýchodní orientaci a bude "
+              "připraven k nastěhování cca v 6/2027.")
+STROMECEK_SOUTH = ("a samostatnou ložnicí o ploše 12,1 m². Jižní orientace a velká okna zajišťují "
+                   "dostatek denního světla po celý den.")
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (MEDKOVA_SW, {"jihozapad"}),
+        (MEDKOVA_NE, {"severovychod"}),
+        # `jizni` starts with no stem; the one normaliser reads it as `jih`.
+        (STROMECEK_SOUTH, {"jih"}),
+        # Two adjectives are a through-flat, read as two so neither wins.
+        ("Byt má jihozápadní a severovýchodní orientaci.", {"jihozapad", "severovychod"}),
+        # An adjective that qualifies another noun is not the unit's orientation.
+        ("Dům stojí na jihozápadní straně ulice, byt má orientaci do klidného dvora.", set()),
+    ],
+)
+def test_orientations_reads_the_adjective_in_front_of_the_noun(
+    text: str, expected: set[str]
+) -> None:
+    assert orientations(text) == expected
+
+
+def test_compass_points_split_a_compound_direction() -> None:
+    assert compass_points({"jihozapad"}) == {"jih", "zapad"}
+    assert compass_points({"sever", "zapad"}) == {"sever", "zapad"}
+    assert compass_points(set()) == frozenset()
 
 
 # --- E966: a co-living room's code ---------------------------------------------------------

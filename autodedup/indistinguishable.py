@@ -32,6 +32,9 @@ each is on the record:
     price, cross-portal          2.6 %                     27.0 %
     total floors                 4.2 %                     35.0 %
 
+The `orientation` row was measured on the reader before E968 (the adjective in front of the
+keyword, and two sets with no cardinal point in common) and is owed a re-measure.
+
 The `street` and `obec` rows look inert against the hazard class, and are supposed to: two
 units of one project share a street. They are here because they separate the OTHER kind of
 negative — a pair of unrelated adverts — where the street differs on 78 % of them.
@@ -130,6 +133,7 @@ from autodedup.text_facts import (
     body_localities,
     built_connection,
     capacity_counts_english,
+    compass_points,
     cross_form_floor_agreement,
     fact_text,
     labelled_unit_ids,
@@ -2779,11 +2783,15 @@ def distinguishing_facts(
         add("street", a.location.street_key, b.location.street_key)
 
     # The compass direction, which is what separates two otherwise identical flats in one
-    # Petřiny building (28145 x 528717: `na jihovýchod` against `na východ`). Both sides must
-    # name exactly ONE direction: a body that lists two is describing a through-flat.
+    # Petřiny building (28145 x 528717: `na jihovýchod` against `na východ`). One direction
+    # against one is read exactly. A body that lists two is describing a through-flat, so it
+    # differs only where the two sides share no cardinal point at all (E968): U Stromečku's
+    # `na sever a západ` against `Jižní orientace` are two flats, `na jih i na sever` against
+    # `na jih` may be one.
     dirs_a, dirs_b = orientations(a.description), orientations(b.description)
-    if len(dirs_a) == 1 and len(dirs_b) == 1 and dirs_a != dirs_b:
-        add("orientation", next(iter(dirs_a)), next(iter(dirs_b)))
+    if ((len(dirs_a) == 1 and len(dirs_b) == 1 and dirs_a != dirs_b)
+            or _set_conflict(compass_points(dirs_a), compass_points(dirs_b))):
+        add("orientation", ", ".join(sorted(dirs_a)), ", ".join(sorted(dirs_b)))
 
     units_a, units_b = unit_designators(a.description), unit_designators(b.description)
     if (len(units_a) == 1 and len(units_b) == 1 and units_a != units_b

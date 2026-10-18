@@ -803,6 +803,22 @@ _COMPASS_WORD = re.compile(
     r"\b(severovychod\w*|severozapad\w*|jihovychod\w*|jihozapad\w*"
     r"|sever\w*|jizni|jih|vychod\w*|zapad\w*)\b"
 )
+# E968: Czech also puts the direction IN FRONT of the noun, as an adjective — `má jihozápadní
+# orientaci`, `Jižní orientace`. Only adjectives directly qualifying the keyword are read, joined
+# by nothing but a coordinator, so `na jihozápadní straně ulice … orientace` is not.
+_COMPASS_ADJECTIVE: str = r"(?:(?:severo|jiho)?(?:vychod|zapad)ni|jizni|severni)"
+_COMPASS_BEFORE = re.compile(
+    r"(?<![a-z])(" + _COMPASS_ADJECTIVE + r"(?:(?:\s+[ai]\s+|\s*[-/,]\s*)"
+    + _COMPASS_ADJECTIVE + r")*)\s+$"
+)
+_CARDINALS: tuple[str, ...] = ("sever", "jih", "vychod", "zapad")
+
+
+def _compass_stem(word: str) -> str | None:
+    """One spelling per direction: the longest stem the word starts with, `jizni` as `jih`."""
+    if word == "jizni":
+        return "jih"
+    return next((stem for stem in _COMPASS_STEMS if word.startswith(stem)), None)
 
 
 def orientations(text: str | None) -> set[str]:
@@ -810,7 +826,8 @@ def orientations(text: str | None) -> set[str]:
 
     The clause after the keyword is read WHOLE, not to its first direction: `orientaci na jih
     i na sever` is a through-flat naming two, and a rule that stopped at `jih` would read it
-    as one. Abbreviations (`na J/Z`) are deliberately not read — a two-letter token is a coin
+    as one. The adjectives in front of it are read the same way (`jižní a západní orientace`).
+    Abbreviations (`na J/Z`) are deliberately not read — a two-letter token is a coin
     flip against street names and room labels, and the rule would rather abstain than guess."""
     if not text:
         return set()
@@ -819,16 +836,18 @@ def orientations(text: str | None) -> set[str]:
     for keyword in _ORIENTATION_KEYWORD.finditer(folded):
         clause = folded[keyword.end(): keyword.end() + _ORIENTATION_WINDOW]
         clause = re.split(r"[.;!?]", clause, maxsplit=1)[0]
-        for match in _COMPASS_WORD.finditer(clause):
-            word = match.group(1)
-            if word == "jizni":
-                out.add("jih")
-                continue
-            for stem in _COMPASS_STEMS:
-                if word.startswith(stem):
-                    out.add(stem)
-                    break
+        words = [match.group(1) for match in _COMPASS_WORD.finditer(clause)]
+        before = _COMPASS_BEFORE.search(
+            folded, max(0, keyword.start() - _ORIENTATION_WINDOW), keyword.start())
+        if before is not None:
+            words += [match.group(1) for match in _COMPASS_WORD.finditer(before.group(1))]
+        out |= {stem for stem in map(_compass_stem, words) if stem is not None}
     return out
+
+
+def compass_points(directions: Iterable[str]) -> frozenset[str]:
+    """The cardinal points the stems name: `jihozapad` is `jih` and `zapad`."""
+    return frozenset(point for stem in directions for point in _CARDINALS if point in stem)
 
 
 def _area_value(raw: str) -> float | None:

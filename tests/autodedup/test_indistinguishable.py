@@ -204,10 +204,43 @@ def test_two_orientations_are_two_flats() -> None:
     assert "orientation" in names(a, b)
 
 
-def test_a_through_flat_naming_two_directions_abstains() -> None:
+def test_a_through_flat_sharing_a_side_abstains() -> None:
+    a = listing(1, description="Diky orientaci na jih i na sever byt prirozene vetra.")
+    b = listing(2, description="Orientace je na jih.")
+    assert "orientation" not in names(a, b)
+
+
+def test_a_through_flat_sharing_no_side_is_two_flats() -> None:
+    """E968: a flat facing north and south cannot be one facing only east."""
     a = listing(1, description="Diky orientaci na jih i na sever byt prirozene vetra.")
     b = listing(2, description="Orientace je na vychod.")
-    assert "orientation" not in names(a, b)
+    assert "orientation" in names(a, b)
+
+
+# E968: Rezidence Medkova, one developer template on sreality 16900 and idnes 113982 at 33 m²,
+# 1+kk, floor 0, one exact pin, promoted to one property on the absence of a fact.
+def test_two_adjective_orientations_are_two_flats() -> None:
+    body = ("Byt se nachází v 1. nadzemním podlaží, má {side} orientaci a bude připraven k "
+            "nastěhování cca v 6/2027.")
+    a = listing(16900, disposition="1+kk", area_m2=33.0, floor=0, price=7_184_632.0,
+                description=body.format(side="jihozápadní"))
+    b = listing(113982, source="idnes", disposition="1+kk", area_m2=33.0, floor=0,
+                price=7_400_170.0, description=body.format(side="severovýchodní"))
+    assert "orientation" in names(a, b)
+    assert "orientation" in stated(a, b, PROMOTE)
+
+
+# E968: U Stromečku, sreality 18195 (`Byt 3A`, north and west) against 62766 (south), 44 m²
+# 2+kk on floor 2 both, one broker, 49 days on sale together.
+def test_north_and_west_against_south_is_two_flats() -> None:
+    a = listing(18195, area_m2=44.0, floor=2, price=8_091_000.0,
+                description="Byt 3A je dispozičně členěn na 2+kk má užitnou plochu (44 m2) a "
+                            "je orientován na sever a západ, což zajišťuje vyvážené denní světlo.")
+    b = listing(62766, area_m2=44.0, floor=2, price=None,
+                description="a samostatnou ložnicí o ploše 12,1 m². Jižní orientace a velká "
+                            "okna zajišťují dostatek denního světla po celý den.")
+    assert "orientation" in names(a, b)
+    assert "orientation" in stated(a, b, PROMOTE)
 
 
 def test_an_abbreviated_orientation_is_not_read() -> None:
