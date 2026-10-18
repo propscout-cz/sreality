@@ -353,6 +353,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_pipeline_checks_latest_per_key.py -q
 
+      # 620's health_liveness() is the pg_cron watcher the GitHub canary asserts on: a stale heartbeat, an
+      # alarm past its budget, an expired matcher lease and a measured Problem with no incident each become
+      # one failing cell the ladder reads unchanged; a dead worker folds its keys into its own cell. The
+      # replay has no pg_cron, so this lane runs the function itself, in a transaction that always rolls back.
+      - name: The pg_cron watcher judges the watchers (migration 620)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_health_liveness_live.py -q
+
       # 06 W2a gate (b) — "a deliberately changed page appends a second body; an
       # unchanged refetch appends none" — is a property of one ON CONFLICT clause
       # and two retention statements. PREPARE proves they compile; only executing

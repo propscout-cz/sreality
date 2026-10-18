@@ -24,8 +24,13 @@ ALARM_RUNGS_H = (6.0, 24.0, 72.0)
 ALARM_WEEKLY_H = 168.0
 # The operator's ruling of 2026-10-18: a gauge rings when it first reads Problem, then once a day.
 GAUGE_RUNG_H = 24.0
-# Recovery needs a second OK measured at least max(2 cadences, this floor) after the first, so
-# neither a lone green run nor two quick greens of a fast check close an incident.
+# A lane measures a check again once its newest row is a cadence old less a tenth of the cadence,
+# at most this: every row carries its run's START, so the next run, started a minute earlier in
+# its slot, would find the row not due and measure the check only every second run.
+DUE_SLACK_MAX_S = 900
+# Recovery needs a second OK measured at least two due intervals (`due_after_s`), and never less
+# than this floor, after the first, so neither a lone green run nor two quick greens of a fast
+# check close an incident.
 RECOVERY_HOLD_MIN_S = 1800
 # A cell nobody has measured for a week can never close on a measured OK, so it closes silently.
 UNMEASURED_CLOSE_DAYS = 7
@@ -87,10 +92,14 @@ UPDATE ops_incidents SET alert_count = alert_count + 1, alerted_at = %(now)s
  WHERE id = ANY(%(ids)s)
 """
 
+# The same registration guard as _NEWEST_SQL: a row the ladder ignores everywhere else must not
+# keep a cell it no longer measures from its silent close.
 _MEASURED_SINCE_SQL = """
-SELECT check_key, run_at, status, details -> 'cells'
-  FROM pipeline_check_results
- WHERE check_key = ANY(%(keys)s) AND status <> 'unknown' AND run_at >= %(since)s
+SELECT r.check_key, r.run_at, r.status, r.details -> 'cells'
+  FROM pipeline_check_results r
+  JOIN health_checks hc ON hc.key = r.check_key
+ WHERE r.check_key = ANY(%(keys)s) AND r.status <> 'unknown' AND r.run_at >= %(since)s
+   AND r.run_at >= hc.declared_at
 """
 
 
@@ -171,9 +180,16 @@ class _Incident:
     acknowledged: bool
 
 
+def due_after_s(cadence_s: int) -> int:
+    """How old a check's newest result must be before a lane measures it again."""
+    return cadence_s - min(cadence_s // 10, DUE_SLACK_MAX_S)
+
+
 def _hold(cadence_s: int) -> _dt.timedelta:
     """How long after a cell's first OK a later measured OK must come to recover its incident."""
-    return _dt.timedelta(seconds=max(2 * cadence_s, RECOVERY_HOLD_MIN_S))
+    # Two due intervals, not two cadences: a lane measures a check up to a slack early, so two
+    # measured intervals can sum to under two cadences and a two-cadence hold waits for a 4th OK.
+    return _dt.timedelta(seconds=max(2 * due_after_s(cadence_s), RECOVERY_HOLD_MIN_S))
 
 
 def _unmeasured_window(cadence_s: int) -> _dt.timedelta:

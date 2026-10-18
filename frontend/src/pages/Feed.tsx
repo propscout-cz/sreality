@@ -10,20 +10,28 @@
  * follow that timestamp. The photos come through the shared hydration layer, the
  * cover chosen as the Browse card chooses it.
  *
- * The chips: "Vše" + the account's saved presets (#1761, per account since
- * #1775), remembered per device; the portals; "Skryté" switches the roll to the
- * hidden properties only (fetchDismissedCards — Browse has no hidden-only lens). */
+ * The chips: "Filtry" (Browse's whole filter set in a sheet, its own lazy chunk),
+ * "Vše" + the account's saved presets (#1761, per account since #1775); the
+ * portals; "Skryté" switches the roll to the hidden properties only
+ * (fetchDismissedCards — Browse has no hidden-only lens).
+ *
+ * THE VIEW LIVES IN THE URL, AS BROWSE'S DOES (lib/feed `feedSearch`): the
+ * filters, the order and the chosen preset, so a Browse link opens the same
+ * scope here and back. A bare /feed reopens what this device last showed. */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useIsFetching, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigationType } from 'react-router-dom';
+import { useNavigationType, useSearchParams } from 'react-router-dom';
 
 import FeedCard from '@/components/phone/FeedCard';
+import BottomSheet from '@/components/phone/BottomSheet';
 import DayRule from '@/components/phone/DayRule';
 import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
 import { PHOTOS_PER_CARD } from '@/components/phone/CardRoll';
+import { filtersBeyond } from '@/components/phone/filterRows';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
+import { SlidersIcon } from '@/components/phone/phoneIcons';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { listFilterPresets } from '@/lib/api';
@@ -34,23 +42,32 @@ import {
   FEED_ALL_SCOPE,
   dayRuleLabel,
   feedFiltersForPreset,
+  feedSearch,
   feedTimestamp,
+  feedViewOf,
   groupByDay,
+  isNewestFirst,
   pragueClock,
   pragueDayKey,
+  readFeedQuery,
   readFeedScope,
-  withPortals,
+  sortLabel,
+  writeFeedQuery,
   writeFeedScope,
+  type FeedView,
 } from '@/lib/feed';
 import { filterById } from '@/lib/filterRegistry.generated';
+import { filtersEqualForPreset } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
 import { CardHydrationProvider } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
-import { cyclePortal, NO_PORTALS, portalShort, type PortalChoice } from '@/lib/portals';
+import { lazyChunk } from '@/lib/lazyChunk';
+import { cyclePortal, portalShort, type PortalChoice } from '@/lib/portals';
 import {
   CARD_PAGE_SIZE,
   DEFAULT_SORT,
   dismissalKeys,
+  fetchBrowseCount,
   fetchDismissedCards,
   fetchDismissedCount,
   fetchListingsForCards,
@@ -60,6 +77,9 @@ import {
   type DismissedCardRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
+
+/* Browse's whole filter set is large; the sheet loads on its first open. */
+const FilterSheet = lazyChunk(() => import('@/components/phone/FilterSheet'));
 
 /* The hidden roll is keyed under Browse's `cards` root so a restore — which
  * re-reads every Browse list — re-reads it too; `showDismissed: true` keeps a
@@ -74,24 +94,62 @@ const PORTALS: ReadonlyArray<string> = (filterById('portals')?.enum_values ?? []
 /* Window scroll per roll, so "open a card → back" lands where it left. */
 const scrollMemory = new Map<string, number>();
 
+const PLACEHOLDER_VIEW: FeedView = { filters: FEED_ALL_FILTERS, sort: DEFAULT_SORT, presetId: null };
+
 export default function Feed() {
   const qc = useQueryClient();
   const navType = useNavigationType();
   const coverTag = useCardCoverTag().value;
-  const [scope, setScope] = useState(readFeedScope);
-  const [portals, setPortals] = useState<PortalChoice | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [hidden, setHidden] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const presetsQ = useQuery({ queryKey: filterPresetKeys.all, queryFn: listFilterPresets });
   const presets = useMemo(() => presetsQ.data?.data ?? [], [presetsQ.data]);
-  const preset = scope === FEED_ALL_SCOPE ? null : (presets.find((p) => p.id === scope) ?? null);
-  /* A remembered preset deleted on the desktop falls back to Vše once the list
-   * is in; until then nothing is read, so the roll never flashes the wrong scope. */
-  const waitingForPreset = scope !== FEED_ALL_SCOPE && presetsQ.isPending;
-  const activeScope = preset ? scope : FEED_ALL_SCOPE;
 
-  const filters = useMemo(() => withPortals(feedFiltersForPreset(preset), portals), [preset, portals]);
-  const sort = DEFAULT_SORT;
+  /* A bare /feed (the tab bar, a cold start) reopens what this device last
+   * showed: the whole view if it was modified, else its scope as that scope
+   * reads NOW. A remembered preset deleted on the desktop falls back to Vše once
+   * the list is in; until then nothing is read, so the roll never flashes the
+   * wrong scope. */
+  const bare = searchParams.toString() === '';
+  const search = useMemo(() => {
+    if (!bare) return searchParams.toString();
+    const remembered = readFeedQuery();
+    if (remembered != null) return remembered;
+    const scope = readFeedScope();
+    if (scope !== FEED_ALL_SCOPE && presetsQ.isPending) return null;
+    const p = presets.find((x) => x.id === scope) ?? null;
+    return feedSearch({ filters: feedFiltersForPreset(p), sort: DEFAULT_SORT, presetId: p?.id ?? null }).toString();
+  }, [bare, searchParams, presets, presetsQ.isPending]);
+  const waitingForPreset = search == null;
+  useEffect(() => {
+    if (bare && search != null) setSearchParams(new URLSearchParams(search), { replace: true });
+  }, [bare, search, setSearchParams]);
+
+  const view = useMemo(() => (search == null ? PLACEHOLDER_VIEW : feedViewOf(new URLSearchParams(search))), [search]);
+  const { filters, sort } = view;
+  /* A filter is not a destination: every write replaces (useUrlFilters' rule). */
+  const setView = (next: FeedView) => setSearchParams(feedSearch(next), { replace: true });
+
+  /* The chosen chip and what it reads by itself — the baseline every "beyond the
+   * scope" mark is measured from. Unknown while the preset list loads. */
+  const preset = view.presetId ? (presets.find((p) => p.id === view.presetId) ?? null) : null;
+  const baseKnown = !view.presetId || !presetsQ.isPending;
+  const activeScope = preset ? preset.id : FEED_ALL_SCOPE;
+  const base = useMemo(() => feedFiltersForPreset(preset), [preset]);
+  const beyond = baseKnown && !waitingForPreset ? filtersBeyond(filters, base) : 0;
+  const modified = baseKnown && !waitingForPreset && !filtersEqualForPreset(filters, base);
+  const newestFirst = isNewestFirst(sort);
+
+  /* Remember the view: its scope always, the whole query only while it differs
+   * from that scope's own (lib/feed FEED_QUERY_KEY). */
+  useEffect(() => {
+    if (bare || search == null || !baseKnown) return;
+    writeFeedScope(activeScope);
+    writeFeedQuery(beyond > 0 || !newestFirst ? search : null);
+  }, [bare, search, baseKnown, activeScope, beyond, newestFirst]);
+
   const orderPortal = orderPortalOf(filters, sort);
 
   const feedKey = browseKeys.cards(filters, sort);
@@ -152,19 +210,32 @@ export default function Feed() {
     [rows, hidden, orderPortal],
   );
 
-  /* "5 nových dnes" — only once the whole of today is loaded. */
+  /* "5 nových dnes" — only once the whole of today is loaded; past the scope's
+   * own filters, or in another order, the scope's total instead. */
+  const showTotal = beyond > 0 || !newestFirst;
+  const totalQ = useQuery({
+    queryKey: browseKeys.count(filters),
+    queryFn: ({ signal }) => fetchBrowseCount(filters, { signal }),
+    enabled: showTotal && !hidden && !waitingForPreset,
+    staleTime: 60_000,
+  });
   const todayCount = groups[0]?.dayKey === todayKey ? groups[0].rows.length : 0;
   const todayComplete = !list.isLoading && (!list.hasNextPage || groups.length > 1 || todayCount === 0);
+  const total = totalQ.data;
   usePhoneHeaderAside(
-    !hidden && !list.isError && todayComplete && rows.length > 0
-      ? `${todayCount} ${czPlural(todayCount, 'nový', 'nové', 'nových')} dnes`
-      : null,
+    hidden || list.isError
+      ? null
+      : showTotal
+        ? total == null
+          ? null
+          : `${total.toLocaleString('cs-CZ')} ${czPlural(total, 'nemovitost', 'nemovitosti', 'nemovitostí')}`
+        : todayComplete && rows.length > 0
+          ? `${todayCount} ${czPlural(todayCount, 'nový', 'nové', 'nových')} dnes`
+          : null,
   );
 
   /* Scroll memory, per roll. */
-  const scrollKey = hidden
-    ? 'hidden'
-    : [activeScope, filters.portals, filters.portalsExcluded, filters.portalsExcludedActiveOnly].join('|');
+  const scrollKey = hidden ? 'hidden' : (search ?? '');
   const restored = useRef(false);
   const ready = rows.length > 0;
   useEffect(() => {
@@ -177,24 +248,51 @@ export default function Feed() {
 
   const listingIds = useMemo(() => rows.map((r) => r.listing_id), [rows]);
 
+  const show = (next: FeedView) => {
+    setView(next);
+    setHidden(false);
+    window.scrollTo(0, 0);
+  };
+  /* A scope chip loads that scope as it stands, newest first (Q17). */
   const chooseScope = (next: string) => {
-    setScope(next);
-    writeFeedScope(next);
-    setPortals(null);
-    setHidden(false);
-    window.scrollTo(0, 0);
+    const p = next === FEED_ALL_SCOPE ? null : (presets.find((x) => x.id === next) ?? null);
+    show({ filters: feedFiltersForPreset(p), sort: DEFAULT_SORT, presetId: p?.id ?? null });
   };
-  const choosePortals = (next: PortalChoice) => {
-    setPortals(next);
-    setHidden(false);
-    window.scrollTo(0, 0);
+  const choosePortals = (next: PortalChoice) => show({ ...view, filters: { ...filters, ...next } });
+  const clearBeyond = () => show({ filters: base, sort: DEFAULT_SORT, presetId: view.presetId });
+  const shown: PortalChoice = hidden
+    ? { portals: [], portalsExcluded: [], portalsExcludedActiveOnly: false }
+    : {
+        portals: filters.portals,
+        portalsExcluded: filters.portalsExcluded,
+        portalsExcludedActiveOnly: filters.portalsExcludedActiveOnly,
+      };
+  /* The Filtry chip counts what the view adds to its scope (not under Skryté). */
+  const shownBeyond = hidden ? 0 : beyond;
+  /* The chosen chip carries a trailing "·" once the view has left its filters. */
+  const scopeChip = (id: string, name: string) => {
+    const on = !hidden && activeScope === id;
+    const marked = on && modified;
+    return (
+      <button
+        key={id}
+        type="button"
+        aria-pressed={on}
+        onClick={() => chooseScope(id)}
+        className={`${CHIP} ${CHIP_MD} ${chipState(on)}`}
+      >
+        {name}
+        {marked && (
+          <>
+            <span aria-hidden className="-ml-1 text-[var(--color-ink)]">
+              ·
+            </span>
+            <span className="sr-only"> (upraveno)</span>
+          </>
+        )}
+      </button>
+    );
   };
-  const shown: PortalChoice = hidden ? NO_PORTALS : {
-    portals: filters.portals,
-    portalsExcluded: filters.portalsExcluded,
-    portalsExcludedActiveOnly: filters.portalsExcludedActiveOnly,
-  };
-  const portalsOn = shown.portals.length > 0 || shown.portalsExcluded.length > 0;
   const toggleHidden = () => {
     if (!hidden) void qc.invalidateQueries({ queryKey: hiddenKey, exact: true });
     setHidden((h) => !h);
@@ -209,23 +307,20 @@ export default function Feed() {
       <div className={CHIP_ROW} role="group" aria-label="Předvolby">
         <button
           type="button"
-          aria-pressed={!hidden && activeScope === FEED_ALL_SCOPE}
-          onClick={() => chooseScope(FEED_ALL_SCOPE)}
-          className={`${CHIP} ${CHIP_MD} ${chipState(!hidden && activeScope === FEED_ALL_SCOPE)}`}
+          onClick={() => setSheetOpen(true)}
+          aria-haspopup="dialog"
+          aria-label={shownBeyond > 0 ? `Filtry (${shownBeyond} navíc)` : 'Filtry'}
+          className={`${CHIP} ${CHIP_MD} ${chipState(shownBeyond > 0)}`}
         >
-          Vše
+          <SlidersIcon className="h-3.5 w-3.5" />
+          Filtry
+          {shownBeyond > 0 && (
+            <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{shownBeyond}</span>
+          )}
         </button>
-        {presets.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            aria-pressed={!hidden && activeScope === p.id}
-            onClick={() => chooseScope(p.id)}
-            className={`${CHIP} ${CHIP_MD} ${chipState(!hidden && activeScope === p.id)}`}
-          >
-            {p.name}
-          </button>
-        ))}
+        <span aria-hidden className={CHIP_DIVIDER} />
+        {scopeChip(FEED_ALL_SCOPE, 'Vše')}
+        {presets.map((p) => scopeChip(p.id, p.name))}
         {presetsQ.isError && (
           <button
             type="button"
@@ -296,10 +391,10 @@ export default function Feed() {
           groups={groups}
           todayKey={todayKey}
           clock={pragueClock(updatedAt)}
+          order={newestFirst ? null : sortLabel(sort)}
           refresh={refresh}
           coverTag={coverTag}
-          portalsOn={portalsOn}
-          onClearPortals={() => setPortals(NO_PORTALS)}
+          onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
         />
         {rows.length > 0 && (
           <InfiniteSentinel
@@ -313,6 +408,27 @@ export default function Feed() {
           />
         )}
       </CardHydrationProvider>
+
+      {sheetOpen && (
+        <Suspense
+          fallback={
+            <BottomSheet label="Filtry" closeLabel="Zavřít" onClose={() => setSheetOpen(false)} footer={<div className="h-11" />}>
+              <p role="status" className="px-4 py-3 text-[14px] text-[var(--color-ink-3)]">
+                Načítám filtry…
+              </p>
+            </BottomSheet>
+          }
+        >
+          <FilterSheet
+            filters={filters}
+            sort={sort}
+            base={base}
+            preset={preset}
+            onApply={show}
+            onClose={() => setSheetOpen(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -326,10 +442,10 @@ function Roll({
   groups,
   todayKey,
   clock,
+  order,
   refresh,
   coverTag,
-  portalsOn,
-  onClearPortals,
+  onClearFilters,
 }: {
   hidden: boolean;
   loading: boolean;
@@ -339,12 +455,14 @@ function Roll({
   groups: ReturnType<typeof groupByDay<CardRow>>;
   todayKey: string;
   clock: string;
+  /* Another order than newest first: one continuous roll under its name. */
+  order: string | null;
   refresh: { onRefresh: () => void; refreshing: boolean };
   coverTag: ReturnType<typeof useCardCoverTag>['value'];
-  portalsOn: boolean;
-  onClearPortals: () => void;
+  /* Present while the view is past its scope's own filters or order. */
+  onClearFilters?: () => void;
 }) {
-  const topLabel = hidden ? 'Skryté' : `Dnes ${clock}`;
+  const topLabel = hidden ? 'Skryté' : order ? `${order} · ${clock}` : `Dnes ${clock}`;
 
   if (loading) {
     return (
@@ -380,8 +498,8 @@ function Roll({
         ) : (
           <RollEmpty
             title="V tomhle výběru nic není."
-            detail="Předvolba ani portály teď nenacházejí žádnou nemovitost."
-            action={portalsOn ? { label: 'Zrušit filtr portálů', onClick: onClearPortals } : undefined}
+            detail="Předvolba ani filtry teď nenacházejí žádnou nemovitost."
+            action={onClearFilters ? { label: 'Vymazat filtry', onClick: onClearFilters } : undefined}
           />
         )}
       </>
@@ -396,6 +514,9 @@ function Roll({
       items.push(<DayRule key={`rule-${g.dayKey}-${i}`} label={label} {...(i === 0 ? refresh : {})} />);
       g.rows.forEach((r) => items.push(card(r)));
     });
+  } else if (order) {
+    items.push(<DayRule key="rule-top" label={topLabel} {...refresh} />);
+    rows.forEach((r) => items.push(card(r)));
   } else {
     items.push(<DayRule key="rule-top" label={topLabel} {...refresh} />);
     groups.forEach((g, i) => {

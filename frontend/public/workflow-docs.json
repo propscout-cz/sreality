@@ -2709,32 +2709,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/label_proposal_backfill.yml"
     },
     {
-      "filename": "llm_health.yml",
-      "name": "Monitoring: acute health (hourly)",
-      "description": "The hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence, stores each result, and exits non-zero when an alarm reads Problem (`fail`), so GitHub emails the operator. GitHub throttles this cron to about five runs a day, so \"hourly\" is a ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical, exit flag included, so a failing alarm measured by either lane reds that run and emails; both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 * * * *",
-          "human": "Every hour at :15"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "pipeline-verification",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/llm_health.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/llm_health.yml"
-    },
-    {
       "filename": "load_obec_population.yml",
       "name": "Jobs: load obec population (manual)",
       "description": "Load ČSÚ municipality population into admin_boundaries.population for EVERY obec (not just the 206 curated cities). Reads the committed DataStat export data/csu_population.json (OBY02AT02 — download from https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only changed rows are written. Dispatch this after committing a refreshed export. This is the population source the \"within X km of a municipality with population > N\" proximity filter reads.",
@@ -3103,33 +3077,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/mirror_model_weights.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/mirror_model_weights.yml"
-    },
-    {
-      "filename": "monitor_workflow_failures.yml",
-      "name": "Monitoring: workflow failures",
-      "description": "Polls the GitHub Actions API on a `*/30` cron (the Actions throttle actually runs it 80–256 min apart) and records failed runs (failure / timed_out / startup_failure, plus `cancelled` that ran long enough to be a timeout-kill rather than a supersession) into `workflow_failures`, so the Health page can list them — GitHub only emails about failed SCHEDULED runs, leaving every other red run invisible unless the operator opens the Actions tab. Coverage is a high-water-mark cursor (app_settings.workflow_failures_cursor), not a fixed lookback, so no red run is dropped in the throttle gap.",
-      "portal": null,
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/30 * * * *",
-          "human": "Every 30 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [],
-      "secrets": [
-        "GITHUB_TOKEN",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "monitor-workflow-failures",
-      "cancelInProgress": false,
-      "timeoutMinutes": 5,
-      "permissions": "contents: read, actions: read",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/monitor_workflow_failures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/monitor_workflow_failures.yml"
     },
     {
       "filename": "new_dedup_candidates.yml",
@@ -4988,14 +4935,14 @@
     },
     {
       "filename": "verify_pipeline.yml",
-      "name": "Monitoring: pipeline verification",
-      "description": "The 6-hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence and stores each result in pipeline_check_results. It is identical to the hourly lane (llm_health.yml), exit flag included: a failing alarm measured by either lane reds that run, so GitHub emails the operator; a gauge never does. Both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
+      "name": "Monitoring: health canary (hourly)",
+      "description": "The health canary: the one monitoring workflow, and the one alarm path that needs neither Supabase's scheduler (pg_cron) nor Railway. Each run records failed workflow runs, measures the GitHub-hosted health checks that are due, then asserts that the watchers and the teller are alive. Only those assertions are meant to turn a run red, and GitHub emails the operator about a red scheduled run.",
       "portal": null,
       "manual": true,
       "schedules": [
         {
-          "cron": "20 */6 * * *",
-          "human": "Every 6 hours at :20"
+          "cron": "15 * * * *",
+          "human": "Every hour at :15"
         }
       ],
       "onPush": false,
@@ -5004,7 +4951,7 @@
       "inputs": [
         {
           "name": "dry_run",
-          "description": "Compute and log the due checks only; write no result or registry rows",
+          "description": "Measure and log the due checks without storing results or registry rows (the poller and the assertions still run)",
           "required": false,
           "type": "boolean",
           "default": "false",
@@ -5012,12 +4959,13 @@
         }
       ],
       "secrets": [
+        "GITHUB_TOKEN",
         "SUPABASE_DB_URL"
       ],
       "concurrencyGroup": "pipeline-verification",
       "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": "contents: read",
+      "timeoutMinutes": 40,
+      "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_pipeline.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_pipeline.yml"
     }

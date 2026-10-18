@@ -2,12 +2,15 @@
 
 `CHECKS` declares every check once: key, page section (`domain`), class (an alarm or a
 gauge), host, cadence, time budget, label, unit and owner page. A run from main projects its
-host's rows into `health_checks` (`project_registry`), measures the checks that are due by cadence
-(`due_checks`, `run_checks`) and stores one `pipeline_check_results` row per result the moment
-it completes, its message and cells inside `details`. A status is ok, warn, fail or unknown,
-and unknown means "not measured" (timed out, not reached, errored, or nothing to score): never
-OK. Nothing here tells anyone — the API's ladder (`toolkit.system_alerts.reconcile`) reads the
-stored results, opens one incident per failing cell and sends the notices.
+host's rows into `health_checks` (`project_registry`), then `run_due` measures the checks that
+are due by cadence (alarms first, each on its own wall clock) and stores one
+`pipeline_check_results` row per result the moment it completes, its message and cells inside
+`details`. A status is ok, warn, fail or unknown, and unknown means "not measured" (timed out,
+errored, or nothing to score): never OK. A check the run's budget does not reach writes nothing
+and stays due. Nothing here tells anyone — the API's ladder (`toolkit.system_alerts.reconcile`)
+reads the stored results, opens one incident per failing cell and sends the notices — and no
+result changes the exit code: the canary's assertions (`scripts/health_canary.py`) are the one
+way a monitoring run goes red.
 
 Thresholds are the code defaults below, merged under `app_settings.pipeline_check_thresholds`.
 
@@ -16,9 +19,8 @@ on demand, so silence is the normal resting state (the longest gap in the 30 day
 2026-09-21 was 143.8 h, and the old `llm_liveness` failed 52 of 347 runs on a healthy
 pipeline). `text_extraction_lag` watches the one recurring lane through its own predicate.
 
-    python -m scripts.verify_pipeline                         # the due checks of github-actions
-    python -m scripts.verify_pipeline --dry-run               # the same, writing nothing
-    python -m scripts.verify_pipeline --exit-nonzero-on-fail  # exit 1 when an alarm fails
+    python -m scripts.verify_pipeline            # the due checks of github-actions
+    python -m scripts.verify_pipeline --dry-run  # the same, writing nothing
 
 Needs only SUPABASE_DB_URL.
 """
@@ -55,8 +57,17 @@ from scraper.sreality_client import (
     INDEX_URL as _SREALITY_INDEX_URL,
     _unwrap_estate as _unwrap_sreality_estate,
 )
+from scripts.checks.clock import (
+    CHECK_BUDGET_S as _CHECK_BUDGET_S,
+    DEFAULT_STATEMENT_TIMEOUT_MS as _DEFAULT_STATEMENT_TIMEOUT_MS,
+    LANE as _LANE,
+    fetchall as _fetchall,
+    fetchone as _fetchone,
+    statement_timeout_clause as _statement_timeout_clause,
+)
 from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
 from toolkit.listing_identity import R2_CARRIERS as _PARITY_CARRIERS
+from toolkit.system_alerts import due_after_s as _due_after_s
 
 
 # The SQL mirror of `location_data.claims_common.sreality_payload_shape`, inlined here when
@@ -104,7 +115,6 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # correctness is at stake. No fail tier — a long transaction is not itself a fault.
     "long_open_txn_warn_minutes": 60,
     "db_cron_fail_rate_fail": 0.5,
-    "worker_stale_fail_minutes": 5,
     # Ingestion. Measured on the QUEUE, so these are portal-size-independent: a
     # healthy drain keeps the oldest never-fetched listing at minutes whatever the
     # portal. Warn at 6h is well above the 6-hourly walk cadence (a listing found
@@ -214,9 +224,8 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # 08:52 UTC on a 04:35 cron). So one ordinary night reaches ~26.5h (warn 30
     # clears it), one MISSED night ~50.5h and two ~69.5h. Fail therefore has to sit
     # between those last two: 50 sat below one missed night's worst case, which fails
-    # this hourly alarm — an onset notice plus the lane's --exit-nonzero-on-fail
-    # emailing a second time — for a single miss the sweep's own red run already
-    # emailed about. 60 keeps one miss a warn and still fails
+    # this hourly alarm — an onset notice — for a single miss the sweep's own red run
+    # already emailed about. 60 keeps one miss a warn and still fails
     # two, and costs ~10h of detection latency on the nightly-dead tail this axis
     # exists for, which warn already ambers within ~30h.
     "broker_finished_warn_hours": 30,
@@ -331,12 +340,15 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "ppm2_coverage_gap_fail_7d": 0.90,
     "ppm2_coverage_min_rows": 200,
     # Workflow-failure poller liveness, keyed on the AGE of its own high-water cursor.
-    # Its cron is `*/30`, but the Actions throttle really runs it 80-256 min apart, so
-    # the fail tier has to clear the worst observed gap (~4.3h) with room to spare: warn
-    # at 6h is "two throttled polls missed", fail at 12h is unambiguous. The poller
-    # deliberately excludes its own runs from workflow_failures, so a dead poller cannot
-    # show up in the table it feeds — it just stops accumulating rows, which is exactly
-    # what a quiet week looks like. The cursor is the only thing that distinguishes them.
+    # Sized when its cron was `*/30` and the Actions throttle ran it 80-256 min apart, so
+    # the fail tier had to clear the worst observed gap (~4.3h) with room to spare: warn
+    # at 6h is "two throttled polls missed", fail at 12h is unambiguous. Since wave 2 the
+    # poller is the canary's first step, so this check reads the cursor moments after a
+    # successful poll; after one failed poll (itself a red canary run) it reads the gap
+    # since the previous run, ~4.9 h at the median. The poller deliberately excludes its
+    # own runs from workflow_failures, so a dead poller cannot show up in the table it
+    # feeds — it just stops accumulating rows, which is exactly what a quiet week looks
+    # like. The cursor is the only thing that distinguishes them.
     "workflow_poller_stale_warn_hours": 6.0,
     "workflow_poller_stale_fail_hours": 12.0,
     # Sreality image template canary. The CDN is an exact-template ALLOWLIST, not a
@@ -382,57 +394,12 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "sreality_image_template_timeout_s": 8.0,
 }
 
-# --- lane + per-check wall-clock budgets (W0.4) -----------------------------
+# --- per-check wall clock: scripts/checks/clock.py. The harness keeps its own spellings for
+# the clock's names until wave 3 moves the checks beside it. -------------------------------
 #
-# Before W0.4 `run_checks` computed EVERY result before persisting ANY of them, so a job
-# timeout wrote zero rows — blinding db_saturation and worker_liveness at exactly the moment
-# (DB saturation) that made the checks slow in the first place. Results are persisted as each
-# check completes, each check runs under its own `Check.budget_s` (a server-side
-# statement_timeout), and the lane under the sum of the due checks' budgets.
-#
-# The default per-check budget. The slowest DB check is floor_convention's cross-portal
-# self-join, 11-35s over four measured runs (the shared measure_plausibility read is ~12s),
-# so at its worst 45s is only 1.3x the known worst case — a new check above ~20s needs its
-# query reworked, not a wider budget.
-_CHECK_BUDGET_S = 45.0
-# Process start, the threshold read and the registry projection, reserved out of every job's
-# timeout on top of the lane budget (test_every_lane_budget_fits_its_job).
+# Process start, the threshold read and the registry projection, reserved out of the harness
+# step's limit on top of the lane budget (test_the_canary_job_fits_every_github_check_due_at_once).
 _JOB_HEADROOM_S = 180.0
-# Outside run_checks (ad-hoc use, tests) keep the historical 10-minute ceiling.
-_DEFAULT_STATEMENT_TIMEOUT_MS = 600_000
-
-
-class _LaneBudget:
-    """Mutable per-run budget state, reset at the top of every run_checks."""
-
-    def __init__(self) -> None:
-        self.deadline: float | None = None
-        self.statement_timeout_ms: float = _DEFAULT_STATEMENT_TIMEOUT_MS
-
-    def start(self, budget_s: float) -> None:
-        self.deadline = _time.monotonic() + budget_s
-
-    def reset(self) -> None:
-        self.deadline = None
-        self.statement_timeout_ms = _DEFAULT_STATEMENT_TIMEOUT_MS
-
-    def remaining(self) -> float | None:
-        if self.deadline is None:
-            return None
-        return self.deadline - _time.monotonic()
-
-    def arm_for_check(self, check_budget_s: float) -> float | None:
-        """Give the next check the smaller of its own budget and what the lane has
-        left; returns the remaining lane seconds (None = unbudgeted)."""
-        left = self.remaining()
-        if left is None:
-            self.statement_timeout_ms = _DEFAULT_STATEMENT_TIMEOUT_MS
-            return None
-        self.statement_timeout_ms = max(1000.0, min(check_budget_s, left) * 1000.0)
-        return left
-
-
-_LANE = _LaneBudget()
 
 
 # --- pure status derivation (unit-tested without a DB) ---------------------
@@ -697,18 +664,6 @@ def _status_over_age_axes(
     return status, offenders
 
 
-def _status_for_worker(
-    ages: list[tuple[str, float]], stale_minutes: float,
-) -> tuple[str, list[str]]:
-    """Fail when any heartbeating worker's last beat is older than `stale_minutes`. An
-    EMPTY list is ok (no worker deployed — not this check's job to demand one); the
-    realtime worker beats ~every 30s, so 5 min = 10 missed beats = down. `worker_heartbeats`
-    is written every 30s and, until now, read by nothing — a dead worker (it owns the
-    latency-critical loops) produced no signal at all."""
-    stale = [f"{w} ({age:.0f}m)" for (w, age) in ages if age > stale_minutes]
-    return ("fail" if stale else "ok"), stale
-
-
 # --- per-m2 measure plausibility (W9) --------------------------------------
 #
 # The four checks below exist because the OTHER health surfaces cannot see the
@@ -898,31 +853,6 @@ def load_thresholds(conn: Any) -> dict[str, Any]:
                 merged[k] = v
     return merged
 
-
-def _statement_timeout_clause() -> str:
-    """The `SET LOCAL statement_timeout` value for the check currently running.
-
-    Server-side enforcement is what gives a check a real wall-clock bound: the
-    connection is autocommit and shared by every check, so a Python-side timeout
-    (a thread we cannot cancel, or a signal raised mid-query) would leave the
-    connection wedged for everyone after it. Postgres cancelling its own query is
-    the only mechanism that hands the connection back clean.
-    """
-    return f"{int(_LANE.statement_timeout_ms)}ms"
-
-
-def _fetchone(conn: Any, sql: str, params: Any = None) -> tuple[Any, ...] | None:
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(f"SET LOCAL statement_timeout = '{_statement_timeout_clause()}'")
-        cur.execute(sql, params or ())
-        return cur.fetchone()
-
-
-def _fetchall(conn: Any, sql: str, params: Any = None) -> list[tuple[Any, ...]]:
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(f"SET LOCAL statement_timeout = '{_statement_timeout_clause()}'")
-        cur.execute(sql, params or ())
-        return cur.fetchall()
 
 
 # --- checks ----------------------------------------------------------------
@@ -1161,9 +1091,10 @@ def check_workflow_poller_liveness(conn: Any, thresholds: dict[str, Any]) -> dic
     else:
         message = (
             f"The workflow-failure poller has not advanced its cursor in {hours:.1f}h "
-            f"(warn > {warn_hours:.0f}h, fail > {fail_hours:.0f}h) — monitor_workflow_failures.yml "
-            "is failing, disabled, or wedged. Red workflow runs are going unrecorded right "
-            "now, and the Health page's failure list is silently frozen, not empty."
+            f"(warn > {warn_hours:.0f}h, fail > {fail_hours:.0f}h) — the canary's poller step "
+            "(verify_pipeline.yml) is failing, disabled, or wedged. Red workflow runs are going "
+            "unrecorded right now, and the Health page's failure list is silently frozen, not "
+            "empty."
         )
     return {
         "check_key": "workflow_poller_liveness",
@@ -1289,40 +1220,6 @@ def check_db_saturation(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
         "value": round(worst_rate, 3),
         "details": {"offenders": offenders, "fail_rate": fail_rate,
                     "jobs": {j["jobname"]: {"ok": j["ok"], "failed": j["failed"]} for j in jobs}},
-        "message": message,
-    }
-
-
-_WORKER_LIVENESS_SQL = """
-select worker, extract(epoch from (now() - max(beat_at))) / 60.0 as age_min
-from worker_heartbeats
-group by worker
-"""
-
-
-def check_worker_liveness(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the realtime worker's heartbeat — it owns the latency-critical loops but
-    worker_heartbeats had no reader, so a dead worker was invisible."""
-    stale_minutes = float(thresholds["worker_stale_fail_minutes"])
-    rows = _fetchall(conn, _WORKER_LIVENESS_SQL)
-    ages = [(str(w), float(age)) for (w, age) in rows if age is not None]
-    status, stale = _status_for_worker(ages, stale_minutes)
-    oldest = max((age for _, age in ages), default=0.0)
-    if stale:
-        message = (
-            f"Realtime worker heartbeat is stale (> {stale_minutes:.0f}m): {', '.join(stale)} "
-            "— the worker owns newest-first probes, the detail drain and real-time dedup; those loops are down."
-        )
-    elif not ages:
-        message = "No worker heartbeats on record (worker not deployed) — nothing to watch."
-    else:
-        message = f"Realtime worker alive (last beat {oldest:.1f}m ago)."
-    return {
-        "check_key": "worker_liveness",
-        "status": status,
-        "value": round(oldest, 2),
-        "details": {"stale_minutes": stale_minutes,
-                    "workers": {w: round(age, 2) for (w, age) in ages}},
         "message": message,
     }
 
@@ -1974,8 +1871,8 @@ def check_ppm2_measure_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[s
 
 
 # The baseline is this check's OWN result row from 6-14 days ago — no new table, no new
-# DDL. verify_pipeline.yml runs every 6h, so the window holds ~32 candidates and a few
-# missed runs cost nothing. Rows whose `details` carries no `cells` object (an errored run
+# DDL. The canary measures this 6-hourly key two or three times a day, so the window
+# holds ~15-25 candidates and a few missed runs cost nothing. Rows whose `details` carries no `cells` object (an errored run
 # writes {"error": ...}) are skipped rather than read as an empty baseline. `history_days`
 # separates "deployed three days ago" from "has recorded no usable baseline in two weeks",
 # which must not both read as green.
@@ -2144,9 +2041,8 @@ def _declared_floor_convention(source: str) -> str | None:
 
 def check_floor_convention(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Is every portal's `floor` on the SAME storey scale (ground = 0)?"""
-    # `_fetchall`, not a bare cursor: it is the only thing that emits the per-check
-    # `SET LOCAL statement_timeout`, and this is the one query in the lane expensive
-    # enough to need it (the cheap counter reads elsewhere can afford a raw cursor).
+    # The most expensive read of the lane; on the per-check clock like every statement, so a
+    # bad day cancels it as Not measured instead of stalling the run.
     rows = _fetchall(conn, _FLOOR_CONVENTION_SQL, {"reference": _FLOOR_REFERENCE})
 
     warn = float(thresholds["floor_convention_delta_warn"])
@@ -2224,9 +2120,7 @@ def check_floor_convention(conn: Any, thresholds: dict[str, Any]) -> dict[str, A
 
 def check_acquisition_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """How long a DISCOVERED but never-fetched listing has been waiting, per portal."""
-    with conn.cursor() as cur:
-        cur.execute(_ACQUISITION_LAG_SQL, (QUEUE_PRIORITY_NEW,))
-        rows = cur.fetchall()
+    rows = _fetchall(conn, _ACQUISITION_LAG_SQL, (QUEUE_PRIORITY_NEW,))
 
     warn_h = thresholds["acquisition_lag_warn_hours"]
     fail_h = thresholds["acquisition_lag_fail_hours"]
@@ -2295,8 +2189,13 @@ def check_text_extraction_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str
     """How long a listing the text lane has not read has been waiting, per portal."""
     from toolkit import description_extraction as text_lane
 
-    model = text_lane.resolve_model(conn)
-    scope = text_lane.lane_scope(conn)
+    # Both reads live in toolkit/ on raw cursors: one transaction, re-armed before each with this
+    # check's time left, binds them to its wall clock like every statement of its own.
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(f"SET LOCAL statement_timeout = '{_statement_timeout_clause()}'")
+        model = text_lane.resolve_model(conn)
+        cur.execute(f"SET LOCAL statement_timeout = '{_statement_timeout_clause()}'")
+        scope = text_lane.lane_scope(conn)
     if not scope or model is None:
         # Not a failure and not a silence: no open gate and no `llm_text` entry IS the
         # lane being off, and it is reported as that rather than as health.
@@ -2314,13 +2213,9 @@ def check_text_extraction_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str
             ),
         }
     version = text_lane.extractor_version(model)
-    with conn.cursor() as cur:
-        cur.execute(text_lane.ELIGIBLE_LAG_SQL, {"version": version})
-        rows = cur.fetchall()
-        cur.execute(text_lane.EXTRACTION_LATENCY_SQL)
-        latency = cur.fetchone()
-        cur.execute(_TEXT_EXTRACT_LANE_SQL)
-        beat = cur.fetchone()
+    rows = _fetchall(conn, text_lane.ELIGIBLE_LAG_SQL, {"version": version})
+    latency = _fetchone(conn, text_lane.EXTRACTION_LATENCY_SQL)
+    beat = _fetchone(conn, _TEXT_EXTRACT_LANE_SQL)
 
     warn_h = thresholds["text_extraction_lag_warn_hours"]
     fail_h = thresholds["text_extraction_lag_fail_hours"]
@@ -2477,9 +2372,7 @@ def check_walk_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
     count of categories whose walk reached the portal's end — but never changes the
     status: a walk can legitimately reach the end and still be short. A category that
     keeps NOT reaching it is `walk_end_streak`'s to ring."""
-    with conn.cursor() as cur:
-        cur.execute(_WALK_COVERAGE_SQL)
-        rows = cur.fetchall()
+    rows = _fetchall(conn, _WALK_COVERAGE_SQL)
 
     warn_gap = thresholds["walk_coverage_warn_gap"]
     fail_gap = thresholds["walk_coverage_fail_gap"]
@@ -2854,15 +2747,24 @@ from unnest(%(kinds)s::text[], %(idents)s::text[]) as o(kind, ident)
 # to_regclass raises on a malformed identifier rather than returning NULL, so an
 # ident that survived parsing but is not a plain dotted name never reaches SQL.
 _SAFE_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_$]*(?:\.[a-zA-Z_][a-zA-Z0-9_$]*){0,2}$")
+# The checkout's migrations/ folder. The worker image ships none, so a run there probes nothing.
+_MIGRATIONS_DIR = Path(os.path.abspath(__file__)).parents[1] / "migrations"
 
 
 def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Are the newest merged migrations actually present in this database?"""
     from scripts.migration_objects import load_migrations
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     newest = int(thresholds["migration_drift_window"])
-    migrations = load_migrations(Path(root) / "migrations", newest=newest)
+    migrations = load_migrations(_MIGRATIONS_DIR, newest=newest)
+    if not migrations:
+        detail = "no migration files on this host"
+        return {
+            "check_key": "migration_drift", "status": "unknown", "value": None,
+            "details": {"window": newest, "skipped": detail},
+            "message": (f"Migration drift is Not measured: {detail}, so no merged migration "
+                        "was probed (the probe reads a repository checkout's migrations/)."),
+        }
 
     probes: list[tuple[str, str]] = []
     for mig in migrations:
@@ -2871,12 +2773,10 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
                 probes.append((obj.kind, obj.ident))
     present: dict[tuple[str, str], bool] = {}
     if probes:
-        with conn.cursor() as cur:
-            cur.execute(_MIGRATION_OBJECT_PROBE_SQL, {
-                "kinds": [k for k, _ in probes], "idents": [i for _, i in probes],
-            })
-            for kind, ident, is_present in cur.fetchall():
-                present[(kind, ident)] = bool(is_present)
+        for kind, ident, is_present in _fetchall(conn, _MIGRATION_OBJECT_PROBE_SQL, {
+            "kinds": [k for k, _ in probes], "idents": [i for _, i in probes],
+        }):
+            present[(kind, ident)] = bool(is_present)
 
     missing_all: list[str] = []   # merged and demonstrably not applied
     partial: list[str] = []       # some objects landed, some did not
@@ -2931,8 +2831,8 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
 
 # --- worker lanes: alive is not the same as working -------------------------
 #
-# `worker_liveness` already catches a DEAD worker (stale heartbeat). It cannot
-# catch a live worker with a wedged lane, which is what actually happened: the
+# The liveness watcher's `worker` cell (migration 620) catches a DEAD worker (stale
+# heartbeat). It cannot catch a live worker with a wedged lane, which is what happened: the
 # realtime worker beat every 30 s for nine hours while its detail-drain lane
 # completed ONE pass and its images lane completed 486. `_lane_loop` awaits
 # run_pass() with no timeout and `_supervised` catches exceptions rather than
@@ -2954,9 +2854,7 @@ select h.worker, l.key as lane,
 
 def check_worker_lane_stall(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Is any always-on worker lane stuck inside a single pass?"""
-    with conn.cursor() as cur:
-        cur.execute(_WORKER_LANE_SQL)
-        rows = cur.fetchall()
+    rows = _fetchall(conn, _WORKER_LANE_SQL)
 
     warn_s = float(thresholds["worker_lane_stall_warn_seconds"])
     fail_s = float(thresholds["worker_lane_stall_fail_seconds"])
@@ -2985,14 +2883,15 @@ def check_worker_lane_stall(conn: Any, thresholds: dict[str, Any]) -> dict[str, 
             offenders.append(f"{worker}.{lane} running {elapsed / 60:.0f}min")
 
     if not rows:
-        # No beating worker at all is worker_liveness's job, not this check's.
-        # Saying "ok" here would be a lie; saying "fail" would double-alarm.
+        # No beating worker at all is the liveness watcher's `worker` cell to judge, not
+        # this check's. Saying "ok" here would be a lie; saying "fail" would double-alarm.
         return {
             "check_key": "worker_lane_stall", "status": "unknown", "value": None,
             "details": {"lanes": {},
                         "skipped": "no worker heartbeat with lane state in the last 10 minutes"},
             "message": ("No worker heartbeat with lane state in the last 10 minutes, so no "
-                        "lane was measured — see worker_liveness."),
+                        "lane was measured — the liveness watcher's worker cell judges a "
+                        "silent worker."),
         }
     if offenders:
         message = (
@@ -3033,9 +2932,7 @@ def check_delist_flip_refused(conn: Any, thresholds: dict[str, Any]) -> dict[str
     throttled portal), so it warns. The operator's move is to check the walk,
     not to raise anything: the drain is already fetching the pages.
     """
-    with conn.cursor() as cur:
-        cur.execute(_DELIST_REFUSAL_SQL)
-        rows = cur.fetchall()
+    rows = _fetchall(conn, _DELIST_REFUSAL_SQL)
     if not rows:
         return {
             "check_key": "delist_flip_refused", "status": "ok", "value": 0,
@@ -3101,9 +2998,7 @@ def check_false_delist_share(conn: Any, thresholds: dict[str, Any]) -> dict[str,
     594) is the only durable trace: reactivation clears `listings.inactive_at`.
     Measured before the rule: sreality 35%, mmreality 15%, remax 11%.
     """
-    with conn.cursor() as cur:
-        cur.execute(_FALSE_DELIST_SQL)
-        rows = cur.fetchall()
+    rows = _fetchall(conn, _FALSE_DELIST_SQL)
 
     warn = float(thresholds["false_delist_share_warn"])
     fail = float(thresholds["false_delist_share_fail"])
@@ -3140,12 +3035,8 @@ def check_false_delist_share(conn: Any, thresholds: dict[str, Any]) -> dict[str,
         return {
             "check_key": "false_delist_share", "status": "unknown", "value": None,
             "details": {**details,
-                        "skipped": f"no portal closed {min_flips}+ ads in 7 days"},
-            "message": (
-                f"No portal closed {min_flips}+ ads in 7 days -- the false-delist share "
-                "was verified for nothing (expected right after migration 594 ships; "
-                "a quiet week later it means the drain is not flipping at all)."
-            ),
+                        "skipped": f"no portal closed {min_flips}+ ads in the last 7 days"},
+            "message": f"No portal closed {min_flips}+ ads in the last 7 days; nothing to score.",
         }
     if offenders:
         message = (
@@ -3455,9 +3346,7 @@ def check_outbound_url_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[s
     standing archive gap (rows the reconciler declined) is not mistaken for a regression.
     The remedy is one codebook entry in scraper/sreality_url.py + a reconciler run.
     """
-    with conn.cursor() as cur:
-        cur.execute(_OUTBOUND_URL_COVERAGE_SQL)
-        rows = cur.fetchall()
+    rows = _fetchall(conn, _OUTBOUND_URL_COVERAGE_SQL)
     warn = int(thresholds["outbound_url_null_warn"])
     fail = int(thresholds["outbound_url_null_fail"])
     per_source = [
@@ -3769,11 +3658,6 @@ _HOURLY, _SIX_HOURLY, _DAILY, _WEEKLY = 3_600, 21_600, 86_400, 604_800
 # its cadence plus this slack; the worker and pg_cron keep time, so theirs is 3 cadences.
 _GITHUB_DELIVERY_SLACK_S = 18 * 3_600
 _STALE_CADENCES = 3
-# A key is due once its newest row is a cadence old less a tenth of the cadence, at most
-# 15 min: every row carries its run's START, so the next hourly run, started a minute
-# earlier in its slot, would find a 59-minute-old row not due and measure the key only
-# every second run.
-_DUE_SLACK_MAX_S = 900
 # The two checks that leave the database wait on third-party round trips, not on Postgres.
 # The URL probe's budget is declared beside its HEAD loop, which stops itself at it (nothing
 # outside can preempt a request); the image probe gets the same.
@@ -3805,15 +3689,18 @@ class Check:
     @property
     def due_after_s(self) -> int:
         """How old the newest result must be before a lane measures this check again."""
-        return self.cadence_s - min(self.cadence_s // 10, _DUE_SLACK_MAX_S)
+        # Spelled in the ladder, whose recovery hold is two of these intervals.
+        return _due_after_s(self.cadence_s)
 
 
-# A lane runs CHECKS in this order under its budget and stamps whatever it does not reach
-# `not_run`, so the order is a priority: cheap invariants first, the expensive reads late and
-# the outbound probes last. The page's `sort` is the position here.
+# `run_due` runs a host's due alarms first, then its due gauges, each class in this order, and
+# a check its budget does not reach stays due for the next run, so the order is a priority
+# inside each class: cheap invariants first, the expensive reads late and the outbound probes
+# last. The page's `sort` is the position here.
 CHECKS: tuple[Check, ...] = (
-    # FIRST: 2026-09-11 21:02 lost the last seven checks to the budget, this one among them,
-    # and the invariant the location programme is measured by is one indexed join.
+    # FIRST of the gauges: 2026-09-11 21:02 lost the last seven checks to the budget, this
+    # one among them, and the invariant the location programme is measured by is one
+    # indexed join.
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
           _GITHUB, _SIX_HOURLY, "Location coverage", unit="ads",
           owner_path="/location-quality"),
@@ -3825,8 +3712,6 @@ CHECKS: tuple[Check, ...] = (
           _GITHUB, _SIX_HOURLY, "Oldest open transaction", unit="min"),
     Check("db_saturation", check_db_saturation, "platform", "alarm", _GITHUB, _HOURLY,
           "Scheduled jobs failing"),
-    Check("worker_liveness", check_worker_liveness, "platform", "alarm", _GITHUB, _HOURLY,
-          "Worker heartbeat", unit="min"),
     Check("dual_write_parity", check_dual_write_parity, "platform", "alarm", _GITHUB,
           _SIX_HOURLY, "Dual-write parity", unit="rows"),
     Check("property_maintenance", check_property_maintenance, "publishing", "alarm",
@@ -3875,8 +3760,8 @@ CHECKS: tuple[Check, ...] = (
           _SIX_HOURLY, "Description reading", unit="h"),
     Check("floor_convention", check_floor_convention, "data_quality", "gauge", _GITHUB,
           _SIX_HOURLY, "Floor convention"),
-    # LAST: the checks that leave the database, so a lane that runs out of budget drops an
-    # outbound probe, never a database measurement.
+    # LAST of the alarms: the checks that leave the database, so a lane that runs out of
+    # budget drops an outbound probe before any database alarm.
     Check("sreality_image_template", check_sreality_image_template, "scraping", "alarm",
           _GITHUB, _DAILY, "Sreality image template", unit="px",
           budget_s=_OUTBOUND_BUDGET_S),
@@ -3886,12 +3771,21 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
+# The hosts this harness projects: those with a Check. pg_cron's registry row is the watcher's
+# own (migration 620); projecting that host would retire it.
+_HARNESS_HOSTS = tuple(dict.fromkeys(c.host for c in CHECKS))
+
 # --- the harness ---------------------------------------------------------------
 
+# Only rows since the key's declared_at count, as for the page and the ladder: a newly registered
+# or re-declared key is due in the very run that projects it, not a cadence later.
 _DUE_SQL = """
 select k.key,
-       (select max(r.run_at) from pipeline_check_results r where r.check_key = k.key)
+       (select max(r.run_at) from pipeline_check_results r
+         where r.check_key = k.key
+           and r.run_at >= coalesce(h.declared_at, '-infinity'::timestamptz))
   from unnest(%(keys)s::text[]) as k(key)
+  left join health_checks h on h.key = k.key
 """
 
 _HEALTH_CHECKS_ROWS_SQL = """
@@ -3920,8 +3814,8 @@ delete from health_checks
 
 
 def due_checks(conn: Any, host: str, now: _dt.datetime) -> list[Check]:
-    """This host's checks, in registry order, whose newest result (any status) is absent or
-    at least `due_after_s` old."""
+    """This host's checks, in registry order, whose newest result since their declared_at (any
+    status) is absent or at least `due_after_s` old."""
     mine = [c for c in CHECKS if c.host == host]
     if not mine:
         return []
@@ -3936,6 +3830,9 @@ def due_checks(conn: Any, host: str, now: _dt.datetime) -> list[Check]:
 def project_registry(conn: Any, host: str, now: _dt.datetime) -> dict[str, int]:
     """Upsert this host's CHECKS into health_checks; delete its rows that no Check declares."""
     declared = [(sort, c) for sort, c in enumerate(CHECKS) if c.host == host]
+    if not declared:
+        raise ValueError(f"no Check is hosted on {host!r}: its registry rows (the watcher's, "
+                         "migration 620) are not this harness's to retire")
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_HEALTH_CHECKS_ROWS_SQL, {"keys": [c.key for _, c in declared]})
         prior = {key: (row_host, cadence_s, declared_at)
@@ -3968,8 +3865,9 @@ def _is_timeout_error(exc: BaseException) -> bool:
     return "canceling statement due to statement timeout" in str(exc)
 
 
-def _timed_out_result(key: str, budget_s: float, exc: BaseException | None) -> dict[str, Any]:
-    """A check cancelled by its budget measured nothing: unknown, never fail.
+def _timed_out_result(key: str, budget_s: float, elapsed_s: float,
+                      exc: BaseException) -> dict[str, Any]:
+    """A check cancelled by its wall clock measured nothing: unknown, never fail.
 
     "I could not measure this" is a different claim from "I measured this and it is broken",
     and a lane under DB pressure would otherwise manufacture a wall of false reds at the
@@ -3979,25 +3877,11 @@ def _timed_out_result(key: str, budget_s: float, exc: BaseException | None) -> d
         "status": "unknown",
         "value": None,
         "details": {"timed_out": True, "budget_seconds": round(budget_s, 1),
-                    "error": str(exc) if exc is not None else None},
+                    "elapsed_seconds": round(elapsed_s, 1), "error": str(exc)},
         "message": (
-            f"Check '{key}' exceeded its {budget_s:.0f}s budget and was cancelled, so it is "
-            "Not measured this run (never healthy). Usually DB pressure; if it persists, "
-            "the check's query needs work."
-        ),
-    }
-
-
-def _not_run_result(key: str, budget_s: float) -> dict[str, Any]:
-    """A check the lane never reached measured nothing: unknown."""
-    return {
-        "check_key": key,
-        "status": "unknown",
-        "value": None,
-        "details": {"not_run": True, "lane_budget_seconds": round(budget_s, 1)},
-        "message": (
-            f"Check '{key}' did not run: the verification lane exhausted its "
-            f"{budget_s:.0f}s budget first, so it is Not measured this run."
+            f"Check '{key}' ran out of its {budget_s:.0f}s budget after {elapsed_s:.0f}s and "
+            "was cancelled, so it is Not measured this run (never healthy). Usually DB "
+            "pressure; if it persists, the check's query needs work."
         ),
     }
 
@@ -4023,7 +3907,8 @@ def run_checks(
     on_result: Callable[[dict[str, Any]], None] | None = None,
     lane_budget_s: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Run each check in isolation under its budget, handing on_result each result as it lands."""
+    """Run each check in isolation on its own wall clock, handing on_result each result as it
+    lands; a check the lane budget does not reach gets no result, so it stays due."""
     results: list[dict[str, Any]] = []
     # The measure checks share one read of measure_plausibility_by_source per run, never
     # across runs.
@@ -4032,26 +3917,25 @@ def run_checks(
     if lane_budget_s is not None:
         _LANE.start(lane_budget_s)
     try:
-        for check in checks:
-            left = _LANE.arm_for_check(check.budget_s)
-            elapsed = 0.0
-            if left is not None and left <= 0:
-                LOG.error("lane budget %.0fs exhausted; check %s not run",
-                          lane_budget_s, check.key)
-                result = _not_run_result(check.key, lane_budget_s or 0.0)
-            else:
-                started = _time.monotonic()
-                try:
-                    result = check.fn(conn, thresholds)
-                except Exception as exc:  # noqa: BLE001 - one broken check never ends the lane
-                    if _is_timeout_error(exc):
-                        spent = _time.monotonic() - started
-                        LOG.error("check %s timed out after %.1fs", check.key, spent)
-                        result = _timed_out_result(check.key, spent, exc)
-                    else:
-                        LOG.exception("check %s errored", check.key)
-                        result = _errored_result(check.key, exc)
-                elapsed = _time.monotonic() - started
+        for i, check in enumerate(checks):
+            budget = _LANE.arm_for_check(check.budget_s)
+            if budget <= 0:
+                LOG.warning("lane budget %.0fs spent; not reached, so still due: %s",
+                            lane_budget_s or 0.0, ", ".join(c.key for c in checks[i:]))
+                break
+            started = _time.monotonic()
+            try:
+                result = check.fn(conn, thresholds)
+            except Exception as exc:  # noqa: BLE001 - one broken check never ends the lane
+                if _is_timeout_error(exc):
+                    spent = _time.monotonic() - started
+                    LOG.error("check %s timed out after %.1fs of its %.0fs budget",
+                              check.key, spent, budget)
+                    result = _timed_out_result(check.key, budget, spent, exc)
+                else:
+                    LOG.exception("check %s errored", check.key)
+                    result = _errored_result(check.key, exc)
+            elapsed = _time.monotonic() - started
             if not isinstance(result.get("details"), dict):
                 result["details"] = {}
             result["details"]["elapsed_ms"] = int(elapsed * 1000)
@@ -4081,19 +3965,35 @@ def insert_result(conn: Any, result: dict[str, Any], run_at: _dt.datetime) -> No
         )
 
 
+def run_due(
+    conn: Any, thresholds: dict[str, Any], host: str, *, now: _dt.datetime,
+    on_result: Callable[[Any, dict[str, Any], _dt.datetime], None] = insert_result,
+    lane_budget_s: float | None = None,
+) -> list[dict[str, Any]]:
+    """Measure this host's due checks, alarms before gauges, storing each result as it lands;
+    `lane_budget_s` caps the pass (the worker lane's 300 s), else the due budgets sum."""
+    # Due-ness is read from the stored results, so a restarted lane re-measures nothing, and
+    # the sort is stable: registry order holds inside each class.
+    due = sorted(due_checks(conn, host, now), key=lambda c: c.cls != "alarm")
+    if due:
+        LOG.info("DUE host=%s %d of %d checks: %s", host, len(due),
+                 sum(1 for c in CHECKS if c.host == host), ", ".join(c.key for c in due))
+    budget = lane_budget_for(due)
+    if lane_budget_s is not None:
+        budget = min(budget, lane_budget_s)
+    return run_checks(conn, thresholds, checks=due,
+                      on_result=lambda result: on_result(conn, result, now),
+                      lane_budget_s=budget)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
                         help="Select and compute the due checks and log them; write nothing "
                              "(no registry rows, no result rows).")
-    parser.add_argument("--host", default=_GITHUB, choices=HOSTS,
+    parser.add_argument("--host", default=_GITHUB, choices=_HARNESS_HOSTS,
                         help="The host whose registry rows this run projects and whose due "
                              "checks it measures.")
-    parser.add_argument("--exit-nonzero-on-fail", action="store_true",
-                        help="Exit 1 when an ALARM measured this run is 'fail', so the lane's "
-                             "GitHub run goes red and emails the operator (both lanes pass "
-                             "it). A failing gauge is a standing condition and never reds "
-                             "the run.")
     parser.add_argument("--arm-dual-write-parity", action="store_true",
                         help="Seed each R2 carrier's dual_write_watermark from where its "
                              "cursor stands now, then exit. Run ONCE, after the dual-write "
@@ -4131,12 +4031,8 @@ def main() -> int:
             projected = project_registry(conn, args.host, run_at)
             LOG.info("REGISTRY host=%s upserted=%d deleted=%d",
                      args.host, projected["upserted"], projected["deleted"])
-        due = due_checks(conn, args.host, run_at)
-        LOG.info("DUE host=%s %d of %d checks: %s", args.host, len(due),
-                 sum(1 for c in CHECKS if c.host == args.host),
-                 ", ".join(c.key for c in due) or "none")
 
-        def _persist(result: dict[str, Any]) -> None:
+        def _persist(db: Any, result: dict[str, Any], at: _dt.datetime) -> None:
             """Log this result and, unless dry-running, store it the moment it completes."""
             nonlocal written
             LOG.info(
@@ -4145,18 +4041,12 @@ def main() -> int:
             )
             if args.dry_run:
                 return
-            insert_result(conn, result, run_at)
+            insert_result(db, result, at)
             written += 1
 
-        results = run_checks(conn, thresholds, checks=due, on_result=_persist,
-                             lane_budget_s=lane_budget_for(due))
-    alarms = {c.key for c in due if c.cls == "alarm"}
-    failing = [r["check_key"] for r in results
-               if r["status"] == "fail" and r["check_key"] in alarms]
-    LOG.info("verify_pipeline host=%s measured %d checks, wrote %d rows; failing alarms: %s",
-             args.host, len(results), written, ", ".join(failing) or "none")
-    if args.exit_nonzero_on_fail and failing:
-        return 1
+        results = run_due(conn, thresholds, args.host, now=run_at, on_result=_persist)
+    LOG.info("verify_pipeline host=%s measured %d checks, wrote %d rows",
+             args.host, len(results), written)
     return 0
 
 

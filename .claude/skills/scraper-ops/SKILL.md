@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing per-source HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, llm_burn_rate.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing per-source HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, llm_burn_rate.
 ---
 
 # Scraper operations
@@ -198,13 +198,13 @@ and `properties`, so a parser's coordinate/locality/street reading is evidence f
 not a write; a listing's place is `listing_location` (join on `listing_id`).
 `scraper/geocoding.py` survives for `/maps/*` and the on-demand URL parse only.
 
-Monitor/alerting workflows watch the rest: `monitor_workflow_failures.yml` ("Monitoring: workflow
-failures", cron `*/30` — records failed / timed-out / startup-failed runs into `workflow_failures`
-for the Health page, since GitHub only emails about failed *scheduled* runs; a never-started
-supersession cancel is distinguished from a real failure; cursor + timeout-kill captured) and `llm_health.yml` ("Monitoring: acute health", hourly
-— verify_pipeline's hourly lane, identical to the 6-hourly `verify_pipeline.yml` but for its cron: every check DUE by its
-registry cadence, so the hourly ones (`llm_errors`, `llm_burn_rate`, `db_saturation`, `worker_liveness`, …) are due each
-time; both lanes exit non-zero on a failing alarm (`--exit-nonzero-on-fail`), so either reds and emails; a gauge never does).
+One monitoring workflow watches the rest: the canary, `verify_pipeline.yml` ("Monitoring: health canary (hourly)"; GitHub
+delivers ~5 runs a day). Step 1, the poller `scripts/record_workflow_failures.py` (ex-`monitor_workflow_failures.yml`),
+records failed / timed-out / startup-failed runs into `workflow_failures` for the Health page, since GitHub only emails
+about failed *scheduled* runs (a never-started supersession cancel is not a failure; cursor + timeout-kill captured);
+step 2 measures the `github-actions` checks DUE by registry cadence; step 3, `scripts/health_canary.py`, is the step
+meant to red the run and so email (a failing check never does; a crash of the poller or the harness, or the harness step
+overrunning its 27 minutes, reds it too; see Pipeline verification below).
 A credit-balance error alarms immediately and PER PROVIDER (each its own account: one provider's success never clears another's credit error; the alert names that provider, its failing models and jobs, where 2026-10-02..10 it named every paid job and no provider), and the LLM failure probe is INDEPENDENT of pending work (a quiet-queue blind spot
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
 provider exception, so the check needs no key of its own.
@@ -401,20 +401,30 @@ Per-lane notes:
 ## Pipeline verification (migration 274)
 
 **Health check harness** (`scripts/verify_pipeline.py`; plan: `docs/design/health-dashboard.md`) — ONE registry, `CHECKS`:
-each `Check` declares key, class (`alarm`/`gauge`), host (all `github-actions` in wave 1), `cadence_s`, budget, label,
-unit and owner page; `project_registry` mirrors the host's keys into `health_checks` (migration 619). FOUR statuses,
-`ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, a not-run, an error or a check's own
-could-not-measure path is `unknown`, reason in `details` (`timed_out`/`not_run`/`errored`/`skipped`), never `ok` (one
-holdout until wave 6: `ppm2_median_shift`'s "compared NOTHING" still reads `warn`). The two GitHub lanes are identical
-but for their crons (`llm_health.yml` hourly, `verify_pipeline.yml` 6-hourly, one concurrency group): each runs only the
-DUE checks (newest row older than `cadence_s` less min(cadence / 10, 15 min)) with `--exit-nonzero-on-fail`, so a failing
-alarm on either reds its run and emails (a gauge never does); the daily sreality image probe and the weekly outbound-URL
-probe are cadences, not workflows. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per
-portal/job/lane). The lanes write no system alert: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
+each `Check` declares key, class (`alarm`/`gauge`), host (`github-actions` for every key until wave 3 moves keys to the
+worker), `cadence_s`, budget, label, unit and owner page; `project_registry` mirrors the host's keys into `health_checks`
+(migration 619). FOUR statuses, `ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, an error or a
+check's own could-not-measure path is `unknown`, reason in `details` (`timed_out`/`errored`/`skipped`), never `ok` (one
+holdout until wave 6: `ppm2_median_shift`'s "compared NOTHING" still reads `warn`). `run_due` (the canary today, the
+worker's health lane from wave 3) measures a host's DUE checks (newest row since `declared_at` older than `cadence_s` less
+min(cadence / 10, 15 min)), alarms before gauges, each under a real wall clock: every statement's `SET LOCAL statement_timeout` is the
+check's time left, so an overrun is `unknown` (`timed_out`, `budget_seconds`, `elapsed_seconds`), and a check the run
+never reached writes no row and stays due; the daily sreality image probe and the weekly outbound-URL probe are
+cadences, not workflows. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per portal/job/lane).
+Measuring writes no system alert and reds no run: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
 one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per check, reminders until
 acknowledged on Health (a minimal Acknowledge button on the pipeline-checks card; the rebuilt page in wave 8) — alarm
-6 h / 24 h / 72 h then weekly, gauge daily — and one recovery once an OK is measured across `max(2 × cadence, 30 min)`;
-`unknown`, or a result past its staleness budget, is inert. **Rationale, ladder, sizing: `references/pipeline-verification.md`.**
+6 h / 24 h / 72 h then weekly, gauge daily — and one recovery once an OK is measured across two cadences less the due slack, never under
+30 min; `unknown`, or a result past its staleness budget, is inert.
+**Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
+(host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (wave
+3+), `stale:<key>` (an alarm past its staleness budget), `api` (the watchdog matcher's lease lapsed) and `unalerted` (a
+measured Problem with no incident); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
+The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
+newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an alarm's onset/reminder
+of the last 12 h is unread, undelivered and its incident open and unacknowledged after 15 min (never a gauge's). Bell only
+(Q1), so that red run's email is the external path. pg_cron watches the worker, the API and every alarm's freshness (the
+canary's keys too); the canary watches pg_cron and the ladder. **Rationale, watchers, sizing: `references/pipeline-verification.md`.**
 
 ## Reading the logs
 

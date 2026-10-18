@@ -212,10 +212,26 @@ stops its reminders. Reading its system alert among the notifications does not a
 _Avoid_: dismiss, mute, snooze, resolve, mark read
 
 **Not measured**:
-The verdict of a check that has no current measurement: it ran out of time, did not run, raised an
-error, found nothing to judge, or is overdue. It never counts as OK, and it neither opens an incident
-nor counts as its recovery.
+The verdict of a check that has no current measurement: it ran out of time, raised an error, found
+nothing to judge, or is overdue. It never counts as OK, and it neither opens an incident nor counts
+as its recovery.
 _Avoid_: unknown (in prose), skipped, pending, OK
+
+**Watcher**:
+A check that judges whether the rest of the health system is alive: the realtime worker's
+heartbeat, every alarm measured on time, the API's background loops, every measured Problem given an
+incident. It runs on the database's own scheduler, outside the worker and the API it judges; the one
+watcher is the liveness check, shown as "Watchers".
+_Avoid_: monitor, meta-check, dead-man switch, heartbeat check
+
+**Canary**:
+The one monitoring workflow on GitHub, an hourly cron that GitHub delivers about five times a day:
+it records failed workflow runs, measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
+that no alarm's system alert has gone unread and undelivered while its incident is open and
+unacknowledged. A failing check never fails its run; the assertions do (so does a crash of the
+poller or the harness, or the harness step overrunning its 27 minutes), so GitHub's failure email is the one path to
+the operator that needs neither the database's scheduler nor Railway.
+_Avoid_: monitoring lane, acute lane, health workflow, smoke test
 
 ### Where users meet the platform
 
