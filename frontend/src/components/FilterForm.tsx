@@ -117,20 +117,31 @@ interface FilterFormProps {
    *  built-in primitive. Use for rich widgets the controls library
    *  can't generically express (district typeahead, tag picker, …). */
   customWidgets?: Record<string, CustomFilterWidget>;
+  /** Render each row without its visible caption: the host names the row
+   *  itself (the phone's Filtry sheet heads every row with its label). The
+   *  caption stays the row's accessible name. */
+  bare?: boolean;
 }
 
-export function FilterForm({
-  scope,
-  state,
-  onChange,
-  visibility,
-  exclude,
-  includeOnly,
-  labels,
-  units,
-  flat,
-  customWidgets,
-}: FilterFormProps) {
+/** One row of the form: a filter, or a min/max pair folded into one (its max
+ *  side in `maxDef`). */
+export interface FormRow {
+  def: FilterDef;
+  maxDef: FilterDef | null;
+}
+
+/** The rows a <FilterForm> draws for this slice of the registry, in the order
+ *  it draws them (registry declaration order, pairs folded). Exported so a host
+ *  that lays the rows out one by one — the phone's Filtry sheet — orders and
+ *  pairs them exactly as the form does. */
+export function formRows(
+  scope: Agenda,
+  {
+    visibility,
+    exclude,
+    includeOnly,
+  }: Pick<FilterFormProps, 'visibility' | 'exclude' | 'includeOnly'> = {},
+): FormRow[] {
   const excludeSet = new Set(exclude ?? []);
   const visibilityById = new Map(
     (visibility ?? []).map((v) => [v.id, v.visibility]),
@@ -175,9 +186,27 @@ export function FilterForm({
       }
     }
   }
+  return visibleFilters
+    .filter((f) => !skipAsMax.has(f.id))
+    .map((def) => ({ def, maxDef: pairedAsMin.get(def.id) ?? null }));
+}
 
-  const renderRow = (f: FilterDef) => {
-    const maxDef = pairedAsMin.get(f.id);
+export function FilterForm({
+  scope,
+  state,
+  onChange,
+  visibility,
+  exclude,
+  includeOnly,
+  labels,
+  units,
+  flat,
+  customWidgets,
+  bare,
+}: FilterFormProps) {
+  const rows = formRows(scope, { visibility, exclude, includeOnly });
+
+  const renderRow = ({ def: f, maxDef }: FormRow) => {
     const custom = customWidgets?.[f.id];
     if (custom) {
       // Render the operator-supplied widget inside the standard
@@ -185,25 +214,26 @@ export function FilterForm({
       // built-in rows.
       const label = labels?.[f.id] ?? prettifyId(f.id);
       return (
-        <Section key={f.id} label={label}>
+        <Caption key={f.id} label={label} bare={bare}>
           {custom({
             value: state[f.id],
             onChange: (v) => onChange([{ id: f.id, value: v }]),
             label,
           })}
-        </Section>
+        </Caption>
       );
     }
     return (
       <FilterRow
         key={f.id}
         def={f}
-        maxDef={maxDef ?? null}
+        maxDef={maxDef}
         value={state[f.id]}
         maxValue={maxDef ? state[maxDef.id] : undefined}
         emit={onChange}
         label={labels?.[f.id] ?? prettifyPair(f.id, maxDef?.id)}
         unit={units?.[f.id] ?? f.unit ?? null}
+        bare={bare}
       />
     );
   };
@@ -212,21 +242,14 @@ export function FilterForm({
     // Preserve registry declaration order so paired rows land next to
     // their host group; the caller's wrapping `<ControlGroup>` provides
     // the visual heading.
-    return (
-      <>
-        {visibleFilters
-          .filter((f) => !skipAsMax.has(f.id))
-          .map(renderRow)}
-      </>
-    );
+    return <>{rows.map(renderRow)}</>;
   }
 
-  const byCategory = new Map<string, FilterDef[]>();
-  for (const f of visibleFilters) {
-    if (skipAsMax.has(f.id)) continue;
-    const list = byCategory.get(f.category) ?? [];
-    list.push(f);
-    byCategory.set(f.category, list);
+  const byCategory = new Map<string, FormRow[]>();
+  for (const r of rows) {
+    const list = byCategory.get(r.def.category) ?? [];
+    list.push(r);
+    byCategory.set(r.def.category, list);
   }
 
   return (
@@ -298,6 +321,24 @@ function prettifyPair(minId: string, _maxId: string | undefined): string {
   return prettifyId(core);
 }
 
+/* A row's caption over its control, or — `bare` — only the group it names. */
+function Caption({
+  label,
+  bare,
+  children,
+}: {
+  label: string;
+  bare?: boolean;
+  children: React.ReactNode;
+}) {
+  if (!bare) return <Section label={label}>{children}</Section>;
+  return (
+    <div role="group" aria-label={label}>
+      {children}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Per-row dispatch                                                           */
 /* -------------------------------------------------------------------------- */
@@ -310,6 +351,7 @@ function FilterRow({
   emit,
   label,
   unit,
+  bare,
 }: {
   def: FilterDef;
   maxDef: FilterDef | null;
@@ -321,6 +363,7 @@ function FilterRow({
    * supplied one, else the registry's static string. Never read `def.unit`
    * directly below: that is how a rent cohort ended up labelled CZK/m². */
   unit: string | null;
+  bare?: boolean;
 }) {
   // Single-filter helper: most rows fire one update at a time. Paired
   // ranges below build a 2-element update array directly so both
@@ -346,7 +389,7 @@ function FilterRow({
       typeof c.step === 'number';
     if (hasFullBounds && def.ui_control !== 'range_inputs') {
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <RangeSlider
             bounds={{
               min: c.min as number,
@@ -366,11 +409,11 @@ function FilterRow({
             unit={unit ?? undefined}
             ariaLabel={label}
           />
-        </Section>
+        </Caption>
       );
     }
     return (
-      <Section label={label}>
+      <Caption label={label} bare={bare}>
         <RangeInputs
           minValue={(value as number | null) ?? null}
           maxValue={(maxValue as number | null) ?? null}
@@ -385,40 +428,40 @@ function FilterRow({
           ariaLabelMax={`${label} max`}
         />
         {unit ? <UnitHint unit={unit} /> : null}
-      </Section>
+      </Caption>
     );
   }
 
   switch (def.ui_control) {
     case 'pill_group':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <PillRow def={def} value={value as string | null} onChange={onChange} />
-        </Section>
+        </Caption>
       );
 
     case 'single_select':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <SingleSelectRow
             def={def}
             label={label}
             value={value as string | number | null}
             onChange={onChange}
           />
-        </Section>
+        </Caption>
       );
 
     case 'multiselect':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <MultiselectRow
             def={def}
             label={label}
             value={(value as Array<string | number> | null) ?? []}
             onChange={onChange}
           />
-        </Section>
+        </Caption>
       );
 
     case 'tristate': {
@@ -442,7 +485,7 @@ function FilterRow({
       // number input — happens for `min_parking_lots` and any future
       // min-only field. Paired ranges are caught above.
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <BufferedNumberInput
             value={(value as number | null) ?? null}
             coerce={def.type === 'int' ? 'int' : 'float'}
@@ -450,12 +493,12 @@ function FilterRow({
             onChange={onChange}
             ariaLabel={label}
           />
-        </Section>
+        </Caption>
       );
 
     case 'number_input':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <BufferedNumberInput
             value={(value as number | null) ?? null}
             coerce={def.type === 'int' ? 'int' : 'float'}
@@ -464,14 +507,14 @@ function FilterRow({
             ariaLabel={label}
           />
           {unit ? <UnitHint unit={unit} /> : null}
-        </Section>
+        </Caption>
       );
 
     case 'csv_input':
       return (
-        <Section label={label}>
+        <Caption label={label} bare={bare}>
           <CsvRow def={def} ariaLabel={label} value={value} onChange={onChange} />
-        </Section>
+        </Caption>
       );
 
     case 'boolean':

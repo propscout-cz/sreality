@@ -220,6 +220,23 @@ export const parseSort = (raw: string | null): SortSpec => {
 export const sortToParam = (s: SortSpec): string =>
   `${s.direction === 'desc' ? '-' : ''}${s.field}`;
 
+/* The cards lane's sort menu — Browse's card view and the phone feed's Řazení
+ * row offer exactly these. Two bookend the file by date (first_seen_at — when
+ * the listing entered our archive), two by price, two by price/m², two by MF
+ * gross yield. mf_gross_yield_pct is only populated for sale apartments; the
+ * query orders nullsFirst:false so every rental / non-apartment listing sorts
+ * to the end either way. */
+export const CARD_SORTS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
+  { label: 'Newest first',      spec: { field: 'first_seen_at', direction: 'desc' } },
+  { label: 'Oldest first',      spec: { field: 'first_seen_at', direction: 'asc'  } },
+  { label: 'Price: low → high', spec: { field: 'price_czk',     direction: 'asc'  } },
+  { label: 'Price: high → low', spec: { field: 'price_czk',     direction: 'desc' } },
+  { label: 'Price/m²: low → high', spec: { field: 'price_per_m2', direction: 'asc'  } },
+  { label: 'Price/m²: high → low', spec: { field: 'price_per_m2', direction: 'desc' } },
+  { label: 'Výnos MF: high → low', spec: { field: 'mf_gross_yield_pct', direction: 'desc' } },
+  { label: 'Výnos MF: low → high', spec: { field: 'mf_gross_yield_pct', direction: 'asc'  } },
+];
+
 /* -------------------------------------------------------------------------- */
 /* THE PORTAL RULE (MS19, migration 590; two-sided since 597): portal and     */
 /* broker filters select ADS; rows are always properties.                     */
