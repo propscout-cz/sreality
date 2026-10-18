@@ -60,6 +60,10 @@ interface SidebarProps {
    * 'modal': plain full-height scroll column inside a dialog (no sticky/top
    * offset, which would mis-position it within a modal panel). */
   layout?: 'page' | 'modal';
+  /* Browse passes this to show a "hide filters" button in the header; the
+   * caller swaps in <FilterSidebarRail> while folded. Optional so the other
+   * consumers (Watchdog edit form, etc.) get a sidebar that cannot fold. */
+  onCollapse?: () => void;
 }
 
 /* Which `ListingFilters` keys live in each collapsible band. Used only to
@@ -319,7 +323,68 @@ function ShowDismissedToggle({
   );
 }
 
-export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, layout = 'page' }: SidebarProps) {
+/* The folded sidebar: a slim full-height strip, one click anywhere on it brings
+ * the filters back. The dot says a filter is still narrowing the results while
+ * the controls are out of sight. */
+export function FilterSidebarRail({
+  active,
+  onExpand,
+  layout = 'page',
+}: {
+  active: boolean;
+  onExpand: () => void;
+  layout?: 'page' | 'modal';
+}) {
+  return (
+    <aside
+      className={
+        layout === 'modal'
+          ? 'shrink-0 w-10 border-r border-[var(--color-rule)] h-full'
+          : 'shrink-0 w-10 border-r border-[var(--color-rule)] sticky top-14 self-start h-[calc(100dvh-3.5rem)]'
+      }
+    >
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-label="Show filters"
+        title="Show filters"
+        className="w-full h-full flex flex-col items-center gap-3 py-4 text-[var(--color-ink-3)] hover:text-[var(--color-copper)] hover:bg-[var(--color-paper-2)] transition-colors"
+      >
+        <ChevronGlyph direction="right" />
+        <span className="[writing-mode:vertical-rl] text-[0.7rem] tracking-[0.18em] uppercase">
+          Filters
+        </span>
+        {active && (
+          <span
+            role="img"
+            aria-label="Filters active"
+            className="size-1.5 rounded-full bg-[var(--color-copper)]"
+          />
+        )}
+      </button>
+    </aside>
+  );
+}
+
+function ChevronGlyph({ direction }: { direction: 'left' | 'right' }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d={direction === 'left' ? 'M10 3 5 8l5 5' : 'M6 3l5 5-5 5'} />
+    </svg>
+  );
+}
+
+export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, layout = 'page', onCollapse }: SidebarProps) {
   // <FilterForm> reads snake_case registry ids; Browse keeps the
   // camelCase `ListingFilters` shape its queries / URL serialisation
   // already use. The adapter in lib/filters bridges both directions
@@ -394,15 +459,28 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
           Filters
         </h2>
-        {!isDefault(filters) && (
-          <button
-            type="button"
-            onClick={() => onChange(DEFAULT_FILTERS)}
-            className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
-          >
-            Reset
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {!isDefault(filters) && (
+            <button
+              type="button"
+              onClick={() => onChange(DEFAULT_FILTERS)}
+              className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
+            >
+              Reset
+            </button>
+          )}
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              aria-label="Hide filters"
+              title="Hide filters"
+              className="-mr-1 p-1 rounded-[var(--radius-xs)] text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
+            >
+              <ChevronGlyph direction="left" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="px-5">
