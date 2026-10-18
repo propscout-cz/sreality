@@ -25,7 +25,10 @@
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) immediately before merging wave 1: until the first
 -- registry projection the view serves no rows (the old page reads "No pipeline checks recorded yet."), so dispatch
--- one non-dry verify_pipeline.yml run once the merge has deployed.
+-- one non-dry verify_pipeline.yml run once the merge has deployed. Never run this branch's verify_pipeline non-dry
+-- before the merge: the old ladder on main reads unknown as healthy and would close incidents and re-send onsets.
+-- After the deploy, expect one grouped onset per currently failing check (today three gauges: location_town_coverage,
+-- ppm2_basis_floor_share, text_extraction_lag), each on the first reconcile pass after the new harness measures it.
 -- ROLLBACK: forward only (rule 1). Every statement is idempotent; a lock-timeout retry re-runs the whole file.
 
 set lock_timeout = '5s';
@@ -100,6 +103,8 @@ create policy notification_dispatches_admin_update on public.notification_dispat
   with check (account_id = '00000000-0000-0000-0000-000000000000'::uuid and (select is_platform_admin()));
 
 -- starts_with, not LIKE: every check key holds `_`, which LIKE reads as a wildcard.
+-- Rows older than the key's registration (declared_at) are not served: the page and the ladder share that rule, so a
+-- verdict the old harness stored (an error as `fail`, no message) never shows as current after the cutover.
 create or replace view public.pipeline_checks_public as
 select * from (
   select hc.key as check_key,
@@ -143,6 +148,7 @@ select * from (
       select c.run_at, c.status, c.value, c.details, c.created_at
         from pipeline_check_results c
        where c.check_key = hc.key
+         and c.run_at >= hc.declared_at
        order by c.run_at desc
        limit 1
     ) latest on true
@@ -150,6 +156,7 @@ select * from (
       select c.run_at
         from pipeline_check_results c
        where c.check_key = hc.key
+         and c.run_at >= hc.declared_at
          and c.status <> 'unknown'
        order by c.run_at desc
        limit 1

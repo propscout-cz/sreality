@@ -1,6 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery, useQueries } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import {
   CartesianGrid,
   Legend,
@@ -26,13 +26,19 @@ import {
   type PipelineCheckRow,
 } from '@/lib/queries';
 import {
+  hasUnacknowledgedIncident,
   normalizePipelineStatus,
+  PIPELINE_STATUS_WORD,
   pipelineCheckLabel,
+  pipelineCheckStatus,
+  pipelineChecksBadgeText,
   pipelineCheckValueLabel,
   sortPipelineChecks,
   summarizePipelineChecks,
+  type PipelineChecksSummary,
   type PipelineCheckStatus,
 } from '@/lib/pipelineChecks';
+import { apiPost } from '@/lib/api';
 import {
   derivedArtifactLabel,
   derivedArtifactStatus,
@@ -714,10 +720,10 @@ function StaleScrapeBanner({ lastScrapeAt }: { lastScrapeAt: string | null }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Pipeline verification checks (migration 274) — the latest row per check_key   */
-/* written by scripts/verify_pipeline.py (LLM liveness/errors/burn rate, DB      */
-/* saturation, worker liveness, dual-write parity). Placed first, above Data     */
-/* sources, because a red check here explains most downstream weirdness.         */
+/* Pipeline verification checks (migration 274) — one row per registered check   */
+/* of scripts/verify_pipeline.py, judged by the view (migration 619: a stale     */
+/* result reads Not measured). Placed first, above Data sources, because a red   */
+/* check here explains most downstream weirdness.                                */
 /* -------------------------------------------------------------------------- */
 
 const PIPELINE_DOT: Record<PipelineCheckStatus, string> = {
@@ -743,14 +749,7 @@ function PipelineChecksSection() {
       <div className="mt-3">
         <Card
           label="Kontroly pipeline"
-          accessory={
-            <PipelineChecksBadge
-              fail={summary.fail}
-              warn={summary.warn}
-              unknown={summary.unknown}
-              hasData={checks.length > 0}
-            />
-          }
+          accessory={<PipelineChecksBadge summary={summary} hasData={checks.length > 0} />}
         >
           <PipelineChecksPanel
             rows={checksQuery.data}
@@ -763,30 +762,46 @@ function PipelineChecksSection() {
   );
 }
 
-function PipelineChecksBadge({
-  fail,
-  warn,
-  unknown,
-  hasData,
-}: {
-  fail: number;
-  warn: number;
-  unknown: number;
-  hasData: boolean;
-}) {
+const PIPELINE_BADGE_TONE: Record<PipelineCheckStatus, string> = {
+  fail: 'bg-[var(--color-brick-soft)] text-[var(--color-brick)]',
+  warn: 'bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]',
+  unknown: 'bg-[var(--color-rule-soft)] text-[var(--color-ink-3)]',
+  ok: 'bg-[var(--color-sage-soft)] text-[var(--color-sage)]',
+};
+
+function PipelineChecksBadge({ summary, hasData }: { summary: PipelineChecksSummary; hasData: boolean }) {
   if (!hasData) return null;
   const base =
     'inline-flex items-center px-1.5 py-0.5 rounded-[var(--radius-xs)] text-[0.6rem] uppercase tracking-wide font-medium ';
-  if (fail > 0) {
-    return <span className={base + 'bg-[var(--color-brick-soft)] text-[var(--color-brick)]'}>{fail} fail</span>;
-  }
-  if (warn > 0) {
-    return <span className={base + 'bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]'}>{warn} watch</span>;
-  }
-  if (unknown > 0) {
-    return <span className={base + 'bg-[var(--color-rule-soft)] text-[var(--color-ink-3)]'}>{unknown} not measured</span>;
-  }
-  return <span className={base + 'bg-[var(--color-sage-soft)] text-[var(--color-sage)]'}>OK</span>;
+  return <span className={base + PIPELINE_BADGE_TONE[summary.worst]}>{pipelineChecksBadgeText(summary)}</span>;
+}
+
+/* The one way to stop reminders until wave 8 rebuilds this page: reading the alert in the
+ * bell marks it read and never acknowledges the incident. */
+function AcknowledgeButton({ checkKey }: { checkKey: string }) {
+  const qc = useQueryClient();
+  const ack = useMutation({
+    mutationFn: () => apiPost<{ key: string; acknowledged: number }>('/admin/health/acknowledge', { key: checkKey }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['pipeline-checks'] }),
+  });
+  return (
+    <>
+      {ack.error && (
+        <span role="alert" className="min-w-0 truncate text-[0.7rem] text-[var(--color-brick)]" title={ack.error.message}>
+          {ack.error.message}
+        </span>
+      )}
+      <button
+        type="button"
+        disabled={ack.isPending}
+        onClick={() => ack.mutate()}
+        title="Stops the reminders for this check's open incidents; each still closes on a measured OK. Reading the alert in the bell never acknowledges it."
+        className="shrink-0 text-[0.7rem] text-[var(--color-copper)] hover:underline underline-offset-2 disabled:text-[var(--color-ink-4)]"
+      >
+        {ack.isPending ? 'Acknowledging…' : 'Acknowledge'}
+      </button>
+    </>
+  );
 }
 
 function PipelineChecksPanel({
@@ -820,17 +835,23 @@ function PipelineChecksPanel({
   return (
     <ul className="space-y-1.5">
       {sorted.map((c) => {
-        const st = normalizePipelineStatus(c.status);
+        const st = pipelineCheckStatus(c);
+        const stored = normalizePipelineStatus(c.status);
         return (
           <li key={c.check_key} className="flex items-center gap-3 text-sm">
             <span
               className="h-2 w-2 rounded-full shrink-0"
               style={{ backgroundColor: PIPELINE_DOT[st] }}
-              title={st}
+              title={
+                st === stored
+                  ? PIPELINE_STATUS_WORD[st]
+                  : `${PIPELINE_STATUS_WORD[st]} — the newest stored result (${PIPELINE_STATUS_WORD[stored]}) is too old`
+              }
             />
             <span className="text-[var(--color-ink)] flex-1 truncate" title={c.check_key}>
               {pipelineCheckLabel(c.check_key)}
             </span>
+            {hasUnacknowledgedIncident(c) && <AcknowledgeButton checkKey={c.check_key} />}
             <span className="font-mono tabular-nums text-[var(--color-ink-2)] whitespace-nowrap">
               {pipelineCheckValueLabel(c.value, c.check_key)}
             </span>

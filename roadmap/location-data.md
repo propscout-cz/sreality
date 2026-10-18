@@ -2890,8 +2890,9 @@ during the drain is this cohort, not a regression.
   the message. The window IS the detection latency — after a cutover the share is elapsed/window, so
   the first 6-hourly tick reads 12.5 % and rings; the 7-day window first drafted would have sat under
   fail for ~1.4 days (adversarial review, #1351). It shares ONE SQL `CASE` with the gate report (`SREALITY_SHAPE_CASE_SQL`, parity-tested
-  against the Python classifier). In-app bell only for now — the hourly emailing lane's `--only` list is
-  a deliberate promotion after a soak, the same ladder the ppm2 checks climbed. The contracts' declarative
+  against the Python classifier). ~~In-app bell only for now — the hourly emailing lane's `--only` list is
+  a deliberate promotion after a soak, the same ladder the ppm2 checks climbed.~~ Superseded 2026-10-18
+  (Health W1: the lanes run due checks; any failing alarm on either lane emails). The contracts' declarative
   `payload_schema_detector` blocks stay as they are: nothing consumes them today and a bezrealitky block
   would sit inside `contract_sha256` and force a version bump for zero claim value.
 
@@ -2927,10 +2928,11 @@ but the run does not partition them by verdict — each is somewhere in 6,519 / 
 
 - ~~Operator: dispatch the 136-row bezrealitky remainder~~ **DONE 2026-09-10** (dispatch 06:16Z →
   reconcile 07:06Z → gate 07:07Z, VERDICT PASS; see the status row). W4 is closed.
-- Soak, then promote `location_payload_shape_drift` into `llm_health.yml`'s `--only` list. The check
+- ~~Soak, then promote `location_payload_shape_drift` into `llm_health.yml`'s `--only` list. The check
   has run in the 6-hourly `verify_pipeline.yml` lane only since #1351 merged, 2026-09-09 07:44Z
   (one scheduled run by the time this was checked, 11:31Z the same day) — that is not a soak; judge
-  it on a week of `pipeline_check_results` rows first.
+  it on a week of `pipeline_check_results` rows first.~~ **Superseded 2026-10-18** (Health W1: the lanes
+  run due checks; any failing alarm on either lane emails).
 - **R4 (Mapy purge) stays carved out and operator-gated.** It is the program's only destructive
   surface and the only part touching live serving; 06 §6.4's coexistence promise ("nothing in the
   ingest write path changes") covers W1–W3 and pointedly excludes W4.

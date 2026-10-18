@@ -12,6 +12,11 @@ from toolkit.system_alerts import MESSAGE_MAX_CHARS, emit_system_alert, reconcil
 
 _MISSING = object()
 _T0 = _dt.datetime(2026, 10, 18, 6, 0, tzinfo=_dt.timezone.utc)
+# A registration older than every row a test writes, so only the cutover tests meet the guard.
+_DECLARED = _dt.datetime(2026, 1, 1, tzinfo=_dt.timezone.utc)
+# Check.staleness_budget on the github-actions host: a cadence plus GitHub's 18 h delivery slack.
+_GITHUB_SLACK_S = 18 * 3600
+_CUTOVER = "c.run_at >= hc.declared_at"
 _ZERO = {"opened": 0, "reminded": 0, "recovered": 0, "closed_silently": 0, "notices": 0}
 _INCIDENT_COLUMNS = ("id", "signature", "first_seen_at", "last_seen_at", "alert_count",
                      "alerted_at", "ok_since", "acknowledged_at")
@@ -19,6 +24,10 @@ _INCIDENT_COLUMNS = ("id", "signature", "first_seen_at", "last_seen_at", "alert_
 
 def _h(hours: float) -> _dt.timedelta:
     return _dt.timedelta(hours=hours)
+
+
+def _s(seconds: float) -> _dt.timedelta:
+    return _dt.timedelta(seconds=seconds)
 
 
 def _iso(at: _dt.datetime) -> str:
@@ -48,7 +57,8 @@ class _FakeCursor:
         if "pg_try_advisory_xact_lock" in norm:
             self._rows = [(c.lock_free,)]
         elif "FROM health_checks" in norm:
-            self._rows = c.newest_rows()
+            # The registration guard holds only where the statement states it.
+            self._rows = c.newest_rows(cutover=_CUTOVER in norm)
         elif "FROM app_settings" in norm:
             self._rows = [] if c.channels is _MISSING else [(c.channels,)]
         elif "INSERT INTO notification_dispatches" in norm:
@@ -120,9 +130,12 @@ class _FakeConn:
         return _FakeTx(self)
 
     def register(self, key: str, *, cls: str = "alarm", cadence_s: int = 3600,
-                 label: str = "", unit: str = "") -> None:
+                 label: str = "", unit: str = "", budget_s: float | None = None,
+                 declared_at: _dt.datetime = _DECLARED) -> None:
+        """A health_checks row; the budget defaults to the github-actions rule."""
+        budget = cadence_s + _GITHUB_SLACK_S if budget_s is None else budget_s
         self.registry[key] = {"class": cls, "cadence_s": cadence_s, "label": label or key,
-                              "unit": unit}
+                              "unit": unit, "budget_s": float(budget), "declared_at": declared_at}
 
     def result(self, key: str, at: _dt.datetime, status: str, *, message: str = "",
                cells: list[dict[str, Any]] | None = None, value: Any = None) -> None:
@@ -134,12 +147,16 @@ class _FakeConn:
         if key not in self.newest or at >= self.newest[key][0]:
             self.newest[key] = row
 
-    def newest_rows(self) -> list[tuple[Any, ...]]:
+    def newest_rows(self, *, cutover: bool) -> list[tuple[Any, ...]]:
         rows = []
         for key, reg in self.registry.items():
-            at, status, value, details = self.newest.get(key, (None, None, None, {}))
+            newest = self.newest.get(key)
+            if cutover and newest is not None and newest[0] < reg["declared_at"]:
+                newest = None  # the newest row predates the registration, so every row does
+            at, status, value, details = newest or (None, None, None, {})
             rows.append((key, reg["class"], reg["cadence_s"], reg["label"], reg["unit"],
-                         status, at, value, details.get("cells"), details.get("message")))
+                         reg["budget_s"], status, at, value, details.get("cells"),
+                         details.get("message")))
         return rows
 
     def newest_status(self, key: str) -> str | None:
@@ -263,6 +280,56 @@ def test_unknown_neither_opens_closes_nor_ages_an_incident() -> None:
     assert conn.writes() == []
 
 
+def test_a_stale_fail_neither_opens_nor_reminds() -> None:
+    """Past its staleness budget the newest row reads Not measured on Health, so it is inert."""
+    conn = _FakeConn()
+    conn.register("llm_errors")  # hourly on GitHub: a 19 h budget
+    conn.register("property_maintenance")
+    inc = conn.seed("property_maintenance", first=_T0 - _h(30))  # its 24 h rung would be due
+    conn.result("llm_errors", _T0 - _h(20), "fail")
+    conn.result("property_maintenance", _T0 - _h(20), "fail")
+    assert reconcile(conn, now=_T0) == _ZERO
+    assert conn.open_incidents() == [inc] and conn.writes() == []
+
+
+def test_a_stale_ok_never_recovers_nor_starts_a_hold() -> None:
+    conn = _FakeConn()
+    conn.register("llm_errors")  # hourly: a two-hour hold, a 19 h budget
+    conn.register("worker_liveness")
+    held = conn.seed("llm_errors", first=_T0 - _h(48), last=_T0 - _h(30),
+                     ok_since=_T0 - _h(25))
+    unheld = conn.seed("worker_liveness", first=_T0 - _h(48), last=_T0 - _h(30))
+    conn.result("llm_errors", _T0 - _h(25), "ok")
+    conn.result("llm_errors", _T0 - _h(20), "ok")  # measured across the hold, but stale now
+    conn.result("worker_liveness", _T0 - _h(20), "ok")
+    assert reconcile(conn, now=_T0) == _ZERO
+    assert held["resolved_at"] is None and unheld["ok_since"] is None
+    assert conn.writes() == []
+
+
+@pytest.mark.parametrize(("age", "counts"), [
+    (_h(19) - _s(1), True), (_h(19), True), (_h(19) + _s(1), False),
+])
+def test_the_staleness_boundary_is_health_stale(age: _dt.timedelta, counts: bool) -> None:
+    """health_stale is `stamp < now() - budget`: a row one second inside its budget still counts."""
+    conn = _FakeConn()
+    conn.register("llm_errors", budget_s=19 * 3600)
+    conn.result("llm_errors", _T0, "fail")
+    assert reconcile(conn, now=_T0 + age)["opened"] == int(counts)
+
+
+def test_rows_from_before_the_keys_registration_are_not_measured() -> None:
+    """The cutover: the old harness stored a check's own error as fail, with no message."""
+    conn = _FakeConn()
+    conn.register("llm_errors", label="LLM errors", declared_at=_T0)
+    conn.result("llm_errors", _T0 - _s(1), "fail")
+    assert reconcile(conn, now=_T0 + _h(0.5)) == _ZERO
+    assert conn.incidents == []
+    conn.result("llm_errors", _T0, "fail", message="openai: 41 credit errors")  # the new harness
+    assert reconcile(conn, now=_T0 + _h(0.5)) == {**_ZERO, "opened": 1, "notices": 1}
+    assert conn.dispatches[0][0] == "LLM errors: Problem — openai: 41 credit errors"
+
+
 def test_a_cell_unmeasured_for_seven_days_closes_silently() -> None:
     conn = _FakeConn()
     conn.register("walk_end_streak", cadence_s=21600)
@@ -324,9 +391,11 @@ def test_warn_keeps_an_incident_open_resets_its_hold_and_never_recovers_it() -> 
     conn.result("false_delist_share", _T0 - _h(1), "warn", message="31 % came back")
     assert reconcile(conn, now=_T0) == _ZERO
     assert (inc["ok_since"], inc["last_seen_at"]) == (None, _T0 - _h(1))
+    conn.result("false_delist_share", _T0 + _h(39), "warn", message="29 % came back")
     assert reconcile(conn, now=_T0 + _h(40)) == {**_ZERO, "reminded": 1, "notices": 1}
-    assert conn.dispatches == [("False delist share: still Watch for 80 h",
-                                f"sys:false_delist_share:reminder:72h:{_iso(first)}", [])]
+    assert conn.dispatches == [(
+        "False delist share: still Watch for 80 h",
+        f"sys:false_delist_share:reminder:72h:{_iso(first)}:{inc['id']}x1", [])]
     assert inc["resolved_at"] is None
 
 
@@ -338,11 +407,39 @@ def test_a_measured_ok_recovers_only_after_the_hold() -> None:
     conn.result("llm_errors", _T0, "ok")
     assert reconcile(conn, now=_T0) == _ZERO
     assert inc["ok_since"] == _T0
-    assert reconcile(conn, now=_T0 + _h(1.99)) == _ZERO
+    conn.result("llm_errors", _T0 + _h(2) - _s(1), "ok")
+    assert reconcile(conn, now=_T0 + _h(2)) == _ZERO  # measured one second short of the hold
+    conn.result("llm_errors", _T0 + _h(2), "ok")
     assert reconcile(conn, now=_T0 + _h(2)) == {**_ZERO, "recovered": 1, "notices": 1}
     assert (inc["resolved_at"], inc["resolve_reason"]) == (_T0 + _h(2), "measured ok")
     assert conn.dispatches == [("✓ LLM errors: recovered after 30 h",
-                                f"sys:llm_errors:recovery:{_iso(first)}", [])]
+                                f"sys:llm_errors:recovery:{_iso(first)}:{inc['id']}x1", [])]
+
+
+def test_a_lone_ok_followed_by_silence_never_recovers() -> None:
+    """The hold is measured, not wall-clock: a second OK must arrive across it."""
+    conn = _FakeConn()
+    conn.register("llm_errors")  # hourly: a two-hour hold
+    conn.result("llm_errors", _T0, "fail")
+    reconcile(conn, now=_T0)
+    (inc,) = conn.open_incidents()
+    conn.result("llm_errors", _T0 + _h(1), "ok")
+    for at in (_T0 + _h(1), _T0 + _h(3), _T0 + _h(18)):
+        assert reconcile(conn, now=at)["recovered"] == 0
+    assert inc["resolved_at"] is None and inc["ok_since"] == _T0 + _h(1)
+
+
+def test_a_second_ok_measured_across_the_hold_recovers() -> None:
+    conn = _FakeConn()
+    conn.register("llm_errors")  # hourly: a two-hour hold
+    conn.result("llm_errors", _T0, "fail")
+    reconcile(conn, now=_T0)
+    (inc,) = conn.open_incidents()
+    conn.result("llm_errors", _T0 + _h(1), "ok")
+    assert reconcile(conn, now=_T0 + _h(1))["recovered"] == 0
+    conn.result("llm_errors", _T0 + _h(3), "ok")
+    assert reconcile(conn, now=_T0 + _h(3))["recovered"] == 1
+    assert (inc["resolved_at"], inc["resolve_reason"]) == (_T0 + _h(3), "measured ok")
 
 
 @pytest.mark.parametrize(("cadence_s", "hold_h"), [(300, 0.5), (3600, 2.0), (21600, 12.0)])
@@ -353,8 +450,11 @@ def test_the_hold_is_two_cadences_and_never_under_thirty_minutes(
     conn.register("db_saturation", cadence_s=cadence_s)
     inc = conn.seed("db_saturation", first=_T0 - _h(1))
     conn.result("db_saturation", _T0, "ok")
-    reconcile(conn, now=_T0 + _h(hold_h) - _dt.timedelta(seconds=1))
+    reconcile(conn, now=_T0)
+    conn.result("db_saturation", _T0 + _h(hold_h) - _s(1), "ok")
+    reconcile(conn, now=_T0 + _h(hold_h) - _s(1))
     assert inc["resolved_at"] is None
+    conn.result("db_saturation", _T0 + _h(hold_h), "ok")
     reconcile(conn, now=_T0 + _h(hold_h))
     assert inc["resolve_reason"] == "measured ok"
 
@@ -380,7 +480,7 @@ def test_alarm_reminders_climb_6h_24h_72h_then_weekly_and_only_the_highest_fires
     assert counts == {**_ZERO, "reminded": 1, "notices": 1}
     assert conn.dispatches == [(
         f"Property maintenance: still Problem for {elapsed_h:.0f} h",
-        f"sys:property_maintenance:reminder:{rung}:{_iso(first)}", [])]
+        f"sys:property_maintenance:reminder:{rung}:{_iso(first)}:1x1", [])]
     assert reconcile(conn, now=_T0 + _dt.timedelta(seconds=60)) == _ZERO  # told once per rung
 
 
@@ -390,11 +490,11 @@ def test_gauge_reminders_come_once_a_day() -> None:
                   label="Location coverage")
     first = _T0 - _h(23)
     conn.seed("location_town_coverage", first=first)
-    conn.result("location_town_coverage", _T0, "fail")
     for at in (_T0, first + _h(24), first + _h(30), first + _h(49), first + _h(121)):
+        conn.result("location_town_coverage", at, "fail")
         reconcile(conn, now=at)
     assert [d[1] for d in conn.dispatches] == [
-        f"sys:location_town_coverage:reminder:{r}:{_iso(first)}" for r in ("d1", "d2", "d5")]
+        f"sys:location_town_coverage:reminder:{r}:{_iso(first)}:1x1" for r in ("d1", "d2", "d5")]
     assert conn.dispatches[0][0] == "Location coverage: still Problem for 24 h"
 
 
@@ -406,6 +506,7 @@ def test_an_acknowledged_incident_gets_no_reminder_but_its_recovery_is_still_tol
     assert reconcile(conn, now=_T0) == _ZERO
     conn.result("llm_burn_rate", _T0 + _h(1), "ok")
     reconcile(conn, now=_T0 + _h(1))
+    conn.result("llm_burn_rate", _T0 + _h(3), "ok")
     assert reconcile(conn, now=_T0 + _h(3)) == {**_ZERO, "recovered": 1, "notices": 1}
     assert conn.dispatches[0][0] == "✓ LLM spend: recovered after 31 h"
 
@@ -421,15 +522,49 @@ def test_reminders_and_recoveries_group_a_checks_cells_into_one_notice() -> None
     assert reconcile(conn, now=_T0) == {**_ZERO, "reminded": 2, "notices": 1}
     assert conn.dispatches == [(
         "Walks not reaching the end: still Problem for 30 h — bazos, sreality",
-        f"sys:walk_end_streak:reminder:24h:{_iso(first)}", [])]
+        f"sys:walk_end_streak:reminder:24h:{_iso(first)}:{sreality['id']}x2", [])]
     assert sreality["alert_count"] == bazos["alert_count"] == 2
-    conn.result("walk_end_streak", _T0 + _h(1), "ok",
-                cells=[_cell("sreality", "ok"), _cell("bazos", "ok")])
-    reconcile(conn, now=_T0 + _h(1))
-    assert reconcile(conn, now=_T0 + _h(13)) == {**_ZERO, "recovered": 2, "notices": 1}
+    for hours in (1, 13):  # the six-hourly hold is twelve hours
+        conn.result("walk_end_streak", _T0 + _h(hours), "ok",
+                    cells=[_cell("sreality", "ok"), _cell("bazos", "ok")])
+        reconcile(conn, now=_T0 + _h(hours))
+    assert {sreality["resolve_reason"], bazos["resolve_reason"]} == {"measured ok"}
     assert conn.dispatches[-1] == (
         "✓ Walks not reaching the end: bazos, sreality recovered after 31 h",
-        f"sys:walk_end_streak:recovery:{_iso(first)}", [])
+        f"sys:walk_end_streak:recovery:{_iso(first)}:{sreality['id']}x2", [])
+
+
+def test_cells_of_one_check_that_recover_in_different_passes_are_each_told() -> None:
+    conn = _FakeConn()
+    conn.register("walk_end_streak", cadence_s=21600, label="Walks")  # a twelve-hour hold
+    for hours, sreality, bazos in ((0, "fail", "fail"), (1, "ok", "fail"), (13, "ok", "ok"),
+                                   (25, "ok", "ok")):
+        worst = "fail" if "fail" in (sreality, bazos) else "ok"
+        conn.result("walk_end_streak", _T0 + _h(hours), worst,
+                    cells=[_cell("sreality", sreality), _cell("bazos", bazos)])
+        reconcile(conn, now=_T0 + _h(hours))
+    recoveries = [d[:2] for d in conn.dispatches if ":recovery:" in d[1]]
+    assert recoveries == [
+        ("✓ Walks: sreality recovered after 1 h", f"sys:walk_end_streak:recovery:{_iso(_T0)}:1x1"),
+        ("✓ Walks: bazos recovered after 13 h", f"sys:walk_end_streak:recovery:{_iso(_T0)}:2x1"),
+    ]
+    assert conn.open_incidents() == []
+
+
+def test_cells_of_one_check_reminded_in_different_passes_are_each_told() -> None:
+    conn = _FakeConn()
+    conn.register("walk_end_streak", cadence_s=21600, label="Walks")
+    for hours, bazos in ((0, "fail"), (5, "ok"), (6, "ok"), (7, "fail")):
+        conn.result("walk_end_streak", _T0 + _h(hours), "fail",
+                    cells=[_cell("sreality", "fail"), _cell("bazos", bazos)])
+        reconcile(conn, now=_T0 + _h(hours))
+    # bazos sat in its hold at the 6 h rung, so its own 6 h reminder comes an hour later.
+    assert [d[1] for d in conn.dispatches if ":reminder:" in d[1]] == [
+        f"sys:walk_end_streak:reminder:6h:{_iso(_T0)}:1x1",
+        f"sys:walk_end_streak:reminder:6h:{_iso(_T0)}:2x1",
+    ]
+    assert [d[0] for d in conn.dispatches[1:]] == [
+        "Walks: still Problem for 6 h — sreality", "Walks: still Problem for 7 h — bazos"]
 
 
 # --- the pass --------------------------------------------------------------
@@ -444,14 +579,15 @@ def test_a_second_pass_over_the_same_state_writes_and_tells_nothing() -> None:
     conn.result("llm_burn_rate", _T0, "fail")
     conn.seed("worker_liveness", first=_T0 - _h(5), ok_since=_T0 - _h(3))
     conn.result("worker_liveness", _T0 - _h(3), "ok")
+    conn.result("worker_liveness", _T0 - _h(1), "ok")
     conn.seed("db_saturation", "cron", first=_T0 - _h(400), last=_T0 - _h(200))
     conn.seed("outbound_url_parity", first=_T0 - _h(9))
     assert reconcile(conn, now=_T0) == {
         "opened": 1, "reminded": 1, "recovered": 1, "closed_silently": 2, "notices": 3}
     assert [d[1] for d in conn.dispatches] == [
         "sys:llm_errors:onset:2026-10-18T06:00:00Z",
-        "sys:llm_burn_rate:reminder:6h:2026-10-17T23:00:00Z",
-        "sys:worker_liveness:recovery:2026-10-18T01:00:00Z",
+        "sys:llm_burn_rate:reminder:6h:2026-10-17T23:00:00Z:1x1",
+        "sys:worker_liveness:recovery:2026-10-18T01:00:00Z:2x1",
     ]
     writes = len(conn.writes())
     assert reconcile(conn, now=_T0 + _dt.timedelta(seconds=60)) == _ZERO
@@ -479,7 +615,9 @@ def test_the_sql_the_fake_cannot_enforce_is_pinned() -> None:
     assert any("ON CONFLICT (signature) WHERE resolved_at IS NULL DO NOTHING RETURNING id" in s
                for s, _ in norms)
     newest = next(s for s, _ in norms if "FROM health_checks" in s)
+    assert "WHERE c.check_key = hc.key AND c.run_at >= hc.declared_at" in newest
     assert "ORDER BY c.run_at DESC LIMIT 1" in newest
+    assert "extract(epoch FROM hc.staleness_budget)::float8" in newest
     read, params = next((s, p) for s, p in norms if "FROM ops_incidents" in s)
     assert "WHERE resolved_at IS NULL AND signature LIKE" in read
     assert params == {"cells": "cell:%"}
@@ -501,6 +639,20 @@ def test_emit_inserts_one_system_health_row_and_a_repeat_is_a_no_op() -> None:
 def test_emit_requires_a_dedupe_key() -> None:
     with pytest.raises(TypeError):
         emit_system_alert(_FakeConn(), "llm_errors", "down")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(("check_key", "dedupe_key"), [
+    ("llm_errors", "sys:llm_burn_rate:onset:x"),
+    ("llm", "sys:llm_errors:onset:x"),  # a key's prefix is not the key
+    ("llm_errors", "llm_errors:onset:x"),
+])
+def test_emit_refuses_a_dedupe_key_outside_its_checks_namespace(
+    check_key: str, dedupe_key: str,
+) -> None:
+    conn = _FakeConn()
+    with pytest.raises(ValueError):
+        emit_system_alert(conn, check_key, "down", dedupe_key=dedupe_key)
+    assert conn.executed == [] and conn.dispatches == []
 
 
 @pytest.mark.parametrize(("stored", "channels"), [

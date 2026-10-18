@@ -210,10 +210,10 @@ def test_property_maintenance_offenders_do_not_round_a_fractional_threshold() ->
 
 
 def test_property_maintenance_sql_is_o1() -> None:
-    """The check runs in the hourly acute lane (job timeout 5 min): it must
+    """The check runs under the per-check 45 s budget (Check.budget_s): it must
     read the completion stamp + the tiny dirty queue, never scan `properties`
-    — the per-row staleness variant measured ~3.5 min live and would have
-    killed the whole lane's rows and alerts each hour."""
+    — the per-row staleness variant measured ~3.5 min live and would be
+    cancelled, Not measured, on every run."""
     from scripts.verify_pipeline import _PROPERTY_MAINTENANCE_SQL as sql
 
     assert "property_sweep_last_complete" in sql
@@ -348,7 +348,7 @@ _FINISH_SPREAD_H = 2.5
 def test_one_missed_night_warns_and_two_fail() -> None:
     """The calibration this axis was sized for, pinned on BOTH sides. A single
     missed night is 48h plus the finish spread — up to ~50.5h — so a fail line at
-    50 fired the hourly acute lane for it: an onset alert from
+    50 failed the alarm for it: an onset notice from
     the ladder plus a non-zero exit from --exit-nonzero-on-fail, a
     second email for the night the sweep's own red run already reported. Two missed
     nights are >=69.5h even when the recovery run finishes at its earliest, so the
@@ -425,7 +425,7 @@ class _OneRow:
 
 def test_broker_resolution_check_reads_all_three_axes_off_one_row() -> None:
     """One O(1) round trip: the finished-run axis is another scalar in the same
-    single-row query, not a second read in the hourly lane's 5-min budget."""
+    single-row query, not a second read in the per-check 45 s budget (Check.budget_s)."""
     from scripts.verify_pipeline import check_broker_resolution_freshness
 
     conn = _OneRow((0.4, 0.4, 61.0, 0.3, 12))
@@ -437,7 +437,7 @@ def test_broker_resolution_check_reads_all_three_axes_off_one_row() -> None:
 
 
 def test_broker_resolution_sql_is_o1() -> None:
-    """The hourly acute lane's 5-min job timeout. resolve_brokers deleted exactly
+    """The per-check 45 s budget (Check.budget_s). resolve_brokers deleted exactly
     this scan from its own incremental: `broker_identity_id IS NULL` is a permanent
     state for ~110k listings, so it detoasted the whole raw_json corpus for ~7
     genuine stragglers and timed out."""
@@ -895,7 +895,7 @@ def test_poller_liveness_is_registered() -> None:
     assert _by_key("workflow_poller_liveness").fn is check_workflow_poller_liveness
 
 
-# --- W0.4: the acute lane degrades gracefully ------------------------------
+# --- W0.4: a lane degrades gracefully -------------------------------------
 
 
 def test_results_are_persisted_as_each_check_completes() -> None:
@@ -945,7 +945,7 @@ def test_a_timed_out_check_is_unknown_rather_than_failing() -> None:
     (result,) = run_checks(None, {}, checks=[_stub("slow", _cancelled)])
     assert result["status"] == "unknown"
     assert result["details"]["timed_out"] is True
-    assert "UNKNOWN" in result["message"]
+    assert "Not measured" in result["message"]
 
 
 def test_lane_budget_exhaustion_marks_the_rest_unknown_not_healthy() -> None:
@@ -1124,6 +1124,26 @@ def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
     assert params["keys"] == _keys()
 
 
+def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measures_it() -> None:
+    """Every row carries its run's start, so the next hourly run, started a minute earlier in
+    its slot, found a 59-minute-old row not due: an hourly check was measured every second
+    run. The slack is a tenth of the cadence, at most 15 min."""
+    from scripts.verify_pipeline import due_checks
+
+    def due(key: str, **age: float) -> bool:
+        conn = _DueConn({key: _NOW - _dt.timedelta(**age)})
+        return key in [c.key for c in due_checks(conn, "github-actions", _NOW)]
+
+    assert due("llm_errors", minutes=59)
+    assert due("llm_errors", minutes=54)          # 60 min less the 6-min slack, inclusive
+    assert not due("llm_errors", minutes=50)
+    assert due("walk_coverage", hours=5, minutes=45)
+    assert not due("walk_coverage", hours=5, minutes=44)
+    assert due("outbound_url_conformance", days=7, minutes=-10)
+    assert not due("outbound_url_conformance", days=7, minutes=-16)
+    assert {c.cadence_s - c.due_after_s for c in CHECKS} == {360, 900}
+
+
 def test_due_selection_never_reaches_another_hosts_checks(monkeypatch: Any) -> None:
     import scripts.verify_pipeline as vp
 
@@ -1300,7 +1320,9 @@ class _MainConn:
         return None
 
 
-def _run_main(monkeypatch: Any, argv: list[str], due: list[Check]) -> tuple[int, dict[str, Any]]:
+def _run_main(monkeypatch: Any, argv: list[str], due: list[Check], *,
+              ref: str | None = None) -> tuple[int, dict[str, Any]]:
+    """main() over fakes; `ref` is GITHUB_REF_NAME (None: unset, as on a local run)."""
     import sys
 
     import scripts.verify_pipeline as vp
@@ -1316,6 +1338,11 @@ def _run_main(monkeypatch: Any, argv: list[str], due: list[Check]) -> tuple[int,
         return due
 
     monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://unused")
+    # CI's own GITHUB_REF_NAME names the PR branch, so every test pins it.
+    if ref is None:
+        monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF_NAME", ref)
     monkeypatch.setattr(vp, "connect", lambda: _MainConn())
     monkeypatch.setattr(vp, "load_thresholds", lambda conn: dict(T))
     monkeypatch.setattr(vp, "project_registry", _project)
@@ -1342,6 +1369,21 @@ def test_main_projects_the_registry_then_measures_and_stores_the_due_checks(
     assert seen["order"] == ["project:github-actions", "due:github-actions"]
     assert seen["inserted"] == ["a", "b"]
     assert "CHECK a status=ok value=1" in caplog.text  # failure_signature reads this line
+
+
+def test_only_a_run_from_main_projects_the_registry(monkeypatch: Any, caplog: Any) -> None:
+    """A dispatch from a branch runs that branch's CHECKS: projecting them would delete
+    main's keys from health_checks (the page serves registry rows only) until main's next
+    run re-declared them. It still measures and stores."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="verify_pipeline")
+    code, seen = _run_main(monkeypatch, [], [_returning("a", "ok")], ref="feature/health-w2")
+    assert code == 0
+    assert seen["order"] == ["due:github-actions"] and seen["inserted"] == ["a"]
+    assert "not projected: this run is from feature/health-w2, not main" in caplog.text
+    _, seen = _run_main(monkeypatch, [], [_returning("a", "ok")], ref="main")
+    assert seen["order"] == ["project:github-actions", "due:github-actions"]
 
 
 def test_main_dry_run_projects_nothing_and_stores_nothing(monkeypatch: Any) -> None:
@@ -2609,10 +2651,12 @@ def test_worker_lane_stall_tolerates_a_long_but_legitimate_drain_pass() -> None:
 
 
 def test_worker_lane_stall_does_not_double_alarm_a_dead_worker() -> None:
-    """No heartbeat at all is worker_liveness's job. Claiming ok would be a lie;
-    claiming fail would ring two bells for one fault."""
+    """No heartbeat at all is worker_liveness's job. Claiming ok would be a lie,
+    claiming fail would ring two bells for one fault, and a warn would hold an
+    incident open as a measured Watch: no lane was measured."""
     out = check_worker_lane_stall(_LaneConn([]), T)
-    assert out["status"] == "warn"
+    assert out["status"] == "unknown" and out["value"] is None
+    assert "heartbeat" in out["details"]["skipped"]
     assert "worker_liveness" in out["message"]
 
 
@@ -3476,6 +3520,30 @@ def test_every_lane_budget_fits_its_job(workflow: str) -> None:
     assert vp.lane_budget_for(hosted) + vp._JOB_HEADROOM_S <= minutes * 60
 
 
+@pytest.mark.parametrize("workflow", ["llm_health.yml", "verify_pipeline.yml"])
+def test_both_lanes_red_their_run_on_a_failing_alarm(workflow: str) -> None:
+    """The lanes are identical: whichever finds an alarm failing first is the one that
+    measured it (the 6-hourly lane takes every 6-hourly key it finds due), and a lane without
+    the flag stored that Problem in silence."""
+    import yaml
+
+    path = Path(__file__).resolve().parents[2] / ".github/workflows" / workflow
+    jobs = yaml.safe_load(path.read_text())["jobs"].values()
+    (run,) = [step["run"] for job in jobs for step in job["steps"]
+              if "scripts.verify_pipeline" in step.get("run", "")]
+    assert "--exit-nonzero-on-fail" in run
+
+
+@pytest.mark.parametrize("workflow", ["llm_health.yml", "verify_pipeline.yml"])
+def test_both_lanes_share_one_concurrency_group(workflow: str) -> None:
+    """One group, so the lanes take turns and a due check is measured once per cadence,
+    never twice when GitHub fires both crons together."""
+    import yaml
+
+    path = Path(__file__).resolve().parents[2] / ".github/workflows" / workflow
+    assert yaml.safe_load(path.read_text())["concurrency"]["group"] == "pipeline-verification"
+
+
 # --- floor_convention (field capture W8) -----------------------------------
 
 
@@ -3730,7 +3798,8 @@ def test_false_delist_share_skips_a_small_portal_rather_than_scoring_it_clean() 
     nothing else was scored."""
     conn = _RowsConn([("maxima", 12, 6)])
     out = check_false_delist_share(conn, T)
-    assert out["status"] == "warn" and out["value"] is None
+    assert out["status"] == "unknown" and out["value"] is None
+    assert "50+ ads" in out["details"]["skipped"]
     assert out["details"]["unscored"] == ["maxima"]
     assert out["details"]["per_source"]["maxima"]["scored"] is False
     assert "verified for nothing" in out["message"]
@@ -3775,6 +3844,7 @@ def _unmeasured_results() -> list[dict[str, Any]]:
     def _never_reached(conn: Any, thresholds: Any) -> dict[str, Any]:  # pragma: no cover
         raise AssertionError("an exhausted lane must not start a check")
 
+    sampled = _ShapeDriftConn([(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")])
     return [
         *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled)]),
         *run_checks(None, {}, checks=[_stub("late", _never_reached)], lane_budget_s=-1.0),
@@ -3787,12 +3857,16 @@ def _unmeasured_results() -> list[dict[str, Any]]:
         vp.check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 10, 10)]), T),
         vp._probe_skipped("the sreality index is unreachable (boom)"),
         check_outbound_url_conformance(_ShapeDriftConn([]), T),
+        check_outbound_url_conformance(sampled, T, budget_s=0.0),
+        vp.check_location_town_coverage(_TownCoverageConn([]), T),
+        check_false_delist_share(_RowsConn([("maxima", 12, 6)]), T),
+        check_worker_lane_stall(_LaneConn([]), T),
     ]
 
 
 def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
     results = _unmeasured_results()
-    assert len(results) == 12
+    assert len(results) == 16
     errored, timed_out, not_run = results[:3]
     assert errored["details"]["errored"] is True and "kaboom" in errored["details"]["error"]
     assert timed_out["details"]["timed_out"] is True
@@ -3802,6 +3876,7 @@ def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
         assert markers, r["check_key"]
         assert r["status"] == "unknown", (r["check_key"], r["status"])
         assert r["value"] is None and r["message"], r["check_key"]
+        assert "UNKNOWN" not in r["message"], r["check_key"]  # the page's words: Not measured
         if "skipped" in markers:  # the reason as text, never a bare flag
             assert isinstance(r["details"]["skipped"], str), r["check_key"]
             assert r["details"]["skipped"].strip(), r["check_key"]

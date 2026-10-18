@@ -24,10 +24,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 _REGISTRY = """
-insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label) values
-  ('aaa_first', 'platform', 'alarm', 'github-actions', 3600, '19 hours', 'First'),
-  ('mmm_mid',   'scraping', 'gauge', 'github-actions', 3600, '19 hours', 'Middle'),
-  ('zzz_last',  'platform', 'alarm', 'github-actions', 3600, '19 hours', 'Last')
+insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) values
+  ('aaa_first', 'platform', 'alarm', 'github-actions', 3600, '19 hours', 'First',  now() - interval '30 days'),
+  ('mmm_mid',   'scraping', 'gauge', 'github-actions', 3600, '19 hours', 'Middle', now() - interval '30 days'),
+  ('zzz_last',  'platform', 'alarm', 'github-actions', 3600, '19 hours', 'Last',   now() - interval '30 days')
 """
 
 _RESULTS = """
@@ -105,9 +105,9 @@ def test_a_stale_newest_row_reads_unknown_and_keeps_its_stored_status(cur):
     """RED by: dropping the health_stale arm of effective_status."""
     _empty(cur)
     cur.execute(
-        "insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label) "
-        "values ('fresh', 'platform', 'alarm', 'github-actions', 3600, '2 hours', 'Fresh'), "
-        "       ('stale', 'platform', 'alarm', 'github-actions', 3600, '2 hours', 'Stale')"
+        "insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+        "values ('fresh', 'platform', 'alarm', 'github-actions', 3600, '2 hours', 'Fresh', now() - interval '30 days'), "
+        "       ('stale', 'platform', 'alarm', 'github-actions', 3600, '2 hours', 'Stale', now() - interval '30 days')"
     )
     cur.execute(
         "insert into pipeline_check_results (run_at, check_key, status) values "
@@ -117,6 +117,30 @@ def test_a_stale_newest_row_reads_unknown_and_keeps_its_stored_status(cur):
         "select check_key, status, effective_status from pipeline_checks_public order by check_key"
     )
     assert cur.fetchall() == [("fresh", "fail", "fail"), ("stale", "fail", "unknown")]
+
+
+def test_a_result_older_than_the_keys_registration_is_not_served(cur):
+    """The cutover rule the ladder applies too: a verdict the old harness stored before the key was
+    registered (an error as `fail`, no message) never shows as current. RED by: dropping the
+    declared_at guard from the view's laterals."""
+    _empty(cur)
+    cur.execute(
+        "insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+        "values ('newkey', 'platform', 'alarm', 'github-actions', 3600, '19 hours', 'New', now() - interval '1 hour')"
+    )
+    cur.execute(
+        "insert into pipeline_check_results (run_at, check_key, status) values "
+        "(now() - interval '2 hours', 'newkey', 'fail'), (now() - interval '30 minutes', 'newkey', 'ok')"
+    )
+    cur.execute(
+        "select status, effective_status, run_at = now() - interval '30 minutes', "
+        "       last_measured_at = now() - interval '30 minutes' "
+        "from pipeline_checks_public where check_key = 'newkey'"
+    )
+    assert cur.fetchone() == ("ok", "ok", True, True)
+    cur.execute("delete from pipeline_check_results where check_key = 'newkey' and status = 'ok'")
+    cur.execute("select run_at, status, effective_status from pipeline_checks_public where check_key = 'newkey'")
+    assert cur.fetchone() == (None, None, "unknown")
 
 
 def test_an_unknown_newest_row_reads_unknown_and_last_measured_skips_it(cur):
@@ -178,8 +202,8 @@ def test_incidents_stop_at_their_own_key_and_at_fourteen_days(cur):
     """
     _empty(cur)
     cur.execute(
-        "insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label) "
-        "values ('a_b', 'platform', 'alarm', 'github-actions', 3600, '19 hours', 'A b')"
+        "insert into health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+        "values ('a_b', 'platform', 'alarm', 'github-actions', 3600, '19 hours', 'A b', now() - interval '30 days')"
     )
     cur.execute(
         "insert into ops_incidents (signature, resolved_at) values "

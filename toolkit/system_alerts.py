@@ -3,8 +3,11 @@
 `reconcile` reads each registered check's newest result, keeps one `ops_incidents` row per
 failing cell (`cell:<key>:<subject>`) and tells each one through `system_health`
 `notification_dispatches` rows: an onset, reminders by class until it is acknowledged on
-Health, and one recovery once a measured OK holds. Stdlib plus a caller-passed psycopg
-connection, so the API and the scripts import it with base dependencies only.
+Health, and one recovery once an OK is measured again across the hold. A newest result that
+is `unknown`, past its key's staleness budget or older than the key's registration is Not
+measured, and Not measured is inert: it neither opens, keeps, recovers nor reminds. Stdlib
+plus a caller-passed psycopg connection, so the API and the scripts import it with base
+dependencies only.
 """
 
 from __future__ import annotations
@@ -21,7 +24,8 @@ ALARM_RUNGS_H = (6.0, 24.0, 72.0)
 ALARM_WEEKLY_H = 168.0
 # The operator's ruling of 2026-10-18: a gauge rings when it first reads Problem, then once a day.
 GAUGE_RUNG_H = 24.0
-# The floor under a two-cadence recovery hold, so one green run of a fast check closes nothing.
+# Recovery needs a second OK measured at least max(2 cadences, this floor) after the first, so
+# neither a lone green run nor two quick greens of a fast check close an incident.
 RECOVERY_HOLD_MIN_S = 1800
 # A cell nobody has measured for a week can never close on a measured OK, so it closes silently.
 UNMEASURED_CLOSE_DAYS = 7
@@ -34,15 +38,19 @@ _RANK = {"ok": 0, "warn": 1, "fail": 2}
 
 _LOCK_SQL = "SELECT pg_try_advisory_xact_lock(hashtext('health_reconcile'))"
 
+# Only rows since the key's registration count: the harness before it stored a check's own
+# error as fail and no message, so a key is Not measured until the new harness measures it.
+# The budget is read as seconds: psycopg parses interval text only under the default IntervalStyle.
 _NEWEST_SQL = """
 SELECT hc.key, hc.class, hc.cadence_s, hc.label, hc.unit,
+       extract(epoch FROM hc.staleness_budget)::float8,
        latest.status, latest.run_at, latest.value,
        latest.details -> 'cells', latest.details ->> 'message'
   FROM health_checks hc
   LEFT JOIN LATERAL (
         SELECT c.status, c.run_at, c.value, c.details
           FROM pipeline_check_results c
-         WHERE c.check_key = hc.key
+         WHERE c.check_key = hc.key AND c.run_at >= hc.declared_at
          ORDER BY c.run_at DESC
          LIMIT 1) latest ON true
  ORDER BY hc.sort, hc.key
@@ -106,6 +114,8 @@ def _system_health_channels(conn: Any) -> list[str]:
 
 def emit_system_alert(conn: Any, check_key: str, message: str, *, dedupe_key: str) -> bool:
     """Insert one system_health dispatch for `check_key`; True when it landed (repeats no-op)."""
+    if not dedupe_key.startswith(f"sys:{check_key}:"):
+        raise ValueError(f"dedupe key {dedupe_key!r} is outside sys:{check_key}:")
     channels = _system_health_channels(conn)
     with conn.cursor() as cur:
         cur.execute(
@@ -162,13 +172,18 @@ class _Incident:
 
 
 def _hold(cadence_s: int) -> _dt.timedelta:
-    """How long a measured OK must hold before its incident recovers."""
+    """How long after a cell's first OK a later measured OK must come to recover its incident."""
     return _dt.timedelta(seconds=max(2 * cadence_s, RECOVERY_HOLD_MIN_S))
 
 
 def _unmeasured_window(cadence_s: int) -> _dt.timedelta:
     """How long a cell may go unmeasured before its incident closes; weekly checks get two weeks."""
     return _dt.timedelta(seconds=max(UNMEASURED_CLOSE_DAYS * 86400, 2 * cadence_s))
+
+
+def _stale(stamp: _dt.datetime, budget_s: float, at: _dt.datetime) -> bool:
+    """`health_stale` (migration 619) on this pass's clock: older than the key's budget."""
+    return stamp < at - _dt.timedelta(seconds=float(budget_s))
 
 
 def _cells(key: str, status: str, value: Any, details: Any, unit: str) -> dict[str, dict[str, Any]]:
@@ -193,11 +208,12 @@ def _cells(key: str, status: str, value: Any, details: Any, unit: str) -> dict[s
 
 
 def _check(row: tuple[Any, ...], at: _dt.datetime) -> _Check:
-    """A registry row with its newest result; only a measured result inside the window has cells."""
-    key, cls, cadence_s, label, unit, status, run_at, value, raw_cells, message = row
+    """A registry row with its newest result; only a measured result inside its budget has cells."""
+    key, cls, cadence_s, label, unit, budget_s, status, run_at, value, raw_cells, message = row
     run_at, cadence = _opt_utc(run_at), int(cadence_s)
+    # pipeline_checks_public's effective_status: missing, unknown or stale is Not measured.
     measured = (status in _RANK and run_at is not None
-                and run_at >= at - _unmeasured_window(cadence))
+                and not _stale(run_at, budget_s, at))
     details = {"cells": raw_cells, "message": message}
     cells = _cells(key, status, value, details, unit or "") if measured else {}
     return _Check(key, cls, cadence, label or key, run_at, cells)
@@ -233,6 +249,14 @@ def _named(key: str, subjects: Iterable[str]) -> str:
     return ", ".join(sorted({s for s in subjects if s != key}))
 
 
+def _anchor(incidents: list[_Incident]) -> str:
+    """A grouped notice's dedupe tail: `{oldest onset}:{lowest id}x{count}`."""
+    # An incident joins one notice per rung and one recovery, so its lowest id keeps two groups
+    # of one check apart when their cells are told in different passes.
+    oldest = min(i.first_seen_at for i in incidents)
+    return f"{_iso(oldest)}:{min(i.id for i in incidents)}x{len(incidents)}"
+
+
 def _onset(check: _Check, opened: list[tuple[_Incident, dict[str, Any]]]) -> str:
     """`{label}: Problem — {subject}: {cell message}; …` for the cells this pass opened."""
     parts = []
@@ -260,12 +284,12 @@ def _reminder(
     if not due:
         return None
     oldest, rung_label = min(due, key=lambda d: d[0].first_seen_at)
+    told = [inc for inc, _ in due]
     hours = (at - oldest.first_seen_at).total_seconds() / 3600
-    state = "Problem" if any(current[inc.id] == "fail" for inc, _ in due) else "Watch"
-    names = _named(check.key, (inc.subject for inc, _ in due))
+    state = "Problem" if any(current[inc.id] == "fail" for inc in told) else "Watch"
+    names = _named(check.key, (inc.subject for inc in told))
     message = f"{check.label}: still {state} for {hours:.0f} h" + (f" — {names}" if names else "")
-    dedupe = f"sys:{check.key}:reminder:{rung_label}:{_iso(oldest.first_seen_at)}"
-    return message, dedupe, [inc for inc, _ in due]
+    return message, f"sys:{check.key}:reminder:{rung_label}:{_anchor(told)}", told
 
 
 def _recovery(check: _Check, incidents: list[_Incident]) -> tuple[str, str]:
@@ -275,7 +299,7 @@ def _recovery(check: _Check, incidents: list[_Incident]) -> tuple[str, str]:
     hours = (ok_since - oldest.first_seen_at).total_seconds() / 3600
     names = _named(check.key, (i.subject for i in incidents))
     message = f"✓ {check.label}: {names + ' ' if names else ''}recovered after {hours:.0f} h"
-    return message, f"sys:{check.key}:recovery:{_iso(oldest.first_seen_at)}"
+    return message, f"sys:{check.key}:recovery:{_anchor(incidents)}"
 
 
 def _measured_subjects(
@@ -332,7 +356,8 @@ def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
                 if inc.ok_since is None:
                     cur.execute(_OK_SINCE_SQL, {"id": inc.id, "at": run_at})
                     inc.ok_since = run_at
-                if at - inc.ok_since >= _hold(check.cadence_s):
+                # Measured time, not wall-clock: silence after one OK never recovers anything.
+                if run_at - inc.ok_since >= _hold(check.cadence_s):
                     recovered.setdefault(check.key, []).append(inc)
         counts["opened"] = sum(len(v) for v in opened.values())
 
@@ -343,17 +368,17 @@ def reconcile(conn: Any, *, now: _dt.datetime | None = None) -> dict[str, int]:
 
         still_open = [i for i in incidents if i.id not in closed]
         retired = [i for i in still_open if i.key not in checks]
-        stale = [i for i in still_open if i.key in checks
-                 and i.last_seen_at < at - _unmeasured_window(checks[i.key].cadence_s)]
-        if stale:
-            seen = _measured_subjects(cur, checks, {i.key for i in stale}, at)
-            stale = [i for i in stale if i.subject not in seen.get(i.key, set())]
+        dark = [i for i in still_open if i.key in checks
+                and i.last_seen_at < at - _unmeasured_window(checks[i.key].cadence_s)]
+        if dark:
+            seen = _measured_subjects(cur, checks, {i.key for i in dark}, at)
+            dark = [i for i in dark if i.subject not in seen.get(i.key, set())]
         unmeasured = f"unmeasured {UNMEASURED_CLOSE_DAYS}d"
-        for reason, group in (("retired", retired), (unmeasured, stale)):
+        for reason, group in (("retired", retired), (unmeasured, dark)):
             if group:
                 cur.execute(_RESOLVE_SQL, {"now": at, "reason": reason,
                                            "ids": sorted(i.id for i in group)})
-        counts["closed_silently"] = len(retired) + len(stale)
+        counts["closed_silently"] = len(retired) + len(dark)
 
         by_key: dict[str, list[_Incident]] = {}
         for inc in incidents:

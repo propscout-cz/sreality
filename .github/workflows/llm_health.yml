@@ -4,13 +4,15 @@ name: "Monitoring: acute health (hourly)"
 # check registry into health_checks, measures every check that is due by its own cadence,
 # stores each result, and exits non-zero when an alarm reads Problem (`fail`), so GitHub
 # emails the operator. GitHub throttles this cron to about five runs a day, so "hourly" is a
-# ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical without the exit
-# flag; both fold into one canary in wave 2. Telling is the API's: its ladder
+# ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical, exit flag
+# included, so a failing alarm measured by either lane reds that run and emails; both fold
+# into one canary in wave 2. Telling is the API's: its ladder
 # (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.
 #
 # Both lanes share one concurrency group, so a check is measured once per cadence even when
 # GitHub delivers the two together. A gauge never reds this run: it is a standing condition
-# the ladder tells once a day.
+# the ladder tells once a day. A dispatch from a branch other than main measures but never
+# projects the registry.
 #
 # Read-only apart from its own result and registry rows; needs ONLY SUPABASE_DB_URL —
 # deliberately not the Anthropic key, so it keeps working when the API is what is down.

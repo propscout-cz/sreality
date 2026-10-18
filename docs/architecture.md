@@ -2020,10 +2020,13 @@ renumber.** Navigate by area:
     `fail` / `unknown`, shown as OK / Watch / Problem / Not measured — where `unknown` means the
     measurement did not happen (timed out, not run, errored, nothing to score) and is never OK; the
     row keeps the check's `message` and, when the check emits them, its `cells` (one verdict per
-    portal, job or lane). Measuring never alerts. The ONE teller is `toolkit/system_alerts.reconcile`,
-    run by the API every 60 s beside the delivery outbox: it keeps one `ops_incidents` row per failing
-    cell (signature `cell:<key>:<subject>`) — a measured `fail` opens it, `warn` keeps it open, a
-    measured `ok` held `max(2 × cadence, 30 min)` closes it, `unknown` never touches it — and emits
+    portal, job or lane). Measuring writes no system alert (a failing alarm only reds its GitHub
+    lane, which emails). The ONE teller is `toolkit/system_alerts.reconcile`, run by the API every
+    60 s beside the watchdog matcher (the outbox delivers its rows once a transport is configured):
+    it keeps one `ops_incidents` row per failing cell (signature `cell:<key>:<subject>`) — a
+    measured `fail` opens it, `warn` keeps it open, an OK measured across the hold
+    `max(2 × cadence, 30 min)` closes it (the newest OK's `run_at` at least the hold after the first
+    OK's; one lone OK never recovers), Not measured never touches it — and emits
     `source_kind='system_health'` dispatches, at most one onset, one reminder and one recovery per
     check per pass (dedupe `sys:<key>:<onset|reminder|recovery>:…`), reminding at 6 h / 24 h / 72 h
     then weekly for an alarm and every 24 h for a gauge: `subscription_id` and `collection_id` both
@@ -2035,20 +2038,22 @@ renumber.** Navigate by area:
     `POST /admin/health/acknowledge` stamps `ops_incidents.acknowledged_at` — and only that stops
     reminders. Reads are admin-gated: `pipeline_checks_public` serves one row per registered key
     with its newest result, its `effective_status` (`unknown` when there is no row, the newest row is
-    `unknown`, or it is older than the key's `staleness_budget` by `public.health_stale`) and its
+    `unknown`, or it is older than the key's `staleness_budget` by `public.health_stale`; a result
+    past its staleness budget is Not measured for the ladder as well as the page) and its
     incidents. Until wave 2 the dead-man switch is migration 274's SECURITY DEFINER
     `emit_verification_stale_alert` (the migration-136 exception-guarded pg_cron pattern, hourly):
     it rings when the newest result row of ANY key is older than 24 h. **The `system_health` arm is
-    the one producer that is NOT property-grain** — it is about the pipeline, not a listing, so
-    `listing_id` / `sreality_id` / `subscription_id` / `collection_id` are all NULL, the
-    operator-state merge reconciler has nothing to re-point on it, and `compose_message()`
-    renders its stored `message` verbatim instead of building a listing subject. Since the
-    reliability program's W3 (migration 462) a **second emitter, the `ops_incidents` signature
-    engine**, runs beside it: one open row per failure SIGNATURE derived from the error TEXT
-    (`scripts/failure_signature.py`), fed by `scraper.portal_runner`'s crash path and
+    one of the two producers (with `collection_share`) that are NOT property-grain** — it is about
+    the pipeline, not a listing, so `listing_id` / `sreality_id` / `subscription_id` /
+    `collection_id` are all NULL, the operator-state merge reconciler has nothing to re-point on it,
+    and `compose_message()` renders its stored `message` verbatim instead of building a listing
+    subject. Since the reliability program's W3 (migration 462) a **second emitter, the
+    `ops_incidents` signature engine**, runs beside it: one open row per failure SIGNATURE derived
+    from the error TEXT (`scripts/failure_signature.py`), fed by `scraper.portal_runner`'s crash path and
     `scripts/record_workflow_failures.py`'s job-log backstop, one dispatch per incident — no second
     alert table, no parallel bell namespace. **It is fenced from cell incidents** (both of its
-    auto-resolve statements skip `signature LIKE 'cell:%'`, so it can never close or "recover" one)
+    auto-resolve statements skip `signature LIKE 'cell:%'`, so it can never close or "recover" one,
+    and the poller ignores `check:` signatures, a failing check being the ladder's to tell)
     **and retires in wave 3**, leaving one incident model.
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
     **A FOURTH producer is live (migration 610): `collection_share`.** `POST

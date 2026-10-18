@@ -1259,8 +1259,8 @@ def seeded_admin_rows(svc: Any) -> "Iterator[str]":
             (n,),
         )
         cur.execute(
-            "INSERT INTO health_checks (key, domain, class, host, cadence_s, staleness_budget, label) "
-            "VALUES (%s, 'platform', 'alarm', 'github-actions', 3600, '1 day', 'iso')",
+            "INSERT INTO health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+            "VALUES (%s, 'platform', 'alarm', 'github-actions', 3600, '1 day', 'iso', now() - interval '1 day')",
             (n,),
         )
         cur.execute("INSERT INTO pipeline_check_results (run_at, check_key, status) VALUES (now(), %s, 'ok')", (n,))

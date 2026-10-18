@@ -320,9 +320,10 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
 }
 
 /* system_health alert: no listing subject or deep-link — the payload is the
- * `message` text (change_kind='system_alert'). Rendered as a full-width button
- * so clicking the row acknowledges it (marks seen), mirroring how the listing
- * rows mark seen on click-through. Red dot + AlertIcon signal severity. */
+ * `message` text (change_kind='system_alert'). Rendered as a full-width button:
+ * clicking the row marks it read (seen_at); it never acknowledges the incident
+ * (only Acknowledge on Health stops reminders). Mirrors how the listing rows mark
+ * seen on click-through. Red dot + AlertIcon signal severity. */
 function SystemNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;

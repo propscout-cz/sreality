@@ -12,7 +12,7 @@ the oracle is the Postgres catalog, never the applied-migrations ledger and neve
 fresh-container CI replay; (2) **every fleet-wide failure surfaces once, to one place,
 with its root cause attached** — one event table, one bell namespace, one escalation
 policy, extended and never duplicated. The constraint on *how*: build on the existing
-shared framework (`portal_runner`, `verify_pipeline.py`'s `_CHECKS`,
+shared framework (`portal_runner`, `verify_pipeline.py`'s `CHECKS`,
 `notification_dispatches`/`channel_sends`, `migrations/`) — two tables and zero
 dependencies across the whole program.
 
@@ -47,7 +47,7 @@ truth enforced only in production, and N identical emails for one cause.
 
 | Wave | Scope | Status |
 | --- | --- | --- |
-| W0 stop the silent losses | Four one-file fixes, each currently *discarding* information: poller cursor loss + a poller-liveness check (W0.1), honest crash accounting at the shared `portal_runner` seam (W0.2), LLM check keyed on state not recency + a per-`called_for` starvation arm (W0.3), graceful degradation of the acute health lane under its 120s budget (W0.4) | ⚪ superseded by the Health dashboard sprint (2026-10-18) |
+| W0 stop the silent losses | Four one-file fixes, each currently *discarding* information: poller cursor loss + a poller-liveness check (W0.1), honest crash accounting at the shared `portal_runner` seam (W0.2), LLM check keyed on state not recency + a per-`called_for` starvation arm (W0.3), graceful degradation of the acute health lane under its 120s budget (W0.4) | 🟢 shipped 2026-08/09; its open follow-ups superseded by the Health dashboard sprint (2026-10-18) |
 | W0.5 the second week's fires | (a) ceskereality contract v4 + contract-immutability lockfile rail in `test.yml` — un-wedges the intake lane, closes the merged≠enforced gap for portal contracts; (b) `llm_liveness` recalibrated 4h → 13h to the real (post-dedup) producer cadence | 🟡 in progress (2026-08-31, shipped as hotfix PRs ahead of wave order — the lane was down) |
 | W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks) | ⚪ proposed — needs operator sign-off |
 | W2 migration file as contract | `-- apply:` / `-- assert:` header tokens above a watermark (≥ 444), asserts executed inside `migrations.yml`'s existing per-file apply loop and *validated as able to fail*, plus schema-vocabulary parity and the hot-DDL doctrine rails. **W2.3's live-catalog drift check shipped in parallel as PR #1204 (`check_migration_drift`)** — remaining W2.3 scope is hardening it, not building it | ⚪ proposed — needs operator sign-off (part shipped in parallel) |
@@ -55,7 +55,7 @@ truth enforced only in production, and N identical emails for one cause.
 | W4 apply becomes a job | Hot-table DDL applied out-of-band by a tested, extracted lock primitive (`attempts=1`, fail fast, escalate to a window — the retry-loop pattern is retired, not tuned); the existing PK-swap applier generalised into a dispatchable maintenance window | ⚪ proposed — needs operator sign-off + one human step (`REALTIME_WORKER_ENABLED`) |
 | W5 constraint-only catalog diff | Named successor: diff CI's replayed schema against the live catalog. Catches 438 exactly, plus the ~241 migrations with no ledger row and no assert, plus the reverse drift direction W2 structurally cannot see — with zero per-migration convention | ⚪ named only, not built (open question 8) |
 
-## W0 — superseded by the Health dashboard sprint (2026-10-18)
+## W0 — shipped 2026-08/09; its open follow-ups superseded by the Health dashboard sprint (2026-10-18)
 
 Approved 2026-08-27. Grouped into three PRs rather than the design doc's four, because
 W0.1/W0.3/W0.4 all touch `scripts/verify_pipeline.py`'s check registry and stacking them
@@ -203,8 +203,8 @@ The Health page and its alarms are rebuilt as one sprint of ten waves, one draft
 in [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md). Its north star: a red
 on Health is a real, current, explained problem — measured once, judged once, shown once, told
 once. The operator answered its six questions on 2026-10-18 (the rulings head its § 11). It
-supersedes this program's W0 and replaces W3.4's ladder; the `ops_incidents` signature engine
-retires in its wave 3.
+supersedes the open follow-ups of this program's W0 (shipped 2026-08/09) and replaces W3.4's
+ladder; the `ops_incidents` signature engine retires in its wave 3.
 
 The ten waves: (1) one vocabulary, one registry, one ladder; (2) watchers — a pg_cron liveness
 check and one hourly GitHub canary; (3) platform checks and the worker's health lane, retiring the
@@ -217,7 +217,7 @@ parts.
 What wave 1 changed:
 - **One vocabulary.** Every result is `ok`, `warn`, `fail` or `unknown` (OK / Watch / Problem /
   Not measured). A check that timed out, did not run, raised, or could not measure is `unknown`
-  with its reason: never OK, and it never opens, closes or ages an incident. Migration 619 widens
+  with its reason: never OK, and it never opens, recovers or ages an incident. Migration 619 widens
   the status CHECK.
 - **One registry.** `scripts/verify_pipeline.py` `CHECKS` declares each of the 29 keys once
   (class, host, cadence, label, unit, owner page) and projects them into the new `health_checks`
@@ -230,16 +230,19 @@ What wave 1 changed:
 - **One ladder.** `toolkit/system_alerts.reconcile`, run by the API every 60 s, keeps one
   `ops_incidents` row per failing cell (`cell:<key>:<subject>`), sends one grouped onset per check,
   reminds until acknowledged on Health — an alarm at 6 h, 24 h, 72 h and then weekly, a gauge once
-  a day (the Q2 ruling) — and sends one recovery once a measured OK has held
+  a day (the Q2 ruling) — and sends one recovery once an OK is measured across
   `max(2 × cadence, 30 min)`. The 30-day re-derivation, the flap cooldown, the day-keyed alerts
-  and the weekly heartbeat are deleted, and the GitHub lanes no longer alert.
+  and the weekly heartbeat are deleted. The GitHub lanes write no system alert; a failing alarm
+  still reds either lane, so GitHub emails.
 - **Read is not acknowledged.** Platform admins can now mark a system alert read (migration 619's
-  policy arm; all 861 had stayed unseen), and only `POST /admin/health/acknowledge` stops
-  reminders.
+  policy arm; all 861 had stayed unseen), and only Acknowledge stops reminders: a minimal
+  Acknowledge button on Health's pipeline-checks card (`POST /admin/health/acknowledge`) until
+  wave 8 rebuilds the page.
 - **One admin-gated read.** `pipeline_checks_public` serves the registry, each key's newest result,
   its effective status (Not measured once stale) and its incidents; keys outside the registry, such
   as the frozen `outbound_url_parity`, leave the page.
-- The retiring signature engine is fenced: it can never close or "recover" a cell incident.
+- The retiring signature engine is fenced: it can never close or "recover" a cell incident, and
+  its poller ignores the `check:` signatures of a red lane.
 
 Owed items this absorbs:
 - **`docs/design/realtime-scrapers.md`'s deferred W5b** (SLO-scaled health, push alerting,
@@ -253,4 +256,4 @@ Owed items this absorbs:
   `failed_passes` move to wave 3 (the llm and jobs checks); delivery follows Q1 (bell only for now).
 
 **Next:** wave 2 — `health_liveness()` on pg_cron every 5 minutes and one hourly GitHub canary
-(migration 619).
+(migration 620).

@@ -221,6 +221,11 @@ MAX_LOG_FETCHES = 25          # Actions API budget guard: one poll, at most this
 LOG_TAIL_BYTES = 64 * 1024    # measured job logs run 27KB-172KB; a drain log is far larger
 _JOB_FAIL_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "startup_failure"})
 
+# A red whose reason is verify_pipeline's own failing CHECK line is a check verdict, and since
+# wave 1 of the Health sprint the ladder (toolkit/system_alerts.reconcile) tells those from the
+# stored result: an incident here would ring the same Problem twice. Crashes keep flowing.
+_LADDER_OWNED_PREFIX = "check:"
+
 # Wall-clock ceiling for the whole incident pass. MAX_LOG_FETCHES alone is not a time
 # budget: each fetch is up to 4 round trips (jobs list, the 302, then _fetch_blob_tail's
 # two ranged reads) at API_TIMEOUT_S=30 each, so 25 of them is a ~50-minute worst case
@@ -344,6 +349,9 @@ def record_incidents(
 ) -> dict[str, int]:
     """Give every newly recorded red a REASON, and close the ones the fleet answered.
 
+    A red whose reason is a failing check is the health ladder's (`_LADDER_OWNED_PREFIX`):
+    it keeps its `workflow_failures` row and opens no incident here.
+
     The API-budget saver is the RUN CLAIM (`ops_incident_runs`, migration 463), not a
     workflow→signature guess: a run the in-process producer already recorded costs zero
     fetches here and — the part that matters — cannot be counted a second time. The
@@ -363,13 +371,14 @@ def record_incidents(
     from toolkit import ops_incidents
 
     stats = {"recorded": 0, "already_recorded": 0, "fetched": 0,
-             "unreadable": 0, "skipped": 0, "expired": 0}
+             "unreadable": 0, "skipped": 0, "expired": 0, "ladder_owned": 0}
     if not failures:
         return {**stats, **ops_incidents.auto_resolve(conn)}
 
     excerpt_cap = ops_incidents.excerpt_byte_budget(conn)
     budget = MAX_LOG_FETCHES
     deadline = time.monotonic() + float(budget_seconds)
+    ladder_owned: list[str] = []
 
     for f in failures:
         path = f.get("workflow_path")
@@ -400,6 +409,10 @@ def record_incidents(
         if text:
             stats["fetched"] += 1
             signature = failure_signature.signature_from_log(text)
+            if signature is not None and signature.startswith(_LADDER_OWNED_PREFIX):
+                stats["ladder_owned"] += 1
+                ladder_owned.append(signature)
+                continue
             excerpt = failure_signature.excerpt_from_log(text, max_bytes=excerpt_cap)
         if signature is None:
             stats["unreadable"] += 1
@@ -422,6 +435,10 @@ def record_incidents(
         except Exception as exc:  # noqa: BLE001 — incidents must never break the poller
             LOG.warning("ops incident write failed for run %s: %r", run_id, exc)
 
+    if ladder_owned:
+        LOG.info("OPS_INCIDENTS ladder_owned=%d: red runs whose reason is a failing check open "
+                 "no incident; the health ladder tells them (%s)",
+                 len(ladder_owned), ", ".join(sorted(set(ladder_owned))))
     return {**stats, **ops_incidents.auto_resolve(conn)}
 
 

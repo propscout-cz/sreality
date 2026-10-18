@@ -462,22 +462,34 @@ Removed from the page (each replaced or owned elsewhere; the list is question 4)
 
 **Goal.** Every health fact says ok, warn, fail or unknown, and every check is declared once with its class, host and cadence. One ladder, toolkit/system_alerts, run by the API beside the outbox, turns measured fails into one stored incident per cell and tells each once. Incidents are acknowledged on purpose; notices can finally be read.
 
-**PR.** Draft PR on feature/health-contract. It contains:
+**PR.** Draft PR on feature/health-w1-contract. It contains:
 - registry metadata and its per-host projection;
 - the unknown path and the cells contract;
 - toolkit/system_alerts.reconcile and the API's system-alerts loop;
 - POST /admin/health/acknowledge;
 - migration 619;
 - docs.
-The GitHub lanes keep running every check unchanged and stop alerting; the old page only learns to draw unknown as neutral. Roughly line-neutral: the ladder, loop, route and migration (about +550) against the re-derivation, weekly heartbeat, day-keyed alerts and their tests (about −650). The second incident model it replaces goes in W3.
+The GitHub lanes keep running every check unchanged and stop alerting; the old page only learns to draw unknown as neutral. ~~Roughly line-neutral: the ladder, loop, route and migration (about +550) against the re-derivation, weekly heartbeat, day-keyed alerts and their tests (about −650).~~ Not as built: the measured delta is in the As-built list below. The second incident model it replaces goes in W3.
 
 **As built (2026-10-18).** Wave 1 (branch `feature/health-w1-contract`) follows this plan except where its build contract was more precise:
 - Moved forward from wave 2: `--only` and its acute-list test, `sreality_image_canary.yml` and `verify_outbound_urls.yml` (their keys now run by cadence, 86,400 s and 604,800 s), `verify_outbound_urls.py`'s own `main()` (its probe is the registered `outbound_url_conformance` check) and the hourly job's 30-minute timeout.
+- The two lanes are identical but for their crons: both run the due checks with `--exit-nonzero-on-fail`, so a failing alarm on either reds its run and GitHub emails (a gauge never reds a run), and both sit in one concurrency group, `pipeline-verification`, so they take turns instead of measuring a check twice.
+- A check is due when its newest result is older than its cadence less a slack of min(cadence / 10, 15 min), so a run that comes a few minutes short of a full cadence after the last one does not skip a whole cadence.
+- The workflow-failure poller (`scripts/record_workflow_failures.py`) ignores `check:` signatures: a run reddened by a failing alarm is the ladder's to tell, so the signature engine opens no second incident for it.
 - `Check` has no `sort` field: the sort is the position in `CHECKS`. `health_checks.domain` holds the page section (scraping, publishing, delisting, dedup, coverage, data_quality, platform); neither it nor `host` has a CHECK, and the table is not seeded: each lane's `project_registry` writes its own rows.
-- The SYSTEM-row arm is its own policy, `notification_dispatches_admin_update` (`account_id is null` and the hoisted `is_platform_admin()`), beside the unchanged tenant policy.
+- The SYSTEM-row arm is a separate permissive policy, `notification_dispatches_admin_update`: `account_id` = the SYSTEM account `00000000-0000-0000-0000-000000000000` (`account_id` is NOT NULL since migration 364) and the hoisted `is_platform_admin()`; the 292 tenant policy is unchanged.
+- Beyond the listed unmeasured paths, location_town_coverage's "no listings read", false_delist_share with no portal at 50 flips and worker_lane_stall with no heartbeat also read unknown; only ppm2_median_shift's "compared NOTHING" stays warn, until wave 6.
 - `effective_status` is unknown when the newest row is missing, unknown, or older than the key's staleness budget; `last_measured_at` is the newest row that is not unknown.
+- The ladder reads staleness the same way: a newest result past its key's staleness budget is inert for it, Not measured like an unknown row. It also counts only results written since the key's `declared_at`, because the old harness stored a check's own error as fail.
+- Recovery needs an OK measured across the hold: the newest OK's `run_at` must be at least the hold after the first OK's (`ok_since`), so one lone OK never recovers, however long ago it ran.
+- A cell closes silently once it has gone unmeasured for max(7 d, 2 × cadence), so the weekly URL probe's incidents wait two weeks.
+- The grouped reminder and recovery dedupe keys also carry the incidents they tell, as `{oldest first_seen_at}:{lowest id}x{count}`, so two groups of one check told in different passes never share a key; an onset stays keyed by its result's `run_at`, because one result opens all its cells in one pass.
+- The loop runs beside the watchdog matcher; the outbox, which starts only once a transport is configured, delivers its rows then.
+- The old page gains one control besides the neutral Not measured: a minimal Acknowledge button on the pipeline-checks card (the rebuilt page comes in wave 8).
 - Both of the signature engine's auto-resolve statements (`_RESOLVE_ON_SUCCESS_SQL` and `_RESOLVE_MAX_AGE_SQL`) carry the `cell:` fence.
 - The replay rail covers 14 days, and the CI import step also imports `scripts.record_workflow_failures`.
+- Measured delta of the first build (41ccb1ea) against f8e76ac5 (`git diff --numstat`): code about +26 net, the migration +194, workflows −103, tests about +1,363 and docs about +1,376, of which 1,264 is this plan. It is not line-neutral. Later deletions pay for the test growth: waves 3 and 6 rewrite `tests/scripts/test_verify_pipeline.py` per check as they delete the legacy keys and their tests, and wave 3 also deletes `toolkit/ops_incidents.py` with `tests/toolkit/test_ops_incidents.py`.
+- `pipeline_checks_public` serves only rows written since the key's `declared_at`, the ladder's own rule, so an old-harness verdict never shows as current after the cutover; the live view test seeds its keys 30 days back for that reason.
 
 **Operator gate.** Q2 (which checks become gauges), answered upfront.
 
@@ -515,7 +527,7 @@ The GitHub lanes keep running every check unchanged and stop alerting; the old p
 - CREATE TABLE health_checks (key pk, domain CHECK portals|dedup|data_quality|platform, class CHECK alarm|gauge, host CHECK realtime-worker|github-actions|pg_cron (derived_artifacts' own spellings), cadence_s, staleness_budget interval, label, unit, owner_path, sort, declared_at default now()). RLS on, no policy, revoked from anon and authenticated. Seeded once with W1's github-actions rows; the canary's projection owns them afterwards, and no CI test pins the seed.
 - CREATE FUNCTION health_stale(stamp timestamptz, budget interval) RETURNS boolean, STABLE SQL: stamp IS NULL OR now() − stamp > budget. The one staleness predicate.
 - ALTER TABLE ops_incidents ADD COLUMN ok_since timestamptz, ADD COLUMN acknowledged_at timestamptz.
-- notification_dispatches: REVOKE UPDATE FROM authenticated; GRANT UPDATE (seen_at, estimation_run_id) TO authenticated (the only columns the tenant routes write; merges run as the service role). ALTER POLICY notification_dispatches_tenant_update adds OR (account_id = SYSTEM AND (SELECT is_platform_admin())) to USING and WITH CHECK, mirroring the read arm.
+- notification_dispatches: REVOKE UPDATE FROM authenticated; GRANT UPDATE (seen_at, estimation_run_id) TO authenticated (the only columns the tenant routes write; merges run as the service role). ~~ALTER POLICY notification_dispatches_tenant_update adds OR (account_id = SYSTEM AND (SELECT is_platform_admin())) to USING and WITH CHECK, mirroring the read arm.~~ Superseded by the build: the SYSTEM arm is a separate permissive policy, notification_dispatches_admin_update, and the 292 tenant policy is unchanged (As built, above).
 - CREATE OR REPLACE VIEW pipeline_checks_public: one row per registered key, today's six columns first (the old page keeps working), then label, unit, domain, class, host, cadence_s, owner_path, sort, last_measured_at, effective_status (unknown when health_stale(greatest(last_measured_at, declared_at), staleness_budget)) and incidents (open cells with since, last seen, notices sent, acknowledged; cells closed in the last 14 d). Admin gate unchanged. Keys outside the registry, such as outbound_url_parity, leave the page with no data delete.
 
 **Tests.**
@@ -547,7 +559,7 @@ The GitHub lanes keep running every check unchanged and stop alerting; the old p
 
 **Risks.**
 - A ladder rewrite can mute or double alerts; the 30-day replay rail and idempotent dedupe keys guard it.
-- Cutover sends one grouped onset per currently failing alarm, once, which is expected; the operator may clear the 861 old alerts first with Mark all read.
+- Cutover sends one grouped onset per currently failing check (alarm or gauge) — today the three failing gauges, location_town_coverage, ppm2_basis_floor_share and text_extraction_lag — once, which is expected; the operator may clear the 861 old alerts first with Mark all read.
 - The widened CHECK is live before merge, so no writer can emit unknown into the narrower constraint.
 - The API redeploys ~11 times a day; incident state lives in the DB, and the first pass after boot catches up.
 - Until W2, a dead API is told by no one, as today (the bell is an API route); llm_health's GitHub email still runs.
@@ -1180,7 +1192,7 @@ After: 15 registered keys.
 
 ## 10. Assumptions the plan rests on
 
-- Migration numbers: main (f8e76ac5) ends at 614, and 615 (#1732), 616 (#1846) and 617 (#1850) are claimed by open PRs. This sprint uses 619-624 and renumbers at PR time if another lands first.
+- Migration numbers: main (f8e76ac5) ends at 614, and 615-618 are claimed (#1846 holds 616; #1732 holds 617 and 618). This sprint uses 619-624 and renumbers at PR time if another lands first.
 - The one-alert-spine rule is honoured: the ladder stays toolkit/system_alerts, the one escalation policy, and only its runner changes, from the GitHub lanes to an API loop beside the outbox that already delivers its notices. If the orchestrator reads the rule as also fixing the runner, the fallback is the feasibility review's contract (liveness opens only its own incidents), at the cost of no reminders while the worker is dead.
 - The API stays one always-on uvicorn process (7 d: 0 crash restarts, boots equal deployments), and a ~100 ms reconcile every 60 s beside the matcher does not affect request latency. The API's service-role connection can write ops_incidents and notification_dispatches.
 - The worker's DB connection has the same rights the GitHub lanes use today: cron.job_run_details, pg_stat_activity, the autodedup schema, llm_calls and the notification tables.
@@ -1261,4 +1273,4 @@ No issue yet: the dead `supports_complete_walk` flag (§ 2.9) and API root loggi
 - After each merge Railway's per-service commit status is confirmed; the page wave gets a read-only check in a real browser against production.
 - Every new alarm is replayed over 14–28 days of stored history as a committed test (aggregates only, no listing ids in the public repo) and ships only with zero false onsets.
 - Every merge restarts the worker (and so the autodedup lane), so worker-touching merges are timed around autodedup seed sittings; on this machine tests run one file at a time.
-- Migration numbers 619–624 assume 615–617 land first from the open PRs; they are renumbered at PR time if needed.
+- Migration numbers 619–624 sit above 615–618, which are claimed (#1846 holds 616; #1732 holds 617 and 618); they are renumbered at PR time if needed.

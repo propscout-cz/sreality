@@ -1,20 +1,48 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasUnacknowledgedIncident,
   normalizePipelineStatus,
   pipelineCheckLabel,
+  pipelineCheckStatus,
+  pipelineChecksBadgeText,
   pipelineCheckValueLabel,
   sortPipelineChecks,
   summarizePipelineChecks,
 } from './pipelineChecks';
 import { fmtCount } from './format';
-import type { PipelineCheckRow } from './queries';
+import type { PipelineCheckIncident, PipelineCheckRow } from './queries';
 
 function check(
   check_key: string,
   status: string,
   value: number | null = null,
+  effective_status: string | null = null,
+  incidents: PipelineCheckIncident[] = [],
 ): PipelineCheckRow {
-  return { check_key, status, value, details: null, run_at: '2026-07-05T13:34:00Z' };
+  return {
+    check_key,
+    status,
+    value,
+    details: null,
+    run_at: '2026-07-05T13:34:00Z',
+    effective_status,
+    incidents,
+  };
+}
+
+/* A newest stored Problem the view reads Not measured: older than its staleness budget. */
+const stale = (key: string) => check(key, 'fail', 3, 'unknown');
+
+function incident(over: Partial<PipelineCheckIncident> = {}): PipelineCheckIncident {
+  return {
+    id: 1,
+    subject: 'sreality',
+    first_seen_at: '2026-10-18T06:40:00Z',
+    resolved_at: null,
+    acknowledged_at: null,
+    notice_count: 1,
+    ...over,
+  };
 }
 
 describe('pipelineCheckLabel', () => {
@@ -74,7 +102,35 @@ describe('normalizePipelineStatus', () => {
   });
 });
 
+describe('pipelineCheckStatus', () => {
+  it("judges the view's effective status, not the stored one", () => {
+    expect(pipelineCheckStatus(stale('a'))).toBe('unknown');
+    expect(pipelineCheckStatus(check('b', 'ok', 1, 'ok'))).toBe('ok');
+  });
+  it('falls back to the stored status only when the row carries no judgement', () => {
+    expect(pipelineCheckStatus(check('a', 'warn'))).toBe('warn');
+    expect(pipelineCheckStatus({ status: null, effective_status: null })).toBe('unknown');
+  });
+});
+
+describe('hasUnacknowledgedIncident', () => {
+  it('is true only for an open incident nobody acknowledged', () => {
+    expect(hasUnacknowledgedIncident(check('a', 'fail', 1, 'fail', [incident()]))).toBe(true);
+    expect(hasUnacknowledgedIncident(check('a', 'fail'))).toBe(false);
+    const acked = incident({ acknowledged_at: '2026-10-18T07:00:00Z' });
+    const closed = incident({ id: 2, resolved_at: '2026-10-18T08:00:00Z' });
+    expect(hasUnacknowledgedIncident(check('a', 'ok', 0, 'ok', [acked, closed]))).toBe(false);
+    expect(
+      hasUnacknowledgedIncident(check('a', 'fail', 1, 'fail', [acked, incident({ id: 3 })])),
+    ).toBe(true);
+  });
+});
+
 describe('summarizePipelineChecks', () => {
+  it('counts a stale stored Problem as not measured, never as a live one', () => {
+    const s = summarizePipelineChecks([stale('a'), check('b', 'ok', 0, 'ok')]);
+    expect(s).toEqual({ ok: 1, warn: 0, fail: 0, unknown: 1, worst: 'unknown' });
+  });
   it('counts each band and reports the worst', () => {
     const s = summarizePipelineChecks([
       check('a', 'ok'),
@@ -100,7 +156,24 @@ describe('summarizePipelineChecks', () => {
   });
 });
 
+describe('pipelineChecksBadgeText', () => {
+  it("names the worst band in the page's words", () => {
+    expect(pipelineChecksBadgeText(summarizePipelineChecks([check('a', 'fail'), check('b', 'fail')])))
+      .toBe('2 problem');
+    expect(pipelineChecksBadgeText(summarizePipelineChecks([check('a', 'warn'), check('b', 'ok')])))
+      .toBe('1 watch');
+    expect(pipelineChecksBadgeText(summarizePipelineChecks([stale('a'), check('b', 'ok')])))
+      .toBe('1 not measured');
+    expect(pipelineChecksBadgeText(summarizePipelineChecks([check('a', 'ok')]))).toBe('OK');
+  });
+});
+
 describe('sortPipelineChecks', () => {
+  it('ranks a stale stored Problem with the unmeasured rows, below a live one', () => {
+    // keys chosen so the stored status alone would put the stale row first
+    const sorted = sortPipelineChecks([check('ok', 'ok'), stale('a_stale'), check('z_live', 'fail')]);
+    expect(sorted.map((c) => c.check_key)).toEqual(['z_live', 'a_stale', 'ok']);
+  });
   it('orders fail, then warn, then not measured, then ok, stable by key', () => {
     const sorted = sortPipelineChecks([
       check('zeta', 'ok'),

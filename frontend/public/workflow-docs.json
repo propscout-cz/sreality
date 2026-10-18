@@ -2711,7 +2711,7 @@
     {
       "filename": "llm_health.yml",
       "name": "Monitoring: acute health (hourly)",
-      "description": "The hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence, stores each result, and exits non-zero when an alarm reads Problem (`fail`), so GitHub emails the operator. GitHub throttles this cron to about five runs a day, so \"hourly\" is a ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical without the exit flag; both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
+      "description": "The hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence, stores each result, and exits non-zero when an alarm reads Problem (`fail`), so GitHub emails the operator. GitHub throttles this cron to about five runs a day, so \"hourly\" is a ceiling, not a rate. The 6-hourly lane (verify_pipeline.yml) is identical, exit flag included, so a failing alarm measured by either lane reds that run and emails; both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
       "portal": null,
       "manual": true,
       "schedules": [
@@ -4989,7 +4989,7 @@
     {
       "filename": "verify_pipeline.yml",
       "name": "Monitoring: pipeline verification",
-      "description": "The 6-hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence and stores each result in pipeline_check_results. It is the hourly lane (llm_health.yml) without the exit flag, so a Problem never reds this run; both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
+      "description": "The 6-hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the check registry into health_checks, measures every check that is due by its own cadence and stores each result in pipeline_check_results. It is identical to the hourly lane (llm_health.yml), exit flag included: a failing alarm measured by either lane reds that run, so GitHub emails the operator; a gauge never does. Both fold into one canary in wave 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results into incidents and notices.",
       "portal": null,
       "manual": true,
       "schedules": [

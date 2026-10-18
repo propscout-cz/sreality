@@ -2,14 +2,16 @@ name: "Monitoring: pipeline verification"
 
 # The 6-hourly lane of the health-check harness (scripts/verify_pipeline.py): it projects the
 # check registry into health_checks, measures every check that is due by its own cadence and
-# stores each result in pipeline_check_results. It is the hourly lane (llm_health.yml)
-# without the exit flag, so a Problem never reds this run; both fold into one canary in wave
-# 2. Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored
-# results into incidents and notices.
+# stores each result in pipeline_check_results. It is identical to the hourly lane
+# (llm_health.yml), exit flag included: a failing alarm measured by either lane reds that run,
+# so GitHub emails the operator; a gauge never does. Both fold into one canary in wave 2.
+# Telling is the API's: its ladder (toolkit/system_alerts.reconcile) turns the stored results
+# into incidents and notices.
 #
 # Read-only apart from its own result and registry rows; needs ONLY SUPABASE_DB_URL. Each
 # check is isolated: one that errors, times out or is not reached is stored Not measured
-# (`unknown`) and the run goes on.
+# (`unknown`) and the run goes on. A dispatch from a branch other than main measures but never
+# projects the registry, so a branch's CHECKS cannot delete main's keys.
 #
 # Required GitHub secret: SUPABASE_DB_URL.
 
@@ -48,11 +50,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run pipeline verification
+      - name: Run the due health checks (red on a failing alarm)
         run: |
-          ARGS=""
+          ARGS="--exit-nonzero-on-fail"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
           fi
-          echo "verify_pipeline args:${ARGS}"
+          echo "verify_pipeline args: ${ARGS}"
           python -m scripts.verify_pipeline $ARGS

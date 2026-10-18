@@ -206,13 +206,14 @@ It appears among the app's notifications; a watchdog's notice about properties i
 _Avoid_: alarm (that is the check), alert (alone), health notification
 
 **Acknowledge**:
-An admin's deliberate act, on the Health page, of marking an incident as known, which stops its
-reminders. Reading its system alert among the notifications does not acknowledge it.
+An admin's deliberate act, on the Health page (wave 1 ships a minimal Acknowledge button on the
+pipeline-checks card; the rebuilt page comes in wave 8), of marking an incident as known, which
+stops its reminders. Reading its system alert among the notifications does not acknowledge it.
 _Avoid_: dismiss, mute, snooze, resolve, mark read
 
 **Not measured**:
-The verdict of a check that has no current measurement: it ran out of time, did not run, failed,
-found nothing to judge, or is overdue. It never counts as OK, and it neither opens an incident
+The verdict of a check that has no current measurement: it ran out of time, did not run, raised an
+error, found nothing to judge, or is overdue. It never counts as OK, and it neither opens an incident
 nor counts as its recovery.
 _Avoid_: unknown (in prose), skipped, pending, OK
 

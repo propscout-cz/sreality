@@ -62,6 +62,38 @@ def _this_week() -> int:
     return _dt.datetime.now(_dt.timezone.utc).isocalendar().week
 
 
+class _Clock:
+    """The module's `time`, advanced by the fake portal and the probe's own sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _slow_portal(clock: _Clock, timeouts: list[float]) -> type:
+    """A portal that answers every HEAD 200 after 20 s, so 44 URLs need ~15 minutes; a
+    request given less than 20 s times out when its timeout runs out."""
+
+    class _Resp:
+        status_code, headers = 200, {}
+
+    class _Session:
+        def head(self, url: str, *, headers: Any, allow_redirects: bool,
+                 timeout: float) -> _Resp:
+            timeouts.append(timeout)
+            clock.now += min(timeout, 20.0)
+            if timeout < 20.0:
+                raise requests.ReadTimeout(f"{url}: read timed out")
+            return _Resp()
+
+    return _Session
+
+
 # --- the sample ------------------------------------------------------------------
 
 
@@ -109,6 +141,7 @@ def test_the_probe_heads_each_url_without_following_a_redirect(monkeypatch: Any)
     """HEAD only, no redirect followed; a network error is a non-conforming sample, never
     an exception that would end the check."""
     calls: list[tuple[str, bool]] = []
+    timeouts: list[float] = []
 
     class _Resp:
         def __init__(self, status: int) -> None:
@@ -118,6 +151,7 @@ def test_the_probe_heads_each_url_without_following_a_redirect(monkeypatch: Any)
         def head(self, url: str, *, headers: Any, allow_redirects: bool,
                  timeout: float) -> _Resp:
             calls.append((url, allow_redirects))
+            timeouts.append(timeout)
             if url.endswith("/down"):
                 raise requests.ConnectionError("down")
             return _Resp(404 if url.endswith("/gone") else 200)
@@ -127,8 +161,26 @@ def test_the_probe_heads_each_url_without_following_a_redirect(monkeypatch: Any)
     base = "https://www.remax-czech.cz/reality/detail/1"
     samples = [_s(id=i, source="remax", source_url=f"{base}/{tail}")
                for i, tail in enumerate(("ok", "gone", "down"))]
-    assert [ok for _, ok in mod.probe_all(samples)] == [True, False, False]
+    assert [ok for _, ok in mod.probe_all(samples, 60.0)] == [True, False, False]
     assert [follow for _, follow in calls] == [False, False, False]
+    assert timeouts == [20.0, 20.0, 20.0]  # a budget with room left gives each the full cap
+
+
+def test_the_probe_stops_at_its_deadline_and_leaves_the_rest_unprobed(
+        monkeypatch: Any) -> None:
+    """A portal answering each HEAD in 20 s needs 15 minutes for 44 URLs, and the probe used
+    to wait all of it (20 s per request, no deadline): seven times its 120 s budget. It now
+    stops at the deadline; the request the deadline cut short judged nothing and joins the
+    unprobed rest instead of counting as a URL that failed."""
+    clock, timeouts = _Clock(), []
+    monkeypatch.setattr(mod, "time", clock)
+    monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts))
+    samples = [_s(id=i) for i in range(44)]
+    probed = mod.probe_all(samples, 120.0)
+    assert [(s.id, ok) for s, ok in probed] == [(i, True) for i in range(5)]
+    assert clock.now <= 120.0
+    assert timeouts[:5] == [20.0] * 5
+    assert timeouts[5:] == [17.5]  # min(20 s, what was left); then nothing more was sent
 
 
 # --- the concentration threshold -----------------------------------------------------
@@ -172,9 +224,11 @@ def test_all_clean_is_ok_with_the_share_as_value() -> None:
 
 def test_the_check_probes_this_iso_weeks_sample_and_judges_it(monkeypatch: Any) -> None:
     probed: list[mod.Sample] = []
+    budgets: list[float] = []
 
-    def _probe(samples: list[mod.Sample]) -> list[tuple[mod.Sample, bool]]:
+    def _probe(samples: list[mod.Sample], budget_s: float) -> list[tuple[mod.Sample, bool]]:
         probed.extend(samples)
+        budgets.append(budget_s)
         return [(s, True) for s in samples]
 
     monkeypatch.setattr(mod, "probe_all", _probe)
@@ -185,12 +239,51 @@ def test_the_check_probes_this_iso_weeks_sample_and_judges_it(monkeypatch: Any) 
     assert out["details"]["codes"] == mod.codes_for_week(week)
     assert out["check_key"] == mod.CHECK_KEY and out["status"] == "ok" and out["value"] == 0.0
     assert out["details"]["sampled"] == len(probed) == 3 * len(mod.codes_for_week(week)) + 8
+    # the sampling queries spend from the same budget the HEAD loop is handed
+    (budget,) = budgets
+    assert 0 < budget <= mod.PROBE_BUDGET_S
+    assert out["details"]["unprobed"] == 0
+    assert out["details"]["budget_seconds"] == mod.PROBE_BUDGET_S
+    assert "not probed" not in out["message"]
+
+
+def test_the_check_judges_what_its_budget_reached_and_reports_the_rest(
+        monkeypatch: Any) -> None:
+    clock, timeouts = _Clock(), []
+    monkeypatch.setattr(mod, "time", clock)
+    monkeypatch.setattr(mod.requests, "Session", _slow_portal(clock, timeouts))
+    out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
+    drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
+    assert drawn * 20.0 >= 14 * 60, "the whole draw would need about 15 minutes"
+    assert clock.now <= mod.PROBE_BUDGET_S
+    assert out["status"] == "ok" and out["details"]["sampled"] == 5
+    assert out["details"]["unprobed"] == drawn - 5
+    assert out["details"]["budget_seconds"] == 120.0
+    assert f"{drawn - 5} of {drawn} sampled URLs were not probed" in out["message"]
+
+
+def test_a_check_whose_budget_is_spent_before_any_probe_is_not_measured(
+        monkeypatch: Any) -> None:
+    """Zero URLs probed is not an ok over zero samples: nothing was verified."""
+
+    class _NoSession:
+        def head(self, *a: Any, **kw: Any) -> Any:
+            raise AssertionError("the budget is spent, so nothing may be sent")
+
+    monkeypatch.setattr(mod.requests, "Session", _NoSession)
+    out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T,
+                                             budget_s=0.0)
+    drawn = 3 * len(out["details"]["codes"]) + len(mod.CRAWLER_SOURCES)
+    assert out["status"] == "unknown" and out["value"] is None
+    assert "budget was spent before any" in out["details"]["skipped"]
+    assert out["details"]["unprobed"] == drawn
+    assert "verified NOTHING" in out["message"]
 
 
 def test_the_check_is_unknown_when_no_sample_was_drawn(monkeypatch: Any) -> None:
     """Nothing to probe is Not measured, never an ok over zero samples."""
 
-    def _never(samples: list[mod.Sample]) -> list[tuple[mod.Sample, bool]]:
+    def _never(samples: list[mod.Sample], budget_s: float) -> list[tuple[mod.Sample, bool]]:
         raise AssertionError("nothing was drawn, so nothing may be probed")
 
     monkeypatch.setattr(mod, "probe_all", _never)
@@ -208,6 +301,8 @@ def test_the_check_is_registered_last_weekly_with_the_outbound_budget() -> None:
     last = CHECKS[-1]
     assert (last.key, last.fn) == (mod.CHECK_KEY, mod.check_outbound_url_conformance)
     assert (last.cls, last.cadence_s, last.budget_s) == ("alarm", 7 * 24 * 3600, 120.0)
+    # the budget the harness accounts for is the one the HEAD loop stops at
+    assert last.budget_s == mod.PROBE_BUDGET_S
 
 
 def test_the_probe_module_never_imports_the_harness_back() -> None:

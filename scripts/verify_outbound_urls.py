@@ -7,8 +7,11 @@ weekly re-derivation parity — but neither asks the portal. This one does, once
 with ~44 HEAD requests: it samples ACTIVE ads, sends `HEAD` to each stored URL, and
 records what came back.
 
-A registered check of scripts/verify_pipeline.py (cadence one week, budget 120 s), run when
-due from the GitHub lanes, so the probe leaves from an address other than the scrapers'.
+A registered check of scripts/verify_pipeline.py (cadence one week, budget `PROBE_BUDGET_S`),
+run when due from the GitHub lanes, so the probe leaves from an address other than the
+scrapers'. The HEAD loop keeps that budget itself, since nothing outside can preempt a request:
+each request waits at most 20 s or what is left, and the URLs it did not reach are reported as
+`unprobed`, never as failures.
 Status-code HEAD only — never follow a redirect, never read a body, never authenticate,
 never reuse this as an ingest surface (sreality's SSR page 302s into a login.seznam.cz
 chain; the scraper reaches sreality by id through /api/v1/estates).
@@ -22,7 +25,8 @@ Thresholding is by CONCENTRATION, not raw rate. A 404 on a single ad is most lik
 delisting rule #3 has not caught up with; a URL-SHAPE defect is systematic — every ad
 of one (category_main, category_sub_cb) cell fails together. So: `fail` when any cell
 with >= cell_min samples is >= cell_fail_share non-conforming; `warn` when the overall
-non-conformance exceeds warn_share; `ok` otherwise; `unknown` when nothing was drawn.
+non-conformance exceeds warn_share; `ok` otherwise; `unknown` when nothing was drawn, or the
+budget ran out before the first URL was probed.
 Active ads only — a delisted sreality page 404s at any URL, so the archive is guarded by
 the offline rails, not this.
 """
@@ -49,6 +53,9 @@ ROWS_PER_CB = 3
 CRAWLER_SOURCES = ("bazos", "bezrealitky", "idnes", "mmreality", "remax",
                    "ceskereality", "realitymix", "maxima")
 _PROBE_INTERVAL_S = 0.5
+# The check's whole budget, sampling included: verify_pipeline registers the check with it.
+PROBE_BUDGET_S = 120.0
+_REQUEST_TIMEOUT_S = 20.0
 _PROBE_HEADERS = {
     "Accept-Language": "cs,en;q=0.9",
     "User-Agent": (
@@ -158,28 +165,49 @@ def draw_samples(conn: Any, week: int) -> list[Sample]:
     return out
 
 
-def probe_all(samples: list[Sample]) -> list[tuple[Sample, bool]]:
+def probe_all(samples: list[Sample], budget_s: float) -> list[tuple[Sample, bool]]:
+    """HEAD each sample's stored URL until `budget_s` is spent: the samples judged, in order."""
     session = requests.Session()
+    deadline = time.monotonic() + budget_s
     results: list[tuple[Sample, bool]] = []
-    for s in samples:
+    for i, s in enumerate(samples):
+        if i:
+            time.sleep(_PROBE_INTERVAL_S)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        timeout = min(_REQUEST_TIMEOUT_S, remaining)
         try:
             resp = session.head(s.source_url, headers=_PROBE_HEADERS,
-                                allow_redirects=False, timeout=20)
+                                allow_redirects=False, timeout=timeout)
+        except requests.Timeout as exc:
+            # Cut short by our own deadline, the request judged nothing: it joins the
+            # unprobed rest instead of counting as a URL that does not resolve.
+            if timeout < _REQUEST_TIMEOUT_S:
+                break
+            LOG.warning("CONFORMANCE %s id=%s error=%s", s.source, s.id, exc)
+            ok = False
+        except requests.RequestException as exc:
+            LOG.warning("CONFORMANCE %s id=%s error=%s", s.source, s.id, exc)
+            ok = False
+        else:
             ok = conforms(s.source, resp.status_code, resp.headers.get("Location"), s.source_url)
             if not ok:
                 LOG.warning("CONFORMANCE %s id=%s cb=%s status=%s location=%s url=%s",
                             s.source, s.id, s.category_sub_cb, resp.status_code,
                             resp.headers.get("Location"), s.source_url)
-        except requests.RequestException as exc:
-            LOG.warning("CONFORMANCE %s id=%s error=%s", s.source, s.id, exc)
-            ok = False
         results.append((s, ok))
-        time.sleep(_PROBE_INTERVAL_S)
+    if len(results) < len(samples):
+        LOG.warning("CONFORMANCE budget %.0fs spent: %d of %d sampled URLs not probed",
+                    budget_s, len(samples) - len(results), len(samples))
     return results
 
 
-def check_outbound_url_conformance(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """This ISO week's sample of stored portal URLs, probed by HEAD and judged by concentration."""
+def check_outbound_url_conformance(conn: Any, thresholds: dict[str, Any], *,
+                                   budget_s: float = PROBE_BUDGET_S) -> dict[str, Any]:
+    """This ISO week's sample of stored portal URLs, probed by HEAD within `budget_s` and
+    judged by concentration over the URLs it reached."""
+    started = time.monotonic()
     week = _dt.datetime.now(_dt.timezone.utc).isocalendar().week
     codes = codes_for_week(week)
     samples = draw_samples(conn, week)
@@ -192,6 +220,20 @@ def check_outbound_url_conformance(conn: Any, thresholds: dict[str, Any]) -> dic
             "details": {"skipped": detail, "week": week, "codes": codes},
             "message": f"Portal URL conformance verified NOTHING — {detail}.",
         }
-    result = classify(probe_all(samples), thresholds)
-    result["details"].update({"week": week, "codes": codes})
+    probed = probe_all(samples, budget_s - (time.monotonic() - started))
+    spent = {"week": week, "codes": codes, "unprobed": len(samples) - len(probed),
+             "budget_seconds": round(budget_s, 1)}
+    if not probed:
+        detail = (f"the {budget_s:.0f} s budget was spent before any of the {len(samples)} "
+                  "sampled URLs was probed")
+        return {
+            "check_key": CHECK_KEY, "status": "unknown", "value": None,
+            "details": {"skipped": detail, **spent},
+            "message": f"Portal URL conformance verified NOTHING — {detail}.",
+        }
+    result = classify(probed, thresholds)
+    result["details"].update(spent)
+    if spent["unprobed"]:
+        result["message"] += (f" {spent['unprobed']} of {len(samples)} sampled URLs were not "
+                              f"probed: the check's {budget_s:.0f} s budget ran out.")
     return result

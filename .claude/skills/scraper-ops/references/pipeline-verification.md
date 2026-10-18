@@ -12,21 +12,32 @@ measured; a check is an alarm or a gauge; a cell is one verdict inside a check (
 
 **Pipeline verification harness** (`scripts/verify_pipeline.py`, migration 274, PR #703; the
 registry and the four statuses since migration 619) — every check is declared once in `CHECKS`
-(class, host, cadence, budget, label, unit, owner page) and projected into `health_checks`; a run
+(class, host, cadence, budget, label, unit, owner page) and projected into `health_checks` (only by a run
+from main: a `workflow_dispatch` from a branch, `GITHUB_REF_NAME` ≠ main, measures and stores but never
+projects, so a branch's `CHECKS` cannot delete main's keys; a local run without the variable counts as main); a run
 writes one `pipeline_check_results` row per check it ran, carrying `details.message`,
-`details.elapsed_ms` and, when the check emits them, `details.cells`. Both GitHub lanes run only
-the checks that are DUE (newest row older than `cadence_s`): `llm_health.yml` hourly with
-`--exit-nonzero-on-fail`, `verify_pipeline.yml` 6-hourly without it, so the daily
-`sreality_image_template` and weekly `outbound_url_conformance` probes ride whichever lane finds
-them due. A timeout, a not-run, an error or a check's own could-not-measure path is `unknown`
-with its reason in `details` (`timed_out`, `not_run`, `errored`, `skipped`); three "verified
-nothing" paths still read `warn` until the wave that replaces their check: `ppm2_median_shift`'s
-"compared NOTHING", `false_delist_share` with no portal at 50 flips, and
-`location_town_coverage`'s "no listings read". The lanes only measure: results reach the bell
-through the ladder below, the notification system's third producer, `system_health`
-(`docs/architecture.md` rule #16). Until wave 2 a `SECURITY DEFINER` dead-man-switch pg_cron
-function (`emit_verification_stale_alert`, the migration-136 exception-guarded pattern) rings
-when the newest result row of any key is older than 24 h. The harness exists because the pipeline
+`details.elapsed_ms` and, when the check emits them, `details.cells`. Both GitHub lanes run
+only the checks that are DUE: newest row older than `cadence_s` less a slack of min(cadence /
+10, 15 min), so a run that comes a few minutes short of a full cadence after the last one does
+not skip a whole cadence. The two lanes are identical but for their crons — `llm_health.yml`
+hourly, `verify_pipeline.yml` 6-hourly (it also takes a manual `dry_run`) — and both carry
+`--exit-nonzero-on-fail`, so a failing alarm on either reds its run and GitHub emails (a gauge
+never reds a run); they share one concurrency group (`pipeline-verification`), so they take
+turns instead of measuring a check twice, and the daily `sreality_image_template` and weekly
+`outbound_url_conformance` probes ride whichever lane finds them due. The URL probe keeps its own 120 s
+budget (`PROBE_BUDGET_S` in `scripts/verify_outbound_urls.py`, its `Check.budget_s`): each HEAD waits
+min(20 s, time left), URLs it did not reach are `details.unprobed` (with `details.budget_seconds`), never
+failures, and none probed is `unknown`. A timeout, a not-run, an
+error or a check's own could-not-measure path is `unknown` with its reason in `details`
+(`timed_out`, `not_run`, `errored`, `skipped`). One "verified nothing" path still reads `warn`
+until wave 6 replaces its check: `ppm2_median_shift`'s "compared NOTHING";
+`location_town_coverage`'s "no listings read", `false_delist_share` with no portal at 50 flips
+and `worker_lane_stall` with no heartbeat to read are Not measured since wave 1. The lanes
+write no system alert: results reach the bell through the ladder below, the notification
+system's third producer, `system_health` (`docs/architecture.md` rule #16). Until wave 2 a
+`SECURITY DEFINER` dead-man-switch pg_cron function (`emit_verification_stale_alert`, the
+migration-136 exception-guarded pattern) rings when the newest result row of any key is older
+than 24 h. The harness exists because the pipeline
 stalled silently for two days in 2026-07 (Anthropic credit exhaustion, 38k+ failed LLM calls) and
 the only alarm was a failing GH Actions cron the operator happened to miss. Among the registered
 checks: `llm_errors`, `llm_burn_rate`, `long_open_transaction` (every 6 h, from
@@ -382,13 +393,14 @@ as arms that cannot fire.
 **3. The acute lane must degrade, not vanish.** `run_checks` computed *all* results before
 `write_results` persisted *any*, inside `llm_health.yml`'s `timeout-minutes: 5`. A timeout
 therefore wrote **zero rows and fired zero alerts** — blinding `db_saturation` and
-`worker_liveness` at precisely the moment DB saturation would make checks slow. Now each
-result is inserted the instant its check returns, and since wave 1 the lanes call no alert
-function at all: the API's ladder reads the stored rows. Budgets: `_CHECK_BUDGET_S` (45 s) per
-check (`Check.budget_s`; 120 s for the two outbound probes), capped by whatever remains of the
-LANE budget — one per-check budget per DUE check, capped to fit the job (both lanes run
-30-minute jobs since wave 1). The full lane shared a 120 s budget until 2026-09-22, and in 13 of
-the 15 runs before that 7-17 of its 25 checks were `not_run`.
+`worker_liveness` at precisely the moment DB saturation would make checks slow. Now each result
+is inserted the instant its check returns, and since wave 1 the lanes call no alert function at
+all: the API's ladder reads the stored rows. Budgets: `_CHECK_BUDGET_S` (45 s) per check
+(`Check.budget_s`; 120 s for the two outbound probes), capped by whatever remains of the LANE
+budget — one per-check budget per DUE check; the summed budgets are proven to fit the 30-minute
+job by `test_every_lane_budget_fits_its_job` (both lanes run 30-minute jobs since wave 1). The
+full lane shared a 120 s budget until 2026-09-22, and in 13 of the 15 runs before that 7-17 of
+its 25 checks were `not_run`.
 Enforcement is **server-side** via `SET LOCAL statement_timeout`: the connection is autocommit
 and shared by every check, so a thread we cannot cancel or a signal raised mid-query would
 leave it wedged for everyone downstream. Postgres cancelling its own query is the only
@@ -396,8 +408,8 @@ mechanism that returns the connection clean. An overrun is `unknown` "timed out"
 (`details.timed_out`), an unreached check `unknown` "not run" (`details.not_run`), and a check
 that raised `unknown` with `details.errored` — "I could not measure this" is a different claim
 from "this is broken", and fail-on-timeout would manufacture a wall of false reds exactly when
-the operator needs to read the real one. Until wave 1 the first two were stored as `warn` (which
-the old ladder read as "not failing", rule 1) and a raising check as `fail`.
+the operator needs to read the real one. Until wave 1 the first two were stored as `warn`
+(which the old ladder read as "not failing", rule 1) and a raising check as `fail`.
 
 **`workflow_poller_liveness`** (W0.1) closes the matching blind spot on the other ops surface.
 `record_workflow_failures.py` deliberately excludes its own runs from `workflow_failures`, so a
@@ -457,14 +469,16 @@ Until W7 ships it, `llm_errors` still catches "calls are failing" (from state, n
 ## `ops_incidents` — the failure-signature producer (W3, migration 462)
 
 **Fenced from cell incidents since wave 1 of the Health dashboard sprint (both of its
-auto-resolve statements skip `signature LIKE 'cell:%'`), and retiring in wave 3.**
+auto-resolve statements skip `signature LIKE 'cell:%'`, and the poller ignores `check:`
+signatures: a failing check is the ladder's to tell), and retiring in wave 3.**
 
-The verification harness rings the bell for the 19 checks it runs. It says nothing about the
-~40 workflow failures/day that never touch a check: portal crashes, CI, backfills, LLM lanes.
-That is the seam the 2026-08-26 outage fell into — the surface that could alert had nothing to
-say about ingest, and `workflow_failures` (the surface that knew ingest was red) stores no
-failure reason of any kind. W3 closes it WITHOUT a second bell: `ops_incidents` emits an
-ordinary `system_health` `notification_dispatches` row and the shipped outbox delivers it.
+The verification harness measures the 29 registered checks and rings nothing itself; the ladder
+below reads their results. Neither says anything about the ~40 workflow failures/day that never
+touch a check: portal crashes, CI, backfills, LLM lanes. That is the seam the 2026-08-26 outage
+fell into — the surface that could alert had nothing to say about ingest, and
+`workflow_failures` (the surface that knew ingest was red) stores no failure reason of any
+kind. W3 closes it WITHOUT a second bell: `ops_incidents` emits an ordinary `system_health`
+`notification_dispatches` row and the shipped outbox delivers it.
 
 **The key.** `scripts/failure_signature.py` (pure stdlib, no DB) normalizes an error into a
 signature derived from the **error text only, never from `workflow_path`** — that asymmetry is
@@ -472,7 +486,7 @@ the whole mechanism, and it is why six portals failing on one `CheckViolation` a
 
 ```
 checkviolation|new row for relation listings violates check constraint listings_area_basis_check
-check:property_maintenance|fail          # verify_pipeline's own CHECK line, one key per check
+check:property_maintenance|fail          # verify_pipeline's own CHECK line, one key per check (ignored by the poller since wave 1)
 aborting|consecutive errors provider outage   # scripts that catch their own error and exit 1
 step:run tests|exit:timed_out@.github/workflows/test.yml   # unreadable red — the ONE scoped key
 ```
@@ -563,42 +577,52 @@ are gone; the GitHub lanes only measure.
 **Where it runs.** `toolkit/system_alerts.reconcile(conn)` is called every 60 s by the API's
 system-alerts loop (`api/system_alerts_loop.py`; `SYSTEM_ALERTS_INTERVAL_SECONDS = 60`, a
 constant), started in `api/main.py`'s lifespan beside the watchdog matcher and off under the same
-`NOTIFICATIONS_MATCHER_DISABLED` guard: telling lives in the process that already runs the outbox
-and serves the bell. A pass is one transaction under
+`NOTIFICATIONS_MATCHER_DISABLED` guard: telling lives in the process that serves the bell, whose
+outbox delivers the rows once a transport is configured. A pass is one transaction under
 `pg_try_advisory_xact_lock(hashtext('health_reconcile'))` — a second caller returns zeros and
 writes nothing — and returns `{opened, reminded, recovered, closed_silently, notices}`, logged
 when any is non-zero. Its values are module constants in `toolkit/system_alerts`, spelled once
 (`ALARM_RUNGS_H`, `ALARM_WEEKLY_H`, `GAUGE_RUNG_H`, `RECOVERY_HOLD_MIN_S`,
 `UNMEASURED_CLOSE_DAYS`, `MESSAGE_MAX_CHARS`); no setting overrides them.
 
-**What it reads.** The registry (`health_checks`: key, class, cadence, label, unit), the newest
-`pipeline_check_results` row per registered key, and the open cell incidents. A result's cells
-are `details.cells` when that is a non-empty list, otherwise one implicit cell whose subject is
-the check key — every wave-1 check, since explicit cells arrive with the waves that rebuild each
-check (wave 6 deletes the fallback). A result whose status is `unknown` is ignored whole: Not
-measured never opens, closes or ages an incident. A cell whose status is not `ok`, `warn` or
-`fail` is ignored.
+**What it reads.** The registry (`health_checks`: key, class, cadence, staleness budget, label,
+unit), the newest `pipeline_check_results` row per registered key written since the key's
+`declared_at` (the old harness stored a check's own error as `fail`, so a key is Not measured
+until the new harness measures it; `pipeline_checks_public` applies the same guard, so the page and the
+ladder agree), and the open cell incidents. A result's cells are
+`details.cells` when that is a non-empty list, otherwise one implicit cell whose subject is the
+check key — every wave-1 check, since explicit cells arrive with the waves that rebuild each
+check (wave 6 deletes the fallback). A result whose status is `unknown` is ignored whole, and so
+is a result older than its key's staleness budget: it is Not measured for the ladder too, as it
+is for the page's `effective_status`. A cell whose status is not `ok`, `warn` or `fail` is
+ignored.
 
 **One incident per failing cell.** One `ops_incidents` row per cell, signature
 `cell:<key>:<subject>` — a prefix the signature engine never produces, and the open-signature
 unique index allows one open row per cell. A measured `fail` opens it (`first_seen_at` =
 `last_seen_at` = the result's `run_at`) or, when it is open, advances `last_seen_at` and clears
-`ok_since`. A `warn` keeps an open incident open (clears `ok_since`) and opens nothing. A measured
-`ok` starts `ok_since` at the first OK; once that OK has held `max(2 × cadence, 30 min)` the
-incident resolves (`resolve_reason = 'measured ok'`). Two closes send nothing: an incident whose
-key left the registry (`retired`), and one whose `last_seen_at` is more than 7 days old and whose
-cell appears in no measured row of those 7 days (`unmeasured 7d`).
+`ok_since`. A `warn` keeps an open incident open (clears `ok_since`) and opens nothing. A
+measured `ok` starts `ok_since` at the first OK, and the incident resolves
+(`resolve_reason = 'measured ok'`) only on an OK measured across the hold,
+`max(2 × cadence, 30 min)`: the newest OK's `run_at` must be at least the hold after the first
+OK; one lone OK never recovers. Two closes send nothing: an incident whose key left the registry
+(`retired`), and a cell unmeasured for max(7 d, 2 × cadence) — its `last_seen_at` older than that
+and its cell in no measured row inside it — which closes silently (`unmeasured 7d`; two weeks for
+the weekly URL probe). Not measured never opens, recovers or ages an incident.
 
 **What it tells.** Each notice is one `notification_dispatches` row written by
 `emit_system_alert(conn, check_key, message, *, dedupe_key)`, which stamps `target_channels` from
 `system_health_channels` (`[]` today: the bell only, Q1). Per check and pass at most one notice
-of each kind, grouped across that check's cells:
+of each kind, grouped across that check's cells. The reminder and recovery keys also carry the
+incidents they tell (`{lowest id}x{count}`), so two groups of one check told in different passes
+never share a key; an onset is keyed by its result's `run_at`, because one result opens all its
+cells in one pass:
 
 | kind | when | dedupe key |
 | --- | --- | --- |
 | onset | incidents opened this pass | `sys:{key}:onset:{run_at}` |
-| reminder | open, not acknowledged, not recovering (`ok_since` null), a rung due | `sys:{key}:reminder:{rung}:{oldest first_seen_at}` |
-| recovery | incidents a measured OK closed this pass | `sys:{key}:recovery:{oldest first_seen_at}` |
+| reminder | open, not acknowledged, not recovering (`ok_since` null), a rung due | `sys:{key}:reminder:{rung}:{oldest first_seen_at}:{lowest id}x{count}` |
+| recovery | incidents a measured OK closed this pass | `sys:{key}:recovery:{oldest first_seen_at}:{lowest id}x{count}` |
 
 Rungs count from `first_seen_at`: an alarm reminds at 6 h, 24 h and 72 h, then weekly (rungs
 `6h`, `24h`, `72h`, `w…`); a gauge every 24 h (`d…`), the operator's Q2 ruling: "ring when first
@@ -609,10 +633,12 @@ characters), reminder `<label>: still Problem|Watch for N h — <subjects>`, rec
 `✓ <label>: <subjects> recovered after N h`. An onset sets `alert_count = 1, alerted_at = now()`;
 a reminder adds one to `alert_count` and moves `alerted_at`.
 
-**Read is not acknowledged.** Reading a notice in the bell sets `notification_dispatches.seen_at`,
-which platform admins can do on SYSTEM rows since migration 619; it never acknowledges.
-`POST /admin/health/acknowledge {"key": …}` sets `ops_incidents.acknowledged_at` on that key's
-open cell incidents, and only that stops their reminders; the recovery is still told.
+**Read is not acknowledged.** Reading a notice in the bell sets
+`notification_dispatches.seen_at`, which platform admins can do on SYSTEM rows since migration
+619; it never acknowledges. The Acknowledge button on Health (wave 1 ships a minimal one on the
+pipeline-checks card; the rebuilt page comes in wave 8) calls
+`POST /admin/health/acknowledge {"key": …}`, which sets `ops_incidents.acknowledged_at` on that
+key's open cell incidents, and only that stops their reminders; the recovery is still told.
 
 **Idempotent by construction.** The loop re-reads the same newest rows every minute, so each step
 is a no-op on repetition: `ON CONFLICT` on the open signature and on `dedupe_key`, `coalesce` on
@@ -625,8 +651,10 @@ is public) through `reconcile`, and asserts no recovery while a key's newest row
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
 fails the whole window.
 
-**Cutover.** The first pass after the deploy sends one grouped onset per check failing at that
-moment, once. The 861 old system alerts can now be cleared with "Mark all read".
+**Cutover.** After the deploy the ladder sends one grouped onset per currently failing check,
+alarm or gauge (today three gauges: `location_town_coverage`, `ppm2_basis_floor_share`,
+`text_extraction_lag`), once, each on its first pass after the new harness has measured it. The
+861 old system alerts can now be cleared with "Mark all read".
 
 **Dead-man switch, until wave 2.** Migration 274's `emit_verification_stale_alert` (pg_cron,
 hourly) rings when the newest result row of any key is older than 24 h, under its own
@@ -705,28 +733,28 @@ outbound checks are the ones the lane budget should drop first. The remedy when 
 template from sreality's own frontend and update `IMAGE_TRANSFORM_OPS`.
 
 **No lane of its own since wave 1.** `sreality_image_canary.yml` is deleted: the check's 24 h
-cadence makes it due once a day on whichever GitHub lane runs next (the hourly one exits non-zero
-on its `fail`), registered after the database checks so a slow CDN can never starve one. A CDN
+cadence makes it due once a day on whichever GitHub lane runs next (either lane exits non-zero on
+its `fail`), registered after the database checks so a slow CDN can never starve one. A CDN
 403/429 (sreality's throttle) or a 5xx is `unknown` — it verified nothing; only a 4xx refusal, a
 non-image body or a downgraded frame is a `fail`.
 
 ## `false_delist_share` — did a confirmed gone verdict close an ad the portal still shows? (2026-10-09)
 
 Rule #3's hysteresis flips a listing only on a second gone verdict at least `GONE_DWELL`
-(12 h) after the first, with no sighting between. The check reads the only durable trace
-of a flip — `detail_queue_completions.outcome = 'flipped'` (migration 594; reactivation
-clears `listings.inactive_at`) — and reports, per portal, the share of the last 7 days'
-flips whose ad is active again. A revival after a confirmed verdict means the portal kept
-the ad down longer than the dwell and brought it back, or its gone signal misfires; either
-way the operator saw an active ad marked inactive. Sized on the pre-hysteresis ledger
-(one verdict flipped): sreality 35%, mmreality 15%, remax 11%, bezrealitky 7%, idnes 6%,
-the rest under 2% — warn ≥5% (the dwell is meant to hold every portal under it), fail
-≥20% (the old sreality order of magnitude: the rule stopped working). A portal with fewer
-than 50 flips in the window is listed in `details.unscored`, not scored; a window where
-no portal reached 50 is `warn` with `value: None` — verified nothing — which is the
-expected state in the first days after 594 ships. `value` is the worst scored share in
-percent; `details.per_source` carries flips / active_again / share / scored. Measured
-every 6 h (its registry cadence); an alarm. The remedy when it reds: read the flipped rows' pages
+(12 h) after the first, with no sighting between. The check reads the only durable trace of
+a flip — `detail_queue_completions.outcome = 'flipped'` (migration 594; reactivation clears
+`listings.inactive_at`) — and reports, per portal, the share of the last 7 days' flips whose
+ad is active again. A revival after a confirmed verdict means the portal kept the ad down
+longer than the dwell and brought it back, or its gone signal misfires; either way the
+operator saw an active ad marked inactive. Sized on the pre-hysteresis ledger (one verdict
+flipped): sreality 35%, mmreality 15%, remax 11%, bezrealitky 7%, idnes 6%, the rest under
+2% — warn ≥5% (the dwell is meant to hold every portal under it), fail ≥20% (the old
+sreality order of magnitude: the rule stopped working). A portal with fewer than 50 flips in
+the window is listed in `details.unscored`, not scored; a window where no portal reached 50
+is Not measured (`unknown`, `value: None`) — verified nothing — which is the expected state
+in the first days after 594 ships. `value` is the worst scored share in percent;
+`details.per_source` carries flips / active_again / share / scored. Measured every 6 h (its
+registry cadence); an alarm. The remedy when it reds: read the flipped rows' pages
 (`detail_queue_completions` → `listings.source_url`) before touching the dwell.
 
 ## `walk_end_streak` — how many walks in a row has a category nominated nothing? (2026-10-13)
@@ -759,11 +787,11 @@ newer than the cell's last walk — and a cell its portal has not walked in its 
 reads **warn whatever its streak** ("<source> <cm>/<ct> not walked since <ts> (N <source>
 walks since)"). That one rule covers two cases: a category starved by a deadline that never
 reaches it (silence is not recovery — it must not read ok), and a category dropped from the
-portal's config, which would otherwise hold the bell red for 14 days on a stale streak;
-warn is dashboard-only, so neither rings. `walk_coverage`'s truncation arm does NOT cover a
-never-started category: it compares the latest run's category count with the 7-day best,
-only warns, and goes quiet once the truncation outlasts 7 days or a rotation keeps the
-count stable.
+portal's config, which would otherwise hold the bell red for 14 days on a stale streak; a
+warn opens nothing, though it keeps an open incident reminding. `walk_coverage`'s truncation
+arm does NOT cover a never-started category: it compares the latest run's category count
+with the 7-day best, only warns, and goes quiet once the truncation outlasts 7 days or a
+rotation keeps the count stable.
 
 `value` is the worst streak among categories still being walked; `details.per_category`
 carries streak / walks / `runs_since_walked` / `last_walked_at` / `last_reached_end_at` /
@@ -774,18 +802,17 @@ no verdict at all (no finished walk anywhere, or `walk_reached_end` gone from
 `by_category`) is `unknown` with value None and `details.skipped`, "measured nothing" — never `ok`,
 value 0. No alerting check here judges index-walk liveness, so read `scrape_runs` when it says that.
 
-Blind spots, known: (1) two descriptors behind one label (bazos pozemek+zahrada,
-dum+chata, the komercni sections, garaz+ostatni) count as reached when every one the run
-WALKED reached the end, so a run that stops between them resets the label's streak;
-(2) a category out of the window entirely (unwalked 14 days) drops out and reads ok;
-(3) a dispatched `--max-pages` / `--limit` run, or a bazos `--locality/--radius-km` run,
-finalizes as an index walk with `walk_reached_end=false` on every category it walked, so
-each one counts as a miss — three between two crons turn the row amber — and a bazos
-dispatch narrowed to one scope counts as a portal walk for `runs_since_walked` of every
-other category; `scrape_runs` records no run arguments, so the check cannot tell them
-apart; (4) until this check emits one cell per category it has a single implicit cell, so while one
-category holds it red a SECOND that parks opens no new incident and is named only in the next
-reminder (6 h / 24 h / 72 h, then weekly) — read the Health row's `details.offenders`, not the
-bell, for the full list. Measured every 6 h (its registry cadence) beside `walk_coverage`; an
-alarm. When it rings: the category's `VERIFY skipped` line names
+Blind spots, known: (1) two descriptors behind one label (bazos pozemek+zahrada, dum+chata,
+the komercni sections, garaz+ostatni) count as reached when every one the run WALKED reached
+the end, so a run that stops between them resets the label's streak; (2) a category out of
+the window entirely (unwalked 14 days) drops out and reads ok; (3) a dispatched
+`--max-pages` / `--limit` run, or a bazos `--locality/--radius-km` run, finalizes as an
+index walk with `walk_reached_end=false` on every category it walked, so each one counts as
+a miss — three between two crons turn the row amber — and a bazos dispatch narrowed to one
+scope counts as a portal walk for `runs_since_walked` of every other category; `scrape_runs`
+records no run arguments, so the check cannot tell them apart; (4) until this check emits
+one cell per category it has a single implicit cell, so while one category holds it red a
+SECOND that parks opens no new incident and is never named in a notice — read the Health
+row's `details.offenders` for the full list. Measured every 6 h (its registry cadence)
+beside `walk_coverage`; an alarm. When it rings: the category's `VERIFY skipped` line names
 our stop, and the portal's own `SLICE` / `DESCENT` lines name the slice.

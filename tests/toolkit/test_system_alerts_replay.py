@@ -28,6 +28,8 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "health_replay_14d
 # Production reconciles every 60 s; every row's arrival plus a 10-minute tick resolves holds of
 # two hours and more, and keeps the replay well under a second.
 _TICK = _dt.timedelta(minutes=10)
+# Check.staleness_budget on the github-actions host, where every key of the window ran.
+_GITHUB_SLACK = _dt.timedelta(hours=18)
 
 # The wave-1 registry (scripts/verify_pipeline.py CHECKS) the history was measured under.
 _REGISTRY: dict[str, tuple[str, int]] = {
@@ -62,6 +64,14 @@ class _Told:
     newest: str | None
 
 
+def _budget(key: str) -> _dt.timedelta:
+    return _dt.timedelta(seconds=_REGISTRY[key][1]) + _GITHUB_SLACK
+
+
+def _hold(key: str) -> _dt.timedelta:
+    return _dt.timedelta(seconds=max(2 * _REGISTRY[key][1], RECOVERY_HOLD_MIN_S))
+
+
 def _history() -> dict[str, _Rows]:
     """Every run of the export expanded into evenly spaced rows, per key, oldest first."""
     history: dict[str, _Rows] = {}
@@ -92,7 +102,8 @@ def _replay() -> tuple[dict[str, _Rows], list[_dt.datetime], _FakeConn, list[_To
     conn = _FakeConn()
     for key in history:
         cls, cadence_s = _REGISTRY[key]
-        conn.register(key, cls=cls, cadence_s=cadence_s)
+        conn.register(key, cls=cls, cadence_s=cadence_s,
+                      budget_s=_budget(key).total_seconds())
     fed = dict.fromkeys(history, 0)
     told: list[_Told] = []
     for at in passes:
@@ -109,25 +120,19 @@ def _replay() -> tuple[dict[str, _Rows], list[_dt.datetime], _FakeConn, list[_To
     return history, passes, conn, told
 
 
-def _hold(key: str) -> _dt.timedelta:
-    return _dt.timedelta(seconds=max(2 * _REGISTRY[key][1], RECOVERY_HOLD_MIN_S))
-
-
-def _streaks(rows: _Rows, passes: list[_dt.datetime], hold: _dt.timedelta) -> int:
-    """The rule restated: a fail opens a streak; only an OK still newest `hold` after it ends it."""
-    count, is_open, ok_since, i = 0, False, None, -1
-    for at in passes:
-        while i + 1 < len(rows) and rows[i + 1][0] <= at:
-            i += 1
-            seen_at, status = rows[i]
-            if status == "fail" and not is_open:
-                count, is_open = count + 1, True
-            if status in ("fail", "warn"):
-                ok_since = None
-            elif status == "ok" and is_open and ok_since is None:
-                ok_since = seen_at
-        if is_open and ok_since is not None and rows[i][1] == "ok" and at - ok_since >= hold:
-            is_open, ok_since = False, None
+def _streaks(rows: _Rows, hold: _dt.timedelta) -> int:
+    """The rule restated: a fail opens a streak; an OK measured `hold` after the first OK ends it."""
+    count, is_open, ok_since = 0, False, None
+    for at, status in rows:
+        if status == "fail":
+            count += not is_open
+            is_open, ok_since = True, None
+        elif status == "warn":
+            ok_since = None
+        elif status == "ok" and is_open:
+            ok_since = ok_since or at
+            if at - ok_since >= hold:
+                is_open, ok_since = False, None
     return count
 
 
@@ -138,6 +143,18 @@ def _rung(cls: str, hours: float) -> str | None:
     if hours >= 168:
         return f"w{int(hours // 168) + 1}"
     return next((f"{h}h" for h in (72, 24, 6) if hours >= h), None)
+
+
+def _utc(stamp: str) -> _dt.datetime:
+    return _dt.datetime.fromisoformat(stamp)
+
+
+def test_the_replay_registry_is_the_harness_registry() -> None:
+    """A class, cadence or budget change in CHECKS must reach this rail, not drift past it."""
+    from scripts.verify_pipeline import CHECKS
+
+    assert _REGISTRY == {c.key: (c.cls, c.cadence_s) for c in CHECKS}
+    assert {c.key: c.staleness_budget for c in CHECKS} == {key: _budget(key) for key in _REGISTRY}
 
 
 def test_no_recovery_is_told_unless_the_newest_row_is_a_measured_ok() -> None:
@@ -168,10 +185,10 @@ def test_every_incident_write_is_anchored_on_a_measured_row_that_says_so() -> No
 
 
 def test_each_maximal_fail_streak_opens_exactly_one_incident_and_one_onset() -> None:
-    history, passes, conn, told = _replay()
+    history, _passes, conn, told = _replay()
     total = 0
     for key, rows in history.items():
-        expected = _streaks(rows, passes, _hold(key))
+        expected = _streaks(rows, _hold(key))
         opened = [i for i in conn.incidents if i["signature"] == f"cell:{key}:{key}"]
         assert len(opened) == expected, key
         assert sum(1 for t in told if t.key == key and t.kind == "onset") == expected, key
@@ -179,6 +196,18 @@ def test_each_maximal_fail_streak_opens_exactly_one_incident_and_one_onset() -> 
     assert total > 0
     # Nothing in this window went a week unmeasured, so every close was a measured recovery.
     assert {i["resolve_reason"] for i in conn.incidents} <= {None, "measured ok"}
+
+
+def test_a_lone_ok_inside_a_fail_streak_does_not_split_its_incident() -> None:
+    """llm_errors 2026-10-12/13: one OK at 20:15 between fails, then fails again until 02:00."""
+    _history, _passes, conn, told = _replay()
+    lone_ok, refail = _utc("2026-10-12T20:15:16Z"), _utc("2026-10-13T02:00:40Z")
+    llm = sorted((i for i in conn.incidents if i["signature"] == "cell:llm_errors:llm_errors"),
+                 key=lambda i: i["first_seen_at"])
+    assert llm[0]["first_seen_at"] < lone_ok and llm[0]["resolved_at"] > refail
+    assert not [i for i in llm if lone_ok <= i["first_seen_at"] <= refail]
+    assert not [t for t in told if t.key == "llm_errors" and t.kind == "recovery"
+                and lone_ok <= t.at <= refail]
 
 
 def test_a_key_failing_all_window_tells_one_onset_then_only_its_rungs() -> None:
@@ -194,8 +223,11 @@ def test_a_key_failing_all_window_tells_one_onset_then_only_its_rungs() -> None:
         for at in passes:
             while i + 1 < len(rows) and rows[i + 1][0] <= at:
                 i += 1
-            rung = _rung(cls, (at - first).total_seconds() / 3600) if at >= first else None
-            if rung and rows[i][1] != "unknown" and rung not in rungs:
+            # Reminders come only while the newest row is measured: not unknown, not stale.
+            if i < 0 or rows[i][1] == "unknown" or rows[i][0] < at - _budget(key):
+                continue
+            rung = _rung(cls, (at - first).total_seconds() / 3600)
+            if rung and rung not in rungs:
                 rungs.append(rung)
         mine = [t for t in told if t.key == key]
         assert [t.kind for t in mine] == ["onset"] + ["reminder"] * len(rungs), key

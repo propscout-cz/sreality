@@ -202,10 +202,10 @@ Monitor/alerting workflows watch the rest: `monitor_workflow_failures.yml` ("Mon
 failures", cron `*/30` — records failed / timed-out / startup-failed runs into `workflow_failures`
 for the Health page, since GitHub only emails about failed *scheduled* runs; a never-started
 supersession cancel is distinguished from a real failure; cursor + timeout-kill captured) and `llm_health.yml` ("Monitoring: acute health", hourly
-— verify_pipeline's hourly lane: every check DUE by its registry cadence, so the hourly
-ones (`llm_errors`, `llm_burn_rate`, `db_saturation`, `worker_liveness`, …) are due each time, with
-`--exit-nonzero-on-fail` so a failing alarm goes red and emails; a gauge never does). A credit-balance error alarms
-immediately and PER PROVIDER (each its own account: one provider's success never clears another's credit error; the alert names that provider, its failing models and jobs, where 2026-10-02..10 it named every paid job and no provider), and the LLM failure probe is INDEPENDENT of pending work (a quiet-queue blind spot
+— verify_pipeline's hourly lane, identical to the 6-hourly `verify_pipeline.yml` but for its cron: every check DUE by its
+registry cadence, so the hourly ones (`llm_errors`, `llm_burn_rate`, `db_saturation`, `worker_liveness`, …) are due each
+time; both lanes exit non-zero on a failing alarm (`--exit-nonzero-on-fail`), so either reds and emails; a gauge never does).
+A credit-balance error alarms immediately and PER PROVIDER (each its own account: one provider's success never clears another's credit error; the alert names that provider, its failing models and jobs, where 2026-10-02..10 it named every paid job and no provider), and the LLM failure probe is INDEPENDENT of pending work (a quiet-queue blind spot
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
 provider exception, so the check needs no key of its own.
 `llm_burn_rate` watches daily LLM spend for the recurring credit-depletion pattern (warn threshold
@@ -404,14 +404,17 @@ Per-lane notes:
 each `Check` declares key, class (`alarm`/`gauge`), host (all `github-actions` in wave 1), `cadence_s`, budget, label,
 unit and owner page; `project_registry` mirrors the host's keys into `health_checks` (migration 619). FOUR statuses,
 `ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, a not-run, an error or a check's own
-could-not-measure path is `unknown`, reason in `details` (`timed_out`/`not_run`/`errored`/`skipped`), never `ok`. Both
-GitHub lanes run only the DUE checks (newest row older than `cadence_s`): `llm_health.yml` hourly with
-`--exit-nonzero-on-fail` (a failing alarm reds the run and emails; a gauge never does), `verify_pipeline.yml` 6-hourly without; the daily sreality
-image probe and the weekly outbound-URL probe are cadences, not workflows. A row keeps `details.message`, `elapsed_ms`
-and any `cells` (one verdict per portal/job/lane). The lanes never alert: the ONE ladder, `toolkit/system_alerts.reconcile`,
-runs in the API every 60 s — one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per
-check, reminders until acknowledged on Health (alarm 6 h / 24 h / 72 h then weekly, gauge daily), one recovery once a
-measured `ok` holds `max(2 × cadence, 30 min)`; `unknown` is inert. **Rationale, ladder, sizing: `references/pipeline-verification.md`.**
+could-not-measure path is `unknown`, reason in `details` (`timed_out`/`not_run`/`errored`/`skipped`), never `ok` (one
+holdout until wave 6: `ppm2_median_shift`'s "compared NOTHING" still reads `warn`). The two GitHub lanes are identical
+but for their crons (`llm_health.yml` hourly, `verify_pipeline.yml` 6-hourly, one concurrency group): each runs only the
+DUE checks (newest row older than `cadence_s` less min(cadence / 10, 15 min)) with `--exit-nonzero-on-fail`, so a failing
+alarm on either reds its run and emails (a gauge never does); the daily sreality image probe and the weekly outbound-URL
+probe are cadences, not workflows. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per
+portal/job/lane). The lanes write no system alert: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
+one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per check, reminders until
+acknowledged on Health (a minimal Acknowledge button on the pipeline-checks card; the rebuilt page in wave 8) — alarm
+6 h / 24 h / 72 h then weekly, gauge daily — and one recovery once an OK is measured across `max(2 × cadence, 30 min)`;
+`unknown`, or a result past its staleness budget, is inert. **Rationale, ladder, sizing: `references/pipeline-verification.md`.**
 
 ## Reading the logs
 
