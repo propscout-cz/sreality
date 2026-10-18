@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readFlag, useMapCollapsed } from './browseLayout';
+import { readFlag, useMapCollapsed, useSidebarCollapsed } from './browseLayout';
 
 const KEY = 'sreality.browse.mapCollapsed';
 
@@ -35,6 +35,26 @@ describe('useMapCollapsed', () => {
   it('reads a persisted value on mount', () => {
     localStorage.setItem(KEY, '1');
     const { result } = renderHook(() => useMapCollapsed());
+    expect(result.current.value).toBe(true);
+  });
+});
+
+describe('useSidebarCollapsed', () => {
+  const SIDEBAR_KEY = 'sreality.browse.sidebarCollapsed';
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('defaults to false (filters shown) and keeps its own key, apart from the map flag', () => {
+    const { result } = renderHook(() => useSidebarCollapsed());
+    expect(result.current.value).toBe(false);
+    act(() => result.current.set(true));
+    expect(localStorage.getItem(SIDEBAR_KEY)).toBe('1');
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('reads a persisted value on mount', () => {
+    localStorage.setItem(SIDEBAR_KEY, '1');
+    const { result } = renderHook(() => useSidebarCollapsed());
     expect(result.current.value).toBe(true);
   });
 });

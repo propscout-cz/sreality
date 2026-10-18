@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import { CollectionsPicker, FilterSidebar } from './Filters';
+import { CollectionsPicker, FilterSidebar, FilterSidebarRail } from './Filters';
 import { AccountTagFilter } from './filter-controls/TagFilterControl';
 import * as api from '@/lib/api';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
@@ -155,5 +155,44 @@ describe('<FilterSidebar> location pick', () => {
     expect(latest.districts).toEqual([
       { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
     ]);
+  });
+});
+
+describe('<FilterSidebar> collapse', () => {
+  const renderSidebar = (onCollapse?: () => void) => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    return renderPicker(
+      <MemoryRouter>
+        <FilterSidebar filters={DEFAULT_FILTERS} onChange={() => {}} onCollapse={onCollapse} />
+      </MemoryRouter>,
+    );
+  };
+
+  it('offers "Hide filters" only to a caller that can fold it', () => {
+    const onCollapse = vi.fn();
+    const { unmount } = renderSidebar(onCollapse);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide filters' }));
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+    unmount();
+
+    renderSidebar();
+    expect(screen.queryByRole('button', { name: 'Hide filters' })).toBeNull();
+  });
+});
+
+describe('<FilterSidebarRail>', () => {
+  it('brings the filters back on a click', () => {
+    const onExpand = vi.fn();
+    render(<FilterSidebarRail active={false} onExpand={onExpand} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Show filters' }));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks that a filter still narrows the results only when one does', () => {
+    const { rerender } = render(<FilterSidebarRail active={false} onExpand={() => {}} />);
+    expect(screen.queryByRole('img', { name: 'Filters active' })).toBeNull();
+    rerender(<FilterSidebarRail active onExpand={() => {}} />);
+    expect(screen.getByRole('img', { name: 'Filters active' })).toBeInTheDocument();
   });
 });

@@ -23,13 +23,14 @@ import Tabs, { type Tab } from '@/components/Tabs';
 import ResizeHandle from '@/components/ResizeHandle';
 import {
   useSidebarWidth,
+  useSidebarCollapsed,
   useMapSplitFraction,
   useMapCollapsed,
   useCardImageLarge,
   useCardCoverTag,
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
-import { FilterSidebar } from '@/components/Filters';
+import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
 import ListingTable from '@/components/ListingTable';
 import ListingCards from '@/components/ListingCards';
 import BrowseStatsView from '@/components/BrowseStats';
@@ -245,10 +246,11 @@ export default function BrowseExperience({
     [setHovered],
   );
 
-  /* Operator-resizable columns + the map-collapsed preference (all per-browser
+  /* Operator-resizable columns + the sidebar/map-collapsed preferences (all per-browser
    * layout state, not part of the shareable view). When the map is collapsed
    * the cards take the full width and reflow to more columns automatically. */
   const sidebar = useSidebarWidth();
+  const sidebarCollapsed = useSidebarCollapsed();
   const mapSplit = useMapSplitFraction();
   const mapCollapsed = useMapCollapsed();
   const cardImageLarge = useCardImageLarge();
@@ -705,27 +707,36 @@ export default function BrowseExperience({
   return (
     <div className={`flex${isModal ? ' h-full' : ''}`} ref={outerRef}>
       {f.sidebar && (
-        <>
-          <FilterSidebar
-            filters={filters}
-            onChange={view.setFilters}
-            onLocationPick={handleLocationPick}
-            width={sidebar.value}
+        sidebarCollapsed.value ? (
+          <FilterSidebarRail
+            active={!isDefault(filters)}
+            onExpand={() => sidebarCollapsed.set(false)}
             layout={layout}
           />
+        ) : (
+          <>
+            <FilterSidebar
+              filters={filters}
+              onChange={view.setFilters}
+              onLocationPick={handleLocationPick}
+              width={sidebar.value}
+              layout={layout}
+              onCollapse={() => sidebarCollapsed.set(true)}
+            />
 
-          <ResizeHandle
-            ariaLabel="Resize the filters sidebar"
-            onMove={onSidebarDrag}
-            onEnd={sidebar.persist}
-            onReset={sidebar.reset}
-            className={
-              isModal
-                ? 'hidden lg:flex self-stretch h-full w-3 -mx-1.5'
-                : 'hidden lg:flex sticky top-14 self-start h-[calc(100dvh-3.5rem)] w-3 -mx-1.5'
-            }
-          />
-        </>
+            <ResizeHandle
+              ariaLabel="Resize the filters sidebar"
+              onMove={onSidebarDrag}
+              onEnd={sidebar.persist}
+              onReset={sidebar.reset}
+              className={
+                isModal
+                  ? 'hidden lg:flex self-stretch h-full w-3 -mx-1.5'
+                  : 'hidden lg:flex sticky top-14 self-start h-[calc(100dvh-3.5rem)] w-3 -mx-1.5'
+              }
+            />
+          </>
+        )
       )}
 
       <div
