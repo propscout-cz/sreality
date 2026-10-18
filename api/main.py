@@ -60,6 +60,7 @@ from api.estimation_runs import (
     update_scenario,
 )
 from api import notifications as nf_module
+from api import system_alerts_loop
 from api.labeling import router as labeling_router
 from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
@@ -115,7 +116,7 @@ from toolkit.summaries import SummarizeError
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
-    """Spawn the Watchdog matcher loop alongside the request handler.
+    """Spawn the Watchdog matcher and the system-alerts loops alongside the request handler.
 
     On startup we also sweep any estimation_runs / building_runs left
     in a non-terminal status by a server crash mid-background-task,
@@ -125,12 +126,15 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     timeout (which can't self-finalize) are likewise stamped with an
     ended_at so they stop reading as 'stuck' on the Health page.
 
-    The loop opens its own per-pass DB connection and respects the
+    The matcher loop opens its own per-pass DB connection and respects the
     `notifications_matcher_interval_seconds` knob in `app_settings`.
     Setting that key to 0 keeps the task alive but idle, so an
     operator can disable matching without redeploying.
 
-    Disabled entirely when the env var `NOTIFICATIONS_MATCHER_DISABLED`
+    The system-alerts loop (api/system_alerts_loop.py) runs the health
+    ladder every minute on its own connection; it has no knob.
+
+    Both are disabled entirely when the env var `NOTIFICATIONS_MATCHER_DISABLED`
     is set — useful for tests / one-off CLI invocations that import
     api.main but don't want a background task chattering.
     """
@@ -173,6 +177,9 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     if not os.environ.get("NOTIFICATIONS_MATCHER_DISABLED"):
         tasks.append(asyncio.create_task(
             nf_module.matcher_loop(stop_event), name="notifications-matcher",
+        ))
+        tasks.append(asyncio.create_task(
+            system_alerts_loop.system_alerts_loop(stop_event), name="system-alerts",
         ))
 
     # Delivery outbox (Sprint N): only start it when a transport is actually

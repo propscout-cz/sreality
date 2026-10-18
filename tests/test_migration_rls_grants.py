@@ -191,7 +191,10 @@ def _parse_grant(stmt: str) -> tuple[set[str], list[str], set[str]] | None:
     m = re.match(r"grant (.+?) on (.+?) to (.+)$", low)
     if not m:
         return None
-    privs = {p.strip() for p in m.group(1).split(",") if p.strip()}
+    # A column list belongs to its privilege: split on its commas, `update (a, b)` read as
+    # the two non-privileges `update (a` and `b)`, so a column-level write grant passed.
+    bare = re.sub(r"\s*\([^)]*\)", "", m.group(1))
+    privs = {p.strip() for p in bare.split(",") if p.strip()}
     roles = {r.strip() for r in re.split(r"[,\s]+", m.group(3)) if r.strip()}
     raw_objs = m.group(2).strip()
     objs: list[str] = []
@@ -398,6 +401,10 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # EXECUTE revoked from every browser role and annotated `ci-allow-ungated` there; the
     # browser reaches a label only through share_party_emails(), counterparties only.
     "auth.users",
+    # The health check registry and the incident table (migrations 619 / 462): the browser
+    # reads both only through the admin-gated pipeline_checks_public.
+    "health_checks",
+    "ops_incidents",
 })
 
 _CREATE_GATED_OBJ = re.compile(
@@ -490,6 +497,18 @@ def test_no_write_grants_to_browser_roles():
         f"{len(TENANT_TABLES)} tables of tests/_tenant_registry.py:\n"
         + "\n".join(offenders)
     )
+
+
+def test_a_column_list_never_hides_a_write_grant():
+    assert _parse_grant("grant update (a, b) on public.t to anon")[0] == {"update"}
+    assert _parse_grant("grant select (id), insert (a, b) on t to anon")[0] == {"select", "insert"}
+    assert _offending_write_grants("grant update (seen_at, note) on public.listings to anon;")
+    assert _offending_write_grants("grant update (a) on public.listings to authenticated;")
+    assert not _offending_write_grants("grant select (id, name) on public.listings to anon;")
+    # a column-level UPDATE on a tenant table stays allowed (migrations 536, 599, 619)
+    assert not _offending_write_grants(
+        "grant update (seen_at, estimation_run_id) on public.notification_dispatches "
+        "to authenticated;")
 
 
 def test_new_base_tables_enable_rls():

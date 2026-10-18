@@ -6,6 +6,7 @@ filter is clean.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -509,3 +510,100 @@ def test_record_incidents_resolves_even_with_nothing_new(monkeypatch):
     fleet has recovered."""
     _patch_incidents(monkeypatch)
     assert rwf.record_incidents(_IncidentConn(), "r", "t", [])["resolved_success"] == 0
+
+
+# --- the ladder fence: a failing check is the health ladder's, not an incident ---------
+
+# An hourly lane red on its own verdicts: verify_pipeline's CHECK lines, then the exit annotation.
+_CHECK_LOG = (
+    "2026-10-18T06:00:01.1000000Z 2026-10-18 06:00:01,100 INFO verify_pipeline "
+    "CHECK llm_burn_rate status=ok value=12.5\n"
+    "2026-10-18T06:00:02.2000000Z 2026-10-18 06:00:02,200 INFO verify_pipeline "
+    "CHECK llm_errors status=fail value=41\n"
+    "2026-10-18T06:00:03.3000000Z ##[error]Process completed with exit code 1.\n"
+)
+# The same lane crashing after a verdict: the exception is the reason, not the check.
+_CRASH_LOG = (
+    "2026-10-18T06:00:02.2000000Z 2026-10-18 06:00:02,200 INFO verify_pipeline "
+    "CHECK llm_errors status=fail value=41\n"
+    "2026-10-18T06:00:03.3000000Z psycopg.errors.QueryCanceled: canceling statement due to "
+    "statement timeout\n"
+    "2026-10-18T06:00:04.4000000Z ##[error]Process completed with exit code 1.\n"
+)
+
+
+def test_a_red_run_failing_only_on_a_check_verdict_opens_no_incident(monkeypatch, caplog):
+    """The ladder tells failing checks from wave 1; the retiring engine must not tell them twice."""
+    calls = _patch_incidents(monkeypatch)
+    logs = {900: _CHECK_LOG, 901: _CRASH_LOG, 902: _CHECK_LOG}
+    monkeypatch.setattr(rwf, "_fetch_failed_job", lambda _r, _t, run_id: {
+        "job_id": run_id, "step_name": "Run checks", "exit_code": "failure"})
+    monkeypatch.setattr(rwf, "fetch_job_log", lambda _r, _t, job_id, **_k: logs[job_id])
+    caplog.set_level(logging.INFO, logger="record_workflow_failures")
+    stats = rwf.record_incidents(_IncidentConn(), "r", "t", [_failure(run_id=i) for i in logs])
+    assert (stats["ladder_owned"], stats["recorded"], stats["fetched"]) == (2, 1, 3)
+    assert [(c["run_id"], c["sig"].split("|")[0]) for c in calls] == [(901, "querycanceled")]
+    told = [r.getMessage() for r in caplog.records if "ladder_owned=" in r.getMessage()]
+    assert len(told) == 1 and "check:llm_errors|fail" in told[0]
+
+
+class _PollCursor:
+    """Just enough of a psycopg cursor for one main() poll."""
+
+    def __init__(self, executed: list[tuple[str, Any]]) -> None:
+        self._executed = executed
+        self.rowcount = 0
+
+    def __enter__(self) -> "_PollCursor":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = None) -> None:
+        self._executed.append((sql, params))
+        self.rowcount = 1 if sql.startswith("INSERT INTO workflow_failures") else 0
+
+    def fetchone(self) -> Any:
+        return None  # no cursor stored yet: the poll bootstraps its window
+
+
+class _PollConn:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, Any]] = []
+
+    def __enter__(self) -> "_PollConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def cursor(self) -> _PollCursor:
+        return _PollCursor(self.executed)
+
+
+def test_a_ladder_owned_red_still_records_its_workflow_failures_row(monkeypatch, caplog):
+    """The fence skips the incident path only; the red run itself stays on file."""
+    import psycopg
+
+    calls = _patch_incidents(monkeypatch)
+    done = datetime.now(timezone.utc) - timedelta(minutes=10)
+    run = _run(id=4242, name="Monitoring: LLM pipeline liveness",
+               path=".github/workflows/llm_health.yml",
+               updated_at=done.strftime("%Y-%m-%dT%H:%M:%SZ"),
+               run_started_at=(done - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    monkeypatch.setattr(rwf, "_fetch_runs_page", lambda _r, _t, page: [run] if page == 1 else [])
+    monkeypatch.setattr(rwf, "_fetch_failed_job", lambda *_a: {
+        "job_id": 5, "step_name": "Run checks", "exit_code": "failure"})
+    monkeypatch.setattr(rwf, "fetch_job_log", lambda *_a, **_k: _CHECK_LOG)
+    conn = _PollConn()
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: conn)
+    for name, value in (("GITHUB_REPOSITORY", "waiff/sreality"), ("GITHUB_TOKEN", "t"),
+                        ("SUPABASE_DB_URL", "postgresql://poller")):
+        monkeypatch.setenv(name, value)
+    caplog.set_level(logging.INFO, logger="record_workflow_failures")
+    assert rwf.main() == 0
+    rows = [p for s, p in conn.executed if s.startswith("INSERT INTO workflow_failures")]
+    assert [(p[0], p[3]) for p in rows] == [(4242, "failure")]
+    assert calls == []
+    assert "ladder_owned=1" in caplog.text

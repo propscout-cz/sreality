@@ -111,7 +111,8 @@ it (`api/`). They do not apply to the scraper.
    (`WWW-Authenticate: Bearer error="invalid_token"` + the reason). `/health` stays open for Railway
    healthchecks. `/admin/*` (Settings-page surface) is gated like every write surface.
    **Phase 1 (increments 1–4, #747/#753/#763/#765) layered identity on top**, not instead
-   of the token: `/admin/*`, `/properties/merge*`, `/labeling/*`,
+   of the token: `/admin/*` (incl. `POST /admin/health/acknowledge {key}`: stamps `ops_incidents.acknowledged_at` on
+   that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*`, dataset-write/dispatch routes on price-stats, and the manual-estimate writes (shared
    reference data, mig 290; stamp the admin into `updated_by`, + `account_id` on insert) use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
@@ -429,8 +430,8 @@ API service:
 - `CORS_ALLOW_ORIGINS` — CSV of allowed origins; must include the Chrome extension's
   `chrome-extension://<id>` origin and the SPA origin.
 - `STUCK_ROW_SWEEP_DISABLED`, `NOTIFICATIONS_MATCHER_DISABLED` (optional flags) — disable the
-  startup sweep of stuck estimation/building runs, and the background watchdog matcher loop,
-  respectively. Default: both enabled.
+  startup sweep of stuck estimation/building runs, and the background watchdog matcher loop (with
+  the system-alerts loop beside it), respectively. Default: both enabled.
 - `STRIPE_WEBHOOK_SECRET` (Railway API) — HMAC secret verifying `Stripe-Signature` on
   `POST /billing/webhook`. Unset → the webhook fails closed (rejects every request), not a
   silent no-op — billing writes never happen without explicit signature verification.
@@ -460,6 +461,7 @@ rule #16; all OPTIONAL, dark until set):
   handler verifies the `Stripe-Signature` HMAC with the stdlib (no stripe SDK).
 - `OUTBOX_DRAIN_DISABLED` (flag) — force-off the delivery outbox loop. The loop ALSO only starts
   when ≥1 transport `is_configured()`, so it's a true no-op until a key above is set + redeploy.
+- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting); its `system_health` dispatches carry `system_health_channels` (`[]` = bell only) and reach the outbox like any other.
 - Operator destinations are `app_settings` rows (operator-editable, history-tracked):
   `notification_email_to`, `notification_telegram_chat_id` (empty = that channel skipped);
   `notifications_outbox_interval_seconds` paces the loop. A watchdog opts in via

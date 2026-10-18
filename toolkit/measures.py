@@ -537,7 +537,7 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
     RegisteredSite(
         path="scripts/verify_pipeline.py",
         arm="unit",
-        hits=4,
+        hits=7,
         measure="ppm2",
         kind=KIND_GUARDS,
         why="W9's plausibility checks (migration 427) — the median-shift, "

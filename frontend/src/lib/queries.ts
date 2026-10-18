@@ -1882,15 +1882,30 @@ export const fetchScraperHealthChecks = async (
     )
   ).data;
 
-/* Migration 274 — pipeline verification checks (latest row per check_key).
- * The DB stamps the ok/warn/fail status + a `value` whose unit is check-specific
- * (ratios, minutes, counts — see scripts/verify_pipeline.py). */
+/* One cell incident of a check (`ops_incidents`, signature `cell:<key>:<subject>`): open,
+ * or closed in the last 14 days. */
+export interface PipelineCheckIncident {
+  id: number;
+  subject: string;
+  first_seen_at: string;
+  resolved_at: string | null;
+  acknowledged_at: string | null;
+  notice_count: number;
+}
+
+/* Migration 274 — pipeline verification checks; since migration 619 one row per registered
+ * check. `status` is the newest STORED result (ok/warn/fail/unknown, a `value` whose unit is
+ * check-specific); `effective_status` is the view's judgement, which reads a result older
+ * than the key's staleness budget as unknown, so the page judges that one. */
 export interface PipelineCheckRow {
   check_key: string;
-  status: string;
+  /* null for a registered check that was never measured (migration 619). */
+  status: string | null;
   value: number | null;
   details: Record<string, unknown> | null;
   run_at: string | null;
+  effective_status: string | null;
+  incidents: PipelineCheckIncident[];
 }
 
 export const fetchPipelineChecks = async (
@@ -1899,7 +1914,7 @@ export const fetchPipelineChecks = async (
   const { data } = await pgRead<PipelineCheckRow[] | null>(
     supabase
       .from('pipeline_checks_public')
-      .select('check_key,status,value,details,run_at')
+      .select('check_key,status,value,details,run_at,effective_status,incidents')
       .order('check_key', { ascending: true }),
     { signal },
   );

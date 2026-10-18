@@ -197,6 +197,11 @@ _ADMIN_ONLY_RELATIONS: list[str] = [
     # by `authenticated`, so this arm never lists it; share_party_emails() reaches it by
     # call, not by name. MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
     "auth.users",
+    # The health check registry and the incident table (migrations 619 / 462): the browser
+    # reads both only through the admin-gated pipeline_checks_public.
+    # MIRRORS tests/test_migration_rls_grants.py::_ADMIN_ONLY_RELATIONS.
+    "health_checks",
+    "ops_incidents",
 ]
 
 # Relations that read the above but are legitimately reachable without the gate.
@@ -1203,12 +1208,14 @@ _SEEDED_ADMIN_VIEWS: frozenset[str] = frozenset({
 
 
 @pytest.fixture(scope="module")
-def seeded_admin_rows(svc: Any) -> "Iterator[None]":
+def seeded_admin_rows(svc: Any) -> "Iterator[str]":
     """One service-role row behind each view in _SEEDED_ADMIN_VIEWS. Without this the
     deny assertion below is vacuous: the CI schema replay holds no business data, so
     `count(*) == 0` for a non-admin passes whether or not the gate works. Seeded as
     svc (owner, RLS-exempt, and is_platform_admin() true via the claims-less
-    bypassrls fallback); torn down children-first."""
+    bypassrls fallback); torn down children-first. Yields the nonce, which is also the
+    registered check key behind pipeline_checks_public (it serves registered keys only,
+    migration 619)."""
     n = f"iso-{uuid.uuid4().hex[:10]}"
     rid = 900_000_000 + int(uuid.uuid4().int % 40_000_000)
     rid2 = rid + 1
@@ -1251,6 +1258,11 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
             "VALUES (%s, 'https://iso.test/x', 'sreality', '{}'::jsonb)",
             (n,),
         )
+        cur.execute(
+            "INSERT INTO health_checks (key, domain, class, host, cadence_s, staleness_budget, label, declared_at) "
+            "VALUES (%s, 'platform', 'alarm', 'github-actions', 3600, '1 day', 'iso', now() - interval '1 day')",
+            (n,),
+        )
         cur.execute("INSERT INTO pipeline_check_results (run_at, check_key, status) VALUES (now(), %s, 'ok')", (n,))
         cur.execute("INSERT INTO phash_pair_notes (image_id_a, image_id_b) VALUES (%s, %s)", (ilo, ihi))
         cur.execute("INSERT INTO image_border_cases (image_id) VALUES (%s)", (ilo,))
@@ -1271,7 +1283,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
         cur.execute("INSERT INTO scrape_runs (run_type, source) VALUES ('index', 'sreality') RETURNING id")
         scrape_id = cur.fetchone()[0]
     try:
-        yield None
+        yield n
     finally:
         with svc.cursor() as cur:  # children before parents
             cur.execute("DELETE FROM image_border_cases WHERE image_id = %s", (ilo,))
@@ -1281,6 +1293,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
             cur.execute("DELETE FROM dedup_decision_feedback WHERE left_property_id = %s AND right_property_id = %s", (lo, hi))
             cur.execute("DELETE FROM dedup_vision_bakeoff_results WHERE run_label = %s", (n,))
             cur.execute("DELETE FROM pipeline_check_results WHERE check_key = %s", (n,))
+            cur.execute("DELETE FROM health_checks WHERE key = %s", (n,))
             cur.execute("DELETE FROM parsed_url_cache WHERE url_hash = %s", (n,))
             cur.execute("DELETE FROM llm_calls WHERE model = %s", (n,))
             cur.execute("DELETE FROM listing_fetch_failures WHERE sreality_id = %s", (rid2,))
@@ -1292,7 +1305,7 @@ def seeded_admin_rows(svc: Any) -> "Iterator[None]":
 
 
 def test_admin_ops_views_deny_non_admin_allow_admin(
-    svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: None,
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: str,
 ) -> None:
     """Live proof the gate actually binds: tenant A (an ordinary account, not admin)
    sees zero rows through every admin-gated view/function; promoting that same user
@@ -1364,6 +1377,162 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
     finally:
         with svc.cursor() as cur:
             cur.execute("DELETE FROM admins WHERE user_id = %s", (tenants["a_user"],))
+
+
+@contextlib.contextmanager
+def _platform_admin(svc: Any, user: uuid.UUID) -> "Iterator[None]":
+    """`user` sits in `admins` (what is_platform_admin() reads for the JWT sub) for the block."""
+    with svc.cursor() as cur:
+        cur.execute("INSERT INTO admins (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (user,))
+    try:
+        yield
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM admins WHERE user_id = %s", (user,))
+
+
+def test_an_admin_reads_the_registry_view_as_the_caller(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_admin_rows: str,
+) -> None:
+    """pipeline_checks_public reads its tables as its owner but calls health_stale() as the
+    CALLER, and functions are born private since 612: without 619's EXECUTE grant the
+    operator's read of effective_status fails while every owner-run view test still passes.
+
+    RED by: dropping `grant execute on function health_stale(...) to authenticated`."""
+    with _platform_admin(svc, tenants["a_user"]):
+        with _scoped(tenants["a_user"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, effective_status, last_measured_at IS NOT NULL, incidents "
+                    "FROM pipeline_checks_public WHERE check_key = %s",
+                    (seeded_admin_rows,),
+                )
+                assert cur.fetchone() == ("ok", "ok", True, [])
+
+
+# Migration 364 stamps every system_health dispatch to the SYSTEM account (account_id is NOT
+# NULL), and no tenant is a member of it, so 292's tenant UPDATE arm never reached one.
+_SYSTEM_ACCOUNT = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
+
+@pytest.fixture(scope="module")
+def seeded_dispatches(
+    svc: Any, tenants: dict[str, uuid.UUID],
+) -> "Iterator[dict[str, Any]]":
+    """One system alert and one of tenant B's own collection_monitor dispatches, each stamped
+    by the dispatch trigger. Seeded as svc; B's row goes with its collection."""
+    nonce = uuid.uuid4().hex[:12]
+    alert = {"message": f"iso alert {nonce}", "dedupe_key": f"sys:iso:{nonce}"}
+    with svc.cursor() as cur:
+        cur.execute(
+            "INSERT INTO notification_dispatches (source_kind, change_kind, message, dedupe_key) "
+            "VALUES ('system_health', 'system_alert', %s, %s) RETURNING id, account_id",
+            (alert["message"], alert["dedupe_key"]),
+        )
+        system_id, system_account = cur.fetchone()
+        cur.execute(
+            "INSERT INTO collections (account_id, name) VALUES (%s, %s) RETURNING id",
+            (tenants["b_acc"], f"iso-{nonce}"),
+        )
+        coll = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO notification_dispatches (source_kind, collection_id, change_kind, dedupe_key) "
+            "VALUES ('collection_monitor', %s, 'new', %s) RETURNING id",
+            (coll, f"iso:{nonce}"),
+        )
+        own_id = cur.fetchone()[0]
+    try:
+        assert system_account == _SYSTEM_ACCOUNT, "a system alert must be a SYSTEM-account row"
+        yield {"system": system_id, "own": own_id, **alert}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM notification_dispatches WHERE id = %s", (system_id,))
+            cur.execute("DELETE FROM collections WHERE id = %s", (coll,))
+
+
+def test_a_platform_admin_marks_a_system_alert_read(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
+) -> None:
+    """Migration 619: all 861 system alerts sat unseen because no UPDATE arm reached a
+    SYSTEM-account row. RED by: dropping notification_dispatches_admin_update."""
+    with _platform_admin(svc, tenants["a_user"]):
+        with _scoped(tenants["a_user"]) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                    (seeded_dispatches["system"],),
+                )
+                assert cur.rowcount == 1, "the platform admin cannot mark a system alert read"
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT seen_at IS NOT NULL FROM notification_dispatches WHERE id = %s",
+            (seeded_dispatches["system"],),
+        )
+        assert cur.fetchone()[0] is True
+
+
+def test_a_platform_admin_cannot_rewrite_a_system_alert(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
+) -> None:
+    """The admin arm admits the ROW; the column grant keeps an alert's text, channels and
+    dedupe key out of every browser caller's reach, an admin's included.
+
+    RED by: restoring table-wide UPDATE on notification_dispatches to authenticated."""
+    import psycopg
+
+    with _platform_admin(svc, tenants["a_user"]):
+        with _scoped(tenants["a_user"]) as conn:
+            for sql in (
+                "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
+                "UPDATE notification_dispatches SET target_channels = '{telegram}' WHERE id = %s",
+                "UPDATE notification_dispatches SET dedupe_key = 'sys:forged' WHERE id = %s",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                        with conn.cursor() as cur:
+                            cur.execute(sql, (seeded_dispatches["system"],))
+    with svc.cursor() as cur:
+        cur.execute(
+            "SELECT message, target_channels, dedupe_key FROM notification_dispatches WHERE id = %s",
+            (seeded_dispatches["system"],),
+        )
+        assert cur.fetchone() == (seeded_dispatches["message"], [], seeded_dispatches["dedupe_key"])
+
+
+def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
+    svc: Any, tenants: dict[str, uuid.UUID], seeded_dispatches: dict[str, Any],
+) -> None:
+    """An UPDATE that reads no column (no WHERE, no RETURNING) is judged by the UPDATE
+    policies alone; with a WHERE the read policy, which hides SYSTEM rows from tenants,
+    would mask a broken admin arm. So the blanket statement is the probe of the arm's gate.
+
+    RED by: an admin arm without its gate, or a column grant missing seen_at or
+    estimation_run_id (the estimate kickoff from a notification writes it)."""
+    seen_at = "SELECT seen_at FROM notification_dispatches WHERE id = %s"
+    with svc.cursor() as cur:
+        cur.execute(seen_at, (seeded_dispatches["system"],))
+        before = cur.fetchone()[0]
+    with _scoped(tenants["b_user"]) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE notification_dispatches SET seen_at = now()")
+            cur.execute(
+                "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                (seeded_dispatches["system"],),
+            )
+            assert cur.rowcount == 0, "a tenant reached a SYSTEM-account system alert"
+            cur.execute(
+                "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
+                (seeded_dispatches["own"],),
+            )
+            assert cur.rowcount == 1, "a tenant can no longer mark its own notification read"
+            cur.execute(
+                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
+                (seeded_dispatches["own"],),
+            )
+            assert cur.rowcount == 1, "a tenant can no longer link an estimate to its notification"
+    with svc.cursor() as cur:
+        cur.execute(seen_at, (seeded_dispatches["system"],))
+        assert cur.fetchone()[0] == before, "a tenant's blanket update reached a system alert"
 
 
 def test_no_anon_write_grants(svc: Any) -> None:

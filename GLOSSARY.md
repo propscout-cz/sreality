@@ -171,6 +171,52 @@ _Avoid_: job, execution, session
 The workflow that measures a property's rentable floor areas from its plans.
 _Avoid_: offtake, area offtake
 
+### Health
+
+**Check**:
+One fact about the platform's own health, measured on a fixed schedule and judged OK, Watch,
+Problem or Not measured. Every check is either an alarm or a gauge.
+_Avoid_: test, probe, monitor, health metric
+
+**Cell**:
+One verdict inside a check, about one part of what the check watches, such as one portal or one
+scheduled job.
+_Avoid_: row, item, sub-check
+
+**Alarm**:
+A check for something that should not happen, such as a portal that stops finding new ads. Its
+Problem is told at once and reminded 6 hours, a day and three days after it began, then weekly,
+until it recovers or is acknowledged.
+_Avoid_: alert (that is the notice), trigger
+
+**Gauge**:
+A check of a standing condition the platform lives with while it is being fixed, such as ads that
+still lack a town, shown with its trend. Its Problem is told once, then reminded once a day until it
+recovers or is acknowledged.
+_Avoid_: metric, indicator, KPI
+
+**Incident**:
+One unbroken spell of trouble in one cell, from its first Problem until a measured OK has held long
+enough to count as recovery.
+_Avoid_: outage, issue, ticket, problem (for the record)
+
+**System alert**:
+A notice about the platform's own health: an incident has started, is still open, or has recovered.
+It appears among the app's notifications; a watchdog's notice about properties is not one.
+_Avoid_: alarm (that is the check), alert (alone), health notification
+
+**Acknowledge**:
+An admin's deliberate act, on the Health page (wave 1 ships a minimal Acknowledge button on the
+pipeline-checks card; the rebuilt page comes in wave 8), of marking an incident as known, which
+stops its reminders. Reading its system alert among the notifications does not acknowledge it.
+_Avoid_: dismiss, mute, snooze, resolve, mark read
+
+**Not measured**:
+The verdict of a check that has no current measurement: it ran out of time, did not run, raised an
+error, found nothing to judge, or is overdue. It never counts as OK, and it neither opens an incident
+nor counts as its recovery.
+_Avoid_: unknown (in prose), skipped, pending, OK
+
 ### Where users meet the platform
 
 **Extension**:

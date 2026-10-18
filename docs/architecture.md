@@ -2009,28 +2009,49 @@ renumber.** Navigate by area:
     `broker_change` is in the `change_kind` CHECK
     (migration 209) but NOT yet emitted — `listing_broker_public` is current-state-only with no
     change signal; the kind is reserved for when one exists. **A THIRD producer is live
-    (migration 274, `scripts/verify_pipeline.py`):** an hourly pipeline-verification job writes
-    `pipeline_check_results` rows (`ok`/`warn`/`fail` per health metric, read via the anon
-    `pipeline_checks_public` / `pipeline_check_history_public` views) and a `fail` status emits
-    a `source_kind='system_health'` dispatch — `subscription_id` and `collection_id` both NULL
-    (widened `notification_dispatches_source_ck`), `sreality_id` now nullable since the alert
-    isn't about any one listing, verbatim text in a new `message` column, `change_kind =
-    'system_alert'`. It rings the same in-app bell the SPA nav badge already polls; a
-    SECURITY DEFINER dead-man-switch function (the migration-136 exception-guarded pg_cron
-    pattern) fires if the hourly job itself stops running. **The `system_health` arm is the one
-    producer that is NOT property-grain** — it is about the pipeline, not a listing, so
-    `listing_id` / `sreality_id` / `subscription_id` / `collection_id` are all NULL, the
-    operator-state merge reconciler has nothing to re-point on it, and `compose_message()`
-    renders its stored `message` verbatim instead of building a listing subject. Since the
-    reliability program's W3 (migration 462) it has a **second emitter beside verify_pipeline:
-    `ops_incidents`** — one open row per failure SIGNATURE (`scripts/failure_signature.py`, a key
-    derived from the error TEXT and never from `workflow_path`, so N workflows failing for one
-    reason are one incident), fed by `scraper.portal_runner`'s crash path in-process and by
-    `scripts/record_workflow_failures.py`'s job-log backstop. Crossing
-    `ops_incident_min_failures` writes exactly ONE dispatch here; there is deliberately no
-    second alert table, no `ops_alert_email`, and no parallel bell namespace. Incidents close
-    when every member workflow posts a newer `workflow_run_health.last_success_at`, on
-    `ops_incident_max_age_hours`, or manually (`toolkit.ops_incidents.resolve_incident`).
+    (migration 274; reshaped by migration 619 in wave 1 of the Health dashboard sprint,
+    `docs/design/health-dashboard.md`): `system_health`.** Its measurer is ONE registry,
+    `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
+    `gauge`), host, cadence, label, unit and owner page, and each host projects its own keys into
+    `health_checks`. A `pipeline_check_results` row carries one of FOUR statuses — `ok` / `warn` /
+    `fail` / `unknown`, shown as OK / Watch / Problem / Not measured — where `unknown` means the
+    measurement did not happen (timed out, not run, errored, nothing to score) and is never OK; the
+    row keeps the check's `message` and, when the check emits them, its `cells` (one verdict per
+    portal, job or lane). Measuring writes no system alert (a failing alarm only reds its GitHub
+    lane, which emails). The ONE teller is `toolkit/system_alerts.reconcile`, run by the API every
+    60 s beside the watchdog matcher (the outbox delivers its rows once a transport is configured):
+    it keeps one `ops_incidents` row per failing cell (signature `cell:<key>:<subject>`) — a
+    measured `fail` opens it, `warn` keeps it open, an OK measured across the hold
+    `max(2 × cadence, 30 min)` closes it (the newest OK's `run_at` at least the hold after the first
+    OK's; one lone OK never recovers), Not measured never touches it — and emits
+    `source_kind='system_health'` dispatches, at most one onset, one reminder and one recovery per
+    check per pass (dedupe `sys:<key>:<onset|reminder|recovery>:…`), reminding at 6 h / 24 h / 72 h
+    then weekly for an alarm and every 24 h for a gauge: `subscription_id` and `collection_id` both
+    NULL (widened `notification_dispatches_source_ck`), `sreality_id` nullable since the alert isn't
+    about any one listing, verbatim text in the `message` column, `change_kind = 'system_alert'`.
+    **Read is not acknowledged:** reading a notice in the bell stamps `seen_at` (a platform admin
+    may do that on a SYSTEM row since migration 619's `notification_dispatches_admin_update` policy,
+    with `authenticated` UPDATE narrowed to `seen_at` and `estimation_run_id`), while only
+    `POST /admin/health/acknowledge` stamps `ops_incidents.acknowledged_at` — and only that stops
+    reminders. Reads are admin-gated: `pipeline_checks_public` serves one row per registered key
+    with its newest result, its `effective_status` (`unknown` when there is no row, the newest row is
+    `unknown`, or it is older than the key's `staleness_budget` by `public.health_stale`; a result
+    past its staleness budget is Not measured for the ladder as well as the page) and its
+    incidents. Until wave 2 the dead-man switch is migration 274's SECURITY DEFINER
+    `emit_verification_stale_alert` (the migration-136 exception-guarded pg_cron pattern, hourly):
+    it rings when the newest result row of ANY key is older than 24 h. **The `system_health` arm is
+    one of the two producers (with `collection_share`) that are NOT property-grain** — it is about
+    the pipeline, not a listing, so `listing_id` / `sreality_id` / `subscription_id` /
+    `collection_id` are all NULL, the operator-state merge reconciler has nothing to re-point on it,
+    and `compose_message()` renders its stored `message` verbatim instead of building a listing
+    subject. Since the reliability program's W3 (migration 462) a **second emitter, the
+    `ops_incidents` signature engine**, runs beside it: one open row per failure SIGNATURE derived
+    from the error TEXT (`scripts/failure_signature.py`), fed by `scraper.portal_runner`'s crash path and
+    `scripts/record_workflow_failures.py`'s job-log backstop, one dispatch per incident — no second
+    alert table, no parallel bell namespace. **It is fenced from cell incidents** (both of its
+    auto-resolve statements skip `signature LIKE 'cell:%'`, so it can never close or "recover" one,
+    and the poller ignores `check:` signatures, a failing check being the ladder's to tell)
+    **and retires in wave 3**, leaving one incident model.
     Delivery detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
     **A FOURTH producer is live (migration 610): `collection_share`.** `POST
     /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`

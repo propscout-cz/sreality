@@ -1,51 +1,24 @@
-"""verify_pipeline.py — scheduled pipeline-health harness.
+"""verify_pipeline.py — the health-check registry and the harness that measures it.
 
-Computes a fixed set of pipeline-health metrics (LLM error rate + burn rate, DB
-saturation, worker liveness, dual-write parity, property maintenance,
-broker-resolution freshness),
-writes one `pipeline_check_results` row per check, and rings the in-app bell once per
-INCIDENT (toolkit.system_alerts.emit_transition_alerts): at onset, again at 6h / 24h /
-72h / weekly while it stays red, and once when it recovers — not on every red run, and
-not on every edge (a check that flaps back to red inside the cooldown re-enters the same
-incident rather than opening a new one).
+`CHECKS` declares every check once: key, page section (`domain`), class (an alarm or a
+gauge), host, cadence, time budget, label, unit and owner page. A run from main projects its
+host's rows into `health_checks` (`project_registry`), measures the checks that are due by cadence
+(`due_checks`, `run_checks`) and stores one `pipeline_check_results` row per result the moment
+it completes, its message and cells inside `details`. A status is ok, warn, fail or unknown,
+and unknown means "not measured" (timed out, not reached, errored, or nothing to score): never
+OK. Nothing here tells anyone — the API's ladder (`toolkit.system_alerts.reconcile`) reads the
+stored results, opens one incident per failing cell and sends the notices.
 
-Born from the 2026-07 incident: the pipeline stalled silently for two days
-(Anthropic credit exhaustion; 38k+ failed LLM calls) with no in-app signal. This
-job makes that loud and durable.
+Thresholds are the code defaults below, merged under `app_settings.pipeline_check_thresholds`.
 
-Each check is isolated (one failing check writes a `fail` row with the error in
-`details`, never kills the run). Thresholds live in
-`app_settings.pipeline_check_thresholds` with the code defaults below as fallbacks.
+There is deliberately NO total-silence LLM check: every LLM producer left is dispatch-driven or
+on demand, so silence is the normal resting state (the longest gap in the 30 days to
+2026-09-21 was 143.8 h, and the old `llm_liveness` failed 52 of 347 runs on a healthy
+pipeline). `text_extraction_lag` watches the one recurring lane through its own predicate.
 
-There is deliberately NO total-silence check any more. `llm_liveness` measured hours
-since the newest `llm_calls` row against a threshold sized to "the one recurring
-producer" — bazos description enrichment, deleted with its lane in field-capture W0.
-Every producer left (autodedup judging, labelling, estimations, URL parsing) is
-dispatch-driven or on demand, so silence is the normal resting state: the longest gap
-in the 30 days to 2026-09-21 was 143.8 h, and the check was already 52 fails / 347 runs
-against a healthy pipeline. A fixed hours threshold over an on-demand workload is a
-false-red generator, and the fix is not a bigger number — it is a per-lane instrument
-with its own baseline. That is `text_extraction_lag` (field-capture R8, W7): oldest
-ELIGIBLE-unextracted age and waiting count per source, computed from the text lane's own
-selector predicate, plus the wedge arm — rows eligible and the lane claiming none — and the
-abort arm — the provider stopped the lane's last pass. It covers the one recurring producer;
-`llm_errors` still catches "calls are failing" (state, not recency; credit per provider)
-and `llm_burn_rate`'s starvation arm "attempting and never succeeding". The
-residual, stated plainly: both of those derive from rows that EXIST, so a total stop on a
-lane R8 does not cover — every remaining producer is dispatch-driven — still reads `ok`.
-
-Each result is persisted AND alerted the moment its check completes, under a per-check
-and a whole-lane wall-clock budget (the acute lane's `_LANE_BUDGET_S`; the full lane's
-`full_lane_budget_s`, one per-check budget per registered check). The acute lane runs inside a job with
-`timeout-minutes: 5`, and it used to compute every result before writing any — so a
-timeout wrote zero rows and fired zero alerts, blinding `db_saturation` and
-`worker_liveness` at exactly the moment DB saturation would make the checks slow. A
-check that overruns its budget reports `warn` ("I could not measure this"), never `fail`
-and never `ok`.
-
-    python -m scripts.verify_pipeline            # compute + write + alert
-    python -m scripts.verify_pipeline --dry-run  # compute + log only, no writes
-    python -m scripts.verify_pipeline --weekly   # weekly-only checks + the heartbeat
+    python -m scripts.verify_pipeline                         # the due checks of github-actions
+    python -m scripts.verify_pipeline --dry-run               # the same, writing nothing
+    python -m scripts.verify_pipeline --exit-nonzero-on-fail  # exit 1 when an alarm fails
 
 Needs only SUPABASE_DB_URL.
 """
@@ -60,9 +33,11 @@ import os
 import re
 import sys
 import time as _time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlencode
 
 import requests
@@ -80,13 +55,8 @@ from scraper.sreality_client import (
     INDEX_URL as _SREALITY_INDEX_URL,
     _unwrap_estate as _unwrap_sreality_estate,
 )
+from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
 from toolkit.listing_identity import R2_CARRIERS as _PARITY_CARRIERS
-from toolkit.system_alerts import (
-    AlertPolicy,
-    check_states,
-    emit_transition_alerts,
-    emit_weekly_heartbeat,
-)
 
 
 # The SQL mirror of `location_data.claims_common.sreality_payload_shape`, inlined here when
@@ -108,7 +78,9 @@ LOG = logging.getLogger("verify_pipeline")
 # default until a future seed migration includes it.
 DEFAULT_THRESHOLDS: dict[str, float] = {
     "llm_error_rate_warn": 0.2,
-    "llm_spend_24h_warn_usd": 90,
+    # 130, not the old 90: the value the app_settings override has carried since migration
+    # 297, so the code default and production say the same number.
+    "llm_spend_24h_warn_usd": 130,
     "llm_spend_24h_fail_usd": 150,
     # false_delist_share: of the ads the drain CLOSED (ledger outcome 'flipped', 7 d), the
     # share active again now -- a revival after a confirmed gone verdict is a flip that was
@@ -133,7 +105,6 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "long_open_txn_warn_minutes": 60,
     "db_cron_fail_rate_fail": 0.5,
     "worker_stale_fail_minutes": 5,
-    "verification_stale_hours": 24,
     # Ingestion. Measured on the QUEUE, so these are portal-size-independent: a
     # healthy drain keeps the oldest never-fetched listing at minutes whatever the
     # portal. Warn at 6h is well above the 6-hourly walk cadence (a listing found
@@ -242,10 +213,10 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # the <=21-min lock wait and the run itself, ~2.5h live to 2026-08-12 (06:25 to
     # 08:52 UTC on a 04:35 cron). So one ordinary night reaches ~26.5h (warn 30
     # clears it), one MISSED night ~50.5h and two ~69.5h. Fail therefore has to sit
-    # between those last two: 50 sat below one missed night's worst case, which reds
-    # the hourly acute lane — an onset alert plus llm_health.yml's
-    # --exit-nonzero-on-fail emailing a second time — for a single miss the sweep's
-    # own red run already emailed about. 60 keeps one miss a warn and still fails
+    # between those last two: 50 sat below one missed night's worst case, which fails
+    # this hourly alarm — an onset notice plus the lane's --exit-nonzero-on-fail
+    # emailing a second time — for a single miss the sweep's own red run already
+    # emailed about. 60 keeps one miss a warn and still fails
     # two, and costs ~10h of detection latency on the nightly-dead tail this axis
     # exists for, which warn already ambers within ~30h.
     "broker_finished_warn_hours": 30,
@@ -409,51 +380,26 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "floor_convention_min_pairs": 40,
     "sreality_image_template_min_ratio": 0.9,
     "sreality_image_template_timeout_s": 8.0,
-    # --- alert escalation policy (W3.4) -------------------------------------
-    # Not per-check thresholds: these govern toolkit.system_alerts, so EVERY check
-    # inherits one escalation policy instead of each one growing its own. Scalars, one
-    # key per rung, because load_thresholds drops any non-scalar from the DB merge — a
-    # JSON array here would be silently ignored and the code default would win forever.
-    # The rungs answer "red for six days, silent for six" (property_maintenance,
-    # 2026-08-20..26); the cooldown answers its mirror image, the 114 alternating
-    # onset/recovery alerts llm_errors produced for an outage that never recovered. It
-    # must stay above the acute lane's hourly cadence or hourly flapping still rings.
-    "alert_reescalate_1_hours": 6.0,
-    "alert_reescalate_2_hours": 24.0,
-    "alert_reescalate_3_hours": 72.0,
-    "alert_reescalate_weekly_hours": 168.0,
-    "alert_flap_cooldown_hours": 6.0,
 }
 
 # --- lane + per-check wall-clock budgets (W0.4) -----------------------------
 #
-# The acute lane runs under `timeout-minutes: 5`. Before W0.4 `run_checks` computed EVERY
-# result before `write_results` persisted ANY of them, so a job timeout wrote zero rows and
-# fired zero alerts — blinding db_saturation and worker_liveness at exactly the moment (DB
-# saturation) that made the checks slow in the first place. Results are now persisted as
-# each check completes, and these budgets keep one slow check from eating the lane.
+# Before W0.4 `run_checks` computed EVERY result before persisting ANY of them, so a job
+# timeout wrote zero rows — blinding db_saturation and worker_liveness at exactly the moment
+# (DB saturation) that made the checks slow in the first place. Results are persisted as each
+# check completes, each check runs under its own `Check.budget_s` (a server-side
+# statement_timeout), and the lane under the sum of the due checks' budgets.
 #
-# THE ACUTE LANE's budget: 120s of llm_health.yml's 300s job. The remaining 180s is
-# deliberate headroom for process start, the threshold read and alert emission.
-_LANE_BUDGET_S = 120.0
-# No single check may hold the lane for more than this. The slowest today is
-# floor_convention's cross-portal self-join, 11-35s over four measured runs (the shared
-# measure_plausibility read is ~12s), so at its worst 45s is only 1.3x the known worst
-# case — a new check above ~20s starves the tail and needs its query reworked, not a
-# wider budget.
+# The default per-check budget. The slowest DB check is floor_convention's cross-portal
+# self-join, 11-35s over four measured runs (the shared measure_plausibility read is ~12s),
+# so at its worst 45s is only 1.3x the known worst case — a new check above ~20s needs its
+# query reworked, not a wider budget.
 _CHECK_BUDGET_S = 45.0
-# Process start, threshold read and alert emission, reserved out of every job's timeout.
+# Process start, the threshold read and the registry projection, reserved out of every job's
+# timeout on top of the lane budget (test_every_lane_budget_fits_its_job).
 _JOB_HEADROOM_S = 180.0
 # Outside run_checks (ad-hoc use, tests) keep the historical 10-minute ceiling.
 _DEFAULT_STATEMENT_TIMEOUT_MS = 600_000
-
-
-def full_lane_budget_s(*, weekly: bool) -> float:
-    """The FULL lane owes every registered check its own budget, so no check can starve
-    another. It used to share the acute lane's 120 s: over the 15 runs to 2026-09-21, 13
-    left 7-17 of the 24 checks `not_run`. A registry that outgrows verify_pipeline.yml's
-    job timeout fails CI (test_full_lane_budget_fits_its_job) instead of going quiet."""
-    return (len(_CHECKS) + (len(_WEEKLY_CHECKS) if weekly else 0)) * _CHECK_BUDGET_S
 
 
 class _LaneBudget:
@@ -670,9 +616,9 @@ def _status_for_property_maintenance(
     and permanently red would train the operator to ignore the check. A dirty
     row aging past its axis means the incremental drain (worker lane + cron)
     is frozen. Both axes are O(1) reads: a per-row staleness scan over 620k
-    properties measured ~3.5 min live and would blow the hourly acute lane's
-    own 5-min job timeout — recreating the silent-`cancelled` mode this check
-    exists to catch."""
+    properties measured ~3.5 min live and would blow the per-check 45 s budget
+    (Check.budget_s) on every run — a check that is always Not measured is the
+    silent mode this check exists to catch."""
     return _status_over_age_axes(
         [("last complete sweep", sweep_age_hours,
           thresholds["property_sweep_warn_hours"],
@@ -1302,17 +1248,17 @@ group by j.jobname
 
 
 def check_db_saturation(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch pg_cron's own run ledger for the DB-saturation signature. Skips cleanly if
-    the cron schema isn't visible (e.g. a branch DB without pg_cron) rather than false-fail."""
+    """Watch pg_cron's own run ledger for the DB-saturation signature. An unreadable cron
+    schema (e.g. a branch DB without pg_cron) is Not measured, never a false fail."""
     fail_rate = float(thresholds["db_cron_fail_rate_fail"])
     try:
         rows = _fetchall(conn, _DB_CRON_SQL)
-    except Exception as exc:  # noqa: BLE001 — cron schema not readable → warn (visible), never false-fail
+    except Exception as exc:  # noqa: BLE001 — cron schema not readable → unknown, never false-fail
         # verify connects via SUPABASE_DB_URL (postgres role, which has cron access); this
-        # path only trips if that changes to a role lacking USAGE on schema cron. warn (not
-        # ok) so the /health page shows the check is INERT rather than silently green.
+        # path only trips if that changes to a role lacking USAGE on schema cron. unknown
+        # (not ok) so the /health page shows the check is INERT rather than silently green.
         return {
-            "check_key": "db_saturation", "status": "warn", "value": None,
+            "check_key": "db_saturation", "status": "unknown", "value": None,
             "details": {"skipped": f"cron.job_run_details unreadable: {exc}",
                         "fix": "GRANT USAGE ON SCHEMA cron TO service_role;"},
             "message": ("DB-saturation check is inert — can't read pg_cron's ledger. "
@@ -1383,9 +1329,9 @@ def check_worker_liveness(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
 
 # One O(1) round trip: the sweep-completion stamp + the tiny dirty queue.
 # Deliberately NOT a per-row staleness scan over properties — that measured
-# ~3.5 min live (620k-row heap × listings semi-join) and would blow the hourly
-# acute lane's 5-min job timeout, taking every other acute check's rows and
-# alerts down with it.
+# ~3.5 min live (620k-row heap × listings semi-join) and would blow the per-check
+# 45 s budget (Check.budget_s), so the check would be cancelled and read Not
+# measured on every run.
 _PROPERTY_MAINTENANCE_SQL = """
 select
   (select extract(epoch from (now() - (value->>'completed_at')::timestamptz)) / 3600.0
@@ -1774,7 +1720,7 @@ def _plausibility_cells(conn: Any) -> tuple[list[dict[str, Any]], str | None]:
 
 
 def _inert_measure_check(check_key: str, reason: str | None) -> dict[str, Any]:
-    """warn, not ok: a check that cannot read its input has not certified anything."""
+    """unknown, not ok: a check that cannot read its input has not certified anything."""
     detail = (
         f"measure_plausibility_by_source is unreadable: {reason}"
         if reason else
@@ -1786,7 +1732,7 @@ def _inert_measure_check(check_key: str, reason: str | None) -> dict[str, Any]:
         f"Per-m2 plausibility check '{check_key}' is INERT — {detail}. If migration 427 "
         "has not been applied yet, apply it."
     )
-    return {"check_key": check_key, "status": "warn", "value": None,
+    return {"check_key": check_key, "status": "unknown", "value": None,
             "details": {"skipped": detail}, "message": message}
 
 
@@ -1798,13 +1744,13 @@ def _unmeasured_check(check_key: str, cells: int, needed: str) -> dict[str, Any]
     those cells carry no floor-eligible rows, no area pairs and no medians). Every arm
     skips them and `worst` never leaves its initial value, so the check would report
     `ok` with a message asserting a fact it never checked. A check that scored nothing
-    has certified nothing; `value` is None so the tile renders an em-dash rather than a
-    0 that reads as a measurement."""
+    has certified nothing, so it is unknown; `value` is None so the tile renders an
+    em-dash rather than a 0 that reads as a measurement."""
     detail = (
         f"{cells} cell(s) read but not one has {needed} — nothing was verified"
     )
     return {
-        "check_key": check_key, "status": "warn", "value": None,
+        "check_key": check_key, "status": "unknown", "value": None,
         "details": {"skipped": detail, "cells_read": cells, "arms_scored": 0},
         "message": (
             f"Per-m2 plausibility check '{check_key}' verified NOTHING — {detail}. "
@@ -2170,7 +2116,7 @@ select source,
 # a warm cluster, so it never stays cached and its cost tracks whatever else is reading
 # `listings`) — which is why it is registered LAST among the DB checks and runs
 # under the same server-side `statement_timeout` as every other check: on a bad day it is
-# cancelled and reports `warn / timed out`, which says UNKNOWN, never a false green.
+# cancelled and stored Not measured (`unknown`, timed out), never a false green.
 _FLOOR_CONVENTION_SQL = """
 WITH k AS MATERIALIZED (
     SELECT source, price_czk, area_m2, disposition, min(floor) AS f
@@ -2229,10 +2175,10 @@ def check_floor_convention(conn: Any, thresholds: dict[str, Any]) -> dict[str, A
             scale_offenders.append(source)
 
     if not scored:
-        # Rows without a scored arm certify nothing; `value` stays None so the tile
-        # shows an em-dash rather than a 0 that reads as agreement.
+        # Rows without a scored arm certify nothing: unknown, and `value` stays None so
+        # the tile shows an em-dash rather than a 0 that reads as agreement.
         return {
-            "check_key": "floor_convention", "status": "warn", "value": None,
+            "check_key": "floor_convention", "status": "unknown", "value": None,
             "details": {"skipped": f"no portal reached {min_pairs} sibling pairs",
                         "per_source": per_source},
             "message": (
@@ -2704,7 +2650,7 @@ def check_walk_end_streak(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
         details["skipped"] = "no walk in the window carried a verdict — nothing was verified"
         return {
             "check_key": "walk_end_streak",
-            "status": "warn",
+            "status": "unknown",
             "value": None,
             "details": details,
             "message": (
@@ -3042,9 +2988,11 @@ def check_worker_lane_stall(conn: Any, thresholds: dict[str, Any]) -> dict[str, 
         # No beating worker at all is worker_liveness's job, not this check's.
         # Saying "ok" here would be a lie; saying "fail" would double-alarm.
         return {
-            "check_key": "worker_lane_stall", "status": "warn", "value": None,
-            "details": {"lanes": {}},
-            "message": "No worker heartbeat in the last 10 minutes — see worker_liveness.",
+            "check_key": "worker_lane_stall", "status": "unknown", "value": None,
+            "details": {"lanes": {},
+                        "skipped": "no worker heartbeat with lane state in the last 10 minutes"},
+            "message": ("No worker heartbeat with lane state in the last 10 minutes, so no "
+                        "lane was measured — see worker_liveness."),
         }
     if offenders:
         message = (
@@ -3190,8 +3138,9 @@ def check_false_delist_share(conn: Any, thresholds: dict[str, Any]) -> dict[str,
                "warn": warn, "fail": fail, "min_flips": min_flips}
     if not scored:
         return {
-            "check_key": "false_delist_share", "status": "warn", "value": None,
-            "details": details,
+            "check_key": "false_delist_share", "status": "unknown", "value": None,
+            "details": {**details,
+                        "skipped": f"no portal closed {min_flips}+ ads in 7 days"},
             "message": (
                 f"No portal closed {min_flips}+ ads in 7 days -- the false-delist share "
                 "was verified for nothing (expected right after migration 594 ships; "
@@ -3260,15 +3209,16 @@ def check_location_payload_shape_drift(conn: Any, thresholds: dict[str, Any]) ->
     min_rows = int(thresholds["location_payload_shape_drift_min_rows"])
     window_hours = int(thresholds["location_payload_shape_drift_window_hours"])
     rows = _fetchall(conn, _LOCATION_PAYLOAD_SHAPE_DRIFT_SQL, {"window_hours": window_hours})
-    cells = [{"source": s, "n": int(n), "unexpected": int(u),
-              "share": (int(u) / int(n)) if int(n) else None}
-             for s, n, u in rows]
-    scored = [c for c in cells if c["n"] >= min_rows]
+    # `per_source`, not `cells`: that key is the health ladder's per-cell verdict contract.
+    per_source = [{"source": s, "n": int(n), "unexpected": int(u),
+                   "share": (int(u) / int(n)) if int(n) else None}
+                  for s, n, u in rows]
+    scored = [c for c in per_source if c["n"] >= min_rows]
     if not scored:
-        detail = (f"{len(cells)} source(s) read, none with {min_rows}+ rows first seen in "
-                  f"{window_hours} h — nothing was verified")
-        return {"check_key": "location_payload_shape_drift", "status": "warn", "value": None,
-                "details": {"skipped": detail, "cells": cells, "arms_scored": 0},
+        detail = (f"{len(per_source)} source(s) read, none with {min_rows}+ rows first seen "
+                  f"in {window_hours} h — nothing was verified")
+        return {"check_key": "location_payload_shape_drift", "status": "unknown", "value": None,
+                "details": {"skipped": detail, "per_source": per_source, "arms_scored": 0},
                 "message": f"Location payload-shape drift verified NOTHING — {detail}."}
     worst = max(c["share"] for c in scored)
     status = "fail" if worst >= fail else "warn" if worst >= warn else "ok"
@@ -3287,8 +3237,9 @@ def check_location_payload_shape_drift(conn: Any, thresholds: dict[str, Any]) ->
         "status": status,
         "value": round(worst * 100, 2),
         "details": {"worst_share": round(worst, 4), "warn": warn, "fail": fail,
-                    "min_rows": min_rows, "window_hours": window_hours, "cells": cells,
-                    "arms_scored": len(scored), "offenders": offenders},
+                    "min_rows": min_rows, "window_hours": window_hours,
+                    "per_source": per_source, "arms_scored": len(scored),
+                    "offenders": offenders},
         "message": message,
     }
 
@@ -3433,9 +3384,11 @@ def check_location_town_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[
     hidden = sum(c["hidden"] for c in cells)
     listings = sum(c["listings"] for c in cells)
     if not cells:
+        # Nothing read is Not measured; a stalled registry is still a measured Problem.
         return {"check_key": "location_town_coverage",
-                "status": "fail" if stalled else "warn", "value": None,
-                "details": {"skipped": "no listings read", "cells": [], "registry": registry},
+                "status": "fail" if stalled else "unknown", "value": None,
+                "details": {"skipped": "no listings read", "per_source": [],
+                            "registry": registry},
                 "message": "Location town coverage verified NOTHING — no listings read."
                            + stall_note}
     offenders = [f"{c['source']}: {c['no_row']:,} without a row, {c['cz_no_town']:,} Czech "
@@ -3469,8 +3422,9 @@ def check_location_town_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[
         "check_key": "location_town_coverage",
         "status": status,
         "value": missing,
+        # `per_source`, not `cells`: that key is the health ladder's per-cell verdict contract.
         "details": {"listings": listings, "no_row": no_row, "cz_no_town": cz_no_town,
-                    "address_no_ku": address_no_ku, "hidden": hidden, "cells": cells,
+                    "address_no_ku": address_no_ku, "hidden": hidden, "per_source": cells,
                     "offenders": offenders, "registry": registry},
         "message": message + stall_note,
     }
@@ -3585,18 +3539,18 @@ def _fetch_sreality_probe(
 
 
 def _probe_skipped(detail: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """warn, never fail: the canary could not REACH sreality, so it verified nothing
+    """unknown, never fail: the canary could not REACH sreality, so it verified nothing
     about our transform — and a flaky network must not manufacture a red that reads as
     'the CDN rejected our template'."""
     return {
         "check_key": "sreality_image_template",
-        "status": "warn",
+        "status": "unknown",
         "value": None,
-        "details": {"skipped": True, "reason": detail, **(extra or {})},
+        "details": {"skipped": detail, **(extra or {})},
         "message": (
             f"Sreality image template verified NOTHING this run — {detail}. The "
-            "deployed transform is UNKNOWN, not healthy; if this persists the probe "
-            "itself needs attention."
+            "deployed transform is Not measured, never healthy; if this persists the "
+            "probe itself needs attention."
         ),
     }
 
@@ -3743,7 +3697,8 @@ def check_sreality_image_template(conn: Any, thresholds: dict[str, Any]) -> dict
     width, height = size if size else (None, None)
     details: dict[str, Any] = {
         "image_url": image_url, "transform": transform, "http_status": cdn_status,
-        "width": width, "height": height, "bytes": len(data), "elapsed_ms": elapsed_ms,
+        # `cdn_elapsed_ms`: the harness stamps `elapsed_ms` with the whole check's time.
+        "width": width, "height": height, "bytes": len(data), "cdn_elapsed_ms": elapsed_ms,
         "source_width": source_width, "source_height": source_height,
         "expected_width": expected_width, "expected_height": expected_height,
         "min_ratio": min_ratio, "detail_url": detail_url,
@@ -3801,80 +3756,208 @@ def check_sreality_image_template(conn: Any, thresholds: dict[str, Any]) -> dict
     }
 
 
-_CHECKS: list[tuple[str, Callable[[Any, dict[str, Any]], dict[str, Any]]]] = [
-    # FIRST, and the position is the point: a lane runs _CHECKS in order under its budget
-    # and stamps whatever it did not reach `not_run` (2026-09-11 21:02 lost the last
-    # seven, this one among them). The invariant the location programme is measured by must
-    # never be the measurement a slower check starves — and it is one indexed join.
-    ("location_town_coverage", check_location_town_coverage),
-    ("llm_errors", check_llm_errors),
-    ("llm_burn_rate", check_llm_burn_rate),
-    ("long_open_transaction", check_long_open_transaction),
-    ("db_saturation", check_db_saturation),
-    ("worker_liveness", check_worker_liveness),
-    ("dual_write_parity", check_dual_write_parity),
-    ("property_maintenance", check_property_maintenance),
-    ("broker_resolution_freshness", check_broker_resolution_freshness),
-    ("broker_merge_suppression", check_broker_merge_suppression),
-    # Registered here (6h lane) but deliberately NOT in llm_health.yml's hourly --only
-    # list yet: ship, soak, then promote. Registration alone rings the in-app bell;
-    # the hourly lane is what emails.
-    ("workflow_poller_liveness", check_workflow_poller_liveness),
-    ("ppm2_median_shift", check_ppm2_median_shift),
-    ("ppm2_basis_floor_share", check_ppm2_basis_floor_share),
-    ("area_vs_usable_divergence", check_area_vs_usable_divergence),
-    ("ppm2_measure_coverage", check_ppm2_measure_coverage),
-    ("acquisition_lag", check_acquisition_lag),
-    ("walk_coverage", check_walk_coverage),
-    # walk_coverage's per-category twin (2026-10-13): consecutive walks a category did
-    # not reach the portal's end, i.e. nominated nothing. One scan of 14 days of
-    # scrape_runs. 6h lane + in-app bell; NOT in llm_health.yml's hourly --only list
-    # (ship, soak, promote).
-    ("walk_end_streak", check_walk_end_streak),
-    ("migration_drift", check_migration_drift),
-    ("worker_lane_stall", check_worker_lane_stall),
-    ("delist_flip_refused", check_delist_flip_refused),
-    # Rule #3's hysteresis watch (2026-10-09): flipped rows active again. 6h lane +
-    # in-app bell; NOT in llm_health.yml's hourly --only list yet (ship, soak, promote).
-    ("false_delist_share", check_false_delist_share),
-    # W4's standing P6 check. 6h lane + in-app bell; NOT in llm_health.yml's hourly
-    # --only list yet — ship, soak, then promote (the same ladder as the ppm2 checks).
-    ("location_payload_shape_drift", check_location_payload_shape_drift),
-    # Portal-URL contract: absolute count of active rows with no page URL. 6h lane +
-    # in-app bell; not in the hourly --only list (ship, soak, then promote).
-    ("outbound_url_coverage", check_outbound_url_coverage),
-    # The other ingest checks ask whether rows ARRIVE; this one asks whether their fields
-    # are filled and in-vocabulary. Third to last deliberately: at ~12s over the whole
-    # active stock it is one of the lane's two expensive DB checks, so it queues behind
-    # the cheap ones rather than spending their budget. 6h lane + in-app bell; not in
-    # llm_health.yml's hourly --only list (ship, soak, promote — the ppm2 ladder).
-    ("field_fill_matrix", check_field_fill_matrix),
-    # `acquisition_lag`'s twin one layer later — "did the row arrive" vs "was its prose
-    # ever read" — but registered HERE rather than beside it: once a gate is open the
-    # eligibility predicate as an aggregate over the whole eligible stock measured
-    # 9.4-10.0 s on 2026-09-22, which is field_fill_matrix's class, not acquisition_lag's
-    # indexed one. (With every gate closed it returns before it queries at all.) 6h lane +
-    # in-app bell; not in llm_health.yml's hourly --only list (ship, soak, promote).
-    ("text_extraction_lag", check_text_extraction_lag),
-    # The last DB check, and the most expensive one in the lane (11-35 s measured): a
-    # cross-portal self-join over every active byt row. It asks the question no fill or
-    # validity measure can — whether a populated, plausible integer is on the RIGHT SCALE.
-    # 6h lane + in-app bell; not in llm_health.yml's hourly --only list (ship, soak,
-    # promote — the ppm2 ladder). It reads RED until W8's heal has run on all six
-    # ground=1 portals; that is the gate, not a regression.
-    ("floor_convention", check_floor_convention),
-    # LAST deliberately: the only check that makes an outbound request, so if the
-    # lane budget runs out it is the one that goes unrun, never a DB check. 6h lane
-    # + in-app bell; not in llm_health.yml's hourly --only list (ship, soak, promote).
-    ("sreality_image_template", check_sreality_image_template),
-]
-# (the check body sits above this registry; the SQL it runs is
-# `_LOCATION_PAYLOAD_SHAPE_DRIFT_SQL`, built on the shape CASE the W4 gate shares)
+# --- the registry ------------------------------------------------------------
 
-# No weekly-only CHECKS today (the merge-precision sample went with the legacy decision
-# engine), but the lane is no longer inert: main() emits the once-per-ISO-week health
-# heartbeat under --weekly (toolkit.system_alerts.emit_weekly_heartbeat).
-_WEEKLY_CHECKS: list[tuple[str, Callable[[Any, dict[str, Any]], dict[str, Any]]]] = []
+HOSTS = ("realtime-worker", "github-actions", "pg_cron")
+CLASSES = ("alarm", "gauge")
+DOMAINS = ("scraping", "publishing", "delisting", "dedup", "coverage", "data_quality",
+           "platform")
+
+_GITHUB = "github-actions"
+_HOURLY, _SIX_HOURLY, _DAILY, _WEEKLY = 3_600, 21_600, 86_400, 604_800
+# GitHub delivers a scheduled run up to ~13 h late, so a key it hosts reads stale only past
+# its cadence plus this slack; the worker and pg_cron keep time, so theirs is 3 cadences.
+_GITHUB_DELIVERY_SLACK_S = 18 * 3_600
+_STALE_CADENCES = 3
+# A key is due once its newest row is a cadence old less a tenth of the cadence, at most
+# 15 min: every row carries its run's START, so the next hourly run, started a minute
+# earlier in its slot, would find a 59-minute-old row not due and measure the key only
+# every second run.
+_DUE_SLACK_MAX_S = 900
+# The two checks that leave the database wait on third-party round trips, not on Postgres.
+# The URL probe's budget is declared beside its HEAD loop, which stops itself at it (nothing
+# outside can preempt a request); the image probe gets the same.
+_OUTBOUND_BUDGET_S = PROBE_BUDGET_S
+
+
+@dataclass(frozen=True)
+class Check:
+    """One registered check: its body, how it is judged, where it runs and how often."""
+
+    key: str
+    fn: Callable[[Any, dict[str, Any]], dict[str, Any]]
+    domain: str
+    cls: str
+    host: str
+    cadence_s: int
+    label: str
+    unit: str = ""
+    owner_path: str = ""
+    budget_s: float = _CHECK_BUDGET_S
+
+    @property
+    def staleness_budget(self) -> _dt.timedelta:
+        """How old the newest result may grow before the page reads the key Not measured."""
+        if self.host == _GITHUB:
+            return _dt.timedelta(seconds=self.cadence_s + _GITHUB_DELIVERY_SLACK_S)
+        return _dt.timedelta(seconds=self.cadence_s * _STALE_CADENCES)
+
+    @property
+    def due_after_s(self) -> int:
+        """How old the newest result must be before a lane measures this check again."""
+        return self.cadence_s - min(self.cadence_s // 10, _DUE_SLACK_MAX_S)
+
+
+# A lane runs CHECKS in this order under its budget and stamps whatever it does not reach
+# `not_run`, so the order is a priority: cheap invariants first, the expensive reads late and
+# the outbound probes last. The page's `sort` is the position here.
+CHECKS: tuple[Check, ...] = (
+    # FIRST: 2026-09-11 21:02 lost the last seven checks to the budget, this one among them,
+    # and the invariant the location programme is measured by is one indexed join.
+    Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
+          _GITHUB, _SIX_HOURLY, "Location coverage", unit="ads",
+          owner_path="/location-quality"),
+    Check("llm_errors", check_llm_errors, "platform", "alarm", _GITHUB, _HOURLY,
+          "LLM errors", owner_path="/costs"),
+    Check("llm_burn_rate", check_llm_burn_rate, "platform", "alarm", _GITHUB, _HOURLY,
+          "LLM spend", unit="USD", owner_path="/costs"),
+    Check("long_open_transaction", check_long_open_transaction, "platform", "alarm",
+          _GITHUB, _SIX_HOURLY, "Oldest open transaction", unit="min"),
+    Check("db_saturation", check_db_saturation, "platform", "alarm", _GITHUB, _HOURLY,
+          "Scheduled jobs failing"),
+    Check("worker_liveness", check_worker_liveness, "platform", "alarm", _GITHUB, _HOURLY,
+          "Worker heartbeat", unit="min"),
+    Check("dual_write_parity", check_dual_write_parity, "platform", "alarm", _GITHUB,
+          _SIX_HOURLY, "Dual-write parity", unit="rows"),
+    Check("property_maintenance", check_property_maintenance, "publishing", "alarm",
+          _GITHUB, _HOURLY, "Property maintenance", unit="h"),
+    Check("broker_resolution_freshness", check_broker_resolution_freshness, "platform",
+          "alarm", _GITHUB, _HOURLY, "Broker resolution", unit="h",
+          owner_path="/brokers/review"),
+    Check("broker_merge_suppression", check_broker_merge_suppression, "dedup", "alarm",
+          _GITHUB, _HOURLY, "Broker merge rulings", unit="pairs",
+          owner_path="/brokers/review"),
+    Check("workflow_poller_liveness", check_workflow_poller_liveness, "platform", "alarm",
+          _GITHUB, _SIX_HOURLY, "GitHub failure poller", unit="h"),
+    Check("ppm2_median_shift", check_ppm2_median_shift, "data_quality", "alarm", _GITHUB,
+          _SIX_HOURLY, "Kč/m² median shift", unit="×"),
+    Check("ppm2_basis_floor_share", check_ppm2_basis_floor_share, "data_quality", "gauge",
+          _GITHUB, _SIX_HOURLY, "Kč/m² price floor", unit="%"),
+    Check("area_vs_usable_divergence", check_area_vs_usable_divergence, "data_quality",
+          "gauge", _GITHUB, _SIX_HOURLY, "Area vs usable area", unit="%"),
+    Check("ppm2_measure_coverage", check_ppm2_measure_coverage, "data_quality", "alarm",
+          _GITHUB, _SIX_HOURLY, "Kč/m² coverage", unit="%"),
+    Check("acquisition_lag", check_acquisition_lag, "scraping", "alarm", _GITHUB,
+          _SIX_HOURLY, "New ads waiting to be fetched", unit="h"),
+    Check("walk_coverage", check_walk_coverage, "coverage", "gauge", _GITHUB, _SIX_HOURLY,
+          "Walk coverage", unit="%"),
+    # walk_coverage's per-category twin: walks in a row that did not reach the portal's end.
+    Check("walk_end_streak", check_walk_end_streak, "scraping", "alarm", _GITHUB,
+          _SIX_HOURLY, "Walks not reaching the end", unit="walks"),
+    Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB,
+          _SIX_HOURLY, "Migration drift", unit="files"),
+    Check("worker_lane_stall", check_worker_lane_stall, "platform", "alarm", _GITHUB,
+          _SIX_HOURLY, "Worker lane stall", unit="s"),
+    Check("delist_flip_refused", check_delist_flip_refused, "delisting", "gauge", _GITHUB,
+          _SIX_HOURLY, "Delist nominations deferred", unit="ads"),
+    Check("false_delist_share", check_false_delist_share, "delisting", "alarm", _GITHUB,
+          _SIX_HOURLY, "False delist share", unit="%"),
+    Check("location_payload_shape_drift", check_location_payload_shape_drift, "scraping",
+          "alarm", _GITHUB, _SIX_HOURLY, "Location payload shape", unit="%"),
+    Check("outbound_url_coverage", check_outbound_url_coverage, "data_quality", "gauge",
+          _GITHUB, _SIX_HOURLY, "Ads with no portal link", unit="ads"),
+    # The three expensive reads queue behind the cheap ones: field_fill_matrix ~12 s over the
+    # whole active stock, text_extraction_lag ~10 s once a gate is open, floor_convention
+    # 11-35 s (a cross-portal self-join over every active byt, the most variable read here).
+    Check("field_fill_matrix", check_field_fill_matrix, "scraping", "alarm", _GITHUB,
+          _SIX_HOURLY, "Field fill", unit="cells"),
+    Check("text_extraction_lag", check_text_extraction_lag, "publishing", "gauge", _GITHUB,
+          _SIX_HOURLY, "Description reading", unit="h"),
+    Check("floor_convention", check_floor_convention, "data_quality", "gauge", _GITHUB,
+          _SIX_HOURLY, "Floor convention"),
+    # LAST: the checks that leave the database, so a lane that runs out of budget drops an
+    # outbound probe, never a database measurement.
+    Check("sreality_image_template", check_sreality_image_template, "scraping", "alarm",
+          _GITHUB, _DAILY, "Sreality image template", unit="px",
+          budget_s=_OUTBOUND_BUDGET_S),
+    Check("outbound_url_conformance", check_outbound_url_conformance, "scraping", "alarm",
+          _GITHUB, _WEEKLY, "Portal links open the right page", unit="%",
+          budget_s=_OUTBOUND_BUDGET_S),
+)
+
+
+# --- the harness ---------------------------------------------------------------
+
+_DUE_SQL = """
+select k.key,
+       (select max(r.run_at) from pipeline_check_results r where r.check_key = k.key)
+  from unnest(%(keys)s::text[]) as k(key)
+"""
+
+_HEALTH_CHECKS_ROWS_SQL = """
+select key, host, cadence_s, declared_at
+  from health_checks
+ where key = any(%(keys)s::text[])
+"""
+
+_HEALTH_CHECKS_UPSERT_SQL = """
+insert into health_checks
+       (key, domain, class, host, cadence_s, staleness_budget, label, unit, owner_path,
+        sort, declared_at)
+values (%(key)s, %(domain)s, %(class)s, %(host)s, %(cadence_s)s, %(staleness_budget)s,
+        %(label)s, %(unit)s, %(owner_path)s, %(sort)s, %(declared_at)s)
+on conflict (key) do update
+   set domain = excluded.domain, class = excluded.class, host = excluded.host,
+       cadence_s = excluded.cadence_s, staleness_budget = excluded.staleness_budget,
+       label = excluded.label, unit = excluded.unit, owner_path = excluded.owner_path,
+       sort = excluded.sort, declared_at = excluded.declared_at
+"""
+
+_HEALTH_CHECKS_RETIRE_SQL = """
+delete from health_checks
+ where host = %(host)s and not (key = any(%(keys)s::text[]))
+"""
+
+
+def due_checks(conn: Any, host: str, now: _dt.datetime) -> list[Check]:
+    """This host's checks, in registry order, whose newest result (any status) is absent or
+    at least `due_after_s` old."""
+    mine = [c for c in CHECKS if c.host == host]
+    if not mine:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(_DUE_SQL, {"keys": [c.key for c in mine]})
+        newest = {key: run_at for key, run_at in cur.fetchall()}
+    return [c for c in mine
+            if newest.get(c.key) is None
+            or (now - newest[c.key]).total_seconds() >= c.due_after_s]
+
+
+def project_registry(conn: Any, host: str, now: _dt.datetime) -> dict[str, int]:
+    """Upsert this host's CHECKS into health_checks; delete its rows that no Check declares."""
+    declared = [(sort, c) for sort, c in enumerate(CHECKS) if c.host == host]
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_HEALTH_CHECKS_ROWS_SQL, {"keys": [c.key for _, c in declared]})
+        prior = {key: (row_host, cadence_s, declared_at)
+                 for key, row_host, cadence_s, declared_at in cur.fetchall()}
+        rows: list[dict[str, Any]] = []
+        for sort, c in declared:
+            old = prior.get(c.key)
+            # declared_at anchors "not measured yet" on the page, so only a new key or a
+            # changed host or cadence restarts it; a re-projection keeps the clock.
+            kept = old is not None and old[0] == c.host and old[1] == c.cadence_s
+            rows.append({
+                "key": c.key, "domain": c.domain, "class": c.cls, "host": c.host,
+                "cadence_s": c.cadence_s, "staleness_budget": c.staleness_budget,
+                "label": c.label, "unit": c.unit, "owner_path": c.owner_path,
+                "sort": sort, "declared_at": old[2] if kept else now,
+            })
+        if rows:
+            cur.executemany(_HEALTH_CHECKS_UPSERT_SQL, rows)
+        cur.execute(_HEALTH_CHECKS_RETIRE_SQL,
+                    {"host": host, "keys": [c.key for c in CHECKS]})
+        deleted = cur.rowcount
+    return {"upserted": len(rows), "deleted": max(deleted or 0, 0)}
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
@@ -3886,153 +3969,131 @@ def _is_timeout_error(exc: BaseException) -> bool:
 
 
 def _timed_out_result(key: str, budget_s: float, exc: BaseException | None) -> dict[str, Any]:
-    """A check that ran past its budget is `warn`, never `fail`.
+    """A check cancelled by its budget measured nothing: unknown, never fail.
 
-    It reports "I could not measure this", which is a different claim from "I measured
-    this and it is broken" — and a lane under DB pressure would otherwise manufacture a
-    wall of false reds at the exact moment the operator needs to read the real one."""
+    "I could not measure this" is a different claim from "I measured this and it is broken",
+    and a lane under DB pressure would otherwise manufacture a wall of false reds at the
+    exact moment the operator needs to read the real one."""
     return {
         "check_key": key,
-        "status": "warn",
+        "status": "unknown",
         "value": None,
         "details": {"timed_out": True, "budget_seconds": round(budget_s, 1),
                     "error": str(exc) if exc is not None else None},
         "message": (
-            f"Check '{key}' exceeded its {budget_s:.0f}s budget and was cancelled — its "
-            "result is UNKNOWN this run, not healthy. Usually DB pressure; if it persists, "
+            f"Check '{key}' exceeded its {budget_s:.0f}s budget and was cancelled, so it is "
+            "Not measured this run (never healthy). Usually DB pressure; if it persists, "
             "the check's query needs work."
         ),
     }
 
 
 def _not_run_result(key: str, budget_s: float) -> dict[str, Any]:
+    """A check the lane never reached measured nothing: unknown."""
     return {
         "check_key": key,
-        "status": "warn",
+        "status": "unknown",
         "value": None,
         "details": {"not_run": True, "lane_budget_seconds": round(budget_s, 1)},
         "message": (
             f"Check '{key}' did not run: the verification lane exhausted its "
-            f"{budget_s:.0f}s budget first. Result UNKNOWN this run."
+            f"{budget_s:.0f}s budget first, so it is Not measured this run."
         ),
     }
 
 
+def _errored_result(key: str, exc: BaseException) -> dict[str, Any]:
+    """A check that raised measured nothing: unknown, with the error kept."""
+    return {
+        "check_key": key,
+        "status": "unknown",
+        "value": None,
+        "details": {"errored": True, "error": str(exc)},
+        "message": f"Check '{key}' raised an error, so it is Not measured this run: {exc}",
+    }
+
+
+def lane_budget_for(checks: Sequence[Check]) -> float:
+    """A lane owes every check it runs that check's own budget, so none can starve another."""
+    return float(sum(c.budget_s for c in checks))
+
+
 def run_checks(
-    conn: Any, thresholds: dict[str, Any], *, weekly: bool = False,
-    only: set[str] | None = None,
+    conn: Any, thresholds: dict[str, Any], *, checks: Sequence[Check],
     on_result: Callable[[dict[str, Any]], None] | None = None,
-    lane_budget_s: float | None = _LANE_BUDGET_S,
-    check_budget_s: float = _CHECK_BUDGET_S,
+    lane_budget_s: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Run every check in isolation, handing each result to `on_result` AS IT COMPLETES.
-
-    A raising check becomes a `fail` row carrying the error, so one broken check never
-    aborts the run. `only` restricts to the named check keys (the acute lane's `--only`).
-
-    Two budgets bound the lane (W0.4). Each check gets `check_budget_s` (or whatever the
-    lane has left, whichever is smaller) enforced server-side as `statement_timeout`; if
-    it is cancelled it reports `warn` "timed out", not `fail`. When the lane budget is
-    gone the remaining checks are not started and report `warn` "not run". Both say
-    UNKNOWN rather than healthy — silence is never recovery.
-
-    `on_result` is what makes a timeout survivable: persisting per check means a killed
-    job keeps every result it had already computed instead of losing all of them.
-    """
+    """Run each check in isolation under its budget, handing on_result each result as it lands."""
     results: list[dict[str, Any]] = []
-    # The measure checks share one 12 s read of measure_plausibility_by_source; the
-    # cache is per RUN, never across runs.
+    # The measure checks share one read of measure_plausibility_by_source per run, never
+    # across runs.
     _PLAUSIBILITY_CACHE.clear()
-    checks = list(_CHECKS) + (list(_WEEKLY_CHECKS) if weekly else [])
-    if only:
-        checks = [(k, fn) for (k, fn) in checks if k in only]
-
     _LANE.reset()
     if lane_budget_s is not None:
         _LANE.start(lane_budget_s)
     try:
-        for key, fn in checks:
-            left = _LANE.arm_for_check(check_budget_s)
+        for check in checks:
+            left = _LANE.arm_for_check(check.budget_s)
+            elapsed = 0.0
             if left is not None and left <= 0:
-                LOG.error(
-                    "lane budget %.0fs exhausted; check %s not run", lane_budget_s, key)
-                result = _not_run_result(key, lane_budget_s or 0.0)
+                LOG.error("lane budget %.0fs exhausted; check %s not run",
+                          lane_budget_s, check.key)
+                result = _not_run_result(check.key, lane_budget_s or 0.0)
             else:
                 started = _time.monotonic()
                 try:
-                    result = fn(conn, thresholds)
-                except Exception as exc:  # noqa: BLE001
-                    elapsed = _time.monotonic() - started
+                    result = check.fn(conn, thresholds)
+                except Exception as exc:  # noqa: BLE001 - one broken check never ends the lane
                     if _is_timeout_error(exc):
-                        LOG.error("check %s timed out after %.1fs", key, elapsed)
-                        result = _timed_out_result(key, elapsed, exc)
+                        spent = _time.monotonic() - started
+                        LOG.error("check %s timed out after %.1fs", check.key, spent)
+                        result = _timed_out_result(check.key, spent, exc)
                     else:
-                        LOG.exception("check %s errored", key)
-                        result = {
-                            "check_key": key,
-                            "status": "fail",
-                            "value": None,
-                            "details": {"error": str(exc)},
-                            "message": f"Pipeline verification check '{key}' errored: {exc}",
-                        }
+                        LOG.exception("check %s errored", check.key)
+                        result = _errored_result(check.key, exc)
+                elapsed = _time.monotonic() - started
+            if not isinstance(result.get("details"), dict):
+                result["details"] = {}
+            result["details"]["elapsed_ms"] = int(elapsed * 1000)
             results.append(result)
+            # Persisted per check, so a job killed mid-lane keeps everything it measured.
             if on_result is not None:
                 try:
                     on_result(result)
                 except Exception:  # noqa: BLE001 - persisting one result must not end the lane
-                    LOG.exception("could not persist result for check %s", key)
+                    LOG.exception("could not persist result for check %s", check.key)
     finally:
         _LANE.reset()
     return results
 
 
 def insert_result(conn: Any, result: dict[str, Any], run_at: _dt.datetime) -> None:
-    """Persist ONE check result. Called as each check completes (W0.4)."""
+    """Persist ONE result; its message rides inside `details`, beside any cells it carries."""
+    details = dict(result.get("details") or {})
+    if result.get("message"):
+        details["message"] = result["message"]
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO pipeline_check_results (run_at, check_key, status, value, details) "
             "VALUES (%s, %s, %s, %s, %s::jsonb)",
             (run_at, result["check_key"], result["status"],
-             result.get("value"), json.dumps(result.get("details") or {})),
+             result.get("value"), json.dumps(details)),
         )
-
-
-def write_results(
-    conn: Any, results: list[dict[str, Any]], run_at: _dt.datetime,
-    *, policy: AlertPolicy | None = None,
-) -> dict[str, int]:
-    """Persist one row per check, then ring the bell per INCIDENT (onset / re-escalation
-    / recovery), not on every red run. Returns {onset, recovery, reescalation} counts.
-
-    The stored history is read BEFORE this run's rows are inserted, so the baseline is
-    the prior run — see toolkit.system_alerts.emit_transition_alerts.
-
-    main() no longer takes this path (it persists and alerts per check so a job timeout
-    keeps what it computed); kept for callers that already hold a full result list."""
-    pol = policy or AlertPolicy()
-    states = check_states(conn, policy=pol)
-    prev = {k: s.status for k, s in states.items() if s.status is not None}
-    for r in results:
-        insert_result(conn, r, run_at)
-    return emit_transition_alerts(
-        conn, results, prev, run_at, states=states, policy=pol)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
-                        help="Compute + log, write nothing (no result rows, no alerts).")
-    parser.add_argument("--weekly", action="store_true",
-                        help="Also run the weekly-only checks and emit the once-per-ISO"
-                             "-week health heartbeat (idempotent: the workflow appends "
-                             "this to all four of Monday's runs).")
-    parser.add_argument("--only", default="",
-                        help="Comma-separated check keys to run (e.g. 'llm_errors,llm_burn_rate' "
-                             "for the hourly LLM lane). Empty = all checks.")
+                        help="Select and compute the due checks and log them; write nothing "
+                             "(no registry rows, no result rows).")
+    parser.add_argument("--host", default=_GITHUB, choices=HOSTS,
+                        help="The host whose registry rows this run projects and whose due "
+                             "checks it measures.")
     parser.add_argument("--exit-nonzero-on-fail", action="store_true",
-                        help="Exit 1 if any run check is 'fail' — so the hourly LLM lane's "
-                             "GitHub run goes red and emails the operator (belt-and-braces "
-                             "for when the in-app bell path itself is down).")
+                        help="Exit 1 when an ALARM measured this run is 'fail', so the lane's "
+                             "GitHub run goes red and emails the operator (both lanes pass "
+                             "it). A failing gauge is a standing condition and never reds "
+                             "the run.")
     parser.add_argument("--arm-dual-write-parity", action="store_true",
                         help="Seed each R2 carrier's dual_write_watermark from where its "
                              "cursor stands now, then exit. Run ONCE, after the dual-write "
@@ -4056,25 +4117,27 @@ def main() -> int:
         LOG.info("armed dual-write parity watermarks for %d carriers", len(armed))
         return 0
 
-    only = {k.strip() for k in args.only.split(",") if k.strip()} or None
     run_at = _dt.datetime.now(_dt.timezone.utc)
-    counts = {"onset": 0, "recovery": 0, "reescalation": 0}
     written = 0
     with connect() as conn:
         thresholds = load_thresholds(conn)
-        policy = AlertPolicy.from_thresholds(thresholds)
-        # The alerting baseline must be read BEFORE this run writes anything, and this
-        # run now writes incrementally — so it is captured here rather than inside a
-        # batch writer (see toolkit.system_alerts.emit_transition_alerts). It carries
-        # the stored history, not just the last status: the ladder needs each open
-        # incident's onset time to know which rung is due.
-        states = check_states(conn, policy=policy) if not args.dry_run else {}
-        prev = {k: s.status for k, s in states.items() if s.status is not None}
+        # A dispatch from a branch measures with that branch's CHECKS but never projects them:
+        # its registry would delete main's keys from the page until main's next run.
+        ref = os.environ.get("GITHUB_REF_NAME", "main")
+        if not args.dry_run and ref != "main":
+            LOG.info("REGISTRY host=%s not projected: this run is from %s, not main",
+                     args.host, ref)
+        elif not args.dry_run:
+            projected = project_registry(conn, args.host, run_at)
+            LOG.info("REGISTRY host=%s upserted=%d deleted=%d",
+                     args.host, projected["upserted"], projected["deleted"])
+        due = due_checks(conn, args.host, run_at)
+        LOG.info("DUE host=%s %d of %d checks: %s", args.host, len(due),
+                 sum(1 for c in CHECKS if c.host == args.host),
+                 ", ".join(c.key for c in due) or "none")
 
         def _persist(result: dict[str, Any]) -> None:
-            """Persist + alert on THIS check, immediately. Both are per-check so a job
-            timeout mid-lane keeps the results it already has AND their alerts, instead
-            of losing every row (the pre-W0.4 behavior)."""
+            """Log this result and, unless dry-running, store it the moment it completes."""
             nonlocal written
             LOG.info(
                 "CHECK %s status=%s value=%s",
@@ -4084,34 +4147,15 @@ def main() -> int:
                 return
             insert_result(conn, result, run_at)
             written += 1
-            emitted = emit_transition_alerts(
-                conn, [result], prev, run_at, states=states, policy=policy)
-            for kind in counts:
-                counts[kind] += emitted[kind]
 
-        results = run_checks(
-            conn, thresholds, weekly=args.weekly, only=only, on_result=_persist,
-            lane_budget_s=(
-                _LANE_BUDGET_S if only else full_lane_budget_s(weekly=args.weekly)))
-        if args.dry_run:
-            LOG.info("dry-run: %d checks computed, no rows written", len(results))
-            return 0
-        if args.weekly:
-            # The weekly lane's heartbeat: one digest per ISO week, so the operator can
-            # tell "nothing is wrong" from "nothing is running". --weekly rides all four
-            # of Monday's runs, hence the week-grain dedupe key. Best-effort, like every
-            # other write here: a failed heartbeat must not discard the run's results.
-            try:
-                if emit_weekly_heartbeat(conn, results, states, run_at):
-                    LOG.info("emitted the weekly health heartbeat")
-            except Exception:  # noqa: BLE001
-                LOG.exception("could not emit the weekly health heartbeat")
-    LOG.info(
-        "verify_pipeline wrote %d rows, emitted %d onset + %d re-escalation + "
-        "%d recovery alerts",
-        written, counts["onset"], counts["reescalation"], counts["recovery"],
-    )
-    if args.exit_nonzero_on_fail and any(r["status"] == "fail" for r in results):
+        results = run_checks(conn, thresholds, checks=due, on_result=_persist,
+                             lane_budget_s=lane_budget_for(due))
+    alarms = {c.key for c in due if c.cls == "alarm"}
+    failing = [r["check_key"] for r in results
+               if r["status"] == "fail" and r["check_key"] in alarms]
+    LOG.info("verify_pipeline host=%s measured %d checks, wrote %d rows; failing alarms: %s",
+             args.host, len(results), written, ", ".join(failing) or "none")
+    if args.exit_nonzero_on_fail and failing:
         return 1
     return 0
 

@@ -32,6 +32,7 @@ warn_if_stale '^migrations/'                                    database       "
 warn_if_stale '^(toolkit|api)/'                                  toolkit-api    "toolkit/ or api/"
 warn_if_stale '^api/llm_client\.py$|^api/providers/'             llm-pipelines  "the LLM provider/client layer"
 warn_if_stale '^scraper/|^\.github/workflows/.*(index_walk|detail_drain)' scraper-ops "scraper/ or an index-walk/detail-drain workflow"
+warn_if_stale '^scripts/verify_pipeline\.py$|^scripts/checks/|^toolkit/system_alerts\.py$' scraper-ops "the health check harness or its ladder"
 warn_if_stale '^frontend/'                                       interface-design "frontend/"
 
 exit 0

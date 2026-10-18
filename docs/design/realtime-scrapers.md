@@ -556,7 +556,7 @@ arm its own then). After a blocked
 portal recovers, reset its `portal_rate_state` row (`penalty_factor = 1`, `next_slot_at = now()`)
 before lifting the kill switches: a refused lease does not decay the penalty.
 
-**Deferred — W5b (health/SLO re-derivation):** cadence-scale the fixed thresholds
+**Deferred — W5b (health/SLO re-derivation):** *Superseded 2026-10-18 by `docs/design/health-dashboard.md`.* cadence-scale the fixed thresholds
 (`detail_queue_backlog` by oldest-row AGE not count — matview line ~301; `delisting_spike` as
 % of portal size — line ~264), close silent-greens (image-pipeline liveness, dedup
 dirty-banner staleness, drift no-baseline→warn, monitor-of-monitors on

@@ -59,7 +59,9 @@ RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OW
 the parent is merely shared with it (migration 610) — and `WITH CHECK` refuses either, so the
 insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
-their parent lookups see every row.
+their parent lookups see every row. Since migration 619, `authenticated` may UPDATE only `seen_at`
+and `estimation_run_id` on `notification_dispatches`, and a platform admin may update SYSTEM-account
+rows (`notification_dispatches_admin_update`).
 
 **Migration 294 — pipeline tables**: `property_pipeline`, `pipeline_stages`,
 `property_pipeline_events`, plus the signup trigger:

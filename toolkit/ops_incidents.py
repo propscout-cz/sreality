@@ -71,10 +71,14 @@ RETURNING id, failure_count, first_seen_at, workflow_paths, sample_run_url,
           sample_excerpt, alerted_at
 """
 
+# Cell incidents (`cell:<key>:<subject>`) belong to toolkit.system_alerts.reconcile: this
+# retiring engine must never close or "recover" one (fenced in wave 1, deleted in wave 3).
+# `%%` is psycopg's escaped `%`; run without parameters, Postgres reads it as the same wildcard.
 _RESOLVE_ON_SUCCESS_SQL = """
 UPDATE ops_incidents i
    SET resolved_at = now(), resolve_reason = 'success'
  WHERE i.resolved_at IS NULL
+   AND i.signature NOT LIKE 'cell:%%'
    AND coalesce(array_length(i.workflow_paths, 1), 0) > 0
    AND NOT EXISTS (
        SELECT 1
@@ -88,6 +92,7 @@ _RESOLVE_MAX_AGE_SQL = """
 UPDATE ops_incidents
    SET resolved_at = now(), resolve_reason = 'max_age'
  WHERE resolved_at IS NULL
+   AND signature NOT LIKE 'cell:%%'
    AND last_seen_at < now() - make_interval(hours => %(hours)s::int)
 RETURNING id, signature, alerted_at
 """
