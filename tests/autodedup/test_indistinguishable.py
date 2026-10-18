@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from autodedup.dataset import Listing, Location
 from autodedup.indistinguishable import (
+    CLUSTER,
     FACT_NAMES,
+    PROMOTE,
     areas_disjoint,
     distinguishing_facts,
     indistinguishable,
 )
+from autodedup.settings import Settings
+
+# The settings the real-time generation runs, for the limbs the default leaves off.
+W31 = Settings.from_json(Path(__file__).resolve().parents[2] / "autodedup/settings/w31.json")
 
 
 def listing(listing_id: int, **kwargs: object) -> Listing:
@@ -29,6 +37,10 @@ def listing(listing_id: int, **kwargs: object) -> Listing:
 
 def names(a: Listing, b: Listing, feats: object = None) -> list[str]:
     return [fact.name for fact in distinguishing_facts(a, b, feats)]  # type: ignore[arg-type]
+
+
+def stated(a: Listing, b: Listing, mode: str = CLUSTER) -> list[str]:
+    return [fact.name for fact in distinguishing_facts(a, b, None, W31, mode)]
 
 
 def test_identical_adverts_are_indistinguishable() -> None:
@@ -236,6 +248,43 @@ def test_a_price_list_of_several_units_conflicts_with_nothing() -> None:
     a = _at_block(1, "K dispozici jednotky c. 3, jednotky c. 5 a jednotky c. 7.")
     b = _at_block(2, "Prodej bytu (c.9).")
     assert "unit_designator" not in names(a, b)
+
+
+# --- E966: a co-living room's code -----------------------------------------------------------
+# Za Pohořelcem: 10 m² rooms of 3+1 flats in one house, one broker template at 13,500 Kč.
+ROOM_303_2 = ("Nabízíme k dlouhodobému nebo krátkodobému pronájmu zařízený pokoj č. 303-2 ve "
+              "sdíleném bytu 3+1 ve skvělé lokalitě Prahy 6 Pohořelec.")
+ROOM_301_3 = ("Nabízíme k dlouhodobému nebo střednědobému pronájmu (201-3, 301-3) zařízený pokoj "
+              "ve sdíleném bytu 3+1. Dostupnost: Pokoj 301-3 (2. patro) Volný ihned.")
+ROOMS_403_303 = ("Pokoj 403-1 volný od 24.8.2026. Pokoj 303-1 volný od 1.9.2026. Nabízíme k "
+                 "dlouhodobému nebo střednědobému pronájmu zařízený pokoj (č. 403-1) ve sdíleném "
+                 "bytu 3+1.")
+
+
+def room(listing_id: int, body: str, source: str = "sreality") -> Listing:
+    return listing(listing_id, source=source, category_type="pronajem", disposition=None,
+                   area_m2=10.0, floor=1, price=13_500.0, description=body)
+
+
+def test_two_room_codes_are_two_rooms() -> None:
+    """sreality 11944 (303-2) against 19252047 (301-3), promoted by D43 on agree:2."""
+    for mode in (PROMOTE, CLUSTER):
+        assert "unit_code" in stated(room(11944, ROOM_303_2), room(19252047, ROOM_301_3), mode)
+    assert "unit_code" in stated(room(11944, ROOM_303_2), room(12273170, ROOMS_403_303))
+
+
+def test_one_room_on_two_portals_is_one_room() -> None:
+    """sreality 11944 and idnes 144190 both let room 303-2; 12273170 / 12298064 both list
+    403-1 and 303-1."""
+    assert "unit_code" not in stated(room(11944, ROOM_303_2),
+                                     room(144190, ROOM_303_2, source="idnes"))
+    assert "unit_code" not in stated(room(12273170, ROOMS_403_303),
+                                     room(12298064, ROOMS_403_303, source="idnes"))
+
+
+def test_a_subset_of_room_codes_is_not_a_conflict() -> None:
+    only = room(2, "Dostupnost: Pokoj 403-1 (4. patro) od 24.8.2026")
+    assert "unit_code" not in stated(room(12273170, ROOMS_403_303), only)
 
 
 # --- image facts, which come only from the engine's own feature row --------------------------

@@ -203,6 +203,13 @@ _UNIT_CODE_BODY: str = (
 )
 _PRINTED_UNIT_CODE = re.compile(_UNIT_NOUN + r"\s+" + _UNIT_MARKER + _UNIT_CODE_BODY
                                 + r"(?![\d+]|\s*m2)")
+# E966: a co-living ROOM is let as the unit itself, and its code is the flat and the room
+# joined by a hyphen — `pokoj č. 303-2` against `Pokoj 301-3`, one Za Pohořelcem template at one
+# rent. Its own pattern, never `_UNIT_NOUN`: two bare numbers joined by a hyphen after `byt` are
+# a range (`byt 2-3 pokoje`), and the dotted, Roman, word and letter forms after `pokoj` are a
+# room's size or its label inside one flat. `[.,]\d` keeps a room list's `pokoj 1 - 12,5 m2` out.
+_PRINTED_ROOM_CODE = re.compile(r"\bpokoj\w*\s+\(?\s*" + _UNIT_MARKER
+                                + r"(\d{1,3}\s?-\s?\d{1,3})(?![\d+]|[.,]\d|\s*m2)")
 # The three forms the segment reader cannot see. Each needs an EXPLICIT marker, because a bare
 # letter or numeral after a noun is Czech grammar: `dům i zahrada` is a house and a garden, not
 # unit I, and `byt a garáž` is a flat and a garage.
@@ -225,7 +232,8 @@ UNIT_CODE_MAX_PER_ADVERT: int = 4
 
 
 def printed_unit_codes(text: str | None, wide: bool = False) -> frozenset[str]:
-    """Every unit code the body prints as this unit's, whole and normalised.
+    """Every unit code the body prints as this unit's, whole and normalised — a co-living
+    room's `pokoj č. 303-2` among them (E966).
 
     `wide` adds the Roman numeral, the number word and the single letter, each of which needs
     an explicit `označením` / `č.` / `číslo` marker to be read at all."""
@@ -237,7 +245,8 @@ def _printed_unit_codes(text: str, wide: bool) -> frozenset[str]:
     folded = fold(text)
     out: set[str] = {
         re.sub(r"\s+", "", match.group(1)).upper().strip(".-/")
-        for match in _PRINTED_UNIT_CODE.finditer(folded)
+        for pattern in (_PRINTED_UNIT_CODE, _PRINTED_ROOM_CODE)
+        for match in pattern.finditer(folded)
     }
     if wide:
         out |= {match.group(1).upper() for match in _PRINTED_UNIT_ROMAN.finditer(folded)}
@@ -690,7 +699,8 @@ def _parcel_numbers_wider(text: str) -> frozenset[str]:
 # developer's adverts inside one building are near-identical by construction (E61), and where
 # no unit number is printed the accessory number is the next thing the building itself names.
 # `stání` is matched as a whole word so `stanice metra` can never become a parking space, and
-# `pokoj č. 2` is deliberately not read: that is a room inside one flat, not an accessory.
+# `pokoj č. 2` is deliberately not read: that is a room inside one flat, not an accessory. A
+# co-living room's own code (`pokoj č. 303-2`) names the unit and is `printed_unit_codes`' (E966).
 _ACCESSORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("stani", re.compile(r"\bstani\b\s*(?:pro\s+auto\s*)?(?:c\.|cislo)\s*(\d{1,4})\b")),
     ("sklep", re.compile(r"\bsklep\w*\s*(?:koj\w*\s*)?(?:c\.|cislo)\s*(\d{1,4})\b")),

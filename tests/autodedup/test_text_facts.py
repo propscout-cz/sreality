@@ -9,6 +9,7 @@ from autodedup.text_facts import (
     address_block_key,
     mask_codes,
     orientations,
+    printed_unit_codes,
     reference_codes,
     stated_areas,
     unit_designators,
@@ -149,3 +150,44 @@ def test_orientations_prefers_the_longer_compass_stem() -> None:
     """`jihovýchod` contains `východ`; reading the short stem would merge two flats."""
     assert orientations("Byt je orientován na jihovýchod.") == {"jihovychod"}
     assert orientations("Byt je orientován na severozápad.") == {"severozapad"}
+
+
+# --- E966: a co-living room's code ---------------------------------------------------------
+# Za Pohořelcem, one template of 10 m² rooms at 13,500 Kč: sreality 11944 and idnes 144190 let
+# room 303-2, sreality 19252047 room 301-3, sreality 12273170 rooms 403-1 and 303-1.
+ROOM_303_2 = ("Nabízíme k dlouhodobému nebo krátkodobému pronájmu zařízený pokoj č. 303-2 ve "
+              "sdíleném bytu 3+1 ve skvělé lokalitě Prahy 6 Pohořelec.")
+ROOM_301_3 = ("Nabízíme k dlouhodobému nebo střednědobému pronájmu (201-3, 301-3) zařízený pokoj "
+              "ve sdíleném bytu 3+1. Nabízený pokoj (cca 10 m2): Jednolůžková postel s matrací. "
+              "Dostupnost: Pokoj 301-3 (2. patro) Volný ihned.")
+ROOMS_403_303 = ("Neplatíte provizi. Pokoj 403-1 volný od 24.8.2026. Pokoj 303-1 volný od "
+                 "1.9.2026. Nabízíme k dlouhodobému nebo střednědobému pronájmu zařízený pokoj "
+                 "(č. 403-1) ve sdíleném bytu 3+1.")
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (ROOM_303_2, {"303-2"}),
+        # The menu in front of the noun is not read; the room the advert names is.
+        (ROOM_301_3, {"301-3"}),
+        (ROOMS_403_303, {"403-1", "303-1"}),
+        ("pronájmu pokoj 301-2 ve sdíleném bytu 3+1, který se nachází ve 2 patře", {"301-2"}),
+    ],
+)
+def test_printed_unit_codes_reads_a_co_living_room_code(text: str, expected: set[str]) -> None:
+    assert printed_unit_codes(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # After a dwelling noun two bare numbers joined by a hyphen are a range.
+        "Hledáme byt 2-3 pokoje v Praze 6.",
+        # A room list's size is not a code, and a single room number is a room inside one flat.
+        "Dispozice: pokoj 1 - 12,5 m2, pokoj 2 - 14 m2, kuchyň 9 m2.",
+        "Pronajmu pokoj č. 2 v bytě 3+1.",
+    ],
+)
+def test_printed_unit_codes_reads_no_range_and_no_room_number(text: str) -> None:
+    assert printed_unit_codes(text) == frozenset()
