@@ -114,7 +114,9 @@ def test_the_producers_stamp_lands_on_the_row(conn):
     last_ok, through, rows, duration_ms = _sweep(conn)
     started = conn.execute("select now()").fetchone()[0]
     assert (rows, duration_ms) == (7, 5000)
-    assert last_ok == through and last_ok >= started
+    # Migration 441's helper reads clock_timestamp() once per column: the two reads can straddle a microsecond tick.
+    assert abs(last_ok - through) < _dt.timedelta(milliseconds=1)
+    assert last_ok >= started and through >= started
 
 
 def test_the_post_condition_refuses_a_loosened_budget(conn):

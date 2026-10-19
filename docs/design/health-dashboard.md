@@ -1016,21 +1016,36 @@ Owed and stated, named here so it is not lost:
 
 **Goal.** System alerts leave the app on the channel the operator chose, once every alarm is a new-model alarm, and the canary checks each one was delivered.
 
-**PR.** Draft PR on feature/health-delivery: migration 623 (system_health_channels and one announced delivery-test alert), docs, and click-by-click steps for the Railway secret and the recipient. No code. With 'bell only' (Q1) the PR is docs alone.
+**PR.** Draft PR on feature/health-delivery: ~~migration 623 (system_health_channels and one announced delivery-test alert),~~ docs, and click-by-click steps for the Railway secret and the recipient. No code. With 'bell only' (Q1) the PR is docs alone. Not as built: no migration file, because under Q1 one would merge unapplied and its data-only statements are invisible to `migration_drift`; it is written at enabling time with the next free number (the As built note, below).
+
+**As built (2026-10-19).** Health dashboard sprint wave 7 (branch `feature/health-delivery`) is this plan as Q1 shrinks it, docs only, except where its build contract was more precise:
+- **The readiness, written down.** A "Delivery readiness" section in the scraper-ops skill's `references/pipeline-verification.md` states what is ready (the two transports; the outbox, which `api/main.py` starts at boot only when a transport `is_configured()`; system alerts addressed when the ladder writes them; the recipients; the canary), what Q1 holds back (the channel list) and the operator's path to switch delivery on later, click by click, in three steps: (1) on the Railway API service's Variables, `TELEGRAM_BOT_TOKEN`, or `RESEND_API_KEY` and `EMAIL_FROM`, with `SPA_BASE_URL` checked, then Deploy; (2) the recipient in Settings › Delivery (Admin → General Settings); (3) the migration below, applied, and the delivery-test system alert confirmed on arrival. The operator gate moves with it, from this merge to enabling time. The bell-only statements are edited in place (the toolkit-api SKILL's system-alerts line, whose `SPA_BASE_URL` line now also says an unset base sends no link; four in `roadmap/reliability-track.md`), and the 2026-08-04 ruling in `docs/design/media-integrity-architecture.md` is annotated as re-affirmed on 2026-10-18, not superseded: the Deletes line assumed delivery would be switched on here.
+- **No migration.** `623_health_delivery.sql` is not written. Merged under Q1 it would sit on main unapplied, against apply-before-merge (§ 13), and its two statements, an UPDATE and an INSERT, declare nothing `migration_drift` can probe, so the check would read it "unverifiable" (Not measured, where the build contract expected a red) and nothing would show it was never applied. The 623 reservation is moot anyway: main reached 634 while the sprint ran, so the file takes the next free number on the day it is written (the database skill: confirm the next free number at apply time), and wave 9's destructive migration, 624 in this plan, likewise takes the next free one when it comes. The readiness section carries the statements (the channel list, and the notice keyed `sys:delivery_test:<date>` with `on conflict (dedupe_key) do nothing`) and the read that confirms the test was sent.
+- **The canary already accepted a sent row.** Since wave 2 (34002963) `alarm_notices_handled` has counted an alarm's notice as handled when a `channel_sends` row for it reads `sent` or `delivered`, beside `seen_at`, so the Adds line's change was already true. Its tests now read the statuses off the statement's own list: a `sent` or `delivered` row handles the notice (Telegram has no delivery webhook, so a sent-only row must count), and a `queued`, `failed`, `bounced` or `suppressed` one does not, so an undelivered alarm past the grace still reds the run (`tests/scripts/test_health_canary.py`). The delivery test's key joins no registered check, so the canary never asserts it, and its link opens Health at the top.
+- **The other Tests lines** need no migrations lane: the channel stamp has been pinned hermetically since wave 1 (`tests/toolkit/test_system_alerts.py::test_emit_stamps_the_system_health_channels`), and the system alert's message (its head as the subject, the `/health#<key>` link, no link without `SPA_BASE_URL`) since wave 3 (`tests/api/test_notification_outbox.py`).
+- **Verified live (10-19).** `channel_sends` has never held a row; `system_health_channels` reads `[]`; both recipients are empty; no watchdog or collection is opted into email or Telegram, and no notice of the last 7 days is addressed to either channel, so the first deploy with a transport key sends nothing old (the outbox sends only notices of the last 7 days addressed to a configured channel, and the ladder addresses a system alert when it writes it).
+- **One variable corrected.** A system alert's link is built from `SPA_BASE_URL`; `API_PUBLIC_URL`, which the build contract named for links, is only the base of email's one-click unsubscribe link (with `NOTIFICATION_UNSUB_SECRET`), so step 1 checks `SPA_BASE_URL` and names that pair as optional.
+- **Also in this PR.** The flaky wave-4 rail `test_the_producers_stamp_lands_on_the_row` (a 1 µs miss on CI run 39287654513) compares the two stamps within 1 ms, each at or after the test's start: migration 441's `stamp_derived_artifact` reads `clock_timestamp()` once per column, and one reading for both would need a new migration, which this docs-only wave does not write.
+
+Owed and stated, named here so it is not lost:
+- The enabling migration, at the operator's word. Until then an alarm nobody read leaves the app only as GitHub's failure email at the next canary run (median ~4.9 h); after it, that email stays as the path that needs neither Supabase's scheduler nor Railway.
+- The SPA's Delivery section names watchdogs and collections only; its two recipients serve system alerts too once the channel list is set.
+
+- Measured against main at the merge (`git diff --numstat`): code +0, migration +0, tests +18 (the canary's six channel-status pins and the tolerant stamp assertion), docs +188 (+211/−23): +206 in all. A docs-only wave under ruling Q1: the plan's "No code" held, and its migration waits for the operator's enabling word.
 
 **Depends on.** W4, W5, W6
 
-**Operator gate.** Q1: add TELEGRAM_BOT_TOKEN (or RESEND_API_KEY and EMAIL_FROM) on the Railway API service and the recipient in Settings › Delivery (steps in the PR); confirm the delivery-test alert arrived before merge.
+**Operator gate.** Q1: add TELEGRAM_BOT_TOKEN (or RESEND_API_KEY and EMAIL_FROM) on the Railway API service and the recipient in Settings › Delivery (steps in the PR); confirm the delivery-test alert arrived before merge. As built: under Q1 this gate moves to enabling time, the readiness section's three steps; this PR merges with no channel switched on.
 
 **Adds.**
-- migration 623
-- The canary's delivery assertion now passes on a sent channel_sends row (it already accepted seen_at)
+- ~~migration 623~~ Not as built: written at enabling time with the next free number (the As built note)
+- The canary's delivery assertion now passes on a sent channel_sends row (it already accepted seen_at). As built: already true since wave 2 (a `sent` or `delivered` row); this wave pins the statuses in tests
 
 **Deletes.**
-- The 'bell only' statements in roadmap/reliability-track.md and the toolkit-api SKILL delivery lines (edited in place); the 2026-08-04 ruling in docs/design/media-integrity-architecture.md marked superseded
+- The 'bell only' statements in roadmap/reliability-track.md and the toolkit-api SKILL delivery lines (edited in place); the 2026-08-04 ruling in docs/design/media-integrity-architecture.md ~~marked superseded~~ annotated as re-affirmed 2026-10-18 (Q1), not superseded (the As built note)
 
 **Migrations.**
-- 623_health_delivery.sql — ADDITIVE config change, operator-ruled (Q1). UPDATE app_settings SET value = Q1's channel list WHERE key = 'system_health_channels'; INSERT one system_health notice, 'Delivery test: Health alerts now reach you here' (dedupe sys:delivery_test:<date>). Applied only after the transport secret is set on the Railway API service and the recipient in Settings › Delivery, because the outbox starts at boot only when a transport is configured.
+- ~~623_health_delivery.sql~~ `<next free number>_health_delivery.sql`, written at enabling time, not in this wave (the As built note) — ADDITIVE config change, operator-ruled (Q1). UPDATE app_settings SET value = Q1's channel list WHERE key = 'system_health_channels'; INSERT one system_health notice, 'Delivery test: Health alerts now reach you here' (dedupe sys:delivery_test:<date>). Applied only after the transport secret is set on the Railway API service and the recipient in Settings › Delivery, because the outbox starts at boot only when a transport is configured.
 
 **Tests.**
 - Migrations lane: a system_health dispatch is stamped with the configured channel.
@@ -1040,11 +1055,12 @@ Owed and stated, named here so it is not lost:
 **Docs in the same PR.**
 - toolkit-api SKILL.md delivery lines (in place)
 - roadmap/reliability-track.md
-- docs/design/media-integrity-architecture.md: the bell-only ruling superseded, dated
+- docs/design/media-integrity-architecture.md: the bell-only ruling ~~superseded~~ re-affirmed (Q1), dated
+- As built: the scraper-ops skill's references/pipeline-verification.md gains the Delivery readiness section
 
 **Risks.**
 - A misconfigured transport leaves alerts undelivered; the canary fails and GitHub emails.
-- Delivery starts after six waves; until then the canary's GitHub email carries unseen alarms.
+- Delivery starts after six waves; until then the canary's GitHub email carries unseen alarms. As built: under Q1 delivery does not start in this wave; the canary's GitHub email carries unseen alarms until the operator enables it.
 
 ### Wave 8 · The Health page
 
@@ -1233,7 +1249,7 @@ After: 15 registered keys.
 - After: one view every 5 min while the tab is visible and on focus (~1 MB of JSON, ~100-150 kB compressed, gauge trends included). The unread badge keeps Shell's existing poll.
 
 **net lines estimate.** About −6,300 ± 1,500 lines.
-**Measured so far** (`git diff --numstat`; code / migrations / tests / docs): wave 1 with its follow-ups +172 / +201 / +1,999 / +1,446; wave 2 +77 / +311 / +933 / +205; wave 3 -389 / +371 / +2,354 / +413; wave 4 +22 / +66 / +15,145 / +351; wave 5 +960 / +0 / +3,609 / +355; wave 6 -6 / +353 / +11,156 / +424 (their As built notes have the detail). The estimate is the end state and holds only if waves 3–9 delete what their rows list; the tests sub-budget is already exceeded (about −2,000 planned, +2,932 after two waves: per-check rails, the replay and the live tests), and the docs one too (this document, the As built notes and the skill reference).
+**Measured so far** (`git diff --numstat`; code / migrations / tests / docs): wave 1 with its follow-ups +172 / +201 / +1,999 / +1,446; wave 2 +77 / +311 / +933 / +205; wave 3 -389 / +371 / +2,354 / +413; wave 4 +22 / +66 / +15,145 / +351; wave 5 +960 / +0 / +3,609 / +355; wave 6 -6 / +353 / +11,156 / +424; wave 7 +0 / +0 / +18 / +188 (their As built notes have the detail). The estimate is the end state and holds only if waves 3–9 delete what their rows list; the tests sub-budget is already exceeded (about −2,000 planned, +2,932 after two waves: per-check rails, the replay and the live tests), and the docs one too (this document, the As built notes and the skill reference).
 - Python ≈ −2,100: ops_incidents −396; system_alerts −426 + reconcile and loop +280; failure_signature −200; record_workflow_failures −120 + workflow facts +60; coverage_gate −311; refresh_image_stats −55; verify_outbound_urls −113; verify_pipeline 4,100 → ~700 plus scripts/checks ~2,600 (≈ −800); worker lane and heartbeat +100; acknowledge route +30; slice writers −135; portal_runner/worker incident bits −60; seams and moved predicates +25.
 - Tests ≈ −2,000: test_ops_incidents −369, test_coverage_gate −299, test_health_image_matviews −175, test_failure_signature −150, test_system_alerts −177, test_verify_pipeline −1,450 (rewritten per check), outbound −80, slice tests −250, new lane/run_due/canary/liveness/API/replay tests about +900.
 - SPA ≈ −2,300: page −2,105, workflow-doc tags −64, sibling copies −150, AutodedupProgress −27, the Notifications link +6.
@@ -1260,7 +1276,7 @@ After: 15 registered keys.
 - location_data's PAYLOAD_SHAPE_PREDICATES (W6), replacing SREALITY_SHAPE_CASE_SQL and _LOCATION_SHAPE_REMEDY in shared code.
 - Check keys scraping, parsing, publishing, delisting, coverage, dedup, jobs, capacity, llm, liveness, data_quality and text_extraction; migration_drift, outbound_url_conformance and location_town_coverage are kept.
 - scripts/checks/clock.py (W2): the per-check wall clock (LaneBudget, fetchone, fetchall), moved out of verify_pipeline so a check module imports it, never the harness; scripts/checks/{scraping,publishing,delisting,dedup,platform,quality}.py; failure_signature.reason_line() (about 50 of the module's 251 lines); scripts/migration_objects.py's shared probe SQL.
-- system_health_channels set to the operator's channel, with one announced delivery-test alert (623).
+- system_health_channels set to the operator's channel, with one announced delivery-test alert (~~623~~ the enabling migration, written at the operator's word with the next free number: wave 7's As built note).
 - SPA: components/health/{PortalMatrix,CheckRow}.tsx, components/{Panel,Stat,StatusDot}.tsx, lib/healthChecks.ts, pages/Health.test.tsx, lib/healthChecks.test.ts and SystemNotificationRow's 'Open Health' link. They replace 6 Card copies, 4 Stat copies, 4 status maps, 11 fetchers and ~25 types.
 
 **Deleted objects.**
