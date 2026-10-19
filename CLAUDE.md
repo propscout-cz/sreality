@@ -158,6 +158,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     the Watchdog kickoff, `scripts/smoke_agent.py`). The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
     UPDATEs its terminal `status` in place; failed runs still persist a row (HTTP 200 + `status='failed'`); re-runs INSERT with `parent_run_id`; a
     run's RESULT is immutable (its yield `scenario` and late-bound `input_listing_id` are not). Sources: `ui`/`api`/`clickup`/`extension`.
+    A paid outside valuation (Valuo) is not our estimate: one row per call in `valuo_valuations`, written only by `api/valuo.py`.
 13. **`building_runs` is the paste-a-building parent.** Children are `estimation_runs` linked via
     `building_run_id` + `building_unit_id`; the unit list is operator-curated JSONB. Status:
     `pending → extracting → awaiting_input → estimating → success|failed`; `awaiting_input` is the

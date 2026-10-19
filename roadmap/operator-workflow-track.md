@@ -7,6 +7,18 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-VALUO: a Valuo valuation on the property page (in progress, 2026-10-19)
+- **Done (W2, backend):** migration 637 `valuo_valuations` (one row per paid call, service-role only, keyed by ad),
+  `GET`/`POST /properties/{id}/valuo` for every signed-in user (the caller's own account; save-before-call, same-request
+  reuse, 409 on a running twin, no retry), `api/valuo.py` as the one home of Valuo's vocabulary + the mapping with its
+  provenance and the operator's careful defaults, `api/valuo_client.py` (`VALUO_API_TOKEN` wins over
+  `VALUO_SANDBOX_API_TOKEN`), `api/http_json.py` folding the two `_http_get_json` copies (the Mapy key no longer reaches
+  logs), the admin-claim copies folded into `deps.is_admin`, the server label dicts into `filter_registry.label_cs`,
+  and the phone Poloha no longer calls a district point a town. Rationale: `docs/architecture.md` § rule 12.
+- **Next:** W3, the section (desktop editor + phone read-only card); the sandbox probe through the live API after the
+  deploy (flat sale and lease, a house with `lot_area`, land, a negative floor) decides the lease basis and whether a
+  house's plot is sent; a per-plan monthly quota counted from the rows before the production token.
+
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
   `docs/design/curated-set-scope.md`): one value (`lib/setScope.ts` `SetScope`: in it / not in it /

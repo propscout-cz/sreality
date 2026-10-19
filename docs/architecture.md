@@ -1395,6 +1395,61 @@ renumber.** Navigate by area:
     This is also why there is NO `CHECK (input_sreality_id IS NULL OR input_listing_id IS NOT
     NULL)`. It holds for every row written so far, but it would reject exactly the
     not-yet-scraped case above and turn a working degraded path into a 500 on submit.
+
+    **A paid outside valuation is not our estimate (Valuo, operator ruling 2026-10-19).** The
+    property page's Valuo section buys a valuation from valuo.cz; each call is one row in
+    `valuo_valuations` (migration 637), written only by `api/valuo.py`, never an `estimation_runs`
+    row. Three reasons, each sufficient: browser roles hold INSERT/UPDATE on `estimation_runs`
+    (291), so anyone could forge a "production" Valuo row; a row with no account falls back to
+    SYSTEM, which every account reads (431); and `property_estimates_public` (412) counts every
+    successful run, so sandbox calls would light Browse's "s odhadem" filter. The table is
+    service-role only (RLS on, zero policies). A row is keyed by AD (`listing_id` = the canonical
+    ad at call time), so it follows its ad through merges and splits with no carrier (rule 18).
+    It holds the exact request sent, the provenance of every parameter (`ad`, `property`,
+    `inferred`, `assumed`, `missing`, `user`, each with `from: {column, value}` and a Czech rule
+    note), Valuo's answer verbatim (its min/max/std keep Valuo's names; nothing calls them
+    quartiles), the environment and the token's 12-hex sha. The POST saves the row `pending`
+    BEFORE the paid call and UPDATEs it once; the unique index on `(account_id, environment,
+    md5(request::text))` over pending/success rows turns an identical request into a reuse or a
+    409, so a double click cannot pay twice, and there is no automatic retry. A Valuo-side failure
+    is a stored `failed` row answered with HTTP 200, as for our runs; a refusal (komerční/ostatní,
+    no point, a point coarser than a town, outside Czechia, a missing required parameter) is a 4xx
+    and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
+    caller's own account. The operator's careful defaults: a missing condition blocks the button,
+    `velmi_dobry` is sent as Valuo's `good` (`assumed`), energy class G is not sent (`assumed` —
+    Czech ads without a PENB certificate must state G too).
+
+    Calibration — how a Valuo number is judged — reads production rows only, drops every row that
+    leaned on a guess for a required parameter or stood on a point coarser than a street, and sets
+    Valuo's `avg_price` against the registered sales in the same building around `as_of` and against
+    our own latest run of the same kind:
+
+    ```sql
+    select v.id, v.request->>'kind' as kind, (v.response->'result'->>'avg_price')::numeric as valuo,
+           sold.median_czk, sold.n, ours.czk as ours
+      from valuo_valuations v
+      join listings l on l.id = v.listing_id
+      join listing_location ll on ll.listing_id = v.listing_id
+      join location_granularity_rank r on r.granularity = ll.granularity
+      left join lateral (                      -- same building, same kind of unit, +-90 days of as_of
+        select percentile_cont(0.5) within group (order by s.price_czk) as median_czk, count(*) as n
+          from sold_transactions s
+         where v.request->>'kind' = 'sale' and s.category_main = l.category_main
+           and st_dwithin(s.geom::geography, ll.geom::geography, 50)
+           and s.area_m2 between l.area_m2 * 0.9 and l.area_m2 * 1.1
+           and abs(s.sold_at - (v.request->>'as_of')::date) <= 90) sold on true
+      left join lateral (
+        select coalesce(er.estimated_sale_price_czk, er.estimated_monthly_rent_czk) as czk
+          from estimation_runs er
+         where er.input_listing_id = v.listing_id and er.status = 'success'
+           and er.estimate_kind = case v.request->>'kind' when 'lease' then 'rent' else 'sale' end
+         order by er.created_at desc limit 1) ours on true
+     where v.environment = 'production' and v.status = 'success'
+       and r.rank >= (select t.rank from location_granularity_rank t where t.granularity = 'street')
+       and not exists (select 1 from jsonb_each(v.provenance) p
+                        where p.key in ('kind', 'floor_area', 'lot_area', 'rating', 'land_type')
+                          and p.value->>'class' in ('assumed', 'missing'));
+    ```
 13. **`building_runs` is the parent grouping for the paste-a-building workflow.** One row
     per pasted house listing (typically `category_main='dum'`). Children are normal
     `estimation_runs` rows linked back via `building_run_id` (FK, `ON DELETE SET NULL` so
