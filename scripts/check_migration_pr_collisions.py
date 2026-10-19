@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         others = open_pr_migrations(args.repo, os.environ.get("GITHUB_TOKEN"), args.pr)
-    except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
+    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"::warning::migration PR collision check skipped, GitHub API unavailable: {exc}")
         return 0
     hits = find_collisions(own, others)

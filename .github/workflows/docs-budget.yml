@@ -28,6 +28,7 @@ jobs:
       # name that no code tree contains; never fails (a plan may name what is not built yet).
       - name: Docs name only symbols that exist (non-blocking)
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         run: python3 scripts/docs_symbol_check.py --base "${{ github.event.pull_request.base.sha }}"
 
       - name: Skill-staleness nudge (non-blocking)
