@@ -51,15 +51,16 @@ def _props(fixture: str, mapper: mod.Props) -> list[dict[str, Any] | None]:
 # --- the registry -----------------------------------------------------------------------
 
 
-def test_the_registry_holds_the_five_sections_in_order() -> None:
+def test_the_registry_holds_the_six_sections_in_order() -> None:
     assert {key: (s.label, s.sort, s.minzoom, s.maxzoom) for key, s in mod.SOURCES.items()} == {
         "metro": ("Metro", 1, 9, 12),
         "flood": ("Záplavová území", 2, 10, 12),
         "kraje": ("Kraje", 3, 3, 9),
         "universities": ("Vysoké školy", 4, 9, 12),
+        "railway": ("Železniční stanice", 5, 7, 12),
         "rent_map": ("Cenová mapa nájemného", 0, 3, 12),
     }
-    assert list(mod.SOURCES) == ["metro", "flood", "kraje", "universities", "rent_map"]
+    assert list(mod.SOURCES) == ["metro", "flood", "kraje", "universities", "railway", "rent_map"]
 
 
 def test_layers_their_sort_and_how_they_are_stored() -> None:
@@ -71,6 +72,7 @@ def test_layers_their_sort_and_how_they_are_stored() -> None:
                   ("flood_az", 5, "outline")],
         "kraje": [("kraje", 1, "plain")],
         "universities": [("universities", 1, "plain"), ("dorms", 2, "plain")],
+        "railway": [("railway_stations", 1, "plain")],
         "rent_map": [("rent_map", 1, "whole")],
     }
 
@@ -126,6 +128,10 @@ def test_the_notes_attribution_and_licences() -> None:
         "prezenčního studia; u škol s pobočkami mimo Prahu jde o počet za celou školu. Další "
         "pracoviště: ostatní budovy, kliniky, rektoráty, menzy, sportoviště."
     )
+    assert mod.SOURCES["railway"].note == (
+        "Železniční stanice a zastávky v celé ČR podle ZABAGED® ČÚZK; název a druh podle Správy "
+        "železnic (kód SR70 v detailu)."
+    )
     # No note: the rent map's panel showed none before it moved onto this path.
     assert mod.SOURCES["rent_map"].note is None
     assert {k: (s.attribution, s.licence) for k, s in mod.SOURCES.items()} == {
@@ -133,6 +139,7 @@ def test_the_notes_attribution_and_licences() -> None:
         "flood": ("© VÚV TGM pro MŽP (ISVS VODA)", "CC BY 4.0"),
         "kraje": ("© ČÚZK (RÚIAN)", "CC BY 4.0"),
         "universities": ("datový podklad © IPR Praha; počty studentů MŠMT", "CC BY 4.0 (IPR Praha)"),
+        "railway": ("© ČÚZK (ZABAGED®)", "CC BY 4.0"),
         # The MF states no licence for the data, only its site's copyright.
         "rent_map": ("Ministerstvo financí ČR – Cenová mapa nájemného",
                      "Licence neuvedena (© Ministerstvo financí ČR)"),
@@ -163,6 +170,11 @@ def test_the_readers_ask_each_publisher_for_its_native_crs() -> None:
     assert _layer("rent_map").readers == (mod.SqlSource(mod.RENT_MAP_SQL),)
     # Both university layers read IPR's one hosted universities layer (3857); the teaching
     # and service sites through the reader that binds MŠMT's counts first.
+    (stations,) = _layer("railway_stations").readers
+    assert (stations.service_url, stations.layer_name, stations.where, stations.out_sr,
+            stations.geometry_type, stations.fields) == (
+        mod.CUZK_ZABAGED, "Železniční stanice, zastávka", "1=1", 5514, mod.POINT,
+        ("fid_zbg", "zst_k", "zst_p", "typ"))
     assert _layer("universities").readers == (mod.UniversitySites("typ_uap in ('02_01','02_02')"),)
     (dorms,) = _layer("dorms").readers
     assert (dorms.service_url, dorms.layer_name, dorms.where, dorms.out_sr, dorms.geometry_type,
@@ -476,6 +488,31 @@ def test_a_primary_seat_without_an_ipr_point_refuses_the_run() -> None:
 def test_the_universities_revision_is_the_ipr_layers_edit_date() -> None:
     section = mod.SOURCES["universities"]
     assert section.revised_at(section, _universities_ctx(_UniversitiesSession(b""))) == date(2026, 1, 20)
+
+
+def test_railway_stations_are_classed_by_kind_and_labelled_by_name() -> None:
+    assert _props("cuzk_zabaged_stations_query.json", mod.railway_station_props) == [
+        {"class": "halt", "name": "Rumburk zastávka", "label": "Rumburk zastávka", "code": "565093"},
+        {"class": "halt", "name": "Hamry nad Sázavou", "label": "Hamry nad Sázavou", "code": "370353"},
+        {"class": "halt", "name": "Spytihněv", "label": "Spytihněv", "code": "351957"},
+    ]
+    assert mod.railway_station_props({"typ": "stanice", "zst_p": " Praha-Zličín ", "zst_k": "540468"}) == {
+        "class": "station", "name": "Praha-Zličín", "label": "Praha-Zličín", "code": "540468"}
+    with pytest.raises(mod.Refused, match="railway station"):
+        mod.railway_station_props({"typ": "nákladiště", "zst_p": "X", "zst_k": "1"})
+    with pytest.raises(mod.Refused, match="railway station"):
+        mod.railway_station_props({"typ": "stanice", "zst_p": "", "zst_k": "1"})
+
+
+def test_the_railway_layer_pages_cuzk_in_its_native_crs() -> None:
+    server = _FakeServer(mod.CUZK_ZABAGED, "cuzk_zabaged_service.json", 58,
+                         "cuzk_zabaged_stations_layer.json", "cuzk_zabaged_stations_query.json",
+                         "OBJECTID")
+    (reader,) = _layer("railway_stations").readers
+    features = list(mod.ArcGis(_http(server)).features(reader))
+    assert [(f.source_id, f.props["class"], f.srid) for f in features] == [
+        ("1", "halt", 5514), ("2", "halt", 5514), ("3", "halt", 5514)]
+    assert all(p.get("outSR") == 5514 for _, p, _ in server.calls if "objectIds" in p)
 
 
 def test_flood_features_keep_the_watercourse_as_their_name() -> None:
@@ -1160,7 +1197,7 @@ def test_a_database_only_render_degrades_a_network_revision_date_at_once(
 
 
 def test_sections_are_selected_in_registry_order() -> None:
-    assert mod.select_sections("") == ["metro", "flood", "kraje", "universities", "rent_map"]
+    assert mod.select_sections("") == ["metro", "flood", "kraje", "universities", "railway", "rent_map"]
     assert mod.select_sections("kraje, metro") == ["metro", "kraje"]
     assert mod.select_sections("rent_map") == ["rent_map"]
     with pytest.raises(ValueError, match="tram"):
@@ -1187,7 +1224,7 @@ def test_one_refused_section_does_not_block_the_others(monkeypatch: pytest.Monke
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {"flood": mod.Refused("shrunk")}))
     monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
     assert mod.main([]) == 1
-    assert seen == ["metro", "flood", "kraje", "universities", "rent_map"]
+    assert seen == ["metro", "flood", "kraje", "universities", "railway", "rent_map"]
 
 
 def test_a_datum_refusal_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
