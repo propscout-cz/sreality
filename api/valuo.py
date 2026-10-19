@@ -406,12 +406,16 @@ def present(row: dict[str, Any]) -> dict[str, Any]:
     response = row["response"] if isinstance(row["response"], dict) else {}
     result = response.get("result") if row["status"] == "success" else None
     error = row["error"]
+    ignored = response.get("ignored_ids") or []
     return {
         "id": row["id"], "created_at": row["created_at"], "listing_id": row["listing_id"],
         "environment": row["environment"], "status": row["status"],
         "request": row["request"], "provenance": row["provenance"],
         "result": {k: result.get(k) for k in RESULT_KEYS} if isinstance(result, dict) else None,
-        "ignored_ids": response.get("ignored_ids") or [],
+        "ignored_ids": ignored,
+        # In Czech here, so the card and the ledger read even on a refused page, which carries no fields.
+        "ignored_labels": [_BY_NAME[n].label if n in _BY_NAME else str(n) for n in ignored],
+        "kind_label": _option_label("kind", row["request"].get("kind")),
         "error": {"code": error["code"], "message": error["message"]} if error else None,
         "ppm2_basis": result_basis(row["request"]),
     }

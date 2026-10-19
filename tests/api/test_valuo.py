@@ -424,6 +424,7 @@ def test_a_valuation_is_saved_before_the_call_and_answered_once(client, world, s
     assert row["status"] == "success" and row["environment"] == "sandbox"
     assert row["result"]["avg_price"] == 6_100_000 and row["result"]["calc_area"] == 54.5
     assert row["ignored_ids"] == ["garages"] and row["error"] is None
+    assert row["ignored_labels"] == ["Garáže"] and row["kind_label"] == "Prodej"
     assert row["ppm2_basis"] == "sale_capital_czk_m2"
     [(cred, request)] = world["calls"]
     assert cred.environment == "sandbox" and request == row["request"]

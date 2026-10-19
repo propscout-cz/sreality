@@ -47,13 +47,16 @@ export default function RunHistory<T extends { id: number; created_at: string }>
                   ].join(' ')}
                 >
                   <td className="px-3 py-2 tabular-nums text-[var(--color-ink-2)]" title={fmtAbsolute(r.created_at)}>
-                    {fmtDateSlash(r.created_at)}{' '}
-                    <span className="text-[0.7rem] text-[var(--color-ink-4)]">{fmtTime24(r.created_at)}</span>
-                    {isSelected && (
-                      <span className="ml-2 text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-copper)]">
-                        {viewing}
-                      </span>
-                    )}
+                    {/* The keyboard's way in: its click bubbles to the row's. */}
+                    <button type="button" aria-current={isSelected || undefined} className="text-left cursor-pointer">
+                      {fmtDateSlash(r.created_at)}{' '}
+                      <span className="text-[0.7rem] text-[var(--color-ink-4)]">{fmtTime24(r.created_at)}</span>
+                      {isSelected && (
+                        <span className="ml-2 text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-copper)]">
+                          {viewing}
+                        </span>
+                      )}
+                    </button>
                   </td>
                   {columns.map((c) => <td key={c.header} className={cell(c.right, c.className)}>{c.cell(r)}</td>)}
                 </tr>

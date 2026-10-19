@@ -16,6 +16,7 @@ import { RunStatusChip } from '@/components/estimation/RunPanel';
 import { SingleSelectDropdown } from '@/components/filter-controls/SingleSelectDropdown';
 import { InfoHint } from '@/components/settings/SectionChrome';
 import { Hairline, SectionLabel } from '@/components/section';
+import { ApiError } from '@/lib/api';
 import { czPlural, fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { mfShape } from '@/lib/mfReference';
@@ -34,6 +35,7 @@ const GRID = 'grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr
 const ABSENT = '[&_input]:border-dashed [&_select]:border-dashed [&_button]:border-dashed'; // dashed = nothing sent
 const Period = ({ on }: { on: boolean }) => (on ? <span className={`ml-1 text-[0.7rem] ${INK3}`}>{LEASE_PERIOD}</span> : null);
 const isLease = (v: Valuation) => ppm2BasisFromToken(v.ppm2_basis) === 'rent';
+const ENVIRONMENT: Record<Valuation['environment'], string> = { sandbox: 'sandbox', production: 'ostré' };
 
 export default function ValuoSection({ property, listingIds, readOnly = false, bare = false }: {
   property: PropertyPublic;
@@ -64,21 +66,27 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
     setEditing(false);
     setReusedAt(reused);
   };
-  const done = ({ reused, valuation: v }: ValuoRun) => pick(v.id, reused ? fmtTime24(v.created_at) : null);
+  const done = ({ reused, valuation: v }: ValuoRun) => pick(v.id, reused ? v.created_at : null);
   const card = (v: Valuation) => (
     <ValuoCard valuation={v} page={page} property={property} runs={runsQ.data?.data ?? []}
       onEdit={canRun ? () => setEditing(true) : undefined} />
   );
 
   let body: ReactNode = null;
+  const err = pageQ.error;
   if (pageQ.isLoading) body = <Skeleton height={140} />;
-  else if (pageQ.error) body = <ErrorBanner message={pageQ.error.message} onRetry={() => void pageQ.refetch()} />;
+  // A 4xx (no account, no such property) answers the same on every retry: a refusal sentence, not an error.
+  else if (err instanceof ApiError && err.kind === 'http' && err.status < 500) body = <p className={`text-sm ${INK3}`}>{err.message}</p>;
+  else if (err) body = <ErrorBanner message={err.message} onRetry={() => void pageQ.refetch()} />;
   else if (page) {
     body = (
       <div className="space-y-3">
         {page.refusal && !readOnly && <p className={`text-sm ${INK3}`}>{page.refusal.message}</p>}
         {reusedAt && (
-          <p className={`text-[0.75rem] ${INK3}`}>Stejný dotaz dnes už proběhl ({reusedAt}) — zobrazuji uložené ocenění.</p>
+          <p className={`text-[0.75rem] ${INK3}`}>
+            Stejný dotaz {fmtDateSlash(reusedAt) === fmtDateSlash(new Date().toISOString()) ? 'dnes' : `dne ${fmtDateSlash(reusedAt)}`}{' '}
+            už proběhl ({fmtTime24(reusedAt)}) — zobrazuji uložené ocenění.
+          </p>
         )}
         {open ? (
           <ValuoEditor propertyId={property.property_id} page={page} ignored={shown?.ignored_ids ?? []}
@@ -101,7 +109,7 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
           <SectionLabel>Valuo</SectionLabel>
           <div className="flex items-baseline gap-3 text-[0.7rem] text-[var(--color-ink-3)]">
             {history.length > 0 && <p className="tracking-wide font-mono tabular-nums">{history.length} ocenění</p>}
-            {page?.environment === 'sandbox' && (
+            {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
               <span className="px-1.5 border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[0.58rem] tracking-[0.18em] uppercase">
                 Sandbox
               </span>
@@ -110,7 +118,7 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
         </div>
         <div className="mt-4">{body}</div>
         {!readOnly && page && history.length > 1 && (
-          <RunHistory title="Všechna ocenění" rows={history} columns={historyColumns(page.fields)}
+          <RunHistory title="Všechna ocenění" rows={history} columns={HISTORY_COLUMNS}
             selectedId={shown?.id ?? null} onPick={(id) => pick(id)} when="Kdy" viewing="zobrazeno" />
         )}
       </section>
@@ -159,8 +167,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
     ['Příznaky', flags],
   ];
   // Said only when there is something to say: a point coarser than a street, a parameter the answer did not use.
-  const ignored = v.ignored_ids.map((n) => page?.fields.find((f) => f.name === n)?.label ?? n).join(', ');
-  const notes = [['Poloha', v.provenance.place?.note], ['Valuo ignorovalo', ignored]].filter((n): n is [string, string] => !!n[1]);
+  const notes = [['Poloha', v.provenance.place?.note], ['Valuo ignorovalo', v.ignored_labels.join(', ')]].filter((n): n is [string, string] => !!n[1]);
   return (
     <EstimateCard eyebrow={eyebrow} aside={aside}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
@@ -191,8 +198,8 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
   );
 }
 
-const historyColumns = (fields: readonly ValuoField[]): HistoryColumn<Valuation>[] => [
-  { header: 'Druh', className: `text-[0.8rem] ${INK3}`, cell: (v) => optionLabel(fields, 'kind', v.request.kind) },
+const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
+  { header: 'Druh', className: `text-[0.8rem] ${INK3}`, cell: (v) => v.kind_label },
   {
     header: 'Průměr', right: true, className: 'font-mono tabular-nums text-[var(--color-ink)]',
     cell: (v) => <>{fmtCzk(v.result?.avg_price)}<Period on={v.result != null && isLease(v)} /></>,
@@ -203,7 +210,7 @@ const historyColumns = (fields: readonly ValuoField[]): HistoryColumn<Valuation>
     cell: (v) => fmtMeasuredPricePerM2(v.result?.avg_price_m2, ppm2BasisFromToken(v.ppm2_basis)),
   },
   { header: 'Stav', cell: (v) => <RunStatusChip status={v.status} /> },
-  { header: 'Prostředí', className: `text-[0.65rem] tracking-[0.14em] uppercase ${INK3}`, cell: (v) => v.environment },
+  { header: 'Prostředí', className: `text-[0.65rem] tracking-[0.14em] uppercase ${INK3}`, cell: (v) => ENVIRONMENT[v.environment] },
 ];
 
 function ValuoEditor({ propertyId, page, ignored, onCancel, onDone }: {
@@ -295,7 +302,8 @@ function Param({ field: f, value, provenance, ignored, onChange }: {
       <Segmented label={f.label} options={BOOL} value={value == null ? null : value ? 'ano' : 'ne'}
         onChange={(v) => onChange(v == null ? null : v === 'ano')} />
     ) : f.type === 'date' ? (
-      <input type="date" aria-label={f.label} value={text ?? ''} onChange={(e) => onChange(e.target.value || null)}
+      // Never cleared: a request without its date would meet another day's answer in the dedupe.
+      <input type="date" aria-label={f.label} value={text ?? ''} onChange={(e) => e.target.value && onChange(e.target.value)}
         className="w-full px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]" />
     ) : (
       <DecimalField label={f.label} value={typeof value === 'number' ? value : null} onChange={onChange}

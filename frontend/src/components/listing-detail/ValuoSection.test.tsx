@@ -6,7 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ApiError, apiGet, apiPost } from '@/lib/api';
-import { fmtCzk, fmtMeasuredPricePerM2, fmtPct, fmtTime24 } from '@/lib/format';
+import { fmtCzk, fmtDateSlash, fmtMeasuredPricePerM2, fmtPct, fmtTime24 } from '@/lib/format';
 import { estimationKeys, fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
 import type { EstimationRun } from '@/lib/types';
 import type { Valuation, ValuoField, ValuoPage } from '@/lib/valuo';
@@ -74,6 +74,8 @@ const SALE: Valuation = {
     flags: [],
   },
   ignored_ids: ['floor'],
+  ignored_labels: ['Podlaží'],
+  kind_label: 'Prodej',
   error: null,
   ppm2_basis: 'sale_capital_czk_m2',
 };
@@ -97,10 +99,11 @@ const PROPERTY = {
   mf_reference_rent: { monthly_rent_czk: 19_000 },
 } as unknown as PropertyPublic;
 
-function renderSection(p: ValuoPage, { readOnly = false, runs }: { readOnly?: boolean; runs?: EstimationRun[] } = {}) {
+function renderSection(p: ValuoPage | Error, { readOnly = false, runs }: { readOnly?: boolean; runs?: EstimationRun[] } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (runs) qc.setQueryData(estimationKeys.byListing([11]), { data: runs, total: runs.length });
-  vi.mocked(apiGet).mockResolvedValue(p);
+  if (p instanceof Error) vi.mocked(apiGet).mockRejectedValue(p);
+  else vi.mocked(apiGet).mockResolvedValue(p);
   return render(
     <QueryClientProvider client={qc}>
       <ValuoSection property={PROPERTY} listingIds={[11]} readOnly={readOnly} />
@@ -161,13 +164,14 @@ describe('<ValuoSection> editor', () => {
 
   it('sends only what the user changed — a value set back is dropped, a cleared one is null', async () => {
     vi.mocked(apiPost).mockResolvedValue({ reused: false, valuation: { ...SALE, id: 2 } });
-    renderSection(page());
+    const { container } = renderSection(page());
     await screen.findByRole('combobox', { name: 'Stav' });
     fireEvent.change(screen.getByRole('combobox', { name: 'Stav' }), { target: { value: 'good' } });
     fireEvent.change(screen.getByRole('textbox', { name: 'Plocha' }), { target: { value: '60' } });
     fireEvent.change(screen.getByRole('textbox', { name: 'Plocha' }), { target: { value: '54,5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Pronájem' }));
     fireEvent.click(screen.getByRole('button', { name: 'Prodej' }));
+    fireEvent.change(container.querySelector('input[type="date"]')!, { target: { value: '' } }); // never cleared
     openMore();
     fireEvent.click(screen.getByRole('button', { name: 'neuvedeno' }));
     fireEvent.click(cta());
@@ -180,15 +184,30 @@ describe('<ValuoSection> editor', () => {
   });
 
   it('says so when the same request already ran, and shows the stored answer', async () => {
-    vi.mocked(apiPost).mockResolvedValue({ reused: true, valuation: SALE });
+    const today = { ...SALE, created_at: new Date().toISOString() };
+    vi.mocked(apiPost).mockResolvedValue({ reused: true, valuation: today });
     renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' } }));
     fireEvent.click(await screen.findByRole('button', { name: 'Ocenit přes Valuo →' }));
     fireEvent.click(cta());
     expect(
       await screen.findByText(
-        `Stejný dotaz dnes už proběhl (${fmtTime24(SALE.created_at)}) — zobrazuji uložené ocenění.`,
+        `Stejný dotaz dnes už proběhl (${fmtTime24(today.created_at)}) — zobrazuji uložené ocenění.`,
       ),
     ).toBeInTheDocument();
+  });
+
+  it('dates a reused answer from another day, and leaves the ledger order alone', async () => {
+    const old = { ...SALE, id: 4, created_at: '2026-09-01T10:00:00Z' };
+    vi.mocked(apiPost).mockResolvedValue({ reused: true, valuation: old });
+    renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' }, history: [SALE, old] }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nové ocenění →' }));
+    fireEvent.click(cta());
+    const day = fmtDateSlash(old.created_at);
+    expect(await screen.findByText(`Stejný dotaz dne ${day} už proběhl (${fmtTime24(old.created_at)}) — zobrazuji uložené ocenění.`))
+      .toBeInTheDocument();
+    const rows = screen.getAllByRole('row');
+    expect(rows[2]).toHaveTextContent(day);
+    expect(within(rows[2]).getByText('zobrazeno')).toBeInTheDocument();
   });
 
   it('renders a refused POST and a failed paid call as their sentences, keeping the form', async () => {
@@ -216,11 +235,29 @@ describe('<ValuoSection> editor', () => {
 });
 
 describe('<ValuoSection> states', () => {
-  it('renders a refusal exactly as the server sent it, with no way to call', async () => {
-    renderSection(page({ refusal: { code: 'anything', message: 'Libovolná věta, jak ji poslal server.' }, fields: [] }));
+  it('renders a refusal exactly as the server sent it, with no way to call, its stored answer still in Czech', async () => {
+    renderSection(page({ refusal: { code: 'anything', message: 'Libovolná věta, jak ji poslal server.' }, fields: [], history: [SALE] }));
     expect(await screen.findByText('Libovolná věta, jak ji poslal server.')).toBeInTheDocument();
     expect(screen.getByText('Valuo')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(within(screen.getByText('Valuo ignorovalo').parentElement!).getByText('Podlaží')).toBeInTheDocument();
+  });
+
+  it('reads a caller with no account as a sentence, not a retryable error', async () => {
+    renderSection(new ApiError('Přihlášený uživatel nemá účet, ocenění nelze uložit.', 400, { detail: { code: 'no_account' } }));
+    expect(await screen.findByText('Přihlášený uživatel nemá účet, ocenění nelze uložit.')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('tags the answer on screen by its own environment, not the configured one', async () => {
+    for (const environment of ['production', null] as const) {
+      const { unmount } = renderSection(page({ environment, history: [SALE] }));
+      expect(await screen.findByText('Sandbox')).toBeInTheDocument();
+      unmount();
+    }
+    renderSection(page({ history: [{ ...SALE, environment: 'production' }] }));
+    await screen.findByText('Odhad ceny · Valuo');
+    expect(screen.queryByText('Sandbox')).not.toBeInTheDocument();
   });
 
   it('shows the latest answer on the ruler with the asking price and our run, from cache only', async () => {
@@ -247,6 +284,7 @@ describe('<ValuoSection> states', () => {
     const lease: Valuation = {
       ...SALE,
       request: { ...SALE.request, kind: 'lease' },
+      kind_label: 'Pronájem',
       ppm2_basis: 'rent_monthly_czk_m2',
       provenance: { ...PROVENANCE, place: { class: 'inferred', note: 'Poloha jen na úrovni obce' } },
       result: { ...SALE.result!, avg_price: 21_000, min_price: 18_000, max_price: 24_000, avg_price_m2: 385 },
@@ -266,12 +304,13 @@ describe('<ValuoSection> states', () => {
       ...SALE, id: 3, status: 'failed', result: null,
       error: { code: 'rate_limited', message: 'Valuo hlásí příliš mnoho dotazů, zkuste to později.' },
     };
-    renderSection(page({ history: [failed, SALE] }));
+    renderSection(page({ history: [failed, { ...SALE, environment: 'production' }] }));
     expect(await screen.findByText('Valuo hlásí příliš mnoho dotazů, zkuste to později.')).toBeInTheDocument();
     expect(screen.getByText('Všechna ocenění')).toBeInTheDocument();
     const rows = screen.getAllByRole('row');
     expect(within(rows[2]).getByText('Prodej')).toBeInTheDocument();
-    fireEvent.click(rows[2]);
+    expect(within(rows[2]).getByText('ostré')).toBeInTheDocument();
+    fireEvent.click(within(rows[2]).getByRole('button')); // the keyboard's way in
     expect(screen.getAllByText(t(fmtCzk(6_100_000))).length).toBeGreaterThan(1);
     expect(screen.queryByText('Valuo hlásí příliš mnoho dotazů, zkuste to později.')).not.toBeInTheDocument();
   });

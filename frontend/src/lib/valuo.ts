@@ -19,6 +19,7 @@ export type Valuation = {
   id: number; created_at: string; environment: 'sandbox' | 'production'; status: 'pending' | 'success' | 'failed';
   request: ValuoValues; provenance: Record<string, Provenance>; result: (Record<ResultKey, number | null> & { flags: unknown }) | null;
   ignored_ids: string[]; error: { code: string; message: string } | null;
+  ignored_labels: string[]; kind_label: string; // Czech from the server, so a page with no fields still reads
   ppm2_basis: string | null; // the REQUEST's basis token (rule 23): a flipped deal type moves it
 };
 export type ValuoPage = {
@@ -53,14 +54,16 @@ export const useValuoPage = (propertyId: number) =>
     staleTime: 30_000,
   });
 
-/* One paid call, never retried (a retry is a second payment); its row lands on top of the cached history. */
+/* One paid call, never retried (a retry is a second payment); a new row lands on top of the cached
+ * history, a reused one stays where it sits. */
 export function useRunValuo(propertyId: number) {
   const qc = useQueryClient();
   return useMutation<ValuoRun, ApiError, ValuoValues>({
     mutationFn: (overrides) => apiPost<ValuoRun>(`/properties/${propertyId}/valuo`, { overrides }),
     retry: false,
     onSuccess: ({ valuation: v }) =>
-      qc.setQueryData<ValuoPage | null>(pageKey(propertyId), (p) =>
-        p && { ...p, history: [v, ...p.history.filter((h) => h.id !== v.id)] }),
+      qc.setQueryData<ValuoPage | null>(pageKey(propertyId), (p) => p && {
+        ...p, history: p.history.some((h) => h.id === v.id) ? p.history.map((h) => (h.id === v.id ? v : h)) : [v, ...p.history],
+      }),
   });
 }
