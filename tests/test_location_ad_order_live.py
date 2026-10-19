@@ -110,3 +110,30 @@ def test_a_property_left_with_no_ads_nulls_both_pointers(cur: Any) -> None:
     cur.execute("UPDATE listings SET property_id = %s WHERE id = %s", (home, lid))
     cur.execute(_RECONCILE_CHILDLESS_SQL)
     assert _pointers(cur, pid) == (None, None)
+
+
+def test_a_later_location_change_moves_only_the_location_pointer(cur: Any) -> None:
+    """The location ad moves while the canonical ad stays: repr_since and city proximity are the canonical ad's."""
+    pid = _property(cur)
+    street = _advert(cur, pid, source="idnes")
+    closed = _advert(cur, pid, source="idnes", active=False)
+    _placed(cur, street, "street")
+    _recompute(cur, pid)
+    assert _pointers(cur, pid) == (street, street)
+    cur.execute("UPDATE properties SET repr_since = '2026-01-01 00:00+00', "
+                "city_proximity_computed_at = '2026-02-01 00:00+00' WHERE id = %s "
+                "RETURNING repr_since, city_proximity_computed_at", (pid,))
+    stamps = cur.fetchone()
+    _placed(cur, closed, "address_point")
+    _recompute(cur, pid)
+    assert _pointers(cur, pid) == (street, closed)
+    cur.execute("SELECT repr_since, city_proximity_computed_at FROM properties WHERE id = %s", (pid,))
+    assert cur.fetchone() == stamps  # W3 is invisible; W4 resets the proximity stamp here on purpose
+
+
+def test_the_function_still_inlines_into_a_lateral_call(cur: Any) -> None:
+    """The rollup's CROSS JOIN LATERAL: a Function Scan would mean one call per property."""
+    cur.execute("EXPLAIN (VERBOSE, COSTS OFF) "
+                "SELECT o.* FROM properties b CROSS JOIN LATERAL property_canonical_listings(b.id) o")
+    plan = "\n".join(r[0] for r in cur.fetchall())
+    assert "Function Scan" not in plan, plan

@@ -53,10 +53,11 @@
 -- overload; no other function body names it (pg_depend does not track a body; a view would make the DROP
 -- refuse); an existing location_listing_ref_id is this file's (bigint, nullable, no default). $post$, in
 -- the transaction: this file's body (md5 1b1a9dacead80ddaff07e12939c99bf8), its signature and posture,
--- the ACL, the column, and a smoke call on property 15100 (five ads on 2026-10-19: location_rank and
--- canonical_rank each 1..5, location ad 13193960, canonical ad 40102; skipped where it has fewer than two
--- ads, i.e. the CI replay). $post_index$: the index is valid and is the repr twin's definition with the
--- column and the name swapped.
+-- the ACL and the widened comment, the column, and a smoke call on property 15100 (five ads on
+-- 2026-10-19: location_rank and canonical_rank each 1..5, location ad 13193960, canonical ad 40102; the
+-- location ad's (tier, rung) at least the canonical ad's, whatever its ads are by the apply; skipped
+-- where it has fewer than two ads, i.e. the CI replay). $post_index$: the index is valid and is the repr
+-- twin's definition with the column and the name swapped.
 --
 -- APPLY through apply_migration.yml (--ref the W3 branch) BEFORE the code merges (the rollup reads
 -- location_rank and writes the column), never through the MCP: CREATE INDEX CONCURRENTLY cannot run in a
@@ -68,7 +69,9 @@
 -- older transaction, a list rebuild included, so it runs with lock_timeout 0 under a 1900 s budget (605);
 -- a cancelled build's INVALID leftover is moved aside and dropped CONCURRENTLY on the re-run.
 -- ROLLBACK: migrations/reverts/635_revert_property_location_ad.sql (588's body verbatim; drops the column
--- and the index, losing only the pointer). A re-run of this file is a no-op.
+-- and the index, losing only the pointer). A re-run reaches the same end state (it re-creates the
+-- function and briefly re-takes the ACCESS EXCLUSIVE lock for the IF NOT EXISTS column; the workflow's
+-- lock-timeout retry covers it).
 
 set lock_timeout = '5s';
 set statement_timeout = '120s';
@@ -193,6 +196,10 @@ begin
      or exists (select 1 from pg_proc p, aclexplode(p.proacl) a where p.oid = v_fn and a.grantee = 0) then
     raise exception '635 did not land: property_canonical_listings is executable beyond service_role (588''s ACL)';
   end if;
+  if obj_description(v_fn, 'pg_proc') not like 'MS5 (migration 588) and ONE PIN W3 (migration 635):%'
+     or obj_description(v_fn, 'pg_proc') is null then
+    raise exception '635 did not land: property_canonical_listings lost its comment with the DROP (not restated)';
+  end if;
   if (select format_type(a.atttypid, a.atttypmod) || ' ' || a.attnotnull || ' ' || a.atthasdef
         from pg_attribute a
        where a.attrelid = 'public.properties'::regclass and a.attname = 'location_listing_ref_id'
@@ -218,6 +225,19 @@ begin
       from public.property_canonical_listings(15100);
     if not v_ok then
       raise exception '635 did not land: property_canonical_listings(15100) does not rank its % ads 1..n in both orders', v_ads;
+    end if;
+    with t as (
+      select x.id,
+             case when ll.geom is not null then 2 when ll.country_status = 'foreign' then 1 else 0 end as tier,
+             coalesce(gr.rank, -1) as rung
+        from (values (v_location_ad), (v_canonical_ad)) x (id)
+        left join public.listing_location ll on ll.listing_id = x.id
+        left join public.location_granularity_rank gr on gr.granularity = ll.granularity)
+    select coalesce(row(a.tier, a.rung) >= row(b.tier, b.rung), false) into v_ok
+      from t a, t b
+     where a.id = v_location_ad and b.id = v_canonical_ad;
+    if not coalesce(v_ok, false) then
+      raise exception '635 did not land: the location ad of 15100 is less precise than its canonical ad';
     end if;
     raise notice '635: property 15100, % ads: location ad %, canonical ad %', v_ads, v_location_ad, v_canonical_ad;
   end if;

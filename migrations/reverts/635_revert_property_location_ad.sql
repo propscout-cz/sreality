@@ -12,7 +12,8 @@
 --   property_canonical_listings(bigint)   588's body, returns (listing_id, canonical_rank)
 --                                          md5(prosrc) 645aa6268a66ea2dd653d8d310c15d61
 -- 635 changed its OUT columns, so this is DROP + CREATE again. It also drops what 635 added: the
--- index properties_location_listing_ref_active_idx and the column properties.location_listing_ref_id.
+-- index properties_location_listing_ref_active_idx (and a cancelled build's _invalid leftover) and the
+-- column properties.location_listing_ref_id.
 --
 -- WHAT APPLYING THIS COSTS, stated plainly so it is never done casually:
 --   * DATA LOSS OF THE POINTER ONLY: every property's stored location ad is dropped with its column.
@@ -53,7 +54,8 @@ begin
      and d.refobjid = 'public.properties'::regclass
      and d.refobjsubid = v_attnum
      and not (d.classid = 'pg_class'::regclass
-              and d.objid = coalesce(to_regclass('public.properties_location_listing_ref_active_idx')::oid, 0));
+              and d.objid in (coalesce(to_regclass('public.properties_location_listing_ref_active_idx')::oid, 0),
+                              coalesce(to_regclass('public.properties_location_listing_ref_active_idx_invalid')::oid, 0)));
   if v_tied is not null then
     raise exception '635 revert refused: % depend on properties.location_listing_ref_id (revert W4 first)', v_tied;
   end if;
@@ -68,6 +70,7 @@ end
 $pre$;
 
 drop index if exists public.properties_location_listing_ref_active_idx;
+drop index if exists public.properties_location_listing_ref_active_idx_invalid;
 alter table public.properties drop column if exists location_listing_ref_id;
 
 drop function if exists public.property_canonical_listings(bigint);
@@ -105,8 +108,10 @@ begin
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'property_canonical_listings'), '')
      is distinct from '645aa6268a66ea2dd653d8d310c15d61'
-     or pg_get_function_result(v_fn) is distinct from 'TABLE(listing_id bigint, canonical_rank integer)' then
-    raise exception '635 revert did not land: property_canonical_listings is not 588''s body and signature';
+     or pg_get_function_result(v_fn) is distinct from 'TABLE(listing_id bigint, canonical_rank integer)'
+     or obj_description(v_fn, 'pg_proc') not like 'MS5 (migration 588): THE canonical order%'
+     or obj_description(v_fn, 'pg_proc') is null then
+    raise exception '635 revert did not land: property_canonical_listings is not 588''s body, signature and comment';
   end if;
   if not has_function_privilege('service_role', v_fn, 'execute')
      or has_function_privilege('anon', v_fn, 'execute')
@@ -117,7 +122,8 @@ begin
   if exists (select 1 from pg_attribute a
               where a.attrelid = 'public.properties'::regclass
                 and a.attname = 'location_listing_ref_id' and not a.attisdropped)
-     or to_regclass('public.properties_location_listing_ref_active_idx') is not null then
+     or to_regclass('public.properties_location_listing_ref_active_idx') is not null
+     or to_regclass('public.properties_location_listing_ref_active_idx_invalid') is not null then
     raise exception '635 revert did not land: properties.location_listing_ref_id or its index survived';
   end if;
 end

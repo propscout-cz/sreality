@@ -7,8 +7,6 @@ import hashlib
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations"
 PATH = MIGRATIONS / "635_property_location_ad.sql"
@@ -36,8 +34,7 @@ _KEY = re.compile(r"^(?P<expr>.*?)(?: (?P<dir>asc|desc))?(?: nulls (?P<nulls>fir
 
 
 def _read(path: Path) -> str:
-    if not path.exists():
-        pytest.skip(f"{path.relative_to(ROOT)} is not written yet (its author works in parallel)")
+    assert path.exists(), f"{path.relative_to(ROOT)} is missing"
     return path.read_text(encoding="utf-8")
 
 

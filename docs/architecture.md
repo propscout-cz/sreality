@@ -2661,8 +2661,8 @@ renumber.** Navigate by area:
     unchanged, non-reactivating refetch no longer refreshes `properties.last_seen_at`/
     `source_count` inline (sreality parity). A `listing_location` write does not dirty its
     property either: an advert gaining or losing its map point re-ranks the canonical advert
-    (migration 588), and that or a rung change re-ranks the location advert (migration 635), at
-    that property's next recompute, at worst the daily sweep.
+    (migration 588), and that, a rung change or a foreign determination re-ranks the location
+    advert (migration 635), at that property's next recompute, at worst the daily sweep.
 21. **Every portal runs through ONE shared framework (Phase 4); per-portal code is a client
     (fetch + pacing) + a parser + a `Portal` adapter + a config row — and shared code grows no new
     portal-name branch.** The parser's outputs
