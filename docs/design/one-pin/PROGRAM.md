@@ -355,6 +355,7 @@ No single response mixes the two.
 - **SPA:**
   - Delete the "Browse map" label (derivedArtifacts.ts:105).
   - Edit comments: derivedArtifacts.test.ts:38, and Health.tsx:89-93, which is a comment, not a threshold; the thresholds left in migration 440.
+  - Note 2026-10-20: Health W8 (PR #1894) deletes derivedArtifacts.ts with its test and rewrites Health.tsx (it reads only pipeline_checks_public), so after it lands this SPA step has nothing left to edit; on rebase keep its deletion.
 - **Delete these test cases:**
   - `tests/test_cron_statement_timeout_guard.py:272-278` (`browse-map-rebuild` budget) and :309;
   - `tests/test_derived_artifacts_registry.py:184-188` (the map case) and the :244 docstring;
