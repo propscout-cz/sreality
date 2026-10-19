@@ -176,8 +176,6 @@ function renderGrid(
             mergeMode={opts.merge != null}
             selectedPropertyIds={new Set(opts.merge?.selected ? [42] : [])}
             onToggleSelect={opts.onToggleSelect ?? (() => {})}
-            pipelineScoped={false}
-            collectionScoped={false}
             estimates={opts.estimates}
             estimatingIds={new Set()}
             onEstimate={() => {}}
@@ -669,7 +667,6 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
             onHover={() => {}}
             onSort={() => {}}
             onClearFilters={() => {}}
-            pipelineScoped={false}
           />
         </MemoryRouter>
       </QueryClientProvider>,

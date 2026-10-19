@@ -52,7 +52,6 @@ import {
   DEFAULT_FILTERS,
   type ListingFilters,
 } from '@/lib/filters';
-import { scopeActive } from '@/lib/setScope';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
@@ -774,8 +773,6 @@ export default function BrowseExperience({
                 onCoverTag={cardCoverTag.set}
                 hasFilters={!isDefault(filters)}
                 hasBounds={filters.bounds != null}
-                pipelineScoped={scopeActive(filters.pipeline)}
-                collectionScoped={scopeActive(filters.collections)}
                 hoveredIds={hoveredIds}
                 hoverOrigin={hoverState.origin}
                 onHover={setHoveredFromList}
@@ -876,7 +873,6 @@ export default function BrowseExperience({
                 hasNextPage={table.hasNextPage}
                 onReachEnd={table.fetchNextPage}
                 hasFilters={!isDefault(filters)}
-                pipelineScoped={scopeActive(filters.pipeline)}
                 hoveredIds={hoveredIds}
                 onHover={setHoveredFromList}
                 onSort={setSortByField}

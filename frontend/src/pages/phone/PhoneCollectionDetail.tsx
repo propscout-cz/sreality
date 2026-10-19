@@ -11,8 +11,8 @@
  * its collection scope (`collections: {in: [id]}`, judged server-side through
  * `collection_properties_public`, rule 18 + migration 629), every status and category, hidden
  * properties included — a property the operator hid stays in the list he filed
- * it in. A removal shows at once: the card leaves when the shared member map
- * (the same rows the server judged) stops listing it here. A member Browse
+ * it in. A removal shows at once: the write's settle (lib/curationSettle) drops
+ * the card from this roll in place. A member Browse
  * does not serve (no served location, rule 25) has no card; it stays reachable
  * as a plain line under the roll, from the collection's own read. */
 
@@ -168,15 +168,13 @@ function Members({ collection, members }: { collection: Collection; members: Col
     getRowId: (r) => r.property_id,
   });
 
-  /* The member map every collection glyph paints from; a remove in the sheet
-   * revalidates it, and the card leaves this roll with it. A failed read hides
-   * nothing (the roll's own read already scoped the cohort). */
+  /* The member map every collection glyph paints from: a member line below the
+   * roll leaves with it before the collection's own read lands. A failed read
+   * hides nothing. */
   const memberMap = useCollectionMembers().data;
   const stillHere = (property_id: number): boolean =>
     memberMap == null
     || matchesScope(memberMap.get(property_id), filters.collections, CURATED_SETS.collections.inRule);
-
-  const rows = list.rows.filter((r) => stillHere(r.property_id));
 
   /* Members with no card: only once the whole roll is in, never mid-paging. */
   const cardIds = new Set(list.rows.map((r) => r.property_id));
@@ -191,7 +189,7 @@ function Members({ collection, members }: { collection: Collection; members: Col
       <DayRule label="Nemovitosti" />
       <CardRoll
         list={list}
-        rows={rows}
+        rows={list.rows}
         errorTitle="Nemovitosti se nepodařilo načíst."
         endLabel={uncarded.length > 0 ? 'Další jsou níže, bez karty.' : 'Víc nemovitostí v této sbírce není.'}
         empty={

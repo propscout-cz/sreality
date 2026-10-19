@@ -15,7 +15,7 @@ import {
   unshareCollection,
   updateCollection,
 } from '@/lib/api';
-import { isMine, revalidateCollections } from '@/lib/collectionCache';
+import { isMine, revalidateCollections, settleCollectionWrite } from '@/lib/collectionCache';
 import { curationKeys } from '@/lib/queries';
 import { propertyPath } from '@/lib/listingUrl';
 import { usePageTitle } from '@/lib/pageTitle';
@@ -650,7 +650,7 @@ function PropertyRowView({
 
   const remove = useMutation({
     mutationFn: () => removePropertyFromCollection(collectionId, row.property_id),
-    onSuccess: () => revalidateCollections(qc, { collection_id: collectionId }),
+    onSuccess: () => settleCollectionWrite(qc, row.property_id, collectionId, false),
   });
 
   return (

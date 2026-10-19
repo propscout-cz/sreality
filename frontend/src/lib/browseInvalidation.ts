@@ -16,8 +16,9 @@ import type { QueryClient } from '@tanstack/react-query';
 import { browseKeys } from '@/lib/browseKeys';
 
 /** Invalidate every Browse read surface, by prefix. Call after any merge /
- * unmerge (or a write whose cohort IS the Browse filter) settles,
- * so cards, table, map, stats and both counts refetch the post-write state. */
+ * unmerge settles, so cards, table, map, stats and both counts refetch the
+ * post-write state. (A curation write settles one property instead:
+ * lib/curationSettle.) */
 export function invalidateBrowseQueries(queryClient: QueryClient): void {
   for (const queryKey of browseKeys.all) {
     void queryClient.invalidateQueries({ queryKey });

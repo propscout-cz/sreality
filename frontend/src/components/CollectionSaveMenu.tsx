@@ -13,9 +13,9 @@
  *
  * Membership is a PROP, not a read: every surface answers it from the one
  * shared member map (lib/collectionCache `useCollectionMembership`). Writes are
- * here, so both surfaces issue the same call and revalidate through the one
+ * here, so both surfaces issue the same call and settle through the one
  * helper — which is what keeps a save made in the header visible on the card
- * grid without a reload.
+ * grid without a reload, and drops a card from a Browse list that excludes it.
  *
  * The phone feed (#1766) opens the same list in a bottom sheet
  * (`CollectionSaveList size="sheet"`): one set of writes, two containers.
@@ -30,7 +30,7 @@ import {
   addPropertiesToCollection,
   removePropertyFromCollection,
 } from '@/lib/api';
-import { revalidateCollections, useCollections } from '@/lib/collectionCache';
+import { settleCollectionWrite, useCollections } from '@/lib/collectionCache';
 import { ROUTES } from '@/lib/routes';
 
 /* The trigger's accessible name, and the panel's — one string so a test that
@@ -43,7 +43,6 @@ export default function CollectionSaveMenu({
   anchorRef,
   onClose,
   id,
-  cohortScoped = false,
 }: {
   property_id: number;
   /* Collection ids this property is already in — owned by the caller's read. */
@@ -52,8 +51,6 @@ export default function CollectionSaveMenu({
   onClose: () => void;
   /* DOM id, so the trigger's aria-controls can point at the panel. */
   id?: string;
-  /* The surrounding cohort is scoped to collections — see revalidateCollections. */
-  cohortScoped?: boolean;
 }) {
   return (
     <AnchoredPopover
@@ -63,7 +60,7 @@ export default function CollectionSaveMenu({
       ariaLabel={COLLECTION_SAVE_LABEL}
       className="w-56 p-1.5"
     >
-      <CollectionSaveList property_id={property_id} memberIds={memberIds} cohortScoped={cohortScoped} />
+      <CollectionSaveList property_id={property_id} memberIds={memberIds} />
     </AnchoredPopover>
   );
 }
@@ -95,12 +92,10 @@ const WORDS = {
 export function CollectionSaveList({
   property_id,
   memberIds,
-  cohortScoped = false,
   size = 'popover',
 }: {
   property_id: number;
   memberIds: Set<number>;
-  cohortScoped?: boolean;
   size?: keyof typeof SIZES;
 }) {
   const cls = SIZES[size];
@@ -112,13 +107,11 @@ export function CollectionSaveList({
 
   const add = useMutation({
     mutationFn: (cid: number) => addPropertiesToCollection(cid, [property_id]),
-    onSuccess: (_, cid) =>
-      revalidateCollections(qc, { collection_id: cid, cohortScoped }),
+    onSuccess: (_, cid) => settleCollectionWrite(qc, property_id, cid, true),
   });
   const remove = useMutation({
     mutationFn: (cid: number) => removePropertyFromCollection(cid, property_id),
-    onSuccess: (_, cid) =>
-      revalidateCollections(qc, { collection_id: cid, cohortScoped }),
+    onSuccess: (_, cid) => settleCollectionWrite(qc, property_id, cid, false),
   });
   const pending = add.isPending || remove.isPending;
 

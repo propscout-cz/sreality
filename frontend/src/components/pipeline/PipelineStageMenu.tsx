@@ -38,9 +38,6 @@ export interface PipelineStageMenuProps {
   property_id: number;
   /* The stage the card sits at now — checked in the list, and never a move target. */
   stageId: number;
-  /* True when the surrounding cohort is filtered by pipeline membership, so a
-   * write changes which rows match and Browse has to refetch. */
-  cohortScoped?: boolean;
   /* The control the menu hangs off (the funnel button / the header pill). */
   anchorRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
@@ -49,7 +46,6 @@ export interface PipelineStageMenuProps {
 export default function PipelineStageMenu({
   property_id,
   stageId,
-  cohortScoped = false,
   anchorRef,
   onClose,
 }: PipelineStageMenuProps) {
@@ -63,7 +59,6 @@ export default function PipelineStageMenu({
       <PipelineStageMenuBody
         property_id={property_id}
         stageId={stageId}
-        cohortScoped={cohortScoped}
         onClose={onClose}
       />
     </AnchoredPopover>
@@ -120,7 +115,6 @@ const SIZES = {
 export interface PipelineStageMenuBodyProps {
   property_id: number;
   stageId: number;
-  cohortScoped?: boolean;
   onClose: () => void;
   size?: keyof typeof SIZES;
 }
@@ -128,7 +122,6 @@ export interface PipelineStageMenuBodyProps {
 export function PipelineStageMenuBody({
   property_id,
   stageId,
-  cohortScoped = false,
   onClose,
   size = 'popover',
 }: PipelineStageMenuBodyProps) {
@@ -140,7 +133,7 @@ export function PipelineStageMenuBody({
     staleTime: 60_000,
   });
   const stages = useMemo(() => stagesQ.data ?? [], [stagesQ.data]);
-  const { move, remove, pending: pendingFor } = usePipelineCard({ cohortScoped });
+  const { move, remove, pending: pendingFor } = usePipelineCard();
   const pending = pendingFor(property_id);
   const [confirming, setConfirming] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
