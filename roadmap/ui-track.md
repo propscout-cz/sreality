@@ -19,7 +19,8 @@ toolkit work.
 - **Deleted, not patched:** the four fixed cards (`BrowseStats`, `PriceBandVelocity`,
   `DispositionBoxPlots`) and the old aggregate body with their five box types, and the LLM box-plot
   annotations (summarize-1: module, route, schemas, tests); migration 627 drops their cache and two
-  settings.
+  settings — applied 2026-10-19 17:35Z on the operator's word, after an R2 backup
+  (`backups/region-annotations-627/2026-10-19/`, 21 + 64 rows) and the autodedup session's green light.
 - **Rule-25 clause (operator may veto):** a place cell keys on the RÚIAN CODE `browse_list` already
   carries (two same-named towns or streets stay two cells; the pivot reads no listing location), and
   the payload's `places` list resolves each key to its name through ONE new owner-rights view over
@@ -42,8 +43,7 @@ toolkit work.
   dispositions outside the canonical vocabulary are charted under their raw spellings, sorted after
   the canonical members, until the heal lands (ruling 9);
   (2) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
-  the operator rules; (3) apply 627 on the operator's word once the code is gone from production;
-  (4) the legacy heal (1) also empties the raw-spelling cells; nothing else is owed on places.
+  the operator rules; (3) the legacy heal (1) also empties the raw-spelling cells; nothing else is owed on places.
 
 ### Negative portal filters (2026-10-13, migration 597)
 - **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal
