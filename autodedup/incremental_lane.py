@@ -370,7 +370,10 @@ BOOTSTRAP_MIN_CLAIM: int = 1
 # the one measurement taken before any was recorded — a conservative start the second pass
 # corrects. The row is halved BEFORE every pass, put back as soon as the pass commits and then
 # overwritten by its measurement (E941), so a pass the system kills mid-way has already halved
-# the next claim.
+# the next claim. A pass the pair budget refuses puts the row back too (E970): the refusal
+# measures the neighbourhood its claim brought, not the claim's size, and after a deploy that
+# moves the engine digest the reject ledger answers nothing, so every claim brings its whole
+# neighbourhood; halved at each refusal, the claim reached one advert and stayed there.
 PASS_BUDGET_S: float = PASS_DEADLINE_S / 2
 PASS_RATE_PER_S: float = 0.1
 # A rate is only recorded when the pass actually claimed enough for the quotient to mean
@@ -415,11 +418,10 @@ BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # halves nothing, since the death was the smaller container's.
 #
 # Below it a pass's memory is its neighbourhood read, not its claim: a smaller claim would only
-# slow the build. So at the floor a death is no claim's to cure — the neighbourhood read, the
-# revived feed (every revived id of a `REVIVE_SLICE` scan), a re-cut under the same lease, one
-# bad advert — and its lease is left to its TTL, as before E948: releasing it at every boot
-# would restart the whole worker as fast as it can boot, and the TTL holds that to one death a
-# lease.
+# slow the build. So at the floor a death is no claim's to cure — the neighbourhood read, a
+# re-cut under the same lease, one bad advert — and its lease is left to its TTL, as before
+# E948: releasing it at every boot would restart the whole worker as fast as it can boot, and
+# the TTL holds that to one death a lease.
 CLAIM_CAP_FLOOR: int = 25
 # E948b: the share a container's memory limit must grow by, over the `limit_mb` its cap was
 # halved under, to reset the cap to `max_listings`; a limit that merely jitters must not.
@@ -1332,9 +1334,7 @@ class SqlWork:
         # its time whether or not it wrote anything.
         by_time = max(BOOTSTRAP_MIN_CLAIM, int(self.pass_budget_s * self.rate_per_s))
         # E948: the size this container survived. It lowers the limit below, so the build's
-        # entered feed (the whole limit) and every other feed's fifth shrink with it; only the
-        # revived feed takes every revived id of its `revive_slice` scan, whatever the limit
-        # (owed since E941).
+        # entered feed (the whole limit) and every other feed's fifth shrink with it.
         cap = int(limit) if self.claim_cap is None else max(1, int(self.claim_cap))
         effective = max(1, min(int(limit), cap, by_time))
         self.claim_bound = {"max_listings": int(limit), "cap": cap,
@@ -1408,10 +1408,14 @@ class SqlWork:
             slice_max, slice_size, revived = (
                 (int(rows[0][0]), int(rows[0][1]), list(rows[0][2] or ()))
                 if rows else (after_revive, 0, []))
-            # A short slice is the end of the sweep, so the cursor wraps and the next pass
-            # starts the cycle again.
-            self._pending[CURSOR_REVIVE] = 0 if slice_size < self.revive_slice else slice_max
-            for listing_id in revived:
+            # E970: a fifth like every other feed, the cursor stopping at the last id taken. A
+            # short slice taken whole is the end of the sweep, so the cursor wraps and the next
+            # pass starts the cycle again.
+            taken = min(len(revived), share)
+            self._pending[CURSOR_REVIVE] = (int(revived[taken - 1]) if taken < len(revived)
+                                            else 0 if slice_size < self.revive_slice
+                                            else slice_max)
+            for listing_id in revived[:taken]:
                 items.append(WorkItem(int(listing_id), "revived", None, None))
 
         # The fifth feed (E79): the rows of this generation the scope has stopped holding.
@@ -2707,11 +2711,12 @@ def run_incremental(conn_factory: Callable[[], Any], *,
     kernel's OOM killer — has already slowed the next claim; a pass that committed puts the
     previous rate back before its reconcile and overwrites it with its measurement after it
     (doubled when it had room, E951; an idle pass, too small to measure, leaves the previous
-    rate), and a refused one puts the previous rate back too. A pass past its deadline rolls
-    back and keeps the halving (E913); so does a pass that RAISED, which writes it again through
-    `fresh_conn` — a factory for a NEW connection, since its own may be dead — or on its own
-    connection when the caller gives none (E930). Every release of the pass's lease falls back
-    to new connections from it too, when a database restart took the pass's own.
+    rate), and a refused one — by the pair budget (E970) or a rail — puts the previous rate back
+    too. A pass past its deadline rolls back and keeps the halving (E913); so does a pass that
+    RAISED, which writes it again through `fresh_conn` — a factory for a NEW connection, since
+    its own may be dead — or on its own connection when the caller gives none (E930). Every
+    release of the pass's lease falls back to new connections from it too, when a database
+    restart took the pass's own.
 
     `holder` names the lease the pass takes (`pass_holder()` when the caller names none) and
     `stopping` says the caller is shutting down (E941): the worker's SIGTERM path releases
@@ -2936,18 +2941,22 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                     "reconcile": {"skipped": f"pass_{STOPPING}"}, "generation": generation,
                     "predecessor_released": predecessor, "claim_cap": cap,
                     "spent_usd": 0.0, **pass_memory()}
-        if stopped and not shutting_down():
+        # The pass did not die: it committed, or the pair budget refused it (E75), which measures
+        # the neighbourhood its claim brought, not the claim's size (E970).
+        survived = stopped == "pair_budget" or (not stopped and result is not None)
+        if survived and not shutting_down():
+            # E941: its claim did not kill it, so the half written ahead goes back NOW, before
+            # the reconcile, whose planning runs outside the pass's statement guards: a raise
+            # there would otherwise leave the half standing, and eight such passes take the
+            # claim to one advert. A committed pass's measurement below, once the reconcile has
+            # run, still overwrites it. E970: a refusal puts it back too; halved, the refusals
+            # after the 2026-10-19 digest move took the rate from 0.116 to 0.0002 and the claim
+            # to one advert.
+            _write_rate(conn, generation, rate_per_s, "restored")
+        elif stopped and not shutting_down():
             # E913: the next pass claims half as much (the half E941 wrote ahead, named).
             _write_rate(conn, generation, rate_per_s / 2.0, "halved")
-        if not stopped and result is not None and not shutting_down():
-            # E941: the pass committed, so its claim did not kill it — the half written ahead
-            # goes back NOW, before the reconcile, whose planning runs outside the pass's
-            # statement guards: a raise there would otherwise leave the half standing, and
-            # eight such passes take the claim to one advert. The measurement below, once the
-            # reconcile has run, still overwrites it.
-            _write_rate(conn, generation, rate_per_s, "restored")
-        if stale_claims and not shutting_down() and (
-                stopped == "pair_budget" or (not stopped and result is not None)):
+        if stale_claims and not shutting_down() and survived:
             # E960: the pass carrying the re-claims did not die. Committed WITH them (its first
             # attempt), the budget is whole again; refused or retried without them, it stands.
             committed = not stopped and result is not None and result.attempts == 1
