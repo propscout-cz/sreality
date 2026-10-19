@@ -502,9 +502,10 @@ begin
     into v_pp_cols
     from pg_attribute a
    where a.attrelid = 'public.properties_public'::regclass and a.attnum > 0 and not a.attisdropped;
+  -- The CASE sits in parentheses: plpgsql reads an IF condition up to the first THEN at depth 0.
   if v_pp_cols is distinct from
-       case when v_pre ->> 'pp_cols' like '%, location_listing_ref_id bigint' then v_pre ->> 'pp_cols'
-            else (v_pre ->> 'pp_cols') || ', location_listing_ref_id bigint' end then
+       (case when v_pre ->> 'pp_cols' like '%, location_listing_ref_id bigint' then v_pre ->> 'pp_cols'
+             else (v_pre ->> 'pp_cols') || ', location_listing_ref_id bigint' end) then
     raise exception '636 did not land: properties_public is not its old columns plus location_listing_ref_id bigint, last';
   end if;
 
