@@ -663,6 +663,17 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_stats_pivot_live.py -q
 
+      # A property's location ad (migration 635, ONE PIN W3, ruling R1): rank 1 of a second window beside the
+      # canonical one (a map point, then determined foreign, then the finest rung, then the canonical order).
+      # Seeded ads read back both orders, the canonical one against 588's body run inline, and both pointers
+      # from the birth, the rollup and the no-ads reset. PREPARE cannot see which ad a window ranks first.
+      - name: A property's location ad is its most precise served ad (migration 635)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_location_ad_order_live.py -q
+
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed
       # above). Executed over a seeded rent map: every status code, the range for a

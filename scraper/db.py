@@ -589,14 +589,15 @@ def _gate2_null_sreality_id_enabled(conn: psycopg.Connection) -> bool:
     return _app_settings_flag(conn, GATE2_NULL_SREALITY_ID_SETTING)
 
 
-# THE one way a property is born (rule 15): a bare row naming its one advert, linked in the same
-# statement; `scripts.recompute_property_stats` fills every other column from that advert.
+# THE one way a property is born (rule 15): a bare row naming its one advert as both its
+# canonical and its location ad, linked in the same statement; `scripts.recompute_property_stats`
+# fills every other column from that advert.
 # `is_active` rides along only so the status-history trigger (migration 392) logs the advert's
 # real state at birth. A listing linked meanwhile is skipped, never re-pointed.
 NEW_SINGLETONS_SQL = """
     WITH born AS (
-        INSERT INTO properties (repr_listing_ref_id, is_active)
-        SELECT l.id, l.is_active FROM listings l
+        INSERT INTO properties (repr_listing_ref_id, location_listing_ref_id, is_active)
+        SELECT l.id, l.id, l.is_active FROM listings l
         WHERE l.id = ANY(%(ids)s::bigint[]) AND l.property_id IS NULL
         RETURNING id, repr_listing_ref_id
     )

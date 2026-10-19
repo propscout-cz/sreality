@@ -25,9 +25,13 @@ A property with exactly one ad.
 _Avoid_: standalone, unmerged property
 
 **Canonical ad**:
-The one ad whose facts a property shows: price, area, description, photos and link. Chosen by a fixed
-order, never by hand.
+The one ad whose facts a property shows: price, area, description, photos and link; its location is
+the location ad's. Chosen by a fixed order, never by hand.
 _Avoid_: representative ad, repr, speaking ad, main ad, headline ad
+
+**Location ad**:
+The ad whose resolved location a property shows: its map pin and precision, its address label, its town, quarter, street and KÚ codes, and everything computed from them (MF reference rent, city proximity, whether it is served). Chosen by a fixed order, never by hand: an ad with a map point first (then one determined foreign), then the finest RÚIAN rung whatever the ad's status, ties by the canonical order (active ads first). Often the canonical ad, not always. Stored as `properties.location_listing_ref_id`.
+_Avoid_: place, pin ad, anchor ad, located ad, representative location
 
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
