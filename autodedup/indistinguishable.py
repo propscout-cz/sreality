@@ -19,18 +19,33 @@ each is on the record:
 
     fact                    fires on 1 unit   fires on 1 project, 2 units
     obec                         0.0 %                      0.0 %
-    orientation                  0.0 %                     50.0 % (n=4)
+    orientation (E968)           0.0 %                     18.2 % (2 of 11)
     price, same portal >60 %     0.0 %                     12.5 %
     unit designator (E61)        0.0 %                (no labelled case)
+    unit code (E966)             0.0 %                (no labelled case)
     stated areas disjoint        0.4 %                     15.5 %
     disposition                  0.3 %              (vetoed before labelling)
     floorplan + rooms weak       0.7 %                     16.7 %
+    subject floor (E967)         0.5 % / 1.0 %             25.0 % (3 of 12)
     floor                        1.1 % / 2.5 %             18.6 %
     area                         1.6 %                     32.8 %
     street                       1.7 %                      0.0 %
     plot area                    2.1 %                     78.6 % (gold)
     price, cross-portal          2.6 %                     27.0 %
     total floors                 4.2 %                     35.0 %
+
+The orientation, unit code and subject floor rows were measured on 2026-10-19 for E966–E968
+(`w16/e966_prague_facts/fact_power_e966.json`): this cohort's classes and dev side, reproduced
+to the pair, read through `distinguishing_facts` itself under `w31`; subject floor is quoted
+one portal / two portals. E968's reader finds a direction on both sides of 146 known
+duplicates (115 before) and 11 hazard pairs (4 before), and fires on none of the first and on
+the same 2 of the second. No w14 advert prints a co-living room's code, so `unit_code` is
+unchanged (0 of the 23 known duplicates that print a code on both sides). E967 and its wider
+placement reader add two known-duplicate firings: 334845 x 335879, one `byt (č.9)` body at
+`ve 4.` and `v 5. nadzemním podlaží` on bazoš and sreality, and 78591 x 10129497, one storey
+apart inside one sreality feed. Main already tells both apart on other facts, so no known
+duplicate becomes distinguishable, while one hazard pair does (95325 x 274541, `v 2. NP`
+against `ve 3. nadzemním podlaží`).
 
 The `street` and `obec` rows look inert against the hazard class, and are supposed to: two
 units of one project share a street. They are here because they separate the OTHER kind of
@@ -46,7 +61,9 @@ REFUSED by the same measurement, and named so nobody re-proposes them:
     unit (the standing ruling that a re-post IS a duplicate says so directly). Only the gross
     form at 60 % survives, and it is free.
   * a floor gap of exactly one ACROSS portals — 45 % of cross-portal known duplicates carry it.
-    Two portals disagree about `přízemí`; that is a vocabulary difference, not a fact.
+    Two portals disagree about `přízemí`; that is a vocabulary difference, not a fact. E967's
+    one exception: both bodies PLACE the unit in the NP noun (`se nachází ve 3. NP`) and write
+    no storey any other way, which leaves no `přízemí` to disagree about.
   * the RÚIAN address code (4.2 %) and the house number (3.7 %) — one building has several
     entrances and two portals geocode one advert to two of them.
 
@@ -130,6 +147,7 @@ from autodedup.text_facts import (
     body_localities,
     built_connection,
     capacity_counts_english,
+    compass_points,
     cross_form_floor_agreement,
     fact_text,
     labelled_unit_ids,
@@ -170,6 +188,7 @@ from autodedup.text_facts import (
     printed_unit_codes,
     further_areas,
     unit_designators,
+    widest_directions,
 )
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -2779,11 +2798,18 @@ def distinguishing_facts(
         add("street", a.location.street_key, b.location.street_key)
 
     # The compass direction, which is what separates two otherwise identical flats in one
-    # Petřiny building (28145 x 528717: `na jihovýchod` against `na východ`). Both sides must
-    # name exactly ONE direction: a body that lists two is describing a through-flat.
+    # Petřiny building (28145 x 528717: `na jihovýchod` against `na východ`). One direction
+    # against one is read exactly — after a stem a wider one of the same body already names is
+    # dropped (`Jižní orientace obýváku, ložnice na jihovýchod` is the one direction jihovýchod),
+    # and only where the two bodies name no stem in common. A body that lists two is describing
+    # a through-flat, so it differs only where the two sides share no cardinal point at all
+    # (E968): U Stromečku's `na sever a západ` against `Jižní orientace` are two flats, `na jih i
+    # na sever` against `na jih` may be one.
     dirs_a, dirs_b = orientations(a.description), orientations(b.description)
-    if len(dirs_a) == 1 and len(dirs_b) == 1 and dirs_a != dirs_b:
-        add("orientation", next(iter(dirs_a)), next(iter(dirs_b)))
+    one_a, one_b = widest_directions(dirs_a), widest_directions(dirs_b)
+    if ((len(one_a) == 1 and len(one_b) == 1 and one_a != one_b and not (dirs_a & dirs_b))
+            or _set_conflict(compass_points(dirs_a), compass_points(dirs_b))):
+        add("orientation", ", ".join(sorted(dirs_a)), ", ".join(sorted(dirs_b)))
 
     units_a, units_b = unit_designators(a.description), unit_designators(b.description)
     if (len(units_a) == 1 and len(units_b) == 1 and units_a != units_b
@@ -2841,7 +2867,9 @@ def distinguishing_facts(
     # a building and every flat in it shares it — and an empty set is never a conflict.
     # E166: the storey the BODY prints, read under the SAME rule as the column — a gap of two
     # is a fact anywhere, a gap of one only inside one feed, because `přízemí` is written both
-    # ways and 45 % of cross-portal known duplicates carry a one-storey gap for that reason. It
+    # ways and 45 % of cross-portal known duplicates carry a one-storey gap for that reason
+    # (E967: not where both bodies PLACE the unit in the NP noun and write no other storey
+    # vocabulary, which leaves no `přízemí` to blame — `np_apart`). It
     # is read because the stored column is null on one side of a third of the corpus, and
     # because `body_align` must not read a storey (E163: doing so newly split 126 certain
     # duplicates of two cohorts on nothing else).
@@ -2850,8 +2878,8 @@ def distinguishing_facts(
     # nachází dvě samostatné místnosti` rewritten as `V přízemí najdete dvě samostatné
     # místnosti`, one house, one price path, two storey words. The worded readings are
     # therefore not read at all where either side is a whole building or a plot.
-    words = cfg.d43_prose_floor_words and not (
-        {a.category_main, b.category_main} & PLOT_EXACT_CATEGORIES)
+    whole_building = bool({a.category_main, b.category_main} & PLOT_EXACT_CATEGORIES)
+    words = cfg.d43_prose_floor_words and not whole_building
 
     def worded_gap(reader, numbered, left: Listing, right: Listing) -> int | None:
         """The storey gap the two bodies state, or None when they state none.
@@ -2862,6 +2890,7 @@ def distinguishing_facts(
         written for the second storey and for the second floor above it by different authors —
         one Rokytnice 2+kk is `v druhém patře` and, re-posted by the same broker at the same
         9,800 Kč, `ve 1. patře (2. NP)` — so a worded ordinal cannot carry a one-storey claim.
+        A placement in the NP noun on both sides is `np_apart`'s, at any gap.
         """
         plain_a, plain_b = numbered(left.description), numbered(right.description)
         if plain_a and plain_b and not (plain_a & plain_b):
@@ -2882,27 +2911,54 @@ def distinguishing_facts(
                                   reader(right.description, True))
         return gap if gap is not None and gap >= 2 else None
 
+    def np_apart(left: Listing, right: Listing) -> bool:
+        """E967: do both bodies PLACE the unit in the NP noun, on two different storeys?
+
+        `se nachází ve 3. NP`, `ve 3 nadzemním podlaží` and `ve čtvrtém nadzemním podlaží` leave
+        nothing to excuse: the two-storey bar and the one-storey camp and feed tests exist for
+        `patro` and `přízemí`, and the NP noun has neither, so its gap is a storey at any size
+        between any two feeds. One náměstí Jiřího z Poděbrad agency lets one 93 m² 3+kk `ve 3
+        nadzemním podlaží` in May and the one above it `ve čtvrtém nadzemním podlaží` in
+        October, on four portals. The placement clause, not the set: a body also names the
+        building's `1. NP` kočárkárna, its `4 NP` and its shops. And only where neither body
+        writes a storey any other way — `ve 2. patře (3. NP)` is the author's own +1 of a patro
+        count and carries the patro's doubt, and a bare `podlaží` or `v přízemí` its own. A
+        storey the two bodies share across every noun still vetoes it (E210), and a whole
+        building's storey is a room's address (E201).
+        """
+        if whole_building:
+            return False
+        named_left = printed_floors_by_form(left.description, True)
+        named_right = printed_floors_by_form(right.description, True)
+        if any(values for named in (named_left, named_right)
+               for form, values in named.items() if form != "np"):
+            return False
+        if ground_or_upper(left.description, True) or ground_or_upper(right.description, True):
+            return False
+        placed_left = subject_floors_by_form(left.description, words).get("np", frozenset())
+        placed_right = subject_floors_by_form(right.description, words).get("np", frozenset())
+        return bool(placed_left and placed_right and not (placed_left & placed_right)
+                    and not cross_form_floor_agreement(named_left, named_right))
+
+    def gap_is_a_storey(gap: int) -> bool:
+        """The column's rule: two storeys anywhere, one inside a camp or inside one feed."""
+        return _rounded_floors(a, b, cfg, gap) or (gap == 1 and _same_feed(
+            a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed))
+
     if cfg.d43_prose_floor:
         prose_gap = worded_gap(printed_floors_by_form, printed_floors, a, b)
-        if prose_gap is not None:
-            floors_a = printed_floors(a.description, words)
-            floors_b = printed_floors(b.description, words)
-            feed = _same_feed(a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed)
-            if (_rounded_floors(a, b, cfg, prose_gap)
-                    or (prose_gap == 1 and feed)):
-                add("prose_floor", sorted(floors_a), sorted(floors_b))
+        if prose_gap is not None and gap_is_a_storey(prose_gap):
+            add("prose_floor", sorted(printed_floors(a.description, words)),
+                sorted(printed_floors(b.description, words)))
 
     # E181: the storey stated OF THE OFFERED UNIT. `prose_floor` is a set of every storey the
     # body names, and one Dašice mill advert names its own 2.NP and a WC in 1.NP, so the sets
     # meet and the two floors of one mill never contradict. The placement clause names one.
     if cfg.d43_subject_floor:
         subject_gap = worded_gap(subject_floors_by_form, subject_floors, a, b)
-        if subject_gap is not None:
-            subject_a = subject_floors(a.description, words)
-            subject_b = subject_floors(b.description, words)
-            feed = _same_feed(a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed)
-            if _rounded_floors(a, b, cfg, subject_gap) or (subject_gap == 1 and feed):
-                add("subject_floor", sorted(subject_a), sorted(subject_b))
+        if np_apart(a, b) or (subject_gap is not None and gap_is_a_storey(subject_gap)):
+            add("subject_floor", sorted(subject_floors(a.description, words)),
+                sorted(subject_floors(b.description, words)))
 
     # E181: the storey written in WORDS. `v přízemí` against `v patře` carries no digit, so no
     # numbered reader sees it — and it needs no camp table either, because `přízemí` is the
