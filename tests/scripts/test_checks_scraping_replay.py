@@ -121,6 +121,7 @@ from typing import Any, NamedTuple
 
 from location_data.claims_common import SOURCES
 from scraper.portal_factory import PORTAL_CLASSES
+from scripts.checks import common
 from scripts.checks import scraping as sc
 from scripts.verify_pipeline import THRESHOLDS
 from tests.scripts.test_checks_platform import _Conn
@@ -376,7 +377,7 @@ def _coverage_replay() -> tuple[_Ladder, dict[_dt.datetime, dict[str, dict[str, 
         held = [(r["source"], *_split(r["unit"]), int(r["held"]), int(r["in_dwell"]))
                 for r in rows]
         conn = _Conn({sc._WALKS_SQL: _walk_rows(at, declared), sc._HELD_SQL: held,
-                      sc._UNNOMINATED_SQL: [], sc._TREND_SQL: []}, now=at)
+                      sc._UNNOMINATED_SQL: [], common.TREND_SQL: []}, now=at)
         result = sc.check_coverage(conn, THRESHOLDS)
         results.append((at, result))
         cells[at] = {c["subject"]: c for c in result["details"]["cells"]}

@@ -181,8 +181,18 @@ migration 507) or it silently measures degrees.
 - **Un-shadow 2026-09-09 17:54–17:59Z:** every portal's stored claims are resolver inputs, and
   W1-b deleted the shadow mechanism whole.
 - **Rule 25's invariant is the coverage number**: `count(listing_location) = count(active
-  listings)`, and every active Czech listing has a town. `verify_pipeline`'s
-  `location_town_coverage` check measures both and is red until the second is zero.
+  listings)`, and every active Czech listing has a town. The `location_town_coverage` gauge
+  (`scripts/checks/quality.py`, on the worker every 6 h since Health dashboard sprint wave 6)
+  measures both over ACTIVE ads first written more than 24 h ago and is red until the second is
+  zero; the inactive ads with no town (13,192 on 2026-10-19, their pages gone) are a dated fact,
+  not judged.
+- **Payload shape, exported** (Health dashboard sprint wave 6): `location_data/claims_common.py`
+  holds `PAYLOAD_SHAPE_PREDICATES`, one NULL-free SQL predicate per portal whose contract reads the
+  stored payload (sreality, bezrealitky, mmreality), TRUE when `l.raw_json` is in the shape the
+  contract expects new ads in, spelled from the same key lists as the Python reader beside it
+  (`sreality_payload_shape`), and `PAYLOAD_SHAPE_REMEDIES`, the remedy per portal. The `parsing` The Python twins the parity rail executes against are `PAYLOAD_SHAPE_READERS` (sreality's is the intake's own `sreality_payload_shape`; bezrealitky's and mmreality's are key-presence readers over the same key lists).
+  alarm's payload arm reads them with the portal name bound as a parameter, so the health checks
+  name no portal (rule 21); a live CI rail holds each predicate to its Python twin.
 - **Resolver lag.** The drain works `dirty_locations` from the oldest row. Judge freshness by
   `resolved_at` and by the oldest `dirty_locations.enqueued_at`, not by queue length. The Location
   Quality page's "on an older registry" share is the same signal per portal.

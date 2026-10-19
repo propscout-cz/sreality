@@ -3,8 +3,10 @@
 # The fixture is pipeline_check_results run-length encoded (check_key,status,from_run_at,to_run_at,
 # runs; UTC to the second), the unmeasured warns of the time read as unknown, with no ids and no
 # URLs, for the keys CHECKS declares (`:keys`; exported 2026-10-19 05:09Z, before wave 4's keys
-# had rows; wave 5 retired broker_merge_suppression and dropped its one row, 111 runs all OK).
-# Refresh it read-only, never by hand, from:
+# had rows; wave 5 retired broker_merge_suppression and dropped its one row, 111 runs all OK;
+# wave 6 retired eight legacy keys and floor_convention and dropped their 48 rows). It holds
+# statuses only, so each run is replayed as one cell named by its key, which the test fake writes:
+# the ladder itself has invented no cell since wave 6. Refresh it read-only, never by hand, from:
 #   with r as (select check_key, run_at,
 #                     case when status = 'warn' and (details ? 'timed_out' or details ? 'not_run')
 #                          then 'unknown' else status end as s
@@ -32,25 +34,22 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "health_replay_14d
 # 108 minutes and more, and keeps the replay well under a second.
 _TICK = _dt.timedelta(minutes=10)
 # Check.staleness_budget: cadence plus this slack on github-actions; three cadences on the worker,
-# whose wave-3 keys have rows from 2026-10-19 00:39Z and whose wave-4 and wave-5 keys have none.
+# whose wave-3 keys have rows from 2026-10-19 00:39Z and whose wave-4 to wave-6 keys have none,
+# but for location_town_coverage: wave 6 moved it to the worker, and its GitHub-era rows (the old
+# whole-corpus count) are replayed as ladder input on the worker's budget.
 _GITHUB_SLACK = _dt.timedelta(hours=18)
 _GH, _RW = "github-actions", "realtime-worker"
 
 # The registry (scripts/verify_pipeline.py CHECKS) as (class, cadence, host). The loader drops the
 # rows of a key retired since the export, as the ladder reads none of them.
 _REGISTRY: dict[str, tuple[str, int, str]] = {
-    "location_town_coverage": ("gauge", 21600, _GH), "jobs": ("alarm", 600, _RW),
-    "capacity": ("alarm", 1800, _RW), "llm": ("alarm", 600, _RW),
+    "jobs": ("alarm", 600, _RW), "capacity": ("alarm", 1800, _RW), "llm": ("alarm", 600, _RW),
     "scraping": ("alarm", 600, _RW), "publishing": ("alarm", 600, _RW),
     "delisting": ("alarm", 600, _RW), "coverage": ("gauge", 3600, _RW),
-    "dedup": ("alarm", 600, _RW),
-    "ppm2_median_shift": ("alarm", 21600, _GH), "ppm2_basis_floor_share": ("gauge", 21600, _GH),
-    "area_vs_usable_divergence": ("gauge", 21600, _GH),
-    "ppm2_measure_coverage": ("alarm", 21600, _GH), "migration_drift": ("alarm", 3600, _GH),
-    "location_payload_shape_drift": ("alarm", 21600, _GH),
-    "outbound_url_coverage": ("gauge", 21600, _GH), "field_fill_matrix": ("alarm", 21600, _GH),
-    "text_extraction_lag": ("gauge", 21600, _GH), "floor_convention": ("gauge", 21600, _GH),
-    "outbound_url_conformance": ("alarm", 604800, _GH),
+    "dedup": ("alarm", 600, _RW), "parsing": ("alarm", 21600, _RW),
+    "data_quality": ("gauge", 21600, _RW), "location_town_coverage": ("gauge", 21600, _RW),
+    "text_extraction": ("gauge", 3600, _RW),
+    "migration_drift": ("alarm", 3600, _GH), "outbound_url_conformance": ("alarm", 604800, _GH),
 }
 
 _Rows = list[tuple[_dt.datetime, str]]
@@ -116,6 +115,7 @@ def _replay() -> tuple[dict[str, _Rows], list[_dt.datetime], _FakeConn, list[_To
     for at in passes:
         for key, rows in history.items():
             while fed[key] < len(rows) and rows[fed[key]][0] <= at:
+                # No cells given: the fake writes the one cell the key names (the header).
                 conn.result(key, *rows[fed[key]])
                 fed[key] += 1
         before = len(conn.dispatches)
@@ -192,6 +192,7 @@ def test_each_maximal_fail_streak_opens_exactly_one_incident_and_one_onset() -> 
     total = 0
     for key, rows in history.items():
         expected = _streaks(rows, _hold(key))
+        # Each row is the key's own cell (the header), so its incidents are signed by the key.
         opened = [i for i in conn.incidents if i["signature"] == f"cell:{key}:{key}"]
         assert len(opened) == expected, key
         assert sum(1 for t in told if t.key == key and t.kind == "onset") == expected, key

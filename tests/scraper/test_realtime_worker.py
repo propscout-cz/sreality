@@ -804,12 +804,18 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     lane = inspect.getsource(rw._amain).split('("health"', 1)[1].split(")),", 1)[0]
     assert "lambda: HEALTH_TICK_SECONDS" in lane
     assert "default_interval=HEALTH_TICK_SECONDS" in lane
-    assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 360.0)
+    assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
+    # Wave 6: the twelve worker budgets (675 s) outgrow one pass inside the watcher's 600 s
+    # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
-    assert verify_pipeline.lane_budget_for(hosted) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
-        "a pass must hold every worker check due at once")
+    alarms = [c for c in hosted if c.cls == "alarm"]
+    assert verify_pipeline.lane_budget_for(alarms) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
+        "every worker ALARM due at once fits; gauges defer")
+    assert max(c.budget_s for c in hosted) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
+        "a check whose budget exceeds the pass would be deferred for ever")
+    assert rw.HEALTH_PASS_BUDGET_SECONDS + 30.0 < 600.0, "the beat's lag inside the watcher's line"
     at = rw.LANES.index("health")
     assert rw.LANES[at - 1:at + 2] == ("text_extract", "health", "autodedup")
     for forbidden in ("app_settings", "os.environ"):

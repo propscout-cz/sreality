@@ -3,7 +3,8 @@
 A check returns `result(key, cells, not_measured)`: one cell per portal, job, lane or unit,
 each `{subject, portal, status, value, unit, message, facts}`; the verdict is the worst
 measured cell, and a check that could measure nothing is `unknown` with `details.skipped`.
-Moved verbatim out of platform.py (wave 4), so no module re-spells the shape.
+Moved verbatim out of platform.py (wave 4), so no module re-spells the shape. A gauge's cells
+also carry their trend (`trend`, wave 6): a rolling series rebuilt from the check's own results.
 """
 
 from __future__ import annotations
@@ -11,8 +12,9 @@ from __future__ import annotations
 import datetime as _dt
 import math
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from scripts.checks.clock import fetchone
+from scripts.checks.clock import PASS, fetchall, fetchone
 
 _UTC = _dt.timezone.utc
 _RANK = {"ok": 0, "warn": 1, "fail": 2}
@@ -25,6 +27,9 @@ WORKER = "realtime-worker"
 # Migration 620's c_worker_dead: past it the watcher's `worker` cell judges a dead worker, and
 # lanes read from an older beat would ring the same outage a second time.
 BEAT_FRESH_S = 600.0
+# An ad is new for its first NEW_AD_H hours: publishing judges the new ads, the location gauge the
+# ads past them, so the edge between the two checks is this one number.
+NEW_AD_H = 24
 
 # A check's own newest stored cells: what a rule that compares with its previous measurement
 # reads (the jobs lanes' counters and failing portals, the Engine's open decision lag).
@@ -33,6 +38,37 @@ select run_at, details -> 'cells' from pipeline_check_results
  where check_key = %(key)s and jsonb_typeof(details -> 'cells') = 'array'
  order by run_at desc
  limit 1
+"""
+
+# A gauge cell's trend: one [day, value, status] point per Europe/Prague day over the last
+# TREND_DAYS days, and whether its status is worse than the point dated WORSE_DAYS earlier.
+TREND_DAYS = 30
+WORSE_DAYS = 7
+_PRAGUE = ZoneInfo("Europe/Prague")
+
+# The gauge's newest MEASURED result: each cell carries its series on from it, so a run that
+# measured nothing (status unknown) never resets one.
+TREND_SQL = """
+select details -> 'cells' from pipeline_check_results
+ where check_key = %(key)s and status <> 'unknown'
+   and jsonb_typeof(details -> 'cells') = 'array'
+ order by run_at desc
+ limit 1
+"""
+
+# The subjects that result lacks (an arm unread then, a unit back after a gap): for each, the
+# newest series a measured result of the window holds. Sent at most once per check, on a miss.
+TREND_LOOKBACK_SQL = """
+select distinct on (c ->> 'subject') c ->> 'subject' as subject, c -> 'facts' -> 'trend' as trend
+  from pipeline_check_results r
+ cross join lateral jsonb_array_elements(
+       case when jsonb_typeof(r.details -> 'cells') = 'array'
+            then r.details -> 'cells' else '[]'::jsonb end) c
+ where r.check_key = %(key)s and r.status <> 'unknown'
+   and r.run_at >= %(since)s
+   and jsonb_typeof(c -> 'facts' -> 'trend') = 'array'
+   and not (c ->> 'subject' = any(%(known)s::text[]))
+ order by c ->> 'subject', r.run_at desc
 """
 
 
@@ -150,3 +186,68 @@ def result(key: str, cells: list[dict[str, Any]], not_measured: dict[str, str]) 
     value = sum(c["status"] == status for c in measured) if status != "ok" else 0
     return {"check_key": key, "status": status, "value": value, "details": details,
             "message": ". ".join(parts) + "."}
+
+
+class _Series:
+    """A gauge's stored series by subject, read once per check of a pass (clock.PASS)."""
+
+    def __init__(self, conn: Any, check_key: str, at: _dt.datetime) -> None:
+        self._conn, self._key, self._since = conn, check_key, at - _dt.timedelta(days=TREND_DAYS)
+        row = fetchone(conn, TREND_SQL, {"key": check_key})
+        cells = row[0] if row is not None and isinstance(row[0], list) else []
+        self._held = {c["subject"]: _stored_series(c.get("facts")) for c in cells
+                      if isinstance(c, dict) and isinstance(c.get("subject"), str)}
+        # With no measured result at all there is nothing older to look back through.
+        self._older: dict[str, list[Any]] | None = None if row is not None else {}
+
+    def get(self, subject: str) -> list[Any]:
+        if subject in self._held:
+            return self._held[subject]
+        if self._older is None:
+            rows = fetchall(self._conn, TREND_LOOKBACK_SQL, {
+                "key": self._key, "since": self._since, "known": sorted(self._held)})
+            self._older = {s: t for s, t in rows if isinstance(s, str) and isinstance(t, list)}
+        return self._older.get(subject, [])
+
+
+def _stored_series(facts: Any) -> list[Any]:
+    series = facts.get("trend") if isinstance(facts, dict) else None
+    return series if isinstance(series, list) else []
+
+
+def _point_day(point: Any) -> _dt.date | None:
+    """A stored point's day, or None for anything that is not [day, value, measured status]."""
+    if not (isinstance(point, list) and len(point) == 3 and isinstance(point[0], str)
+            and isinstance(point[2], str) and point[2] in _RANK):
+        return None
+    try:
+        return _dt.date.fromisoformat(point[0])
+    except ValueError:
+        return None
+
+
+def trend(conn: Any, check_key: str, subject: str, value: Any, status: str,
+          at: _dt.datetime) -> dict[str, Any]:
+    """A gauge cell's `trend` ([[Prague day, value, status], …] over TREND_DAYS days, today's
+    point replacing the day's earlier one; an unmeasured cell carries its series unchanged) and
+    `worse_7d` (today's status worse than the point dated WORSE_DAYS back, None without one)."""
+    held = PASS.memo(f"trend:{check_key}", lambda: _Series(conn, check_key, at)).get(subject)
+    today = at.astimezone(_PRAGUE).date()
+    first = today - _dt.timedelta(days=TREND_DAYS - 1)
+    points: dict[_dt.date, list[Any]] = {}
+    for point in held:
+        day = _point_day(point)
+        if day is not None and first <= day <= today:
+            points[day] = list(point)
+    if status in _RANK:
+        points[today] = [today.isoformat(), value, status]
+    week = points.get(today - _dt.timedelta(days=WORSE_DAYS))
+    worse = None if status not in _RANK or week is None else _RANK[status] > _RANK[week[2]]
+    return {"trend": [points[day] for day in sorted(points)], "worse_7d": worse}
+
+
+def with_trends(conn: Any, check_key: str, cells: list[dict[str, Any]],
+                at: _dt.datetime) -> None:
+    """Every cell of a gauge carries its trend; alarms carry none."""
+    for c in cells:
+        c["facts"].update(trend(conn, check_key, c["subject"], c["value"], c["status"], at))

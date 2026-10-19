@@ -93,8 +93,11 @@ calls an LLM must do the same.
   no snapshot; a failed call is cached with an attempt count and given up on after 5.
   `false` needs an explicit negation in the evidence quote, every value needs a quote verbatim in
   the advert text, and `floor` comes back as the advert's own words for `scraper/floor.py` to
-  convert. Health: `verify_pipeline`'s `text_extraction_lag`, built from the lane's OWN selector
-  (R8), red too when the provider stopped the last pass (`last.fatal`, a failed pass in the heartbeat). `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
+  convert. Health: the `text_extraction` gauge (`scripts/checks/quality.py`), on the lane's OWN
+  statements (R8): new ads in scope still unread 1-24 h after arriving (Wilson lower bound; counted over
+  arrivals, never through the eligibility predicate), p95 minutes to the first reading beside the 20 min
+  SLO, and the backlog's ETA; a provider stop (`last.fatal`, a failed
+  pass in the heartbeat) is the `llm` check's credit cell and the `jobs` check's `lane/text_extract` cell. `app_settings.enrichment_model` is the one switch. `docs/design/field-capture/PROGRAM.md`.
 
 **Vision image downscaling is unified in `toolkit/vision_images.py` — one helper, two
 tiers.** Every image→LLM call routes R2 bytes through `image_block(r2, key, max_edge)`

@@ -17,6 +17,7 @@ import pytest
 from location_data.claims_common import SOURCES
 from scraper.db import QUEUE_PRIORITY_NEW
 from scraper.portal_runner import DECLARED_TOTAL_KEY
+from scripts.checks import common
 from scripts.checks import scraping as sc
 from scripts.checks.common import wilson_lower
 from tests.scripts.test_checks_platform import _Conn
@@ -306,9 +307,11 @@ def test_the_declared_total_is_read_by_its_shared_key() -> None:
 
 def _coverage(walks: list[tuple[Any, ...]], *, held: list[tuple[Any, ...]] | None = None,
               unnominated: list[tuple[Any, ...]] | None = None,
-              trend: list[tuple[Any, ...]] | None = None) -> tuple[dict[str, Any], _Conn]:
+              trend: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], _Conn]:
+    """check_coverage over these rows; `trend` is its newest measured result's cells."""
     conn = _Conn({sc._WALKS_SQL: walks, sc._HELD_SQL: held or [],
-                  sc._UNNOMINATED_SQL: unnominated or [], sc._TREND_SQL: trend or []}, now=_NOW)
+                  sc._UNNOMINATED_SQL: unnominated or [],
+                  common.TREND_SQL: [] if trend is None else [(trend,)]}, now=_NOW)
     return sc.check_coverage(conn, T), conn
 
 
@@ -378,24 +381,31 @@ def test_a_portal_with_no_walk_in_the_window_keeps_its_unnominated_cell() -> Non
     assert nothing["status"] == "unknown" and "not_measured" not in nothing["details"]
 
 
-def test_each_cell_carries_its_own_7_and_30_day_values_and_whether_it_grew() -> None:
-    trend = [(7, [{"subject": "bazos/unnominated", "value": 10},
-                  {"subject": "bazos/residual/byt-prodej", "value": -3.0}]),
-             (30, [{"subject": "bazos/unnominated", "value": 4}])]
+def test_each_cell_carries_its_rolling_trend_and_whether_it_is_worse_than_a_week_ago() -> None:
+    """Wave 6 (D11): coverage's cells carry the gauges' one trend (common.trend), rolled on from
+    this check's newest measured result; W4's trend_30d / worse_than_7d are gone."""
+    trend = [{"subject": "bazos/unnominated", "facts": {"trend": [["2026-10-12", 10, "ok"]]}},
+             {"subject": "bazos/residual/byt-prodej",
+              "facts": {"trend": [["2026-10-12", -3.0, "warn"], ["2026-10-18", 1.0, "ok"]]}}]
     out, conn = _coverage([_unit()], held=[("bazos", "byt", "prodej", 10_150, 0)],
                           unnominated=[("bazos", 30, 0, _ago(days=1))], trend=trend)
     cells = _cells(out)
-    assert cells["bazos/unnominated"]["facts"]["trend_30d"] == {"7d": 10, "30d": 4}
-    assert cells["bazos/unnominated"]["facts"]["worse_than_7d"] is True
-    assert cells["bazos/residual/byt-prodej"]["facts"]["worse_than_7d"] is False
-    assert cells["bazos/residual/byt-prodej"]["facts"]["trend_30d"] == {"7d": -3.0, "30d": None}
-    (params,) = [p for sql, p, _ in conn.sent if sql == sc._TREND_SQL]
-    assert params == {"key": "coverage", "days": [7, 30]}
+    unnominated = cells["bazos/unnominated"]["facts"]
+    assert unnominated["trend"] == [["2026-10-12", 10, "ok"], ["2026-10-19", 30, "warn"]]
+    assert unnominated["worse_7d"] is True
+    residual = cells["bazos/residual/byt-prodej"]["facts"]
+    assert residual["trend"] == [["2026-10-12", -3.0, "warn"], ["2026-10-18", 1.0, "ok"],
+                                 ["2026-10-19", 1.5, "ok"]]
+    assert residual["worse_7d"] is False
+    assert not {"trend_30d", "worse_than_7d"} & set(unnominated)
+    assert {str(p) for sql, p, _ in conn.sent if sql == common.TREND_SQL} == {
+        str({"key": "coverage"})}
 
 
 def test_a_cell_with_no_reading_a_week_ago_claims_no_trend() -> None:
     out, _ = _coverage([_unit()], unnominated=[("bazos", 3, 0, None)])
-    assert _cells(out)["bazos/unnominated"]["facts"]["worse_than_7d"] is None
+    facts = _cells(out)["bazos/unnominated"]["facts"]
+    assert (facts["trend"], facts["worse_7d"]) == ([["2026-10-19", 3, "ok"]], None)
 
 
 def test_the_coverage_verdict_names_its_key() -> None:

@@ -47,13 +47,12 @@ _LOCK_SQL = "SELECT pg_try_advisory_xact_lock(hashtext('health_reconcile'))"
 # error as fail and no message, so a key is Not measured until the new harness measures it.
 # The budget is read as seconds: psycopg parses interval text only under the default IntervalStyle.
 _NEWEST_SQL = """
-SELECT hc.key, hc.class, hc.cadence_s, hc.label, hc.unit,
+SELECT hc.key, hc.class, hc.cadence_s, hc.label,
        extract(epoch FROM hc.staleness_budget)::float8,
-       latest.status, latest.run_at, latest.value,
-       latest.details -> 'cells', latest.details ->> 'message'
+       latest.status, latest.run_at, latest.details -> 'cells'
   FROM health_checks hc
   LEFT JOIN LATERAL (
-        SELECT c.status, c.run_at, c.value, c.details
+        SELECT c.status, c.run_at, c.details
           FROM pipeline_check_results c
          WHERE c.check_key = hc.key AND c.run_at >= hc.declared_at
          ORDER BY c.run_at DESC
@@ -95,7 +94,7 @@ UPDATE ops_incidents SET alert_count = alert_count + 1, alerted_at = %(now)s
 # The same registration guard as _NEWEST_SQL: a row the ladder ignores everywhere else must not
 # keep a cell it no longer measures from its silent close.
 _MEASURED_SINCE_SQL = """
-SELECT r.check_key, r.run_at, r.status, r.details -> 'cells'
+SELECT r.check_key, r.run_at, r.details -> 'cells'
   FROM pipeline_check_results r
   JOIN health_checks hc ON hc.key = r.check_key
  WHERE r.check_key = ANY(%(keys)s) AND r.status <> 'unknown' AND r.run_at >= %(since)s
@@ -202,37 +201,29 @@ def _stale(stamp: _dt.datetime, budget_s: float, at: _dt.datetime) -> bool:
     return stamp < at - _dt.timedelta(seconds=float(budget_s))
 
 
-def _cells(key: str, status: str, value: Any, details: Any, unit: str) -> dict[str, dict[str, Any]]:
-    """A measured result's cells by subject: its own, else one implicit cell named by the key."""
-    details = details if isinstance(details, dict) else {}
-    raw = details.get("cells")
-    if not isinstance(raw, list):
-        raw = []
-    implicit = {"subject": key, "portal": None, "status": status, "value": value, "unit": unit,
-                "message": details.get("message") or "", "facts": {}}
+def _cells(raw: Any) -> dict[str, dict[str, Any]]:
+    """A result's verdict cells by subject (`details -> 'cells'`), the worst one per subject."""
+    # No cell is ever invented (wave 6 deleted the one named by the key): a result without a
+    # verdict cell opens, keeps and recovers nothing, so every check writes its own, OK included.
     cells: dict[str, dict[str, Any]] = {}
-    for cell in raw:
+    for cell in raw if isinstance(raw, list) else []:
         if not isinstance(cell, dict) or cell.get("status") not in _RANK:
             continue
         subject = str(cell.get("subject") or "")
         held = cells.get(subject)
         if subject and (held is None or _RANK[cell["status"]] > _RANK[held["status"]]):
             cells[subject] = cell
-    # A list under `cells` that holds no verdict (a legacy per-portal table, a payload shape of
-    # its own) is not a cell list: the check still measured, so its own status is the cell.
-    return cells or {key: implicit}
+    return cells
 
 
 def _check(row: tuple[Any, ...], at: _dt.datetime) -> _Check:
     """A registry row with its newest result; only a measured result inside its budget has cells."""
-    key, cls, cadence_s, label, unit, budget_s, status, run_at, value, raw_cells, message = row
+    key, cls, cadence_s, label, budget_s, status, run_at, raw_cells = row
     run_at, cadence = _opt_utc(run_at), int(cadence_s)
     # pipeline_checks_public's effective_status: missing, unknown or stale is Not measured.
     measured = (status in _RANK and run_at is not None
                 and not _stale(run_at, budget_s, at))
-    details = {"cells": raw_cells, "message": message}
-    cells = _cells(key, status, value, details, unit or "") if measured else {}
-    return _Check(key, cls, cadence, label or key, run_at, cells)
+    return _Check(key, cls, cadence, label or key, run_at, _cells(raw_cells) if measured else {})
 
 
 def _incident(row: tuple[Any, ...]) -> _Incident:
@@ -260,9 +251,9 @@ def _clip(text: str) -> str:
     return text if len(text) <= MESSAGE_MAX_CHARS else text[: MESSAGE_MAX_CHARS - 1] + "…"
 
 
-def _named(key: str, subjects: Iterable[str]) -> str:
-    """The subjects a notice names; the implicit cell is the check itself and needs no name."""
-    return ", ".join(sorted({s for s in subjects if s != key}))
+def _named(subjects: Iterable[str]) -> str:
+    """The subjects a notice names, each once, sorted."""
+    return ", ".join(sorted(set(subjects)))
 
 
 def _anchor(incidents: list[_Incident]) -> str:
@@ -278,11 +269,8 @@ def _onset(check: _Check, opened: list[tuple[_Incident, dict[str, Any]]]) -> str
     parts = []
     for inc, cell in opened:
         text = str(cell.get("message") or "").strip()
-        if inc.subject != check.key:
-            text = f"{inc.subject}: {text}" if text else inc.subject
-        if text:
-            parts.append(text)
-    return f"{check.label}: Problem" + (f" — {'; '.join(parts)}" if parts else "")
+        parts.append(f"{inc.subject}: {text}" if text else inc.subject)
+    return f"{check.label}: Problem — {'; '.join(parts)}"
 
 
 def _reminder(
@@ -303,7 +291,7 @@ def _reminder(
     told = [inc for inc, _ in due]
     hours = (at - oldest.first_seen_at).total_seconds() / 3600
     state = "Problem" if any(current[inc.id] == "fail" for inc in told) else "Watch"
-    names = _named(check.key, (inc.subject for inc in told))
+    names = _named(inc.subject for inc in told)
     message = f"{check.label}: still {state} for {hours:.0f} h" + (f" — {names}" if names else "")
     return message, f"sys:{check.key}:reminder:{rung_label}:{_anchor(told)}", told
 
@@ -313,7 +301,7 @@ def _recovery(check: _Check, incidents: list[_Incident]) -> tuple[str, str]:
     oldest = min(incidents, key=lambda i: i.first_seen_at)
     ok_since = oldest.ok_since or oldest.first_seen_at
     hours = (ok_since - oldest.first_seen_at).total_seconds() / 3600
-    names = _named(check.key, (i.subject for i in incidents))
+    names = _named(i.subject for i in incidents)
     message = f"✓ {check.label}: {names + ' ' if names else ''}recovered after {hours:.0f} h"
     return message, f"sys:{check.key}:recovery:{_anchor(incidents)}"
 
@@ -325,9 +313,9 @@ def _measured_subjects(
     since = {k: at - _unmeasured_window(checks[k].cadence_s) for k in keys}
     cur.execute(_MEASURED_SINCE_SQL, {"keys": sorted(keys), "since": min(since.values())})
     seen: dict[str, set[str]] = {}
-    for key, run_at, status, cells in cur.fetchall():
+    for key, run_at, cells in cur.fetchall():
         if _as_utc(run_at) >= since[key]:
-            seen.setdefault(key, set()).update(_cells(key, status, None, {"cells": cells}, ""))
+            seen.setdefault(key, set()).update(_cells(cells))
     return seen
 
 

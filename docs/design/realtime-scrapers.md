@@ -490,7 +490,8 @@ nothing else.
 
 **Health lane (Health dashboard wave 3, ships LIVE):** the checks the registry hosts on
 `realtime-worker` (`jobs`, `capacity`, `llm` since wave 3; `scraping`, `publishing`, `delisting` and
-the `coverage` gauge since wave 4; `dedup` since Health dashboard sprint wave 5;
+the `coverage` gauge since wave 4; `dedup` since Health dashboard sprint wave 5; `parsing` and the
+`data_quality`, `location_town_coverage` and `text_extraction` gauges since wave 6;
 `docs/design/health-dashboard.md` § 4) are measured
 here, every `HEALTH_TICK_SECONDS` (60 s), by THE harness:
 `scripts.verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=…,
@@ -498,11 +499,12 @@ lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)`, never a copy.
 - **A constant tick, no switch.** The text_extract lane's shape: no `app_settings` row, so no read
   that can fail and no fail-safe-0; the brake is a deploy. Due-ness is read from the stored
   results, so a pass with nothing due is one indexed read and a restarted worker re-measures
-  nothing; alarms run before gauges, each check on its own clock (`CHECK_BUDGET_S`) inside the
-  360 s pass (8 × 45 s: its eight checks since Health dashboard sprint wave 5, seven in wave 4),
-  and every result is stored as it lands, with `run_at` = the pass's start.
+  nothing; alarms run before gauges, each check on its own clock (`CHECK_BUDGET_S`; 180 s for
+  `parsing`) inside the 500 s pass (since Health dashboard sprint wave 6: the alarms' 495 s always
+  fit, and a gauge whose budget no longer fits what is left waits for the next pass; 360 s in waves
+  4-5), and every result is stored as it lands, with `run_at` = the pass's start.
 - **One pass at a time.** `_HEALTH_PASS_LOCK`: the harness keeps per-run module state
-  (`scripts.checks.clock.LANE`, its plausibility cache), so a pass abandoned at
+  (`scripts.checks.clock.LANE` and `PASS`, the per-pass memo), so a pass abandoned at
   `LANE_PASS_TIMEOUT_SECONDS` must not overlap the next; a skipped pass is
   `last.previous_pass_running`.
 - **The registry, once per process.** The first pass projects this host's `health_checks` rows

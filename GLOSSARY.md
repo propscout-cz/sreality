@@ -249,9 +249,15 @@ _Avoid_: alert (that is the notice), trigger
 
 **Gauge**:
 A check of a standing condition the platform lives with while it is being fixed, such as ads that
-still lack a town, shown with its trend. Its Problem is told once, then reminded once a day until it
-recovers or is acknowledged.
+still lack a town, shown with its trend and whether it is worse than a week ago. Its Problem is told
+once, then reminded once a day until it recovers or is acknowledged.
 _Avoid_: metric, indicator, KPI
+
+**Trend**:
+A gauge cell's last 30 days, one point per Prague day with that day's value and status, carried
+forward from one measurement to the next, so the Health page can show whether a standing condition
+is shrinking and whether today's status is worse than a week ago. Alarms have none.
+_Avoid_: sparkline (that is the drawing), history, time series
 
 **Incident**:
 One unbroken spell of trouble in one cell, from its first Problem until a measured OK has held long
@@ -288,14 +294,15 @@ it records the production runs of the other workflows (those run on schedule or 
 with its reason line), measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
 that no alarm's system alert has gone unread and undelivered while its incident is open and
 unacknowledged. A failing check never fails its run; the assertions do (so does a crash of the
-poller or the harness, or the harness step overrunning its 21 minutes), so GitHub's failure email is the one path to
+poller or the harness, or the harness step overrunning its 6 minutes), so GitHub's failure email is the one path to
 the operator that needs neither the database's scheduler nor Railway.
 _Avoid_: monitoring lane, acute lane, health workflow, smoke test
 
 **Health lane**:
 The realtime worker's lane that measures the checks hosted on the worker: every minute it runs
-those that are due, within a six-minute pass, and once a day it deletes check results older than
-35 days. The watcher judges whether it is running.
+those that are due, within an eight-minute (500 s) pass (a gauge that no longer fits waits for the
+next minute), and once a day it deletes check results older than 35 days. The watcher judges whether it
+is running.
 _Avoid_: health worker, check lane, monitor lane
 
 **Job cell**:

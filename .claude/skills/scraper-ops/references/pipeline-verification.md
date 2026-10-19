@@ -16,15 +16,18 @@ registry and the four statuses since migration 619) — every check is declared 
 from main: a `workflow_dispatch` from a branch, `GITHUB_REF_NAME` ≠ main, measures and stores but never
 projects, so a branch's `CHECKS` cannot delete main's keys; a local run without the variable counts as main); a run
 writes one `pipeline_check_results` row per check it ran, carrying `details.message`,
-`details.elapsed_ms` and, when the check emits them, `details.cells`. A run measures only the
+`details.elapsed_ms` and `details.cells` (every measured result carries its cells since Health dashboard
+sprint wave 6; an unmeasured one carries an empty list). A run measures only the
 checks that are DUE: newest row older than `cadence_s` less a slack of min(cadence / 10, 15 min)
 (`toolkit/system_alerts.due_after_s`, the interval the recovery hold doubles), so a run that
 comes a few minutes short of a full cadence after the last one does not skip a whole cadence. Only
 rows written since the key's `declared_at` count, as for the page and the ladder, so a newly
 registered or re-declared key is due in the run that projects it. Since wave 3 the platform alarms `jobs`, `capacity` and
-`llm`, since wave 4 the portal checks `scraping`, `publishing`, `delisting` and `coverage`, and since Health dashboard
-sprint wave 5 the engine check `dedup` are hosted on the worker and measured by its health lane (below); every other
-key is `github-actions`-hosted and measured by the middle step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
+`llm`, since wave 4 the portal checks `scraping`, `publishing`, `delisting` and `coverage`, since Health dashboard
+sprint wave 5 the engine check `dedup`, and since wave 6 the `parsing` alarm and the quality gauges `data_quality`,
+`location_town_coverage` and `text_extraction` are hosted on the worker and measured by its health lane (below); the
+two keys left, `migration_drift` and `outbound_url_conformance`, are `github-actions`-hosted and measured by the middle
+step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
 concurrency group, `pipeline-verification`, keeps two runs from measuring a check twice); the
 weekly `outbound_url_conformance` probe rides whichever run finds it due. No result reds a run
 (`--exit-nonzero-on-fail` is gone since wave 2): the canary's
@@ -36,9 +39,9 @@ sreality cannot starve the crawler portals; URLs it did not reach are `details.u
 `details.budget_seconds`), never failures, and a probe that reached fewer than half of its draw is
 `unknown` ("probed N of M …" in `details.skipped`). A timeout, an error or a check's own could-not-measure
 path is `unknown` with its reason in `details` (`timed_out`, `errored`, `skipped`); a check the
-run's budget never reached gets no row at all and stays due. One "verified nothing" path still reads `warn`
-until wave 6 replaces its check: `ppm2_median_shift`'s "compared NOTHING";
-`location_town_coverage`'s "no listings read" is Not measured since wave 1. The harness
+run's budget never reached gets no row at all and stays due. No "verified nothing" path reads `warn`
+any more: the last, `ppm2_median_shift`'s "compared NOTHING", went with that key in Health dashboard sprint
+wave 6, whose median-shift arm reads Not measured until 6 days of its own history exist. The harness
 writes no system alert: results reach the bell through the ladder below, the notification
 system's third producer, `system_health` (`docs/architecture.md` rule #16). Since wave 2 the
 pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, the API, the
@@ -83,65 +86,18 @@ faster alarm. Their thresholds, SQL and tests went with them.
 Health dashboard sprint wave 5 retired `broker_merge_suppression` (hourly, on GitHub) into the
 `dedup` check's `rulings/brokers` cell (every 10 min, on the worker); its threshold
 (`broker_suppression_violations_fail`), its check function and its tests went with it.
-Four **per-m² plausibility** checks joined in W9 of the measure-unification program
-(migration 427, view `measure_plausibility_by_source`, one read per run shared by all four;
-they are registered at a 6-hour cadence, not hourly — a 12 s
-scan of the active corpus for a slow-moving signal). They exist because
-`data_quality_by_source` tests 29 fields for `IS NOT NULL` and nothing else, so it was
-structurally blind to BOTH defects that program fixed: a plot area sitting in the floor-area
-column and a per-m² unit price sitting in `price_czk` are 100% non-NULL. Grain is
-(source, category_main, category_type) — a portal alone pools sale flats with monthly rentals,
-a category alone pools a broken portal with eight healthy ones. Each has a stock arm and a
-trailing-7-day arm and alarms on the worse: the stock arm indicts a defect that has been
-standing for months, the fresh arm catches a regression the week it ships instead of waiting
-for the corpus to churn. **Every share is a ratio over rows that HAVE the inputs**, so a cell
-with nothing to measure scores no arm — and a skipped arm would otherwise be indistinguishable
-from a clean one. Two rails close that: `ppm2_measure_coverage` watches the denominator, and a
-check that scored NO arm at all reports `unknown` with `value` null and `details.skipped`
-("verified NOTHING"), never `ok`. If you ever see all four Not measured at once, the measure's
-inputs stopped being written.
-`area_vs_usable_divergence` — share of rows carrying BOTH areas that differ by >10% (the view's
-material band). Only rows with both: bazos populates `usable_area` on 0 of 10 409 dum rows and
-must read silent, not divergent, so the charter's literal `area_m2 IS DISTINCT FROM usable_area`
-would have fired on every portal that publishes one field. `pozemek` is skipped by name — under
-Option A `area_m2` IS the plot for land. Live pre-backfill: mmreality dum/prodej 99.7% (100% over
-the trailing week) against 0.0% on every other portal; the milder realitymix byt convention sits
-at 10.5%, which is why warn is 20% and not 5%.
-`ppm2_basis_floor_share` — share of priced, area-bearing, basis-decidable rows that
-`measure_price_per_m2` NULLs at its per-basis floor (rent < 1 000, sale non-land < 100 000).
-An absolute LEVEL, not the "jump" the charter asked for: the unit-price masquerade never jumped,
-it has been standing for the life of the portals carrying it. Live: ceskereality komercni/pronajem
-20.0%, realitymix 19.0%, remax 11.3%, bazos 6.7% — against idnes and sreality at 0.5% in the same
-cell, which is exactly the split between portals with and without a per-area price guard.
-`ppm2_measure_coverage` — share of a cell's active rows the measure has NO INPUT for (no price,
-or no positive area), skipping cells whose basis is undecidable (there an absent measure is the
-specified answer). Rows the floor rejected are NOT counted — they have their inputs and
-`ppm2_basis_floor_share` already indicts them. This is the axis that sees what the other three
-structurally cannot: live, sreality publishes 27 174 active `pozemek` rows with `area_m2` NULL on
-all of them (plot size is in `estate_area`), so those four cells produce no measure at all while
-every other axis skips them and reads clean — and `data_quality_by_source` can't see it either,
-grouping by (source, field) with no category grain (sreality `area_m2` reads 71.7% populated).
-Severity splits by ARM: the stock arm can only **warn** (a standing, sanctioned gap nobody clears
-today — warn 0.95, the five live dark cells are 0.995-1.000 and the next cell down is 0.894),
-while the 7-day arm **fails** at 0.90 (that share among this week's arrivals is a parser
-regression in flight; worst live scored 7d gap is 0.358). It is also the anti-silencing rail: a
-portal that started writing NULL `area_m2` would make the divergence and floor axes go QUIET.
-`ppm2_median_shift` — each cell's own median area and median Kč/m² against ITSELF a week ago,
-read from this check's own `pipeline_check_results.details` row from 6-14 days back (no new table).
-Deliberately NOT a cross-portal comparison: measured live, portal medians legitimately differ by up
-to 19x on mix (idnes' rural land is 8.5x the peer Kč/m²), so a peer arm cannot separate a bug from
-a catalogue. It cannot see a defect older than its baseline — that is what the two direct detectors
-are for — but it fires at 3x on any new basis flip, and it will fire when the W2 backfill heals
-mmreality (6.96x on area, 7.45x on the measure). Thresholds are sized on the noisiest real weekly
-move measurable today, 1.90x. Each median is gated on **its own support in both weeks** — the rows
-carrying that value, never `n_active`: 64 cells clear `n_active >= 200` but only 58/56 clear it on
-area/Kč-m² support, and bezrealitky pozemek/prodej is 1 643 active rows with NINE areas whose spread
-is 17.6x, so gating on cell size would red the tile and ring the bell on two ordinary delistings.
-No baseline is `ok` for the first week after deploy and `warn` after,
-so a check that has been erroring for a fortnight cannot read as green; a baseline that matched
-nothing is `warn` ("compared NOTHING"), not a stable 1.00x; an empty view read (the
-`is_platform_admin()` gate failing for the job's role) or an unreadable one (migration 427 not
-applied yet) is `unknown` naming the cause, never `ok` and never four red tiles.
+Health dashboard sprint wave 6 retired nine keys into four checks on the worker (the last two sections
+of this file): the regression detectors `field_fill_matrix`, `ppm2_measure_coverage`'s 7-day arm,
+`ppm2_median_shift` and `location_payload_shape_drift`, with the measure of the old page's SQL
+`snapshot_churn` rung, into the `parsing` alarm; the standing conditions `ppm2_basis_floor_share`,
+`area_vs_usable_divergence` (with its estate-sum arm), `outbound_url_coverage` and
+`ppm2_measure_coverage`'s stock arm into the `data_quality` gauge; and `text_extraction_lag` into the
+`text_extraction` gauge, its wedge arm being the `jobs` check's `lane/text_extract` cell and its abort
+arm the `llm` check's credit cell. `floor_convention` was deleted (Q4), and `location_town_coverage`
+kept its key, moved to the worker and is counted over active ads. Their thresholds, SQL, helpers and
+tests went with them; the four per-m² plausibility checks' rationale and calibration (W9 of the
+measure-unification program, migration 427's `measure_plausibility_by_source`) moved into the new
+sections.
 
 The six dedup-specific checks (street/geo debt, eligibility funnel,
 merge latency, engine health, merge-precision sample) went with the removed engine, along with
@@ -164,13 +120,14 @@ gauge, which no longer certify a total the adapter derived from what it saw (rem
 declare `total_is_count`). Inflow is judged against the same 24 h window 7-28 days earlier PLUS the
 NEW queue rows, so a stopped drain reads as ingest's problem, never as lost discovery.
 
-**`text_extraction_lag`** (field capture W7) is the ingest arm's twin one layer later —
-oldest ELIGIBLE-unextracted advert + waiting count per portal, plus a wedge arm (rows eligible,
-lane claiming none, or the lane absent from the heartbeat) and an abort arm (the provider
-stopped the last pass: `fail` quoting its `fatal`, whatever the backlog's age or `claimed`;
-2026-10-02..10 the lane claimed 500 a pass for eight days and wrote nothing) — and it is
-computed from the text lane's OWN selector predicate, because the outage it replaces was a lane
-and its three monitors disagreeing about who was eligible.
+**Description reading** (field capture W7's `text_extraction_lag`; judged by the `text_extraction` gauge
+since Health dashboard sprint wave 6, below) is the ingest arm's twin one layer later, computed from the
+text lane's OWN statements, because the outage it replaced was a lane and its three monitors
+disagreeing about who was eligible. The old key read the oldest eligible-unextracted advert, a stock it
+judged as a flow (FAIL at about 3,400 h on every run while the lane was healthy); its wedge arm (rows
+eligible, the lane claiming none or absent from the heartbeat) is the `jobs` check's `lane/text_extract`
+cell, and its abort arm (the provider stopped the last pass; 2026-10-02..10 the lane claimed 500 a pass for
+eight days and wrote nothing) the `llm` check's `<provider>/credit` cell.
 
 **Lane cells** (the `jobs` check's `lane/<lane>` since wave 3; `worker_lane_stall` before it) close
 the gap the watcher's `worker` cell (and `worker_liveness` before it) structurally cannot see — a
@@ -196,17 +153,28 @@ issue #1855). Only the GitHub checkout has the files, so it stays on the canary 
 `migrations/` folder) is `unknown` with `details.skipped` "no migration files on this host", never
 `ok`. Since wave 3 it lives in `scripts/checks/platform.py`, and its probe SQL
 (`MIGRATION_OBJECT_PROBE_SQL`, `SAFE_IDENT`) in `scripts/migration_objects.py`, shared with
-`scripts/apply_migration_receipt.py`.
+`scripts/apply_migration_receipt.py`. Since Health dashboard sprint wave 6 it emits a cell per migration file
+in its window (the newest 25), named by its filename: OK applied, Problem when the file's objects are wholly
+absent, Watch when some are, Not measured "unverifiable" when the file declares no object the probe can
+check (grants, drops, data updates). OK cells are included, so a fixed file's incident recovers on a
+measured OK instead of closing silently after 7 days.
 
 **Thresholds.** Every other check's thresholds live in one dict, `THRESHOLDS`
 (`scripts/verify_pipeline.py`), each entry with a one-line basis comment, passed to every check by
 `main()` and by the worker's health lane. Since wave 3 nothing overrides them: `DEFAULT_THRESHOLDS`,
 `load_thresholds` and its merge of `app_settings.pipeline_check_thresholds` are deleted (every
 override equalled its default; migration 624 deletes the row), so a threshold changes in a PR, with
-its basis. `field_fill_matrix` owns none (sized on its cohort's measured drift), and the watcher's
-live as constants inside `health_liveness()` (below).
+its basis. Since Health dashboard sprint wave 6 that includes the fill and vocabulary arms' numbers
+(`parsing_fill_*`, `parsing_vocabulary_*`, `parsing_census_stale_days`, sized on the cohort's measured
+drift and passed to
+`scraper/field_census.py` as keyword arguments) and the registry limits (`location_registry_*`); only the
+watcher's live as constants inside `health_liveness()` (below).
 
-## `field_fill_matrix` — fill AND validity per (source, field) (field capture W1)
+## Fill and vocabulary — fill AND validity per (portal, field) (field capture W1; judged by `parsing` since Health dashboard sprint wave 6)
+
+Field capture W1 shipped this as the `field_fill_matrix` check; since Health dashboard sprint wave 6 it is
+the `parsing` alarm's fill and vocabulary arms (`<portal>/fill/<field>`, `<portal>/vocabulary/<field>` and the
+`census` cell; the `parsing` section, below), measured every 6 h on the worker. The rationale holds.
 
 `data_quality_by_source` tests 26 fields for `IS NOT NULL`. That is blind to the two defect
 shapes the field-capture program exists to fix: a value that is PRESENT and outside every
@@ -223,10 +191,9 @@ newest-1,000 slice is a time window whose category mix rotates with whatever a p
 happened to cover. Measured on the shipped code before this was fixed — mmreality's window went
 from a balanced mix to 73 % commercial rentals in two days, moving `cellar` 40.2 % → 8.2 % and
 `disposition` 41.4 % → 6.3 % with no parser touched, twice over the fail tier. So the matrix is one
-aggregate pass over every `is_active` row: measured 12.2 s for all nine portals, inside the 45 s
-per-check budget, and registered late in `CHECKS` (only `text_extraction_lag`, `floor_convention`
-and the outbound URL probe follow it) so the cheap checks are never
-the ones that go unrun. It never expands a row into (field, value) pairs — that form costs 32 s
+aggregate pass over every `is_active` row: measured 12.2 s for all nine portals (3.7 s in production on
+2026-10-19), inside the `parsing` alarm's 180 s budget. It never expands a row into (field, value)
+pairs — that form costs 32 s
 over the stock; per-value counts come from `count(*) filter (where col = '<canonical value>')`
 interpolated from `toolkit/filter_registry.COLUMN_CANONICAL_VALUES`, keyed by COLUMN — which is also
 where the statutory `energy_rating` 'G' share per portal comes from. 'G' stays an ordinary grade: W5
@@ -239,81 +206,52 @@ to an absolute floor, because a floor cannot see a legitimately-zero cell or a p
 drift of that cohort, never a binomial SE (the stock is the population, not a draw): comparing
 each cell's fill with the same fill over the rows already active a week earlier, across 90 cells
 on 2026-09-21, the worst moved 4.1 pp in a WEEK (bezrealitky `disposition` 55.0 → 50.9) and the
-median under 1 pp — a 6-hourly run sees ~0.15 pp of that. A fill drop ≥ 10 pp warns and ≥ 20 pp
-fails, both only where the baseline was ≥ 10 % filled; below that the collapse arm binds instead —
-a cell with 50+ blessed filled rows keeping under a quarter of them fails. An off-canon share
-rising ≥ 5 pp warns, ≥ 15 pp fails. A cell that drifts past a threshold honestly is a re-bless,
-and the message says so. The check carries NO `THRESHOLDS` entries: the numbers
-belong to the cohort, not to a taste, and the program adds no settings.
+median under 1 pp — a 6-hourly run sees ~0.15 pp of that. A fill drop of more than 10 pp warns and of more
+than 20 pp fails, both only where the baseline was ≥ 10 % filled; below that the collapse arm binds instead —
+a cell with 50+ blessed filled rows keeping under a quarter of them fails. An off-canon share rising more than
+5 pp warns, more than 15 pp fails (the lines are strict, at the matrix's four decimals). A cell that drifts
+past a threshold honestly is a re-bless, and the message says so. The numbers belong to the cohort, not to a
+taste: since Health dashboard sprint wave 6 they are `THRESHOLDS` keys (`parsing_fill_*`,
+`parsing_vocabulary_*`, `parsing_census_stale_days`) carrying this basis, which `scraper/field_census.py`
+receives as keyword arguments, and no setting overrides them.
 
 **A blessed cell that stops being measured is an offender.** The spine comes from
 `portals.is_enabled` and from a source having active rows, so a portal disabled during an incident
-would otherwise take its 26 cells out of the denominator and leave the check certifying the
-silence — `ppm2_measure_coverage`'s lesson, applied here as: a whole source missing FAILS, a single
-missing cell warns, and the message carries `cells_measured` of `cells_blessed`.
+would otherwise take its 26 cells out of the denominator and leave the arm certifying the
+silence — the old measure-coverage check's lesson (its denominator rail is the `data_quality` gauge's
+`measure_gap` cells since wave 6), applied here as: a whole portal missing reads Problem on each of its
+blessed cells, a single missing cell Watch, and each such cell's message counts the portal's blessed fields
+absent from the live matrix.
 
-**Known, not judged.** The baseline records today's zeros, so the check is green on day one and
-still names them every run (`details.zero_fill_cells`) until W2's attribute contract declares a
+**Known, not judged.** The baseline records today's zeros, so the arm is green on day one and
+still names them every run, as facts, until W2's attribute contract declares a
 producer for each. That list is computed from the LIVE matrix, so the run that repairs a cell is
-the run that stops naming it. Boolean cells never written `false` are reported the same way
-(`details.booleans_never_false`) — whether silence means `false` or `unknown` is an absence
+the run that stops naming it. Boolean cells never written `false` are reported the same way —
+whether silence means `false` or `unknown` is an absence
 semantics the contract declares, so there is nothing yet to be right or wrong against.
 
-**Who owns which field**, so the two fill instruments can never be read against each other:
-`data_quality_by_source` keeps the seven probes with no attribute column (`geom`, `locality`,
-`street`, `property_grouped`, `source_url`, the two condition levels), `field_fill_matrix` owns
-the 26 `LISTING_COLUMNS` attributes, and the 19 they share are the view's to lose in a later wave.
-Both now read every active row, so a shared cell cannot report two different numbers.
+**Who owns which field.** The fill arm owns the 26 `LISTING_COLUMNS` attributes. `data_quality_by_source`'s
+seven probes with no attribute column (`geom`, `locality`, `street`, `property_grouped`, `source_url`, the
+two condition levels) froze with its capture in Health dashboard sprint wave 6 (migration 633 unscheduled
+`capture-data-quality`; wave 9 drops the view): a portal link is the `data_quality` gauge's `url/<portal>`
+cell, a town the location gauge's.
 
 **The census half** is checked in per portal under `data/field_capture/census/` and re-blessed
 with `python -m scraper.field_census --bless` — a reviewed diff, like the location contract's
 golden. A stale census is the known blind spot (a portal renames a key and every gate built on the
-census still agrees with itself), so staleness > 30 d is this check's last arm, a WARN. It is
+census still agrees with itself), so staleness > 30 d is the alarm's `census` cell, a Watch (wave 6
+re-blessed the nine censuses of 09-21 before they turned stale on 10-22). It is
 deliberately NOT a pytest: a test keyed on the calendar reds `main` on a date, on a branch that
 touched nothing.
 
-## `floor_convention` — is a plausible integer on the RIGHT SCALE? (field capture W8)
+## `floor_convention` — deleted in Health dashboard sprint wave 6
 
-The check no fill or validity measure can stand in for. `listings.floor` was a ~50/50 mix of two Czech
-conventions until W8 — ground = 0 on idnes, bazos and ceskereality, ground = 1 on the other six — and
-nothing in the repo could see it, because a storey one too high is perfectly typed, perfectly non-NULL
-and perfectly plausible. There was **no floor check of any kind** before this one.
-
-**The measure needs no labels and no LLM.** Two active `byt` adverts agreeing on price, area AND
-disposition are the same flat often enough that the MEAN of their floor difference is a clean
-convention signal; the check reports `mean(portal floor − idnes floor)` per portal. idnes is the
-reference because its parser has always read the Czech word ("2. patro (3. NP)"). A key counts only
-where its side holds ONE storey for it (`min(floor) = max(floor)`), so a repeated
-price/area/disposition triple cannot smear the difference.
-
-**Tiers: warn 0.35, fail 0.50, min 40 pairs.** Fail at half a storey is unreachable by noise and
-reachable only by a portal on the other scale. The measure has a real noise floor — a sibling match is
-not a proven duplicate — sized live at +0.10 on bazos. warn is 0.35 rather than 0.25 for ONE portal:
-ceskereality reads +0.20 and only ~0.03 of that is sample conditioning (restricting the idnes side to
-`floor >= 1` moves it +0.199 → +0.167); the rest is 925 pairs at exactly +1 against 92 below 0, an
-unexplained one-storey sub-population tracked in `docs/design/field-capture/handover-autodedup-floor.md`
-§ 6. Every converted portal lands inside 0.25 in simulation, so the wider tier protects that portal
-alone and does not certify it. `min_pairs` 40 lets maxima score on its ~49 pairs and still refuses a
-mean drawn from one or two adverts; a portal below the floor is reported but not scored, and if NO
-portal is scored the check returns `unknown` with `value` None and `details.skipped` — "verified
-nothing" is not a green.
-
-**It is the most expensive check in the lane, and the most variable** — 27.0 / 35.1 / 11.0 / 16.1 s on
-four `EXPLAIN (ANALYZE)` runs over ~34.7k pairs, against `field_fill_matrix`'s steady ~12 s — because
-the plan is a BitmapAnd feeding a Bitmap Heap Scan that spills (~116k buffers, ~85 % of them `read` even
-on a warm cluster, so it never stays cached and its cost tracks concurrent readers). Hence: registered
-LAST among the DB checks, and read through `_fetchall` so it inherits the per-check
-`SET LOCAL statement_timeout`. Cancelled, it reports `unknown` (`details.timed_out`), never a false green.
-A new check above ~20 s starves the tail and needs its query reworked, not a wider `_CHECK_BUDGET_S`.
-
-**It reads RED from the day it shipped** — the one check in the lane that does, deliberately. The six
-ground = 1 portals read +0.82..+1.05 until the heal has re-derived them
-(`python -m scripts.reparse --source <portal> --fields floor --write --allow-snapshot-deferral`, six
-passes, runbook in the hand-over § 7). The failure message names those commands, and names them ONLY
-for a portal whose contract cell declares `ground1`: telling the operator to re-derive ceskereality
-(cell `ground0`) would shift 34,363 rows down one storey, most of them correct.
-Since wave 1 it is a gauge (Q2): its standing red sends one system alert, then one reminder a day
-until it is acknowledged on Health; wave 6 deletes the check (Q4).
+Q4: 0 fails in 90 runs, the costliest check (11-35 s, a cross-portal self-join), measured against one
+portal (idnes). The field-capture W8 floor heal it gated has run; its rationale is in git history (this
+file at 5fa16a55) and `docs/design/field-capture/handover-autodedup-floor.md`. A storey-scale flip has
+no arm now (the `parsing` section's Known limits). `scraper.attribute_contract.floor_convention`, the
+parsers' floor contract, and `autodedup/floor_convention.py`, the engine's floor camps, are other
+things and stay.
 
 ## The `scrape_runs` crash contract (`portal_runner.run_phase`, W0.2)
 
@@ -376,8 +314,9 @@ providers would let it clear an empty Anthropic account within minutes. Through 
 Anthropic-backed jobs included, and its rate arm read the newest call of ANY provider, so a stray
 error after a top-up could hold it red for ~24 h; the `llm` check judges both per provider (below).
 The worker side of the same incident: a text-lane pass the provider stopped
-was booked as a success (`failed_passes: 0`) — it is now a failed pass, and
-`text_extraction_lag` fails on its `fatal` whatever `claimed` says (it had blamed backlog age).
+was booked as a success (`failed_passes: 0`) — it is now a failed pass, which the `jobs` check's
+`lane/text_extract` cell reads beside the `llm` check's credit cell (`text_extraction_lag`, which failed on
+that `fatal` whatever `claimed` said, where it had blamed backlog age, went in Health dashboard sprint wave 6).
 The same rule, broken once more and closed in wave 1 of the Health dashboard sprint: a timed-out
 check was `warn`, which `emit_transition_alerts` read as not failing, so 6 of
 `text_extraction_lag`'s 7 timeouts in that outage closed its incident with a false "✓ Recovered"
@@ -412,10 +351,11 @@ therefore wrote **zero rows and fired zero alerts** — blinding `db_saturation`
 `worker_liveness` at precisely the moment DB saturation would make checks slow. Now each result
 is inserted the instant its check returns, and since wave 1 the harness calls no alert function
 at all: the API's ladder reads the stored rows. Budgets: `_CHECK_BUDGET_S` (45 s) per check
-(`Check.budget_s`; 120 s for the outbound URL probe), capped by whatever remains of the RUN
-budget — one per-check budget per DUE check (`lane_budget_for`); the summed budgets are proven
-to fit, with the 180 s headroom, the harness step's 21-minute limit (the poller step has 5, the job
-35 with 8 minutes for setup and the assertions) by `test_the_canary_job_fits_every_github_check_due_at_once`.
+(`Check.budget_s`; 120 s for the outbound URL probe, 180 s for `parsing`), capped by whatever remains of
+the RUN budget — one per-check budget per DUE check (`lane_budget_for`); the summed budgets are proven
+to fit, with the 180 s headroom, the harness step's 6-minute limit (the poller step has 5, the job
+19 with 8 minutes for setup and the assertions; 21 and 35 until Health dashboard sprint wave 6) by
+`test_the_canary_job_fits_every_github_check_due_at_once`.
 The full lane shared
 a 120 s budget until 2026-09-22, and in 13 of the 15 runs before that 7-17 of its 25 checks were
 never reached.
@@ -436,10 +376,16 @@ before each statement. A check that raised is `unknown` with `details.errored` �
 measure this" is a different claim from "this is broken", and fail-on-timeout would manufacture
 a wall of false reds exactly when the operator needs to read the real one. A check the run never
 reached gets **no row**: `run_checks` stops when the run budget is spent and logs the keys it
-did not reach, which stay due for the next run (on the worker, its next 60 s tick).
-Due-ness reads the newest row of any status, so the wave-1 `unknown` "not run" row
-(`details.not_run`) made an unreached check wait a whole cadence for its next try. Until wave 1
-timeouts and not-runs were stored as `warn` (which the old ladder read as "not failing", rule 1)
+did not reach, which stay due for the next run (on the worker, its next 60 s tick). Since Health
+dashboard sprint wave 6 a lane budget (the worker's 500 s pass) never starts a check whose own budget no
+longer fits what is left (weighed before it starts: at most the time left plus 1 s, `_FIT_SLACK_S`, so a check
+due alone, whose budget is the lane's whole budget, runs): the check waits, unwritten and still due, for the
+next pass (the log line `DEFER <key>: its N s budget does not fit …`), because one started short would time
+out and store an `unknown` row, which keeps it waiting a whole cadence (6 h for a gauge). Alarms run first and
+every alarm due at once fits the pass (a rail), so only gauges wait; the canary's run budget is the sum of its
+due checks' budgets, so it never meets the case. Due-ness reads the newest row of any status, so the wave-1
+`unknown` "not run" row (`details.not_run`) made an unreached check wait a whole cadence for its next try.
+Until wave 1 timeouts and not-runs were stored as `warn` (which the old ladder read as "not failing", rule 1)
 and a raising check as `fail`.
 
 **The poller cell** (`gh/poller` in `jobs` since wave 3; `workflow_poller_liveness`, W0.1, before
@@ -493,7 +439,8 @@ so `check_llm_liveness`, `_status_for_llm_silence` and `llm_silence_fail_hours` 
 deleted. The replacement is not a global recency threshold at all: field-capture R8 makes each
 lane's health check read the lane's OWN eligibility predicate (oldest eligible-unextracted age
 per source), which needs no historical baseline — the same shape as the retired
-`check_acquisition_lag` (field-capture W7 shipped it as `text_extraction_lag`). Beside it the
+`check_acquisition_lag` (field-capture W7 shipped it as `text_extraction_lag`; the `text_extraction` gauge
+since Health dashboard sprint wave 6). Beside it the
 `llm` check catches "calls
 are failing" per provider (from state, not recency) and "attempting and never succeeding".
 
@@ -526,13 +473,16 @@ selection imports `due_after_s` from it, so the due slack and the hold built on 
 unit), the newest `pipeline_check_results` row per registered key written since the key's
 `declared_at` (the old harness stored a check's own error as `fail`, so a key is Not measured
 until the new harness measures it; `pipeline_checks_public` applies the same guard, so the page and the
-ladder agree), and the open cell incidents. A result's cells are
-`details.cells` when that is a non-empty list, otherwise one implicit cell whose subject is the
-check key — every wave-1 check, since explicit cells arrive with the waves that rebuild each
-check (wave 6 deletes the fallback). A result whose status is `unknown` is ignored whole, and so
-is a result older than its key's staleness budget: it is Not measured for the ladder too, as it
-is for the page's `effective_status`. A cell whose status is not `ok`, `warn` or `fail` is
-ignored.
+ladder agree), and the open cell incidents. A result's cells are the verdicts its `details.cells` list
+holds. Until Health dashboard sprint wave 6 a result without them was one implicit cell named by the
+check key (every wave-1 check, since explicit cells arrived with the waves that rebuilt each check); wave
+6 deleted that fallback here and in the watcher's `unalerted` arm (migration 633), so a result with no
+cells opens, keeps and recovers nothing. Every measured result carries its cells: `run_checks` stores a
+verdict with no judged cell as Not measured and logs it as the check's defect
+(`test_no_result_reaches_the_ladder_without_cells`), and the wave-6 modules' hermetic tests pin cells on every
+status; the harness writes `cells: []` only for an unmeasured one. A result whose status is `unknown` is
+ignored whole, and so is a result older than its key's staleness budget: it is Not measured for the ladder
+too, as it is for the page's `effective_status`. A cell whose status is not `ok`, `warn` or `fail` is ignored.
 
 **One incident per failing cell.** One `ops_incidents` row per cell, signature
 `cell:<key>:<subject>`; the open-signature unique index allows one open row per cell. It is the one
@@ -606,8 +556,10 @@ is public) through `reconcile`, and asserts no recovery while a key's newest row
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
 fails the whole window. Its registry copy is host-aware since wave 3 (3 × cadence on the worker,
 cadence + 18 h on GitHub), and its fixture has held the surviving keys only since wave 4, which
-re-exported it with the header's SQL when the seven portal keys retired; the worker's eight
-checks have input replays of their own (below).
+re-exported it with the header's SQL when the seven portal keys retired; Health dashboard sprint wave 6
+deleted the 48 rows of its nine retired keys, and since the implicit cell went, the loader gives each
+status-only row one cell named by its key (in the test helpers, never in production code). The worker's
+twelve checks have input replays of their own (below).
 
 **Cutover.** After the deploy the ladder sends one grouped onset per currently failing check,
 alarm or gauge (today three gauges: `location_town_coverage`, `ppm2_basis_floor_share`,
@@ -637,6 +589,24 @@ Problem (about −14 %: 13.7 k declared against 11.8 k held, the chaty-chalupy d
 On a day the full property sweep holds the maintenance lease past about 40 min, `publishing`'s
 visible cells read Problem for its duration (its Known limits, below).
 
+**Wave 6's cutover.** The worker projects its four new keys on its first health pass after the deploy and
+measures them in that pass (all four are due); the nine retired GitHub keys (`ppm2_median_shift`,
+`ppm2_basis_floor_share`, `ppm2_measure_coverage`, `area_vs_usable_divergence`, `field_fill_matrix`,
+`outbound_url_coverage`, `location_payload_shape_drift`, `text_extraction_lag` and `floor_convention`) leave
+`health_checks` at the canary's next run from main, which closes their open cell incidents silently as
+`retired` (`ppm2_basis_floor_share`'s and `text_extraction_lag`'s gauge incidents, open at merge,
+included); both sets show on the page in between. `location_town_coverage` keeps its key but changes host,
+so its `declared_at` restarts and it reads Not measured until the worker measures it; its open implicit
+incident `cell:location_town_coverage:location_town_coverage` matches none of the new `<portal>/town`
+subjects, so it is never reminded and closes silently (`unmeasured 7d`) within 7 days. A canary run checked
+out at the old SHA that projects after the worker's first pass may move the row back to GitHub, and it
+stays so until the worker's next projection (one per process). Expected at ship: `data_quality` opens a
+Problem on realitymix's komerční/pronájem basis floor (11.4 % of 4,140 priced ads NULLed, lower bound 10.5
+%), a real condition; `location_town_coverage` opens one on the 43 active ads with no town (ceskereality 39,
+realitymix 3, mmreality 1); `parsing`'s median cells read Not measured for 6 days; idnes `has_balcony`
+reads OK on the re-blessed baseline. Migration 633's apply stops `capture-data-quality`, so the old page's
+`field_null_drift` rung reads "no baseline yet" about 20 h later, until wave 8 replaces the page.
+
 ## Hosts, the watcher and the canary — who watches whom (wave 2, 2026-10-18)
 
 Wave 2 of the Health dashboard sprint (`docs/design/health-dashboard.md` § 3 and § 6) gives each
@@ -644,21 +614,21 @@ runtime the health system depends on an observer that does not run inside it. A 
 (`Check.host`, mirrored into `health_checks.host`) is where it is measured, and each host projects
 and deletes only its own registry rows:
 
-- **`github-actions`**: 12 keys since Health dashboard sprint wave 5 (13 in wave 4, 20 in wave 3,
-  all 28 in wave 2), measured by the canary's middle step at their cadences; wave 6 moves the rest
-  to the worker as it rebuilds them. Two stay for
+- **`github-actions`**: 2 keys since Health dashboard sprint wave 6 (12 in wave 5, 13 in wave 4, 20 in
+  wave 3, all 28 in wave 2), measured by the canary's middle step at their cadences, and they stay for
   good: `migration_drift` needs the repository checkout, and the weekly URL probe needs an address
   other than the scrapers'.
 - **`pg_cron`**: `liveness`, the one watcher — a SQL function, not a `Check`, that upserts its own
   registry row.
 - **`realtime-worker`**: `jobs`, `capacity` and `llm` since wave 3, `scraping`, `publishing`,
-  `delisting` and the `coverage` gauge since wave 4, `dedup` since Health dashboard sprint wave 5,
+  `delisting` and the `coverage` gauge since wave 4, `dedup` since Health dashboard sprint wave 5, and
+  `parsing` with the `data_quality`, `location_town_coverage` and `text_extraction` gauges since wave 6,
   measured by the worker's health lane (below).
 
 **`run_due`.** `verify_pipeline.run_due(conn, thresholds, host, *, now, on_result=insert_result, lane_budget_s=None)`
 reads which of the host's checks are due from the database (`due_checks`, so a restart re-runs
 nothing), runs the alarms first and then the gauges, registry order inside each class, through
-`run_checks` under the summed budgets of the due checks (`lane_budget_for`), capped by `lane_budget_s` when given, and hands each result
+`run_checks` under the summed budgets of the due checks (`lane_budget_for`), capped by `lane_budget_s` when given (under that cap a check whose budget no longer fits waits for the next pass, since wave 6: self-rule 3), and hands each result
 to `on_result` as it lands; `main()` projects the registry and calls it. The per-check wall clock,
 and why an unreached check gets no row, are self-rule 3 above.
 
@@ -675,10 +645,10 @@ dead. Its cells judge what must not judge itself:
 | cell | Problem when | basis |
 | --- | --- | --- |
 | `worker` | a worker's newest heartbeat is more than 10 min old (with no heartbeat row at all, `unknown`: "no worker on record") | beats come every 30 s, the worker's watchdog exits at 300 s, a deploy gap is under 2 min |
-| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | a full pass (at most 360 s, the lane's pass budget since wave 4; 300 s in wave 3) plus its 60 s tick stays under it |
+| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | a pass is in flight at most 500 s, the lane's pass budget since Health dashboard sprint wave 6 (360 s in waves 4-5, 300 s in wave 3), 530 s with the heartbeat's 30 s lag; the lane sleeps its 60 s tick after each pass, so a full pass completes at most 560 s after the previous one, 590 s with the lag: both arms stay under the 10 min line, the 10 s left being the pass's own overrun (its connection and due read, each statement's 1 s floor, the daily prune); measured passes ran p50 1.9 s, max 23.1 s on 2026-10-19 |
 | `stale:<key>` | an alarm other than `liveness` whose newest measured result (ok/warn/fail written since its `declared_at`) is past its staleness budget (`public.health_stale`); with no measured result it counts from `declared_at`, so a key whose every run is Not measured is still told; facts `key`, `host`, `last_measured_at`, `budget_s` | the budget is 3 × cadence on the worker and pg_cron, cadence + 18 h on GitHub, whose crons arrive up to ~13 h late |
 | `api` | the watchdog matcher's lease (`notification_matcher_lease`) is more than 2 × `notifications_matcher_interval_seconds` (300 by default) + 60 s past its `expires_at`; a NULL `expires_at` (a clean shutdown released it) is `unknown`; interval 0 (matcher off) is `ok` with the state fact `off` | the matcher renews the lease every pass (~300.5 s apart) in the API process that also runs the ladder's loop; the lease lasts 15 min (`api/notifications._MATCHER_LEASE_TTL`), so a crashed API reads Problem about 26 min after its last renewal |
-| `unalerted` | a cell fails in an alarm's newest result (in budget, written since `declared_at`) and also failed in its newest measured result at least 2 cadences older, and has no open `cell:<key>:<subject>` incident; cells are read as the ladder reads them (explicit `details.cells`, else the implicit cell named by the key); one cell, `value` = the cells counted, its facts naming the keys and cells | a fail that has stood for two cadences has had every 60 s ladder pass in between to open its incident; like the ladder, it counts no stale or unmeasured result |
+| `unalerted` | a cell fails in an alarm's newest result (in budget, written since `declared_at`) and also failed in its newest measured result at least 2 cadences older, and has no open `cell:<key>:<subject>` incident; cells are read as the ladder reads them (the explicit `details.cells`; the implicit cell named by the key went in migration 633, Health dashboard sprint wave 6); one cell, `value` = the cells counted, its facts naming the keys and cells | a fail that has stood for two cadences has had every 60 s ladder pass in between to open its incident; like the ladder, it counts no stale or unmeasured result |
 
 While a worker's cell fails, the keys hosted on it (a host is named like its worker,
 `realtime-worker`) and its `health_lane` cell fold into it instead of each getting a cell, so a
@@ -699,9 +669,10 @@ any key; it never fired), which 620 unschedules and 624 drops.
 
 **The canary: `verify_pipeline.yml`**, "Monitoring: health canary (hourly)": cron `15 * * * *`
 plus a manual dispatch whose `dry_run` input reaches the harness step only. GitHub delivers about
-five of its runs a day (median gap ~4.9 h). One job — 35 minutes while it carries the legacy keys (the poller step 5, the harness step 21 for
-its budgets plus 180 s headroom, 8 for setup and the assertions; 12 budgets summing to 615 s since
-Health dashboard sprint wave 5, 13 and 660 s in wave 4, 20 and 1,050 s in wave 3, 28 and 1,410 s before),
+five of its runs a day (median gap ~4.9 h). One job — 19 minutes since Health dashboard sprint wave 6 (the poller step 5, the harness step 6 for
+its budgets plus 180 s headroom, 8 for setup and the assertions; 2 budgets summing to 165 s since wave 6,
+12 and 615 s in wave 5 under 35 and 21 minutes, 13 and 660 s in wave 4, 20 and 1,050 s in wave 3, 28 and
+1,410 s before),
 concurrency group `pipeline-verification` (never cancelled in progress), permissions
 `contents: read` and `actions: read`, env `SUPABASE_DB_URL` and `GITHUB_TOKEN` — in three steps:
 
@@ -710,11 +681,11 @@ concurrency group `pipeline-verification` (never cancelled in progress), permiss
    a wedged poll cannot eat the checks' time; since wave 3 it records production runs with their
    reason lines and workflow facts ("The poller", below).
 2. **Measure the GitHub-hosted checks**: `python -m scripts.verify_pipeline --host github-actions`
-   (`--dry-run` when asked), `if: ${{ !cancelled() }}` under its own 21-minute limit, so a poller failure never skips the
+   (`--dry-run` when asked), `if: ${{ !cancelled() }}` under its own 6-minute limit, so a poller failure never skips the
    checks (a cancel does, and an overrun fails this step rather than the job).
 3. **Assert the watchers and the teller are alive**: `python -m scripts.health_canary`,
    `if: always()`, the last step and the only one whose non-zero exit is meant to red the run. A
-   poller or harness crash reds it too, as does the harness step overrunning its 21 minutes, and rightly: the
+   poller or harness crash reds it too, as does the harness step overrunning its 6 minutes, and rightly: the
    canary did not complete.
 
 `scripts/health_canary.py` connects with `scraper.db.connect()` and runs one bounded SQL per
@@ -756,8 +727,8 @@ check measured elsewhere — the watcher's, or the worker's.
   production GitHub workflow (through the canary's poller, whose cursor is its `gh/poller` cell),
   every pg_cron job (`health-liveness` included), every worker lane and every derived artifact.
   Since wave 4 it also runs the portal checks (`scraping`, `publishing`, `delisting`, `coverage`),
-  and since Health dashboard sprint wave 5 the engine check (`dedup`). The watcher's `health_lane`
-  cell watches the lane; wave 6 moves the remaining checks to it.
+  since Health dashboard sprint wave 5 the engine check (`dedup`), and since wave 6 the `parsing` alarm
+  and the quality gauges. The watcher's `health_lane` cell watches the lane.
 
 **Known gap.** A clean API shutdown leaves the lease NULL, which reads Not measured, not Problem:
 that is every deploy's normal state until the new process's first pass claims the lease. An API
@@ -777,8 +748,9 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   every deploy re-projects the worker's keys and deletes its undeclared ones, touching no other
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
-  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (360 s since wave 4: 8 × 45 s, its eight checks since
-  Health dashboard sprint wave 5 and seven in wave 4; 300 s in wave 3), which measures the due worker-hosted checks,
+  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (500 s since Health dashboard sprint wave 6: its seven 45 s alarms
+  and `parsing`'s 180 s, 495 s in all, always fit, and a gauge whose budget no longer fits what is left waits
+  for the next pass; 360 s in waves 4-5, 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
 - once per 24 h in each process, the 35-day prune the operator ruled (Q5): `delete from
   pipeline_check_results where run_at < now() - interval '35 days'`, 10,000 rows at a time by
@@ -788,12 +760,14 @@ Its heartbeat `last` is `{"measured": [keys], "pruned": n}`. The worker imports
 `scripts.verify_pipeline` inside the pass (the image carries `scripts/`; `migrations/` is
 dockerignored, which only `migration_drift` reads, and that check stays on GitHub);
 `verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
-worker's keys carry the 45 s per-check budget and a staleness budget of 3 × cadence (30 min for
-`jobs`, `llm`, `scraping`, `publishing`, `delisting` and `dedup`, 90 min for `capacity`, 3 h for
-the `coverage` gauge), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
+worker's keys carry the 45 s per-check budget (180 s for `parsing`) and a staleness budget of 3 × cadence
+(30 min for `jobs`, `llm`, `scraping`, `publishing`, `delisting` and `dedup`, 90 min for `capacity`, 3 h for
+the `coverage` and `text_extraction` gauges, 18 h for `parsing` and the `data_quality` and
+`location_town_coverage` gauges), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
 (it covers alarms only: a stopped gauge just reads Not measured on the page), its `health_lane` cell (no completed
-pass, a pass in flight or a failing spell for 10 min, which a full 360 s pass and its 60 s tick stay
-under) tells a stopped lane, and the lane is a `lane/health` job cell like any other.
+pass, a pass in flight or a failing spell for 10 min; a 500 s pass stays under the in-flight line, its row
+above) tells a stopped lane, and the lane is a `lane/health` job cell like any other. The image carries
+`data/` too, so the `parsing` alarm's fill arm reads its blessed baseline there.
 
 ## `jobs` — is every scheduled machine running and succeeding? (wave 3)
 
@@ -984,7 +958,7 @@ label "Capacity", unit "cells"):
 | `check_timeouts/<host>` | one cell per host that measures through the harness (`github-actions`, `realtime-worker`): the share of the last 24 h's `pipeline_check_results` rows of that host's keys with `details ? 'timed_out'`, so one host's timeouts are not averaged into the other's; the watcher's `pg_cron`-hosted key is left out, and a host with no result in 24 h is Not measured | > 5 % | > 20 % |
 | `open_transaction` | the oldest `xact_start` in `pg_stat_activity`, autovacuum and the check's own backend excluded; Not measured while the view hides a session (below) | > 60 min | > 6 h |
 | `connections` | client connections against `max_connections`; Not measured while the view hides a session (below) | > 70 % | > 90 % |
-| `worker_memory` | the autodedup lane's `last.peak_rss_mb` over its `memory_limit_mb`, from a pass of this process only: Not measured ("no autodedup pass since the worker booted"; facts `last_pass_at` and `boot`) while the lane's `last_pass_at` is NULL or older than the heartbeat's `started_at`, because the boot seed carries `last` across a restart (`text_extraction_lag` reads the text lane's), so until then it is the dead process's peak | > 0.8 | > 0.9 |
+| `worker_memory` | the autodedup lane's `last.peak_rss_mb` over its `memory_limit_mb`, from a pass of this process only: Not measured ("no autodedup pass since the worker booted"; facts `last_pass_at` and `boot`) while the lane's `last_pass_at` is NULL or older than the heartbeat's `started_at`, because the boot seed carries `last` across a restart (the watcher's `health_lane` cell and the `jobs` check's lane cells read it), so until then it is the dead process's peak | > 0.8 | > 0.9 |
 | `db_restart` | `pg_postmaster_start_time()`, a fact | — | — (always OK) |
 
 **A hidden session is not a quiet one.** `pg_stat_activity` shows a session the reading role may not
@@ -1034,10 +1008,11 @@ success no longer masks another's outage; starvation per (provider, `called_for`
 success elsewhere cannot hold an aggregate healthy (self-rule 2). It replaces `llm_errors` (an
 any-provider rate gate over a 24 h window) and `llm_burn_rate` with its starved and idle arms, and
 spells the spend once (the code default was $90 against the settings row's $130 until wave 1).
-`text_extraction_lag`'s abort arm, a third detector of the same outage, goes with that key in
-wave 6. Until then the alarms tell a provider's credit outage twice, by its `<provider>/credit` cell
-and by the `jobs` check's `lane/text_extract` cell, because the text lane's provider-fatal pass is
-a failed pass.
+`text_extraction_lag`'s abort arm, a third detector of the same outage, went with that key in Health
+dashboard sprint wave 6. The alarms still tell a provider's credit outage twice, by its
+`<provider>/credit` cell and by the `jobs` check's `lane/text_extract` cell, because the text lane's
+provider-fatal pass is a failed pass, and the `text_extraction` gauge's `stock` cell reads it as 0
+readings while rows wait (stated, accepted).
 
 **Replay rails.** `tests/scripts/test_checks_platform_replay.py` replays aggregate INPUTS exported
 read-only from production — `tests/fixtures/health_jobs_14d.csv`, `health_capacity_cron_8w.csv`
@@ -1257,8 +1232,10 @@ Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose 
 true or absent is Not measured, as in scraping's missing arm. Unnominated counts from the ad's last
 sighting, not from that walk's start: an ad checked inside the 24 h recheck throttle before the walk
 is in flight, not stuck (counted from the walk's start, 2026-10-19 read about 3,600 ads already
-being rechecked: Problem on five portals). Each cell's facts carry `trend_30d` (this check's own
-value 7 and 30 days ago, from `pipeline_check_results`) and `worse_than_7d`.
+being rechecked: Problem on five portals). Each cell's facts carry `trend` and `worse_7d`, the shared
+gauge trend (the quality gauges section, below); until Health dashboard sprint wave 6 they were `trend_30d`
+(this check's own value 7 and 30 days ago) and `worse_than_7d` (the value grew), and the series restarted at
+that deploy.
 
 Basis: with in-dwell ads subtracted R is 0-0.15 % on idnes, sreality and bazos (held +1,708 / +1,405
 / +1,362 against in-dwell 1,600 / 1,251 / 1,371); ceskereality's houses (`dum`/`prodej`) read about
@@ -1483,21 +1460,304 @@ the value and the time; the cells render in wave 8); the `broker_merge_suppressi
 canary's first run from `main`; and the engine progress page says "The engine merges in production
 inside the apply scope; live lane health is on Health.", its link landing on the row.
 
-## `location_payload_shape_drift` — can the location contracts still read new payloads?
+## `parsing` — are new ads still read the way they were? (Health dashboard sprint wave 6)
 
-`location_payload_shape_drift` — W4's standing payload-schema-version check (06 §6.4 W4 gate,
-P6). Per source, the share of ACTIVE rows **first seen in the trailing 48 h** (`…_window_hours`) whose payload the
-location contracts cannot read: sreality's `locality` object not post-cutover shape (the same
-exhaustive SQL `CASE` at `scripts.verify_pipeline.SREALITY_SHAPE_CASE_SQL`, parity-tested against
-`claims_common.sreality_payload_shape`), bezrealitky's `ruianId` KEY absent.
-Why the fresh arm only, and why 48 h: a new row always gets a detail fetch within the hour, so after a
-source-side cutover the share climbs as elapsed/window — one 6-hourly tick into 48 h reads 12.5% and
-crosses fail; the same tick into a 7-day window reads 3.6% and the bell would wait ~1.4 days. Why it
-exists: an unknown sreality shape classifies `absent` and the claim lane simply counts it — nobody is
-told (the refetch cohort that used to chase it went with rule 25's one-lane fold). warn 3% / fail 10% / min 30 rows
-(`location_payload_shape_drift_*` thresholds); `unknown` with null value and `details.skipped` when
-no source reached min rows;
-the message names the remedy per source (sreality: update `sreality_payload_shape` in
-`claims_intake.py`, re-extract — the contract's `payload_schema_detector` block went with W1-c's
-six-key contract shape; bezrealitky: restore `ruianId` in `_DETAIL_QUERY`, then refetch
-the rows fetched meanwhile). Measured every 6 h (its registry cadence); an alarm.
+`check_parsing` (`scripts/checks/quality.py`; an alarm on the worker, domain `portals`, cadence 21,600 s,
+budget 180 s, label "Parsing", unit "cells", owner page `/scrapers`). The regression detectors of field
+capture and the measure program, folded into one per-portal alarm: a field's fill dropping, new ads losing
+their per-m² measure, a jump in a stock median, an unreadable location payload, a re-snapshot storm. Every
+subject is emitted on every pass, OK cells included (about 540, 541 on 10-19), so a cell recovers on a
+measured OK, while the measure view is readable: when it is not, the measures and median subjects (the view's
+rows) cannot be named, and `details.not_measured` and the message name both arms with the cause. The check's
+message is its worst cell's, and a Watch never rings.
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `<portal>/fill/<field>` | the field's fill over the portal's active ads (`field_census`'s matrix statement, on the check's clock) against the blessed baseline (the fill and vocabulary section, above) | a drop of more than 10 pp from a baseline at least 10 % filled; one blessed cell no longer measured; or no active ad carrying a field the attribute contract names a producer for | a drop of more than 20 pp; fewer than a quarter of the blessed filled ads where 50 or more were blessed; or the whole portal no longer measured |
+| `<portal>/vocabulary/<field>` | the field's off-canon share (canon: `toolkit/filter_registry.COLUMN_CANONICAL_VALUES`) against the baseline | a rise of more than 5 pp | a rise of more than 15 pp |
+| `census` | the age of the checked-in key censuses (`data/field_capture/census/`) | older than 30 d | never |
+| `<portal>/measures/<cm>-<ct>` | the gap, the share of ads with no per-m² measure (no price, or no positive area), among the cell's active ads first seen in 7 d, judged on its Wilson lower bound against the same cell's stock gap (`measure_plausibility_by_source`) | the bound above the stock gap by more than 0.10 (`parsing_measures_warn`) | by more than 0.25 (`parsing_measures_fail`) |
+| `<portal>/median/<cm>-<ct>` | the active stock's median Kč/m² (`measure_price_per_m2`) against this check's own median 6-14 d ago; ratio = max(now / then, then / now); Not measured for the first 6 days, after a change of basis, and when either median is 0 | above 2× (`parsing_median_warn`) | above 3× (`parsing_median_fail`) |
+| `<portal>/payload` | among the portal's active ads first seen in 48 h, the share whose stored payload the location contract cannot read (`claims_common.PAYLOAD_SHAPE_PREDICATES`) | above 3 % (`parsing_payload_warn`) | above 10 % (`parsing_payload_fail`) |
+| `<portal>/churn` | re-snapshots (a listing's second and later snapshots) written in 24 h per active ad, against the portal's own 28-day median daily ratio; facts the ratio and the median | above 3× (`parsing_churn_warn_x`) | above 6× (`parsing_churn_fail_x`) |
+
+The fill and vocabulary numbers are `THRESHOLDS` keys `parsing_fill_*`, `parsing_vocabulary_*` and
+`parsing_census_stale_days`, passed to `field_census` by name. Minimum evidence, below which a cell is Not
+measured: 50 new ads for the measures cell (`parsing_measures_min_n`), 200 ads carrying the measure in both
+readings for a median (`parsing_median_min_n`) and 30 for the payload cell (`parsing_payload_min_n`). A churn
+cell under 500 re-snapshots in 24 h (`parsing_churn_min_snapshots`) reads OK ("under the 500 a storm needs"):
+the quiet day was counted, so it is measured, and churn is Not measured only for a portal with no active ad.
+maxima's handful of arrivals (2 in 48 h and 21 a week on 10-19) keeps its measures cells Not measured; it has
+no payload cell, because its contract reads the page.
+
+**Fill and vocabulary.** The cohort, the sizing and the "known, not judged" rules are the fill and
+vocabulary section's, above. The matrix read 3.7 s in production on 10-19. Its one Problem onset, 2026-09-22
+05:06Z (bazos `condition` and `energy` filled 133 → 33), was the deleted description lane's residue being
+overwritten by refetches; it cleared on that day's re-bless, not on a fix. The goldens were re-blessed again
+in this wave, read-only against production (10-19 13:53Z), by the bless path's own parts rather than
+`python -m scraper.field_census --bless`, which had no database credentials here: the module's statements ran
+through the Supabase MCP, each md5-matched to the module constant it came from, and their rows went through
+the module's own reducers and writers. The nine censuses of 09-21 would have read stale from 2026-10-22
+19:20Z, and idnes `has_balcony`'s 26.8 % → 13.7 % is wave 4's definition change (terraces out, #1567)
+converging as refetches overwrite about 17,845 terrace-only ads, not a regression. The worker image carries
+`data/field_capture/` (the Dockerfile copies `data/`).
+
+**Measures of new ads.** The legacy `ppm2_measure_coverage` judged the gap itself: its stock arm read Watch at
+0.95 (a standing, sanctioned gap) and its 7-day arm Problem at 0.90. The design's carry floor (Watch below
+0.95, Problem below 0.90) turned those numbers upside down and would have rung 13 Problem and 6 Watch at ship
+on standing gaps (19 of the 32 cells with 200 new ads on 10-19; bazos's classified ads carry no area on about
+a fifth of its arrivals), while the legacy rule needs 6.3 d of a total collapse and never sees a partial one
+(remax's ~44 % of pages with no price path, fixed 2026-08-05). Judging the 7-day gap's lower bound against the
+cell's stock gap cancels the gaps both share, so only a change in new ads reads. The stock gap itself is the
+`data_quality` gauge's `measure_gap` cell. The arm is also the anti-silencing rail: a portal that started
+writing NULL areas would make the floor and divergence shares go quiet, and this cell reads it first.
+
+**Median shift.** Each cell's own median against itself a week back, never a peer: portal medians legitimately
+differ by up to 19× on mix (idnes's rural land is 8.5× the peer Kč/m²). Over the active STOCK, never arrivals:
+on a two-day burst of cheap land (bazos pozemek/prodej, 10-12/13: 2,534 ads at 23-28 Kč/m²) the arrival
+cohort's weekly median fell 810 → 61 Kč/m² (13.3×) while the stock moved 1.49×. Since 09-26 no stock median
+moved more than 1.49× in a week; every move of 2× or more in the retained 35 days came in 09-19..09-25, when
+the 09-17 W19/W21 heals moved five per-m² medians 3.2-6.9× (W19's spaced thousands on the land of bazos,
+~800 → 117 Kč/m², ceskereality, realitymix and remax; W21's mmreality plot on its houses for sale). The
+2× / 3× lines were sized on the noisiest real weekly move of 2026-08 (1.90×), and each median is gated on its
+own support, the ads carrying the value, never the cell's size (bezrealitky pozemek/prodej once held 1,643
+active ads with nine areas spread 17.6×). Only the per-m² median is compared (the old check compared the area
+median too). The baseline is the facts (`median`, `price_per_m2_basis`, `n`) of this check's own cells 6-14 d
+ago, and a cell whose basis changed since is Not measured, as is one whose median is 0 now or then (land's
+per-m² price is rounded to 2 dp with no floor, and a shift is the ratio of two positive medians);
+`ppm2_median_shift`'s rows, which kept their medians under `details.cells` as an object, are never bridged, so
+the arm is Not measured for its first 6 days. Each median carries `price_per_m2_basis` and names its unit
+through `toolkit.measures.unit_label(basis)` (a rent cell reads Kč/m²/měs: rule 23). A heal or a re-bless
+reads as a shift and must be acknowledged: no heal ledger exists yet.
+
+**Payload shape.** Three portals' location contracts read the stored payload: sreality's API JSON
+(`locality`), bezrealitky's GraphQL answer (`ruianId`) and mmreality's embedded JSON. The other six read the
+archived page and have no payload cell; a page-markup change there reaches Health through the fill arm and the
+location gauge. `location_data/claims_common.PAYLOAD_SHAPE_PREDICATES` holds one NULL-free SQL predicate per
+portal over `l.raw_json` (TRUE = readable: sreality's `locality` an object carrying a post-cutover key,
+bezrealitky's `ruianId` key present, mmreality's `municipality` and `point` keys present), spelled from the
+same key lists as the Python reader beside it (`sreality_payload_shape`), and `PAYLOAD_SHAPE_REMEDIES` the
+remedy per portal; the check wraps each predicate in `coalesce(…, false)`, so a truncated payload never counts
+as readable, and binds the portal name, so it names none (rule 21). "Readable" means the shape new ads are
+expected in: the contract still reads sreality's legacy shape through its fallback paths, but a new ad
+arriving in it is a regression. Why 48 h: a new ad gets its detail fetch within the hour, so after a
+portal-side change the share climbs as elapsed / window: one 6-hourly pass into 48 h reads 12.5 % and crosses
+10 %, where a 7-day window would sit at 3.6 % for about 1.4 days. No unreadable arrival in 28 d (35,127
+sreality and bezrealitky arrivals, 10-19); mmreality's predicate is new and has no history.
+`tests/location_data/test_payload_shape_parity_live.py`, in CI's migrations lane, executes each SQL predicate
+on fixture payloads and asserts it agrees with its Python twin: the "parity-tested" this section used to claim
+had been false since location W1-a (5d3fc621) deleted that test.
+
+**Churn.** A volatile hashed field re-snapshots the corpus and fans out watchdog price-drop keys. The absolute
+lines of the old page's SQL rung (0.5 / 1.5 snapshots per active ad per 24 h, migration 354) sat above every
+storm on record: idnes's FX price jitter wrote 95.5k snapshots a week, 47 % of all, until #683 on 2026-07-02,
+about 0.12-0.14 per active ad against a 0.03 normal, and the 28-day daily maximum on 10-19 was 0.100 (idnes,
+10-01). So the arm counts re-snapshots only (a listing's first snapshot is its arrival) and judges each portal
+against its own 28-day median daily ratio, with at least 500 re-snapshots in the 24 h, under which the cell
+reads OK, so a small portal's quiet day cannot ring.
+
+**Known limits.** The stock arms are slow: a field that goes NULL on every new write reaches the fill arm's
+10 pp Watch in 1.8-23 d (2-6 % of a portal's stock is rewritten a day; the slow end is a field 27 % filled), and
+the collapse arm needs 23-69 d. The median arm is blind for 6 days and reads a heal or a re-bless as a shift.
+No parsing-family check ever caught a parser regression in flight: every real onset of the legacy checks was
+a heal, a clean-up or a standing defect, and people found every in-flight regression on record, after 13.7 h
+to ~131 d; these thresholds are calibrated on heals, standing defects and the measured series, not on a true
+positive. A churn storm present from a portal's first day is its own median and stays invisible. The payload
+arm reads new ads only, so existing ads rewritten from a wrong page (mmreality's substitute cards, 09-07) pass
+it. Media (photos per new ad: realitymix's new ads had none for 19 days, 07-16 to 08-04) and value anomalies
+(placeholders such as idnes floor = 20, sentinels such as sreality zip = −1, and a storey-scale flip such as
+sreality's old-API rows, which `floor_convention` watched until Q4 deleted it) have no arm: filed, not built.
+
+It replaces `field_fill_matrix`, `ppm2_measure_coverage`'s 7-day arm, `ppm2_median_shift` and
+`location_payload_shape_drift` with `SREALITY_SHAPE_CASE_SQL` and `_LOCATION_SHAPE_REMEDY` (portal literals in
+shared code); on the old page, the SQL `snapshot_churn` and `field_null_drift` rungs, until wave 9 drops them.
+
+## The quality gauges — `data_quality`, `location_town_coverage`, `text_extraction` (Health dashboard sprint wave 6)
+
+Three gauges on the worker, in `scripts/checks/quality.py` beside `parsing`, domain `data_quality`, each with
+the 45 s budget: standing conditions with an owner, told once when a cell first reads Problem and then once a
+day until it recovers or is acknowledged (Q2); a Watch sends nothing. Every subject is emitted on every pass,
+OK cells included, while the measure view is readable: when it is not, `data_quality`'s floor and measure_gap
+subjects (the view's rows) cannot be named, its divergence and estate-sum cells read Not measured naming the
+cause, and `details.not_measured` and the message name the view.
+
+**Trends.** Every gauge cell carries `trend` and `worse_7d` (`scripts/checks/common.trend`, which `coverage`
+uses too since this wave): `trend` is the cell's [day, value, status] for each of the last 30 Europe/Prague
+days, rolled from the newest measured previous result that carries the subject, so a Not measured run never
+resets it, with today's point replacing the day's earlier one; `worse_7d` is true when today's status is worse
+than the point dated a week back, and None without one. Wave 8's page draws the series and counts the gauges
+worse than last week. Alarms carry no trend. A new subject, or one renamed, starts a fresh series.
+
+### `data_quality` — the value quality of each portal's ads
+
+`check_data_quality` (cadence 21,600 s, label "Data quality", unit "cells", owner page `/scrapers`, the
+per-portal page, because no page renders value quality yet). It reads the per-m² plausibility view
+`measure_plausibility_by_source` (migrations 427 and 534; active ads, grain (portal, category, deal)) through
+the pass memo it shares with `parsing`, and `listings.source_url`.
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `floor/<portal>/<cm>-<ct>` | the share of priced, area-bearing, basis-decidable ads that `measure_price_per_m2` NULLs at its per-basis floor (rent under 1,000, sale under 100,000 outside land), over the stock and over ads first seen in 7 d, on the Wilson lower bound | above 5 % (`data_quality_floor_warn`) | above 10 % (`data_quality_floor_fail`) |
+| `divergence/<portal>` | per category and deal, land skipped, over the stock and over ads first seen in 7 d: the share of ads carrying both areas whose `area_m2` and `usable_area` differ by more than 10 %, on the lower bound; the worst decides | above 20 % (`data_quality_divergence_warn`) | above 40 % (`data_quality_divergence_fail`) |
+| `estate_sum/<portal>` | per category and deal, land skipped: the share of three-area ads whose `estate_area` equals `area_m2` + `usable_area` within 1 % (a figure the page computed, not measured), on the lower bound; the worst decides | above 5 % (`data_quality_estate_sum_warn`) | above 10 % (`data_quality_estate_sum_fail`) |
+| `url/<portal>` | active ads with no portal link (`source_url` NULL), an absolute count; fact: those first written in 7 d | above 50 (`data_quality_url_warn`) | above 500 (`data_quality_url_fail`) |
+| `measure_gap/<portal>/<cm>-<ct>` | the stock's share of ads with no per-m² measure (no price, or no positive area) where the basis is decidable, on the lower bound, with at least 200 ads (`data_quality_measure_gap_min_n`) | above 95 % (`data_quality_measure_gap_warn`) | never |
+
+The floor, divergence and estate-sum shares need 100 ads each (`data_quality_*_min_n`). **The view.**
+`data_quality_by_source` tested fields for `IS NOT NULL` only, so it was blind to both defects the measure
+program fixed: a plot area in the floor-area column and a per-m² unit price in `price_czk` are 100 % non-NULL.
+The grain is (portal, category, deal): a portal alone pools sale flats with monthly rents, a category alone
+pools a broken portal with eight healthy ones. Every share is a ratio over ads that HAVE the inputs, so a cell
+with nothing to measure scores nothing and would read like a clean one: the `measure_gap` cells watch the
+denominator (sreality's 27,174 active land ads with no headline area read 100 % until W17's plot-area heal on
+09-15), and an empty or unreadable view is Not measured, naming its cause. The read measured 3.45 s warm on
+10-19.
+
+**Basis floor.** An absolute level, not a jump: the unit-price masquerade (a price per m² stored as the price)
+never jumped, it stood for the life of the portals carrying it. Sized on 2026-08-25: ceskereality
+komerční/pronájem 20.0 %, realitymix 19.0 %, remax 11.3 %, bazos 6.7 %, against idnes and sreality at 0.5 % in
+the same cell, the split between portals with and without a per-area price guard. On 10-19 it reads Problem on
+realitymix komerční/pronájem (11.4 % of 4,140, lower bound 10.5 %), a real data condition and the expected
+ship-time red, not re-sized to hide it; Watch on realitymix pozemek/pronájem (13.7 % of 131, lower bound 8.9
+%), remax komerční/pronájem (9.6 % of 281, 6.7 %) and bazos komerční/pronájem (6.3 % of 2,787, 5.5 %; 7.3 % of
+its 455 new ads, 5.2 %).
+
+**Area against usable area.** Only ads with both areas count: bazos fills `usable_area` on 0 of 10,409 houses
+and must read silent, not divergent; land is skipped by name, because its `area_m2` IS the plot. Before W1's
+heal mmreality houses read 99.7 % against 0.0 % elsewhere, and realitymix flats' milder convention 10.5 %,
+which is why Watch is 20 % and not 5 %; on 10-19 nothing crossed (worst 0.1 % of 1,190, remax byt/pronájem). The
+estate-sum share is a weak fingerprint of mmreality's old shape (its `estate_area` was parcel plus usable area
+while its headline was the usable area): its top two cells read 5.5 % of 55 and 2.6 % of 1,123 over a
+background under 1.4 %, so 5 % / 10 % is a forward guard sized on a real ranking; on 10-19 the worst was 1.5 %
+of 875 (sreality dům/pronájem, lower bound 0.9 %).
+
+**Ads with no portal link.** Absolute counts, never a share of ~400k active ads: a URL-codebook miss moves a
+count within a day. 11 on 10-19, all sreality, none first seen in 7 d.
+
+It replaces `ppm2_basis_floor_share`, `area_vs_usable_divergence`, `outbound_url_coverage`,
+`ppm2_measure_coverage`'s stock arm and `floor_convention` (deleted, Q4), and `data_quality_by_source` with the
+`capture-data-quality` job: migration 633 unschedules the job (24 failures in 30 d, statement timeouts and "job
+startup timeout", each ringing the `jobs` check's cron cell for a job this gauge supersedes), and
+`data_quality_snapshots` stays as frozen history until wave 9 (Q5).
+
+### `location_town_coverage` — rule 25's invariant over active ads
+
+`check_location_town_coverage` (cadence 21,600 s, label "Location coverage", unit "cells", owner page
+`/location-quality`; on GitHub until this wave).
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `<portal>/town` | among the portal's ACTIVE ads first written more than 24 h ago (`l.is_active and l.first_seen_at < now() - NEW_AD_H`), those with no `listing_location` row or non-foreign with no town (`obec_kod`); a Czech address-grain row written by the current `RESOLVER_VERSION` with a town but no `katastr_kod` (KÚ geometry missing at the registry version), outside the towns whose KÚ the registry load recorded as degenerate, is a Problem condition kept out of the value (a row with no town counts once, as no town); facts `hidden` (the ads the consumer rule hides), the no-row and no-town counts and the town share | never | 1 or more: red until zero (rule 25) |
+| `registry` | the RÚIAN registry's current version and any staged load (`registry_versions`) | never | no current version, a load staged for more than 24 h (`location_registry_max_staged_hours`), or a current version older than 40 d (`location_registry_max_age_days`) |
+
+Rule 25's invariant: every served listing has a row and every active Czech listing has a town; foreign is a
+determination, never a default. Since this wave it is judged over ACTIVE ads first written more than 24 h ago
+(Q2), reversing W15's whole-corpus count, under which the check never read OK in 132 runs: on 10-19
+the whole corpus held 13,246 such ads, 13,192 of them inactive ads whose pages are gone. `NEW_AD_H` (24) lives
+in `scripts/checks/common.py` and publishing's visible arm imports it too, so an ad leaves publishing's window
+as it enters this one, and the resolver's lag inside an ad's first day stays publishing's to judge (on 10-19,
+21 active ads under 24 h old had no town, resolved within minutes). The lane still covers every listing (W15):
+only the gauge's population moved. The inactive stock is not read each run: on 10-19 at 13:09Z, 13,192 inactive
+ads had no town, plus 3 inactive sreality address-grain rows with no KÚ, a dated fact that Location Quality
+owns. Live then: 43 active ads (ceskereality 39, realitymix 3, mmreality 1; 23 of them older than 30 d, none
+last resolved more than 7 d ago), 0 with no row and 0 address-grain rows with no KÚ; the statement ran 3.1 s
+with the served predicate's hidden count (0.62 s without it), against the whole-corpus statement's 6.5 s. The
+registry: `ruian:2026-09-30`, loaded 10-01, 19 d old, nothing staged, so a missed November load reads Problem
+from 11-10 (41 d; the line is strict). Problem, not Watch: a stalled load is a failure the `jobs` check cannot
+see (a superseded run is cancelled, not failed), and a gauge's Watch sends no notice. The per-portal series
+changes meaning at this deploy, as it did on 2026-09-14.
+
+Known limits: a gauge already reading Problem cannot announce a resolver regression (the 2026-09-14 sweep that
+left 595,816 ads undetermined and the 09-17 loss of 29,545 bazos locations each deepened an open red), so
+publishing's location arms are that detector; a text-lane stall shows twice for bazos, whose town comes from
+the text lane's reading unless the ad carries a map-link pin: here after 24 h, and as publishing's
+`location_not_served` stage.
+
+### `text_extraction` — are new ads' descriptions read promptly?
+
+`check_text_extraction` (cadence 3,600 s, label "Description reading", unit "cells", owner page `/costs`).
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `flow/<portal>` | for each portal in the text lane's scope, the share of ads with a description first written 1-24 h ago that have no reading at the current `SCHEMA_VERSION`, on the Wilson lower bound over at least 30 of them (`text_extraction_flow_min_n`, else Not measured); facts the given-up ads and p95 minutes to the first reading at any version of the current `SCHEMA_VERSION`, beside the lane's 20 min `SLO_MINUTES` | above 5 % (`text_extraction_flow_warn`) | above 25 % (`text_extraction_flow_fail`) |
+| `stock` | rows waiting, active and inactive (the archive is re-read once per `SCHEMA_VERSION`), readings in 24 h, and ETA = waiting / readings a day, a lower bound | the ETA above 14 d (`text_extraction_eta_warn_d`), or 0 readings in 24 h while only inactive rows wait | 0 readings in 24 h while active rows wait |
+
+With the lane off (no model set, or no portal in its scope) every cell reads OK with the state `off`. Both
+statements are the lane's own (`toolkit/description_extraction`), imported, never copied, and so are its scope
+and model reads, all on the check's clock: the stock counts through the lane's ONE eligibility predicate,
+while the flow counts the scope's arrivals (active ads with a description) and never goes through that
+predicate, so a predicate that selects nothing cannot hide its own arrivals (the 07-22 → 09-21 dead lane
+reached 223 of ~50k bazos ads while its workflow read green). An ad the lane gave up on after `GIVE_UP_AFTER`
+(5) failed readings stays unread in the flow and is named as a fact. The old key judged the archive's age as a
+flow and read FAIL (3,450.8 h on 10-19) on every run while the lane was healthy. p95 counts to the first
+reading at any version of the current schema, so a version bump is not a stall: counted to the first reading
+at the current version, the arrivals of 10-12 to 10-14, re-read after the 10-14 bump, put the 7-day p95 at
+3,521 min. The flow needs 30 arrivals because 2 unread of a small portal's 2 have a lower bound of 34 %, a
+Problem (bazos, the lane's one portal today, had 707 on 10-19). Stated, not fixed: both reads date a reading
+by its cache row's `created_at`, which a retry that succeeds leaves at its first, failed attempt, so the p95
+understates and the readings in 24 h can miss a late success. Live on 10-19: flow 0 of 707 bazos arrivals
+unread, p95 49.2 min; stock 55,285 waiting (54 active, 55,231 the archive re-read) at 12,790 readings a day,
+an ETA of 4.32 d. The old key's 35 retained days hold 22 runs with no reading in 24 h while rows waited, all
+in the provider-credit outage (10-03 to 10-12; the lane read nothing for 248.8 h), and 4 with an ETA past 14 d
+around it.
+
+A provider outage is told three times, stated and accepted: by `llm`'s `<provider>/credit` cell, by `jobs`'
+`lane/text_extract` cell (a pass the provider stopped is a failed pass) and here, first as the flow's unread
+new ads and then as the stock's 0 readings (the replay opens the bazos flow cell at 10-02 15:00Z and the stock
+at 10-03 17:00Z); a lane that raises or stops is the `jobs` lane cell's. It replaces `text_extraction_lag` (a
+stock read as a flow), whose wedge arm is the `jobs` lane cell and whose abort arm is the `llm` credit cell.
+
+### `migration_drift` and `outbound_url_conformance` — explicit cells (wave 6)
+
+Both stay on GitHub. `migration_drift` emits a cell per migration file in its window (under "Walks, queues,
+lanes and migrations", above). `outbound_url_conformance` (`scripts/verify_outbound_urls.py`; domain
+`data_quality` since this wave, `scraping` before) emits a cell per portal of `claims_common.SOURCES`: Problem
+when one of its strata with at least `outbound_url_conformance_cell_min` samples is more than
+`outbound_url_conformance_cell_fail_share` non-conforming (a URL-shape defect fails a whole stratum, where a
+delisting not yet caught up with is one scattered 404), OK otherwise, any scattered failure named. An HTTP 403
+or 405 is the portal refusing the HEAD (a bot wall, or a server that allows no HEAD) and judges nothing: a
+portal whose every link was refused, or of which nothing was drawn, is Not measured. One `sample` cell
+carries the overall share, Watch when its Wilson lower bound exceeds 5 %
+(`outbound_url_conformance_warn_share`), because a crawler portal's one sample a week can never reach
+`cell_min` and its 1-of-1 bound would read 21 %. The probe now resolves a relative `Location` header against
+the request URL before reading its segments: two of the six failures of 10-18 were sreality redirects to a
+relative `/detail/…` path. That week read 6 of 44 (13.6 %, lower bound 6.4 %); with the fix, and the two 403
+walls refused, it is 2 of 42 (lower bound 1.3 %): OK. The module sits outside `scripts/checks/`, so the
+rule-21 rail does not cover its sreality codebook rotation; its header says so, and the Portal-seam refactor
+is filed (#1860).
+
+**Replay rails (Health dashboard sprint wave 6).** `tests/scripts/test_checks_quality_replay.py` feeds the
+four checks' inputs through the real ladder from fixtures under `tests/fixtures/health_quality_*.csv`,
+exported read-only from production (counts only: the repo is public), each export's SQL and time in the test's
+header. `pipeline_check_results` keeps 35 days (Q5), so the fixtures come from that window (the legacy checks'
+runs and stored medians) and from durable stores: churn per portal per day over 28 d from `listing_snapshots`,
+the 7-day and stock gaps over 28 d and the weekly stock medians over 6 weeks, as the measure view computes them, the active no-town counts per portal (current only:
+`listing_location` keeps no history), and arrivals and readings per day over 28 d from the text lane's
+tables. The legacy rows' harness artifacts stored as `warn` (`not_run`, `timed_out`, `skipped`) are filtered
+out. Where no durable input exists (fill per day, payload shape per day) the replay is SYNTHETIC and says so.
+What the replays open (tests/scripts/test_checks_quality_replay.py, 22 tests; 09-22..10-19, parsing 6-hourly
+at 111 ticks and 541 subjects, text hourly): parsing opens TWO incidents in 28 days, both idnes churn — 09-24
+18:00Z to 09-26 12:00Z (peak 9.0×) and 10-01 12:00Z to 10-04 06:00Z (peak 11.9×, 8,935 re-snapshots against a
+median day of 754), the FX-conversion re-snapshot waves of #683 (price moves of ~0.57 % just past the 0.5 %
+re-enqueue tolerance on exchange-rate days): a real churn class, kept as the expected recurring red until it
+is fixed at the source; 10-17 peaks at 5.9× (Watch). measures 0 Watch (worst 9.1 pp); medians Not measured
+until 09-28 06:00Z then OK (worst 1.10×); fill, vocabulary and payload SYNTHETIC and OK. Synthetic: a collapse
+of new ads' measures reads Watch at 24 h and Problem at 2.25 d; a 4× storm Watch only (opens nothing); a 7×
+storm Problem for one tick (recovered after 30 h). Heals: the 09-17 W19/W21 heals moved five median cells
+(3.2-6.9×), four of which the legacy key's single cell had hidden. text_extraction opens four incidents, all
+real lane stops: the W1 cutover (46.1 h without a reading, 09-22) and the credit outage (flow 10-02 15:00Z to
+10-12 20:00Z; stock 10-03 17:00Z to 10-13 17:00Z). data_quality's one Problem is the day-one realitymix
+komerční/pronájem floor (473 of 4,141 priced ads in the export, LB 10.5 %); the location gauge reads the 43
+ads as Problem and recovers on a synthetic zero. The seeded, rolled-back live rail
+`tests/test_checks_quality_sql_live.py`, in CI's migrations lane, executes every statement the four checks
+send, the payload predicates and the location gauge's 24 h edge with publishing included.
+`tests/scripts/test_checks_parsing.py` and `tests/scripts/test_checks_gauges.py` pin every rule above on fake
+connections, with the retired checks' fixtures as fold-equivalence inputs: each arm now judged on the Wilson
+lower bound is pinned separately, and where a legacy arm used `>=`, the change to the shared strict `>` is
+pinned at the boundary.
+
+To check after the merge: `health_checks` holds twelve `realtime-worker` keys and two `github-actions` keys;
+within minutes of the worker's deploy Health shows the `parsing`, `data_quality`, `location_town_coverage` and
+`text_extraction` rows (their cells render in wave 8); the nine retired rows leave at the canary's first run
+from `main`; after migration 633's apply `cron.job` holds no `capture-data-quality`; and `data_quality` reads
+Problem on realitymix's komerční/pronájem floor cell, as expected.

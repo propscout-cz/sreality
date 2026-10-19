@@ -2055,16 +2055,19 @@ renumber.** Navigate by area:
     `gauge`), host, cadence, label, unit and owner page, and each host projects (and deletes) only
     its own keys in `health_checks`. Hosts: `realtime-worker` — the platform alarms `jobs`,
     `capacity` and `llm` since wave 3, the portal alarms `scraping`, `publishing` and
-    `delisting` with the `coverage` gauge since wave 4, and the engine alarm `dedup` since Health
-    dashboard sprint wave 5, measured by the worker's health lane
-    (`run_due` on a 60 s tick, a pass capped at 360 s); `github-actions` — every other `CHECKS`
-    key until wave 6 moves the gauges (migration_drift and the URL probe stay there), measured by the
-    hourly canary's `run_due`; `pg_cron` — the watcher's one `liveness` key. A
+    `delisting` with the `coverage` gauge since wave 4, the engine alarm `dedup` since Health
+    dashboard sprint wave 5, and the `parsing` alarm with the `data_quality`, `location_town_coverage`
+    and `text_extraction` gauges since wave 6, measured by the worker's health lane
+    (`run_due` on a 60 s tick, a pass capped at 500 s, in which a gauge whose budget no longer fits
+    waits for the next pass); `github-actions` — `migration_drift` and the URL probe, which stay
+    there for good, measured by the hourly canary's `run_due`; `pg_cron` — the watcher's one
+    `liveness` key. A
     `pipeline_check_results` row carries one of FOUR statuses — `ok` / `warn` / `fail` / `unknown`,
     shown as OK / Watch / Problem / Not measured — where `unknown` means the measurement did not
     happen (timed out, errored, nothing to score) and is never OK; a check a run never reached
-    writes no row and stays due. The row keeps the check's `message` and, when the check emits
-    them, its `cells` (one verdict per portal, job or lane). Each check runs under a real wall
+    writes no row and stays due. The row keeps the check's `message` and its `cells` (one verdict
+    per portal, job, lane, provider or migration file); every measured result carries cells since
+    wave 6, which deleted the implicit cell a cell-less result used to stand for. Each check runs under a real wall
     clock: every statement's `statement_timeout` is the check's remaining budget (wave 2); its
     thresholds live once, in `THRESHOLDS`, each with its basis, and nothing overrides them (wave 3).
     Measuring writes no system alert and reds no run. The ONE teller is
@@ -2107,7 +2110,7 @@ renumber.** Navigate by area:
     open incident after 15 min, and every alarm onset or reminder sent 15 min to 12 h ago was
     seen or delivered, or its key's cell incidents are all acknowledged or closed (exit 1; gauge
     notices are never asserted). A failing check never reds the run; the assertions do, as does a crash
-    of the poller or the harness or the harness step overrunning its 21 minutes, so GitHub's failure email is
+    of the poller or the harness or the harness step overrunning its 6 minutes, so GitHub's failure email is
     the one path to the operator that needs neither Supabase's scheduler nor Railway — with the
     bell the only channel (2026-10-18 ruling), it is how an unread alarm leaves the app. Who
     watches whom: pg_cron watches the worker, the API's loops, the teller and every alarm's
@@ -3314,7 +3317,9 @@ renumber.** Navigate by area:
     the heal clears — while realitymix byt, the 10.5 % cell the 20 % warn tier was chosen to
     spare, now reads 0.0 %. The tiers are deliberately NOT tightened onto that floor while the
     one real offender is still pending a heal: a threshold moved to fit a corpus mid-repair
-    calibrates on the repair.
+    calibrates on the repair. Both arms are the `data_quality` gauge's `divergence` and `estate_sum`
+    cells since Health dashboard sprint wave 6, with these thresholds, judged on the Wilson lower
+    bound.
 
     **Still open, deliberately.** Six portals publish a **built-up area** ("zastavěná plocha" /
     mmreality's `builtUpArea`) with no column to put it in — a schema decision for the operator,
@@ -3470,7 +3475,8 @@ renumber.** Navigate by area:
     was known, and a 75 m dedup circle around a town-centroid pin is exactly the false-merge class
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
     listings per pin. **The invariant**: every served listing has a row and every active Czech
-    listing has a town (`check_location_town_coverage` is red until both are zero), and foreign is a
+    listing has a town (the `location_town_coverage` gauge, over active ads first written more than
+    24 h ago since Health dashboard sprint wave 6, is red until both are zero), and foreign is a
     determination — a country field, a foreign section, a pin outside the country — never the
     default for "no town found". **Speed**: Browse and the map read `browse_list`, which copies the
     fields at rebuild, so no consumer query joins the store; a field is added only by operator
@@ -3887,9 +3893,21 @@ recorded in its report, never a placeholder entry. **Entries are immutable**: a 
 bump, never an edit, so a claim's `contract_entry_id` always names the rule that produced it, and a
 new signal is a YAML entry. The intake is not free of per-portal code, though: `extract_listing`
 keeps one sreality-only branch (the `sreality_payload_shape:` refusal counting rows still frozen on
-the legacy payload shape), and `claims_common.py` keys three Python tables by portal —
-`HISTORY_COMPLETENESS`, `COORDINATE_RULES` and `ARCHIVED_COORDINATE_RULES`, the last on purpose: a
-new coordinate entry yields no pin until a PR adds its row there and argues its licence. A locator may name an ordered `fallback` list of alternative paths, each with the transforms ITS
+the legacy payload shape), and `claims_common.py` keys five tables by portal — `COORDINATE_RULES`,
+`ARCHIVED_COORDINATE_RULES`, `PAYLOAD_SHAPE_PREDICATES`, `PAYLOAD_SHAPE_REMEDIES` and
+`PAYLOAD_SHAPE_READERS`. The coordinate rules are keyed on purpose: a new coordinate entry yields no
+pin until a PR adds its row there and argues its licence. The three payload tables (Health dashboard
+sprint wave 6) serve the `parsing` alarm's payload arm: for each portal whose contract reads the
+stored payload (sreality's API JSON, bezrealitky's GraphQL answer, mmreality's embedded JSON), a
+NULL-free SQL predicate over `l.raw_json`, TRUE when the payload is in the shape the contract expects
+new ads in, spelled from the same key lists as its Python twin in `PAYLOAD_SHAPE_READERS`, with the
+remedy per portal; the check binds the portal name as a parameter, so `scripts/checks/` names no
+portal (rule 21), and a live CI rail executes each predicate against its twin. Only sreality's twin
+wraps the intake's own reader (`sreality_payload_shape`); bezrealitky's and mmreality's key lists are
+spelled by hand after their contract YAML, and an offline rail beside the live one
+(`tests/location_data/test_payload_shape_parity_live.py`) holds every key a predicate needs to a
+pointer its contract reads. The predicates and remedies replace the harness's
+`SREALITY_SHAPE_CASE_SQL` and `_LOCATION_SHAPE_REMEDY`. A locator may name an ordered `fallback` list of alternative paths, each with the transforms ITS
 shape needs, and the reader takes the first that answers — that, not a second entry, is how a portal
 whose payload changed shape keeps reading the older one (sreality@3: 30,265 delisted rows were frozen
 on the pre-cutover JSON, whose whole address is one line in `/locality/value` with the pin in `/map`,
@@ -4117,10 +4135,15 @@ every walk, sweep, rail and audit surface drives off `listings` unfiltered (migr
 index on `properties (repr_listing_ref_id)` stays — append-only, and every read model that joins
 `listings` on that column still uses it). The one rule left in the programme is the CONSUMER rule
 `SERVED_LOCATION_PREDICATE`, below, and it decides what is *shown*, never what is *worked*. **The red
-line**: `check_location_town_coverage` (`scripts/verify_pipeline.py`) reports, per portal and in
-absolute counts, listings with no row and non-foreign listings with no `obec_kod` over the portal's
-WHOLE corpus, and is RED until both are zero — its per-portal series changed meaning on 2026-09-14
-and numbers either side of that date are not comparable. That is the invariant the whole shape exists
+line**: the `location_town_coverage` gauge (`scripts/checks/quality.py`, on the worker every 6 h since
+Health dashboard sprint wave 6) reports, per portal and in absolute counts, ACTIVE ads first written
+more than 24 h ago (`NEW_AD_H`, the edge publishing's visible arm shares) with no row, or non-foreign
+with no `obec_kod`, and is RED until both are zero: as a gauge it sends one notice when it first reads
+Problem, then one a day until it recovers or is acknowledged. The lane still works every listing; only
+the gauge's population moved (operator ruling Q2, 2026-10-18, which reverses W15's whole-corpus count:
+the 13,192 inactive ads with no town on 2026-10-19, whose pages are gone, are a dated fact that Location
+Quality owns, not read each run). Its per-portal series changed meaning on 2026-09-14 and again at the
+wave-6 deploy, and numbers either side of those dates are not comparable. That is the invariant the whole shape exists
 for; the mandatory town entry, BIND's tail rungs and the sweep's fourth arm are all rails that serve
 it. Its KÚ arm (MF PR-B) is the same kind of zero: a Czech address-grain row written by the current
 `RESOLVER_VERSION` without a `katastr_kod` means KÚ geometry is missing at the registry version.
@@ -4185,8 +4208,8 @@ its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
 the extension, the audit page's own links and an operator's pipeline card (rule 22 operator state)
 all keep working on an unresolved listing. Measured at the ruling: 44,702 of 711,600 Browse rows,
-2,953 of them still-live ads. `check_location_town_coverage` reports the count per portal as
-`hidden_n` — a workload number that never moves the check's status. The operator watches the same
+2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as its
+`hidden` fact — a workload number that never moves its status. The operator watches the same
 set on `/new-dedup/pin-audit`, whose relation `location_pin_audit_mv` (migration 524) IS that
 definition — every listing that fails `SERVED_LOCATION_PREDICATE` and nothing else, refreshed hourly
 by pg_cron, leading the nav with its count — so the page and the rule can never describe different
@@ -4263,7 +4286,9 @@ all three from R2; three geometries per unit — authoritative, subdivided pip, 
 unit's authoritative row carried) → gazetteer → a **completeness assertion** (the state and every
 member obec and KÚ have pip + authoritative) → **pointer swap**: only a complete version goes live.
 Křovák S-JTSK → WGS84 is ONE audited 1 m PROJ conversion (`location_data/krovak.py`, golden-point
-test); `location_town_coverage` goes red when the registry stops moving (40 d current / 24 h staged).
+test); the `location_town_coverage` gauge's `registry` cell reads Problem when the registry stops moving
+(no current version, a current one older than 40 d, or a load staged for more than 24 h:
+`location_registry_max_age_days`, `location_registry_max_staged_hours`).
 
 **OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load and claim intake — share the OUTER
 `location-batch` concurrency group so **at most one runs at a time** (each keeps its own inner group

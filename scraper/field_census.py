@@ -38,7 +38,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Collection, Iterable, Mapping, Sequence
+from typing import Any, Collection, Iterable, Mapping, NamedTuple, Sequence
 
 from scraper.db import LISTING_COLUMNS, connect
 from toolkit import filter_registry
@@ -325,96 +325,83 @@ def reduce_matrix(
     }
 
 
-# --- the regression arms (pure; verify_pipeline turns these into a status) ---
+# --- the regression arms (pure; scripts/checks/quality.py turns them into cells) ---
 
-# Sized against the MEASURED drift of the cohort, not against a binomial SE (the stock is
-# not a draw, it is the population). Measured 2026-09-21 over 90 (source, field) cells,
-# comparing each cell's fill over every active row against the same fill over the rows
-# that were already active a week earlier: worst cell 4.1 pp (bezrealitky `disposition`),
-# median under 1 pp. A week of arrivals is ~2%/day of the stock, so between two 6-hourly
-# runs the same drift is ~0.15 pp. So:
-#   * a 10 pp fall is over twice the worst WEEK of honest drift, and 20 pp five times it;
-#   * the relative arm catches a partial break the absolute one cannot (ceskereality's
-#     `furnished` key mismatch would sit at ~2.5%, not 0%): a cell that had 50+ filled
-#     rows and keeps under a quarter of them cannot get there by drift at any share.
-# The `>= 0.10` floor on the absolute arm keeps a cell that was always near-zero from
-# ringing on a handful of rows; the relative arm covers those instead. A cell that drifts
-# past a threshold honestly is a re-bless, which is why both arms name the command.
-FILL_DROP_WARN_PP = 0.10
-FILL_DROP_FAIL_PP = 0.20
-FILL_DROP_MIN_BASELINE = 0.10
-FILL_COLLAPSE_RATIO = 0.25
-FILL_COLLAPSE_MIN_ROWS = 50
-# An off-canon share that RISES is a portal or parser that started emitting a spelling
-# nothing maps. 5 pp is 3.2 sigma, 15 pp is 9.5 sigma.
-OFF_CANON_RISE_WARN_PP = 0.05
-OFF_CANON_RISE_FAIL_PP = 0.15
-# The census is a sample of a live key space; a portal that renames a key leaves a stale
-# census reading green. 30 days is the reviewed-diff cadence, not a CI calendar.
-CENSUS_STALE_DAYS = 30
+# The numbers are the harness's (THRESHOLDS `parsing_fill_*`, `parsing_vocabulary_rise_*`,
+# `parsing_census_stale_days`, each beside its basis), passed in by the parsing check. A cell that
+# drifts past a line honestly is a re-bless, which is why the check names BLESS_COMMAND.
+FILL, VOCABULARY = "fill", "vocabulary"
+
+
+class Finding(NamedTuple):
+    """One (source, field) cell that moved against the blessed matrix, on one arm."""
+
+    key: str
+    arm: str
+    status: str
+    reason: str
 
 
 def compare_to_baseline(
-    live: Mapping[str, Any], baseline: Mapping[str, Any],
-    *, inert: Collection[str] = (),
-) -> tuple[list[str], list[str]]:
-    """(fail offenders, warn offenders) for the live matrix against the blessed one.
-
-    `inert` names the cells NOTHING can write today — a `none` producer, or a `text` cell
-    whose gate is closed. Their fill can only fall (the deleted lane's residue leaving with
-    its listings), and a fall there is expected, not a defect: the drop and collapse arms
-    skip them, the off-canon arm does not (a wrong spelling is wrong whoever wrote it).
-
-    A cell the baseline does not carry is never an offender — a new portal or a new
-    column arrives green and is blessed into the baseline by the next re-bless. The
-    reverse is: a blessed cell the live matrix no longer produces is the STRONGEST form
-    of "this portal stopped writing its fields", and without an arm of its own it reads
-    as perfect health — the matrix spine comes from `portals.is_enabled` and from having
-    active rows, so one flag flip can take 26 cells out of the measurement."""
-    fails: list[str] = []
-    warns: list[str] = []
+    live: Mapping[str, Any], baseline: Mapping[str, Any], *,
+    fill_drop_warn_pp: float, fill_drop_fail_pp: float, fill_drop_min_baseline: float,
+    fill_collapse_ratio: float, fill_collapse_min_rows: int,
+    off_canon_rise_warn_pp: float, off_canon_rise_fail_pp: float,
+    inert: Collection[str] = (),
+) -> list[Finding]:
+    """Every live cell that moved against the blessed matrix: one finding per cell and arm."""
+    findings: list[Finding] = []
     base_cells: Mapping[str, Any] = baseline.get("cells") or {}
     live_cells: Mapping[str, Any] = live.get("cells") or {}
     live_sources = {key.split("/", 1)[0] for key in live_cells}
+    # A blessed cell the live matrix no longer produces is the strongest form of a portal that
+    # stopped writing: the spine comes from portals.is_enabled and from having active ads, so one
+    # flag flip takes all of a portal's cells out of the measurement.
     missing: dict[str, list[str]] = {}
     for key in sorted(set(base_cells) - set(live_cells)):
-        missing.setdefault(key.split("/", 1)[0], []).append(key.split("/", 1)[1])
+        missing.setdefault(key.split("/", 1)[0], []).append(key)
     for source, gone in sorted(missing.items()):
-        line = (
-            f"{source}: {len(gone)} blessed cell(s) absent from the live matrix "
-            f"({', '.join(gone[:4])}{', ...' if len(gone) > 4 else ''})"
-        )
-        (warns if source in live_sources else fails).append(line)
+        if source in live_sources:
+            status, reason = "warn", (
+                f"blessed, but absent from the live matrix ({len(gone)} of {source}'s blessed "
+                "fields are; its other fields are measured)")
+        else:
+            status, reason = "fail", (
+                f"blessed, but absent from the live matrix with all {len(gone)} of {source}'s "
+                "blessed fields: the portal's ads left the measurement")
+        findings.extend(Finding(key, FILL, status, reason) for key in gone)
     for key, cell in sorted(live_cells.items()):
         was = base_cells.get(key)
         if not isinstance(was, Mapping):
-            continue
-        drop = float(was.get("fill", 0.0)) - float(cell.get("fill", 0.0))
-        base_filled = int(was.get("filled", 0))
+            continue  # a cell the baseline lacks arrives green: the next re-bless adds it
+        # The lines are strict, at the matrix's own four decimals: 10.0 pp does not cross 10 pp.
+        base_fill, fill = float(was.get("fill", 0.0)), float(cell.get("fill", 0.0))
+        drop = round(base_fill - fill, 4)
+        base_filled, filled = int(was.get("filled", 0)), int(cell.get("filled", 0))
         if key in inert:
+            # Nothing can write it today (a `none` producer, or a closed gate), so its fill only
+            # falls; a wrong spelling is still wrong whoever wrote it.
             pass
-        elif float(was.get("fill", 0.0)) >= FILL_DROP_MIN_BASELINE and drop >= FILL_DROP_WARN_PP:
-            line = (
-                f"{key} fill {was['fill']:.1%} -> {cell['fill']:.1%} "
-                f"(-{drop * 100:.1f} pp of {cell['n']} sampled)"
-            )
-            (fails if drop >= FILL_DROP_FAIL_PP else warns).append(line)
-        elif (
-            base_filled >= FILL_COLLAPSE_MIN_ROWS
-            and cell.get("filled", 0) < FILL_COLLAPSE_RATIO * base_filled
-        ):
-            fails.append(
-                f"{key} filled {base_filled} -> {cell['filled']} of {cell['n']} sampled "
-                f"(under {FILL_COLLAPSE_RATIO:.0%} of the blessed count)"
-            )
-        rise = float(cell.get("off_canon", 0.0)) - float(was.get("off_canon", 0.0))
-        if rise >= OFF_CANON_RISE_WARN_PP:
-            line = (
-                f"{key} off-canon {was.get('off_canon', 0.0):.1%} -> "
-                f"{cell.get('off_canon', 0.0):.1%} ({', '.join(cell.get('off_canon_values', [])[:4])})"
-            )
-            (fails if rise >= OFF_CANON_RISE_FAIL_PP else warns).append(line)
-    return fails, warns
+        elif base_fill >= fill_drop_min_baseline and drop > fill_drop_warn_pp:
+            failed = drop > fill_drop_fail_pp
+            limit = fill_drop_fail_pp if failed else fill_drop_warn_pp
+            findings.append(Finding(key, FILL, "fail" if failed else "warn", (
+                f"fill {base_fill:.1%} -> {fill:.1%}: -{drop * 100:.1f} pp of "
+                f"{int(cell.get('n', 0)):,} active ads, past {limit * 100:g} pp")))
+        elif base_filled >= fill_collapse_min_rows and filled < fill_collapse_ratio * base_filled:
+            findings.append(Finding(key, FILL, "fail", (
+                f"filled {base_filled:,} -> {filled:,} of {int(cell.get('n', 0)):,} active ads: "
+                f"under {fill_collapse_ratio:.0%} of the blessed count")))
+        base_off, off = float(was.get("off_canon", 0.0)), float(cell.get("off_canon", 0.0))
+        rise = round(off - base_off, 4)
+        if rise > off_canon_rise_warn_pp:
+            failed = rise > off_canon_rise_fail_pp
+            limit = off_canon_rise_fail_pp if failed else off_canon_rise_warn_pp
+            spellings = ", ".join(cell.get("off_canon_values", [])[:4])
+            findings.append(Finding(key, VOCABULARY, "fail" if failed else "warn", (
+                f"off the canon {base_off:.1%} -> {off:.1%} (+{rise * 100:.1f} pp"
+                f"{': ' + spellings if spellings else ''}), past {limit * 100:g} pp")))
+    return findings
 
 
 def zero_fill_cells(matrix: Mapping[str, Any]) -> list[str]:
@@ -430,22 +417,10 @@ def zero_fill_cells(matrix: Mapping[str, Any]) -> list[str]:
     )
 
 
-def booleans_never_false(matrix: Mapping[str, Any]) -> list[str]:
-    """Boolean cells with a true count and no false, ever, in the active stock.
-
-    Reported as a NUMBER, never as a verdict: whether silence means `false` or `unknown`
-    is the absence semantics the W2 attribute contract declares per (portal, field), and
-    until it exists there is nothing here to be right or wrong against."""
-    return sorted(
-        f"{key} {cell['true']}/{cell['n']} true, 0 false"
-        for key, cell in (matrix.get("cells") or {}).items()
-        if isinstance(cell, Mapping) and cell.get("false") == 0 and cell.get("true", 0) > 0
-    )
-
-
 def stale_censuses(
-    censuses: Iterable[Mapping[str, Any]], *, now: _dt.datetime
+    censuses: Iterable[Mapping[str, Any]], *, now: _dt.datetime, max_age_days: int
 ) -> list[str]:
+    """A line per census older than `max_age_days` whole days, or with no readable stamp."""
     out: list[str] = []
     for census in censuses:
         stamped = str(census.get("generated_at") or "")
@@ -455,7 +430,7 @@ def stale_censuses(
             out.append(f"{census.get('portal')} has no readable generated_at")
             continue
         age = (now - when).days
-        if age > CENSUS_STALE_DAYS:
+        if age > max_age_days:
             out.append(f"{census.get('portal')} census is {age}d old")
     return out
 

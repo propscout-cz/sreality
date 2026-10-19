@@ -523,15 +523,18 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 # by THE harness (scripts.verify_pipeline.run_due) on a CONSTANT tick, the text_extract
 # lane's shape: no app_settings row, so no read that can fail; the brake is a deploy.
 HEALTH_TICK_SECONDS = 60.0
-# Every hosted check due at once still fits: 8 × the 45 s check budget (eight checks since wave
-# 5; a ninth raises this cap), inside the watcher's 10-minute health_lane in-flight rule.
-HEALTH_PASS_BUDGET_SECONDS = 360.0
+# The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
+# pass for 600 s (migration 621): 500 s plus the 60 s tick and the heartbeat's 30 s lag stays
+# under both. Every hosted ALARM due at once fits (7 × 45 s +
+# parsing's 180 s = 495 s, wave 6); a gauge that does not fit the rest is deferred to the next
+# 60 s tick, never started short (run_due).
+HEALTH_PASS_BUDGET_SECONDS = 500.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
 HEALTH_PRUNE_INTERVAL_SECONDS = 86400.0
 HEALTH_PRUNE_BATCH_ROWS = 10_000
-# The harness keeps per-run module state (scripts.checks.clock.LANE, its plausibility
-# cache), so a pass abandoned at LANE_PASS_TIMEOUT_SECONDS must never overlap the next.
+# The harness keeps per-pass module state (scripts.checks.clock.LANE and PASS, the pass's
+# memo), so a pass abandoned at LANE_PASS_TIMEOUT_SECONDS must never overlap the next.
 _HEALTH_PASS_LOCK = _PassLock("health")
 # The registry is projected once per process, on its first pass that reaches the database.
 _HEALTH_REGISTRY_PROJECTED = False

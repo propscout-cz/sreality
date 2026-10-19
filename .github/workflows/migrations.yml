@@ -366,14 +366,15 @@ jobs:
         run: pytest tests/test_pipeline_checks_latest_per_key.py -q
 
       # 620's health_liveness() is the pg_cron watcher the GitHub canary asserts on: a stale heartbeat, an
-      # alarm past its budget, an expired matcher lease and a measured Problem with no incident each become
-      # one failing cell the ladder reads unchanged; a dead worker folds its keys into its own cell. The
-      # replay has no pg_cron, so this lane runs the function itself, in a transaction that always rolls back.
+      # alarm past its budget, an expired matcher lease and a measured Problem with no incident (a failing
+      # explicit cell, since 633) each become one failing cell the ladder reads unchanged; a dead worker folds
+      # its keys into its own cell. The replay has no pg_cron, so this lane runs the function itself, in a
+      # transaction that always rolls back. Migration 633's own statements run in their step, below.
       - name: The pg_cron watcher judges the watchers (migration 620)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
-        run: pytest tests/test_health_liveness_live.py -q
+        run: pytest tests/test_health_liveness_live.py -q -k "not migration_633"
 
       # 621 gives the canary's poller its production facts (workflow_failures.reason/event/head_branch,
       # workflow_run_health.state/on_main/recent_starts, nullable: NULL means not seen yet) and retires the
@@ -406,18 +407,42 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_property_sweep_artifact_live.py -q
 
-      # Waves 4 and 5's checks judge in SQL that the fakes, replays and PREPARE never run: seeded rows, each check's
+      # Waves 4 to 6's checks judge in SQL that the fakes, replays and PREPARE never run: seeded rows, each check's
       # own statements and parameters, rolled back. Walks, end-reached units, inflow, fetch errors, unnominated ads;
       # Browse stages on the canonical ad, stock, photos, queues; outflow, stuck ads, verify backlog, precision; the
       # engine's state, build backlog, decision lag, lease, rulings breaches and splits, where a seeded merge of the
-      # removed engine moves no number (rule 15, executed).
-      - name: The portal and engine checks' statements count what they claim (waves 4-5)
+      # removed engine moves no number (rule 15, executed); the parsing alarm's payload shape, measures of new ads,
+      # medians, churn and field matrix; the quality gauges' floor, divergence, estate-sum and link counts, town
+      # coverage from exactly where publishing's visible day ends, the RÚIAN registry, the description lane, trends.
+      - name: The portal, engine and quality checks' statements count what they claim (waves 4-6)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: |
           pytest tests/test_checks_scraping_sql_live.py tests/test_checks_publishing_sql_live.py \
-                 tests/test_checks_delisting_sql_live.py tests/test_checks_dedup_sql_live.py -q
+                 tests/test_checks_delisting_sql_live.py tests/test_checks_dedup_sql_live.py \
+                 tests/test_checks_quality_sql_live.py -q
+
+      # 633 makes the watcher read explicit cells only, as the ladder does since wave 6: a failing result without a
+      # verdict cell is no cell, never "a measured Problem with no incident" under its key (the watcher's step above
+      # pins the arm). It also unschedules the frozen data-quality capture and restates the measure view's comment.
+      # The tests run the file's own unschedule against a stubbed pg_cron (a re-run is a no-op) and its
+      # post-condition, which refuses a capture still scheduled, in a transaction that always rolls back.
+      - name: The watcher reads explicit cells only and the data-quality capture stops (migration 633)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_health_liveness_live.py -q -k migration_633
+
+      # The payload-shape predicates (location_data/claims_common.PAYLOAD_SHAPE_PREDICATES, wave 6) count the
+      # parsing check's unreadable payloads; the rail executes each on fixture payloads and holds it to its Python
+      # twin in PAYLOAD_SHAPE_READERS (only sreality's wraps the claims intake's own reader; the file's offline
+      # rails hold every key a predicate needs to its contract YAML). No parity test existed 5d3fc621..wave 6.
+      - name: Each payload-shape predicate reads a payload as its Python reader does (wave 6)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/location_data/test_payload_shape_parity_live.py -q
 
       # 06 W2a gate (b) — "a deliberately changed page appends a second body; an
       # unchanged refetch appends none" — is a property of one ON CONFLICT clause
