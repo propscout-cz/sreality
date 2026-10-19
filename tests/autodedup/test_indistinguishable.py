@@ -371,7 +371,7 @@ def test_a_subset_of_room_codes_is_not_a_conflict() -> None:
     assert "unit_code" not in stated(room(12273170, ROOMS_403_303), only)
 
 
-# --- E969: one storey apart across two feeds is the vocabulary, in every noun --------------
+# --- E969: one storey apart across two portals is the vocabulary, in every noun ------------
 # The operator's ruling of 2026-10-19, withdrawing E967: `2. NP` may be `3. NP` through data
 # quality alone. náměstí Jiřího z Poděbrad: one agency's 93 m² 3+kk `ve 3 nadzemním podlaží`
 # (sreality 14936, May) and `ve čtvrtém nadzemním podlaží` (idnes 19241736, October); every
@@ -385,6 +385,7 @@ PATRO_3 = ("Nabízíme Vám k pronájmu velmi moderní a luxusní byt po rekonst
 PATRO_4_WORDED = ("Nabízíme k pronájmu byt 3+kk o užitné ploše 93 m² ve čtvrtém patře historického "
                   "činžovního domu s výtahem.")
 STOREY_FACTS = {"prose_floor", "subject_floor"}
+EVERY_STOREY_FACT = STOREY_FACTS | {"floor", "offered_storey", "storey_word"}
 
 
 def flat(listing_id: int, body: str, source: str = "sreality", first: str = "2026-05-01",
@@ -407,16 +408,42 @@ def placed(listing_id: int, storey: str, source: str, **fields: object) -> Listi
         (flat(14936, NP_3, broker_key="phone-a"),
          flat(19241736, NP_4, source="idnes", first="2026-10-01", last="2026-10-18")),
         (placed(1, "ve 2. NP", "idnes"), placed(2, "ve 3. NP", "bezrealitky")),
-        # The patro noun, and the two nouns against each other (two brokers, never live together).
+        # The patro noun.
         (flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18"),
          flat(19250437, PATRO_4_WORDED, source="idnes", first="2026-10-01", last="2026-10-18")),
-        (flat(14936, NP_3, broker_key="phone-a"),
-         flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18", broker_key="identity-b")),
+        # The ground floor in words against the first floor above it, numbered and worded.
+        (placed(1, "v přízemí", "idnes"), placed(2, "v 1. patře", "bezrealitky")),
+        (placed(1, "v přízemí", "idnes"), placed(2, "v prvním patře", "bezrealitky")),
     ],
 )
-def test_one_storey_apart_across_two_feeds_is_no_fact(a: Listing, b: Listing) -> None:
+def test_one_storey_apart_across_two_portals_is_no_fact(a: Listing, b: Listing) -> None:
     for mode in (PROMOTE, CLUSTER):
-        assert not STOREY_FACTS & set(stated(a, b, mode))
+        assert not EVERY_STOREY_FACT & set(stated(a, b, mode))
+
+
+def test_one_storey_apart_inside_one_portal_keeps_its_rule() -> None:
+    """Not ruled on 2026-10-19: inside one portal (E180, scope `source`) or one feed (E145) a
+    one-storey gap stays a fact for two adverts live together, two agencies included, and the
+    sequential excuse still reads none for two that never were (14936 in May, 19241633 in
+    October, `3. NP` against `3. patro`)."""
+    live = {"first_seen_at": "2026-05-01T00:00:00+00:00",
+            "last_seen_at": "2026-06-01T00:00:00+00:00"}
+    for lower, upper in (("ve 2. NP", "ve 3. NP"), ("v přízemí", "v 1. patře")):
+        a = placed(1, lower, "sreality", broker_key="k1", **live)
+        b = placed(2, upper, "sreality", broker_key="k2", **live)
+        for mode in (PROMOTE, CLUSTER):
+            assert EVERY_STOREY_FACT & set(stated(a, b, mode))
+    a = flat(14936, NP_3, broker_key="phone-a")
+    b = flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18", broker_key="identity-b")
+    for mode in (PROMOTE, CLUSTER):
+        assert not EVERY_STOREY_FACT & set(stated(a, b, mode))
+
+
+def test_the_ground_floor_against_a_storey_two_up_or_an_unnumbered_one_is_a_fact() -> None:
+    for upper in ("ve 2. patře", "ve druhém patře", "v patře"):
+        a, b = placed(1, "v přízemí", "idnes"), placed(2, upper, "bezrealitky")
+        for mode in (PROMOTE, CLUSTER):
+            assert "storey_word" in stated(a, b, mode)
 
 
 def test_two_storeys_apart_in_the_np_noun_is_a_fact() -> None:

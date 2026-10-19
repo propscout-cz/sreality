@@ -266,8 +266,9 @@ def _printed_unit_codes(text: str, wide: bool) -> frozenset[str]:
 # one scale with an offset of one. Read from the prose because the stored column is null on one
 # side of a third of the corpus — and read as a set, because a body names the building's storeys
 # as well as this unit's.
-# E967: a maisonette's range or list (`2.-3. NP`, `2. a 3. NP`) names BOTH its storeys, and the
-# advert that names only its entry storey must still meet it — so both numbers are read.
+# E967, kept by E969: a maisonette's range or list (`2.-3. NP`, `2. a 3. NP`) names BOTH its
+# storeys, and the advert that names only its entry storey must still meet it — so both numbers
+# are read.
 _STOREY_JOINER: str = r"(?:\s*[-–]\s*|\s+(?:a|az)\s+)"
 _PROSE_NP = re.compile(r"\b(?:(\d{1,2})\.?" + _STOREY_JOINER
                        + r")?(\d{1,2})\.?\s*(?:np\b|nadzemnim?\s+podlazi)")
@@ -293,20 +294,17 @@ _WORD_NP = re.compile(
 _WORD_PATRO = re.compile(r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|patro|poschodi)\b")
 
 
+def printed_floors(text: str | None, words: bool = False) -> frozenset[int]:
+    """Every storey the body prints, on the NP scale (`1` is the ground floor)."""
+    return _printed_floors(text, words) if text else frozenset()
+
+
 # Which WORD carried a storey, kept beside the number. `3. patro` is the fourth storey and
 # `3. NP` is the third, so two bodies that both write "three" are one storey apart on the NP
 # scale for no other reason than which noun their author reached for — and one Bílina agency
 # re-writes its own advert from `v šestém patře osmipodlažního objektu` to `ve 6. nadzemním
 # podlaží`, same flat, same rent, same house number. That is a vocabulary, not a storey, and
 # `_same_feed` cannot see it because it is one feed's two spellings.
-FLOOR_FORMS: tuple[str, ...] = ("np", "patro")
-
-
-def printed_floors(text: str | None, words: bool = False) -> frozenset[int]:
-    """Every storey the body prints, on the NP scale (`1` is the ground floor)."""
-    return _printed_floors(text, words) if text else frozenset()
-
-
 def printed_floors_by_form(text: str | None, words: bool = False
                            ) -> dict[str, frozenset[int]]:
     """`printed_floors` split by the noun that carried each storey — `np` or `patro`."""
@@ -429,11 +427,11 @@ def _subject_floors(text: str, words: bool = False) -> frozenset[int]:
 # the offered unit: the preposition is mandatory, because `v přízemí domu je kočárkárna` is a
 # statement about the building.
 _GROUND_WORD = re.compile(r"\b(?:v|ve)\s+prizemi\b|\bprizemni\s+(?:byt|jednotk|apartman)\w*")
-_UPPER_WORD = re.compile(r"\b(?:v|ve)\s+(?:\d{1,2}\.?\s*)?(?:patre|poschodi)\b")
+_UPPER_WORD = re.compile(r"\b(?:v|ve)\s+(?:(\d{1,2})\.?\s*)?(?:patre|poschodi)\b")
 # E201: the same clause with the storey spelled out. `ve třetím patře` is `v patře` with an
 # ordinal in the middle, and without this the worded upper storey reads as no storey at all.
 _UPPER_WORD_ORDINAL = re.compile(
-    r"\b(?:v|ve)\s+(?:" + _ORDINAL_ALTERNATION + r")\s+(?:patre|poschodi)\b")
+    r"\b(?:v|ve)\s+(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|poschodi)\b")
 
 
 # E210: `v posledním podlaží` names a storey as surely as a numeral does, and two adverts of
@@ -521,6 +519,22 @@ def _ground_or_upper(text: str, words: bool = False) -> frozenset[str]:
         out.add("ground")
     if _UPPER_WORD.search(folded) or (words and _UPPER_WORD_ORDINAL.search(folded)):
         out.add("upper")
+    return frozenset(out)
+
+
+def upper_storeys(text: str | None, words: bool = False) -> frozenset[int]:
+    """The storeys the upper clauses of `ground_or_upper` number, on the NP scale (`v 1. patře`
+    is 2); a bare `v patře` numbers none."""
+    return _upper_storeys(text, words) if text else frozenset()
+
+
+@body_cached
+def _upper_storeys(text: str, words: bool = False) -> frozenset[int]:
+    folded = fold(text)
+    out = {int(match.group(1)) + 1 for match in _UPPER_WORD.finditer(folded) if match.group(1)}
+    if words:
+        out |= {_FLOOR_ORDINAL_WORDS[match.group(1)] + 1
+                for match in _UPPER_WORD_ORDINAL.finditer(folded)}
     return frozenset(out)
 
 

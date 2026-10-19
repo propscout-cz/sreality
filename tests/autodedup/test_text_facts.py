@@ -18,6 +18,7 @@ from autodedup.text_facts import (
     stated_areas,
     subject_floors,
     unit_designators,
+    upper_storeys,
     widest_directions,
 )
 
@@ -284,7 +285,7 @@ def test_printed_unit_codes_reads_no_range_and_no_room_number(text: str) -> None
     assert printed_unit_codes(text) == frozenset()
 
 
-# --- E967's two storey readers, kept by E969 -----------------------------------------------
+# --- the range reader (E967, kept by E969) and main's bare podlaží -------------------------
 
 
 def test_a_bare_podlazi_is_read_on_the_np_scale() -> None:
@@ -310,6 +311,15 @@ def test_a_bare_podlazi_is_read_on_the_np_scale() -> None:
 def test_a_maisonette_range_reads_both_storeys(text: str, expected: set[int]) -> None:
     """The last storey alone would split the range from the advert naming the entry."""
     assert printed_floors(text, True) == expected
+
+
+def test_upper_storeys_reads_the_number_the_upper_clause_carries() -> None:
+    """E969: on the NP scale, so `v přízemí` (1) against `v 1. patře` (2) is one storey."""
+    assert upper_storeys("Byt se nachází v 1. patře domu.") == {2}
+    assert upper_storeys("Byt se nachází v 1. poschodí domu.") == {2}
+    assert upper_storeys("Byt se nachází ve třetím patře domu.", True) == {4}
+    assert upper_storeys("Byt se nachází ve třetím patře domu.") == frozenset()
+    assert upper_storeys("Byt se nachází v patře domu.") == frozenset()
 
 
 def test_a_maisonette_range_is_placed_whole() -> None:

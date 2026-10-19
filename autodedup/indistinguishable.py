@@ -61,7 +61,8 @@ REFUSED by the same measurement, and named so nobody re-proposes them:
   * a floor gap of exactly one ACROSS portals — 45 % of cross-portal known duplicates carry it.
     Two portals disagree about `přízemí`; that is a vocabulary difference, not a fact. The NP
     noun is no exception (E969, withdrawing E967): the operator ruled on 2026-10-19 that `2. NP`
-    may be `3. NP` through data quality alone, so a storey is a sign at two apart.
+    may be `3. NP` through data quality alone, so a storey is a sign at two apart. Nor are the
+    words: `v přízemí` against `v 1. patře` is the same one storey (E969).
   * the RÚIAN address code (4.2 %) and the house number (3.7 %) — one building has several
     entrances and two portals geocode one advert to two of them.
 
@@ -163,6 +164,7 @@ from autodedup.text_facts import (
     fold,
     ground_or_upper,
     leading_area,
+    upper_storeys,
     parcel_divisions,
     prose_plot_areas,
     reference_codes,
@@ -816,6 +818,13 @@ def _rounded_floors(a: Listing, b: Listing, settings: Settings, gap: int) -> boo
     return True
 
 
+def _storey_gap_is_a_fact(a: Listing, b: Listing, settings: Settings, gap: int) -> bool:
+    """The convention every storey the bodies state is judged by: two storeys anywhere, one
+    only inside one camp (E180) or one feed (E145)."""
+    return _rounded_floors(a, b, settings, gap) or (gap == 1 and _same_feed(
+        a, b, settings.floor_same_source_feed, settings.floor_feed_unknown_closed))
+
+
 def _development_pair(a: Listing, b: Listing) -> bool:
     """Do BOTH bodies speak a new development's vocabulary? (`development.PROJECT_TERMS`.)"""
     from autodedup.development import PROJECT_TERMS
@@ -1269,9 +1278,7 @@ def offered_storey_conflict(
     for side, storeys in ((a, left), (b, right)):
         if side.floor is not None and (side.floor + 1) not in storeys:
             return None
-    gap = min(abs(x - y) for x in left for y in right)
-    feed = _same_feed(a, b, settings.floor_same_source_feed, settings.floor_feed_unknown_closed)
-    if _rounded_floors(a, b, settings, gap) or (gap == 1 and feed):
+    if _storey_gap_is_a_fact(a, b, settings, min(abs(x - y) for x in left for y in right)):
         return (str(sorted(left)), str(sorted(right)))
     return None
 
@@ -2908,35 +2915,33 @@ def distinguishing_facts(
 
     if cfg.d43_prose_floor:
         prose_gap = worded_gap(printed_floors_by_form, printed_floors, a, b)
-        if prose_gap is not None:
-            floors_a = printed_floors(a.description, words)
-            floors_b = printed_floors(b.description, words)
-            feed = _same_feed(a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed)
-            if (_rounded_floors(a, b, cfg, prose_gap)
-                    or (prose_gap == 1 and feed)):
-                add("prose_floor", sorted(floors_a), sorted(floors_b))
+        if prose_gap is not None and _storey_gap_is_a_fact(a, b, cfg, prose_gap):
+            add("prose_floor", sorted(printed_floors(a.description, words)),
+                sorted(printed_floors(b.description, words)))
 
     # E181: the storey stated OF THE OFFERED UNIT. `prose_floor` is a set of every storey the
     # body names, and one Dašice mill advert names its own 2.NP and a WC in 1.NP, so the sets
     # meet and the two floors of one mill never contradict. The placement clause names one.
     if cfg.d43_subject_floor:
         subject_gap = worded_gap(subject_floors_by_form, subject_floors, a, b)
-        if subject_gap is not None:
-            subject_a = subject_floors(a.description, words)
-            subject_b = subject_floors(b.description, words)
-            feed = _same_feed(a, b, cfg.floor_same_source_feed, cfg.floor_feed_unknown_closed)
-            if _rounded_floors(a, b, cfg, subject_gap) or (subject_gap == 1 and feed):
-                add("subject_floor", sorted(subject_a), sorted(subject_b))
+        if subject_gap is not None and _storey_gap_is_a_fact(a, b, cfg, subject_gap):
+            add("subject_floor", sorted(subject_floors(a.description, words)),
+                sorted(subject_floors(b.description, words)))
 
     # E181: the storey written in WORDS. `v přízemí` against `v patře` carries no digit, so no
     # numbered reader sees it — and it needs no camp table either, because `přízemí` is the
     # ground floor on every portal. One HK-Pouchov 3+kk is `s terasou 15 m2 v přízemí` on
     # realitymix and `s balkonem v patře` on four other portals at the same 17,000 rent.
+    # E969: `přízemí` is storey 1, so an upper clause that numbers its storey states the gap,
+    # and `v přízemí` against `v 1. patře` is one storey, judged like every other; a bare `v
+    # patře` states none and stands.
     if cfg.d43_ground_vs_upper:
         words_a = ground_or_upper(a.description, words)
         words_b = ground_or_upper(b.description, words)
         if len(words_a) == 1 and len(words_b) == 1 and words_a != words_b:
-            add("storey_word", next(iter(words_a)), next(iter(words_b)))
+            upper = upper_storeys((b if words_a == {"ground"} else a).description, words)
+            if not upper or _storey_gap_is_a_fact(a, b, cfg, min(upper) - 1):
+                add("storey_word", next(iter(words_a)), next(iter(words_b)))
 
     # E183: how many dwellings the object holds. D49 refused the bare co-live price limb, and
     # that refusal stands — one advert may carry a freehold price and a co-operative share at
