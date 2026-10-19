@@ -410,9 +410,9 @@ LLM + maps (FastAPI service + scoring jobs):
   (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
 - `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. `scraper.geocoding`, the `/maps/suggest` proxy and the
-  static map fail over to it **only** when the primary is rejected (401/403) or rate-limited (429), never on a 5xx.
-  Set it as the GitHub Actions secret (`seed_curated_cities.yml`) and the **Railway API env var**. Unset → no-op.
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding, `/maps/suggest` and the static map fail over
+  to it in ONE loop (`scraper.geocoding.with_mapy_key_failover`) **only** on a rejected (401/403) or rate-limited (429)
+  primary, never on a 5xx. GitHub Actions secret (`seed_curated_cities.yml`) + the **Railway API env var**. Unset → no-op.
 - `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
   `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
   `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.

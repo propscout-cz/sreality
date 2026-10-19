@@ -30,7 +30,7 @@ from fastapi.responses import Response
 from psycopg.rows import dict_row
 
 from api import dependencies as deps
-from scraper.geocoding import KEY_LEVEL_STATUS, mapy_api_keys
+from scraper.geocoding import KEY_LEVEL_STATUS, MapyKeyRefused, mapy_api_keys, with_mapy_key_failover
 
 LOG = logging.getLogger(__name__)
 # uvicorn configures only its own loggers, so the root stays at WARNING and an api.* INFO line
@@ -171,8 +171,8 @@ def fetch_static_map(params: dict[str, Any]) -> tuple[bytes | None, int | None]:
     if not keys:
         LOG.warning("static map: no Mapy key configured")
         return None, None
-    status: int | None = None
-    for i, key in enumerate(keys):
+
+    def attempt(key: str, last: bool) -> tuple[bytes | None, int | None]:
         try:
             resp = requests.get(
                 MAPY_STATIC_URL, params=params, headers={"X-Mapy-Api-Key": key}, timeout=_TIMEOUT_S,
@@ -183,11 +183,13 @@ def fetch_static_map(params: dict[str, Any]) -> tuple[bytes | None, int | None]:
         status = resp.status_code
         if status == 200 and resp.headers.get("content-type", "").startswith("image/"):
             return resp.content, status
-        if status in KEY_LEVEL_STATUS and i < len(keys) - 1:
-            LOG.warning("static map: Mapy key %d/%d refused (status=%s), trying the backup", i + 1, len(keys), status)
-            continue
+        if status in KEY_LEVEL_STATUS and not last:
+            raise MapyKeyRefused(status)
         return None, status
-    return None, status
+
+    return with_mapy_key_failover(
+        attempt, keys, log=LOG, refused="static map: Mapy key %d/%d refused (status=%s), trying the backup",
+    )
 
 
 @router.get("/properties/{property_id}/static-map.png")

@@ -57,7 +57,7 @@ from location_data.resolver.resolve_db import (
     SqlRegistryView,
 )
 from location_data.resolver.types import RegistryView, Street
-from scraper.geocoding import KEY_LEVEL_STATUS, mapy_api_keys
+from scraper.geocoding import KEY_LEVEL_STATUS, MapyKeyRefused, mapy_api_keys, with_mapy_key_failover
 
 LOG = logging.getLogger(__name__)
 
@@ -124,8 +124,7 @@ def suggest(query: str, *, limit: int = 10, lang: str = "cs") -> dict[str, Any]:
 def _fetch_suggest(
     query: str, *, limit: int, lang: str, keys: list[str]
 ) -> dict[str, Any]:
-    last_exc: Exception | None = None
-    for i, key in enumerate(keys):
+    def attempt(key: str, last: bool) -> dict[str, Any]:
         try:
             return http_json.fetch_json(
                 "GET", MAPY_SUGGEST_URL, timeout=10,
@@ -135,13 +134,8 @@ def _fetch_suggest(
                 },
             )
         except http_json.HttpJsonError as exc:
-            last_exc = exc
-            if exc.status in KEY_LEVEL_STATUS and i < len(keys) - 1:
-                LOG.warning(
-                    "Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
-                    i + 1, len(keys), exc.status,
-                )
-                continue
+            if exc.status in KEY_LEVEL_STATUS and not last:
+                raise MapyKeyRefused(exc.status) from exc
             # A rejected key / throttle / outage from Mapy must NOT surface as a raw
             # 500: the typeahead says "Place search is unavailable" only on a 503, and
             # a 500 leaves a silent empty dropdown. Log the real upstream status.
@@ -149,10 +143,10 @@ def _fetch_suggest(
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
             ) from exc
-    # Unreachable: the last key never `continue`s.
-    raise HTTPException(
-        status_code=503, detail="geocoding temporarily unavailable",
-    ) from last_exc
+
+    return with_mapy_key_failover(
+        attempt, keys, log=LOG, refused="Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
+    )
 
 
 _CURRENT_VERSION_SQL = "SELECT id FROM registry_versions WHERE is_current LIMIT 1"
