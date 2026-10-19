@@ -7,10 +7,10 @@
  * matching the band as soon as a filter was set. The dot is decorative now;
  * the state rides on aria-describedby instead. */
 
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 
-import { CollapsibleGroup, Segmented } from './controls';
+import { CollapsibleGroup, DecimalField, Segmented } from './controls';
 
 describe('<CollapsibleGroup>', () => {
   it('is named by its band title alone, with or without active filters', () => {
@@ -50,5 +50,28 @@ describe('<Segmented>', () => {
       <Segmented options={OPTIONS} value="a" onChange={() => {}} variant="solid" />,
     );
     expect(cls()).toContain('bg-[var(--color-copper)]');
+  });
+});
+
+/* The one decimal input (RunPanel's estimate inputs; the Valuo editor). */
+describe('<DecimalField>', () => {
+  const type = (text: string, props: { readOnly?: boolean } = {}) => {
+    const onChange = vi.fn();
+    const { unmount } = render(
+      <DecimalField label="Plocha" value={40} onChange={onChange} suffix="m²" {...props} />,
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Plocha' }), { target: { value: text } });
+    unmount();
+    return onChange.mock.calls;
+  };
+
+  it('reads a comma as the decimal point and an empty box as null', () => {
+    expect(type(' 52,5 ')).toEqual([[52.5]]);
+    expect(type('')).toEqual([[null]]);
+  });
+
+  it('ignores text that is not a number, and every edit when read-only', () => {
+    expect(type('52 m')).toEqual([]);
+    expect(type('52', { readOnly: true })).toEqual([]);
   });
 });

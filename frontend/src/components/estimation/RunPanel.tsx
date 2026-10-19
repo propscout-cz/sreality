@@ -13,7 +13,7 @@
  * remount would show the previous run's edits. (A background refetch of
  * the SAME run deliberately does not reset them — that would wipe the
  * operator's in-progress edits.) */
-import { Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentProps } from 'react';
 import { createPortal } from 'react-dom';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Link, useLocation } from 'react-router-dom';
@@ -61,7 +61,7 @@ import RangeStrip from '@/components/estimation/RangeStrip';
 import Timeline from '@/components/estimation/Timeline';
 import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
-import { PickButton } from '@/components/controls';
+import { DecimalField, PickButton } from '@/components/controls';
 import { canRerun, type RerunOverrides } from '@/lib/rerun';
 import { listingPath } from '@/lib/listingUrl';
 import { filterById } from '@/lib/filterRegistry.generated';
@@ -636,7 +636,7 @@ function YieldBlock({
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <YieldNumField
+        <NumField
           label="Monthly rent"
           value={rent}
           step="100"
@@ -644,7 +644,7 @@ function YieldBlock({
           onChange={setRentTouching}
           hint={defaultRent != null ? 'Default: median estimate' : 'No estimate — set manually'}
         />
-        <YieldNumField
+        <NumField
           label="Fond oprav + SVJ"
           value={costPerM2}
           step="1"
@@ -664,7 +664,7 @@ function YieldBlock({
                 : 'Cost per m² of usable area'
           }
         />
-        <YieldNumField
+        <NumField
           label="Area"
           value={areaM2}
           step="0.1"
@@ -673,7 +673,7 @@ function YieldBlock({
           readOnly
           hint="From listing"
         />
-        <YieldNumField
+        <NumField
           label="Listing price"
           value={price}
           step="100000"
@@ -681,7 +681,7 @@ function YieldBlock({
           onChange={setPrice}
           hint={priceHint}
         />
-        <YieldNumField
+        <NumField
           label="Renovation"
           value={renovation}
           step="50000"
@@ -694,63 +694,6 @@ function YieldBlock({
           }
         />
       </div>
-    </div>
-  );
-}
-
-function YieldNumField({
-  label,
-  value,
-  step,
-  suffix,
-  hint,
-  readOnly,
-  onChange,
-}: {
-  label: string;
-  value: number | null;
-  step?: string;
-  suffix?: string;
-  hint?: string;
-  readOnly?: boolean;
-  onChange: (v: number | null) => void;
-}) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <div className="mt-1.5 flex items-stretch gap-2 min-w-0">
-        <input
-          type="text"
-          aria-label={label}
-          inputMode="decimal"
-          readOnly={readOnly}
-          value={value == null ? '' : String(value)}
-          step={step}
-          onChange={(e) => {
-            if (readOnly) return;
-            const raw = e.target.value.trim().replace(',', '.');
-            if (raw === '') return onChange(null);
-            const n = Number(raw);
-            if (Number.isFinite(n)) onChange(n);
-          }}
-          className={[
-            'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
-            readOnly
-              ? 'bg-[var(--color-paper-2)] border-[var(--color-rule)] text-[var(--color-ink-2)] cursor-default'
-              : 'bg-[var(--color-inset)] border-[var(--color-rule)]',
-          ].join(' ')}
-        />
-        {suffix && (
-          <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
-            {suffix}
-          </span>
-        )}
-      </div>
-      {hint && (
-        <p className="mt-1.5 text-[0.7rem] text-[var(--color-ink-4)] leading-relaxed">
-          {hint}
-        </p>
-      )}
     </div>
   );
 }
@@ -1728,48 +1671,18 @@ function AdjustPanel({
 
 function NumField({
   label,
-  value,
-  step,
-  placeholder,
-  suffix,
   required,
   hint,
-  onChange,
+  ...input
 }: {
   label: string;
-  value: number | null;
-  step?: string;
-  placeholder?: string;
-  suffix?: string;
   required?: boolean;
   hint?: string;
-  onChange: (v: number | null) => void;
-}) {
+} & Omit<ComponentProps<typeof DecimalField>, 'label' | 'className'>) {
   return (
     <div>
       <FieldLabel required={required}>{label}</FieldLabel>
-      <div className="mt-1.5 flex items-stretch gap-2 min-w-0">
-        <input
-          type="text"
-          aria-label={label}
-          inputMode="decimal"
-          value={value == null ? '' : String(value)}
-          placeholder={placeholder}
-          step={step}
-          onChange={(e) => {
-            const raw = e.target.value.trim().replace(',', '.');
-            if (raw === '') return onChange(null);
-            const n = Number(raw);
-            if (Number.isFinite(n)) onChange(n);
-          }}
-          className="flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
-        />
-        {suffix && (
-          <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
-            {suffix}
-          </span>
-        )}
-      </div>
+      <DecimalField label={label} className="mt-1.5" {...input} />
       {hint && (
         <p className="mt-1.5 text-[0.7rem] text-[var(--color-ink-4)] leading-relaxed">
           {hint}

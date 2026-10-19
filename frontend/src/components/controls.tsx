@@ -422,6 +422,62 @@ export function NumberCell({
   );
 }
 
+/* DecimalField — a decimal-number input with an optional unit after it. A
+ * comma is read as the decimal point, an empty box is null, and anything that
+ * is not a finite number is ignored until it parses. `label` is the input's
+ * accessible name; the visible caption is the caller's. */
+export function DecimalField({
+  label,
+  value,
+  onChange,
+  step,
+  placeholder,
+  suffix,
+  readOnly,
+  className = '',
+}: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  step?: string;
+  placeholder?: string;
+  suffix?: string;
+  readOnly?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ')}>
+      <input
+        type="text"
+        aria-label={label}
+        inputMode="decimal"
+        readOnly={readOnly}
+        value={value == null ? '' : String(value)}
+        placeholder={placeholder}
+        step={step}
+        onChange={(e) => {
+          if (readOnly) return;
+          const raw = e.target.value.trim().replace(',', '.');
+          if (raw === '') return onChange(null);
+          const n = Number(raw);
+          if (Number.isFinite(n)) onChange(n);
+        }}
+        className={[
+          'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
+          readOnly
+            ? 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] cursor-default'
+            : 'bg-[var(--color-inset)]',
+        ].join(' ')}
+      />
+      {suffix && (
+        <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
+          {suffix}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* TriRow — any / yes / no segmented control on a single label row. Used     */
 /* by Filters.tsx (and any future spec form) with structurally identical      */
