@@ -13,6 +13,7 @@ import {
   fmtCount,
   fmtCzk,
   fmtDateSlash,
+  fmtPct,
   fmtRelative,
   fmtTime24,
 } from '@/lib/format';
@@ -376,7 +377,7 @@ function YieldCell({ run }: { run: EstimationRun }) {
   }
   return (
     <span className="text-[var(--color-ink-2)]">
-      {run.gross_yield_pct.toFixed(2)}&nbsp;%
+      {fmtPct(run.gross_yield_pct, { digits: 2 })}
     </span>
   );
 }

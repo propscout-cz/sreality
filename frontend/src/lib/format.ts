@@ -124,16 +124,17 @@ export const fmtDistanceM = (n: number | null | undefined): string => {
  * are visually symmetric. Bare magnitudes (a yield, a share) stay unsigned. */
 export const fmtPct = (
   n: number | null | undefined,
-  opts: { signed?: boolean; digits?: number } = {},
+  /* unit: false drops the "%" — the low end of a range ("3,60–4,10 %"). */
+  opts: { signed?: boolean; digits?: number; unit?: boolean } = {},
 ): string => {
   if (n == null || !Number.isFinite(n)) return '—';
-  const { signed = false, digits = 1 } = opts;
+  const { signed = false, digits = 1, unit = true } = opts;
   const body = n.toLocaleString('cs-CZ', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
   const sign = signed && n > 0 ? '+' : '';
-  return `${sign}${body}${NBSP}%`;
+  return unit ? `${sign}${body}${NBSP}%` : `${sign}${body}`;
 };
 
 /* Percentage POINTS — a difference between two percentages (a yield moving

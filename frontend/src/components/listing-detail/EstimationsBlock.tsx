@@ -23,10 +23,11 @@ import {
   fmtCzk,
   fmtDateSlash,
   fmtAbsolute,
+  fmtPct,
   fmtRelative,
   fmtTime24,
 } from '@/lib/format';
-import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
+import { MfReferenceCard, YieldFigure } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
 import {
   ConfidencePill,
@@ -240,12 +241,7 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
           )}
         </span>
         {run.gross_yield_pct != null && (
-          <span className="text-[0.72rem] text-[var(--color-ink-3)] tabular-nums">
-            hrubý výnos{' '}
-            <span className="text-[var(--color-ink)] font-medium">
-              {run.gross_yield_pct.toFixed(2)} %
-            </span>
-          </span>
+          <YieldFigure>{fmtPct(run.gross_yield_pct, { digits: 2 })}</YieldFigure>
         )}
       </div>
       {(run.rent_p25_czk != null && run.rent_p75_czk != null && !isSale) && (
@@ -389,9 +385,7 @@ function RunHistory({
                     )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-ink-2)]">
-                    {r.gross_yield_pct != null
-                      ? `${r.gross_yield_pct.toFixed(2)} %`
-                      : '—'}
+                    {fmtPct(r.gross_yield_pct, { digits: 2 })}
                   </td>
                   <td className="px-3 py-2">
                     <RunStatusChip status={r.status} />

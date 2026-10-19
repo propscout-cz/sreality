@@ -38,6 +38,7 @@ import {
   fmtCzk,
   fmtFloor,
   fmtMeasuredPricePerM2,
+  fmtPct,
   fmtRelative,
 } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisFromToken } from '@/lib/measure';
@@ -217,7 +218,7 @@ function EstimateHeadline({ run }: { run: EstimationRun }) {
         <p className="mt-1 text-sm font-mono tabular-nums text-[var(--color-ink-2)]">
           gross yield{' '}
           <span className="text-[var(--color-ink)]">
-            {run.gross_yield_pct.toFixed(2)}&nbsp;%
+            {fmtPct(run.gross_yield_pct, { digits: 2 })}
           </span>
         </p>
       )}
@@ -628,7 +629,7 @@ function YieldBlock({
             color: yieldPct != null ? 'var(--color-copper)' : 'var(--color-ink-4)',
           }}
         >
-          {yieldPct != null ? `${yieldPct.toFixed(2)} %` : '—'}
+          {fmtPct(yieldPct, { digits: 2 })}
         </p>
         <p className="mt-2 text-[0.78rem] text-[var(--color-ink-3)] font-mono tabular-nums">
           ((rent − fond oprav a SVJ) × 12) ÷ (listing price + renovation)
