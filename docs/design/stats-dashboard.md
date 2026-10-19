@@ -44,12 +44,18 @@ chart on stav excludes every bazos property — visibly, in the ledger. The esti
 ### Registry — `toolkit/stats_registry.py` (the one definition)
 
 `DIMENSIONS` (id, labels, kind `enum | band | geo | bool`, the SQL over `stats_dim_key`'s arguments, the ordered
-options, category availability, band steps), `MEASURES` (`tom_days`, `area`, `price`, `ppm2`; `single_status`
-on turnover), `STATS`, `MIN_N = 10`, `MAX_ROWS = 6`, `MAX_COLS = 1`, `MAX_CELLS = 2000`, `VIEWS`.
-Three faces, none hand-restated: `dim_key_function_sql()` and `measure_value_sql()` are carried verbatim by
-migration 626 (pinned by `tests/test_626_stats_dashboard.py`); `registry_json()` is emitted to
+options, category availability, band steps and the measure a band bands, the palette group), `MEASURES`
+(`tom_days`, `area`, `price`, `ppm2`; `single_status` on turnover), `STATS`, `DEFAULT_STAT`, `REFUSALS`,
+`STATUSES`, `MIN_N = 10`, `MAX_ROWS = 6`, `MAX_COLS = 1`, `MAX_CELLS = 2000`, `MAX_CHARTS`, `VIEWS`. A band or
+yes/no dimension is built by `_band_dim` / `_bool_dim`, which render its SQL (the basis step, the category
+guard) from its column, steps and categories, so each step is stated once, on its dimension.
+Three faces, none hand-restated: `dim_key_function_sql()`, `measure_value_sql()`, `spec_guard_sql()` (the
+pivot's `bad_spec` chain) and the two id lists `single_status_measures_sql()` (the `mixed_status` arm) and
+`geo_ids_sql()` (the `places` block) are carried verbatim by migration 626 (pinned by equality in
+`tests/test_626_stats_dashboard.py`); `registry_json()` is emitted to
 `frontend/src/lib/statsRegistry.generated.ts` by `scripts/generate_filter_registry.py` (CI `--check`);
-`validate_chart` gates `PUT /stats/dashboard`.
+`validate_board` (the `MAX_CHARTS` cap, unique ids, every chart through `validate_chart`) gates
+`PUT /stats/dashboard`, whose 422 detail is its `SpecError`.
 
 A place dimension (`kraj`, `okres`, `obec`, `cast_obce`, `ulice`) keys on the RÚIAN CODE `browse_list` already
 carries (`region_id`, `okres_id`, `obec_id`, `cast_obce_id`, `ulice_id`; rule 25's one code predicate), as text,
@@ -101,12 +107,15 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
 ### SPA — `frontend/src/lib/stats.ts` + `frontend/src/components/stats/`
 
 - `lib/stats.ts`: the types above; `fetchStatsPivot(filters, spec)` = `resolveBrowsePrefilters` +
-  `supabase.rpc('browse_stats_properties', {...buildBrowseStatsArgs(f, resolved), spec})`, query key
-  `[browseKeys.root.stats, f, spec]` (so `browseInvalidation`'s aggregate root keeps working); the prefilters
+  `supabase.rpc('browse_stats_properties', {...buildBrowseStatsArgs(f, pre), spec})` with `pre` the one
+  `BrowsePrefilters` object `resolveBrowsePrefilters` returns (the map read hands the builder the same object), query
+  key `browseKeys.stats(f, spec)` (so `browseInvalidation`'s aggregate root keeps working; `browseKeys.statsAll` is
+  the header spinner's prefix); the prefilters
   resolve ONCE per filter set for the whole board through a shared cached query
   (`browseKeys.statsPrefilters(f)` = `[root.stats, f, 'prefilters']`, swept with the same root);
-  `fetchDashboard` / `saveDashboard`; `placeNames(pivot)` (the payload's `places` as one (dimension, code) →
-  name lookup, built once per pivot and handed to every sort and label); `cellTree` (cells → nested rows,
+  `fetchDashboard` / `saveDashboard`; `StatsPivot.places` (the payload's `places` as one (dimension, code) →
+  name Map, built once in `normalizePivot` and read by every sort and label); `pivotRows(pivot)` (cells → rows in
+  reading order, `{key, depth, rollup, label, cells}`, each level ordered once) and `colValuesOf(pivot)` (the private tree groups
   children by key prefix); `sortKeys` (enum/bool by registry order, unknown members after, bands numeric,
   places by their label with Czech collation, two of one name by code); `keyLabel` (band ⇒ "80 – 90 m²" /
   "5 000 – 10 000 Kč/m²" from the step for the payload's basis; enum ⇒ `label_cs`; place ⇒ its name from
@@ -115,7 +124,8 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
   po 2 500 Kč / měs"; the two-step registry label only while the basis is unknown, and on the palette chip);
   `DEFAULT_CHARTS`; the refusal texts (Czech).
 - `components/stats/StatsDashboard.tsx`: the tab. Reads the board, renders one `StatsChart` per chart, "Přidat
-  graf" at the end, saves through the API, invalidates.
+  graf" at the end, saves through `lib/useOptimisticWrite` (the ONE write policy, mutation key
+  `['write','stats','dashboard']`): the PUT's answer becomes the cache on success, a re-read only on failure.
 - `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit / Odebrat; in
   edit mode the card flips in place to `ChartBuilder` (same card, same width), Uložit / Zrušit.
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
@@ -130,8 +140,9 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
   vyřazeno 13 414 (chybí údaje)" — over a thin three-segment bar in ink tints, plus the cohort chips (byt ·
   prodej · aktivní). The same component on every chart, before the view.
 - `components/stats/views/PivotTable.tsx` (nested rows with indent, a column dimension ⇒ one value per column
-  showing the chart's `stat` with n beneath; no column dimension ⇒ the seven statistics), `PivotLines.tsx` and
-  `PivotBars.tsx` (recharts, axes through `lib/chartAxis.valueAxisSpec`, series = column values: copper first,
+  showing the chart's `stat` with n beneath; no column dimension ⇒ the seven statistics), `PivotSeries.tsx`
+  (`kind: 'line' | 'bar'`, one lazy chunk; `StatsChart` builds the series model once and applies the series cap
+  to it; recharts, axes through `lib/chartAxis.valueAxisSpec`, series = column values: copper first,
   ink tints after, at most `MAX_SERIES` (each colour solid, then dashed) or a one-sentence refusal; the SVG is
   hidden from assistive tech and a screen-reader table carries the same numbers), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
   rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers are
@@ -155,7 +166,8 @@ deleted files are replaced by rows for the files that now carry the unit strings
 
 - `tests/test_626_stats_dashboard.py` (offline): the effective `stats_dim_key` text equals
   `dim_key_function_sql()`; the stats statement contains `measure_value_sql()`, `v_min_n constant int := 10`
-  and `v_max_cells constant int := 2000`; 626's cohort WHERE equals 625's; the signature is 625's 74 parameters
+  and `v_max_cells constant int := 2000`; its `bad_spec` chain equals `spec_guard_sql()`, its `mixed_status`
+  arm names `single_status_measures_sql()` and its `places` block `geo_ids_sql()`; 626's cohort WHERE equals 625's; the signature is 625's 74 parameters
   plus `spec jsonb default null`; the seven `stats_dim_key` calls end on the five place codes and the pivot
   names no listing location; the register view's text and grants, and the `places` block that joins it;
   `--check` of the generated TS passes.
@@ -165,8 +177,8 @@ deleted files are replaced by rows for the files that now carry the unit strings
   keys for rent vs sale, and the place keys: codes as text, two same-named towns as two cells, `places` named
   from seeded register rows (null for a retired unit), every place level read as `authenticated` through the
   view's grant.
-- `tests/api/test_stats_dashboard.py`: PUT validates through the registry (422 on a bad chart), upserts, scopes
-  to the caller's account.
+- `tests/api/test_stats_dashboard.py`: PUT validates through the registry's `validate_board` (422 on a bad
+  chart or an oversized / duplicate-id board, with the registry's reason), upserts, scopes to the caller's account.
 - Updated: `test_browse_map_read_contract` (`_STATS_ONLY_PARAMS`), `test_one_place_predicate` (latest = 626,
   the parameter order), the two per-migration pins (602, 598 files), `test_measure_price_per_m2` (the stats arm
   reads the pivot or is dropped in favour of the one-measure census), `test_portal_rule` (live call shape),

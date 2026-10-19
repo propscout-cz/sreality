@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import BoxTable, { boxAxis } from './BoxTable';
-import { NO_PLACES, cellTree, flattenTree } from '@/lib/stats';
+import { pivotRows } from '@/lib/stats';
 import { cell, pivotOf } from '../testPivot';
 
 const sp = (s: string | null | undefined) => (s ?? '').replace(/\s/g, ' ').trim();
@@ -19,7 +19,7 @@ const pivot = pivotOf({
 
 describe('<BoxTable> — THE box primitive', () => {
   it('spans one shared axis over every drawn row\'s p10..p90, nothing else', () => {
-    const axis = boxAxis(flattenTree(cellTree(pivot.cells, pivot.spec, NO_PLACES).root))!;
+    const axis = boxAxis(pivotRows(pivot))!;
     expect(axis.domain[0]).toBeLessThanOrEqual(100);
     expect(axis.domain[1]).toBeGreaterThanOrEqual(300);
     const step = axis.ticks[1] - axis.ticks[0];
@@ -31,7 +31,7 @@ describe('<BoxTable> — THE box primitive', () => {
     const { container } = render(<BoxTable pivot={pivot} />);
     const medians = [...container.querySelectorAll('[data-median]')] as HTMLElement[];
     expect(medians).toHaveLength(3);
-    const axis = boxAxis(flattenTree(cellTree(pivot.cells, pivot.spec, NO_PLACES).root))!;
+    const axis = boxAxis(pivotRows(pivot))!;
     const pct = (v: number) => ((v - axis.domain[0]) / (axis.domain[1] - axis.domain[0])) * 100;
     expect(parseFloat(medians[1].style.left)).toBeCloseTo(pct(160));
     const whisker = container.querySelectorAll('[data-whisker]')[2] as HTMLElement;

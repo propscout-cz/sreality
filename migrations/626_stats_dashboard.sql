@@ -65,7 +65,7 @@ begin
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), '')
-     not in ('6b102dd7960cced4ffbbf31127048428', '824683a34456c3497c4367ad28d91b95') then
+     not in ('6b102dd7960cced4ffbbf31127048428', 'a69d5fb1b9f1ae2321d8952683919757') then
     raise exception '626 refused: browse_stats_properties is not 625''s body nor this file''s (or has two overloads)';
   end if;
 end
@@ -273,7 +273,7 @@ declare
   v_masks int[];
   r1 text; r2 text; r3 text; r4 text; r5 text; r6 text; c1 text;
 begin
-  -- The spec contract (toolkit.stats_registry.validate_spec, the same rules): refuse, never guess.
+  -- The spec contract (toolkit.stats_registry.spec_guard_sql: validate_spec's rules): refuse, never guess.
   if spec is null then v_bad := 'spec missing';
   elsif jsonb_typeof(spec) <> 'object' then v_bad := 'spec must be an object';
   elsif (spec ? 'rows' and jsonb_typeof(spec->'rows') <> 'array')
@@ -476,7 +476,7 @@ begin
              when c.filtered_n = 0 then 'empty'
              when c.cat_lo <> c.cat_hi or c.type_lo <> c.type_hi then 'mixed_category'
              -- ruling 3: ONE status in the SAMPLE (the cohort's `status` fact above may still be mixed).
-             when v_measure = 'tom_days' and (select bool_or(is_active) and not bool_and(is_active) from sample) then 'mixed_status'
+             when v_measure in ('tom_days') and (select bool_or(is_active) and not bool_and(is_active) from sample) then 'mixed_status'
              when (select count(*) from used) > v_max_cells then 'too_many_cells'
            end as refused
     from cohort c
@@ -499,7 +499,7 @@ begin
         select distinct d.dim, d.key
           from used u
           cross join lateral (values (r1, u.k1), (r2, u.k2), (r3, u.k3), (r4, u.k4), (r5, u.k5), (r6, u.k6), (c1, u.kc)) d(dim, key)
-         where d.key is not null and d.dim in ('cast_obce', 'kraj', 'obec', 'okres', 'ulice')
+         where d.key is not null and d.dim in ('kraj', 'okres', 'obec', 'cast_obce', 'ulice')
       ) p
       left join public.ruian_place_names_public n on n.level = p.dim and n.code = p.key::bigint), '[]'::jsonb) else '[]'::jsonb end,
     'cells', case when x.refused is null then coalesce((

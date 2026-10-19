@@ -875,11 +875,7 @@ export const fetchListingsForMap = async (
    * emitted id space. */
   const { data: grid } = await pgRead<MapGrid>(
     supabase.rpc('browse_map_cells', {
-      ...buildBrowseStatsArgs(f, {
-        obec_ids_filter: pre.obecIds,
-        property_ids_filter: pre.propertyIds,
-        property_ids_excluded: pre.propertyIdsExcluded,
-      }),
+      ...buildBrowseStatsArgs(f, pre),
       point_budget: pinLimit,
     }),
     { signal },
@@ -1172,14 +1168,6 @@ export const fetchDismissedCards = async (
   return { rows, nextCursor };
 };
 
-/* The id allowlists the caller has already resolved over the network
- * (resolveBrowsePrefilters), so this builder stays pure. */
-export interface BrowseStatsResolvedFilters {
-  obec_ids_filter: number[] | null;
-  property_ids_filter: number[] | null;
-  property_ids_excluded: number[] | null;
-}
-
 /* The argument object `browse_stats_properties` takes.
  *
  * ONE builder, because there are TWO callers: lib/stats.ts fetchStatsPivot (plus
@@ -1190,10 +1178,12 @@ export interface BrowseStatsResolvedFilters {
  * other produces a map and a Stats tab describing different sets of properties,
  * with no error anywhere. Extracting it collapses that surface to zero.
  *
- * Pure: every value comes from `f` or from `resolved`. Exported for queries.test.ts. */
+ * Pure: every value comes from `f` or from `pre`, the id allowlists the caller
+ * has already resolved over the network (resolveBrowsePrefilters). Exported for
+ * queries.test.ts. */
 export const buildBrowseStatsArgs = (
   f: ListingFilters,
-  resolved: BrowseStatsResolvedFilters,
+  pre: BrowsePrefilters,
 ): Record<string, unknown> => {
   const triToBool = (t: typeof f.hasBalcony): boolean | null =>
     t === 'any' ? null : t === 'yes';
@@ -1309,8 +1299,11 @@ export const buildBrowseStatsArgs = (
      * Migration 378 — generic property-id allowlist; carries the deal-pipeline
      * scope (rule #22) today, and is the seam any future property-grain
      * prefilter should reuse instead of growing another bespoke param.
-     * Both are resolved over the network by the caller — see the interface. */
-    ...resolved,
+     * Migration 598 — the one denylist, properties carrying an excluded tag.
+     * All three are resolved over the network by the caller (`pre`). */
+    obec_ids_filter:         pre.obecIds,
+    property_ids_filter:     pre.propertyIds,
+    property_ids_excluded:   pre.propertyIdsExcluded,
   };
 };
 

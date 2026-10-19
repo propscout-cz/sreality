@@ -1,4 +1,6 @@
-import { cohortChips, fmtN, ledgerCounts, type StatsPivot } from '@/lib/stats';
+import { memo, useMemo } from 'react';
+import { fmtCount } from '@/lib/format';
+import { cohortChips, ledgerCounts, type StatsPivot } from '@/lib/stats';
 
 /* THE sample ledger — the mark every chart carries above its view, in the edit
  * preview too. One line of counts (what the filter selected, what has every
@@ -6,29 +8,34 @@ import { cohortChips, fmtN, ledgerCounts, type StatsPivot } from '@/lib/stats';
  * three-segment bar: behind a number · counted in a cell under the minimum ·
  * excluded. A chart never shows a statistic without saying how many properties
  * stand behind it and how many did not make it in. */
-export default function SampleLedger({ pivot }: { pivot: StatsPivot | null }) {
-  const counts = pivot ? ledgerCounts(pivot) : null;
-  if (!pivot || !counts) return null;
-  const chips = cohortChips(pivot);
-  const { filtered, sample, excluded, withStats, underMin } = counts;
+function SampleLedger({ pivot }: { pivot: StatsPivot }) {
+  const counts = useMemo(() => ledgerCounts(pivot), [pivot]);
+  const chips = useMemo(() => cohortChips(pivot), [pivot]);
+  if (!counts) return null;
+  const { filtered, sample, excluded, split } = counts;
 
   const segments: Array<{ id: string; n: number; color: string; label: string }> =
-    withStats == null || underMin == null
-      ? [{ id: 'sample', n: sample, color: 'var(--color-ink-3)', label: `ve vzorku ${fmtN(sample)}` }]
+    split == null
+      ? [{ id: 'sample', n: sample, color: 'var(--color-ink-3)', label: `ve vzorku ${fmtCount(sample)}` }]
       : [
-          { id: 'stats', n: withStats, color: 'var(--color-ink-2)', label: `ve statistikách ${fmtN(withStats)}` },
+          {
+            id: 'stats',
+            n: split.withStats,
+            color: 'var(--color-ink-2)',
+            label: `ve statistikách ${fmtCount(split.withStats)}`,
+          },
           {
             id: 'under',
-            n: underMin,
+            n: split.underMin,
             color: 'var(--color-ink-4)',
-            label: `${fmtN(underMin)} v buňkách pod ${pivot.min_n}`,
+            label: `${fmtCount(split.underMin)} v buňkách pod ${pivot.min_n}`,
           },
         ];
   segments.push({
     id: 'excluded',
     n: excluded,
     color: 'var(--color-rule-strong)',
-    label: `vyřazeno ${fmtN(excluded)}`,
+    label: `vyřazeno ${fmtCount(excluded)}`,
   });
 
   return (
@@ -38,9 +45,9 @@ export default function SampleLedger({ pivot }: { pivot: StatsPivot | null }) {
           Ve filtru <Count n={filtered} /> · vzorek <Count n={sample} /> · vyřazeno{' '}
           <Count n={excluded} />
           {excluded > 0 ? ' (chybí údaje)' : ''}
-          {underMin != null && underMin > 0 ? (
+          {split && split.underMin > 0 ? (
             <>
-              {' '}· <Count n={underMin} /> v buňkách pod {pivot.min_n}
+              {' '}· <Count n={split.underMin} /> v buňkách pod {pivot.min_n}
             </>
           ) : null}
         </p>
@@ -78,18 +85,8 @@ export default function SampleLedger({ pivot }: { pivot: StatsPivot | null }) {
   );
 }
 
-function Count({ n }: { n: number }) {
-  return <span className="font-mono tabular-nums text-[var(--color-ink)]">{fmtN(n)}</span>;
-}
+export default memo(SampleLedger);
 
-/* The dashed "too few" mark: a cell under the minimum shows its n and this,
- * never a number. The same dashed vocabulary as an empty shelf slot — absence
- * is drawn, not left blank. */
-export function TooFew({ minN }: { minN: number }) {
-  return (
-    <span className="inline-flex items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)] px-1.5 py-px text-[0.65rem] leading-tight text-[var(--color-ink-3)] whitespace-nowrap">
-      <span aria-hidden="true">pod {minN}</span>
-      <span className="sr-only">méně než {minN} nemovitostí, bez statistik</span>
-    </span>
-  );
+function Count({ n }: { n: number }) {
+  return <span className="font-mono tabular-nums text-[var(--color-ink)]">{fmtCount(n)}</span>;
 }

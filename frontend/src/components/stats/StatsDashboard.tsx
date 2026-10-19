@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { arrayMove } from '@dnd-kit/sortable';
 import type { ListingFilters } from '@/lib/filters';
 import { pushToast } from '@/lib/toast';
+import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
 import {
@@ -17,8 +19,9 @@ import StatsChart, { type CardFocus } from './StatsChart';
 /* Browse › Stats: the account's board of charts over the current filter. The
  * filter only picks the sample; the board (which charts, in which order) is ONE
  * document per account, read through RLS and written whole through
- * PUT /stats/dashboard. No saved row ⇒ the four default charts, and the first
- * save persists the whole list. */
+ * PUT /stats/dashboard through the one optimistic write (lib/useOptimisticWrite).
+ * No saved row ⇒ the four default charts, and the first save persists the whole
+ * list. */
 export default function StatsDashboard({ filters }: { filters: ListingFilters }) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<ChartSpec | null>(null);
@@ -44,19 +47,15 @@ export default function StatsDashboard({ filters }: { filters: ListingFilters })
     staleTime: 5 * 60_000,
   });
 
-  const save = useMutation<ChartSpec[], Error, ChartSpec[], { prev: ChartSpec[] | undefined }>({
+  /* The board moves on the click; the PUT answers with the board as stored, which
+   * is adopted on success, so only a failure (rolled back from onSettled) re-reads. */
+  const save = useOptimisticWrite<ChartSpec[], ChartSpec[]>({
+    mutationKey: ['write', 'stats', 'dashboard'],
     mutationFn: saveDashboard,
-    onMutate: async (charts) => {
-      await qc.cancelQueries({ queryKey: statsDashboardKey });
-      const prev = qc.getQueryData<ChartSpec[]>(statsDashboardKey);
-      qc.setQueryData(statsDashboardKey, charts);
-      return { prev };
-    },
-    onError: (err, _charts, ctx) => {
-      if (ctx?.prev) qc.setQueryData(statsDashboardKey, ctx.prev);
-      pushToast('err', `Grafy se nepodařilo uložit: ${err.message}`);
-    },
-    onSettled: () => qc.invalidateQueries({ queryKey: statsDashboardKey }),
+    patch: (charts) => [cachePatch<ChartSpec[]>({ queryKey: statsDashboardKey, exact: true }, () => charts)],
+    revalidate: (_charts, failed) => (failed ? [statsDashboardKey] : []),
+    onSuccess: (saved) => qc.setQueryData(statsDashboardKey, saved),
+    onError: (err) => pushToast('err', `Grafy se nepodařilo uložit: ${err.message}`),
   });
 
   if (board.isLoading) {
@@ -85,20 +84,16 @@ export default function StatsDashboard({ filters }: { filters: ListingFilters })
    * loses nothing — and it is not listed twice meanwhile. */
   const listed = pending ? charts.filter((c) => c.id !== pending.id) : charts;
   const atCap = charts.length >= MAX_CHARTS;
-  const commit = (next: ChartSpec[]) => save.mutate(next);
   const move = (id: string, delta: -1 | 1) => {
     const from = charts.findIndex((c) => c.id === id);
     const to = from + delta;
     if (from < 0 || to < 0 || to >= charts.length) return;
-    const next = [...charts];
-    const [c] = next.splice(from, 1);
-    next.splice(to, 0, c);
-    commit(next);
+    save.mutate(arrayMove(charts, from, to));
     focusCard(id, delta < 0 ? 'earlier' : 'later');
   };
   const remove = (id: string) => {
     const at = listed.findIndex((c) => c.id === id);
-    commit(charts.filter((c) => c.id !== id));
+    save.mutate(charts.filter((c) => c.id !== id));
     /* Focus goes to what now stands in its place: the next card, else the add tile. */
     const heir = listed[at + 1];
     if (heir) focusCard(heir.id, 'heading');

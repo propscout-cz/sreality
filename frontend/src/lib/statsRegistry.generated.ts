@@ -9,8 +9,10 @@
 export type DimKind = "enum" | "band" | "geo" | "bool";
 export type MeasureUnit = "days" | "m2" | "price" | "ppm2";
 export type StatId = "n" | "mean" | "median" | "p10" | "p25" | "p75" | "p90";
-export type ChartStat = Exclude<StatId, "n">;
+export type ChartStat = "mean" | "median" | "p10" | "p25" | "p75" | "p90";
 export type ViewId = "table" | "line" | "bar" | "box";
+export type StatsRefusal = "empty" | "mixed_category" | "mixed_status" | "too_many_cells" | "bad_spec";
+export type CohortStatus = "active" | "inactive" | "mixed";
 
 export interface StatsOption {
   value: string | number;
@@ -29,8 +31,10 @@ export interface StatsDimension {
   options: StatsOption[] | null;
   /** band: the step per basis ({sale, rent}) or for every basis ({all}); keys are the band's lower bound. */
   steps: Record<string, number> | null;
-  /** band: the unit the key is in. */
-  unit: MeasureUnit | null;
+  /** band: the measure whose values it bands — its unit and its quantity label. */
+  measure: string | null;
+  /** The palette group, in registry order. */
+  group: string;
 }
 
 export interface StatsMeasure {
@@ -42,7 +46,6 @@ export interface StatsMeasure {
   single_status: boolean;
 }
 
-/** ruling 7: how many row and column dimensions a view takes (line / bar: exactly one row). */
 export interface StatsViewLimits {
   min_rows: number;
   max_rows: number;
@@ -51,35 +54,22 @@ export interface StatsViewLimits {
 
 export interface StatsRegistryPayload {
   min_n: number;
-  max_rows: number;
-  max_cols: number;
   max_cells: number;
-  /** charts on one saved board; PUT /stats/dashboard refuses more. */
   max_charts: number;
-  stats: StatId[];
   chart_stats: ChartStat[];
+  default_stat: ChartStat;
   views: ViewId[];
+  refusals: StatsRefusal[];
+  statuses: CohortStatus[];
   view_limits: Record<ViewId, StatsViewLimits>;
-  rent_basis: string;
   dimensions: StatsDimension[];
   measures: StatsMeasure[];
 }
 
 export const STATS_REGISTRY: StatsRegistryPayload = {
   "min_n": 10,
-  "max_rows": 6,
-  "max_cols": 1,
   "max_cells": 2000,
   "max_charts": 50,
-  "stats": [
-    "n",
-    "mean",
-    "median",
-    "p10",
-    "p25",
-    "p75",
-    "p90"
-  ],
   "chart_stats": [
     "mean",
     "median",
@@ -88,11 +78,24 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
     "p75",
     "p90"
   ],
+  "default_stat": "median",
   "views": [
     "table",
     "line",
     "bar",
     "box"
+  ],
+  "refusals": [
+    "empty",
+    "mixed_category",
+    "mixed_status",
+    "too_many_cells",
+    "bad_spec"
+  ],
+  "statuses": [
+    "active",
+    "inactive",
+    "mixed"
   ],
   "view_limits": {
     "table": {
@@ -116,7 +119,6 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "max_cols": 0
     }
   },
-  "rent_basis": "rent_monthly_czk_m2",
   "dimensions": [
     {
       "id": "disposition",
@@ -217,7 +219,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vlastnost"
     },
     {
       "id": "area_band_5",
@@ -231,7 +234,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "steps": {
         "all": 5
       },
-      "unit": "m2"
+      "measure": "area",
+      "group": "Vlastnost"
     },
     {
       "id": "area_band_10",
@@ -245,7 +249,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "steps": {
         "all": 10
       },
-      "unit": "m2"
+      "measure": "area",
+      "group": "Vlastnost"
     },
     {
       "id": "condition",
@@ -311,7 +316,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vlastnost"
     },
     {
       "id": "ppm2_band_s",
@@ -324,7 +330,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         "sale": 5000,
         "rent": 25
       },
-      "unit": "ppm2"
+      "measure": "ppm2",
+      "group": "Cena"
     },
     {
       "id": "ppm2_band_l",
@@ -337,7 +344,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         "sale": 10000,
         "rent": 50
       },
-      "unit": "ppm2"
+      "measure": "ppm2",
+      "group": "Cena"
     },
     {
       "id": "price_band_s",
@@ -350,7 +358,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         "sale": 250000,
         "rent": 1000
       },
-      "unit": "price"
+      "measure": "price",
+      "group": "Cena"
     },
     {
       "id": "price_band_m",
@@ -363,7 +372,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         "sale": 500000,
         "rent": 2500
       },
-      "unit": "price"
+      "measure": "price",
+      "group": "Cena"
     },
     {
       "id": "price_band_l",
@@ -376,7 +386,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         "sale": 1000000,
         "rent": 5000
       },
-      "unit": "price"
+      "measure": "price",
+      "group": "Cena"
     },
     {
       "id": "kraj",
@@ -386,7 +397,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "categories": null,
       "options": null,
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Místo"
     },
     {
       "id": "okres",
@@ -396,7 +408,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "categories": null,
       "options": null,
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Místo"
     },
     {
       "id": "obec",
@@ -406,7 +419,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "categories": null,
       "options": null,
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Místo"
     },
     {
       "id": "cast_obce",
@@ -416,7 +430,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "categories": null,
       "options": null,
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Místo"
     },
     {
       "id": "ulice",
@@ -426,7 +441,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
       "categories": null,
       "options": null,
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Místo"
     },
     {
       "id": "building_type",
@@ -497,7 +513,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vlastnost"
     },
     {
       "id": "furnished",
@@ -523,7 +540,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     },
     {
       "id": "has_balcony",
@@ -544,7 +562,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     },
     {
       "id": "has_lift",
@@ -565,7 +584,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     },
     {
       "id": "has_parking",
@@ -586,7 +606,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     },
     {
       "id": "terrace",
@@ -607,7 +628,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     },
     {
       "id": "cellar",
@@ -628,7 +650,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     },
     {
       "id": "garage",
@@ -649,7 +672,8 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
         }
       ],
       "steps": null,
-      "unit": null
+      "measure": null,
+      "group": "Vybavení"
     }
   ],
   "measures": [

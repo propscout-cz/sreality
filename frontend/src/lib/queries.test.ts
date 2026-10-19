@@ -52,6 +52,11 @@ import type { DistrictChip, ListingFilters } from './filters';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+/* No prefilter active: the id allowlists buildBrowseStatsArgs is handed when none narrows. */
+const NO_PREFILTERS: BrowsePrefilters = {
+  obecIds: null, propertyIds: null, propertyIdsExcluded: null, empty: false,
+};
+
 /* THE PostgREST stand-in for this file: every builder method chains (including
  * the `.retry()` / `.abortSignal()` pgRead sets, and the `.range()` fetchAllRows
  * drives), `.in()` records the ids it was handed, and awaiting the chain answers
@@ -339,7 +344,7 @@ describe('districtsFilterClause, re-exported by queries.ts', () => {
         { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
         { name: 'Žižkov', context: 'Praha', level: 'cast_obce', id: 490067, excluded: true },
       ],
-    }, { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null });
+    }, NO_PREFILTERS);
     expect(args.districts_levels).toEqual(['ulice', 'cast_obce']);
     expect(args.districts_ids).toEqual([666742, 490067]);
     expect(args.districts_excluded_filter).toEqual([false, true]);
@@ -764,9 +769,8 @@ describe('dismissed properties are hidden at the source', () => {
   });
 
   it('puts the flag on the one Stats/map argument object', () => {
-    const resolved = { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null };
-    expect(buildBrowseStatsArgs(DEFAULT_FILTERS, resolved).hide_dismissed).toBe(true);
-    expect(buildBrowseStatsArgs(revealed, resolved).hide_dismissed).toBe(false);
+    expect(buildBrowseStatsArgs(DEFAULT_FILTERS, NO_PREFILTERS).hide_dismissed).toBe(true);
+    expect(buildBrowseStatsArgs(revealed, NO_PREFILTERS).hide_dismissed).toBe(false);
   });
 });
 
@@ -775,7 +779,6 @@ describe('dismissed properties are hidden at the source', () => {
  * list and were silently dropped on the way to the two aggregate RPCs, whose
  * parameters have existed since migrations 133/439. */
 describe('buildBrowseStatsArgs sends the size bounds', () => {
-  const resolved = { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null };
 
   it('passes every Size-group bound through', () => {
     const args = buildBrowseStatsArgs({
@@ -784,7 +787,7 @@ describe('buildBrowseStatsArgs sends the size bounds', () => {
       usableAreaMin: 60, usableAreaMax: 90,
       gardenAreaMin: 100, gardenAreaMax: 300,
       parkingLotsMin: 2,
-    }, resolved);
+    }, NO_PREFILTERS);
     expect(args.estate_area_min_filter).toBe(400);
     expect(args.estate_area_max_filter).toBe(1200);
     expect(args.usable_area_min_filter).toBe(60);
@@ -795,7 +798,7 @@ describe('buildBrowseStatsArgs sends the size bounds', () => {
   });
 
   it('sends null when unset, never undefined (the RPC default is the same)', () => {
-    const args = buildBrowseStatsArgs(DEFAULT_FILTERS, resolved);
+    const args = buildBrowseStatsArgs(DEFAULT_FILTERS, NO_PREFILTERS);
     for (const k of [
       'estate_area_min_filter', 'estate_area_max_filter',
       'usable_area_min_filter', 'usable_area_max_filter',
@@ -868,11 +871,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     expect(supabase.rpc).toHaveBeenCalledWith('browse_stats_properties', expect.anything());
     /* The map's cohort object, byte for byte, plus the spec — one builder. */
     expect(rpcArgs[0]).toEqual({
-      ...buildBrowseStatsArgs(DEFAULT_FILTERS, {
-        obec_ids_filter: null,
-        property_ids_filter: null,
-        property_ids_excluded: null,
-      }),
+      ...buildBrowseStatsArgs(DEFAULT_FILTERS, NO_PREFILTERS),
       spec: SPEC,
     });
   });
@@ -989,7 +988,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
   it('sends the portal rule\'s two inputs without a broker', () => {
     const args = buildBrowseStatsArgs(
       { ...DEFAULT_FILTERS, portals: ['idnes'], status: 'inactive' },
-      { obec_ids_filter: null, property_ids_filter: null, property_ids_excluded: null },
+      NO_PREFILTERS,
     );
     expect(args.portal_filter).toEqual(['idnes']);
     expect([args.active_only_filter, args.inactive_only_filter]).toEqual([false, true]);

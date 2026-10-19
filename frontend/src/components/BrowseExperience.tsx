@@ -542,7 +542,7 @@ export default function BrowseExperience({
 
   /* The Stats tab is the account's chart board (components/stats); each card reads
    * its own pivot, so the header's spinner follows any of them. */
-  const statsFetching = useIsFetching({ queryKey: [browseKeys.root.stats] });
+  const statsFetching = useIsFetching({ queryKey: browseKeys.statsAll });
 
   const cityOverlay = useMemo(() => {
     const cities = citiesQuery.data;

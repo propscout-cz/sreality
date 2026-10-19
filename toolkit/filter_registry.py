@@ -2131,7 +2131,7 @@ def effective_for(
 # --- JSON dump (used by /admin/filter-schema + scripts/generate_…) -------
 
 
-def _enum_to_json(e: EnumOption) -> dict[str, Any]:
+def enum_to_json(e: EnumOption) -> dict[str, Any]:
     out: dict[str, Any] = {"value": e.value, "label_cs": e.label_cs, "label_en": e.label_en}
     if e.group is not None:
         out["group"] = e.group
@@ -2152,7 +2152,7 @@ def _filter_to_json(f: FilterDef) -> dict[str, Any]:
         "unit": f.unit,
         "basis": f.basis,
         "enum_values": (
-            [_enum_to_json(e) for e in f.enum_values]
+            [enum_to_json(e) for e in f.enum_values]
             if f.enum_values else None
         ),
         "aliases": list(f.aliases) if f.aliases else [],

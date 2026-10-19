@@ -20,7 +20,6 @@ const root = {
 } as const;
 
 export const browseKeys = {
-  root,
   cards: (f: ListingFilters, s: SortSpec) => [root.cards, f, s] as const,
   table: (f: ListingFilters, s: SortSpec) => [root.table, f, s] as const,
   /* The pin limit is the server's point budget, so it decides the answer's SHAPE
@@ -31,6 +30,8 @@ export const browseKeys = {
   /* The cohort's resolved prefilter ids, shared by every chart of one filter set
    * (lib/stats fetchStatsPivot); under the stats root so the same sweeps reach it. */
   statsPrefilters: (f: ListingFilters) => [root.stats, f, 'prefilters'] as const,
+  /** Every Stats read (each chart's pivot and the shared prefilters): the tab's spinner. */
+  statsAll: [root.stats] as const,
   count: (f: ListingFilters) => [root.count, f] as const,
   noPriceCount: (f: ListingFilters) => [root.noPriceCount, f] as const,
   /** The paged lists: patched in place by a dismissal, never refetched for one. */

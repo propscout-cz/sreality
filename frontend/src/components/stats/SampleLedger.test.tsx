@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import SampleLedger, { TooFew } from './SampleLedger';
-import { cell, pivotOf } from './testPivot';
+import SampleLedger from './SampleLedger';
+import { TooFew } from './views/cells';
+import { badSpecPivot, cell, pivotOf } from './testPivot';
 
 const text = (el: Element | null) => (el?.textContent ?? '').replace(/\s/g, ' ');
 
@@ -70,9 +71,7 @@ describe('<SampleLedger> — the mark on every chart', () => {
   });
 
   it('renders nothing when the payload has no counts', () => {
-    const { container } = render(
-      <SampleLedger pivot={pivotOf({ refused: 'bad_spec', filtered: null, sample: null, excluded: null })} />,
-    );
+    const { container } = render(<SampleLedger pivot={badSpecPivot()} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

@@ -1,19 +1,20 @@
 import { Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ListingFilters } from '@/lib/filters';
+import { browseKeys } from '@/lib/browseKeys';
 import { lazyChunk } from '@/lib/lazyChunk';
 import Skeleton from '@/components/Skeleton';
+import type { ChartStat } from '@/lib/statsRegistry.generated';
 import {
   LINE_NEEDS_ROW,
   MAX_SERIES,
+  categoryBlockNote,
   chartProblem,
   chartTitle,
-  dimBlock,
-  dimLabel,
   fetchStatsPivot,
+  minRowsFor,
   refusalText,
-  seriesCount,
-  statsPivotKey,
+  seriesModel,
   tooManySeriesText,
   viewBlock,
   type ChartSpec,
@@ -26,8 +27,7 @@ import PivotTable from './views/PivotTable';
 import BoxTable from './views/BoxTable';
 
 /* recharts stays out of the Browse chunk until a line or bar chart is on screen. */
-const PivotLines = lazyChunk(() => import('./views/PivotLines'));
-const PivotBars = lazyChunk(() => import('./views/PivotBars'));
+const PivotSeries = lazyChunk(() => import('./views/PivotSeries'));
 
 /* A transiently unavailable action (a save in flight) is aria-disabled, not
  * disabled, so it keeps keyboard focus; a structurally unavailable one is disabled. */
@@ -35,6 +35,12 @@ const ACTION =
   'rounded-[var(--radius-xs)] px-1.5 py-1 text-[0.75rem] text-[var(--color-ink-3)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] disabled:opacity-35 disabled:hover:bg-transparent disabled:cursor-not-allowed aria-disabled:opacity-35 aria-disabled:hover:bg-transparent aria-disabled:cursor-not-allowed transition-colors';
 
 type FocusTarget = 'heading' | 'edit' | 'remove' | 'keep' | 'earlier' | 'later' | 'builder';
+
+/* The card's two move buttons, one definition. */
+const MOVES = [
+  { dir: 'earlier', glyph: '↑', where: 'dopředu' },
+  { dir: 'later', glyph: '↓', where: 'dozadu' },
+] as const;
 
 /* Focus the board asks this card to take after it moved the card or removed its
  * neighbour (the pressed control was re-inserted or is gone). `seq` re-fires an
@@ -80,13 +86,11 @@ export default function StatsChart({
   const [draft, setDraft] = useState<ChartSpec>(chart);
   const [confirming, setConfirming] = useState(false);
   const shown = editing ? draft : chart;
-  const spec: StatsSpec = useMemo(
-    () => ({ rows: shown.rows, cols: shown.cols, measure: shown.measure }),
-    [shown.rows, shown.cols, shown.measure],
-  );
+  /* A fresh object per render: react-query hashes the key by value. */
+  const spec: StatsSpec = { rows: shown.rows, cols: shown.cols, measure: shown.measure };
 
   const pivot = useQuery<StatsPivot, Error>({
-    queryKey: statsPivotKey(filters, spec),
+    queryKey: browseKeys.stats(filters, spec),
     queryFn: ({ signal }) => fetchStatsPivot(filters, spec, { signal, client }),
     placeholderData: (prev) => prev,
   });
@@ -95,20 +99,15 @@ export default function StatsChart({
   const title = chartTitle(shown, data?.basis ?? null);
   const problem = editing ? chartProblem(draft) : null;
 
-  const headingRef = useRef<HTMLHeadingElement>(null);
-  const editRef = useRef<HTMLButtonElement>(null);
-  const removeRef = useRef<HTMLButtonElement>(null);
-  const keepRef = useRef<HTMLButtonElement>(null);
-  const earlierRef = useRef<HTMLButtonElement>(null);
-  const laterRef = useRef<HTMLButtonElement>(null);
-  const builderRef = useRef<HTMLDivElement>(null);
+  /* Every element a flip can send focus to, by target. */
+  const refs = useRef<Partial<Record<FocusTarget, HTMLElement | null>>>({});
+  const refTo = (t: FocusTarget) => (el: HTMLElement | null) => {
+    refs.current[t] = el;
+  };
   const focusTo = (t: FocusTarget) => {
-    const el = {
-      heading: headingRef, edit: editRef, remove: removeRef, keep: keepRef,
-      earlier: earlierRef, later: laterRef, builder: builderRef,
-    }[t].current;
+    const el = refs.current[t];
     if (el && !(el instanceof HTMLButtonElement && el.disabled)) el.focus();
-    else headingRef.current?.focus();
+    else refs.current.heading?.focus();
   };
 
   /* A flip of this card queues its focus target; the effect lands it once the
@@ -163,7 +162,7 @@ export default function StatsChart({
       className="@container min-w-0 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]"
     >
       <header className="flex items-start gap-3 px-5 pt-4">
-        <h3 id={headingId} ref={headingRef} tabIndex={-1} className="min-w-0 text-[1.02rem] leading-snug">
+        <h3 id={headingId} ref={refTo('heading')} tabIndex={-1} className="min-w-0 text-[1.02rem] leading-snug">
           {title}
         </h3>
         {!editing && (
@@ -180,43 +179,32 @@ export default function StatsChart({
                 >
                   Odebrat
                 </button>
-                <button ref={keepRef} type="button" className={ACTION} onClick={keep} aria-label="Ponechat graf">
+                <button ref={refTo('keep')} type="button" className={ACTION} onClick={keep} aria-label="Ponechat graf">
                   Ponechat
                 </button>
               </>
             ) : (
               <>
-                {onMove && (
-                  <>
+                {onMove &&
+                  MOVES.map((m) => (
                     <button
-                      ref={earlierRef}
+                      key={m.dir}
+                      ref={refTo(m.dir)}
                       type="button"
                       className={ACTION}
-                      onClick={saving ? undefined : onMove.earlier}
-                      disabled={!onMove.earlier}
+                      onClick={saving ? undefined : onMove[m.dir]}
+                      disabled={!onMove[m.dir]}
                       aria-disabled={saving || undefined}
-                      aria-label={`Posunout graf ${title} dopředu`}
+                      aria-label={`Posunout graf ${title} ${m.where}`}
                     >
-                      ↑
+                      {m.glyph}
                     </button>
-                    <button
-                      ref={laterRef}
-                      type="button"
-                      className={ACTION}
-                      onClick={saving ? undefined : onMove.later}
-                      disabled={!onMove.later}
-                      aria-disabled={saving || undefined}
-                      aria-label={`Posunout graf ${title} dozadu`}
-                    >
-                      ↓
-                    </button>
-                  </>
-                )}
-                <button ref={editRef} type="button" className={ACTION} onClick={begin} aria-label={`Upravit graf ${title}`}>
+                  ))}
+                <button ref={refTo('edit')} type="button" className={ACTION} onClick={begin} aria-label={`Upravit graf ${title}`}>
                   Upravit
                 </button>
                 <button
-                  ref={removeRef}
+                  ref={refTo('remove')}
                   type="button"
                   className={ACTION}
                   onClick={askRemove}
@@ -233,7 +221,7 @@ export default function StatsChart({
 
       {editing && (
         <div
-          ref={builderRef}
+          ref={refTo('builder')}
           tabIndex={-1}
           role="group"
           aria-label={`Úprava grafu ${title}`}
@@ -260,7 +248,7 @@ export default function StatsChart({
         className={`px-5 pt-4 pb-5 transition-opacity ${pivot.isPlaceholderData ? 'opacity-60' : ''}`}
         aria-busy={pivot.isFetching}
       >
-        <Body chart={shown} pivot={data} loading={pivot.isLoading} error={pivot.error} onRetry={() => void pivot.refetch()} />
+        <Body chart={shown} pivot={data} error={pivot.error} onRetry={() => void pivot.refetch()} />
       </div>
 
       {editing && (
@@ -292,13 +280,11 @@ export default function StatsChart({
 function Body({
   chart,
   pivot,
-  loading,
   error,
   onRetry,
 }: {
   chart: ChartSpec;
   pivot: StatsPivot | null;
-  loading: boolean;
   error: Error | null;
   onRetry: () => void;
 }) {
@@ -317,37 +303,42 @@ function Body({
       </p>
     );
   }
-  if (loading || !pivot) return <Skeleton height={96} />;
+  if (!pivot) return <Skeleton height={96} />;
   if (pivot.refused) return <Refusal>{refusalText(pivot.refused)}</Refusal>;
   /* The payload answered a different spec (a placeholder while the preview's
    * new one loads) that this view cannot draw: hold the old picture back. */
   if (viewBlock(pivot.spec, chart.view) != null) return null;
   if (pivot.sample === 0) {
-    const off = pivot.spec.rows.concat(pivot.spec.cols).filter((d) => dimBlock(d, pivot.category_main) != null);
+    const note = categoryBlockNote([...pivot.spec.rows, ...pivot.spec.cols], pivot.category_main);
     return (
       <Refusal>
         Žádná nemovitost ve filtru nemá všechny potřebné údaje.
-        {off.length > 0 ? ` ${off.map(dimLabel).join(', ')}: ${dimBlock(off[0], pivot.category_main)}.` : ''}
+        {note ? ` ${note}` : ''}
       </Refusal>
     );
   }
+  if (pivot.spec.rows.length < minRowsFor(chart.view)) return <Refusal>{LINE_NEEDS_ROW}</Refusal>;
   switch (chart.view) {
     case 'table':
       return <PivotTable pivot={pivot} stat={chart.stat} />;
     case 'box':
       return <BoxTable pivot={pivot} />;
     case 'line':
-    case 'bar': {
-      if (pivot.spec.rows.length !== 1) return <Refusal>{LINE_NEEDS_ROW}</Refusal>;
-      if (seriesCount(pivot) > MAX_SERIES) return <Refusal>{tooManySeriesText()}</Refusal>;
-      const View = chart.view === 'line' ? PivotLines : PivotBars;
-      return (
-        <Suspense fallback={<Skeleton height={240} />}>
-          <View pivot={pivot} stat={chart.stat} />
-        </Suspense>
-      );
-    }
+    case 'bar':
+      return <Series pivot={pivot} stat={chart.stat} kind={chart.view} />;
   }
+}
+
+/* Line / bar: the series model is built once, here, so the palette's limit is
+ * judged on the model the view then draws. */
+function Series({ pivot, stat, kind }: { pivot: StatsPivot; stat: ChartStat; kind: 'line' | 'bar' }) {
+  const model = useMemo(() => seriesModel(pivot, stat), [pivot, stat]);
+  if (model.series.length > MAX_SERIES) return <Refusal>{tooManySeriesText()}</Refusal>;
+  return (
+    <Suspense fallback={<Skeleton height={240} />}>
+      <PivotSeries pivot={pivot} model={model} stat={stat} kind={kind} />
+    </Suspense>
+  );
 }
 
 /* A refusal is one sentence in the card body — on the same dashed vocabulary as

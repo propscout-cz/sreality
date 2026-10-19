@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
-import PivotLines from './PivotLines';
+import type { ChartStat } from '@/lib/statsRegistry.generated';
+import { seriesModel, type StatsPivot } from '@/lib/stats';
+import PivotSeries from './PivotSeries';
 import { cell, pivotOf } from '../testPivot';
 
 /* ResponsiveContainer measures a 0x0 parent in jsdom; a fixed size makes the
@@ -29,27 +31,31 @@ afterAll(() => {
   for (const k of Object.keys(TOKENS)) document.documentElement.style.removeProperty(k);
 });
 
-const pivot = pivotOf({
-  spec: { rows: ['disposition'], cols: ['condition'], measure: 'area' },
-  cells: [
-    cell(['1+kk'], 20, 40, 'novostavba'),
-    cell(['2+kk'], 20, 55, 'novostavba'),
-    cell(['1+kk'], 20, 38, 'dobry'),
-    cell(['2+kk'], 6, null, 'dobry'),
-    cell(['1+kk'], 20, 30, 'spatny'),
-    cell(['2+kk'], 20, 50, 'spatny'),
-  ],
-});
+/* The card builds the model (StatsChart) and hands it to the view. */
+const draw = (pivot: StatsPivot, stat: ChartStat, kind: 'line' | 'bar') =>
+  render(<PivotSeries pivot={pivot} model={seriesModel(pivot, stat)} stat={stat} kind={kind} />);
 
-describe('<PivotLines>', () => {
+describe('<PivotSeries kind="line">', () => {
+  const pivot = pivotOf({
+    spec: { rows: ['disposition'], cols: ['condition'], measure: 'area' },
+    cells: [
+      cell(['1+kk'], 20, 40, 'novostavba'),
+      cell(['2+kk'], 20, 55, 'novostavba'),
+      cell(['1+kk'], 20, 38, 'dobry'),
+      cell(['2+kk'], 6, null, 'dobry'),
+      cell(['1+kk'], 20, 30, 'spatny'),
+      cell(['2+kk'], 20, 50, 'spatny'),
+    ],
+  });
+
   it('draws one line per column value, copper first, then the ink tints', () => {
-    const { container } = render(<PivotLines pivot={pivot} stat="median" />);
+    const { container } = draw(pivot, 'median', 'line');
     const strokes = [...container.querySelectorAll('.recharts-line-curve')].map((p) => p.getAttribute('stroke'));
     expect(strokes).toEqual(['#3c6e63', '#1a1c22', '#4a4d57']);
   });
 
   it('keys the series in the registry order and names the statistic and the unit', () => {
-    render(<PivotLines pivot={pivot} stat="median" />);
+    draw(pivot, 'median', 'line');
     const legend = screen.getByRole('list', { name: 'Řady grafu' });
     expect([...legend.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
       'Novostavba',
@@ -60,7 +66,7 @@ describe('<PivotLines>', () => {
   });
 
   it('labels the value axis through valueAxisSpec, with no repeated tick', () => {
-    const { container } = render(<PivotLines pivot={pivot} stat="median" />);
+    const { container } = draw(pivot, 'median', 'line');
     const ticks = [...container.querySelectorAll('.recharts-yAxis text')].map((t) => t.textContent);
     expect(ticks.length).toBeGreaterThan(1);
     expect(new Set(ticks).size).toBe(ticks.length);
@@ -69,7 +75,7 @@ describe('<PivotLines>', () => {
   });
 
   it('gives the plot a text alternative: the same numbers as a screen-reader table', () => {
-    const { container } = render(<PivotLines pivot={pivot} stat="median" />);
+    const { container } = draw(pivot, 'median', 'line');
     const table = screen.getByRole('table', { name: 'medián · m²' });
     expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Dispozice', 'Novostavba', 'Dobrý', 'Špatný',
@@ -81,7 +87,34 @@ describe('<PivotLines>', () => {
   });
 
   it('leaves a gap for a cell under the minimum and says so', () => {
-    render(<PivotLines pivot={pivot} stat="median" />);
+    draw(pivot, 'median', 'line');
     expect(screen.getByText(/Chybějící bod = buňka pod 10 nemovitostí/)).toBeInTheDocument();
+  });
+});
+
+describe('<PivotSeries kind="bar">', () => {
+  const pivot = pivotOf({
+    spec: { rows: ['has_lift'], cols: [], measure: 'price' },
+    basis: 'rent_monthly_czk_m2',
+    category_type: 'pronajem',
+    cells: [cell([], 40, 20_000), cell(['ne'], 20, 18_000), cell(['ano'], 20, 22_000)],
+  });
+
+  it('draws one bar per x value from a zero-based axis', () => {
+    const { container } = draw(pivot, 'mean', 'bar');
+    expect(container.querySelectorAll('.recharts-bar-rectangle')).toHaveLength(2);
+    const ticks = [...container.querySelectorAll('.recharts-yAxis text')].map((t) => t.textContent);
+    /* valueAxisSpec puts one scale unit on the whole axis, so zero reads "0 k". */
+    expect(ticks[0]).toMatch(/^0(\s|$)/);
+    expect([...container.querySelectorAll('.recharts-xAxis text')].map((t) => t.textContent)).toEqual([
+      'Ano',
+      'Ne',
+    ]);
+  });
+
+  it('names the statistic and the rent period from the payload basis; one series needs no key', () => {
+    draw(pivot, 'mean', 'bar');
+    expect(screen.getByText('průměr · Kč / měs')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Řady grafu' })).toBeNull();
   });
 });

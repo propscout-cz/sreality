@@ -18,34 +18,33 @@ import { cell, pivotOf } from '@/components/stats/testPivot';
 import {
   DEFAULT_CHARTS,
   DIMENSION_GROUPS,
+  LINE_NEEDS_ROW,
   MAX_SERIES,
-  NO_PLACES,
-  cellKeyOf,
-  cellTree,
+  categoryBlockNote,
   chartProblem,
   chartTitle,
   chipTarget,
+  colValuesOf,
   cohortChips,
   dimBlock,
   dropOutcome,
   fetchDashboard,
-  flattenTree,
   keyLabel,
   ledgerCounts,
   measureUnit,
   moveRow,
   newChart,
-  nodeLabel,
+  noColumnsText,
   normalizePivot,
+  pivotRows,
   placeDim,
-  placeNames,
   refusalText,
   removeDim,
   sanitizeChart,
   saveDashboard,
-  seriesCount,
   seriesModel,
   sortKeys,
+  statUsed,
   viewBlock,
   type ChartSpec,
 } from './stats';
@@ -65,34 +64,35 @@ const chart = (over: Partial<ChartSpec>): ChartSpec => ({
   ...over,
 });
 
-const OBCE = placeNames(
-  pivotOf({
-    places: [
-      { dim: 'obec', key: '561380', name: 'Česká Lípa' },
-      { dim: 'obec', key: '562971', name: 'Chomutov' },
-      { dim: 'obec', key: '554481', name: 'Cheb' },
-      { dim: 'obec', key: '582786', name: 'Brno' },
-      { dim: 'obec', key: '586021', name: 'Hodonín' },
-    ],
-  }),
-);
+/* A pivot with no place among its keys. */
+const NONE = pivotOf().places;
+
+const OBCE = pivotOf({
+  places: [
+    { dim: 'obec', key: '561380', name: 'Česká Lípa' },
+    { dim: 'obec', key: '562971', name: 'Chomutov' },
+    { dim: 'obec', key: '554481', name: 'Cheb' },
+    { dim: 'obec', key: '582786', name: 'Brno' },
+    { dim: 'obec', key: '586021', name: 'Hodonín' },
+  ],
+}).places;
 
 describe('sortKeys — the registry is the one order', () => {
   it('orders an enum by its options, unknown members after, alphabetically', () => {
-    expect(sortKeys('disposition', ['3+kk', 'zzz', '1+kk', 'atyp-x', '2+1'], NO_PLACES)).toEqual([
+    expect(sortKeys('disposition', ['3+kk', 'zzz', '1+kk', 'atyp-x', '2+1'], NONE)).toEqual([
       '1+kk', '2+1', '3+kk', 'atyp-x', 'zzz',
     ]);
-    expect(sortKeys('condition', ['spatny', 'novostavba', 'projekt'], NO_PLACES)).toEqual([
+    expect(sortKeys('condition', ['spatny', 'novostavba', 'projekt'], NONE)).toEqual([
       'projekt', 'novostavba', 'spatny',
     ]);
   });
 
   it('orders a boolean ano before ne', () => {
-    expect(sortKeys('has_lift', ['ne', 'ano'], NO_PLACES)).toEqual(['ano', 'ne']);
+    expect(sortKeys('has_lift', ['ne', 'ano'], NONE)).toEqual(['ano', 'ne']);
   });
 
   it('orders bands by their lower bound, numerically', () => {
-    expect(sortKeys('ppm2_band_s', ['100000', '95000', '5000'], NO_PLACES)).toEqual(['5000', '95000', '100000']);
+    expect(sortKeys('ppm2_band_s', ['100000', '95000', '5000'], NONE)).toEqual(['5000', '95000', '100000']);
   });
 
   it('orders places by their register name with Czech collation (Č after C, Ch after H)', () => {
@@ -105,38 +105,38 @@ describe('sortKeys — the registry is the one order', () => {
 
 describe('keyLabel — one label per key, steps by the payload basis', () => {
   it('labels a sale per-m² band with the sale step and unit', () => {
-    expect(sp(keyLabel('ppm2_band_s', '5000', SALE, NO_PLACES))).toBe(sp(`5 000 – 10 000 ${PPM2_UNIT.sale}`));
-    expect(sp(keyLabel('ppm2_band_l', '80000', SALE, NO_PLACES))).toBe(sp(`80 000 – 90 000 ${PPM2_UNIT.sale}`));
+    expect(sp(keyLabel('ppm2_band_s', '5000', SALE, NONE))).toBe(sp(`5 000 – 10 000 ${PPM2_UNIT.sale}`));
+    expect(sp(keyLabel('ppm2_band_l', '80000', SALE, NONE))).toBe(sp(`80 000 – 90 000 ${PPM2_UNIT.sale}`));
   });
 
   it('labels a rent per-m² band with the rent step and the monthly unit', () => {
-    expect(sp(keyLabel('ppm2_band_s', '300', RENT, NO_PLACES))).toBe(sp(`300 – 325 ${PPM2_UNIT.rent}`));
-    expect(sp(keyLabel('ppm2_band_l', '300', RENT, NO_PLACES))).toBe(sp(`300 – 350 ${PPM2_UNIT.rent}`));
+    expect(sp(keyLabel('ppm2_band_s', '300', RENT, NONE))).toBe(sp(`300 – 325 ${PPM2_UNIT.rent}`));
+    expect(sp(keyLabel('ppm2_band_l', '300', RENT, NONE))).toBe(sp(`300 – 350 ${PPM2_UNIT.rent}`));
   });
 
   it('labels a land band per m² of plot, on the sale step', () => {
-    expect(sp(keyLabel('ppm2_band_s', '0', LAND, NO_PLACES))).toBe(sp(`0 – 5 000 ${PPM2_UNIT.land}`));
+    expect(sp(keyLabel('ppm2_band_s', '0', LAND, NONE))).toBe(sp(`0 – 5 000 ${PPM2_UNIT.land}`));
   });
 
   it('labels price bands by period', () => {
-    expect(sp(keyLabel('price_band_m', '3000000', SALE, NO_PLACES))).toBe(sp(`3 000 000 – 3 500 000 ${PRICE_PERIOD_UNIT.capital}`));
-    expect(sp(keyLabel('price_band_s', '15000', RENT, NO_PLACES))).toBe(sp(`15 000 – 16 000 ${PRICE_PERIOD_UNIT.monthly}`));
-    expect(sp(keyLabel('price_band_l', '15000', RENT, NO_PLACES))).toBe(sp('15 000 – 20 000 Kč / měs'));
+    expect(sp(keyLabel('price_band_m', '3000000', SALE, NONE))).toBe(sp(`3 000 000 – 3 500 000 ${PRICE_PERIOD_UNIT.capital}`));
+    expect(sp(keyLabel('price_band_s', '15000', RENT, NONE))).toBe(sp(`15 000 – 16 000 ${PRICE_PERIOD_UNIT.monthly}`));
+    expect(sp(keyLabel('price_band_l', '15000', RENT, NONE))).toBe(sp('15 000 – 20 000 Kč / měs'));
   });
 
   it('labels area bands with their one step whatever the basis', () => {
-    expect(sp(keyLabel('area_band_10', '80', RENT, NO_PLACES))).toBe('80 – 90 m²');
-    expect(sp(keyLabel('area_band_5', '80', SALE, NO_PLACES))).toBe('80 – 85 m²');
+    expect(sp(keyLabel('area_band_10', '80', RENT, NONE))).toBe('80 – 90 m²');
+    expect(sp(keyLabel('area_band_5', '80', SALE, NONE))).toBe('80 – 85 m²');
   });
 
   it('leaves a band without a basis unit-less — a gap, never a guess', () => {
-    expect(sp(keyLabel('ppm2_band_s', '5000', null, NO_PLACES))).toBe('5 000 – 10 000');
+    expect(sp(keyLabel('ppm2_band_s', '5000', null, NONE))).toBe('5 000 – 10 000');
   });
 
   it('labels enums by label_cs and unknown members by themselves', () => {
-    expect(keyLabel('condition', 'po_rekonstrukci', SALE, NO_PLACES)).toBe('Po rekonstrukci');
-    expect(keyLabel('has_balcony', 'ano', SALE, NO_PLACES)).toBe('Ano');
-    expect(keyLabel('condition', 'legacy_spelling', SALE, NO_PLACES)).toBe('legacy_spelling');
+    expect(keyLabel('condition', 'po_rekonstrukci', SALE, NONE)).toBe('Po rekonstrukci');
+    expect(keyLabel('has_balcony', 'ano', SALE, NONE)).toBe('Ano');
+    expect(keyLabel('condition', 'legacy_spelling', SALE, NONE)).toBe('legacy_spelling');
   });
 });
 
@@ -157,18 +157,18 @@ describe('places — a place key is a RÚIAN code, named by the payload', () => 
       cell(['990500003'], 5, null),
     ],
   });
-  const names = placeNames(lhota);
+  const names = lhota.places;
 
   it('labels a place key by its register name, per dimension', () => {
     expect(keyLabel('obec', '582786', SALE, names)).toBe('Brno');
     expect(keyLabel('okres', '582786', SALE, names)).toBe('582786');
-    expect(nodeLabel({ keys: ['582786'], cells: new Map(), children: [] }, lhota.spec, SALE, names)).toBe('Brno');
+    expect(pivotRows(lhota).find((r) => r.key === '582786')?.label).toBe('Brno');
   });
 
   it('keeps two places of one name as two rows, ordered by code', () => {
-    const rows = flattenTree(cellTree(lhota.cells, lhota.spec, names).root);
-    expect(rows.map((r) => r.keys.join('/'))).toEqual(['', '990500003', '582786', '990500001', '990500002']);
-    expect(rows.map((r) => nodeLabel(r, lhota.spec, SALE, names))).toEqual([
+    const rows = pivotRows(lhota);
+    expect(rows.map((r) => r.key)).toEqual(['', '990500003', '582786', '990500001', '990500002']);
+    expect(rows.map((r) => r.label)).toEqual([
       'Celkem', '990500003', 'Brno', 'Lhota', 'Lhota',
     ]);
   });
@@ -176,7 +176,7 @@ describe('places — a place key is a RÚIAN code, named by the payload', () => 
   it('shows the code when the register has no name for it', () => {
     expect(keyLabel('obec', '990500003', SALE, names)).toBe('990500003');
     expect(keyLabel('obec', '123456', SALE, names)).toBe('123456');
-    expect(keyLabel('ulice', '990700001', SALE, NO_PLACES)).toBe('990700001');
+    expect(keyLabel('ulice', '990700001', SALE, NONE)).toBe('990700001');
   });
 
   it('names the x axis and the series of a line chart, in label order', () => {
@@ -197,8 +197,9 @@ describe('places — a place key is a RÚIAN code, named by the payload', () => 
     ]);
   });
 
-  it('builds the lookup once per pivot', () => {
-    expect(placeNames(lhota)).toBe(names);
+  it('builds the lookup once, when the payload is read', () => {
+    expect(names).toBeInstanceOf(Map);
+    expect(names.size).toBe(4);
   });
 });
 
@@ -251,42 +252,41 @@ describe('chartTitle — derived, never stored', () => {
   });
 });
 
-describe('cellTree — children by key prefix, parent above children', () => {
-  const spec = { rows: ['disposition', 'condition'], cols: [], measure: 'ppm2' };
-  const cells = [
-    cell([], 60, 100),
-    cell(['2+kk'], 30, 110),
-    cell(['1+kk'], 30, 90),
-    cell(['2+kk', 'spatny'], 5, null),
-    cell(['2+kk', 'novostavba'], 25, 120),
-    cell(['1+kk', 'dobry'], 30, 90),
-  ];
+describe('pivotRows — children by key prefix, parent above children', () => {
+  const pivot = pivotOf({
+    spec: { rows: ['disposition', 'condition'], cols: [], measure: 'ppm2' },
+    cells: [
+      cell([], 60, 100),
+      cell(['2+kk'], 30, 110),
+      cell(['1+kk'], 30, 90),
+      cell(['2+kk', 'spatny'], 5, null),
+      cell(['2+kk', 'novostavba'], 25, 120),
+      cell(['1+kk', 'dobry'], 30, 90),
+    ],
+  });
 
   it('nests every level under its prefix and orders each level by its dimension', () => {
-    const rows = flattenTree(cellTree(cells, spec, NO_PLACES).root);
-    expect(rows.map((r) => r.keys.join('/'))).toEqual([
-      '', '1+kk', '1+kk/dobry', '2+kk', '2+kk/novostavba', '2+kk/spatny',
+    const rows = pivotRows(pivot);
+    expect(rows.map((r) => r.key)).toEqual([
+      '', '1+kk', '1+kk›dobry', '2+kk', '2+kk›novostavba', '2+kk›spatny',
     ]);
-    expect(rows.map((r) => nodeLabel(r, spec, SALE, NO_PLACES))).toEqual([
+    expect(rows.map((r) => r.label)).toEqual([
       'Celkem', '1+kk', 'Dobrý', '2+kk', 'Novostavba', 'Špatný',
+    ]);
+    expect(rows.map((r) => [r.depth, r.rollup])).toEqual([
+      [0, true], [1, true], [2, false], [1, true], [2, false], [2, false],
     ]);
   });
 
   it('keeps a cell per column value and lists the columns in registry order', () => {
-    const colSpec = { rows: ['disposition'], cols: ['has_lift'], measure: 'ppm2' };
-    const tree = cellTree(
-      [cell([], 20, 1, 'ne'), cell([], 20, 2, 'ano'), cell(['1+kk'], 20, 3, 'ne'), cell(['1+kk'], 12, 4, 'ano')],
-      colSpec,
-      NO_PLACES,
-    );
-    expect(tree.cols).toEqual(['ano', 'ne']);
-    expect(tree.root.cells.get('ano')?.median).toBe(2);
-    expect(tree.root.children[0].cells.get('ne')?.median).toBe(3);
-  });
-
-  it('keys React rows and cells by keys.join + col', () => {
-    expect(cellKeyOf(['2+kk', 'dobry'], 'ano')).toBe('2+kk›dobry|ano');
-    expect(cellKeyOf([], null)).toBe('|');
+    const p = pivotOf({
+      spec: { rows: ['disposition'], cols: ['has_lift'], measure: 'ppm2' },
+      cells: [cell([], 20, 1, 'ne'), cell([], 20, 2, 'ano'), cell(['1+kk'], 20, 3, 'ne'), cell(['1+kk'], 12, 4, 'ano')],
+    });
+    expect(colValuesOf(p)).toEqual(['ano', 'ne']);
+    const [whole, oneKk] = pivotRows(p);
+    expect(whole.cells.get('ano')?.median).toBe(2);
+    expect(oneKk.cells.get('ne')?.median).toBe(3);
   });
 });
 
@@ -296,12 +296,14 @@ describe('the ledger', () => {
       spec: { rows: ['disposition'], cols: [], measure: 'ppm2' },
       cells: [cell([], 80, 100), cell(['1+kk'], 74, 90), cell(['2+kk'], 6, null)],
     });
-    expect(ledgerCounts(p)).toEqual({ filtered: 100, sample: 80, excluded: 20, withStats: 74, underMin: 6 });
+    expect(ledgerCounts(p)).toEqual({
+      filtered: 100, sample: 80, excluded: 20, split: { withStats: 74, underMin: 6 },
+    });
   });
 
   it('keeps the counts on a refusal and leaves the split unknown', () => {
     const p = pivotOf({ refused: 'mixed_category', cells: [], category_main: null });
-    expect(ledgerCounts(p)).toMatchObject({ filtered: 100, sample: 80, withStats: null, underMin: null });
+    expect(ledgerCounts(p)).toMatchObject({ filtered: 100, sample: 80, split: null });
     expect(cohortChips(p)).toEqual(['více typů nemovitosti', 'prodej', 'aktivní']);
   });
 
@@ -317,40 +319,44 @@ describe('the ledger', () => {
   });
 });
 
-describe('normalizePivot', () => {
-  it('reads jsonb numerics and the echoed spec', () => {
-    const p = normalizePivot(
-      {
-        spec: { rows: ['disposition'], cols: [], measure: 'price' },
-        filtered: '12', sample: 10, excluded: 2, basis: SALE, min_n: 10, refused: null,
-        cells: [{ keys: ['1+kk'], col: null, n: 10, mean: '5.5', median: 5, p10: 1, p25: 2, p75: 7, p90: 9 }],
-      },
+describe('normalizePivot — the RPC\'s two answers', () => {
+  it('keeps the spec the server echoed, not the one asked for', () => {
+    const p = pivotOf({ spec: { rows: ['disposition'], cols: [], measure: 'price' } });
+    expect(normalizePivot(
+      { ...p, places: [] },
       { rows: [], cols: [], measure: 'ppm2' },
-    );
-    expect(p.spec).toEqual({ rows: ['disposition'], cols: [], measure: 'price' });
-    expect(p.filtered).toBe(12);
-    expect(p.cells[0].mean).toBe(5.5);
-    expect(p.places).toEqual([]);
+    ).spec).toEqual({ rows: ['disposition'], cols: [], measure: 'price' });
   });
 
-  it('reads the place names, a missing name as null, and drops a malformed entry', () => {
-    const p = normalizePivot(
-      {
-        spec: { rows: ['obec'], cols: [], measure: 'price' },
-        places: [
-          { dim: 'obec', key: '582786', name: 'Brno' },
-          { dim: 'obec', key: '990500003', name: null },
-          { dim: 'obec', key: 582786, name: 'Brno' },
-          null,
-        ],
-        cells: [],
-      },
-      { rows: [], cols: [], measure: 'ppm2' },
+  it('reads the place names, a missing name as null', () => {
+    const p = pivotOf({
+      spec: { rows: ['obec'], cols: [], measure: 'price' },
+      places: [
+        { dim: 'obec', key: '582786', name: 'Brno' },
+        { dim: 'obec', key: '990500003', name: null },
+      ],
+    });
+    expect(keyLabel('obec', '582786', SALE, p.places)).toBe('Brno');
+    expect(keyLabel('obec', '990500003', SALE, p.places)).toBe('990500003');
+  });
+
+  it('fills the bad_spec stub: the requested spec, no counts, no cohort facts', () => {
+    const spec = { rows: ['disposition'], cols: [], measure: 'ppm2' };
+    const p = normalizePivot({ refused: 'bad_spec', reason: 'unknown measure', cells: [] }, spec);
+    expect(p).toMatchObject({
+      spec, filtered: null, sample: null, excluded: null, status: null, basis: null,
+      refused: 'bad_spec', reason: 'unknown measure', cells: [],
+    });
+    expect(p.places.size).toBe(0);
+  });
+
+  it('reads a refusal or a status this build does not know as none', () => {
+    const p = pivotOf();
+    const odd = normalizePivot(
+      { ...p, places: [], refused: 'from_the_future' as never, status: 'paused' as never },
+      p.spec,
     );
-    expect(p.places).toEqual([
-      { dim: 'obec', key: '582786', name: 'Brno' },
-      { dim: 'obec', key: '990500003', name: null },
-    ]);
+    expect([odd.refused, odd.status]).toEqual([null, null]);
   });
 });
 
@@ -386,11 +392,24 @@ describe('the shelf rules (the registry\'s, in the UI)', () => {
   });
 
   it('says why a view cannot take the shelves, and why a chart cannot be saved', () => {
-    expect(viewBlock({ rows: ['a', 'b'], cols: [], measure: 'ppm2' }, 'line')).toMatch(/jednu dimenzi/);
-    expect(viewBlock({ rows: ['a'], cols: ['b'], measure: 'ppm2' }, 'box')).toMatch(/krabice/);
+    expect(viewBlock({ rows: ['a', 'b'], cols: [], measure: 'ppm2' }, 'line')).toBe(
+      'čáry a pruhy mají v Řádcích jen jednu dimenzi',
+    );
+    expect(viewBlock({ rows: ['a'], cols: ['b'], measure: 'ppm2' }, 'box')).toBe('krabice nemá Sloupce');
     expect(viewBlock({ rows: ['a'], cols: ['b'], measure: 'ppm2' }, 'bar')).toBeNull();
     expect(chartProblem(chart({ view: 'bar', rows: [] }))).toMatch(/osa x/);
     expect(chartProblem(chart({ view: 'table', rows: [] }))).toBeNull();
+    /* The view names come from the picker's own labels. */
+    expect(LINE_NEEDS_ROW).toBe('Čáry a pruhy potřebují jednu dimenzi v Řádcích (osa x).');
+    expect(noColumnsText('box')).toBe('Krabice nemá Sloupce — dimenze patří do Řádků.');
+  });
+
+  it('draws one statistic on line, bar and a table with a column', () => {
+    expect(statUsed(chart({ view: 'line' }))).toBe(true);
+    expect(statUsed(chart({ view: 'bar' }))).toBe(true);
+    expect(statUsed(chart({ view: 'table', cols: ['condition'] }))).toBe(true);
+    expect(statUsed(chart({ view: 'table' }))).toBe(false);
+    expect(statUsed(chart({ view: 'box' }))).toBe(false);
   });
 
   it('disables a byty-only dimension off byty, with the reason', () => {
@@ -398,6 +417,10 @@ describe('the shelf rules (the registry\'s, in the UI)', () => {
     expect(dimBlock('area_band_5', 'byt')).toBeNull();
     expect(dimBlock('area_band_5', null)).toBeNull();
     expect(dimBlock('disposition', 'dum')).toBeNull();
+    expect(categoryBlockNote(['disposition', 'area_band_5', 'area_band_10'], 'dum')).toBe(
+      'Plocha po 5 m², Plocha po 10 m²: jen byty.',
+    );
+    expect(categoryBlockNote(['disposition', 'area_band_5'], 'byt')).toBeNull();
   });
 
   it('drops a chip or a slot where it lands, and says when the view refuses it', () => {
@@ -459,16 +482,16 @@ describe('seriesModel — x is the one row dimension, series the column values',
     expect(m.data.map((d) => d.label)).toEqual(['1+kk', '2+kk']);
     expect(m.data[0]).toMatchObject({ s0: 100, s1: null });
     expect(m.gaps).toBe(true);
-    expect(seriesCount(p)).toBe(2);
   });
 
-  it('counts the series a column would draw, one without a column', () => {
+  it('draws a series per column value, one without a column', () => {
     const many = pivotOf({
       spec: { rows: ['disposition'], cols: ['obec'], measure: 'ppm2' },
       cells: Array.from({ length: MAX_SERIES + 1 }, (_, i) => cell(['1+kk'], 20, 100, String(582786 + i))),
     });
-    expect(seriesCount(many)).toBe(MAX_SERIES + 1);
-    expect(seriesCount(pivotOf({ spec: { rows: ['disposition'], cols: [], measure: 'ppm2' } }))).toBe(1);
+    expect(seriesModel(many, 'median').series).toHaveLength(MAX_SERIES + 1);
+    const one = seriesModel(pivotOf({ spec: { rows: ['disposition'], cols: [], measure: 'ppm2' } }), 'median');
+    expect(one.series.map((s) => s.label)).toEqual(['Cena za m²']);
   });
 });
 

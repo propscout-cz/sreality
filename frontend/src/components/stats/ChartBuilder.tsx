@@ -1,4 +1,4 @@
-import { useId, useState, type CSSProperties, type MouseEventHandler, type ReactNode, type TouchEventHandler } from 'react';
+import { useId, useMemo, useState, type CSSProperties, type MouseEventHandler, type ReactNode, type TouchEventHandler } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -23,12 +23,13 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { PickButton } from '@/components/controls';
-import { STATS_REGISTRY, type ViewId } from '@/lib/statsRegistry.generated';
+import { Label, PickButton } from '@/components/controls';
+import { STATS_REGISTRY } from '@/lib/statsRegistry.generated';
 import {
   DIMENSION_GROUPS,
   STAT_LABEL,
   VIEW_LABEL,
+  categoryBlockNote,
   chipTarget,
   dimBlock,
   dimLabel,
@@ -37,8 +38,10 @@ import {
   maxRowsFor,
   measureLabel,
   moveRow,
+  noColumnsText,
   placeDim,
   removeDim,
+  statUsed,
   viewBlock,
   type ChartSpec,
   type DropTarget,
@@ -80,30 +83,30 @@ const dragLabel = (id: UniqueIdentifier): string => {
   return dim ? dimLabel(dim) : String(id);
 };
 
+/* What dropping `active` on `over` does to the draft; null when it is no drop. */
+const outcomeOf = (draft: ChartSpec, active: UniqueIdentifier, over: UniqueIdentifier | undefined) => {
+  const dim = dimOf(active);
+  const target = over != null ? toTarget(over) : null;
+  return dim && target ? dropOutcome(draft, dim, target) : null;
+};
+
 /* Screen-reader narration of a drag, in Czech. The drop says whether the chart
  * took it: a move the view's limits refuse leaves the chart unchanged. */
-const announcementsFor = (draft: ChartSpec): Announcements => {
-  const outcome = (active: UniqueIdentifier, over: UniqueIdentifier) => {
-    const dim = dimOf(active);
-    const target = toTarget(over);
-    return dim && target ? dropOutcome(draft, dim, target) : null;
-  };
-  return {
-    onDragStart: ({ active }) => `Zvednuto: ${dragLabel(active.id)}.`,
-    onDragOver: ({ active, over }) =>
-      over
-        ? `${dragLabel(active.id)} nad polem ${shelfName(over.id)}.`
-        : `${dragLabel(active.id)} není nad žádným polem.`,
-    onDragEnd: ({ active, over }) => {
-      const result = over ? outcome(active.id, over.id) : null;
-      if (!over || !result) return `Vráceno: ${dragLabel(active.id)}.`;
-      return result.refused
-        ? `${dragLabel(active.id)} nelze položit do ${shelfName(over.id)}.`
-        : `Položeno: ${dragLabel(active.id)} do ${shelfName(over.id)}.`;
-    },
-    onDragCancel: ({ active }) => `Vráceno: ${dragLabel(active.id)}.`,
-  };
-};
+const announcementsFor = (draft: ChartSpec): Announcements => ({
+  onDragStart: ({ active }) => `Zvednuto: ${dragLabel(active.id)}.`,
+  onDragOver: ({ active, over }) =>
+    over
+      ? `${dragLabel(active.id)} nad polem ${shelfName(over.id)}.`
+      : `${dragLabel(active.id)} není nad žádným polem.`,
+  onDragEnd: ({ active, over }) => {
+    const result = outcomeOf(draft, active.id, over?.id);
+    if (!over || !result) return `Vráceno: ${dragLabel(active.id)}.`;
+    return result.refused
+      ? `${dragLabel(active.id)} nelze položit do ${shelfName(over.id)}.`
+      : `Položeno: ${dragLabel(active.id)} do ${shelfName(over.id)}.`;
+  },
+  onDragCancel: ({ active }) => `Vráceno: ${dragLabel(active.id)}.`,
+});
 
 /* Pointer drags bind the mouse and touch starts only — never the keyboard
  * listener — so a chip's Enter / Space stays its click. */
@@ -116,6 +119,8 @@ const INSTRUCTIONS = {
   draggable:
     'Mezerníkem dimenzi zvednete, šipkami ji posunete, mezerníkem položíte, klávesou Escape přesun zrušíte.',
 };
+
+const PALETTE_DIMS = DIMENSION_GROUPS.flatMap((g) => g.dims);
 
 export default function ChartBuilder({
   draft,
@@ -137,25 +142,28 @@ export default function ChartBuilder({
   );
   const chosen = new Set([...draft.rows, ...draft.cols]);
   const target = chipTarget(draft);
+  /* Why each dimension is ruled out for the cohort's category (null = it is not):
+   * read by the chips and the slots alike, with the one sentence that names them. */
+  const { why, note } = useMemo(
+    () => ({
+      why: new Map(PALETTE_DIMS.map((d) => [d, dimBlock(d, categoryMain)])),
+      note: categoryBlockNote(PALETTE_DIMS, categoryMain),
+    }),
+    [categoryMain],
+  );
+  const announcements = useMemo(() => announcementsFor(draft), [draft]);
 
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     setDragging(null);
-    const dim = dimOf(active.id);
-    const to = over ? toTarget(over.id) : null;
-    if (!dim || !to) return;
-    const { next, refused } = dropOutcome(draft, dim, to);
-    if (!refused && next !== draft) onChange(next);
+    const next = outcomeOf(draft, active.id, over?.id)?.next;
+    if (next && next !== draft) onChange(next);
   };
-
-  const blockedByCategory = DIMENSION_GROUPS.flatMap((g) => g.dims)
-    .map((d) => ({ d, why: dimBlock(d, categoryMain) }))
-    .filter((x): x is { d: string; why: string } => x.why != null);
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={closestCenter}
-      accessibility={{ announcements: announcementsFor(draft), screenReaderInstructions: INSTRUCTIONS }}
+      accessibility={{ announcements, screenReaderInstructions: INSTRUCTIONS }}
       onDragStart={({ active }: DragStartEvent) => setDragging(active.id)}
       onDragCancel={() => setDragging(null)}
       onDragEnd={onDragEnd}
@@ -163,10 +171,10 @@ export default function ChartBuilder({
       <div className="grid gap-5 @3xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div role="group" aria-label="Dimenze" className="space-y-3">
           {DIMENSION_GROUPS.map((g) => (
-            <PaletteGroup key={g.label} label={g.label}>
+            <Picker key={g.label} label={g.label}>
               {g.dims.map((d) => {
                 const on = chosen.has(d);
-                const why = dimBlock(d, categoryMain);
+                const off = why.get(d) ?? null;
                 const full = !on && target == null;
                 return (
                   <PaletteChip
@@ -174,12 +182,12 @@ export default function ChartBuilder({
                     dim={d}
                     on={on}
                     // A chosen chip always stays clickable: its click takes it back out.
-                    disabled={!on && (why != null || full)}
+                    disabled={!on && (off != null || full)}
                     ariaLabel={
                       on
                         ? `Odebrat ${dimLabel(d)} z grafu`
-                        : why
-                          ? `${dimLabel(d)} — ${why}`
+                        : off
+                          ? `${dimLabel(d)} — ${off}`
                           : full
                             ? `${dimLabel(d)} — Řádky i Sloupce jsou plné`
                             : `Přidat ${dimLabel(d)} do ${target === 'cols' ? 'Sloupců' : 'Řádků'}`
@@ -190,13 +198,9 @@ export default function ChartBuilder({
                   />
                 );
               })}
-            </PaletteGroup>
+            </Picker>
           ))}
-          {blockedByCategory.length > 0 && (
-            <p className="text-[0.7rem] text-[var(--color-ink-3)]">
-              {blockedByCategory.map((x) => dimLabel(x.d)).join(', ')}: {blockedByCategory[0].why}.
-            </p>
-          )}
+          {note && <p className="text-[0.7rem] text-[var(--color-ink-3)]">{note}</p>}
           {target == null && (
             <p className="text-[0.7rem] text-[var(--color-ink-3)]">
               Řádky i Sloupce jsou plné — dimenzi nejdřív odeberte.
@@ -205,8 +209,8 @@ export default function ChartBuilder({
         </div>
 
         <div className="space-y-4">
-          <RowsShelf draft={draft} onChange={onChange} categoryMain={categoryMain} />
-          <ColsShelf draft={draft} onChange={onChange} categoryMain={categoryMain} />
+          <RowsShelf draft={draft} onChange={onChange} why={why} />
+          <ColsShelf draft={draft} onChange={onChange} why={why} />
           <ValueWell draft={draft} onChange={onChange} />
         </div>
       </div>
@@ -227,20 +231,21 @@ export default function ChartBuilder({
 function ShelfLabel({ id, children, aside }: { id: string; children: ReactNode; aside?: ReactNode }) {
   return (
     <div className="mb-1.5 flex items-baseline justify-between gap-2">
-      <p id={id} className="text-[0.62rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-        {children}
-      </p>
+      <Label id={id}>{children}</Label>
       {aside ? <span className="font-mono tabular-nums text-[0.65rem] text-[var(--color-ink-3)]">{aside}</span> : null}
     </div>
   );
 }
 
-function PaletteGroup({ label, children }: { label: string; children: ReactNode }) {
+/* A labelled row of pick buttons: a palette group, the value, the view, the statistic. */
+function Picker({ label, children }: { label: string; children: ReactNode }) {
   const id = useId();
   return (
-    <div role="group" aria-labelledby={id}>
+    <div>
       <ShelfLabel id={id}>{label}</ShelfLabel>
-      <div className="flex flex-wrap gap-1">{children}</div>
+      <div role="group" aria-labelledby={id} className="flex flex-wrap gap-1">
+        {children}
+      </div>
     </div>
   );
 }
@@ -273,60 +278,114 @@ function PaletteChip({
 
 /* -------------------------------------------------------------------------- */
 
+type Why = ReadonlyMap<string, string | null>;
+
 const SLOT_BTN =
   'inline-flex h-6 min-w-6 items-center justify-center rounded-[var(--radius-xs)] px-1 text-[0.72rem] text-[var(--color-ink-3)] hover:bg-[var(--color-paper-2)] hover:text-[var(--color-ink)] disabled:opacity-35 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors';
 
-function RowsShelf({
-  draft,
-  onChange,
-  categoryMain,
+/* A filled slot, in Řádky or Sloupce. */
+const SLOT =
+  'flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-3)] pr-1';
+
+/* An empty slot: the dashed mark of something absent. */
+const PLACEHOLDER =
+  'flex h-8 items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)] px-2 text-[0.72rem] text-[var(--color-ink-2)]';
+
+/* A shelf: its label (with the fill count), and the well a drag drops into. */
+function ShelfFrame({
+  label,
+  aside,
+  list,
+  dropRef,
+  over,
+  children,
 }: {
-  draft: ChartSpec;
-  onChange: (next: ChartSpec) => void;
-  categoryMain: string | null;
+  label: string;
+  aside?: string;
+  /* Řádky are an ordered list; Sloupce one slot. */
+  list: boolean;
+  dropRef: (el: HTMLElement | null) => void;
+  over: boolean;
+  children: ReactNode;
 }) {
   const id = useId();
-  const max = maxRowsFor(draft.view);
-  const { setNodeRef, isOver } = useDroppable({ id: ROWS_SHELF });
-  const colsFree = maxColsFor(draft.view) > 0;
+  const well = `rounded-[var(--radius-sm)] border bg-[var(--color-inset)] p-1.5 transition-colors ${
+    over ? 'border-[var(--color-copper)]' : 'border-[var(--color-rule)]'
+  }`;
   return (
     <div role="group" aria-labelledby={id}>
-      <ShelfLabel id={id} aside={`${draft.rows.length} z ${max}`}>
-        Řádky
+      <ShelfLabel id={id} aside={aside}>
+        {label}
       </ShelfLabel>
-      <SortableContext items={draft.rows.map((d) => `r:${d}`)} strategy={verticalListSortingStrategy}>
-        <ol
-          ref={setNodeRef}
-          className={[
-            'space-y-1 rounded-[var(--radius-sm)] border bg-[var(--color-inset)] p-1.5 transition-colors',
-            isOver ? 'border-[var(--color-copper)]' : 'border-[var(--color-rule)]',
-          ].join(' ')}
-        >
-          {draft.rows.map((d, i) => (
+      {list ? (
+        <ol ref={dropRef} className={`space-y-1 ${well}`}>
+          {children}
+        </ol>
+      ) : (
+        <div ref={dropRef} className={well}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RowsShelf({ draft, onChange, why }: { draft: ChartSpec; onChange: (next: ChartSpec) => void; why: Why }) {
+  const max = maxRowsFor(draft.view);
+  const { setNodeRef, isOver } = useDroppable({ id: ROWS_SHELF });
+  return (
+    <SortableContext items={draft.rows.map((d) => `r:${d}`)} strategy={verticalListSortingStrategy}>
+      <ShelfFrame label="Řádky" aside={`${draft.rows.length} z ${max}`} list dropRef={setNodeRef} over={isOver}>
+        {draft.rows.map((d, i) => {
+          const toCols = placeDim(draft, d, 'cols');
+          return (
             <RowSlot
               key={d}
               dim={d}
               index={i}
               last={i === draft.rows.length - 1}
-              note={dimBlock(d, categoryMain)}
-              canToCols={colsFree}
+              note={why.get(d) ?? null}
               onUp={() => onChange(moveRow(draft, i, i - 1))}
               onDown={() => onChange(moveRow(draft, i, i + 1))}
-              onToCols={() => onChange(placeDim(draft, d, 'cols'))}
+              onToCols={toCols !== draft ? () => onChange(toCols) : undefined}
               onRemove={() => onChange(removeDim(draft, d))}
             />
-          ))}
-          {draft.rows.length < max && (
-            <li
-              className="flex h-8 items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)] px-2 text-[0.72rem] text-[var(--color-ink-2)]"
-              style={{ marginLeft: `${draft.rows.length * 0.75}rem` }}
-            >
-              {draft.rows.length === 0 ? 'Bez řádků: jeden řádek za celý vzorek' : 'Další úroveň — klikněte na dimenzi nebo ji sem přetáhněte'}
-            </li>
-          )}
-        </ol>
-      </SortableContext>
-    </div>
+          );
+        })}
+        {draft.rows.length < max && (
+          <li className={PLACEHOLDER} style={{ marginLeft: `${draft.rows.length * 0.75}rem` }}>
+            {draft.rows.length === 0 ? 'Bez řádků: jeden řádek za celý vzorek' : 'Další úroveň — klikněte na dimenzi nebo ji sem přetáhněte'}
+          </li>
+        )}
+      </ShelfFrame>
+    </SortableContext>
+  );
+}
+
+/* What a row slot and the column slot share: the label, the category note, and
+ * the slot's buttons ending in its ×. */
+function SlotBody({
+  label,
+  note,
+  onRemove,
+  children,
+}: {
+  label: string;
+  note: string | null;
+  onRemove: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <span className="min-w-0 truncate text-[0.8rem] text-[var(--color-ink)]">{label}</span>
+      {note ? <span className="text-[0.65rem] text-[var(--color-brick)] whitespace-nowrap">{note}</span> : null}
+      <span className="ml-auto flex items-center">
+        {children}
+        <button type="button" className={SLOT_BTN} onClick={onRemove} aria-label={`Odebrat ${label}`}>
+          ×
+        </button>
+      </span>
+    </>
   );
 }
 
@@ -335,7 +394,6 @@ function RowSlot({
   index,
   last,
   note,
-  canToCols,
   onUp,
   onDown,
   onToCols,
@@ -345,10 +403,10 @@ function RowSlot({
   index: number;
   last: boolean;
   note: string | null;
-  canToCols: boolean;
   onUp: () => void;
   onDown: () => void;
-  onToCols: () => void;
+  /* Absent where the view takes no column. */
+  onToCols?: () => void;
   onRemove: () => void;
 }) {
   const label = dimLabel(dim);
@@ -360,14 +418,7 @@ function RowSlot({
     marginLeft: `${index * 0.75}rem`,
   };
   return (
-    <li
-      ref={setNodeRef}
-      style={style}
-      className={[
-        'flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-3)] pr-1',
-        isDragging ? 'opacity-60' : '',
-      ].join(' ')}
-    >
+    <li ref={setNodeRef} style={style} className={`${SLOT}${isDragging ? ' opacity-60' : ''}`}>
       <button
         type="button"
         ref={setActivatorNodeRef}
@@ -379,99 +430,68 @@ function RowSlot({
         <Grip />
       </button>
       <span className="font-mono tabular-nums text-[0.65rem] text-[var(--color-ink-3)]">{index + 1}</span>
-      <span className="min-w-0 truncate text-[0.8rem] text-[var(--color-ink)]">{label}</span>
-      {note ? <span className="text-[0.65rem] text-[var(--color-brick)] whitespace-nowrap">{note}</span> : null}
-      <span className="ml-auto flex items-center">
+      <SlotBody label={label} note={note} onRemove={onRemove}>
         <button type="button" className={SLOT_BTN} onClick={onUp} disabled={index === 0} aria-label={`Posunout ${label} výš`}>
           ↑
         </button>
         <button type="button" className={SLOT_BTN} onClick={onDown} disabled={last} aria-label={`Posunout ${label} níž`}>
           ↓
         </button>
-        {canToCols && (
+        {onToCols && (
           <button type="button" className={SLOT_BTN} onClick={onToCols} aria-label={`Přesunout ${label} do Sloupců`}>
             do Sloupců
           </button>
         )}
-        <button type="button" className={SLOT_BTN} onClick={onRemove} aria-label={`Odebrat ${label}`}>
-          ×
-        </button>
-      </span>
+      </SlotBody>
     </li>
   );
 }
 
-function ColsShelf({
-  draft,
-  onChange,
-  categoryMain,
-}: {
-  draft: ChartSpec;
-  onChange: (next: ChartSpec) => void;
-  categoryMain: string | null;
-}) {
-  const id = useId();
+function ColsShelf({ draft, onChange, why }: { draft: ChartSpec; onChange: (next: ChartSpec) => void; why: Why }) {
   const max = maxColsFor(draft.view);
   const { setNodeRef, isOver } = useDroppable({ id: COLS_SHELF, disabled: max === 0 });
   const dim = draft.cols[0];
-  const rowsFree = draft.rows.length < maxRowsFor(draft.view);
+  const toRows = dim ? placeDim(draft, dim, 'rows') : draft;
   return (
-    <div role="group" aria-labelledby={id}>
-      <ShelfLabel id={id} aside={max === 0 ? undefined : `${draft.cols.length} z ${max}`}>
-        Sloupce
-      </ShelfLabel>
-      <div
-        ref={setNodeRef}
-        className={[
-          'rounded-[var(--radius-sm)] border bg-[var(--color-inset)] p-1.5 transition-colors',
-          isOver ? 'border-[var(--color-copper)]' : 'border-[var(--color-rule)]',
-        ].join(' ')}
-      >
-        {max === 0 ? (
-          <p className="flex h-8 items-center px-2 text-[0.72rem] text-[var(--color-ink-2)]">
-            Krabice nemá Sloupce — dimenze patří do Řádků.
-          </p>
-        ) : dim ? (
-          <ColSlot
-            dim={dim}
-            note={dimBlock(dim, categoryMain)}
-            canToRows={rowsFree}
-            onToRows={() => onChange(placeDim(draft, dim, 'rows'))}
-            onRemove={() => onChange(removeDim(draft, dim))}
-          />
-        ) : (
-          <p className="flex h-8 items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)] px-2 text-[0.72rem] text-[var(--color-ink-2)]">
-            Bez sloupců — přetáhněte sem dimenzi pro řady nebo sloupce tabulky
-          </p>
-        )}
-      </div>
-    </div>
+    <ShelfFrame
+      label="Sloupce"
+      aside={max === 0 ? undefined : `${draft.cols.length} z ${max}`}
+      list={false}
+      dropRef={setNodeRef}
+      over={isOver}
+    >
+      {max === 0 ? (
+        <p className="flex h-8 items-center px-2 text-[0.72rem] text-[var(--color-ink-2)]">{noColumnsText(draft.view)}</p>
+      ) : dim ? (
+        <ColSlot
+          dim={dim}
+          note={why.get(dim) ?? null}
+          onToRows={toRows !== draft ? () => onChange(toRows) : undefined}
+          onRemove={() => onChange(removeDim(draft, dim))}
+        />
+      ) : (
+        <p className={PLACEHOLDER}>Bez sloupců — přetáhněte sem dimenzi pro řady nebo sloupce tabulky</p>
+      )}
+    </ShelfFrame>
   );
 }
 
 function ColSlot({
   dim,
   note,
-  canToRows,
   onToRows,
   onRemove,
 }: {
   dim: string;
   note: string | null;
-  canToRows: boolean;
-  onToRows: () => void;
+  /* Absent while Řádky are full. */
+  onToRows?: () => void;
   onRemove: () => void;
 }) {
   const label = dimLabel(dim);
   const { setNodeRef, listeners, isDragging } = useDraggable({ id: `c:${dim}` });
   return (
-    <div
-      ref={setNodeRef}
-      className={[
-        'flex h-8 items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-3)] pr-1',
-        isDragging ? 'opacity-60' : '',
-      ].join(' ')}
-    >
+    <div ref={setNodeRef} className={`${SLOT}${isDragging ? ' opacity-60' : ''}`}>
       <span
         {...pointerStarts(listeners)}
         aria-hidden="true"
@@ -479,18 +499,13 @@ function ColSlot({
       >
         <Grip />
       </span>
-      <span className="min-w-0 truncate text-[0.8rem] text-[var(--color-ink)]">{label}</span>
-      {note ? <span className="text-[0.65rem] text-[var(--color-brick)] whitespace-nowrap">{note}</span> : null}
-      <span className="ml-auto flex items-center">
-        {canToRows && (
+      <SlotBody label={label} note={note} onRemove={onRemove}>
+        {onToRows && (
           <button type="button" className={SLOT_BTN} onClick={onToRows} aria-label={`Přesunout ${label} do Řádků`}>
             do Řádků
           </button>
         )}
-        <button type="button" className={SLOT_BTN} onClick={onRemove} aria-label={`Odebrat ${label}`}>
-          ×
-        </button>
-      </span>
+      </SlotBody>
     </div>
   );
 }
@@ -498,35 +513,30 @@ function ColSlot({
 /* -------------------------------------------------------------------------- */
 
 function ValueWell({ draft, onChange }: { draft: ChartSpec; onChange: (next: ChartSpec) => void }) {
-  const id = useId();
-  const viewNotes = STATS_REGISTRY.views
-    .map((v) => ({ v, why: viewBlock(draft, v) }))
-    .filter((x): x is { v: ViewId; why: string } => x.why != null && x.v !== draft.view);
-  const statUsed = draft.view === 'line' || draft.view === 'bar' || (draft.view === 'table' && draft.cols.length > 0);
+  /* Why each view cannot take the draft's shelves (null = it can). */
+  const blocks = STATS_REGISTRY.views.map((v) => ({ v, why: viewBlock(draft, v) }));
+  const notes = blocks.filter((x) => x.why != null && x.v !== draft.view);
   /* The well holds three pickers; only the measure group is named "Hodnota". */
   return (
     <div className="space-y-3 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] p-3">
-      <div>
-        <ShelfLabel id={id}>Hodnota</ShelfLabel>
-        <div role="group" aria-labelledby={id} className="flex flex-wrap gap-1">
-          {STATS_REGISTRY.measures.map((m) => (
-            <PickButton
-              key={m.id}
-              on={draft.measure === m.id}
-              onClick={() => onChange({ ...draft, measure: m.id })}
-              ariaLabel={`Hodnota: ${measureLabel(m.id)}`}
-            >
-              {m.label_cs}
-            </PickButton>
-          ))}
-        </div>
-      </div>
+      <Picker label="Hodnota">
+        {STATS_REGISTRY.measures.map((m) => (
+          <PickButton
+            key={m.id}
+            on={draft.measure === m.id}
+            onClick={() => onChange({ ...draft, measure: m.id })}
+            ariaLabel={`Hodnota: ${measureLabel(m.id)}`}
+          >
+            {m.label_cs}
+          </PickButton>
+        ))}
+      </Picker>
       <Picker label="Zobrazení">
-        {STATS_REGISTRY.views.map((v) => (
+        {blocks.map(({ v, why }) => (
           <PickButton
             key={v}
             on={draft.view === v}
-            disabled={draft.view !== v && viewBlock(draft, v) != null}
+            disabled={draft.view !== v && why != null}
             onClick={() => onChange({ ...draft, view: v })}
             ariaLabel={`Zobrazení: ${VIEW_LABEL[v]}`}
           >
@@ -534,12 +544,12 @@ function ValueWell({ draft, onChange }: { draft: ChartSpec; onChange: (next: Cha
           </PickButton>
         ))}
       </Picker>
-      {viewNotes.length > 0 && (
+      {notes.length > 0 && (
         <p className="-mt-1.5 text-[0.7rem] text-[var(--color-ink-3)]">
-          {viewNotes.map((x) => `${VIEW_LABEL[x.v]}: ${x.why}`).join(' · ')}
+          {notes.map((x) => `${VIEW_LABEL[x.v]}: ${x.why}`).join(' · ')}
         </p>
       )}
-      {statUsed && (
+      {statUsed(draft) && (
         <Picker label="Statistika">
           {STATS_REGISTRY.chart_stats.map((s) => (
             <PickButton
@@ -553,18 +563,6 @@ function ValueWell({ draft, onChange }: { draft: ChartSpec; onChange: (next: Cha
           ))}
         </Picker>
       )}
-    </div>
-  );
-}
-
-function Picker({ label, children }: { label: string; children: ReactNode }) {
-  const id = useId();
-  return (
-    <div>
-      <ShelfLabel id={id}>{label}</ShelfLabel>
-      <div role="group" aria-labelledby={id} className="flex flex-wrap gap-1">
-        {children}
-      </div>
     </div>
   );
 }

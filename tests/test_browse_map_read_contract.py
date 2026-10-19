@@ -68,21 +68,20 @@ def _strip_ts_comments(src: str) -> str:
 
 
 def _builder_keys() -> set[str]:
-    """The snake_case keys `buildBrowseStatsArgs` puts on the wire, including the two it
-    spreads in from `resolved`."""
+    """The snake_case keys `buildBrowseStatsArgs` puts on the wire, the prefilter
+    allowlists it reads off `pre` included."""
     src = _ts()
     at = src.index("export const buildBrowseStatsArgs")
     block = _balanced_block(src, src.index("{", src.index("return {", at)))
     body = _strip_ts_comments(block)
     keys = set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:", body, flags=re.MULTILINE))
-    assert "...resolved" in body, (
-        "buildBrowseStatsArgs no longer spreads `resolved` — the two id allowlists the "
-        "caller resolves over the network have stopped reaching the RPC."
-    )
-    # `...resolved`'s own keys are declared on the interface, not in the literal.
-    iface = _balanced_block(src, src.index("{", src.index("interface BrowseStatsResolvedFilters")))
-    keys |= set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:", _strip_ts_comments(iface),
-                           flags=re.MULTILINE))
+    # The prefilter allowlists ride in from the ONE resolved object (`pre`), by name: a
+    # caller cannot hand the builder a hand-mapped subset any more.
+    for field in ("obecIds", "propertyIds", "propertyIdsExcluded"):
+        assert re.search(rf"\bpre\.{field}\b", body), (
+            f"buildBrowseStatsArgs no longer reads `pre.{field}` — that allowlist the "
+            "caller resolves over the network has stopped reaching the RPC."
+        )
     assert len(keys) > 60, f"only parsed {len(keys)} builder keys — the parse broke"
     return keys
 
@@ -188,14 +187,20 @@ def test_the_map_rpc_carries_both_prefilter_id_spaces() -> None:
         f"applyPrefilters' id spaces changed: {pairs}"
     )
 
+    # The map call hands the builder the whole resolved object; the builder is where
+    # each allowlist is named (asserted by _builder_keys), so the call need only pass it.
     call = _rpc_call_block("browse_map_cells")
+    assert "buildBrowseStatsArgs(f, pre)" in call, (
+        "the browse_map_cells call no longer passes the resolved prefilters to the one "
+        "cohort builder — the map cohort would lose every id allowlist"
+    )
+    builder = _strip_ts_comments(_balanced_block(
+        _ts(), _ts().index("{", _ts().index("return {", _ts().index("export const buildBrowseStatsArgs")))))
     for column, field in pairs:
-        assert re.search(rf"pre\.{field}\b", call), (
-            f"applyPrefilters filters on `{column}` via `p.{field}`, but the "
-            f"browse_map_cells call never passes `pre.{field}` — that allowlist is "
-            "silently dropped on the map and applied everywhere else."
+        assert re.search(rf"pre\.{field}\b", builder), (
+            f"applyPrefilters filters on `{column}` via `p.{field}`, but buildBrowseStatsArgs "
+            f"never reads `pre.{field}` — that allowlist is silently dropped from the RPC cohorts"
         )
-    assert "listing_ids_filter" not in call
 
 
 def test_the_map_lane_is_chosen_from_the_filters_alone() -> None:

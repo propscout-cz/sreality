@@ -1,8 +1,8 @@
 """toolkit.stats_registry — the Stats dashboard's one vocabulary (docs/design/stats-dashboard.md).
 
-The spec validator gates `PUT /stats/dashboard` and states the same rules the pivot RPC
-refuses on; the SQL faces render one arm per dimension / measure from the same tuples the
-generated TypeScript is emitted from. Migration 626 carrying those faces verbatim is
+The board validator gates `PUT /stats/dashboard`; the spec validator states the same rules
+the pivot RPC refuses on; the SQL faces render one arm per dimension / measure from the same
+tuples the generated TypeScript is emitted from. Migration 626 carrying those faces verbatim is
 tests/test_626_stats_dashboard.py's subject.
 """
 
@@ -15,6 +15,7 @@ import pytest
 
 from toolkit import filter_registry as fr
 from toolkit import stats_registry as sr
+from toolkit.measures import RENT_MONTHLY_CZK_M2
 
 _OK_SPEC = {"rows": ["disposition", "condition"], "cols": ["kraj"], "measure": "ppm2"}
 _OK_CHART = {"id": "c1", "view": "table", "rows": ["disposition"], "cols": ["condition"],
@@ -128,6 +129,32 @@ def test_a_chart_must_be_an_object() -> None:
         sr.validate_chart(["c1"])
 
 
+# --- validate_board -------------------------------------------------------------------
+
+
+def test_a_board_is_its_charts_normalised_in_order() -> None:
+    board = [{**_OK_CHART, "id": "b"}, {**_OK_CHART, "id": "a", "view": "box", "cols": []}]
+    assert [c["id"] for c in sr.validate_board(board)] == ["b", "a"]
+    assert sr.validate_board([]) == []
+    assert len(sr.validate_board([{**_OK_CHART, "id": f"c{i}"} for i in range(sr.MAX_CHARTS)])) == sr.MAX_CHARTS
+
+
+@pytest.mark.parametrize(
+    "board, reason",
+    [
+        ([{**_OK_CHART, "id": f"c{i}"} for i in range(sr.MAX_CHARTS + 1)],
+         f"at most {sr.MAX_CHARTS} charts on a board"),
+        ([_OK_CHART, dict(_OK_CHART)], "chart 1: duplicate id 'c1'"),
+        ([_OK_CHART, {**_OK_CHART, "id": "c2", "view": "pie"}], "chart 1: unknown view 'pie'"),
+        (["c1"], "chart 0: chart must be an object"),
+    ],
+)
+def test_a_bad_board_is_refused_naming_the_chart(board: list, reason: str) -> None:
+    with pytest.raises(sr.SpecError) as exc:
+        sr.validate_board(board)
+    assert str(exc.value) == reason
+
+
 # --- the SQL faces ----------------------------------------------------------------------
 
 
@@ -171,7 +198,7 @@ def test_measure_value_has_one_arm_per_measure() -> None:
 def test_the_limits_are_the_rulings() -> None:
     assert (sr.MIN_N, sr.MAX_ROWS, sr.MAX_COLS, sr.MAX_CELLS) == (10, 6, 1, 2000)
     assert sr.STATS == ("n", "mean", "median", "p10", "p25", "p75", "p90")
-    assert sr.CHART_STATS == sr.STATS[1:]
+    assert sr.CHART_STATS == sr.STATS[1:] and sr.DEFAULT_STAT in sr.CHART_STATS
 
 
 def test_ids_are_unique() -> None:
@@ -181,23 +208,30 @@ def test_ids_are_unique() -> None:
 
 @pytest.mark.parametrize("dim", [d for d in sr.DIMENSIONS if d.kind == "band"],
                          ids=[d.id for d in sr.DIMENSIONS if d.kind == "band"])
-def test_every_band_has_steps_and_a_unit(dim: sr.Dimension) -> None:
-    assert dim.steps and dim.unit
+def test_every_band_has_steps_and_names_an_existing_measure(dim: sr.Dimension) -> None:
+    assert dim.steps and dim.measure in sr.MEASURE_BY_ID
     assert all(isinstance(v, int) and v > 0 for v in dim.steps.values())
-    if dim.unit == "m2":
+    if dim.measure == "area":
         assert set(dim.steps) == {"all"} and dim.categories == ("byt",)
+        assert dim.sql.startswith("case when category_main = 'byt' then ")
     else:
-        assert set(dim.steps) == {"sale", "rent"}
+        assert set(dim.steps) == {"sale", "rent"} and dim.categories is None
         assert f"'{sr.RENT_BASIS}' then {dim.steps['rent']} else {dim.steps['sale']}" in dim.sql
 
 
+def test_only_bands_name_a_measure() -> None:
+    assert all((d.measure is None) == (d.kind != "band") for d in sr.DIMENSIONS)
+
+
 def test_the_band_steps_are_ruling_5() -> None:
-    assert sr.PPM2_STEPS == {"ppm2_band_s": {"sale": 5_000, "rent": 25},
-                             "ppm2_band_l": {"sale": 10_000, "rent": 50}}
-    assert sr.PRICE_STEPS == {"price_band_s": {"sale": 250_000, "rent": 1_000},
-                              "price_band_m": {"sale": 500_000, "rent": 2_500},
-                              "price_band_l": {"sale": 1_000_000, "rent": 5_000}}
-    assert sr.AREA_STEPS == {"area_band_5": 5, "area_band_10": 10}
+    assert {d.id: d.steps for d in sr.DIMENSIONS if d.kind == "band"} == {
+        "area_band_5": {"all": 5}, "area_band_10": {"all": 10},
+        "ppm2_band_s": {"sale": 5_000, "rent": 25}, "ppm2_band_l": {"sale": 10_000, "rent": 50},
+        "price_band_s": {"sale": 250_000, "rent": 1_000},
+        "price_band_m": {"sale": 500_000, "rent": 2_500},
+        "price_band_l": {"sale": 1_000_000, "rent": 5_000},
+    }
+    assert sr.RENT_BASIS == RENT_MONTHLY_CZK_M2
 
 
 def test_enum_and_bool_dimensions_carry_their_order_and_places_none() -> None:
@@ -225,19 +259,22 @@ def test_only_turnover_needs_one_status() -> None:
 def test_registry_json_round_trips_and_names_everything() -> None:
     doc = sr.registry_json()
     assert json.loads(json.dumps(doc)) == doc
+    assert set(doc) == {"min_n", "max_cells", "max_charts", "chart_stats", "default_stat", "views",
+                        "refusals", "statuses", "view_limits", "dimensions", "measures"}
     assert [d["id"] for d in doc["dimensions"]] == [d.id for d in sr.DIMENSIONS]
     assert [m["id"] for m in doc["measures"]] == [m.id for m in sr.MEASURES]
-    assert (doc["min_n"], doc["max_rows"], doc["max_cols"], doc["max_cells"]) == (10, 6, 1, 2000)
-    assert doc["max_charts"] == sr.MAX_CHARTS
+    assert (doc["min_n"], doc["max_cells"], doc["max_charts"]) == (10, 2000, sr.MAX_CHARTS)
+    assert doc["chart_stats"] == list(sr.CHART_STATS) and doc["default_stat"] in doc["chart_stats"]
+    assert doc["refusals"] == list(sr.REFUSALS) and doc["statuses"] == list(sr.STATUSES)
     assert doc["view_limits"] == {
         v: {"min_rows": lim.min_rows, "max_rows": lim.max_rows, "max_cols": lim.max_cols}
         for v, lim in sr.VIEW_LIMITS.items()
     }
     assert list(doc["view_limits"]) == list(sr.VIEWS)
-    assert doc["rent_basis"] == sr.RENT_BASIS
     for d in doc["dimensions"]:
-        assert d["label_cs"] and d["label_en"]
+        assert d["label_cs"] and d["label_en"] and d["group"]
         assert (d["steps"] is None) == (d["kind"] != "band")
+        assert (d["measure"] in sr.MEASURE_BY_ID) == (d["kind"] == "band")
 
 
 def test_no_dimension_label_spells_a_per_m2_unit() -> None:

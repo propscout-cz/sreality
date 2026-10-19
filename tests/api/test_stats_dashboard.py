@@ -3,7 +3,7 @@
 Hermetic: the tenant connection is a scripted fake that records every statement, the JWT is
 overridden, and the account resolver returns a distinctive sentinel (never None — tenancy.md's
 #917 rule), so the tests can assert the sentinel ARRIVES at the upsert. Validation runs
-unmodified through the route: every chart passes `toolkit.stats_registry.validate_chart`, and
+unmodified through the route: the board passes `toolkit.stats_registry.validate_board`, and
 a refusal is a 422 that names the chart and the registry's reason without touching the table.
 """
 
@@ -50,8 +50,7 @@ class _Cursor:
         self.conn.rows[str(account_id)] = json.loads(charts)
 
     def fetchone(self) -> tuple:
-        account_id = self.conn.log[-1][1][0]
-        return (self.conn.rows[str(account_id)], _AT)
+        return (_AT,)
 
 
 class _Conn:
@@ -98,7 +97,7 @@ def test_the_board_is_upserted_whole_for_the_callers_account(client, conn: _Conn
     [(sql, params)] = conn.log
     assert sql.startswith("INSERT INTO stats_dashboards (account_id, charts, updated_at)")
     assert "ON CONFLICT (account_id) DO UPDATE SET charts = EXCLUDED.charts" in sql
-    assert "RETURNING charts, updated_at" in sql
+    assert sql.endswith("RETURNING updated_at")
     assert str(params[0]) == _ACCT
     assert json.loads(params[1]) == body["charts"]
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -199,20 +200,26 @@ STATS_HEADER = """\
 // are rendered from the same module, so no face of the registry is hand-restated.
 """
 
-STATS_TYPES = """\
-export type DimKind = "enum" | "band" | "geo" | "bool";
-export type MeasureUnit = "days" | "m2" | "price" | "ppm2";
-export type StatId = "n" | "mean" | "median" | "p10" | "p25" | "p75" | "p90";
-export type ChartStat = Exclude<StatId, "n">;
-export type ViewId = "table" | "line" | "bar" | "box";
+def _stats_types() -> str:
+    """The unions and interfaces, every member list read from the registry."""
+    def union(values: tuple[str, ...]) -> str:
+        return " | ".join(f'"{v}"' for v in values)
+    return f"""\
+export type DimKind = {union(typing.get_args(sr.DimKind))};
+export type MeasureUnit = {union(typing.get_args(sr.MeasureUnit))};
+export type StatId = {union(sr.STATS)};
+export type ChartStat = {union(sr.CHART_STATS)};
+export type ViewId = {union(sr.VIEWS)};
+export type StatsRefusal = {union(sr.REFUSALS)};
+export type CohortStatus = {union(sr.STATUSES)};
 
-export interface StatsOption {
+export interface StatsOption {{
   value: string | number;
   label_cs: string;
   label_en: string;
-}
+}}
 
-export interface StatsDimension {
+export interface StatsDimension {{
   id: string;
   label_cs: string;
   label_en: string;
@@ -221,43 +228,42 @@ export interface StatsDimension {
   categories: string[] | null;
   /** enum / bool: the ordered vocabulary (the ONE order every chart sorts by). */
   options: StatsOption[] | null;
-  /** band: the step per basis ({sale, rent}) or for every basis ({all}); keys are the band's lower bound. */
+  /** band: the step per basis ({{sale, rent}}) or for every basis ({{all}}); keys are the band's lower bound. */
   steps: Record<string, number> | null;
-  /** band: the unit the key is in. */
-  unit: MeasureUnit | null;
-}
+  /** band: the measure whose values it bands — its unit and its quantity label. */
+  measure: string | null;
+  /** The palette group, in registry order. */
+  group: string;
+}}
 
-export interface StatsMeasure {
+export interface StatsMeasure {{
   id: string;
   label_cs: string;
   label_en: string;
   unit: MeasureUnit;
   /** ruling 3: the sample must hold one status (active or delisted). */
   single_status: boolean;
-}
+}}
 
-/** ruling 7: how many row and column dimensions a view takes (line / bar: exactly one row). */
-export interface StatsViewLimits {
+export interface StatsViewLimits {{
   min_rows: number;
   max_rows: number;
   max_cols: number;
-}
+}}
 
-export interface StatsRegistryPayload {
+export interface StatsRegistryPayload {{
   min_n: number;
-  max_rows: number;
-  max_cols: number;
   max_cells: number;
-  /** charts on one saved board; PUT /stats/dashboard refuses more. */
   max_charts: number;
-  stats: StatId[];
   chart_stats: ChartStat[];
+  default_stat: ChartStat;
   views: ViewId[];
+  refusals: StatsRefusal[];
+  statuses: CohortStatus[];
   view_limits: Record<ViewId, StatsViewLimits>;
-  rent_basis: string;
   dimensions: StatsDimension[];
   measures: StatsMeasure[];
-}
+}}
 """
 
 
@@ -266,7 +272,7 @@ def generate_stats() -> str:
     return "\n".join(
         [
             STATS_HEADER,
-            STATS_TYPES,
+            _stats_types(),
             f"export const STATS_REGISTRY: StatsRegistryPayload = {body};\n",
             "export function statsDimension(id: string): StatsDimension | undefined {\n"
             "  return STATS_REGISTRY.dimensions.find((d) => d.id === id);\n}\n",

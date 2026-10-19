@@ -1,142 +1,114 @@
-import type { ChartStat, StatId } from '@/lib/statsRegistry.generated';
+import { memo, useMemo } from 'react';
+import { STATS_REGISTRY, type ChartStat } from '@/lib/statsRegistry.generated';
+import { fmtCount } from '@/lib/format';
 import {
   STAT_LABEL,
-  cellKeyOf,
-  cellTree,
   chartTitle,
-  colKey,
+  colValuesOf,
   dimTitle,
-  flattenTree,
-  fmtN,
-  fmtStat,
   keyLabel,
-  measureLabel,
   measureUnit,
-  nodeLabel,
-  placeNames,
-  rowKeyOf,
+  pivotRows,
+  quantityLabel,
+  statFormat,
+  statUsed,
   type StatsCell,
   type StatsPivot,
 } from '@/lib/stats';
-import { TooFew } from '../SampleLedger';
-import { NUM_TD, NUM_TH, ROW_DIM_TH, RowHeader, rowClass, rowDimsLabel } from './cells';
+import { NUM_TD, NUM_TH, PivotRow, ROW_DIM_TH, TooFew, rowDimsLabel, statTd } from './cells';
 
-const SIX: ReadonlyArray<Exclude<StatId, 'n'>> = ['mean', 'median', 'p10', 'p25', 'p75', 'p90'];
+const STATS = STATS_REGISTRY.chart_stats;
+
+const COLGROUP_TH = 'px-3 pt-1.5 text-right text-[0.7rem] font-medium text-[var(--color-ink-2)]';
 
 /* The pivot as a table. Nested rows are indented under their rollup row, which
  * sits above them. Without a column dimension a row carries the seven
  * statistics; with one, each column carries the chart's statistic with its n
  * beneath. The unit is named once, in the header, from the payload's basis. */
-export default function PivotTable({ pivot, stat }: { pivot: StatsPivot; stat: ChartStat }) {
-  const { spec } = pivot;
-  const places = placeNames(pivot);
-  const tree = cellTree(pivot.cells, spec, places);
-  const rows = flattenTree(tree.root);
-  const unit = measureUnit(spec.measure, pivot.basis);
-  const quantity = `${measureLabel(spec.measure)}${unit ? ` · ${unit}` : ''}`;
+function PivotTable({ pivot, stat }: { pivot: StatsPivot; stat: ChartStat }) {
+  const { spec, basis, places, min_n: minN } = pivot;
+  const rows = useMemo(() => pivotRows(pivot), [pivot]);
+  const cols = useMemo(() => colValuesOf(pivot), [pivot]);
   const colDim = spec.cols[0];
+  const perColumn = statUsed({ view: 'table', cols: spec.cols });
+  const fmt = statFormat(spec.measure);
+  const unit = measureUnit(spec.measure, basis);
+  const quantity = quantityLabel(spec.measure, basis);
+  /* One header model: a column per column value, or per chart statistic. */
+  const heads = perColumn
+    ? cols.map((c) => ({ key: c, label: keyLabel(colDim, c, basis, places) }))
+    : STATS.map((s) => ({ key: s, label: STAT_LABEL[s] }));
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[0.8rem]">
         <caption className="sr-only">
-          {chartTitle(spec, pivot.basis)}
+          {chartTitle(spec, basis)}
           {unit ? ` (${unit})` : ''}
         </caption>
         <thead>
           <tr className="border-b border-[var(--color-rule-soft)]">
             <th rowSpan={2} scope="col" className={ROW_DIM_TH}>
-              {rowDimsLabel(spec, pivot.basis)}
+              {rowDimsLabel(spec, basis)}
             </th>
-            {colDim ? (
-              <th
-                colSpan={Math.max(1, tree.cols.length)}
-                scope="colgroup"
-                className="px-3 pt-1.5 text-right text-[0.7rem] font-medium text-[var(--color-ink-2)]"
-              >
-                {dimTitle(colDim, pivot.basis)} — {STAT_LABEL[stat]}, {quantity}
+            {!perColumn && (
+              <th rowSpan={2} scope="col" className={NUM_TH}>
+                n
               </th>
-            ) : (
-              <>
-                <th rowSpan={2} scope="col" className={NUM_TH}>
-                  n
-                </th>
-                <th
-                  colSpan={SIX.length}
-                  scope="colgroup"
-                  className="px-3 pt-1.5 text-right text-[0.7rem] font-medium text-[var(--color-ink-2)]"
-                >
-                  {quantity}
-                </th>
-              </>
             )}
+            <th colSpan={Math.max(1, heads.length)} scope="colgroup" className={COLGROUP_TH}>
+              {perColumn ? `${dimTitle(colDim, basis)} — ${STAT_LABEL[stat]}, ${quantity}` : quantity}
+            </th>
           </tr>
           <tr className="border-b border-[var(--color-rule)]">
-            {colDim
-              ? tree.cols.map((c) => (
-                  <th key={c} scope="col" className={NUM_TH}>
-                    {keyLabel(colDim, c, pivot.basis, places)}
-                  </th>
-                ))
-              : SIX.map((s) => (
-                  <th key={s} scope="col" className={NUM_TH}>
-                    {STAT_LABEL[s]}
-                  </th>
-                ))}
+            {heads.map((h) => (
+              <th key={h.key} scope="col" className={NUM_TH}>
+                {h.label}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((node) => {
-            const depth = node.keys.length;
-            return (
-              <tr key={rowKeyOf(node.keys)} className={rowClass(depth, spec.rows.length)}>
-                <RowHeader depth={depth} rollup={depth < spec.rows.length}>
-                  {nodeLabel(node, spec, pivot.basis, places)}
-                </RowHeader>
-                {colDim ? (
-                  tree.cols.map((c) => (
-                    <ColumnCell
-                      key={cellKeyOf(node.keys, c)}
-                      cell={node.cells.get(colKey(c))}
-                      stat={stat}
-                      measure={spec.measure}
-                      minN={pivot.min_n}
-                    />
-                  ))
-                ) : (
-                  <SevenStats cell={node.cells.get('')} measure={spec.measure} minN={pivot.min_n} />
-                )}
-              </tr>
-            );
-          })}
+          {rows.map((row) => (
+            <PivotRow key={row.key} row={row}>
+              {perColumn ? (
+                cols.map((c) => <ColumnCell key={c} cell={row.cells.get(c)} stat={stat} fmt={fmt} minN={minN} />)
+              ) : (
+                <SevenStats cell={row.cells.get('')} fmt={fmt} minN={minN} />
+              )}
+            </PivotRow>
+          ))}
         </tbody>
       </table>
     </div>
   );
 }
 
+export default memo(PivotTable);
+
 function SevenStats({
   cell,
-  measure,
+  fmt,
   minN,
 }: {
   cell: StatsCell | undefined;
-  measure: string;
+  fmt: (v: number) => string;
   minN: number;
 }) {
   if (!cell) {
     return (
       <>
         <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>0</td>
-        <td colSpan={SIX.length} />
+        <td colSpan={STATS.length} />
       </>
     );
   }
+  /* The server nulls the six statistics together below the minimum. */
   if (cell.median == null) {
     return (
       <>
-        <td className={`${NUM_TD} text-[var(--color-ink-2)]`}>{fmtN(cell.n)}</td>
-        <td colSpan={SIX.length} className="px-3 py-1.5 text-right">
+        <td className={`${NUM_TD} text-[var(--color-ink-2)]`}>{fmtCount(cell.n)}</td>
+        <td colSpan={STATS.length} className="px-3 py-1.5 text-right">
           <TooFew minN={minN} />
         </td>
       </>
@@ -144,18 +116,12 @@ function SevenStats({
   }
   return (
     <>
-      <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>{fmtN(cell.n)}</td>
-      {SIX.map((s) => {
-        const v = cell[s];
-        return (
-          <td
-            key={s}
-            className={`${NUM_TD} ${s === 'median' ? 'text-[var(--color-ink)] font-medium' : 'text-[var(--color-ink-2)]'}`}
-          >
-            {v == null ? '—' : fmtStat(v, measure)}
-          </td>
-        );
-      })}
+      <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>{fmtCount(cell.n)}</td>
+      {STATS.map((s) => (
+        <td key={s} className={statTd(s)}>
+          {fmt(cell[s] as number)}
+        </td>
+      ))}
     </>
   );
 }
@@ -163,12 +129,12 @@ function SevenStats({
 function ColumnCell({
   cell,
   stat,
-  measure,
+  fmt,
   minN,
 }: {
   cell: StatsCell | undefined;
   stat: ChartStat;
-  measure: string;
+  fmt: (v: number) => string;
   minN: number;
 }) {
   if (!cell) {
@@ -183,15 +149,9 @@ function ColumnCell({
   return (
     <td className={`${NUM_TD} align-top`}>
       <span className="block leading-tight">
-        {v == null ? (
-          <TooFew minN={minN} />
-        ) : (
-          <span className="text-[var(--color-ink)]">{fmtStat(v, measure)}</span>
-        )}
+        {v == null ? <TooFew minN={minN} /> : <span className="text-[var(--color-ink)]">{fmt(v)}</span>}
       </span>
-      <span className="block text-[0.65rem] leading-tight text-[var(--color-ink-3)]">
-        n {fmtN(cell.n)}
-      </span>
+      <span className="block text-[0.65rem] leading-tight text-[var(--color-ink-3)]">n {fmtCount(cell.n)}</span>
     </td>
   );
 }

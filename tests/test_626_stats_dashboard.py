@@ -2,7 +2,7 @@
 
 What only the text can show (docs/design/stats-dashboard.md, "Rails"): the effective
 `stats_dim_key` IS `toolkit.stats_registry.dim_key_function_sql()`; the pivot carries the
-registry's measure expression, limits, dimension list and place-dimension list verbatim; its
+registry's measure expression, limits, spec guard, turnover and place-dimension lists verbatim; its
 cohort WHERE is 625's byte for byte and its signature 625's 74 parameters plus `spec`; the old
 signature is dropped by its exact types and the ACL restated in the same transaction; the
 apply is gated on 625's live body or this file's own; the saved board is an RLS'd tenant table;
@@ -53,10 +53,6 @@ def _block(tag: str) -> str:
     return SQL[at: SQL.index(f"${tag}$;", at)]
 
 
-def _quoted(fragment: str) -> list[str]:
-    return re.findall(r"'([a-z0-9_]+)'", fragment)
-
-
 # --- the registry, carried verbatim ---------------------------------------------------
 
 
@@ -71,21 +67,16 @@ def test_the_pivot_carries_the_registrys_measure_and_limits() -> None:
     assert f"v_min_n     constant int := {sr.MIN_N};" in body
     assert f"v_max_cells constant int := {sr.MAX_CELLS};" in body
     assert sr.MIN_N == 10 and sr.MAX_CELLS == 2000
-    assert f"coalesce(array_length(v_rows, 1), 0) > {sr.MAX_ROWS} then" in body
-    assert f"coalesce(array_length(v_cols, 1), 0) > {sr.MAX_COLS} then" in body
     # six fixed row slots and one column slot: the rollup is the registry's MAX_ROWS deep
     slots = ", ".join(f"k{i}" for i in range(1, sr.MAX_ROWS + 1))
     assert f"group by kc, rollup({slots})" in body
 
 
-def test_the_pivot_validates_the_registrys_vocabulary_in_its_order() -> None:
+def test_the_pivot_guards_the_spec_with_the_registrys_rules() -> None:
+    """validate_spec's limits, measures and dimensions, rendered once (`spec_guard_sql`)."""
     body = _body(SQL, FN)
-    measures = re.search(r"v_measure not in \(([^)]*)\)", body).group(1)
-    assert _quoted(measures) == [m.id for m in sr.MEASURES]
-    dims = re.search(r"where d not in \(([^)]*)\)", body).group(1)
-    assert _quoted(dims) == [d.id for d in sr.DIMENSIONS]
-    geo = re.search(r"and d\.dim in \(([^)]*)\)", body).group(1)
-    assert _quoted(geo) == sorted(sr.GEO_IDS)
+    at = body.index("  if spec is null then")
+    assert body[at: body.index("  end if;", at) + len("  end if;")] == sr.spec_guard_sql()
 
 
 def test_the_turnover_refusal_names_the_registrys_single_status_measures() -> None:
@@ -93,8 +84,9 @@ def test_the_turnover_refusal_names_the_registrys_single_status_measures() -> No
     single = [m.id for m in sr.MEASURES if m.single_status]
     assert single == ["tom_days"]
     body = _body(SQL, FN)
-    assert ("when v_measure = 'tom_days' and (select bool_or(is_active) and not bool_and(is_active) "
-            "from sample) then 'mixed_status'") in body
+    arm = re.search(r"when v_measure in \(([^)]*)\) and \(select bool_or\(is_active\) and not "
+                    r"bool_and\(is_active\) from sample\) then 'mixed_status'", body)
+    assert arm and arm.group(1) == sr.single_status_measures_sql()
     assert "c.any_active and not c.all_active" not in body
 
 
@@ -237,7 +229,7 @@ def test_the_place_names_reach_the_invoker_pivot_through_an_owner_rights_view() 
             "order by p.dim, p.key) from ( select distinct d.dim, d.key from used u "
             "cross join lateral (values (r1, u.k1), (r2, u.k2), (r3, u.k3), (r4, u.k4), (r5, u.k5), "
             "(r6, u.k6), (c1, u.kc)) d(dim, key) "
-            "where d.key is not null and d.dim in ('cast_obce', 'kraj', 'obec', 'okres', 'ulice') ) p "
+            f"where d.key is not null and d.dim in ({sr.geo_ids_sql()}) ) p "
             "left join public.ruian_place_names_public n on n.level = p.dim and n.code = p.key::bigint), "
             "'[]'::jsonb) else '[]'::jsonb end,") in flat
     assert flat.count("ruian_place_names_public") == 1
