@@ -1,4 +1,4 @@
-"""Migration 630's rails (ONE PIN W1): the map reads browse_list and the swap re-patches identity changes, offline."""
+"""Migration 630's rails (ONE PIN W1): the map reads browse_list, the swap re-patches identity changes and builds no map index."""
 
 from __future__ import annotations
 
@@ -17,11 +17,9 @@ LIVE = {"rebuild_browse_list": "be7b0ec2297d269f495a42fdcc474517",
         "browse_map_cells": "7406f8566504c33efc7fe4273b4f76cc"}
 SOURCE_OF = {"rebuild_browse_list": "605_street_chip_level.sql",
              "browse_map_cells": "629_curated_set_scope.sql"}
-MAP_INDEX = ("create index browse_list_next_map_idx on browse_list_next "
-             "(category_main, category_type, lat, lng) include (property_id, is_active, price_czk, "
-             "disposition, subtype, area_m2, last_seen_at, first_seen_at) "
-             "where lat is not null and lng is not null")
-MAP_RENAME = "alter index browse_list_next_map_idx rename to browse_list_map_idx"
+# The map cover index W1 built, measured and dropped (2026-10-19: (b) 399 ms and (c) 1.93 s with it,
+# 219 / 904 ms without; the planner took it for heap-ordered and paid one heap page per row).
+MAP_INDEX_NAMES = ("browse_list_next_map_idx", "browse_list_map_idx")
 _DROP = re.compile(r"drop table if exists (?:public\.)?browse_list\b")
 _RENAME = re.compile(r"alter table (?:public\.)?browse_list_next rename to browse_list\b")
 
@@ -72,14 +70,12 @@ def test_the_repatch_runs_after_the_drop_and_before_the_rename() -> None:
         "the window must name merges (created_at) and their undos/splits (undone_at)")
 
 
-def test_the_map_index_is_built_and_renamed_like_its_siblings() -> None:
-    """RED by: a key, INCLUDE or partial WHERE other than the planned one, or a rename before the table's."""
+def test_the_rebuild_builds_no_map_index_and_the_file_drops_the_first_applys() -> None:
+    """RED by: the rebuild building or renaming the dropped map index, or losing the leftover's DROP."""
     rebuild = _code(_body(SQL, "rebuild_browse_list"))
-    assert rebuild.count(MAP_INDEX) == 1 and rebuild.count(MAP_RENAME) == 1
-    order = [rebuild.index(MAP_INDEX), rebuild.index("analyze browse_list_next"),
-             _DROP.search(rebuild).start(), _RENAME.search(rebuild).start(),
-             rebuild.index(MAP_RENAME)]
-    assert order == sorted(order)
+    for name in MAP_INDEX_NAMES:
+        assert name not in rebuild, f"the rebuild names {name}, the map index W1 dropped"
+    assert "drop index if exists public.browse_list_map_idx" in SQL
 
 
 @pytest.mark.parametrize("fn", sorted(LIVE))
@@ -124,7 +120,7 @@ def test_a_revert_restores_605s_rebuild_and_629s_map_rpc() -> None:
 
 
 def test_the_file_forces_no_rebuild() -> None:
-    """The next */15 tick builds the index; a forced rebuild would hold browse_list for ~62 s at apply."""
+    """The next */15 tick runs the new body; a forced rebuild would hold browse_list for ~62 s at apply."""
     assert not re.search(r"(select|perform)\s+(public\.)?rebuild_browse_list\(\)", _code(SQL))
 
 

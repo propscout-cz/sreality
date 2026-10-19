@@ -200,7 +200,7 @@ No single response mixes the two.
 | Browse read models | 2: `browse_list` (patched) + `properties_map_mv` (timer only) | **1**: `browse_list` |
 | A merge reaches list / map / counts | list in its commit unless it lands in the 6.9 % rebuild window (then lost until the next swap); map ≤31 min | all three in the merge's commit; a merge inside the rebuild window is re-patched into the new table before the swap |
 | Map tile counts | `browse_map_cells` over the matview | the same function over `browse_list`, plus `lat/lng is not null` |
-| Map index | `properties_map_mv_cover` (92.4 MB) | `browse_list_map_idx`, partial, same key, `property_id` in place of `sreality_id` (≈92 MB, estimated from the cover's size) |
+| Map index | `properties_map_mv_cover` (92.4 MB) | none: `browse_list`'s own indexes (a map cover index was tried in W1 and dropped, 2026-10-19; W1 receipts) |
 | `browse_list` heap order | category_main, category_type, first_seen_at | **unchanged** |
 | A property's location | the canonical ad's row, read keyed on `repr_listing_ref_id` | the location ad's row, read keyed on `location_listing_ref_id`; CHECK + CI rail |
 | Canonical order | 588 | unchanged |
@@ -247,11 +247,8 @@ No single response mixes the two.
 ### W1: one Browse read model, race closed (PR 1; migration 630 additive; SPA)
 
 **Migration 630, md5-gated on 605's `rebuild_browse_list` and 629's `browse_map_cells`** (the repo's gate hashes `prosrc`, per name: `be7b0ec2297d269f495a42fdcc474517` and `7406f8566504c33efc7fe4273b4f76cc`, read live 2026-10-19 15:32Z; 629's author confirmed no further change before merge)**:**
-- **`rebuild_browse_list()`, restated from 605:650-722 with two additions and nothing else** (heap order unchanged):
-  1. **The map index**, built and renamed on swap like its siblings:
-     `create index browse_list_next_map_idx on browse_list_next (category_main, category_type, lat, lng) include (property_id, is_active, price_czk, disposition, subtype, area_m2, last_seen_at, first_seen_at) where lat is not null and lng is not null`.
-     - This is the matview cover's key and width, with `sreality_id` (never read by `browse_map_cells`) swapped for `property_id`, which the default call's dismissal check reads.
-     - The portal arrays stay out of the INCLUDE list. They would add about 48 MB for an index-only read the visibility map grants only part of the time.
+- **`rebuild_browse_list()`, restated from 605:650-722 with one addition and nothing else** (heap order unchanged):
+  1. **[as built 2026-10-19] The map index: tried, measured, dropped.** The first apply's rebuild built `browse_list_map_idx` (the matview cover's key and width, `property_id` in place of `sreality_id`, partial on a point). In production it made the map slower: (b) 399 ms and (c) 1.93 s with it, against 219 ms and 904 ms without it (W1 receipts below). 630 is reverted in production and re-applied without it; the corrected file drops the leftover (`drop index if exists public.browse_list_map_idx`).
   2. **The identity re-patch.**
      - At the start, read `v_since` = the previous run's `derived_artifacts.complete_through` minus 15 minutes.
      - After `drop table if exists browse_list` holds its lock and before the rename, delete from and re-insert into `browse_list_next` (from `browse_projection`) every property named by a `property_merge_events` row with `created_at >= v_since or undone_at >= v_since`:
@@ -264,7 +261,7 @@ No single response mixes the two.
 - **`browse_map_cells`**, restated from 629, reads `from browse_list l` and gains `and l.lat is not null and l.lng is not null`.
   - Without that line it would count browse_list's 53,146 unmappable rows as a NULL tile: byt/prodej + sreality reads 54,101 rows instead of 51,904.
   - Its comment no longer claims "ONE index-only pass" (629:723-724).
-- **No forced rebuild.** The next */15 tick builds the index. Without the index, browse_list already meets every target below (129 ms for (a)).
+- **No forced rebuild.** The next */15 tick runs the new body, which builds nothing new. Without a map index, browse_list meets every target below (W0: (a) 72.6 ms).
 - A revert file in `migrations/reverts/` restores 605's rebuild and 629's `browse_map_cells`.
 
 **SPA:**
@@ -275,14 +272,14 @@ No single response mixes the two.
 - Comments the move makes false: queries.ts:93, :104, :837-845; BrowseExperience.tsx:620, :1214; districtCodes.ts:26; measure.ts:13.
 
 **Tests and CI (retargets, from inventory B):**
-- **`tests/test_browse_map_cells_plan.py`** points at `browse_list_map_idx`. It now asserts the DEFAULT call's full column set, target list AND WHERE (category_main, category_type, lat, lng, property_id, is_active), is contained in the index. Today it checks only the target list, which is the false green. Its docstring's stale `district` mention goes.
+- **`tests/test_browse_map_cells_plan.py`** [as built 2026-10-19: deleted]. The plan was to point it at `browse_list_map_idx`; with the index dropped it has no subject.
 - **Other retargets:**
   - `tests/test_browse_map_cells_live.py:25-27, :54-55, :113` → `browse_list`. A table needs no park trick.
   - `tests/test_portal_rule.py:146-155`: the map case.
   - `tests/test_one_place_predicate.py:123, :248`: the pair becomes `("browse_map_cells", "browse_list")`.
   - The branch's `tests/test_browse_map_read_contract.py:168`.
   - `frontend/src/lib/queries.test.ts:768` and the :580 comment.
-- **`.github/workflows/migrations.yml:240-261`:** the step "The map tiles stay index-only and bounded" is renamed "The map tiles stay bounded", and its comment names browse_list's map index.
+- **`.github/workflows/migrations.yml:240-261`:** the step "The map tiles stay index-only and bounded" is renamed "The map tiles stay bounded" and runs only `tests/test_browse_map_cells_live.py` (the plan rail went with the index).
 - **A body test:** the re-patch statement sits after the DROP and before the rename.
 
 **Docs touched by this wave:**
@@ -292,7 +289,7 @@ No single response mixes the two.
   - close the non-goal at :354-363 and deferred item 4 at :399-400.
 - toolkit/browse_read_model.py:16-20 and scripts/recompute_property_stats.py:423-424 say a rebuild is "in flight ~26 %". Measured: 61.9 s per 900 s. Also describe the re-patch.
 
-**Sequencing: apply right before the merge.** From the moment 630 is applied, the tile counts read `browse_list` while the pins still read the matview, until Railway deploys the SPA. So 630 is applied only once the PR is green and ready, the receipts below are taken during the one */15 tick that builds the index, and the PR merges straight after. The split lasts minutes, never longer.
+**Sequencing: apply right before the merge.** From the moment 630 is applied, the tile counts read `browse_list` while the pins still read the matview, until Railway deploys the SPA. So 630 is applied only once the PR is green and ready, the receipts below are taken during the first */15 tick that runs the new body, and the PR merges straight after. The split lasts minutes, never longer.
 
 **Verify between apply and merge (one */15 tick).** Latency targets are hot server execution:
 - (a) and every city-bbox call with any portal chip ≤ 150 ms;
@@ -302,7 +299,7 @@ No single response mixes the two.
 - the default call, reported.
 - One run of each lands in the first minute after the swap (cold pages). Heap fetches are reported, never asserted.
 - The `browse_map_cells` total for (b) on `browse_list` equals the matview's, within the drift between their last rebuilds.
-- `derived_artifacts.last_duration_ms` before and after. The extra index is estimated at +1 to 2 s (sort proxy 1.24 s), a window of about 63 s.
+- `derived_artifacts.last_duration_ms` before and after (with the map index it measured +0.35 s and +1.38 s, inside the old body's 61.9-66.2 s spread).
 - The post-DROP section timed once, ideally during an autodedup burst (the re-patch's cost under the lock).
 
 **Verify after merge, with Railway status green:**
@@ -312,6 +309,21 @@ No single response mixes the two.
 
 **Stop if** a target is missed. Surface the numbers and the named fallback:
 - **Fallback:** order the rebuild's heap by category_main, category_type, lat, lng. It saves about 11k buffer hits on (a) but costs non-place list pages about 10× the heap pages (113 → 1,188), so it is used only on a miss.
+
+**W1 receipts 2026-10-19** (17:44-18:04Z, read-only; file: `~/one-pin-artifacts/w1-receipts.md`, exact SQL for every number). The first apply's rebuild built `browse_list_map_idx` at the 17:45 tick:
+
+| call (sreality chip, hide_dismissed) | target | W0, no map index | with the map index, hot | met with it |
+|---|---|---|---|---|
+| (a) dům + komerční prodej, Praha bbox | ≤150 ms | 72.6 ms | 71.1 ms | yes |
+| (b) byt/prodej nationwide | ≤400 ms | 218.7 ms | 399.3 ms | by 0.7 ms |
+| (c) whole country | ≤1.2 s | 904 ms | 1,932 ms | **no** |
+| pin read, limit 2000 | ≤100 ms | 61.8 ms | 29.6 ms | yes |
+| default byt/pronájem, no chip | reported | not taken | 265.8 ms (453.1 ms, visibility map empty) | n/a |
+
+- **Cause:** the function's `(not hide_dismissed or not exists …)` stays a SubPlan filter, and the planner prices the map index as heap-ordered (its leading column `category_main` has correlation 0.9999) while inside a category it runs in lat/lng order: one heap page per row (773k buffers for (c), 139k for (b)). Without `all_sources` in it, no chip call can be index-only.
+- **Decision (2026-10-19):** revert 630 in production and re-apply it without the map index; the re-patch and `property_merge_events_recent_idx` stay.
+- (b) total: 51,962 on `browse_list` = 51,962 on the matview. Identity invariant 0 at 17:51 and 18:03 (after a burst of at least 47 identity events). Replay: 108 = 108 properties, row for row; 604858 absent.
+- Rebuild: 62,686 and 63,717 ms against 62,337 ms for the old body (whose last five ran 61.9-66.2 s). Re-patch windows: 103 events / 108 ids and 3 / 6; 0 inside either run.
 
 ### W2: retire the map matview (PR 2; migration 631 DESTRUCTIVE: pauses for R2 and R10)
 
@@ -550,7 +562,7 @@ Not safe today:
 | | Added | Deleted |
 |---|---|---|
 | Relations | 0 | **1** matview (`properties_map_mv`, 824,675 rows, 464 MB with indexes) |
-| Indexes | 3 (`browse_list_map_idx`, ≈92 MB est.; `property_merge_events_recent_idx`, a few MB, W1; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3) | 2 (`properties_map_mv` pk + cover 92.4 MB) → **net +1** (the ledger index bounds a read under an exclusive lock) |
+| Indexes | 2 (`property_merge_events_recent_idx`, a few MB, W1; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3; the map index W1 tried was dropped) | 2 (`properties_map_mv` pk + cover 92.4 MB) → W1+W2: 1 added / 2 deleted, **net −1**; with W3, net 0 |
 | Functions | 0 | **2** (`rebuild_properties_map_mv`, `properties_map_visible`) + **2** dead MF functions (R11) |
 | Cron jobs / registry rows / Health cells | 0 | **1 / 1 / 1** |
 | Table columns | **1** (`properties.location_listing_ref_id`) | 0 |
@@ -562,9 +574,9 @@ Not safe today:
 | Location spellings in code | 1 definition in 2 shapes (subject fragment, spatial-first cohort; R7/R8) | 5 subject point reads → 1 fragment; 3 cohort joins + Decision 13's EXISTS → 1 shape; by-id's second location join; 2 outbox label compositions; the feed's ad-label dependency; the proximity reset's `< repr_since` clause |
 | Modules naming the canonical pointer next to a location | — | 9 → 4 (each with a non-location reason) |
 | Browse freshness contracts | — | 2 → **1** |
-| Rebuild CPU | +1 to 2 s per list rebuild × 96/day (est.) | ≈60 s × 48/day of matview builds |
+| Rebuild CPU | the re-patch per list rebuild × 96/day (≈155 ms at a 1,156-id burst) | ≈60 s × 48/day of matview builds |
 | WAL | 0 | ≈22 GB/day (logged matview rebuilds) |
-| Tests | 1 rail (3 arms), order tests, 1 SPA same-chain test, 1 rebuild-body test | 3 map test cases + the cron-guard map entry |
+| Tests | 1 rail (3 arms), order tests, 1 SPA same-chain test, 1 rebuild-body test | 3 map test cases + the cron-guard map entry + the map plan rail (W1) |
 | Docs | 1 GLOSSARY entry | the map half of the skill's column-bridge recipes; CLAUDE.md:51 entry |
 | Lines | append-only migration restatements (rule 1 forbids editing history) | runtime lines: measured with `git diff --stat` and reported in each PR body (no estimate here) |
 
@@ -668,6 +680,7 @@ The stored `properties.mf_*` columns are NOT dropped here; they stay with PR-F a
 
 **R12. Measure the map index on live `browse_list` before W1?**
 → **Decided, not asked: no.** It would be out-of-band DDL on production. W1 already meets every target without the index (129 ms for (a)), and its own receipt has a named fallback.
+- **[as built 2026-10-19]** W1's first apply measured it in production instead: it slowed (b) and (c), so it was dropped (W1 receipts).
 - *Yes:* a temporary `create index concurrently` right after a swap; it vanishes at the next rebuild.
 
 *Withdrawn: R6* (the resolver marks its property dirty). Its effect on this sprint was not measured. It moves to F1, where it closes a measured lag (78 % of new properties).
@@ -682,7 +695,7 @@ The stored `properties.mf_*` columns are NOT dropped here; they stay with PR-F a
   - Nothing else triggers a rebuild.
   - `derived_artifacts` still reads fresh, but the publishing stock check (scripts/checks/publishing.py:94-102) goes red.
   - **Mitigation:** accept now (the list's bound today); LOGGED comes with F1.
-- **Map index effect is estimated.** The index's effect on (a) is estimated at 40 to 80 ms, not measured. Without the index, (a) already runs at 129 ms against a 150 ms target, and the fallback's list cost is known.
+- **Map index effect is estimated.** The index's effect on (a) is estimated at 40 to 80 ms, not measured. Without the index, (a) already runs at 129 ms against a 150 ms target, and the fallback's list cost is known. **[as built 2026-10-19]** Measured: (a) unchanged (71.1 ms), (b) and (c) slower; the index was dropped (W1 receipts).
 - **Counts and pins briefly disagree.** Between applying 630 and Railway deploying W1's SPA, the tile counts read `browse_list` while the pins still read the matview. That is why 630 is applied only right before the merge: the split lasts minutes.
 - **Visible changes in W4.**
   - About 13,784 locations change and about 10,797 rings become dots.

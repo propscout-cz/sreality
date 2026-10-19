@@ -16,9 +16,7 @@
 -- WHAT APPLYING THIS COSTS, stated plainly so it is never done casually:
 --   * the tile counts go back to properties_map_mv, stale for up to 31 minutes after every merge;
 --   * a merge, detach or split that commits inside the list rebuild's copy-to-swap window (6.9 %
---     of wall-clock) is lost again until the next swap;
---   * the next list rebuild after this revert builds no browse_list_map_idx, so a map read on
---     browse_list loses its index.
+--     of wall-clock) is lost again until the next swap.
 -- ORDER: W1's SPA reads the pins from browse_list. Revert that code (git revert, deploy) together
 -- with this file: whichever lands first, the pins and the tile counts read different relations
 -- until the other does. It cannot apply once 631 has dropped properties_map_mv (the precondition
@@ -35,12 +33,12 @@ begin
   end if;
   if coalesce((select md5(prosrc) from pg_proc
                  where oid = to_regprocedure('public.rebuild_browse_list()')), '')
-     not in ('b422be1accf77776408c63adfc8a69a5', 'be7b0ec2297d269f495a42fdcc474517') then
+     not in ('9a49f72a8719ff801c854a7a81ba575b', 'be7b0ec2297d269f495a42fdcc474517', 'b422be1accf77776408c63adfc8a69a5') then
     raise exception '630 revert refused: rebuild_browse_list() is not 630''s body (a later migration replaced it)';
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells'), '')
-     not in ('81b08b6aeb070b697155aba9d38fedd0', '7406f8566504c33efc7fe4273b4f76cc') then
+     not in ('9fee948a7993edf62d0a3467d3fb928b', '7406f8566504c33efc7fe4273b4f76cc', '81b08b6aeb070b697155aba9d38fedd0') then
     raise exception '630 revert refused: browse_map_cells is not 630''s body (a later migration replaced it, or two overloads)';
   end if;
 end
