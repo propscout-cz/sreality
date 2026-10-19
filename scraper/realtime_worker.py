@@ -1400,21 +1400,11 @@ def _seconds_since_last_sreality_index_walk() -> float | None:
 
 
 def _post_workflow_dispatch(token: str) -> bool:
-    import requests
+    from scraper.github_dispatch import post_workflow_dispatch
 
-    url = (f"https://api.github.com/repos/{DISPATCH_REPO}"
-           f"/actions/workflows/{DISPATCH_WORKFLOW}/dispatches")
     try:
-        resp = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            json={"ref": DISPATCH_REF},
-            timeout=30,
-        )
+        resp = post_workflow_dispatch(
+            DISPATCH_REPO, DISPATCH_WORKFLOW, token, {"ref": DISPATCH_REF}, timeout=30)
     except Exception as exc:  # noqa: BLE001 - a dispatch hiccup must not kill the lane
         LOG.warning("count-probe: dispatch POST failed: %s", exc)
         return False
