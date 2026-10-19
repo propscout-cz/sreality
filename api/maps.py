@@ -39,9 +39,9 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-import requests
 from fastapi import HTTPException
 
+from api import http_json
 from api.location_filter import ChipLevel
 from location_data.resolver.composite import match_streets
 from location_data.resolver.geo import haversine_m
@@ -94,12 +94,6 @@ def _api_keys() -> list[str]:
     return keys
 
 
-def _http_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
-    resp = requests.get(url, params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
 def _cache_evict_expired(now: float) -> None:
     for k, (exp, _) in list(_suggest_cache.items()):
         if exp <= now:
@@ -133,26 +127,25 @@ def _fetch_suggest(
     last_exc: Exception | None = None
     for i, key in enumerate(keys):
         try:
-            return _http_get_json(
-                MAPY_SUGGEST_URL,
-                {
+            return http_json.fetch_json(
+                "GET", MAPY_SUGGEST_URL, timeout=10,
+                params={
                     "query": query, "limit": limit, "lang": lang,
                     "type": "regional", "apikey": key,
                 },
             )
-        except (requests.RequestException, ValueError) as exc:
+        except http_json.HttpJsonError as exc:
             last_exc = exc
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status in KEY_LEVEL_STATUS and i < len(keys) - 1:
+            if exc.status in KEY_LEVEL_STATUS and i < len(keys) - 1:
                 LOG.warning(
                     "Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
-                    i + 1, len(keys), status,
+                    i + 1, len(keys), exc.status,
                 )
                 continue
             # A rejected key / throttle / outage from Mapy must NOT surface as a raw
             # 500: the typeahead says "Place search is unavailable" only on a 503, and
             # a 500 leaves a silent empty dropdown. Log the real upstream status.
-            LOG.warning("Mapy suggest upstream failure status=%s: %s", status, exc)
+            LOG.warning("Mapy suggest upstream failure: %s", exc)
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
             ) from exc
