@@ -1091,6 +1091,20 @@ const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
   return out;
 };
 
+/* A preset click keeps the active lenses (operator ruling 6, 2026-10-19): the
+ * preset sets the market criteria, the lenses ride along unchanged — including
+ * a lens a pre-ruling blob still stores, which never overrides the live one. */
+export const withPresetLenses = (
+  preset: ListingFilters,
+  current: ListingFilters,
+): ListingFilters => {
+  const out = { ...preset };
+  for (const k of PRESET_EXCLUDED_KEYS) {
+    (out as Record<string, unknown>)[k] = current[k];
+  }
+  return out;
+};
+
 /** Build the spec to persist. The transient map viewport (`bounds`) is
  *  dropped unless the operator opts to include the current map area, so a
  *  criteria-only preset doesn't pin a stale bounding box; the

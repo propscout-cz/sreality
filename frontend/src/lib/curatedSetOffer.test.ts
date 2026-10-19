@@ -14,7 +14,6 @@ describe('offerCuratedSet', () => {
   it('offers nothing while the member map is unresolved', () => {
     expect(offerCuratedSet(cards, undefined, known, IN([7]))).toEqual({
       options: [],
-      missing: [],
       show: false,
     });
   });
@@ -46,10 +45,9 @@ describe('offerCuratedSet', () => {
     expect(offer.show).toBe(true);
   });
 
-  it('names a selected id no set carries any more', () => {
+  it('keeps the row for a selected id no set carries any more (the control draws its #id)', () => {
     const offer = offerCuratedSet(cards, new Map(), known, { set: null, in: [], out: [99] });
     expect(offer.options).toEqual([]);
-    expect(offer.missing).toEqual([99]);
     expect(offer.show).toBe(true);
   });
 

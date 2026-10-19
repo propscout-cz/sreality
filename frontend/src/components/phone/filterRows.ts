@@ -41,7 +41,6 @@ const CUSTOM_REACH: Record<CustomBlockKey, { ids: string[]; fields: Array<keyof 
   subtype: { ids: ['subtype'], fields: ['subtype'] },
   districts: { ids: ['districts'], fields: ['districts'] },
   include_no_price: { ids: ['include_no_price'], fields: ['includeNoPrice'] },
-  tags: { ids: ['tags'], fields: ['tags'] },
   show_dismissed: { ids: ['show_dismissed'], fields: ['showDismissed'] },
   city_population_hint: { ids: [], fields: [] },
   market_growth: { ids: [], fields: ['priceGrowthRules'] },

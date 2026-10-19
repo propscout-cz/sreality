@@ -4,17 +4,17 @@
  * NOTHING HERE DECIDES WHAT A FILTER MEANS (rule 16). The rows are the desktop
  * sidebar's layout (lib/filterLayout, unrolled by ./filterRows) under the
  * sidebar's own words; each row opens onto the sidebar's own control — the
- * registry form row, the place typeahead, the two-sided tag and portal chips —
- * and every edit applies through the sidebar's `applySidebarUpdates`. The sheet
- * holds a DRAFT: "Zobrazit N nemovitostí" (N is Browse's count of the draft)
- * applies it to the feed's URL; "Zavřít" lets it go. The map-only group stays
- * out: the phone has no map.
+ * registry form row (the curated-set chips among its widgets), the place
+ * typeahead, the two-sided portal chips — and every edit applies through the
+ * sidebar's `applySidebarUpdates`. The sheet holds a DRAFT: "Zobrazit N
+ * nemovitostí" (N is Browse's count of the draft) applies it to the feed's URL;
+ * "Zavřít" lets it go. The map-only group stays out: the phone has no map.
  *
  * The footer's menu saves the draft as a new preset or writes it back into the
  * chosen one (two steps), through the preset API Browse uses. A preset is its
  * FILTERS on the phone (the feed opens every scope newest first), so an update
- * keeps the preset's stored order; the pipeline scope and the dismissed reveal
- * never ride into one (`filtersForPreset`, rule 22). */
+ * keeps the preset's stored order; the curated-set lenses, the broker and the
+ * dismissed reveal never ride into one (`filtersForPreset`, rule 22). */
 
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -31,7 +31,6 @@ import MarketGrowthFilter from '@/components/MarketGrowthFilter';
 import { Segmented } from '@/components/controls';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
-import { AccountTagFilter } from '@/components/filter-controls/TagFilterControl';
 import { ApiError, createFilterPreset, updateFilterPreset } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { isNewestFirst, sortLabel, type FeedView } from '@/lib/feed';
@@ -157,8 +156,6 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
             onChange={(next) => merge({ includeNoPrice: next.includeNoPrice })}
           />
         );
-      case 'tags':
-        return <AccountTagFilter value={draft.tags} onChange={(tags) => merge({ tags })} />;
       case 'show_dismissed':
         /* Its hint counts the cohort twice; it reads the settled draft, so a
          * typed bound does not fire two counts per keystroke. */

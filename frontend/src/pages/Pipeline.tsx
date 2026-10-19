@@ -18,16 +18,20 @@ import {
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
-import { collectionLabel, useCollectionMembers, useCollections } from '@/lib/collectionCache';
+import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
   curationKeys,
   fetchPropertyTagMemberSet,
   matchesDistricts,
   pipelineKeys,
 } from '@/lib/queries';
-import { CURATED_SETS, matchesScope, normalizeScope } from '@/lib/setScope';
+import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
-import { TagFilterControl, tagOptionsFor } from '@/components/filter-controls/TagFilterControl';
+import {
+  CuratedSetFilter,
+  collectionUnit,
+  tagUnit,
+} from '@/components/filter-controls/CuratedSetFilter';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { usePhoneShell } from '@/lib/phoneShell';
 import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
@@ -42,7 +46,7 @@ import { type ListingStatus } from '@/lib/filters';
 import { filterById } from '@/lib/filterRegistry.generated';
 import TagColorPicker from '@/components/TagColorPicker';
 import ErrorBanner from '@/components/ErrorBanner';
-import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
+import { readFailed } from '@/components/ReadFailedMark';
 import { FunnelIcon, InfoIcon } from '@/components/icons';
 import SizeToggle, {
   LargeImageGlyph,
@@ -198,12 +202,9 @@ function PipelineBoardPage() {
     return {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
-      collections: [
-        ...offered.options.map((c) => ({ value: c.id, label: collectionLabel(c) })),
-        ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
-      ],
+      collections: offered.options.map(collectionUnit),
       showCollections: offered.show,
-      tags: tagOptionsFor(tags.options, scopes.tags),
+      tags: tags.options.map(tagUnit),
       showTags: tags.show,
     };
   }, [cards, members, collections, tagMembers, tagsQ.data, scopes]);
@@ -307,33 +308,27 @@ function PipelineBoardPage() {
               />
             </Field>
           )}
-          {readFailed(membersQ) && (
-            /* The filter fails open (rule #22) and says so (MS16). */
-            <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void membersQ.refetch()} />
-          )}
-          {bar.showCollections && (
+          {/* The curation lenses fail open (rule #22) and say so (MS16): the
+              control's read is the member map the offer stands on. */}
+          {(bar.showCollections || readFailed(membersQ)) && (
             <Field label="Kolekce">
-              <MultiselectChips
-                value={scopes.collections?.in ?? []}
-                options={bar.collections}
-                onChange={(ids) =>
-                  setScope(
-                    'collections',
-                    normalizeScope({ set: null, out: [], ...scopes.collections, in: ids }),
-                  )
-                }
+              <CuratedSetFilter
+                set="collections"
+                units={bar.collections}
+                value={scopes.collections}
+                onChange={(next) => setScope('collections', next)}
+                query={membersQ}
               />
             </Field>
           )}
-          {readFailed(tagMembersQ) && (
-            <ReadFailedMark what="Štítky" variant="header" onRetry={() => void tagMembersQ.refetch()} />
-          )}
-          {bar.showTags && (
+          {(bar.showTags || readFailed(tagMembersQ)) && (
             <Field label="Štítky">
-              <TagFilterControl
-                tags={bar.tags}
+              <CuratedSetFilter
+                set="tags"
+                units={bar.tags}
                 value={scopes.tags}
                 onChange={(next) => setScope('tags', next)}
+                query={tagMembersQ}
               />
             </Field>
           )}

@@ -58,9 +58,7 @@ function formWords(
     case 'city_index_rules':
       return countWords((value as unknown[]).length, 'pravidlo', 'pravidla', 'pravidel');
     case 'multiselect':
-      return def.enum_values
-        ? listWords((value as unknown[]).map((v) => optionLabel(def, v)))
-        : countWords((value as unknown[]).length, 'vybraná', 'vybrané', 'vybraných');
+      return listWords((value as unknown[]).map((v) => optionLabel(def, v)));
     case 'pill_group':
     case 'single_select':
       /* `any` is the registry's own "no constraint" option (status). */
@@ -84,8 +82,6 @@ function customWords(row: Extract<SheetRow, { kind: 'custom' }>, f: ListingFilte
     }
     case 'districts':
       return f.districts.length ? placeLabelOf(f.districts) : null;
-    case 'tags':
-      return scopeWords('tags', f.tags);
     case 'portals':
       return portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
     case 'market_growth':

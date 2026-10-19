@@ -562,7 +562,8 @@ describe('<Pipeline> board', () => {
     const retry = await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ });
     expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
     expect(screen.getByText('Sadová')).toBeInTheDocument();
-    expect(screen.queryByText('Kolekce')).not.toBeInTheDocument();
+    /* The retry stands in the row's place: no chip while the map is missing. */
+    expect(screen.queryByRole('button', { name: 'V žádné kolekci' })).not.toBeInTheDocument();
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
     fireEvent.click(retry);
     await waitFor(() =>
@@ -606,6 +607,22 @@ describe('<Pipeline> board', () => {
       expect(screen.queryByText('Lesní')).not.toBeInTheDocument(),
     );
     expect(screen.getByText('Sadová')).toBeInTheDocument();
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
+  });
+
+  /* Ruling 10 (2026-10-19): the bar's Kolekce row is the one curated-set
+     control, its "not in" chip included. */
+  it('narrows the board to the cards in no collection through "V žádné kolekci"', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(
+      new Map([[42, [7]]]),
+    );
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'V žádné kolekci' }));
+    await waitFor(() => expect(screen.queryByText('Sadová')).not.toBeInTheDocument());
+    expect(screen.getByText('Lesní')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Šortlist' })).toBeDisabled();
     expect(screen.getByText(/nemovitostí/).textContent).toBe('1 z 2 nemovitostí');
   });
 
