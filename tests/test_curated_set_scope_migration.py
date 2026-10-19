@@ -189,9 +189,9 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
     assert "portal_status_matches" not in outside
 
 
-# 632 restated the Stats pivot with its floor at five and nothing else changed (tests/test_stats_min_n_migration.py
-# pins that), so the pivot's latest definition is 632's; every other function is still 629's.
-_LATER = {"browse_stats_properties": "632_stats_min_n_5.sql"}
+# 632 restated the Stats pivot with its floor at five, 634 with its status fact on the cohort's own portal
+# rule (each pinned as 'nothing else moved'), so the pivot's latest definition is 634's; the rest is 629's.
+_LATER = {"browse_stats_properties": "634_stats_status_lens.sql"}
 
 
 def test_these_are_the_latest_definitions() -> None:

@@ -31,6 +31,13 @@ toolkit work.
   unpicked). The saved chart's `stat` became `stats`, a list; 628 rewrites the stored board losslessly.
 - **Floor lowered to five (2026-10-19, migration 632):** a Stats cell shows its statistics from 5 properties
   (operator ruling; it was 10). One constant in the pivot (`v_min_n`), mirrored by `MIN_N`, shipped as `min_n`.
+- **Status judged by the cohort's rule (2026-10-19, migration 634):** with a portal filter the pivot's
+  `status` fact and the turnover gate read the portal rule (597), not the property's is_active — a property
+  delisted on the chosen portal but live elsewhere no longer flips a Neaktivní cohort to "aktivní i neaktivní"
+  (it leaves a turnover sample as excluded instead). Known gap: under a BROKER scope the SPA sends no portal
+  and status any, so the status fact stays the property's and "broker + Neaktivní" can still read mixed
+  (2,169 of 355,514 broker-property pairs) — closing it needs the broker prefilter to carry per-property
+  broker-ad status.
 - **Next:** (1) the legacy-vocabulary heal as its own PR — 89 condition spellings and 766
   dispositions outside the canonical vocabulary are charted under their raw spellings, sorted after
   the canonical members, until the heal lands (ruling 9);

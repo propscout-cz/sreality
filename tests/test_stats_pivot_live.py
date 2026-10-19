@@ -56,7 +56,9 @@ def _add(cur: Any, *, cm: str = "byt", ct: str = "prodej", disposition: str | No
          condition: str | None = "velmi_dobry", area: float | None = 50.0,
          price: int | None = 5_000_000, active: bool = True, tom: int | None = 30,
          balcony: bool | None = None, kraj: int | None = None, okres: int | None = None,
-         obec: int | None = None, cast_obce: int | None = None, ulice: int | None = None) -> int:
+         obec: int | None = None, cast_obce: int | None = None, ulice: int | None = None,
+         sources: list[str] | None = None, active_sources: list[str] | None = None) -> int:
+    """`sources` / `active_sources`: the property's portals (default: sreality, active iff `active`)."""
     pid, lid = next(_IDS), next(_IDS)
     cur.execute(
         "insert into browse_list (property_id, listing_id, is_active, category_main, category_type, "
@@ -68,12 +70,13 @@ def _add(cur: Any, *, cm: str = "byt", ct: str = "prodej", disposition: str | No
         "  measure_price_per_m2(%(price)s::numeric, %(area)s::numeric, %(cm)s::text, %(ct)s::text), "
         "  measure_price_per_m2_basis(%(cm)s::text, %(ct)s::text), %(tom)s::integer, "
         "  %(balcony)s::boolean, %(kraj)s::bigint, %(okres)s::bigint, %(obec)s::bigint, "
-        "  %(cast_obce)s::bigint, %(ulice)s::bigint, array['sreality'], "
-        "  case when %(active)s::boolean then array['sreality'] else '{}'::text[] end)",
+        "  %(cast_obce)s::bigint, %(ulice)s::bigint, %(sources)s::text[], %(active_sources)s::text[])",
         {"pid": pid, "lid": lid, "active": active, "cm": cm, "ct": ct,
          "disposition": disposition, "condition": condition, "area": area, "price": price,
          "tom": tom, "balcony": balcony, "kraj": kraj, "okres": okres, "obec": obec,
-         "cast_obce": cast_obce, "ulice": ulice},
+         "cast_obce": cast_obce, "ulice": ulice,
+         "sources": sources if sources is not None else ["sreality"],
+         "active_sources": active_sources if active_sources is not None else (["sreality"] if active else [])},
     )
     return pid
 
@@ -114,11 +117,13 @@ def _register(cur: Any) -> None:
     )
 
 
-def _pivot(cur: Any, pids: list[int], spec: Any) -> dict[str, Any]:
+def _pivot(cur: Any, pids: list[int], spec: Any, **args: Any) -> dict[str, Any]:
+    """`args`: further cohort parameters by name (portal_filter, inactive_only_filter, ...)."""
+    extra = "".join(f", {k} => %({k})s" for k in args)
     cur.execute(
-        "select public.browse_stats_properties(property_ids_filter => %s::bigint[], "
-        "spec => %s::jsonb)",
-        (pids, None if spec is None else json.dumps(spec)),
+        "select public.browse_stats_properties(property_ids_filter => %(pids)s::bigint[], "
+        f"spec => %(spec)s::jsonb{extra})",
+        {"pids": pids, "spec": None if spec is None else json.dumps(spec), **args},
     )
     return cur.fetchone()[0]
 
@@ -221,6 +226,28 @@ def test_more_than_one_category_is_refused(cur, other: dict[str, Any]) -> None:
     out = _pivot(cur, pids, {"rows": ["disposition"], "cols": [], "measure": "price"})
     assert (out["refused"], out["filtered"], out["cells"]) == ("mixed_category", 20, [])
     assert None in (out["category_main"], out["category_type"])
+
+
+def test_the_status_fact_follows_the_cohorts_own_portal_rule(cur) -> None:
+    """Migration 631. 'Inactive on sreality' admits a property still live on bezrealitky (597: the portal
+    rule judges the selected portals' ads). The pivot judges that row the same way, so the cohort reads
+    inactive and turnover draws -- over the five closed runs: the row whose property still runs has no
+    measured run on sreality and is set aside as excluded (ruling 3), while a price chart keeps it.
+    Without a portal filter the same property is simply active."""
+    gone = [_add(cur, active=False, tom=100 + i) for i in range(5)]
+    elsewhere = _add(cur, active=True, tom=50, sources=["sreality", "bezrealitky"], active_sources=["bezrealitky"])
+    cohort = gone + [elsewhere]
+    lens = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"},
+                  portal_filter=["sreality"], inactive_only_filter=True)
+    assert (lens["filtered"], lens["sample"], lens["excluded"], lens["status"], lens["refused"]) == (6, 5, 1, "inactive", None)
+    assert lens["cells"][0]["n"] == 5 and lens["cells"][0]["median"] == 102
+    price = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "price"},
+                   portal_filter=["sreality"], inactive_only_filter=True)
+    assert (price["sample"], price["excluded"], price["status"]) == (6, 0, "inactive")
+    plain = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"}, inactive_only_filter=True)
+    assert (plain["filtered"], plain["status"], plain["refused"]) == (5, "inactive", None)
+    both = _pivot(cur, cohort, {"rows": [], "cols": [], "measure": "tom_days"})
+    assert (both["filtered"], both["status"], both["refused"]) == (6, "mixed", "mixed_status")
 
 
 def test_turnover_needs_one_status_and_price_does_not(cur) -> None:
