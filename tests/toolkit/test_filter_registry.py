@@ -124,7 +124,7 @@ def test_pg_columns_subset_of_known_listings_columns() -> None:
         # Migration 133 — MF gross rental yield % (sale apartments).
         "mf_gross_yield_pct",
         # Migrations 534/535 — THE plot measure, published as a column on the
-        # Browse read model (browse_projection -> browse_list, properties_map_mv)
+        # Browse read model (browse_projection -> browse_list)
         # because `area_m2` is the parcel for pozemek and `estate_area` is NULL
         # on a third of active land. Not on `listings`: the API-side readers
         # call plot_area_m2(...) there (toolkit.measures).

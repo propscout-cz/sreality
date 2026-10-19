@@ -149,7 +149,7 @@ where a caller needs it.
 - **Open with `set local lock_timeout = '5s';` when a migration GRANT/REVOKEs or
   CREATE-OR-REPLACEs a hot or cron-refreshed relation** (any matview, `browse_list`, `listings`).
   Those take ACCESS EXCLUSIVE and a whole-transaction loop holds every lock it already took —
-  without a timeout it queues behind, or blocks, the `*/10` health refresh or the map rebuild.
+  without a timeout it queues behind, or blocks, the `*/10` health refresh or the `*/15` list rebuild.
 - **Destructive migrations** (`DROP TABLE`/`COLUMN`, type-changing `ALTER`, `DELETE`
   without `WHERE`, `TRUNCATE`) — **pause for explicit operator OK** ("yes, apply it") and
   back up the affected data *first* (`backup_before_drop.yml`, to R2). There's no staging
@@ -260,23 +260,20 @@ defined once) into `browse_list` — an **UNLOGGED
 table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
 *before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
-`properties_map_mv` stays a real `MATERIALIZED VIEW` (30-min cadence) fed from the same
-projection. (The publication-gate predicate is **gone** from the projection as of migration
+The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The publication-gate predicate is **gone** from the projection as of migration
 475 — flipped inert in August, then removed with the rest of the legacy dedup engine, rule
 #15. `properties.published_at` survives as a frozen historical column that constrains
-nothing.) This retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
+nothing.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
 pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
 `gh-actions-cron-throttle-fleet` if you need the numbers).
 
 **Appending a column to `browse_projection`** (migration 584's recipe; append LAST, each body verbatim from its
-latest definer): take both rebuild advisory locks (`statement_timeout` > the 1800 s cron cap); in ONE transaction
+latest definer): take the list rebuild's advisory lock (`statement_timeout` > the 1800 s cron cap); in ONE transaction
 `alter table browse_list add column` FIRST (the positional `sync_browse_list` insert and `browse_list_visible(...)`'s
-`l.*` must never see it narrower than the view), the view, then bridge `properties_map_visible(...)` with
-`null::<type> as <col>` ONLY while the matview lacks the column (EXECUTE + `-- ci-allow-dynamic:`; a static bridge
-breaks re-runs); then, `lock_timeout 0` under the held re-entrant keys, force the map rebuild + restore its source, then the list's.
+`l.*` must never see it narrower than the view), then the view; then, `lock_timeout 0` under the held re-entrant key, force the list's rebuild.
 **Removing a column** (590's recipe): in ONE transaction alter `browse_list` FIRST (`sync_browse_list` locks it before the view), rename the
-view aside (the matview + its source follow by OID), create the new one, re-create both row-type sources (the map's as a static bridge); then
-the rebuild at top level (a body inside a DO block is apply-time DDL to the receipt parser); force the list, then map + legacy drop.
+view aside (its row-type source follows by OID), create the new one, re-create `browse_list_visible(...)`; then
+the rebuild at top level (a body inside a DO block is apply-time DDL to the receipt parser); force the list, then the legacy drop.
 
 **A property row is its canonical advert's** (migrations 561, 588): `properties.repr_listing_ref_id`
 = rank 1 of `property_canonical_listings(property_id)` (active, map point, earliest first seen among
@@ -288,12 +285,12 @@ portal lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since
 
 **Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot) + 629's nine curated-set scope parameters (both functions; `spec` and the map's `point_budget` shape the answer, never the cohort). Gate a re-sign on a plan probe first: `docs/agents/db-plan-probe.md` (no DDL; PostgREST's call shape; RLS as the caller).
 
-**Two functions depend on `browse_projection`'s row type** (537; since 629 ten defaulted parameters: `hide_dismissed`
+**One function depends on `browse_projection`'s row type** (537; since 629 ten defaulted parameters: `hide_dismissed`
 + the nine `<set>_set/_in/_out`): `browse_list_visible(...)` — the SPA's ONE Browse source since 630 (list, count and
-map pins), judging dismissals + curated membership under the caller's RLS (a zero-arg call = 537's answer) — and
-`properties_map_visible(...)`, with no SPA caller since 630 (W2 drops it). A non-CASCADE `drop view browse_projection` now fails; drop and recreate them in the
-same migration. Keep them `language sql stable`, invoker, no `SET`: that is what lets the planner
-inline them, so PostgREST's filters/ORDER BY/LIMIT still reach `browse_list`'s index.
+map pins), judging dismissals + curated membership under the caller's RLS (a zero-arg call = 537's answer); its map
+twin `properties_map_visible(...)` went with the matview in 631. A non-CASCADE `drop view browse_projection` now fails; drop and recreate it in the
+same migration. Keep it `language sql stable`, invoker, no `SET`: that is what lets the planner
+inline it, so PostgREST's filters/ORDER BY/LIMIT still reach `browse_list`'s index.
 
 **A single-value filter must reach `browse_list` as `=`, never as `= ANY`.** The serving
 index is `(category_main, category_type, first_seen_at DESC, property_id DESC)` and Browse's
@@ -320,21 +317,21 @@ Filter this view by `listing_id`, always. Its sreality-keyed sibling
 (`fetchImagesByListingIds` in `frontend/src/lib/queries.ts`) exists for the frozen-comparable
 id space and is NOT interchangeable — worth knowing before W7a collapses the image loaders.
 
-**Never hand-retype `rebuild_browse_list()`/`rebuild_properties_map_mv()`.** Both blue-green
-DROP+CREATE their object every tick, including the `GRANT SELECT ... TO authenticated` (never
-`anon` — migration 299 deliberately narrowed this) and, for `browse_list`, the district/price
+**Never hand-retype `rebuild_browse_list()`.** It blue-green
+DROP+CREATEs `browse_list` every tick, including the `GRANT SELECT ... TO authenticated` (never
+`anon` — migration 299 deliberately narrowed this) and the district/price
 covering indexes (migration 283's 9-column form, not migration 277's original 3-column form).
 Migration 371 copied from an outdated body and silently reintroduced BOTH the anon grant and
 the narrow indexes while its own commit message claimed no behavior change — live-anon-readable
 for an unknown period, fixed in migration 376. Always `CREATE OR REPLACE` from the CURRENT
 function body (`pg_get_functiondef`), never from an old migration file or a design doc's
-emergency-rollback snippet. Both functions now also self-check after granting
+emergency-rollback snippet. It also self-checks after granting
 (`if has_table_privilege('anon', ..., 'SELECT') then raise exception`) — a regression RAISEs,
 rolling back the whole tick so the last known-good object stays published instead of a
 mis-permissioned one, and the artifact's `derived_artifacts.last_succeeded_at` (surfaced on
 the Health page, migration 440) stops advancing within one cycle. `tests/test_browse_grant_drift.py`
-is the matching OFFLINE gate — it reaches inside `EXECUTE`-embedded DDL for these two relations
-specifically, unlike `test_migration_rls_grants.py`'s scanner, which treats dollar-quoted
+is the matching OFFLINE gate — it reaches inside `EXECUTE`-embedded DDL for `browse_list` and the retired
+`properties_map_mv` specifically, unlike `test_migration_rls_grants.py`'s scanner, which treats dollar-quoted
 function bodies as opaque by design.
 
 **Every derived artifact declares its own freshness in `derived_artifacts`** (migration 437,
@@ -395,7 +392,7 @@ claimed otherwise and drove the blocking design — never re-derive that claim f
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
 this for all matviews, plus the exact broker index set — migration 508's DROP+CREATE
 silently lost 414's covering index and no test noticed). Pre-578 SQL producers
-(`refresh_health_matviews`, `refresh_location_pin_audit_mv`, the blue-green rebuilds) keep
+(`refresh_health_matviews`, `refresh_location_pin_audit_mv`, the blue-green `rebuild_browse_list()`) keep
 their pinned inline shapes; new SQL producers call the chokepoint.
 
 **A `SECURITY DEFINER` gate in a view's WHERE is per-row ONLY when it is combined with a

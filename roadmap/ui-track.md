@@ -469,6 +469,9 @@ End-to-end browser flow over the U1b backend.
   row-comparison keyset cursor (PostgREST can't emit it yet).
 - W1 of ONE PIN: map pins + tile counts read `browse_list`; the rebuild
   re-patches identity changes (migration 630).
+- W2 of ONE PIN: `properties_map_mv` retired with its rebuild, cron job,
+  registry row and `properties_map_visible`, plus the two dead MF
+  functions (migration 631).
 
 ### Chart axis unification (done)
 

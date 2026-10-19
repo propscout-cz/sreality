@@ -1419,7 +1419,7 @@ def test_a_property_with_no_ads_is_reset_to_no_ads_once():
 def test_with_no_canonical_ad_a_property_leaves_the_read_models():
     """Why the reset needs no clause of its own in Browse or the map: the projection's consumer
     rule (rule 25) reads the location row of the canonical ad, joined on `repr_listing_ref_id`,
-    so a NULL never passes it, and `browse_list` and `properties_map_mv` are its rows."""
+    so a NULL never passes it, and `browse_list` is its rows."""
     from tests.test_browse_read_path_guardrail import _latest_migration_defining, _strip_comments
 
     sql = _strip_comments(_latest_migration_defining("browse_projection").read_text())

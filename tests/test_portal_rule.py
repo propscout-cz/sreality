@@ -6,7 +6,7 @@ the map cells over `browse_list`) and, for the `any` rows, through the Watchdog'
 compiled clause (`toolkit.filter_compiler.PROPERTIES_GRAIN`); every broker case seeds its
 ads and runs the broker lookup (`toolkit.brokers.broker_property_ids`). The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
-and the three relations' one shape. Offline: the fixture covers every arm.
+and the projection's and `browse_list`'s one shape. Offline: the fixture covers every arm.
 
 Live rails run in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`), each
 inside a transaction that always rolls back.
@@ -215,18 +215,18 @@ def test_the_rebuild_builds_one_partial_index_per_portal(conn) -> None:
 
 
 @live
-def test_the_projection_and_both_read_models_have_one_shape(conn) -> None:
-    """`sync_browse_list` inserts by POSITION, and both sources return the projection's
-    row type: three relations, one column list, the twelve appended last."""
+def test_the_projection_and_the_read_model_have_one_shape(conn) -> None:
+    """`sync_browse_list` inserts by POSITION (`insert into browse_list select * from
+    browse_projection`): two relations, one column list, the twelve appended last."""
     shapes = {}
     with conn.cursor() as cur:
-        for rel in ("browse_projection", "browse_list", "properties_map_mv"):
+        for rel in ("browse_projection", "browse_list"):
             cur.execute(
                 "select attname, format_type(atttypid, atttypmod) from pg_attribute "
                 "where attrelid = %s::regclass and attnum > 0 and not attisdropped "
                 "order by attnum", (f"public.{rel}",))
             shapes[rel] = cur.fetchall()
-    assert shapes["browse_list"] == shapes["browse_projection"] == shapes["properties_map_mv"]
+    assert shapes["browse_list"] == shapes["browse_projection"]
     names = [n for n, _ in shapes["browse_projection"]]
     assert "asset_id" not in names
     # One contiguous block in portal order; later columns may follow it (584's recipe appends
