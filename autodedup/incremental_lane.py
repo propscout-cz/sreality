@@ -298,7 +298,9 @@ SETTLE_LAG_S: int = 300
 # How far back the anti-join looks for a row that committed after the cursor passed its id.
 STRAGGLER_WINDOW: int = 5000
 # One round-robin slice of the revive sweep. 434k inactive rows at 20k a pass is a full cycle
-# every ~22 passes (~22 min at the worker's 60 s interval), which is the lane's revival latency.
+# every ~22 passes (~22 min at the worker's 60 s interval), which is the lane's revival latency
+# while no slice holds more revived ids than the feed's fifth of the claim: each fifth beyond
+# that keeps the cursor inside the slice one more pass (E970).
 REVIVE_SLICE: int = 20000
 # How many rows of its OWN cursor index a forward feed reads before the scope is resolved for
 # them (E79). Measured on the live corpus: the three feeds together take 23,234 rows a day —

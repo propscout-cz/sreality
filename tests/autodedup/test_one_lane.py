@@ -1515,6 +1515,17 @@ def test_a_blend_that_beats_the_doubling_is_stored_and_not_called_a_doubling() -
         round(0.5 * 25 / 10.0 + 0.5 * LIVE_RATE, 6), False)
 
 
+def test_the_first_floor_pass_after_the_refusals_is_measured_by_the_blend() -> None:
+    """E970: the 2026-10-19 refusals left the rate at 0.000056 and the claim at one advert a
+    feed. The first pass that commits is a clock-cut, filled claim (five adverts at a limit of
+    one), so it is measured, and at that rate E98's blend beats E951's doubling by far."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate, doubled = _measure_rate(5, 600.0, 0.000056, _bound("time", 1, 525.0))
+    assert (rate, doubled) == (0.004195, False)
+    assert rate > 70 * 0.000056 > 2 * 0.000056
+
+
 @pytest.mark.parametrize("claimed, bound", [
     (500, _bound("count", 500, 525.0)),     # the count bound it: the clock had room to spare
     (250, _bound("cap", 250, 525.0)),       # E948's cap bound it: memory, not time
