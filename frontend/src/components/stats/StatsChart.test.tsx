@@ -12,7 +12,7 @@ vi.mock('@/lib/stats', async (importOriginal) => ({
 }));
 
 const CHART: stats.ChartSpec = {
-  id: 'c1', view: 'table', rows: ['disposition'], cols: [], measure: 'area', stat: 'median',
+  id: 'c1', view: 'table', rows: ['disposition'], cols: [], measure: 'area', stats: ['median'],
 };
 
 const renderChart = (props: Partial<Parameters<typeof StatsChart>[0]> = {}) => {

@@ -80,16 +80,16 @@ def test_the_board_is_upserted_whole_for_the_callers_account(client, conn: _Conn
     charts = [
         {**_CHART, "title": "derived, never stored"},
         {"id": "c2", "view": "line", "rows": ["area_band_10"], "cols": ["condition"],
-         "measure": "price", "stat": "p75"},
+         "measure": "price", "stats": ["p75", "p10"]},
     ]
     res = client.put("/stats/dashboard", json={"charts": charts})
     assert res.status_code == 200, res.text
     body = res.json()
     assert body == {
         "charts": [
-            {"id": "c1", "view": "box", "stat": "median", "rows": ["disposition", "condition"],
+            {"id": "c1", "view": "box", "stats": ["median"], "rows": ["disposition", "condition"],
              "cols": [], "measure": "ppm2"},
-            {"id": "c2", "view": "line", "stat": "p75", "rows": ["area_band_10"],
+            {"id": "c2", "view": "line", "stats": ["p75", "p10"], "rows": ["area_band_10"],
              "cols": ["condition"], "measure": "price"},
         ],
         "updated_at": _AT.isoformat(),
@@ -118,7 +118,8 @@ def test_an_empty_board_is_a_valid_board(client, conn: _Conn) -> None:
         ([{**_CHART, "rows": ["kraj", "okres", "obec", "cast_obce", "ulice", "condition", "disposition"]}],
          "chart 0: at most 6 row dimensions"),
         ([{**_CHART, "measure": "yield"}], "chart 0: unknown measure 'yield'"),
-        ([{**_CHART, "stat": "n"}], "chart 0: unknown stat 'n'"),
+        ([{**_CHART, "stats": ["n"]}], "chart 0: unknown stat 'n'"),
+        ([{**_CHART, "stats": []}], "chart 0: stats must be a non-empty list"),
         ([_CHART, dict(_CHART)], "chart 1: duplicate id 'c1'"),
         ([{**_CHART, "id": ""}], "chart 0: chart id must be a short string"),
         ([_CHART, {**_CHART, "id": "c2", "view": "line", "rows": ["kraj", "obec"]}],

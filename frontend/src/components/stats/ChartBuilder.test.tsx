@@ -8,7 +8,7 @@ let latest: ChartSpec;
 
 function Harness({ initial, categoryMain = 'byt' }: { initial: Partial<ChartSpec>; categoryMain?: string | null }) {
   const [draft, setDraft] = useState<ChartSpec>({
-    id: 'c', view: 'table', rows: [], cols: [], measure: 'ppm2', stat: 'median', ...initial,
+    id: 'c', view: 'table', rows: [], cols: [], measure: 'ppm2', stats: ['median'], ...initial,
   });
   latest = draft;
   return <ChartBuilder draft={draft} onChange={setDraft} categoryMain={categoryMain} />;
@@ -94,19 +94,33 @@ describe('<ChartBuilder> — every drag has a click path', () => {
       'Doba na trhu', 'Plocha', 'Cena', 'Cena za m²',
     ]);
     expect(screen.getByRole('group', { name: 'Zobrazení' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Statistika' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Statistika · jedna nebo víc' })).toBeInTheDocument();
     expect(screen.queryByRole('region')).toBeNull();
   });
 
-  it('picks the value, the view and — where one value is drawn — the statistic', () => {
+  it('picks the value, the view and — where statistics are drawn — the statistics', () => {
     render(<Harness initial={{ rows: ['disposition'] }} />);
     click('Hodnota: Doba na trhu');
     expect(latest.measure).toBe('tom_days');
-    expect(screen.queryByRole('group', { name: 'Statistika' })).toBeNull();
+    expect(screen.queryByRole('group', { name: /^Statistika/ })).toBeNull();
     click('Zobrazení: Pruhy');
     expect(latest.view).toBe('bar');
+    expect(screen.getByRole('group', { name: /^Statistika/ })).toBeInTheDocument();
     click('Statistika: p75');
-    expect(latest.stat).toBe('p75');
+    expect(latest.stats).toEqual(['median', 'p75']);
+  });
+
+  it('takes several statistics at once, in the order they were picked, and never fewer than one', () => {
+    render(<Harness initial={{ view: 'line', rows: ['disposition'] }} />);
+    click('Statistika: p10');
+    click('Statistika: p90');
+    expect(latest.stats).toEqual(['median', 'p10', 'p90']);
+    click('Statistika: medián');
+    expect(latest.stats).toEqual(['p10', 'p90']);
+    click('Statistika: p10');
+    click('Statistika: p90');
+    expect(latest.stats).toEqual(['p90']);
+    expect(screen.getByRole('button', { name: 'Statistika: p90' })).toBeInTheDocument();
   });
 });
 

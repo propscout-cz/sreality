@@ -46,11 +46,13 @@ export interface StatsSpec {
   measure: string;
 }
 
-/* One saved chart. The title is derived (chartTitle), never stored. */
+/* One saved chart. The title is derived (chartTitle), never stored. `stats` is
+ * the statistics a line, a bar and a table with a column draw: one or more, in
+ * the order they were picked (the first one leads, in the copper series). */
 export interface ChartSpec extends StatsSpec {
   id: string;
   view: ViewId;
-  stat: ChartStat;
+  stats: ChartStat[];
 }
 
 /* A rollup cell: `keys.length` is its level (0 = the whole sample, per column
@@ -278,13 +280,21 @@ export function chartProblem(chart: ChartSpec): string | null {
   return viewBlock(chart, chart.view);
 }
 
-/* Whether the chart draws ONE statistic (its `stat`): line, bar, and a table
- * with a column dimension (one value per column). */
+/* Whether the chart draws its picked `stats`: line, bar, and a table with a
+ * column dimension (each column value carries one sub-column per statistic). */
 export const statUsed = (chart: Pick<ChartSpec, 'view' | 'cols'>): boolean =>
   chart.view === 'line' || chart.view === 'bar' || (chart.view === 'table' && chart.cols.length > 0);
 
 const strArray = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+
+/* A statistic added at the end (it follows the leading ones) or removed — but
+ * never the last one: a chart always draws at least one. The one rule the
+ * builder's picker toggles through. */
+export function toggleStat(stats: readonly ChartStat[], s: ChartStat): ChartStat[] {
+  if (!stats.includes(s)) return [...stats, s];
+  return stats.length > 1 ? stats.filter((x) => x !== s) : [...stats];
+}
 
 /* A saved chart this build can draw, or null. Drops what the registry no longer
  * knows rather than letting one stale chart make the whole board unsaveable. */
@@ -300,8 +310,10 @@ export function sanitizeChart(raw: unknown): ChartSpec | null {
   const cols = strArray(c.cols);
   const dims = [...rows, ...cols];
   if (dims.some((d) => !DIMS.has(d)) || new Set(dims).size !== dims.length) return null;
-  const stat = typeof c.stat === 'string' && CHART_STATS.has(c.stat) ? (c.stat as ChartStat) : STATS_REGISTRY.default_stat;
-  const chart: ChartSpec = { id, view: c.view as ViewId, rows, cols, measure, stat };
+  /* Known statistics only, once each, in the saved order; none usable reads as the default. */
+  const picked = [...new Set(strArray(c.stats).filter((x) => CHART_STATS.has(x)))] as ChartStat[];
+  const stats = picked.length > 0 ? picked : [STATS_REGISTRY.default_stat];
+  const chart: ChartSpec = { id, view: c.view as ViewId, rows, cols, measure, stats };
   return chartProblem(chart) == null ? chart : null;
 }
 
@@ -616,7 +628,7 @@ export function colValuesOf(pivot: StatsPivot): string[] {
 /* -------------------------------------------------------------------------- */
 
 export interface SeriesModel {
-  series: Array<{ key: string; label: string; dataKey: string }>;
+  series: Array<{ key: string; stat: ChartStat; label: string; dataKey: string }>;
   data: Array<Record<string, string | number | null>>;
   /* Some (x, series) has fewer than min_n properties, or none — drawn as a gap. */
   gaps: boolean;
@@ -627,21 +639,33 @@ const xcKey = (x: string, col: string | null): string => `${x}|${colKey(col)}`;
 
 /* Built for a spec with exactly one row (the view's minimum, which the card
  * checks before it draws). */
-export function seriesModel(pivot: StatsPivot, stat: ChartStat): SeriesModel {
+export function seriesModel(pivot: StatsPivot, stats: readonly ChartStat[]): SeriesModel {
   const { spec, basis, places } = pivot;
   const xDim = spec.rows[0];
   const colDim = spec.cols[0];
   const level1 = pivot.cells.filter((c) => c.keys.length === 1);
   const xs = sortKeys(xDim, [...new Set(level1.map((c) => c.keys[0]))], places);
-  const series = colDim
-    ? colValuesOf(pivot).map((k, i) => ({ key: k, label: keyLabel(colDim, k, basis, places), dataKey: `s${i}` }))
-    : [{ key: '', label: measureLabel(spec.measure), dataKey: 's0' }];
+  /* One series per (column value, statistic), a column's statistics side by side
+   * in the picked order. A lone statistic is not named in the legend (the caption
+   * names it); several are, so each line says which it is. */
+  const several = stats.length > 1;
+  const columns = colDim
+    ? colValuesOf(pivot).map((k) => ({ key: k, label: keyLabel(colDim, k, basis, places) }))
+    : [{ key: '', label: measureLabel(spec.measure) }];
+  const series = columns.flatMap((col, ci) =>
+    stats.map((st, si) => ({
+      key: col.key,
+      stat: st,
+      label: !several ? col.label : colDim ? `${col.label} · ${STAT_LABEL[st]}` : STAT_LABEL[st],
+      dataKey: `s${ci * stats.length + si}`,
+    })),
+  );
   const at = new Map(level1.map((c) => [xcKey(c.keys[0], c.col), c]));
   let gaps = false;
   const data = xs.map((x) => {
     const row: Record<string, string | number | null> = { x, label: keyLabel(xDim, x, basis, places) };
     for (const s of series) {
-      const v = at.get(xcKey(x, s.key))?.[stat] ?? null;
+      const v = at.get(xcKey(x, s.key))?.[s.stat] ?? null;
       if (v == null) gaps = true;
       row[s.dataKey] = v;
     }
@@ -664,7 +688,7 @@ export const SERIES_TOKENS = [
 export const MAX_SERIES = SERIES_TOKENS.length * 2;
 
 export const tooManySeriesText = (): string =>
-  `Řad je víc než ${MAX_SERIES} — použijte Tabulku, nebo zužte filtr.`;
+  `Řad je víc než ${MAX_SERIES} — použijte Tabulku, zužte filtr nebo vyberte méně statistik.`;
 
 /* -------------------------------------------------------------------------- */
 /* The sample ledger                                                           */
@@ -730,16 +754,16 @@ export function refusalText(refusal: StatsRefusal): string {
   }
 }
 
-const stat = STATS_REGISTRY.default_stat;
+const stats: ChartStat[] = [STATS_REGISTRY.default_stat];
 
 /* The seed board. Every chart must answer on DEFAULT_FILTERS (status 'any',
  * byty): no turnover (it needs one status) and no byty-only dimension that a
  * cohort switch would empty. stats.test.ts pins both. */
 export const DEFAULT_CHARTS: ChartSpec[] = [
-  { id: 'default-1', view: 'table', rows: [], cols: [], measure: 'price', stat },
-  { id: 'default-2', view: 'table', rows: [], cols: [], measure: 'ppm2', stat },
-  { id: 'default-3', view: 'box', rows: ['disposition'], cols: [], measure: 'ppm2', stat },
-  { id: 'default-4', view: 'box', rows: ['condition'], cols: [], measure: 'ppm2', stat },
+  { id: 'default-1', view: 'table', rows: [], cols: [], measure: 'price', stats },
+  { id: 'default-2', view: 'table', rows: [], cols: [], measure: 'ppm2', stats },
+  { id: 'default-3', view: 'box', rows: ['disposition'], cols: [], measure: 'ppm2', stats },
+  { id: 'default-4', view: 'box', rows: ['condition'], cols: [], measure: 'ppm2', stats },
 ];
 
 const newChartId = (): string =>
@@ -751,5 +775,5 @@ export const newChart = (): ChartSpec => ({
   rows: [],
   cols: [],
   measure: 'ppm2',
-  stat,
+  stats,
 });

@@ -279,7 +279,8 @@ def validate_spec(spec: Any) -> dict[str, Any]:
 
 
 def validate_chart(chart: Any) -> dict[str, Any]:
-    """One saved chart: {id, view, rows, cols, measure, stat}. `stat` matters to line/bar only."""
+    """One saved chart: {id, view, rows, cols, measure, stats}. `stats` (one or more chart statistics,
+    in the order the user picked them: the first leads) is read by line, bar and a table with a column."""
     if not isinstance(chart, dict):
         raise SpecError("chart must be an object")
     cid = chart.get("id")
@@ -288,9 +289,14 @@ def validate_chart(chart: Any) -> dict[str, Any]:
     view = chart.get("view")
     if view not in VIEWS:
         raise SpecError(f"unknown view {view!r}")
-    stat = chart.get("stat", DEFAULT_STAT)
-    if stat not in CHART_STATS:
-        raise SpecError(f"unknown stat {stat!r}")
+    stats = chart.get("stats", [DEFAULT_STAT])
+    if not isinstance(stats, list) or not stats:
+        raise SpecError("stats must be a non-empty list")
+    for st in stats:
+        if st not in CHART_STATS:
+            raise SpecError(f"unknown stat {st!r}")
+    if len(set(stats)) != len(stats):
+        raise SpecError("a statistic may appear once")
     spec = validate_spec(chart)
     limits = VIEW_LIMITS[view]
     if len(spec["cols"]) > limits.max_cols:
@@ -299,7 +305,7 @@ def validate_chart(chart: Any) -> dict[str, Any]:
         span = (f"exactly {limits.min_rows}" if limits.min_rows == limits.max_rows
                 else f"{limits.min_rows} to {limits.max_rows}")
         raise SpecError(f"a {view} chart takes {span} row dimension{'' if limits.max_rows == 1 else 's'}")
-    return {"id": cid, "view": view, "stat": stat, **spec}
+    return {"id": cid, "view": view, "stats": list(stats), **spec}
 
 
 def validate_board(charts: list[Any]) -> list[dict[str, Any]]:

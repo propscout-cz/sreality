@@ -19,7 +19,7 @@ from toolkit.measures import RENT_MONTHLY_CZK_M2
 
 _OK_SPEC = {"rows": ["disposition", "condition"], "cols": ["kraj"], "measure": "ppm2"}
 _OK_CHART = {"id": "c1", "view": "table", "rows": ["disposition"], "cols": ["condition"],
-             "measure": "price", "stat": "p25"}
+             "measure": "price", "stats": ["p25", "median"]}
 
 
 # --- validate_spec --------------------------------------------------------------------
@@ -65,13 +65,26 @@ def test_a_bad_spec_is_refused_with_its_reason(spec: object, reason: str) -> Non
 
 def test_a_chart_is_normalised_and_a_title_is_never_stored() -> None:
     out = sr.validate_chart({**_OK_CHART, "title": "Ceny podle dispozice"})
-    assert out == {"id": "c1", "view": "table", "stat": "p25", "rows": ["disposition"],
+    assert out == {"id": "c1", "view": "table", "stats": ["p25", "median"], "rows": ["disposition"],
                    "cols": ["condition"], "measure": "price"}
 
 
-def test_the_stat_defaults_to_the_median() -> None:
-    chart = {k: v for k, v in _OK_CHART.items() if k != "stat"}
-    assert sr.validate_chart(chart)["stat"] == "median"
+def test_the_stats_default_to_the_median_alone() -> None:
+    chart = {k: v for k, v in _OK_CHART.items() if k != "stats"}
+    assert sr.validate_chart(chart)["stats"] == ["median"]
+
+
+def test_the_stats_keep_the_order_they_were_picked_in() -> None:
+    """The first pick leads (the leading series is the copper one), so the order is part of the chart."""
+    chart = {**_OK_CHART, "stats": ["p90", "median", "p10"]}
+    assert sr.validate_chart(chart)["stats"] == ["p90", "median", "p10"]
+
+
+def test_the_old_single_stat_key_is_ignored_not_read() -> None:
+    """A client that still sends `stat` (the migration-628 shape) gets the default, never an error."""
+    chart = {k: v for k, v in _OK_CHART.items() if k != "stats"} | {"stat": "p90"}
+    out = sr.validate_chart(chart)
+    assert out["stats"] == ["median"] and "stat" not in out
 
 
 @pytest.mark.parametrize("view", sr.VIEWS)
@@ -106,8 +119,11 @@ def test_a_line_or_bar_takes_one_row_and_a_series(view: str) -> None:
         ({"id": "x" * 65}, "chart id must be a short string"),
         ({"id": 7}, "chart id must be a short string"),
         ({"view": "pie"}, "unknown view 'pie'"),
-        ({"stat": "n"}, "unknown stat 'n'"),
-        ({"stat": "max"}, "unknown stat 'max'"),
+        ({"stats": ["n"]}, "unknown stat 'n'"),
+        ({"stats": ["median", "max"]}, "unknown stat 'max'"),
+        ({"stats": []}, "stats must be a non-empty list"),
+        ({"stats": "median"}, "stats must be a non-empty list"),
+        ({"stats": ["p10", "p10"]}, "a statistic may appear once"),
         ({"view": "box"}, "a box chart takes row dimensions only"),
         ({"view": "line", "rows": ["kraj", "obec"]}, "a line chart takes exactly 1 row dimension"),
         ({"view": "line", "rows": []}, "a line chart takes exactly 1 row dimension"),
