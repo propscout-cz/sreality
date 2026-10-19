@@ -95,7 +95,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     title: 'Essentials',
     defaultOpen: true,
     keys: [
-      'categoryMain', 'categoryType', 'status',
+      'categoryMain', 'categoryType', 'status', 'tomObservedOnly',
       'recentlyAddedDays', 'recentlyChangedDays',
       'districts',
       'dispositions', 'subtype',
@@ -117,11 +117,15 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
         when: (f) => subtypeMains(f.categoryMain).length > 0,
         blocks: [{ kind: 'custom', key: 'subtype', label: 'Subtype' }],
       },
+      /* Three form blocks, not one: a form draws its ids in REGISTRY order, which would
+       * put the toggle below both recency dropdowns. It reads as part of the status
+       * ("which ads count"), so it sits directly under the status buttons. */
       {
         title: 'Status',
         blocks: [
+          form({ status: 'Status' }),
+          form({ tom_observed_only: 'Newly listed only' }),
           form({
-            status: 'Status',
             recently_added_days: 'Recently added',
             recently_changed_days: 'Recently changed',
           }),
@@ -262,7 +266,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     keys: [
       'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
       'firstSeenMinDays', 'firstSeenMaxDays',
-      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax', 'tomObservedOnly',
+      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
     ],
     groups: [
       {
@@ -286,7 +290,6 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
             first_seen_min_days: 'First seen (days ago)',
             last_seen_min_days: 'Last seen (days ago)',
             tom_days_min: 'Time on market (days)',
-            tom_observed_only: 'Newly listed only',
           }),
         ],
       },
