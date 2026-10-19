@@ -24,7 +24,7 @@ The operator chose to replace them with charts the user builds, which deletes th
 5. Bands: price per m² sale 5 000 / 10 000, rent 25 / 50; total price sale 250 000 / 500 000 / 1 000 000, rent
    1 000 / 2 500 / 5 000; floor area 5 / 10 m², byty only. Defined once (`toolkit/stats_registry.py`).
 6. Statistics n, mean, median, p10, p25, p75, p90; a cell under **5** properties shows n and no statistics
-   (amended 2026-10-19 by the operator, migration 630: it was 10; at n = 5 a box rests on the 2nd–4th order
+   (amended 2026-10-19 by the operator, migration 632: it was 10; at n = 5 a box rests on the 2nd–4th order
    statistics, so the n stays beside every figure)
    (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median.
 7. Table = rows × columns; line / bar = one row dimension on x, the column dimension as series; box = rows only.
@@ -172,7 +172,7 @@ deleted files are replaced by rows for the files that now carry the unit strings
 ### Rails
 
 - `tests/test_626_stats_dashboard.py` (offline): the effective `stats_dim_key` text equals
-  `dim_key_function_sql()`; the stats statement contains `measure_value_sql()`, `v_min_n constant int := 5` (the effective definition is 630's, which restates the then-latest body, 629's, with that one line changed)
+  `dim_key_function_sql()`; the stats statement contains `measure_value_sql()`, `v_min_n constant int := 5` (the effective definition is 632's, which restates the then-latest body, 629's, with that one line changed)
   and `v_max_cells constant int := 2000`; its `bad_spec` chain equals `spec_guard_sql()`, its `mixed_status`
   arm names `single_status_measures_sql()` and its `places` block `geo_ids_sql()`; 626's cohort WHERE equals 625's; the signature is 625's 74 parameters
   plus `spec jsonb default null`; the seven `stats_dim_key` calls end on the five place codes and the pivot

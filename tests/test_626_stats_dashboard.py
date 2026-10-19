@@ -25,7 +25,7 @@ SQL = (MIGRATIONS / NAME).read_text(encoding="utf-8")
 CODE = re.sub(r"--[^\n]*", "", SQL)
 S625 = (MIGRATIONS / "625_tom_observed.sql").read_text(encoding="utf-8")
 FN = "browse_stats_properties"
-# The pivot is restated whole by every migration that touches it (629 added the curated scope, 630 moved the floor), so the pins
+# The pivot is restated whole by every migration that touches it (629 added the curated scope, 632 moved the floor), so the pins
 # about its BODY read the effective definition; the ones about what 626 itself creates read 626.
 EFFECTIVE = latest_definition(FN).read_text(encoding="utf-8")
 LIVE_625 = "6b102dd7960cced4ffbbf31127048428"  # pg_proc md5(prosrc), read live 2026-10-19

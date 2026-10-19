@@ -1,4 +1,4 @@
--- 630_stats_min_n_5.sql -- a Stats cell shows its statistics from five properties, not ten.
+-- 632_stats_min_n_5.sql -- a Stats cell shows its statistics from five properties, not ten.
 --
 -- WHY. Operator ruling 2026-10-19: "show the statistics if n >= 5, not n >= 10". Ruling 6 of the dashboard
 -- (docs/design/stats-dashboard.md) had set the floor at ten; the operator lowers it. The floor is enforced
@@ -32,13 +32,13 @@ begin
   select count(*) = 100000 into populated
     from (select 1 from public.properties limit 100000) probe;
   if not populated then
-    raise notice '630: replay container (corpus < 100k properties), precondition skipped';
+    raise notice '632: replay container (corpus < 100k properties), precondition skipped';
     return;
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), '')
      not in ('17eb17021b8150b731910fcd13547f63', '2740668e7151535fd730db17ca7410c1') then
-    raise exception '630 refused: browse_stats_properties is not 629''s body nor this file''s (or has two overloads)';
+    raise exception '632 refused: browse_stats_properties is not 629''s body nor this file''s (or has two overloads)';
   end if;
 end
 $pre$;
@@ -443,11 +443,11 @@ begin
   select count(*), min(p.prosrc) into n, src from pg_proc p
    where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties';
   if n <> 1 or position('v_min_n     constant int := 5;' in src) = 0 or position('rollup(k1, k2, k3, k4, k5, k6)' in src) = 0 then
-    raise exception '630 did not land: browse_stats_properties (% overloads) does not carry the floor of five', n;
+    raise exception '632 did not land: browse_stats_properties (% overloads) does not carry the floor of five', n;
   end if;
   if not has_function_privilege('authenticated', (select p.oid from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), 'execute') then
-    raise exception '630 did not land: authenticated lost execute on browse_stats_properties';
+    raise exception '632 did not land: authenticated lost execute on browse_stats_properties';
   end if;
 end
 $post$;
