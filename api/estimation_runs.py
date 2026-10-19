@@ -51,7 +51,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from fastapi import HTTPException
 
 from api.cursor import decode_cursor, encode_cursor
-from api.dependencies import SYSTEM_ACCOUNT_ID
+from api.dependencies import SYSTEM_ACCOUNT_ID, is_admin
 
 from psycopg.types.json import Jsonb
 
@@ -594,10 +594,7 @@ def _is_privileged(claims: dict[str, Any] | None) -> bool:
     mirroring require_entitlement's bypass."""
     if claims is None:
         return True   # internal caller (ClickUp / agent / test) — never metered
-    if claims.get("is_admin") is True:
-        return True
-    meta = claims.get("app_metadata") or {}
-    return meta.get("is_admin") is True
+    return is_admin(claims)
 
 
 def _budget_enabled(conn: "psycopg.Connection") -> bool:
