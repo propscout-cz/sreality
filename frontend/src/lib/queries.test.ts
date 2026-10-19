@@ -522,22 +522,21 @@ describe('the one-portal order', () => {
 
 /* The measure travels with its PUBLISHED LABEL on every Browse lane, or the
  * number arrives unlabelable. All six migration-425 relations publish
- * `price_per_m2_basis` — including `browse_list` and `properties_map_mv`, whose
- * rebuilds run inside the migration and whose column presence § 9 asserts
- * before it commits — so no surface re-derives the basis in TypeScript.
- * `category_main` / `category_type` ride along for what the basis token does
- * not say: the denominator (plot vs floor area) and the monthly period on the
- * absolute price. */
+ * `price_per_m2_basis` — including `browse_list`, whose rebuild runs inside
+ * the migration and whose column presence § 9 asserts before it commits — so
+ * no surface re-derives the basis in TypeScript. `category_main` rides along
+ * for what the basis token does not say, the denominator (plot vs floor area);
+ * `category_type` for the monthly period, on the lanes that print one (not the map). */
 describe('Browse select-lists carry the measure with its published basis', () => {
   const cols = (list: string): string[] => list.split(',');
 
-  it('selects the measure, its published basis, and both category columns', () => {
+  it('selects the measure, its published basis, and the category columns each lane prints', () => {
     for (const [lane, list] of Object.entries(BROWSE_SELECT_COLUMNS)) {
       const c = cols(list);
       expect(c, `${lane}: price_per_m2`).toContain('price_per_m2');
       expect(c, `${lane}: price_per_m2_basis`).toContain('price_per_m2_basis');
       expect(c, `${lane}: category_main`).toContain('category_main');
-      expect(c, `${lane}: category_type`).toContain('category_type');
+      if (lane !== 'map') expect(c, `${lane}: category_type`).toContain('category_type');
     }
   });
 
@@ -731,7 +730,7 @@ describe('dismissed properties and curated sets are judged at the source', () =>
     const [, cells, pins] = s.rpc.mock.calls;
     expect(cells[0]).toBe('browse_map_cells');
     expect(cells[1]).toMatchObject({ tags_in: [5, 6], collections_set: 'out', pipeline_out: [9] });
-    expect(pins.slice(0, 2)).toEqual(['properties_map_visible', list[1]]);
+    expect(pins.slice(0, 2)).toEqual(['browse_list_visible', list[1]]);
     expect(s.inIds).toEqual([]);
     expect(s.from).not.toHaveBeenCalled();
   });
@@ -744,7 +743,7 @@ describe('dismissed properties and curated sets are judged at the source', () =>
     expect((cells[1] as Record<string, unknown>).hide_dismissed).toBe(true);
     /* The pin limit IS the server's point budget: one number end to end. */
     expect((cells[1] as Record<string, unknown>).point_budget).toBe(200);
-    expect(pins[0]).toBe('properties_map_visible');
+    expect(pins[0]).toBe('browse_list_visible');
   });
 
   it('puts the flag on the one Stats/map argument object', () => {
@@ -943,5 +942,63 @@ describe('Browse Stats resolves through the one prefilter path', () => {
     expect(rpcArgs[0]).not.toHaveProperty('listing_ids_filter');
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].point_budget).toBe(200);
+  });
+});
+
+/* A pin is a listed property with a point: the pin read is the list's read, one
+ * relation under one filter chain, so no status, portal or dismissal rule can hold
+ * on one lane and not the other. Driven through the real client, so the URLs
+ * PostgREST receives are what is compared. */
+describe('the map pins read the list\'s relation through the list\'s chain', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('sends one relation and one filter set; only select, order, limit and the point guard differ', async () => {
+    const urls: URL[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      const body = url.pathname.endsWith('/browse_map_cells')
+        ? { clustered: false, cells: null, level: null, total: 0 }
+        : [];
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: new Headers(),
+        text: async () => JSON.stringify(body),
+      } as unknown as Response;
+    }));
+    const filters = (u: URL): string[] => [...u.searchParams]
+      .filter(([k]) => !['select', 'order', 'limit'].includes(k))
+      .map(([k, v]) => `${k}=${v}`)
+      .sort();
+    for (const showDismissed of [false, true]) {
+      urls.length = 0;
+      const f: ListingFilters = {
+        ...DEFAULT_FILTERS,
+        showDismissed,
+        portals: ['sreality'],
+        bounds: { north: 50.18, south: 49.94, east: 14.71, west: 14.22 },
+      };
+      await fetchListingsForMap(f, 200);
+      await fetchListingsForCards(f, DEFAULT_SORT, null);
+      await fetchListingsForTable(f, DEFAULT_SORT, null);
+      const [pins, ...lists] = urls.filter((u) => !u.pathname.endsWith('/browse_map_cells'));
+      if (!showDismissed) expect(pins.pathname).toBe('/rest/v1/rpc/browse_list_visible');
+      expect(filters(pins)).toEqual(expect.arrayContaining([
+        'all_sources=ov.{sreality}', 'newest_ad_at_sreality=not.is.null',
+        'lat=gte.49.94', 'lat=lte.50.18', 'lng=gte.14.22', 'lng=lte.14.71',
+      ]));
+      expect(pins.searchParams.has('order') || pins.searchParams.has('limit')).toBe(false);
+      expect(lists).toHaveLength(2);
+      for (const list of lists) {
+        expect(list.pathname, `showDismissed=${showDismissed}`).toBe(pins.pathname);
+        expect(filters(pins)).toEqual([...filters(list), 'lat=not.is.null', 'lng=not.is.null'].sort());
+        expect(list.searchParams.has('order') && list.searchParams.has('limit')).toBe(true);
+      }
+    }
   });
 });

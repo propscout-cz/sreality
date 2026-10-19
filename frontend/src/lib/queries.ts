@@ -88,25 +88,24 @@ export const TABLE_PAGE_SIZE = 50;
 export const CARD_PAGE_SIZE = 24;
 
 /* Every Browse row carries `listing_id` (the surrogate = the repr child's
- * listings.id, migration 343 on browse_list / properties_map_mv) — the stable,
+ * listings.id, migration 343 on browse_list) — the stable,
  * NEVER-NULL identity used for React keys, the maplibre feature-state id, and
- * the hover-sync set. The detail link is CANONICAL-first: `source` +
+ * the hover-sync set. The Table/Cards detail link is CANONICAL-first: `source` +
  * `source_id_native` (migration 362 exposed the latter on the Browse read path)
  * build `/listing/{source}/{native}`, so the URL bar never flashes the negative
  * synthetic id. `sreality_id` stays selected for the legacy fallback (and as a
  * sort field) but is NULLABLE post-Gate-2, so it must never be a key/feature id.
- * The map has no keyset tiebreaker column, so it carries `property_id` explicitly
- * (Table/Cards get it from withKeysetColumns) for the final null-safe
- * `?property=` detail-link fallback. */
+ * The map carries neither: its popup links by `property_id` (propertyPath, with
+ * listing_id as the advert), so MAP_COLS selects `property_id` explicitly
+ * (Table/Cards get it from withKeysetColumns). */
 /* `price_per_m2` is the SERVER measure (migration 425) and `price_per_m2_basis`
- * is the SERVER label for it — both published on properties_map_mv, so the pin
+ * is the SERVER label for it — both published on browse_list, so the pin
  * reads the basis rather than re-deriving it.
  * Reading it PER FEATURE is not a convenience: Browse never forces a sale/rent
  * choice (rule 22 — `deal=any` is a first-class cohort), so one map can hold a
  * sale pin and a rent pin at once, and a map-wide unit would be wrong on one of
  * them by ~300x. `category_main` stays for what the basis does not say: whether
- * this row's area_m2 is floor area or PLOT area (the popup says so), and
- * `category_type` for the monthly period on the total-price label. */
+ * this row's area_m2 is floor area or PLOT area (the popup says so). */
 /* Every column here is serialised into a GeoJSON feature property for EVERY pin, so
  * an unread column is pure wire cost. `subtype` (0 of 50,000 non-NULL in the default
  * cohort) and `tom_days` (fully populated, read nowhere) were both dropped in W6a --
@@ -120,7 +119,7 @@ export const CARD_PAGE_SIZE = 24;
  * ring, the clicked one with a circle of `uncertainty_radius_m` metres around it,
  * and `granularity_rank` is the INT form of the rung (migration 380), because
  * granularity is compared by rank and never by enum text. */
-const MAP_COLS = 'listing_id,property_id,sreality_id,source,source_id_native,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,category_type,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
+const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
 const TABLE_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
   /* The Kč/m² cell reads the SERVER measure (migration 425), not price/area:
@@ -295,12 +294,12 @@ const solePortal = (f: ListingFilters): string | null =>
  * another. */
 const BROWSE_LIST_RELATION = 'browse_list';
 
-/* Each read model's source function (migrations 537 + 629): the same rows, minus
+/* The one Browse source function (migrations 537 + 629 + 630: list, counts and
+ * map pins alike): the same rows, minus
  * the caller's dismissed properties unless revealed, narrowed by the curated-set
  * scope — membership judged server-side under the caller's RLS, because an
  * operator's own sets only grow and can never ride in the GET URL. */
 const BROWSE_LIST_SOURCE = 'browse_list_visible';
-const MAP_SOURCE = 'properties_map_visible';
 
 interface CountOption {
   count?: 'exact';
@@ -325,9 +324,6 @@ const readSource = (
 
 const listSource = (f: ListingFilters, columns: string, opts?: CountOption) =>
   readSource(BROWSE_LIST_SOURCE, f, columns, opts);
-
-const mapSource = (f: ListingFilters, columns: string) =>
-  readSource(MAP_SOURCE, f, columns);
 
 /* One portal's "Newest first" (MS19, Q49 b): with exactly one portal P selected,
  * "Newest first" and "Oldest first" order properties by when their newest ad on
@@ -476,25 +472,19 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
 };
 
 export interface MapRow {
-  /* Surrogate identity (never null) — the maplibre feature-state id + hover-sync
-   * key. `sreality_id` is nullable post-Gate-2 and is only for the detail link. */
+  /* Surrogate identity (never null) — the maplibre feature-state id + hover-sync key. */
   listing_id: number;
   property_id: number;
-  sreality_id: number | null;
-  source: string | null;
-  source_id_native: string | null;
   lat: number;
   lng: number;
   price_czk: number | null;
   /* The SERVER measure and the SERVER label for it. The map label switches
    * between price_czk and price_per_m2 (the "Ceny" control), and the unit is
    * decided PER PIN from `price_per_m2_basis` — see MAP_COLS. `category_main`
-   * names the denominator (plot vs floor area) in the popup; `category_type`
-   * carries the monthly period onto the absolute price. */
+   * names the denominator (plot vs floor area) in the popup. */
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
   category_main: string | null;
-  category_type: string | null;
   disposition: string | null;
   area_m2: number | null;
   /* The one server-composed place string (migration 503) -- what the popup
@@ -748,23 +738,14 @@ interface MapGrid {
 }
 
 /* The per-point read, run only once the server has said the cohort fits the pin
- * limit, so it needs no limit of its own.
- *
- * It reads `properties_map_mv` (migration 254), NOT `properties_public`. Shipping
- * the points off the live, churned `properties` table was cold-fragile
- * (>3s, the anon statement_timeout) — the matview is a clean, all-visible, cached
- * copy of the same columns, so the identical scan stays robust cold (~200ms). It
- * carries properties_public's full FILTERABLE surface, so applyFilters /
- * applyPrefilters are a drop-in (only the source differs). Rebuilt from
- * browse_projection by rebuild_properties_map_mv() (pg_cron, 7,37 past the hour —
- * migration 277); freshness readable off derived_artifacts_public, one row per
- * artifact (migration 440). */
+ * limit, so it needs no limit of its own: the list's source and filter chain,
+ * narrowed to rows with a point. */
 const fetchMapPoints = async (
   f: ListingFilters,
   pre: BrowsePrefilters,
   signal?: AbortSignal,
 ): Promise<MapRow[]> => {
-  const base = mapSource(f, MAP_COLS)
+  const base = listSource(f, MAP_COLS)
     .not('lat', 'is', null)
     .not('lng', 'is', null);
   const scoped = applyPrefilters(applyFilters(base, f), pre);

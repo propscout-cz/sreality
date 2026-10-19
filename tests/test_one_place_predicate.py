@@ -86,11 +86,11 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # over 625's WHERE verbatim (tests/test_626_stats_dashboard.py); 629 (curated-set scope) added
 # nine trailing parameters and one clause block to both RPCs; 632 restated the Stats pivot with the
 # floor at five and nothing else changed (tests/test_stats_min_n_migration.py); 634 made its
-# status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py). Re-read the chip
-# arms when this moves again.
+# status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list. Re-read the
+# chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
     "browse_stats_properties": "634_stats_status_lens.sql",
-    "browse_map_cells": "629_curated_set_scope.sql",
+    "browse_map_cells": "630_one_browse_read_model.sql",
 }
 
 
@@ -123,7 +123,7 @@ def _chip_case_arms(func: str) -> list[dict[str, str]]:
 
 @pytest.mark.parametrize(
     "func,relation",
-    [("browse_stats_properties", "browse_list"), ("browse_map_cells", "properties_map_mv")],
+    [("browse_stats_properties", "browse_list"), ("browse_map_cells", "browse_list")],
 )
 def test_the_stats_and_map_cohorts_inherit_the_consumer_rule(func: str, relation: str) -> None:
     """W5, operator ruling 2026-09-13. Neither RPC restates the rule that a listing is
@@ -251,8 +251,8 @@ def _latest_view_definition(view: str) -> str:
     "view", ["browse_projection", "properties_public", "pipeline_board_public", "listing_feed_public"],
 )
 def test_every_level_column_exists_on_every_chip_filtered_relation(view: str) -> None:
-    """A level is only a filter where the relation publishes its column: browse_list and
-    properties_map_mv inherit browse_projection's, properties_public is the Watchdog's,
+    """A level is only a filter where the relation publishes its column: browse_list inherits
+    browse_projection's (the map reads it since 630), properties_public is the Watchdog's,
     pipeline_board_public the board's in-memory copy, listing_feed_public the portal-mirror
     lane's. RED by: a re-definition that drops one, or a level with no served column."""
     from tests.test_location_w3_projection import _columns, _sql

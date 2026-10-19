@@ -467,6 +467,8 @@ End-to-end browser flow over the U1b backend.
 - Deferred: live-table index retirement after a ≥7-day
   pg_stat_user_indexes observation window (operator OK required);
   row-comparison keyset cursor (PostgREST can't emit it yet).
+- W1 of ONE PIN: map pins + tile counts read `browse_list`; the rebuild
+  re-patches identity changes (migration 630).
 
 ### Chart axis unification (done)
 

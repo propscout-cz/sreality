@@ -270,20 +270,22 @@ jobs:
 
       # The map RPC makes two claims a real schema is the only thing that can check.
       #
-      # PLAN: the tile aggregate reads properties_map_mv INDEX-ONLY (2,332 blocks for the
-      # whole default cohort, 2026-10-15). That rests entirely on every aggregated column
-      # being inside properties_map_mv_cover — adding obec_id, property_id or source turns
-      # it into an Index Scan over a 433 MB matview and changes no result anywhere, so
-      # nothing else goes red. The rail reads the target list OUT of the shipped function.
+      # PLAN: since migration 630 the tile aggregate reads browse_list through its map index,
+      # browse_list_map_idx (category_main, category_type, lat, lng, partial on a point).
+      # The DEFAULT call (byt/pronajem, hide_dismissed, status any or active) must read
+      # only columns that index holds, target list AND WHERE: a new always-on conjunct off
+      # the index changes no result anywhere, so nothing else goes red. The rail reads the
+      # columns out of the planner (auto_explain, VERBOSE) on the shipped function, after
+      # running the */15 rebuild once so the index exists. Portal chips and the other
+      # filters visit the heap by design.
       #
       # BEHAVIOUR: the cell count is bounded BY CONSTRUCTION (migration 602: the finest
       # world-tile level with at most 1,024 occupied tiles; there is no LIMIT in the
-      # function), every mappable row is counted exactly once in one tile, the tile
-      # centres are the ones tests/fixtures/map_tile_lattice.json pins (the SPA's formula),
-      # interior tiles are stable under a pan and children sum to their parent. The
-      # behavioural rail parks the matview and substitutes a real table -- you cannot
-      # INSERT into a materialized view, and CI's replayed copy is empty.
-      - name: The map tiles stay index-only and bounded (migration 602)
+      # function), every mappable row is counted exactly once in one tile and a row with
+      # no point in none, the tile centres are the ones tests/fixtures/map_tile_lattice.json
+      # pins (the SPA's formula), interior tiles are stable under a pan and children sum to
+      # their parent. browse_list is a real table, seeded inside a rolled-back transaction.
+      - name: The map tiles stay bounded (migrations 602, 630)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"

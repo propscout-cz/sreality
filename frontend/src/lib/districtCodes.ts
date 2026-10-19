@@ -23,8 +23,8 @@ export const DISTRICT_LEVEL_ORDER = ['kraj', 'okres', 'obec', 'cast_obce', 'ulic
 export type LocationLevel = (typeof DISTRICT_LEVEL_ORDER)[number];
 
 /* level → the code column, on every place-filterable relation: `browse_list`
- * and `properties_map_mv`, `properties_public` (the Watchdog) and
- * `pipeline_board_public` (the board). */
+ * (the list, the map pins and the tile counts), `properties_public` (the
+ * Watchdog) and `pipeline_board_public` (the board). */
 const DISTRICT_LEVEL_COLUMN = {
   kraj: 'region_id',
   okres: 'okres_id',

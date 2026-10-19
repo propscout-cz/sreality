@@ -102,7 +102,7 @@ export function parseIntervalMs(raw: unknown): number | null {
 const ARTIFACT_LABELS: Record<string, string> = {
   llm_cost_hour_rollup: 'LLM cost rollup',
   browse_list: 'Browse list',
-  properties_map_mv: 'Browse map',
+  properties_map_mv: 'Map matview (unread since 630)',
 };
 
 export function derivedArtifactLabel(name: string): string {
