@@ -2,18 +2,18 @@
  *
  * NORTH STAR — one measure, one definition, one label. The NUMBER always comes
  * from the server (migration 425's `measure_price_per_m2`, published as
- * `price_per_m2` on all five read relations); nothing here re-derives price/area.
+ * `price_per_m2` on all four read relations); nothing here re-derives price/area.
  * What lives here is the LABEL half: which basis a figure is on, and the Czech
  * unit that basis is spelled with.
  *
  * THE LABEL IS READ FROM THE SERVER TOO, WHEREVER THERE IS A COLUMN TO READ.
  * `measure_price_per_m2_basis(category_main, category_type)` is published as
- * `price_per_m2_basis` on ALL FIVE read relations — listings_public,
- * properties_public, pipeline_board_public AND the two derived Browse read
- * models, `browse_list` (the list and the map read it) + `properties_map_mv`. Migration
- * 425 § 9 refuses to commit unless the last two carry it (both rebuilds run
- * inside the migration, and a skipped rebuild raises), and the column was
- * re-verified present on production on 2026-08-25. So every render surface
+ * `price_per_m2_basis` on ALL FOUR read relations — listings_public,
+ * properties_public, pipeline_board_public AND the derived Browse read model,
+ * `browse_list` (the list, the map pins and the tile counts read it). Migration
+ * 425 § 9 refused to commit unless the derived read models carried it (their
+ * rebuilds ran inside the migration, and a skipped rebuild raised), and the
+ * column was re-verified present on production on 2026-08-25. So every render surface
  * selects the published token and maps it through `ppm2BasisFromToken`. An
  * earlier draft of this file mirrored the SQL in TS on the premise that the two
  * snapshots lacked the column; that premise was false, and a second definition

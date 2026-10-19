@@ -24,7 +24,7 @@ Three drifts are possible and all three are silent. This file is the net for eac
 
 The curated-set scope (migration 629) rides beside them as nine named arguments built
 ONCE (`scopeArgs` in frontend/src/lib/setScope.ts) and spread into the builder AND the
-list/pin source read (`readSource`), so all four cohort functions must take all nine.
+list/pin source read (`readSource`), so all three cohort functions must take all nine.
 
 Offline; runs in the normal `pytest -q` lane. Nothing here needs a database — the
 behaviour of the shipped SQL is tests/test_browse_map_cells_live.py's subject.
@@ -150,8 +150,8 @@ def test_every_builder_key_is_a_parameter_of_both_rpcs() -> None:
 
 
 def test_the_scope_arguments_reach_every_cohort_function() -> None:
-    """The nine curated-set arguments are the same names on the wire and in all four
-    cohort functions; the list/pin sources also take `hide_dismissed`."""
+    """The nine curated-set arguments are the same names on the wire and in all three
+    cohort functions; the list/pin source also takes `hide_dismissed`."""
     # RED by: renaming a set or a side in lib/setScope.ts without a migration (a PGRST202 on
     # every Browse read), or dropping the spread from readSource (the list ignores a scope
     # the map and Stats honour).
@@ -163,8 +163,7 @@ def test_the_scope_arguments_reach_every_cohort_function() -> None:
         "tags", "collections", "pipeline"}
     for func in ("browse_stats_properties", "browse_map_cells"):
         assert SCOPE_ARGS <= _sql_params(func), func
-    for func in ("browse_list_visible", "properties_map_visible"):
-        assert SCOPE_ARGS | {"hide_dismissed"} <= _sql_params(func, minimum=9), func
+    assert SCOPE_ARGS | {"hide_dismissed"} <= _sql_params("browse_list_visible", minimum=9)
     src = _ts()
     read = _strip_ts_comments(src[src.index("const readSource"): src.index("const listSource")])
     assert "hide_dismissed: !f.showDismissed, ...scopeArgs(f)" in read, (

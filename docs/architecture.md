@@ -640,11 +640,11 @@ rules. Identify which one a task belongs to before you start.
 - Every PostgREST read runs as `authenticated`; `anon` is granted no relation (Phase 0,
   migrations 299/331), functions are born private since migration 612, and a CI census
   (`tests/test_tenant_isolation_live.py`) keeps every `SECURITY DEFINER` function in `public`
-  out of `anon`'s reach. The SPA reads the `*_public` views; the Browse/map read models
+  out of `anon`'s reach. The SPA reads the `*_public` views; the Browse/map read model
   `browse_list` (an UNLOGGED table rebuilt blue-green; the list, its counts, the map pins and
-  the tile counts all read it since migration 630) and `properties_map_mv` (no SPA reader
-  since 630; dropped in W2) — plain SELECT grants to `authenticated`, no RLS, read directly when "show dismissed" is on and
-  otherwise through their `*_visible` INVOKER twins (migration 537); the location-audit
+  the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
+  — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
+  otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
   relations `location_pin_audit_mv` (a matview, no RLS) and `location_audit_waterfall` (RLS,
   read-all policy); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
@@ -2322,7 +2322,7 @@ renumber.** Navigate by area:
     dedicated not-in chip — "V žádné kolekci" / "Mimo pipeline" / "Bez štítků" — and "V pipeline"
     for the pipeline only; Browse sidebar, phone sheet and the board bar) and one in-memory rule
     (`matchesScope`, the board and the phone roll). **Membership is judged in the database under
-    the caller's RLS (migration 629)**: `browse_list_visible` / `properties_map_visible` /
+    the caller's RLS (migration 629)**: `browse_list_visible` /
     `browse_stats_properties` / `browse_map_cells` take `<set>_set` / `_in` / `_out` for each set,
     judged through the `*_public` membership views; only element ids travel (`scopeArgs`, active sides
     only). This SUPERSEDES the 2026-10-14 client prefilters: `lib/tagScope.ts`,
@@ -2440,13 +2440,13 @@ renumber.** Navigate by area:
     dismissal (`pipeline`). A detach leaves them on the property left.
     **Browse hides dismissed properties by default, server-side (migration 537).** A dismissed
     set is an exclusion that grows without bound, so it never leaves the database — the rule
-    migration 629 extended to every curated set (rule #18). Each Browse relation has a
-    dismissal-aware twin — `browse_list_visible(...)`, `properties_map_visible(...)` — an
+    migration 629 extended to every curated set (rule #18). The Browse relation has a
+    dismissal-aware twin, `browse_list_visible(...)` (the map's `properties_map_visible(...)` went
+    with `properties_map_mv` in migration 631): an
     inlinable SECURITY INVOKER SQL function (`NOT EXISTS` against `property_dismissals_public`);
-    functions rather than views because `browse_list` and
-    `properties_map_mv` are blue-green rebuilt (a view or policy on them would block the DROP or
-    vanish with it), and they return `browse_projection`'s row type, never the rebuilt
-    relation's. Since 629 they take ten defaulted parameters: `hide_dismissed` (default true)
+    a function rather than a view because `browse_list` is blue-green rebuilt (a view or policy
+    on it would block the DROP or vanish with it), and it returns `browse_projection`'s row type,
+    never the rebuilt relation's. Since 629 it takes ten defaulted parameters: `hide_dismissed` (default true)
     first, then the nine curated-set scope parameters, so ONE source serves both lenses (a
     zero-arg call keeps 537's answer). `browse_stats_properties` / `browse_map_cells` take the
     same `hide_dismissed` flag (default false) and the nine. The SPA's `queries.ts:readSource`
@@ -3288,7 +3288,7 @@ renumber.** Navigate by area:
     `pg_column` too. It also broke rule 16 the other way round — the watchdog matching on the
     measure while Browse matched on nothing. So `plot_area_m2` is now a COLUMN of the read
     model, computed by the same function inside `browse_projection` (→ `browse_list`,
-    `properties_map_mv`, the two relations Browse filters against) and `pg_column` points at
+    the one relation Browse filters against since migration 630; 631 dropped `properties_map_mv`) and `pg_column` points at
     it. One definition, two spellings: a function call over `listings`, a published column over
     the read model.
     `test_frontend_read_contract_subset_of_projection` already demands the projection publish
@@ -4193,13 +4193,13 @@ such pin at once — with ~87 % of active pins below building level it buried th
 A count mark (`frontend/src/lib/mapCounts.ts`) carries no per-pin radius, so all of this exists only for a pin.
 Migration 584 (operator ruling 2026-10-02) appends `ulice_id` (= `ll.ulice_kod`) last to
 `browse_projection`, `properties_public`, `pipeline_board_public` and `listing_feed_public` (gone
-since 618), and so to both read models — served for the street chip level, read by no filter
+since 618), and so to both read models of the time (one since 631) — served for the street chip level, read by no filter
 until its RPC arm lands.
-**Appending is the only legal edit here** — `browse_list` and `properties_map_mv` materialize
+**Appending is the only legal edit here** — `browse_list` materializes
 `select * from browse_projection` and `toolkit/browse_read_model.sync_browse_list` re-inserts
 POSITIONALLY, so anything computed outside the view, or any reordering, writes NULLs into the wrong
-columns silently. An unresolved row's re-sourced codes and pin are NULL, and a NULL `lat` drops the
-row out of `properties_map_mv` — the intended posture (no pin the resolver would not stand behind),
+columns silently. An unresolved row's re-sourced codes and pin are NULL, and a NULL `lat` keeps the
+row off the map (the pin read and `browse_map_cells` skip a row with no point) — the intended posture (no pin the resolver would not stand behind),
 and the reason the red line gates everything downstream. Browse and the map read `browse_list`, which
 COPIES those fields at rebuild, so no consumer query joins the store; a field is added only by operator
 ruling or after a measured slowdown, and only there.
@@ -4212,7 +4212,7 @@ rendered onto each surface's own listing-id expression — so it covers the 36,9
 audit set, every future listing whose page carries no location, and nothing else; a row returns the
 moment it has a geom, with no backfill and nothing to re-stamp. It is carried by the one LIST
 surface, `browse_projection` (keyed on the property's display listing, so `browse_list`,
-`properties_map_mv`, `browse_stats_properties` and `browse_map_cells` all inherit it), plus,
+`browse_stats_properties` and `browse_map_cells` all inherit it), plus,
 in code, the watchdog matcher (`api/notifications._build_match_clauses`,
 which reads `properties_public` and so cannot inherit) and path C candidate generation
 (`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
@@ -4233,8 +4233,9 @@ was retired by 513 because it read five `properties` place columns 508 drops, an
 name on inputs that cannot expire the same way.
 
 **THE REBUILD BUDGET SCALES WITH THE CORPUS** (W13, migration 522, after the 2026-09-14 freeze).
-`browse_list` and `properties_map_mv` are whole-relation rebuilds of `browse_projection` on pg_cron
-(`*/15` and `7,37`), so their cost tracks the corpus and their `statement_timeout` must too. It did
+`browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`; the map's
+`properties_map_mv`, rebuilt at `7,37`, was dropped in migration 631), so its cost tracks the corpus
+and its `statement_timeout` must too. It did
 not: as the location store recovered to 712,932 rows with a town the list rebuild grew 173 s → 257 s
 → 405 s → past its fixed 600 s budget, timed out 11 times in 6 h, and froze Browse at 315,827 active
 rows for two and a half hours while each tick threw away ten minutes of work. Two lessons landed
@@ -4249,11 +4250,11 @@ lock released in an `exception when others` handler, and PL/pgSQL's OTHERS does 
 QUERY_CANCELED — so every one of the 11 cancellations skipped the release. Nothing wedged only
 because pg_cron opens a fresh connection per run; from a pooled session the first cancel would have
 left the key held and every later tick would have returned "skipping tick" forever while
-`cron.job_run_details` reported success. Both now use `pg_try_advisory_xact_lock`, which Postgres
+`cron.job_run_details` reported success. Both then moved to `pg_try_advisory_xact_lock`, which Postgres
 releases on commit, rollback AND cancel. **And the blast radius:** the failing `*/15` job kept the
 box in `DataFileRead` for 10 minutes in every 15, the pg_cron scheduler lagged past the minute
-boundary, and pg_cron does not catch up a MISSED slot — so `browse-map-rebuild`, whose whole
-schedule is two single minutes an hour (:07 and :37, both inside a rebuild window), stopped firing
+boundary, and pg_cron does not catch up a MISSED slot — so `browse-map-rebuild` (retired by migration
+631), whose whole schedule was two single minutes an hour (:07 and :37, both inside a rebuild window), stopped firing
 entirely for 3.5 h with no run row and no log line. A starved job looks exactly like a wedged one;
 `pg_locks`, an orphaned `_next` relation and `pg_stat_activity` are what tell them apart.
 

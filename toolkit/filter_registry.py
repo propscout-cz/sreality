@@ -1547,7 +1547,7 @@ def _build_registry() -> dict[str, FilterDef]:
         # browse filter whose `pg_column` is null, so a None here is not a note
         # about how the filter is applied — it is the filter silently not being
         # applied at all. Migration 535 publishes `plot_area_m2` on the Browse
-        # relations (browse_projection -> browse_list, properties_map_mv)
+        # relations (browse_projection -> browse_list)
         # precisely so this can point at a column; the
         # API-side readers call `toolkit.measures.plot_area_sql` over `listings`,
         # which has no such column. One definition, two spellings, same answer.

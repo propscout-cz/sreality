@@ -86,11 +86,11 @@ const STALE_HOURS_WARN = 36;
 // The pg_cron loop refreshes the Health matviews every 10 min; 25 min of
 // silence means it has missed two cycles — likely dead, not just slow.
 const HEALTH_DATA_STALE_MIN = 25;
-// The two hard-coded browse_list / properties_map_mv staleness thresholds that
-// used to live here are gone (migration 440). Both artifacts now declare their
-// own `staleness_budget` in `derived_artifacts` and are rendered by
-// <DerivedArtifactsSection/> below alongside the other twelve — one row per
-// artifact, budget owned by the database rather than duplicated in the client.
+// No read-model staleness threshold is hard-coded here (migration 440 removed the
+// last two): every derived artifact, browse_list included, declares its own
+// `staleness_budget` in `derived_artifacts` and is rendered by
+// <DerivedArtifactsSection/> below — one row per artifact, budget owned by the
+// database rather than duplicated in the client.
 
 function categoryLabel(c: { category_main: string; category_type: string }): string {
   return `${categoryMainLabelPlural(c.category_main)} · ${categoryTypeLabel(c.category_type).toLowerCase()}`;

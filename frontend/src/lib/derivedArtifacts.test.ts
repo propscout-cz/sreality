@@ -30,12 +30,12 @@ const artifact = (over: Partial<DerivedArtifactRow> = {}): DerivedArtifactRow =>
 });
 
 describe('parseIntervalMs', () => {
-  /* The three budgets the live view actually returns today, verbatim. The
+  /* Three sub-day budgets the live view returns, verbatim (2026-10-19). The
    * server runs IntervalStyle = postgres, so every sub-day budget is HH:MM:SS. */
   it('reads the live budgets exactly as production sends them', () => {
     expect(parseIntervalMs('00:45:00')).toBe(2_700_000); // browse_list
     expect(parseIntervalMs('01:00:00')).toBe(3_600_000); // llm_cost_hour_rollup
-    expect(parseIntervalMs('01:30:00')).toBe(5_400_000); // properties_map_mv
+    expect(parseIntervalMs('02:10:00')).toBe(7_800_000); // location_pin_audit_mv
   });
 
   /* Legal values a future registry row can carry that do NOT match HH:MM:SS —

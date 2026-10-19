@@ -65,7 +65,7 @@ stored derivation is a second definition, so a reader composes what it needs fro
 became eleven readers composing five different strings, so the composition moved into ONE immutable
 SQL function, `location_display_label(street_name, house_number_cp, house_number_co, obec_name,
 cast_obce_name, country_code, country_status)`, and every serving view publishes its result as
-`display_label`: `browse_projection` (→ `browse_list`, `properties_map_mv`), `listing_feed_public`,
+`display_label`: `browse_projection` (→ `browse_list`), `listing_feed_public`,
 `properties_public`, `listings_public`, `broker_listings_public`, and `pipeline_board_public` (which
 reads it off `properties_public` — it is `security_invoker` and `listing_location` is revoked from
 `authenticated`). The four API surfaces that read `listings` directly — the extension's

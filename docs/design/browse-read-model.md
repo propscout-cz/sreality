@@ -6,6 +6,12 @@
 > before any schema lands. Nothing here is applied. See ROADMAP.md for
 > sequencing.
 
+> **Superseded by migrations 630/631 (2026-10-19, ONE PIN W1/W2):** the two read models below are
+> now one. Since 630 the map's pins and tile counts read `browse_list` (laid out in its map index's
+> order, `browse_list_map_idx`), and 631 dropped `properties_map_mv` with its rebuild and cron job.
+> The rest of this document is the July 2026 design, kept as history; the plan and receipts are in
+> `docs/design/one-pin/PROGRAM.md`.
+
 ## Context
 
 Browse has **five read surfaces that must agree**: the card list, the table,

@@ -1,4 +1,4 @@
-<!-- STATUS: APPROVED 2026-10-19. Rulings: R1 most precise even if inactive; R2+R10 retire the matview, no backup; R3 pointer; R4 "properties"; R5/R7/R8/R9 defaults; R11 drop the dead MF functions (verified off every live path); R12 no temp index. Execution: W0 running; W1 waits for PR #1882 (migration 629). Investigation artifacts: ~/one-pin-artifacts on the operator machine. -->
+<!-- STATUS: APPROVED 2026-10-19. Rulings: R1 most precise even if inactive; R2+R10 retire the matview, no backup; R3 pointer; R4 "properties"; R5/R7/R8/R9 defaults; R11 drop the dead MF functions (verified off every live path); R12 no temp index. Execution: W0 done; W1 merged (#1887, migration 630); W2 = 631 (this PR); W3 = 635, W4 = 636. Investigation artifacts: ~/one-pin-artifacts on the operator machine. -->
 
 # ONE PROPERTY, ONE LOCATION, ONE MAP: the approved plan (rulings taken 2026-10-19)
 
@@ -217,6 +217,7 @@ No single response mixes the two.
 
 **Process for every wave:**
 - Migration numbers start at **630**. 629 is taken by the curated-set-scope branch; re-check `ls migrations | tail` at branch time.
+  - **[2026-10-19]** W1 = 630, W2 = 631; 632-634 went to other sprints, so W3 = **635** and W4 = **636**.
 - Each branch is cut from `main` in an on-disk worktree, never in the shared working tree (another session's branch with uncommitted changes).
 - Merges and deploys only while `autodedup.settings rt_bootstrap:rt` reads false; additive applies need no window.
 - **Every wave's migration is applied and verified BEFORE its PR merges** (apply before deploy, the migration-438 incident class). W3's birth INSERT and W4's watchdog read name the new column, so code that deploys before its migration fails on every singleton birth.
@@ -253,7 +254,7 @@ No single response mixes the two.
      - **No map index** (second apply, 18:22Z): (a) 225 ms, (b) 285 ms, (c) 1,229 ms. (a) lost its bbox path; (c) missed by 29 ms.
      - **The retired matview**, laid out by category_main, category_type, lat, lng with the same index: (a) ~30 ms, (b) 204 ms, (c) 874 ms.
      - **Decision (2026-10-19, the named fallback below):** give `browse_list` the matview's layout. The CTAS orders by `category_main, category_type, lat, lng` (no point sorts last) and builds the map index again, so rows in index order sit on consecutive heap pages and the planner's correlation assumption is true. Cost accepted: see the risk "List page locality". The third apply lands over either earlier state (the gates accept all three).
-     - **Third receipts** (after the 18:45Z tick): pending.
+     - **Third receipts** (after the 18:45Z tick): superseded by the operator's ruling (2026-10-19) accepting the whole-country tile count at 1.4 s.
   2. **The identity re-patch.**
      - At the start, read `v_since` = the previous run's `derived_artifacts.complete_through` minus 15 minutes.
      - After `drop table if exists browse_list` holds its lock and before the rename, delete from and re-insert into `browse_list_next` (from `browse_projection`) every property named by a `property_merge_events` row with `created_at >= v_since or undone_at >= v_since`:
@@ -327,9 +328,10 @@ No single response mixes the two.
 
 - **Cause:** the function's `(not hide_dismissed or not exists …)` stays a SubPlan filter, and the planner prices the map index as heap-ordered (its leading column `category_main` has correlation 0.9999) while inside a category it runs in lat/lng order: one heap page per row (773k buffers for (c), 139k for (b)). Without `all_sources` in it, no chip call can be index-only.
 - **Decision (2026-10-19):** revert 630 in production and re-apply it without the map index; the re-patch and `property_merge_events_recent_idx` stay.
-- **Second receipts (18:23Z, no map index):** (a) 224.6 ms (**no**), (b) 285.0 ms, (c) 1,228.8 ms (**no**, by 29 ms), pins 62.8 ms. **Decision 2:** the named fallback, the matview's layout with the map index (W1 item 1). Third receipts after the 18:45Z tick: pending.
+- **Second receipts (18:23Z, no map index):** (a) 224.6 ms (**no**), (b) 285.0 ms, (c) 1,228.8 ms (**no**, by 29 ms), pins 62.8 ms. **Decision 2:** the named fallback, the matview's layout with the map index (W1 item 1). Third receipts after the 18:45Z tick: superseded by the operator's 1.4 s ruling (2026-10-19).
 - (b) total: 51,962 on `browse_list` = 51,962 on the matview. Identity invariant 0 at 17:51 and 18:03 (after a burst of at least 47 identity events). Replay: 108 = 108 properties, row for row; 604858 absent.
 - Rebuild: 62,686 and 63,717 ms against 62,337 ms for the old body (whose last five ran 61.9-66.2 s). Re-patch windows: 103 events / 108 ids and 3 / 6; 0 inside either run.
+- **Operator ruling (2026-10-19):** the whole-country tile count, 1.4 s at full zoom-out, is accepted (target (c) was ≤1.2 s). Follow-up candidate: the dismissal clause as a plain `NOT EXISTS`, one text across the four 629 bodies (three once 631 drops `properties_map_visible`).
 
 ### W2: retire the map matview (PR 2; migration 631 DESTRUCTIVE: pauses for R2 and R10)
 
@@ -341,10 +343,19 @@ No single response mixes the two.
   - Delete its `derived_artifacts` row.
   - Per R11, drop the dead `recompute_mf_gross_yields()` and `recompute_property_mf(...)` (latest bodies 507:380, :524), verified off every live path.
   - `notify pgrst`.
-  - Backup per R10.
+  - No backup (R10: only derived objects are dropped; the revert, migrations/reverts/631_revert_retire_properties_map_mv.sql, restores them).
+- **[as built 2026-10-19] Migration 631 drops** (live identities read 2026-10-19), behind the `$pre$` guard, with no backup (R10 waived it):
+  - the `browse-map-rebuild` cron job (`7,37 * * * *`), unscheduled;
+  - `properties_map_visible(...)`, its one overload (629's ten-parameter signature);
+  - `rebuild_properties_map_mv()`;
+  - the matview `properties_map_mv` with `properties_map_mv_pk` and `properties_map_mv_cover`;
+  - the `derived_artifacts` row `properties_map_mv` (deleted);
+  - per R11, `recompute_property_mf(p_ids bigint[])` and `recompute_mf_gross_yields()`;
+  - then `notify pgrst`.
 - **SPA:**
   - Delete the "Browse map" label (derivedArtifacts.ts:105).
   - Edit comments: derivedArtifacts.test.ts:38, and Health.tsx:89-93, which is a comment, not a threshold; the thresholds left in migration 440.
+  - Note 2026-10-20: Health W8 (PR #1894) deletes derivedArtifacts.ts with its test and rewrites Health.tsx (it reads only pipeline_checks_public), so after it lands this SPA step has nothing left to edit; on rebase keep its deletion.
 - **Delete these test cases:**
   - `tests/test_cron_statement_timeout_guard.py:272-278` (`browse-map-rebuild` budget) and :309;
   - `tests/test_derived_artifacts_registry.py:184-188` (the map case) and the :244 docstring;
@@ -388,9 +399,9 @@ No single response mixes the two.
   - CI green, including the migrations lane;
   - read-only production map check.
 
-### W3: choose the location ad (PR 3; migration 632 additive; invisible)
+### W3: choose the location ad (PR 3; migration 635 additive; invisible)
 
-- **Migration 632:**
+- **Migration 635:**
   - `alter table properties add column location_listing_ref_id bigint`:
     - nullable, metadata-only, guarded by `lock_timeout`;
     - a column comment states the rule;
@@ -430,9 +441,9 @@ No single response mixes the two.
   - One bullet in roadmap/location-data.md: centroid radii drawn too small (town 60.4 %, quarter 86.1 % containment).
   - One bullet in roadmap/autodedup.md: the cross-town property ids as merge-quality input.
 
-### W4: every property surface reads the location ad (PR 4; migration 633 additive; visible)
+### W4: every property surface reads the location ad (PR 4; migration 636 additive; visible)
 
-**Migration 633, md5-gated on the bodies it restates:**
+**Migration 636, md5-gated on the bodies it restates:**
 - **`$pre$` gate:** refuse while any row has `(repr_listing_ref_id IS NULL) <> (location_listing_ref_id IS NULL)`.
 - **The CHECK.** `alter table properties add constraint properties_location_ad_present check ((repr_listing_ref_id is null) = (location_listing_ref_id is null)) not valid`, guarded by `lock_timeout`, then `validate constraint`. Validation scans without blocking reads or writes.
 - **`browse_projection`**, restated from 625:204-298: only the join at 625:289 changes key. The MF lateral (625:291-294) follows because it reads `ll`. `listing_id` and `source_id_native` stay the canonical ad's link (625:260-261). The column list is unchanged, so `browse_list` needs no bridge.
@@ -568,8 +579,8 @@ Not safe today:
 | | Added | Deleted |
 |---|---|---|
 | Relations | 0 | **1** matview (`properties_map_mv`, 824,675 rows, 464 MB with indexes) |
-| Indexes | 3 (`browse_list_map_idx`, the matview cover's key and width, W1; `property_merge_events_recent_idx`, a few MB, W1; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3) | 2 (`properties_map_mv` pk + cover 92.4 MB) → W1+W2: 2 added / 2 deleted, **net 0**; with W3's twin, net +1 |
-| Functions | 0 | **2** (`rebuild_properties_map_mv`, `properties_map_visible`) + **2** dead MF functions (R11) |
+| Indexes | 3 (`browse_list_map_idx`, the matview cover's key and width, W1; `property_merge_events_recent_idx`, a few MB, W1; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3) | 2 (`properties_map_mv_pk` + `properties_map_mv_cover`, 92.4 MB; W2, migration 631) → W1+W2: 2 added / 2 deleted, **net 0**; with W3's twin, net +1 |
+| Functions | 0 | **4**, all in migration 631 (W2): **2** map (`rebuild_properties_map_mv()`, `properties_map_visible(...)`) + **2** dead MF (`recompute_property_mf(p_ids bigint[])`, `recompute_mf_gross_yields()`; R11) |
 | Cron jobs / registry rows / Health cells | 0 | **1 / 1 / 1** |
 | Table columns | **1** (`properties.location_listing_ref_id`) | 0 |
 | Constraints | 1 CHECK (the column's enforcement) | 0 |

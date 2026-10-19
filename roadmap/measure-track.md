@@ -549,7 +549,8 @@ Three actions remain, all requiring the operator; none of them is code.
    Independent of 438 — it touches only `price_czk` and `raw_json`.
 
 Then re-check the per-basis p05/median/p95 from `properties_map_mv` and confirm mmreality
-dum/prodej no longer reads ~5 701 Kč/m² on a ~905 m² median area.
+dum/prodej no longer reads ~5 701 Kč/m² on a ~905 m² median area (job 7 and `properties_map_mv`
+retired in migration 631; read `browse_list`).
 
 ## Next after this program
 
@@ -586,8 +587,9 @@ render its SHAPE.
   and `properties_public` call the measure with `ll.katastr_kod` and `listing_feed_public` reads
   the property's yield from `browse_list` (`browse_list_mf`, Q8 b); estimations pass the KÚ too.
   PR-A (registry publish-complete) is merged.
-- **Next — PR-F:** drops the stored `mf_*`, the 507 functions and `rent_map_*_public` right
-  after the program is verified in production (operator 2026-09-25; explicit OK + `pg_dump` first).
+- **Next — PR-F:** drops the stored `mf_*` and `rent_map_*_public` right after the program is
+  verified in production (operator 2026-09-25; explicit OK + `pg_dump` first). The two 507 MF
+  functions went earlier, in migration 631 (ONE PIN W2, ruling R11).
 
 ## Time on market — one read-time measure (2026-10-17)
 Found when `tom=5-45` still listed 0–1 day cards: the filter had `pg_column=None`, so Browse's list never

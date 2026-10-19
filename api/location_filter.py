@@ -37,8 +37,7 @@ ChipLevel = Literal["kraj", "okres", "obec", "cast_obce", "ulice"]
 # so the SPA, the API and the RPC bodies can be diffed.
 LEVEL_ORDER: tuple[ChipLevel, ...] = get_args(ChipLevel)
 # level -> the code column on every chip-filtered relation: `browse_projection`
-# (materialized as `browse_list` and `properties_map_mv`), `properties_public` and
-# `pipeline_board_public`.
+# (materialized as `browse_list`), `properties_public` and `pipeline_board_public`.
 LEVEL_COLUMN: dict[ChipLevel, str] = dict(zip(
     LEVEL_ORDER, ("region_id", "okres_id", "obec_id", "cast_obce_id", "ulice_id"), strict=True,
 ))

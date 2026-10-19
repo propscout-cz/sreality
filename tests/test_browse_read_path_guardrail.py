@@ -6,7 +6,7 @@ Three invariant families, all deterministic and offline (no database):
    its only stamper was the removed dedup engine). The EFFECTIVE
    (latest-migration) definitions of `properties_public` (live view: detail
    pages, watchdog matcher) and `browse_projection` (migration 276: the ONE
-   projection both Browse read models materialize from) must not call
+   projection the Browse read model, `browse_list`, materializes from) must not call
    `publication_gate_enabled()` at all.
 
    Why this is still worth a test rather than a deletion: the function was
@@ -17,7 +17,7 @@ Three invariant families, all deterministic and offline (no database):
    SECURITY DEFINER call into these definitions repeats that outage, so
    the guard now watches for the whole class returning, not for its wrapping.
 
-2. REBUILD INVARIANTS — the pg_cron rebuild functions (migration 277) must
+2. REBUILD INVARIANTS — the pg_cron rebuild function (migration 277) must
    ANALYZE the replacement relation BEFORE swapping it live (autovacuum never
    analyzes a fresh relation in time; every Browse read's plan comes from
    pg_statistic — no stats = seq scans and bad plans), and must pg_notify PostgREST
@@ -193,14 +193,6 @@ def test_list_rebuild_analyzes_before_swap_and_notifies() -> None:
     )
 
 
-def test_map_rebuild_analyzes_before_swap_and_notifies() -> None:
-    _rebuild_invariants(
-        "rebuild_properties_map_mv",
-        "properties_map_mv_next",
-        "alter materialized view properties_map_mv_next rename",
-    )
-
-
 # ------------------------------------------------------- resolved-but-empty --
 
 @pytest.mark.parametrize("fn", ["browse_stats_properties", "browse_map_cells"])
@@ -224,9 +216,9 @@ def test_a_resolved_but_empty_allowlist_yields_zero_rows(fn: str) -> None:
 def test_the_effective_list_definition_carries_the_consumer_rule(view: str) -> None:
     """W5, operator ruling 2026-09-13: a listing reaches a consumer only once
     `listing_location` has an answer for it. `browse_projection` is where Browse, Stats
-    and the map all get it from — `browse_list` and `properties_map_mv` are both
-    `select * from browse_projection` — so this is the one definition that has to carry
-    it, and the EFFECTIVE (highest-numbered) migration is the only one worth asking.
+    and the map all get it from — `browse_list` is `select * from browse_projection` — so
+    this is the one definition that has to carry it, and the EFFECTIVE (highest-numbered)
+    migration is the only one worth asking.
 
     RED by: a later migration re-creating the view from an older body and dropping
     the clause on the way — exactly the failure mode `_latest_migration_defining` exists

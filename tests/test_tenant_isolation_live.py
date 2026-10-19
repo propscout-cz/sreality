@@ -1567,8 +1567,8 @@ def test_no_anon_write_grants(svc: Any) -> None:
 # DEFINER first — while they were INVOKER they read these as the CALLER, so revoking
 # would have broken the operator's own Health dashboard).
 #
-# Deliberately absent: properties_map_mv and price_stat_choropleth — the SPA reads those
-# two directly as shared-market data (the third, rent_map_choropleth, is gone: migration 601).
+# Deliberately absent: price_stat_choropleth — the SPA reads it directly as shared-market
+# data (properties_map_mv is gone: migration 631; rent_map_choropleth: migration 601).
 _ADMIN_GATED_MATVIEWS: list[str] = [
     "images_failure_overview_mv",
     "health_summary_mv",

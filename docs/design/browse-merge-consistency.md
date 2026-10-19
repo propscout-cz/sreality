@@ -40,8 +40,8 @@ was layered on top of the older one without updating it:
   `migrations/413_browse_list_rebuild_cadence.sql`; `*/5` in 277 when this was
   written). Nothing about this rebuild is
   event-driven — it is a pure timer. Nothing in the merge write path signals
-  it. The map (`properties_map_mv`) has the identical structure on a 30-minute
-  timer (the map reads browse_list since migration 630; the matview retires in W2).
+  it. The map (`properties_map_mv`) had the identical structure on a 30-minute
+  timer (the map reads `browse_list` since migration 630; migration 631 dropped the matview).
 
 So: the "without waiting for the cron" guarantee the merge code was written to
 provide is **silently negated** by a read layer that didn't exist when that
@@ -172,8 +172,8 @@ created the table). This is pure application-layer SQL added to one file.
 — not `property_identity.py`.** Both `property_identity` (merge/detach/split)
 and `asset_identity` (link/unlink) need it; a shared single-purpose module
 keeps `asset_identity` from importing the merge module (an unnatural
-dependency) and gives future read-model helpers (e.g. a `properties_map_mv`
-patch) an obvious home. `sync_browse_list(conn, property_ids)`:
+dependency) and gives future read-model helpers an obvious home (the map needs
+none: it reads `browse_list` since migration 630, and 631 dropped `properties_map_mv`). `sync_browse_list(conn, property_ids)`:
 
 ```python
 def sync_browse_list(conn: psycopg.Connection, property_ids: Iterable[int]) -> None:
@@ -356,7 +356,7 @@ reimplementations) stays an explicit separate-PR follow-up (see non-goals).
 
 - **[closed 2026-10-19, ONE PIN W1: migration 630]** The map no longer
   lags merges: its pins and tile counts read `browse_list` since migration 630, so a merge
-  reaches them in its own commit; W2 plans to retire `properties_map_mv`. The original
+  reaches them in its own commit; W2 retired `properties_map_mv` (migration 631). The original
   non-goal, kept for the record: **`properties_map_mv`'s 30-minute lag stays as-is.** It is a true
   `MATERIALIZED VIEW`, not a table — Postgres does not support row-level DML
   against a matview, so the Layer-1 patch technique doesn't apply directly.
