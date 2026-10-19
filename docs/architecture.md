@@ -2154,7 +2154,11 @@ renumber.** Navigate by area:
     `PUT /stats/dashboard`. Every answer carries its sample ledger (`filtered` / `sample` /
     `excluded`: a NULL on a chosen dimension or on the measure excludes the property, never buckets
     it), statistics only for a cell of at least 5 properties, and a refusal instead of a guess
-    (`empty`, `mixed_category`, `mixed_status` for turnover over a sample of two statuses,
+    (`empty`, `mixed_category`, `mixed_status` for turnover over a sample of two statuses — a row's
+    status judged by the cohort's own portal rule (597), so "inactive on sreality" stays one status
+    even where the property is live elsewhere; such a row leaves a turnover sample as excluded, its run on
+    that portal being unmeasured at property grain; under a broker scope the status fact stays the
+    property's, a known gap (migration 633),
     `too_many_cells`, `bad_spec`). A place dimension keys on the RÚIAN code `browse_list` carries
     (`region_id` … `ulice_id`, rule 25's one code predicate), so two towns or streets of one name stay
     two cells and the pivot reads no listing location; the payload's `places` names each key through

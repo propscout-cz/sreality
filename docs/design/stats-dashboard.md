@@ -19,7 +19,10 @@ The operator chose to replace them with charts the user builds, which deletes th
 2. ONE dashboard per account, independent of the filter (the filter only picks the sample); several charts,
    add / remove / reorder. Stored whole.
 3. A turnover chart requires ONE status in the sample (active or delisted) — the same refusal as mixed property
-   types. Plain percentiles over the picked sample; no survival estimator.
+   types. Plain percentiles over the picked sample; no survival estimator. (Migration 633: a row's status is
+   judged by the cohort's own portal rule, and a property delisted on the chosen portal but live elsewhere
+   has no measured run there — it leaves a turnover sample as excluded, never pooled; under a BROKER scope
+   the status fact stays the property's — a known gap, `roadmap/ui-track.md`.)
 4. "Mixed" = more than one `category_main` OR more than one `category_type` in the cohort.
 5. Bands: price per m² sale 5 000 / 10 000, rent 25 / 50; total price sale 250 000 / 500 000 / 1 000 000, rent
    1 000 / 2 500 / 5 000; floor area 5 / 10 m², byty only. Defined once (`toolkit/stats_registry.py`).
@@ -78,7 +81,7 @@ fragment still holds; `tests/test_browse_map_read_contract.py` learns that `spec
 ```
 { spec, filtered, sample, excluded,            -- properties in the cohort / with every needed value / the rest
   category_main, category_type,                -- the cohort's single values, null when mixed
-  status: 'active' | 'inactive' | 'mixed' | null,
+  status: 'active' | 'inactive' | 'mixed' | null,   -- each row judged by the cohort's own portal rule (597; migration 633)
   basis: <migration-425 token> | null,         -- rent_monthly_czk_m2 ⇒ rent steps and "Kč / měs"
   min_n: 5,
   refused: null | 'empty' | 'mixed_category' | 'mixed_status' | 'too_many_cells' | 'bad_spec', reason?,
