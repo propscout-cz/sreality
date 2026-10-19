@@ -4,7 +4,7 @@ ad waiting in the detail queue), changes (the oldest repriced ad waiting), visib
 whose property is not in browse_list), stock (active properties missing from browse_list) and
 photos (new ads' photos not stored, or stored narrow); for the fleet, stock and dirty (the oldest
 property waiting for maintenance). Each not-in-Browse count is split by the stage that blocks it,
-judged on the property's canonical ad as browse_projection judges it. The portal list is imported
+judged on the property's location ad as browse_projection judges it. The portal list is imported
 and every statement runs on the per-check clock; the module imports neither the harness nor the
 worker.
 """
@@ -41,15 +41,15 @@ _WAITING = "waiting_for_rebuild"
 _REBUILT_CTE = """rebuilt as materialized (
     select max(last_succeeded_at) as at from derived_artifacts where name = 'browse_list')"""
 
-# Judged on the property's CANONICAL ad, as browse_projection is. A property born, or whose
-# canonical ad's location was resolved, after the newest rebuild started cannot be in it yet:
+# Judged on the property's LOCATION ad, as browse_projection is. A property born, or whose
+# location ad's location was resolved, after the newest rebuild started cannot be in it yet:
 # the resolver never patches browse_list, so such an ad waits for the next */15 rebuild.
 _STAGE_TAIL = f"""
-            when not {served_location_predicate("p.repr_listing_ref_id")}
+            when not {served_location_predicate("p.location_listing_ref_id")}
                 then 'location_not_served'
             when p.created_at > r.at
                  or (select ll.resolved_at from listing_location ll
-                      where ll.listing_id = p.repr_listing_ref_id) > r.at
+                      where ll.listing_id = p.location_listing_ref_id) > r.at
                 then '{_WAITING}'
             else 'not_in_browse_list'"""
 

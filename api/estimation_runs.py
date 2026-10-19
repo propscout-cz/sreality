@@ -57,6 +57,7 @@ from psycopg.types.json import Jsonb
 
 from api import maps
 from api import schemas as s
+from location_data.claims_common import SUBJECT_LOCATION_JOIN
 from scraper import source_dispatcher
 from toolkit import ComparableFilters, TargetSpec
 from toolkit.rent_map import compute_reference_rent
@@ -378,9 +379,10 @@ _HAS_FEEDBACK_SUBSELECT = (
     ") AS has_feedback"
 )
 # Best-available city/locality string for the /estimations list:
-# - runs with a resolved subject use the resolver's municipality name
-#   (listing_location.obec_name; W4-c dropped listings.district, which this used
-#   to read) via LEFT JOIN (matched on the surrogate input_listing_id;
+# - runs with a resolved subject use the resolver's municipality name at the
+#   subject's place (`SUBJECT_LOCATION_JOIN`, ruling R7: its property's location
+#   ad, else its own row; W4-c dropped listings.district, which this used to read)
+#   via LEFT JOIN (matched on the surrogate input_listing_id;
 #   input_sreality_id is only the fallback join key for pre-#914 rows never
 #   stamped with it — Gate 2, a post-Gate-2 non-sreality subject has
 #   input_sreality_id NULL)
@@ -418,7 +420,7 @@ _LIST_FROM = (
     "estimation_runs er "
     "LEFT JOIN listings l ON l.id = er.input_listing_id "
     "OR (er.input_listing_id IS NULL AND l.sreality_id = er.input_sreality_id) "
-    "LEFT JOIN listing_location ll ON ll.listing_id = l.id"
+    + SUBJECT_LOCATION_JOIN
 )
 _RUN_COLUMNS_OUT: tuple[str, ...] = _RUN_COLUMNS + (
     "cost_usd_total", "has_feedback",
@@ -1513,31 +1515,32 @@ def _reject_ungeocodable_submit(conn: "psycopg.Connection", body: Any) -> None:
     )
 
 
+_MATCH_BY_URL_SQL = (
+    "SELECT l.sreality_id, l.id AS listing_id, "
+    "ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng, "
+    "l.area_m2, l.disposition, l.floor, l.price_czk, l.category_type "
+    f"FROM listings l {SUBJECT_LOCATION_JOIN} "
+    "WHERE ll.geom IS NOT NULL AND l.source_url IS NOT NULL "
+    "AND (l.source_url = %(url)s OR l.source_url = %(canon)s "
+    "     OR rtrim(l.source_url, '/') = %(canon)s) "
+    "ORDER BY l.last_seen_at DESC NULLS LAST LIMIT 1"
+)
+
+
 def _match_listing_by_url(
     conn: "psycopg.Connection", url: str,
 ) -> dict[str, Any] | None:
     """Match a pasted URL to an existing scraped `listings` row (any portal we
     already scrape), so a known-portal subject reuses the scraper's parsed
     attributes instead of an LLM parse. Coordinates are required (the
-    comparables search is spatial); most-recently-seen row wins. Returns None
-    when there's no usable match so the caller falls back to URL parsing.
+    comparables search is spatial) and are the subject's place (ruling R7: its
+    property's location ad, else its own row); area, layout, floor and price stay
+    the advert's own. Most-recently-seen row wins. Returns None when there's no
+    usable match so the caller falls back to URL parsing.
     """
     canon = source_dispatcher.canonical_url(url)
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT l.sreality_id, l.id AS listing_id, "
-            # W4-a: coordinates come from listing_location, so "a known-portal
-            # subject with a coordinate" now means "the resolver placed it".
-            "ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng, "
-            "l.area_m2, l.disposition, l.floor, l.price_czk, l.category_type "
-            "FROM listings l "
-            "JOIN listing_location ll ON ll.listing_id = l.id "
-            "WHERE ll.geom IS NOT NULL AND l.source_url IS NOT NULL "
-            "AND (l.source_url = %(url)s OR l.source_url = %(canon)s "
-            "     OR rtrim(l.source_url, '/') = %(canon)s) "
-            "ORDER BY l.last_seen_at DESC NULLS LAST LIMIT 1",
-            {"url": url, "canon": canon},
-        )
+        cur.execute(_MATCH_BY_URL_SQL, {"url": url, "canon": canon})
         row = cur.fetchone()
     if row is None or row[2] is None or row[3] is None:
         return None
@@ -1566,6 +1569,19 @@ def _listing_id_of(conn: "psycopg.Connection", sreality_id: int | None) -> int |
     return int(row[0]) if row else None
 
 
+_MATCH_BY_ID_SQL = (
+    "SELECT l.sreality_id, "
+    "ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng, "
+    "COALESCE(lp.area_m2, l.area_m2) AS area_m2, "
+    "COALESCE(lp.disposition, l.disposition) AS disposition, "
+    "l.floor, "
+    "COALESCE(lp.current_price_czk, l.price_czk) AS price_czk, "
+    "COALESCE(lp.category_type, l.category_type) AS category_type, l.id "
+    f"FROM listings l {SUBJECT_LOCATION_JOIN} "
+    "WHERE l.sreality_id = %(id)s LIMIT 1"
+)
+
+
 def _match_listing_by_id(
     conn: "psycopg.Connection", sreality_id: int,
 ) -> dict[str, Any] | None:
@@ -1574,27 +1590,13 @@ def _match_listing_by_id(
     Mirrors `_match_listing_by_url`; coordinates are required (the comparables
     search is spatial). Returns None when the row is missing or has no geom.
 
-    Subject facts (coords / area / disposition / price / category_type) are the listing's
-    PROPERTY's -- its canonical advert's (migration 561) -- when it belongs to an active
-    property, so an estimation launched from ANY portal's advert of the same flat resolves the
-    SAME subject; the listing's own row is the fallback. `floor` stays per-advert."""
+    Subject facts (area / disposition / price / category_type) are the listing's PROPERTY's
+    -- its canonical advert's (migration 561) -- and its coordinates the property's location
+    advert's (ruling R7), when it belongs to an active property, so an estimation launched
+    from ANY portal's advert of the same flat resolves the SAME subject; the listing's own row
+    is the fallback. `floor` stays per-advert."""
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT l.sreality_id, "
-            "ST_Y(COALESCE(pll.geom, ll.geom)) AS lat, "
-            "ST_X(COALESCE(pll.geom, ll.geom)) AS lng, "
-            "COALESCE(p.area_m2, l.area_m2) AS area_m2, "
-            "COALESCE(p.disposition, l.disposition) AS disposition, "
-            "l.floor, "
-            "COALESCE(p.current_price_czk, l.price_czk) AS price_czk, "
-            "COALESCE(p.category_type, l.category_type) AS category_type, l.id "
-            "FROM listings l "
-            "LEFT JOIN properties p ON p.id = l.property_id AND p.status = 'active' "
-            "LEFT JOIN listing_location ll ON ll.listing_id = l.id "
-            "LEFT JOIN listing_location pll ON pll.listing_id = p.repr_listing_ref_id "
-            "WHERE l.sreality_id = %(id)s LIMIT 1",
-            {"id": int(sreality_id)},
-        )
+        cur.execute(_MATCH_BY_ID_SQL, {"id": int(sreality_id)})
         row = cur.fetchone()
     if row is None or row[1] is None or row[2] is None:
         return None
@@ -1945,21 +1947,20 @@ def _load_subject_condition(
 
 
 # The subject's MF facts when it is one of our adverts: its PROPERTY's golden record and
-# the representative's stored location codes -- the inputs properties_public hands
-# mf_reference(), so a run's reference equals the listing page's. COALESCE keeps the
+# its location advert's stored location codes (ruling R7) -- the inputs properties_public
+# hands mf_reference(), so a run's reference equals the listing page's. COALESCE keeps the
 # advert's own value for a pre-attach row.
-_SUBJECT_MF_FACTS_SQL = """
-    SELECT COALESCE(p.category_main, l.category_main),
-           COALESCE(p.category_type, l.category_type),
-           COALESCE(p.current_price_czk, l.price_czk),
-           COALESCE(p.condition, l.condition),
-           COALESCE(p.has_balcony, l.has_balcony), COALESCE(p.terrace, l.terrace),
-           COALESCE(p.furnished, l.furnished), COALESCE(p.garage, l.garage),
-           COALESCE(p.has_lift, l.has_lift), COALESCE(p.building_type, l.building_type),
+_SUBJECT_MF_FACTS_SQL = f"""
+    SELECT COALESCE(lp.category_main, l.category_main),
+           COALESCE(lp.category_type, l.category_type),
+           COALESCE(lp.current_price_czk, l.price_czk),
+           COALESCE(lp.condition, l.condition),
+           COALESCE(lp.has_balcony, l.has_balcony), COALESCE(lp.terrace, l.terrace),
+           COALESCE(lp.furnished, l.furnished), COALESCE(lp.garage, l.garage),
+           COALESCE(lp.has_lift, l.has_lift), COALESCE(lp.building_type, l.building_type),
            ll.obec_kod, ll.katastr_kod, ll.country_status::text
       FROM listings l
-      LEFT JOIN properties p ON p.id = l.property_id AND p.status = 'active'
-      LEFT JOIN listing_location ll ON ll.listing_id = COALESCE(p.repr_listing_ref_id, l.id)
+      {SUBJECT_LOCATION_JOIN}
      WHERE l.id = %(listing_id)s
 """
 _MF_FACT_KEYS = (

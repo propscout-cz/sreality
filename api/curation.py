@@ -133,9 +133,9 @@ def get_collection(
 
     properties_sql = (
         "SELECT cp.property_id, p.repr_listing_id, "
-        # ONE place string (migration 503), composed from the property's DISPLAY
-        # listing — the same listing its price and area come from, and the same
-        # label Browse shows for the same card. Taken off properties_public
+        # ONE place string (migration 503), the property's LOCATION ad's since
+        # 636 (rule 15), the same label Browse shows for the same card; price
+        # and area stay the canonical ad's. Taken off properties_public
         # rather than from a `listing_location` join because this route runs on
         # the tenant pool (`SET LOCAL ROLE authenticated`) and migration 501
         # revoked the answer table from that role; an owner-rights `_public` view

@@ -142,11 +142,12 @@ def test_location_answers_point_label_and_zoom_by_granularity(client, conn, gran
     }
 
 
-def test_location_reads_the_canonical_ad_and_compares_by_rank(client, conn):
+def test_location_reads_the_location_ad_and_compares_by_rank(client, conn):
     client.get("/properties/7/location", headers=AUTH)
     sql, params = conn.statements[0]
     assert params == (7,)
-    assert "listing_location ll on ll.listing_id = p.repr_listing_ref_id" in sql
+    assert "listing_location ll on ll.listing_id = p.location_listing_ref_id" in sql
+    assert "repr_listing_ref_id" not in sql
     assert "location_display_label(" in sql
     assert "location_granularity_rank" in sql
 

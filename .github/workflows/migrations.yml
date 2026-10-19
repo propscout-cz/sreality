@@ -684,6 +684,19 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_location_ad_order_live.py -q
 
+      # Every property surface reads the location ad (migration 636, ONE PIN W4, rulings R1/R7/R8). A property whose
+      # canonical ad sits on a street ring and whose inactive ad sits on the address point reads back the address
+      # point's lat/lng/label/rank through browse_projection and properties_public, is served by it, and gets its city
+      # proximity there; the rollup clears the proximity stamp exactly when the location ad changes (from a NULL pointer
+      # too). The rail's schema arm reads every view and function body of this replay for a place keyed on the
+      # canonical ad. PREPARE cannot see which ad a join is keyed on.
+      - name: Every property surface reads the location ad (migration 636)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_location_ad_readers_live.py tests/test_property_location_ad_rail.py -q
+
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed
       # above). Executed over a seeded rent map: every status code, the range for a

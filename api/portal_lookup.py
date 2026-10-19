@@ -83,10 +83,13 @@ SELECT
     -- ONE place string (migration 503), the same one Browse, the map and the
     -- notifications print. The panel used to fall back `district ?? locality`
     -- while the SPA fell back the other way, so one listing could be labelled
-    -- two different ways on two surfaces.
-    location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
-                           ll.obec_name, ll.cast_obce_name, ll.country_code,
-                           ll.country_status) AS display_label,
+    -- two different ways on two surfaces. It is the PROPERTY's, its location ad's
+    -- (ruling R9), so it names the place the MF below is priced at; the advert's
+    -- own label only for an advert not yet attached, which has no MF.
+    COALESCE(pp.display_label,
+             location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
+                                    ll.obec_name, ll.cast_obce_name, ll.country_code,
+                                    ll.country_status)) AS display_label,
     l.is_active, l.last_seen_at,
     -- THE measure and its label (migration 425), listing-grain: the panel is
     -- overlaid on ONE portal advert, so the number must be that advert's.

@@ -1,4 +1,4 @@
-"""The publishing check's statements, executed: Browse's stages on the canonical ad, stock, photos and the queue.
+"""The publishing check's statements, executed: Browse's stages on the location ad, stock, photos and the queue.
 
 The hermetic tests answer each statement with canned rows, the replay re-implements it in Python and PREPARE checks
 only names and types, so nothing else runs the rules the SQL encodes. Each test seeds ads, properties, locations,
@@ -6,11 +6,12 @@ Browse rows, photos or queue rows relative to its transaction's now(), runs the 
 the check sends, then the cells it feeds. The rules pinned:
 
 - visible: an active ad first written 30 min-24 h ago (72 h for the wider window) is in Browse, or held at the first
-  stage that stops it: no property, property not active, its property's canonical ad's location not served (no
+  stage that stops it: no property, property not active, its property's location ad's location not served (no
   listing_location row, or one with neither a point nor a foreign determination), waiting for the next rebuild (a
-  property born, or a canonical ad resolved again, after the newest browse_list rebuild started: a fact, never a
+  property born, or a location ad resolved again, after the newest browse_list rebuild started: a fact, never a
   blocker), else not yet in Browse. A property held at its status or location is one browse_projection does not serve.
-- The canonical ad is the rollup's rank 1 of property_canonical_listings (migration 588), never the ad being counted.
+- The location ad is the rollup's location rank 1 of property_canonical_listings (migration 635), never the ad being
+  counted and not necessarily the canonical ad.
 - stock: an active property counts once per portal it holds an active ad on, and once for the fleet.
 - photos: of ads first written 1-24 h ago, a taken-down ad's photos are out, not stored is every NULL storage_path,
   narrow is a stored width under 600 px (no width is unmeasured), and the top reason drops the URL.
@@ -109,10 +110,12 @@ def _located(conn: Any, listing_id: int, shape: tuple[bool, str, str], *,
 def _held(conn: Any, source: str, *, status: str = "active", active: bool = True,
           born: _dt.timedelta = 3 * _H, shape: tuple[bool, str, str] | None = _POINT,
           resolved: _dt.timedelta = 3 * _H) -> int:
-    """A property whose one ad, first written 2 h ago, is its canonical ad; `shape` None leaves it unresolved."""
+    """A property whose one ad, first written 2 h ago, is its canonical and location ad; `shape` None leaves it
+    unresolved."""
     pid = _property(conn, status=status, active=active, born=born)
     ad = _ad(conn, source, active=active, property_id=pid)
-    conn.execute("update properties set repr_listing_ref_id = %s where id = %s", (ad, pid))
+    conn.execute("update properties set repr_listing_ref_id = %s, location_listing_ref_id = %s where id = %s",
+                 (ad, ad, pid))
     if shape:
         _located(conn, ad, shape, resolved=resolved)
     return pid
@@ -171,7 +174,7 @@ def _by_subject(cells: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def test_each_new_ad_is_held_at_the_first_stage_that_stops_it_and_waiting_is_never_a_blocker(conn: Any) -> None:
-    """Status before location, location before the rebuild's lag; a property born, or whose canonical ad was resolved
+    """Status before location, location before the rebuild's lag; a property born, or whose location ad was resolved
     again, after the newest rebuild started is waiting for the next one, which the cell keeps out of its blocked
     share."""
     _rebuilt(conn, 20 * _MIN)
@@ -208,15 +211,18 @@ def test_each_new_ad_is_held_at_the_first_stage_that_stops_it_and_waiting_is_nev
     assert (wide["window_h"], wide["ads"], wide["blocked"]) == (72, 10, 7)
 
 
-def test_an_ad_is_judged_on_its_propertys_canonical_ad_never_on_its_own_location(conn: Any) -> None:
-    """The rollup stores rank 1 of property_canonical_listings (an ad with a point first, then the earliest first
-    written) as repr_listing_ref_id, and both the served predicate and the resolved-again read take that ad."""
+def test_an_ad_is_judged_on_its_propertys_location_ad_never_on_its_own_location(conn: Any) -> None:
+    """The rollup stores location rank 1 of property_canonical_listings (a point, then a foreign determination, then
+    the finest rung, then the canonical order) as location_listing_ref_id, and both the served predicate and the
+    resolved-again read take that ad. `abroad` is the case where it is not the canonical ad: its canonical ad (first
+    written earlier) has no answer, its location ad is determined foreign, so the property is served."""
     _rebuilt(conn, 20 * _MIN)
     located, abroad, re_resolved = _property(conn), _property(conn), _property(conn)
     _ad(conn, "idnes", property_id=located)                                       # no location of its own
     canonical = {located: _ad(conn, "bazos", seen=50 * _H, property_id=located)}
     _located(conn, canonical[located], _POINT)
-    _located(conn, _ad(conn, "idnes", property_id=abroad), _ABROAD)              # served on its own
+    abroad_ad = _ad(conn, "idnes", property_id=abroad)
+    _located(conn, abroad_ad, _ABROAD)                                           # served on its own
     canonical[abroad] = _ad(conn, "bazos", seen=10 * _H, property_id=abroad)     # first written earlier, no answer
     _located(conn, _ad(conn, "idnes", property_id=re_resolved), _POINT, resolved=10 * _MIN)
     canonical[re_resolved] = _ad(conn, "bazos", seen=50 * _H, property_id=re_resolved)
@@ -225,12 +231,15 @@ def test_an_ad_is_judged_on_its_propertys_canonical_ad_never_on_its_own_location
         conn.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
     stored = conn.execute("select id, repr_listing_ref_id from properties where id = any(%s)", (list(canonical),))
     assert dict(stored.fetchall()) == canonical
+    location = {**canonical, abroad: abroad_ad}
+    stored = conn.execute("select id, location_listing_ref_id from properties where id = any(%s)", (list(location),))
+    assert dict(stored.fetchall()) == location
 
     assert _visible(conn) == {
-        ("idnes", True, "not_in_browse_list"): 2, ("idnes", True, "location_not_served"): 1,
-        ("bazos", False, "not_in_browse_list"): 2, ("bazos", True, "location_not_served"): 1,
+        ("idnes", True, "not_in_browse_list"): 3,
+        ("bazos", False, "not_in_browse_list"): 2, ("bazos", True, "not_in_browse_list"): 1,
     }
-    assert _projected(conn, canonical) == {located, re_resolved}
+    assert _projected(conn, canonical) == {located, abroad, re_resolved}
 
 
 def test_stock_counts_an_active_property_once_per_portal_it_holds_an_active_ad_on(conn: Any) -> None:

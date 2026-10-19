@@ -406,7 +406,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
   - **W3 S1+S2 shipped** (migration 503): the serving views read `listing_location`, and every place
     display reads ONE `display_label`. `browse_projection` joins on `properties.repr_listing_ref_id`
     (the DISPLAY listing — place, price and area now come from one child instead of `best_geo` /
-    `best_street` / `repr` separately) and APPENDS `display_label`, `cast_obce_id`,
+    `best_street` / `repr` separately; superseded by ONE PIN, migration 636: the place comes from the
+    location ad, `location_listing_ref_id`, price and area still from the canonical ad) and APPENDS `display_label`, `cast_obce_id`,
     `uncertainty_radius_m`, `granularity_rank` while RE-SOURCING `obec_id`/`okres_id`/`region_id`
     and `lat`/`lng` from the answer table; `listing_feed_public` gets the same on `listings.id`;
     `listings_public`, `properties_public`, `broker_listings_public` and `pipeline_board_public`
@@ -514,7 +515,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   - **W4-a shipped** (migration 507, additive — apply BEFORE the deploy): every remaining reader
     takes its location from `listing_location`. `properties_public` + `listings_public` re-source
     `lat`/`lng` and `obec_id`/`okres_id`/`region_id` (property grain via `repr_listing_ref_id`,
-    listing grain via `listing_id`), and `properties_public.obec` from `ll.obec_name` — re-sourced
+    since 636 via `location_listing_ref_id`; listing grain via `listing_id`), and `properties_public.obec` from `ll.obec_name` — re-sourced
     in place, so the column lists do not move and the kanban town sort needed no SPA change.
     Nothing appended: the census found no other reader of the legacy place text on either view.
     In code, `_shared_filter_where` (Browse + Watchdog, rule 16) and every other `listings.geom`
@@ -1160,6 +1161,23 @@ component is slimmed twice — each wave rewrites one component and slims its st
   (first draft 1.77 s; 2.51 s with no category), a kraj + obec pair 44 ms as before. Outreach stores
   chips in `target.districts` (609 rewrote the stored id lists; 0 campaigns existed); the API refuses
   the old id lists (422 on a request, 409 on a stored target). No index: the arms OR five columns.
+- **ONE PIN — a property's location is its location ad — in review 2026-10-20 (636 not yet applied)** (operator rulings
+  of 2026-10-19, R1/R3/R5/R7–R9; migrations 635 + 636; `docs/design/one-pin/PROGRAM.md`). A property used to
+  stand at its canonical ad's point, so two ads of one building could draw a ring where a sibling ad
+  held the exact address. `properties.location_listing_ref_id` now points at the ad ranked first by a
+  map point, then determined foreign, then the finest RÚIAN rung whatever the ad's status, ties by
+  the canonical order; the rollup and the singleton birth write it with the canonical ad and 636's
+  CHECK keeps the two NULL together. Every property surface reads place through it (Browse, map,
+  counts, `properties_public`, the property page and phone map, the watchdog, notifications, the
+  estimation subject and comparables, the extension's label); price, area, photos and link stay the
+  canonical ad's. A pointer, not a value, so rule 25's one store holds (R3 is the net-add ruling).
+  Measured 2026-10-19: after the W3 backfill 14,051 properties (status `active`, live or dormant)
+  stand at an ad other than their canonical one; the plan's census put ~10.8k rings becoming dots, ~84 town changes and 0
+  newly unserved.
+- **Owed (ONE PIN W3 hand-off): centroid radii drawn too small** — town 60.4 %, quarter 86.1 %
+  containment of the exact point (measured 2026-10-19; street level 98.5 %). The ads agree where
+  both are exact (p90 0 m); the misses are the radius, not the evidence. Calibrating a radius is a
+  `RESOLVER_VERSION` bump through the ordinary lane.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
   it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the

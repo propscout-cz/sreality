@@ -275,13 +275,15 @@ latest definer): take the list rebuild's advisory lock (`statement_timeout` > th
 view aside (its row-type source follows by OID), create the new one, re-create `browse_list_visible(...)`; then
 the rebuild at top level (a body inside a DO block is apply-time DDL to the receipt parser); force the list, then the legacy drop.
 
-**A property row is its canonical advert's** (migrations 561, 588): `properties.repr_listing_ref_id`
-= rank 1 of `property_canonical_listings(property_id)` (active, map point, earliest first seen among
-active / latest last seen among inactive, trust, id), written by the one rollup; every read model
-joins place/floor/description/broker through it, and `properties_public.listing_id` is it
-(`repr_since`: when it last changed; alerts count only its later price steps; the rollup clears
-`city_proximity_computed_at` with it). The rollup also writes `all_sources` / `active_sources` (sorted
-portal lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since 590 together with `source_count` (one partial index per portal on `browse_list`).
+**A property row is its canonical advert's, its place its location advert's** (migrations 561, 588, 635, 636):
+`properties.repr_listing_ref_id` = rank 1 of `property_canonical_listings(property_id)` (active, map point, earliest
+first seen among active / latest last seen among inactive, trust, id), written by the one rollup; every read model
+joins floor/description/broker through it, and `properties_public.listing_id` is it (`repr_since`: when it last
+changed; alerts count only its later price steps). `location_listing_ref_id` = rank 1 of its `location_rank` (point,
+then foreign, then the finest rung whatever the status, then the canonical order), set in the same statements, NULL
+with it (636's CHECK); every property surface joins `listing_location` on it, and the rollup clears
+`city_proximity_computed_at` when IT changes. The rollup also writes `all_sources` / `active_sources` (sorted portal
+lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since 590 together with `source_count` (one partial index per portal on `browse_list`).
 
 **Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot) + 629's nine curated-set scope parameters (both functions; `spec` and the map's `point_budget` shape the answer, never the cohort). Gate a re-sign on a plan probe first: `docs/agents/db-plan-probe.md` (no DDL; PostgREST's call shape; RLS as the caller).
 
@@ -454,8 +456,9 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   wants one, is computed in the filter layer, never at ingest.
 - **A listing has ONE location and it lives in `listing_location`** (27 cols, migrations 501/566).
   `listings` and `properties` carry NO place column at all: read a listing's place by joining
-  `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.repr_listing_ref_id`
-  — a property's place is its representative listing's). The codes are `ll.obec_kod` /
+  `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.location_listing_ref_id`, never the
+  canonical advert, since 636; a cohort goes spatial-first: `ll` → `properties lp on lp.location_listing_ref_id =
+  ll.listing_id and lp.status = 'active'` → `listings l on l.id = lp.repr_listing_ref_id`). The codes are `ll.obec_kod` /
   `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
   labels `ll.obec_name` / `okres_name` / `street_name`. One trap: `ll.geom` IS
   `geometry(Point,4326)`, so a metre-based `ST_DWithin`/`ST_Distance` must cast

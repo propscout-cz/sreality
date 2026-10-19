@@ -136,8 +136,9 @@ def test_the_work_list_means_a_live_card_on_an_active_flat_or_house():
     assert "p.status = 'active'" in sql and "p.is_active" in sql
     # reas's sold catalogue is byty + domy only, so no other category earns a fetch.
     assert "p.category_main IN ('byt', 'dum')" in sql
-    # The subject's point comes from the property's repr listing, never from listings.
-    assert "ll.listing_id = p.repr_listing_ref_id" in sql
+    # The cell is the property's location ad's town, never the canonical ad's.
+    assert "ll.listing_id = p.location_listing_ref_id" in sql
+    assert "repr_listing_ref_id" not in sql
 
 
 def test_a_cell_that_cannot_be_boxed_is_never_offered_as_work():

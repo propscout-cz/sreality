@@ -1,11 +1,12 @@
 """The phone's Poloha: where a property is, as JSON and as a Mapy static map image.
 
-GET /properties/{id}/location answers the canonical ad's point from `listing_location`
+GET /properties/{id}/location answers the location ad's point from `listing_location`
 (rule 25's one store), its granularity, the place label the property page prints
 (`location_display_label`, as `properties_public` composes it) and the zoom the phone opens
-at. The canonical ad is `properties.repr_listing_ref_id`, rank 1 of
-`property_canonical_listings` as the rollup stored it, so this is the ad the page shows. A
-detail-by-id read: no served-location predicate (rule 25 keeps those reachable).
+at. The location ad is `properties.location_listing_ref_id`, the `location_rank` 1 of
+`property_canonical_listings` as the rollup stored it, so this is the place the page, Browse
+and the map show. A detail-by-id read: no served-location predicate (rule 25 keeps those
+reachable).
 
 GET /properties/{id}/static-map.png streams Mapy's static map of that point through us on
 every view. Mapy's terms allow showing the image online but never storing or caching it
@@ -91,7 +92,7 @@ select st_y(ll.geom) as lat,
                               ll.obec_name, ll.cast_obce_name, ll.country_code,
                               ll.country_status) as label
   from properties p
-  left join listing_location ll on ll.listing_id = p.repr_listing_ref_id
+  left join listing_location ll on ll.listing_id = p.location_listing_ref_id
   left join location_granularity_rank r on r.granularity = ll.granularity
  where p.id = %s and p.status = 'active'
 """

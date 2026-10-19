@@ -22,8 +22,18 @@ ONE table, listing grain, rebuilt by the resolver (`location_resolve.yml` + the 
 
 **There is no property-grain table.** `property_location_current` was a verbatim copy of its
 winner's row — migration 493 measured `p.kraj_kod` and `w.kraj_kod` agreeing on 0 of 637,381 rows —
-and nothing outside one pg_cron statement read it. A property's location is its members' rows
-aggregated at read: join `listings.property_id` and pick or summarise.
+and nothing outside one pg_cron statement read it. A property's location is ONE member's row, never
+an aggregate: its **location ad**, `listing_location ll on ll.listing_id = p.location_listing_ref_id`
+(migration 635 chooses it: a map point first, then determined foreign, then the finest RÚIAN rung
+whatever the ad's status, ties by the canonical order). Every property surface reads that one ad
+since 636 — Browse and its map, `properties_public`, the property page and the phone map, the
+watchdog, notifications, the estimation subject and comparables, the extension's label. The
+pointer stores no location value, so this is still one store. A consumer about ONE ad (the ad page,
+the pin audit, dedup) reads that ad's own row. The two SQL shapes, beside the served rule in
+`location_data/claims_common.py`: an estimation SUBJECT joins its property's location ad, falling
+back to its own row while it has no live property (`SUBJECT_LOCATION_JOIN`); a COHORT goes
+spatial-first, place → the live property it locates → that property's canonical ad as the row
+(`COHORT_LOCATION_FROM`), because the GiST index cannot drive a COALESCE key.
 
 A listing with no row has never been resolved (brand new, between drains). Rule 25 makes that a
 vanishing case: a listing with no live claim gets an `undetermined` row (granularity `unknown`, no
@@ -68,10 +78,12 @@ cast_obce_name, country_code, country_status)`, and every serving view publishes
 `display_label`: `browse_projection` (→ `browse_list`), `listing_feed_public`,
 `properties_public`, `listings_public`, `broker_listings_public`, and `pipeline_board_public` (which
 reads it off `properties_public` — it is `security_invoker` and `listing_location` is revoked from
-`authenticated`). The four API surfaces that read `listings` directly — the extension's
-`/listings/lookup`, the notification composer and outbox, the dispatch feed, the collections route
-— call the same function. Still no STORED label: a function over the answer table's own columns is
-one definition, computed where it is read.
+`authenticated`). Since 636 the API's property-grain surfaces print the property's own
+`properties_public.display_label` — the collections route, the dispatch feed and the notification
+outbox (whose two inline compositions are deleted), and the extension panel, which composes the
+ad's own label with the same function only for an ad not yet in a property; the phone's property
+location route calls the function on the property's location ad. Still no STORED label: a function
+over the answer table's own columns is one definition, computed where it is read.
 
 **The fallback order, which is the rule and not a detail:**
 
@@ -166,7 +178,8 @@ removed the last two runtime switches of any kind on this path — the SPA bisec
 
 ## 5. There is no legacy path (W4-c)
 
-Migration 508 dropped it. `listings` and `properties` carry NO place columns: no `geom`, no
+Migration 508 dropped it. `listings` and `properties` carry NO place columns (635's
+`properties.location_listing_ref_id` points at an ad and stores no place): no `geom`, no
 `obec_id`/`okres_id`/`region_id`/`ku_id`, no `obec`/`okres`/`region`, no
 `locality`/`district`/`street`/`house_number`/`zip`, no `street_name_key`/`geo_cell_key`/
 `street_source`, and none of the sreality `locality_*_id` portal ids. The trigger that wrote them

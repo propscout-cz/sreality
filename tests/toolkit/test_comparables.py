@@ -571,13 +571,28 @@ def test_condition_level_filters_absent_when_none():
     assert "apartment_condition_level_min" not in params
 
 
-def test_a_property_counts_once_as_its_canonical_advert():
-    """Decision 13: an advert is a comparable only as its property's canonical advert, so a
-    property on two portals is weighted once. Rendered in `_shared_filter_where`, so the
-    velocity and transit-corridor cohorts count properties the same way."""
-    sql, _ = build_query(TargetSpec(lat=50.0, lng=14.0), ComparableFilters())
-    assert ("EXISTS (SELECT 1 FROM properties canon_p "
-            "WHERE canon_p.id = l.property_id AND canon_p.repr_listing_ref_id = l.id)") in sql
+def test_a_property_counts_once_as_its_canonical_advert_at_its_location_advert():
+    """Decision 13 + ruling R8: an advert is a comparable only as its property's canonical
+    advert, so a property on two portals is weighted once, and it stands at its property's
+    location advert. ONE spatial-first shape (`claims_common.COHORT_LOCATION_FROM`) drives
+    the comparables, velocity and transit-corridor cohorts, so they count and place
+    properties the same way; the identity gate is the join, not a per-row EXISTS."""
+    from location_data.claims_common import COHORT_LOCATION_FROM
+    from toolkit.transit_axis import build_corridor_query
+    from toolkit.velocity import build_market_velocity_query
+
+    target, filters = TargetSpec(lat=50.0, lng=14.0), ComparableFilters()
+    assert COHORT_LOCATION_FROM == (
+        "listing_location ll "
+        "JOIN properties lp ON lp.location_listing_ref_id = ll.listing_id AND lp.status = 'active' "
+        "JOIN listings l ON l.id = lp.repr_listing_ref_id AND l.property_id = lp.id"
+    )
+    for sql in (build_query(target, filters)[0],
+                build_market_velocity_query(target, filters, "all")[0],
+                build_corridor_query(target, filters, ["tram"], 800, 300)[0]):
+        assert f"FROM {COHORT_LOCATION_FROM}\n" in sql
+        assert "FROM listings l" not in sql and "canon_p" not in sql
+        assert "ll.listing_id = l.id" not in sql
 
 
 def test_the_subjects_whole_property_is_left_out():

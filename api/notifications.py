@@ -48,7 +48,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 from api.cursor import decode_cursor, encode_cursor
 from api.location_filter import DistrictChip, district_where
-from location_data.claims_common import served_location_predicate
+from location_data.claims_common import SUBJECT_LOCATION_JOIN, served_location_predicate
 from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
 
@@ -251,10 +251,11 @@ def _build_match_clauses(
     # Browse inherits it from `browse_projection` (migration 512); the matcher cannot,
     # because it reads `properties_public` — a DETAIL-by-id surface that deliberately
     # keeps serving an unresolved listing to a direct link. So the ONE definition is
-    # rendered here instead, keyed on the property's display listing, which is what
-    # `properties_public.listing_id` is. Without it a watchdog would fire on a listing
-    # nobody can find in Browse, and "matches" would mean two different things.
-    where: list[str] = [served_location_predicate("l.listing_id")]
+    # rendered here instead, keyed on the property's LOCATION ad
+    # (`properties_public.location_listing_ref_id`, migration 636), as browse_projection
+    # keys it. Without it a watchdog would fire on a listing nobody can find in Browse,
+    # and "matches" would mean two different things.
+    where: list[str] = [served_location_predicate("l.location_listing_ref_id")]
     params: dict[str, Any] = {}
 
     if (
@@ -453,8 +454,8 @@ def delete_subscription(
 # --- dispatches (the notification feed) -----------------------------------
 
 
-# EVERY column here reads an owner-rights view (`listings_public`; the MF yield
-# `properties_public`), never `listings` — and that is a FIX, not a style
+# EVERY column here reads an owner-rights view (`listings_public`; the place and
+# the MF yield `properties_public`), never `listings` — and that is a FIX, not a style
 # choice. This feed runs on the tenant pool, i.e. under
 # `SET LOCAL ROLE authenticated`, and `listings` has carried RLS with NO POLICY
 # since migration 001: under that role the table is empty, so the LEFT JOIN this
@@ -462,18 +463,20 @@ def delete_subscription(
 # arrived NULL in the feed. `listings_public` is an owner-rights view
 # over the same rows with no WHERE of its own (migration 494), so it returns
 # exactly what a BYPASSRLS reader always saw here and what the browser role never
-# did. It is also the only way this query can reach the resolved location at all:
+# did. The two views are also the only way this query can reach a resolved location:
 # migration 501 revoked `listing_location` from `authenticated`, which is the
 # same reason pipeline_board_public reads its label off properties_public.
 #
 # `display_label` is the ONE place string (migration 503). It replaced the
 # `locality, district` pair the feed used to ship, which the SPA fell back
 # through as `locality ?? district` while the extension fell back the other way
-# — two surfaces naming the same listing two different places.
+# — two surfaces naming the same listing two different places. It is the
+# PROPERTY's (ruling R5): a dispatch is property-grain (rule 16), so the feed
+# names the place its property page, Browse and the map name, its location ad's.
 _LISTING_PROJECTION = (
     "lp.sreality_id, lp.category_main, lp.category_type, lp.price_czk, "
     "lp.price_unit, lp.area_m2, lp.disposition, lp.subtype, "
-    "lp.display_label, "
+    "pp.display_label, "
     "lp.is_active, lp.first_seen_at, lp.last_seen_at, "
     "lp.source, lp.source_url, "
     # MF is property-grain, like the dispatch itself (rule 16): the feed shows
@@ -719,6 +722,20 @@ def mark_all_seen(
 
 _PRONAJEM = "pronajem"
 
+# The point is the subject's place (ruling R7): its property's location ad, else its own
+# row. A listing placed nowhere surfaces as "no geom" below, the same refusal the estimator
+# has for any unplaced subject. Area, layout, price and category stay the advert's own.
+_RESOLVE_FOR_ESTIMATE_SQL = (
+    "SELECT l.id AS listing_id, l.sreality_id, "
+    "  ST_Y(ll.geom) AS lat, "
+    "  ST_X(ll.geom) AS lng, "
+    "  l.area_m2, l.disposition, l.floor, "
+    "  l.category_main, l.category_type, "
+    "  l.price_czk, l.price_unit "
+    f"FROM listings l {SUBJECT_LOCATION_JOIN} "
+    "WHERE l.id = %s"
+)
+
 
 def _resolve_listing_for_estimate(
     conn: "psycopg.Connection", listing_id: int,
@@ -731,22 +748,7 @@ def _resolve_listing_for_estimate(
     otherwise resolve to nothing and be reported as "listing missing".
     """
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT l.id AS listing_id, l.sreality_id, "
-            # W4-a: the point is the resolver's, not the trigger-filled
-            # listings.geom (dropped in W4-c). A listing with no
-            # listing_location row surfaces as "no geom" below, which is the
-            # same refusal the estimator already had for an unplaced listing.
-            "  ST_Y(ll.geom) AS lat, "
-            "  ST_X(ll.geom) AS lng, "
-            "  l.area_m2, l.disposition, l.floor, "
-            "  l.category_main, l.category_type, "
-            "  l.price_czk, l.price_unit "
-            "FROM listings l "
-            "LEFT JOIN listing_location ll ON ll.listing_id = l.id "
-            "WHERE l.id = %s",
-            (listing_id,),
-        )
+        cur.execute(_RESOLVE_FOR_ESTIMATE_SQL, (listing_id,))
         row = cur.fetchone()
         cols = [d[0] for d in cur.description] if cur.description else []
     if row is None:

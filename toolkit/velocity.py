@@ -19,6 +19,7 @@ import statistics
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
+from location_data.claims_common import COHORT_LOCATION_FROM, SUBJECT_LOCATION_JOIN
 from toolkit.comparables import (
     ComparableFilters,
     TargetSpec,
@@ -59,9 +60,7 @@ def build_market_velocity_query(
     sql = (
         "SELECT l.sreality_id, l.first_seen_at, l.last_seen_at, l.is_active,\n"
         f"  {tom_days_sql('l')} AS tom_days\n"
-        "FROM listings l\n"
-        # W4-a: the radius in _shared_filter_where reads `ll`.
-        "JOIN listing_location ll ON ll.listing_id = l.id\n"
+        f"FROM {COHORT_LOCATION_FROM}\n"
         "WHERE " + "\n  AND ".join(where) + "\n"
         "ORDER BY l.first_seen_at\n"
         f"LIMIT {_HARD_LIMIT}"
@@ -278,8 +277,7 @@ def _fetch_listing_for_velocity(
             "  ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng,\n"
             "  l.category_main, l.category_type, l.id,\n"
             f"  {tom_days_sql('l')} AS tom_days\n"
-            "FROM listings l\n"
-            "LEFT JOIN listing_location ll ON ll.listing_id = l.id\n"
+            f"FROM listings l {SUBJECT_LOCATION_JOIN}\n"
             f"WHERE {id_clause}",
             (id_val,),
         )

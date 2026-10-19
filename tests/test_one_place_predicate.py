@@ -435,7 +435,9 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
     The geography cast is checked with it, and it is the reason this test is
     worth having: `listing_location.geom` is geometry(Point,4326), so an
     UNCAST `ST_DWithin(ll.geom, point, 1000)` compiles, runs, and silently means
-    1000 DEGREES. Every moved call site casts."""
+    1000 DEGREES. Every moved call site casts. A module that takes its join from
+    location_data/claims_common.py (COHORT_LOCATION_FROM / SUBJECT_LOCATION_JOIN)
+    counts as joining it."""
     spatial = (
         "toolkit/comparables.py",
         "toolkit/velocity.py",
@@ -453,7 +455,11 @@ def test_every_spatial_reader_takes_its_point_from_listing_location() -> None:
         assert bare_l_geom.search(code) is None, f"{rel} still reads listings.geom"
         assert "listings.geom" not in code, f"{rel} still reads listings.geom"
         assert "COALESCE(p.geom" not in code, f"{rel} still reads properties.geom"
-        assert "listing_location" in code, f"{rel} does not join listing_location"
+        assert (
+            "listing_location" in code
+            or "COHORT_LOCATION_FROM" in code
+            or "SUBJECT_LOCATION_JOIN" in code
+        ), f"{rel} does not read listing_location (directly or through claims_common)"
 
     for rel, expected in (
         ("toolkit/comparables.py", 2),

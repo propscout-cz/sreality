@@ -141,6 +141,11 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   the commit that deletes the modes must name what replaces it. `legacy_retire` rides on
   `mode=apply` (`retire_legacy=1`), and since E953 also runs alone under `generation=rt,blocks=`
   (the per-area undo before an area goes live), so that commit must keep the `rt` form.
+- **Input from ONE PIN (2026-10-19): cross-town conflicting ad pairs as merge-quality input.** ~34 of
+  1,580 sampled live conflicts (property ids 1–158,046) cross a town line. A property whose ads
+  sit in two towns may be a wrong merge, and since migration 636 its pin stands at the finer ad's
+  point, which can be the other building's. Census SQL in the ONE PIN W0/W1 receipts
+  (`~/one-pin-artifacts/` on the operator machine; `docs/design/one-pin/PROGRAM.md` W3).
 - **Next (W8, E953):** per area, before it enters the apply scope: brake, the area into the scope
   row, `mode=apply` `generation=rt,retire_legacy=1,blocks=town:<code>` dry run, then live, then
   the interval back. Beroun (`town:531057`) first, once the lane has read it after the 10-14
