@@ -1,15 +1,11 @@
-"""Valuo valuations: Valuo's vocabulary, how a property becomes a Valuo request, and the store.
-
-A valuation is an outside opinion bought from Valuo, never our estimate (CLAUDE.md rule 12): one
-`valuo_valuations` row per call, written only here — INSERTed `pending` before the paid call, UPDATEd
-once after it. `build_request` maps the property page's own facts (the canonical ad, the property
-record, rule 25's one location store for the point) onto Valuo's parameters and records where each
-value came from. Valuo's codes and their Czech labels live in FIELDS alone and reach the browser as
-options; our own values are labelled by the filter registry.
-"""
+"""Valuo valuations: Valuo's vocabulary (FIELDS, the only home of its codes and Czech labels), how a
+property becomes a Valuo request with the provenance of every value, and the store — one
+`valuo_valuations` row per paid call, INSERTed `pending` before it and UPDATEd once after (rule 12)."""
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import math
 import uuid
 from dataclasses import dataclass
@@ -26,6 +22,8 @@ from api import valuo_client
 from api.routes.property_location import load_location
 from toolkit.filter_registry import DISPOSITION_OPTIONS, SUBTYPE_OPTIONS, label_cs, type_label_cs
 from toolkit.measures import ppm2_basis
+
+LOG = logging.getLogger(__name__)
 
 FLAT, HOUSE, LAND = "flat", "house", "land"
 ALL = (FLAT, HOUSE, LAND)
@@ -104,7 +102,7 @@ FIELDS: tuple[Field, ...] = (
         ("brick", "Cihlová"), ("panel", "Panelová"), ("mixed", "Smíšená"), ("wood", "Dřevěná"),
         ("stone", "Kamenná"), ("montage", "Montovaná"), ("low_energy", "Nízkoenergetická"), ("other", "Jiná"),
     )),
-    _count("floor", "Podlaží"),
+    _count("floor", "Podlaží", minimum=-3),  # scraper/floor.py's own bound; the ad's underground floor waits
     _count("total_floors", "Počet podlaží", minimum=1),
     Field("energy_performance", "Energetická třída", "enum", tuple((c, c) for c in "ABCDEFG")),
     Field("elevator", "Výtah", "boolean"),
@@ -180,6 +178,9 @@ _SOURCE: dict[str, str] = {
     "category_main": AD, "category_type": AD, "condition": AD, "subtype": AD, "disposition": AD,
     "building_type": PROPERTY, "ownership": PROPERTY, "energy_rating": PROPERTY,
 }
+# Columns sent as they stand, through the gate a user's value passes: one Valuo cannot take is not sent.
+_COPIED = (("total_floors", "total_floors", AD), ("garden_area", "garden_area", PROPERTY),
+           ("has_lift", "elevator", PROPERTY), ("parking_lots", "parking_spaces", PROPERTY))
 _NOT_SENT_NOTES: dict[tuple[str, str], str] = {
     ("energy_rating", "G"): "Třídu G uvádějí i inzeráty bez průkazu PENB, proto se neposílá.",
     ("furnished", "castecne"): "Částečné vybavení se neposílá.",
@@ -192,6 +193,7 @@ REFUSALS: dict[str, str] = {
     "unsupported_type": "Valuo oceňuje jen byty, domy a pozemky.",
     "no_location": "Bez polohy nemovitost ocenit nelze.",
     "not_cz": "Valuo oceňuje jen nemovitosti v Česku.",
+    "country_unverified": "Není ověřeno, že nemovitost leží v Česku.",  # foreign is a finding, never a default
     "too_coarse": "Poloha je známa jen hruběji než obec — Valuo potřebuje alespoň obec.",
 }
 ABANDONED = {"code": "abandoned", "http_status": None, "message": "Ocenění se nedokončilo."}
@@ -216,7 +218,8 @@ def refusal(subject: dict[str, Any], location: dict[str, Any] | None) -> dict[st
     entry = MAPS["category_main"][1].get(subject.get("category_main") or "")
     code = ("unsupported_type" if entry is None or entry[0] is None
             else "no_location" if location is None
-            else "not_cz" if location["country_status"] != "cz"
+            else "not_cz" if location["country_status"] == "foreign"
+            else "country_unverified" if location["country_status"] != "cz"
             else "too_coarse" if location["precision"] == "coarse"
             else None)
     return {"code": code, "message": REFUSALS[code]} if code else None
@@ -275,32 +278,25 @@ def build_request(
     if ptype == HOUSE and estate:
         put("lot_area", None, MISSING, _source("estate_area", estate),
             "Plochu pozemku domu zatím neposíláme, než ji Valuo ověřeně započítá.")
-    garden = _plain(subject.get("garden_area"))
-    if garden and garden > 0:
-        put("garden_area", garden, PROPERTY, _source("garden_area", garden))
-    for flag, param, note in (("has_balcony", "balcony_area", "Inzerát uvádí balkon, ne jeho plochu."),
-                              ("terrace", "terrace_area", "Inzerát uvádí terasu, ne její plochu."),
-                              ("cellar", "cellar_area", "Inzerát uvádí sklep, ne jeho plochu.")):
+    for column, param, cls in _COPIED:
+        raw = _plain(subject.get(column))
+        if raw is not None:
+            with contextlib.suppress(OverrideError):
+                put(param, _coerce(_BY_NAME[param], raw), cls, _source(column, raw))
+    for flag, param, noun in (("has_balcony", "balcony_area", "balkon"), ("terrace", "terrace_area", "terasu"),
+                              ("cellar", "cellar_area", "sklep")):
         if subject.get(flag):
-            put(param, None, MISSING, _source(flag, True), note)
+            put(param, None, MISSING, _source(flag, True), f"Inzerát uvádí {noun}, ne plochu.")
     floor = subject.get("floor")
     if floor is not None:
         if floor >= 0:
             put("floor", int(floor), AD, _source("floor", floor))
-        else:
-            put("floor", None, MISSING, _source("floor", floor), "Podzemní podlaží se neposílá.")
-    total = subject.get("total_floors")
-    if total is not None and total >= 1:
-        put("total_floors", int(total), AD, _source("total_floors", total))
-    if subject.get("has_lift") is not None:
-        put("elevator", bool(subject["has_lift"]), PROPERTY, _source("has_lift", subject["has_lift"]))
+        else:  # Valuo's reading of a basement is unproven: the user sends it, the ad does not
+            put("floor", None, MISSING, _source("floor", floor), "Podzemní podlaží se samo neposílá.")
     if subject.get("garage") is not None:
         garages = 1 if subject["garage"] else 0
         put("garages", garages, INFERRED, _source("garage", subject["garage"]),
             f"Garáž: {'ano' if garages else 'ne'} → {garages}")
-    if subject.get("parking_lots") is not None and subject["parking_lots"] >= 0:
-        put("parking_spaces", int(subject["parking_lots"]), PROPERTY,
-            _source("parking_lots", subject["parking_lots"]))
     put("as_of", datetime.now(_PRAGUE).date().isoformat(), ASSUMED, None, "Dnešní datum.")
 
     for param, value in overrides.items():
@@ -365,6 +361,7 @@ select {_COLUMNS} from valuo_valuations
 _ABANDON_SQL = f"""
 update valuo_valuations set status = 'failed', error = %s
  where account_id = %s and status = 'pending' and created_at < now() - interval '{_STALE_PENDING}'
+returning id
 """
 _INSERT_SQL = f"""
 insert into valuo_valuations (account_id, listing_id, environment, token_sha, request, provenance)
@@ -372,9 +369,11 @@ values (%s, %s, %s, %s, %s, %s)
 on conflict do nothing
 returning {_COLUMNS}
 """
+# Spelled as the unique index's own key, so the index answers it and the two can never disagree.
 _TWIN_SQL = f"""
 select {_COLUMNS} from valuo_valuations
- where account_id = %s and environment = %s and request = %s and status in ('pending', 'success')
+ where account_id = %s and environment = %s and listing_id = %s
+   and md5(request::text) = md5(%s::jsonb::text) and status in ('pending', 'success')
  limit 1
 """
 _FINISH_SQL = f"""
@@ -384,14 +383,14 @@ returning {_COLUMNS}
 """
 
 
-def _one(conn: Any, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+def _rows(conn: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
-        return cur.fetchone()
+        return cur.fetchall()
 
 
 def _load(conn: Any, property_id: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    subject = _one(conn, _SUBJECT_SQL, (property_id,))
+    [subject] = _rows(conn, _SUBJECT_SQL, (property_id,)) or [None]
     if subject is None:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Nemovitost nenalezena"})
     try:
@@ -420,13 +419,14 @@ def present(row: dict[str, Any]) -> dict[str, Any]:
 
 def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
          cred: valuo_client.Credential | None) -> dict[str, Any]:
-    """GET /properties/{id}/valuo: the editor's defaults and the caller's own history. Never a 503."""
+    """GET /properties/{id}/valuo: the editor's defaults and the caller's own history. Never a 503. It settles
+    the caller's abandoned calls first, so a call the API died during is never shown as running."""
     subject, location = _load(conn, property_id)
     refused = refusal(subject, location)
-    unconfigured = {"code": "unconfigured", "message": REFUSALS["unconfigured"]}
+    _rows(conn, _ABANDON_SQL, (Jsonb(ABANDONED), account_id))
     out: dict[str, Any] = {
         "environment": cred.environment if cred else None,
-        "refusal": refused or (None if cred else unconfigured),
+        "refusal": refused or (None if cred else {"code": "unconfigured", "message": REFUSALS["unconfigured"]}),
         "subject": {
             "listing_id": subject["listing_id"],
             "category_main": subject["category_main"],
@@ -445,12 +445,6 @@ def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
         out.update(fields=[f.spec(ptype) for f in fields_for(ptype)], defaults=request,
                    provenance=provenance, blocking=blocking(request))
     return out
-
-
-def _rows(conn: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(sql, params)
-        return list(cur.fetchall())
 
 
 def _refuse(status: int, code: str, message: str, **extra: Any) -> HTTPException:
@@ -474,12 +468,12 @@ def run(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: u
         raise _refuse(422, "missing_required", f"Chybí povinné parametry: {labels}.", fields=missing)
 
     # `conn` is autocommit: each statement commits alone, so no transaction stays open across the paid call.
-    with conn.cursor() as cur:
-        cur.execute(_ABANDON_SQL, (Jsonb(ABANDONED), account_id))
-    row = _one(conn, _INSERT_SQL, (account_id, subject["listing_id"], cred.environment, cred.token_sha,
-                                   Jsonb(request), Jsonb(provenance)))
-    if row is None:  # the unique index met an identical pending or successful twin
-        twin = _one(conn, _TWIN_SQL, (account_id, cred.environment, Jsonb(request)))
+    _rows(conn, _ABANDON_SQL, (Jsonb(ABANDONED), account_id))
+    [row] = _rows(conn, _INSERT_SQL, (account_id, subject["listing_id"], cred.environment, cred.token_sha,
+                                      Jsonb(request), Jsonb(provenance))) or [None]
+    if row is None:  # the unique index met this ad's identical pending or successful twin
+        [twin] = _rows(conn, _TWIN_SQL, (account_id, cred.environment, subject["listing_id"],
+                                         Jsonb(request))) or [None]
         if twin is not None and twin["status"] == "success":
             return {"reused": True, "valuation": present(twin)}
         raise _refuse(409, "in_progress", "Stejný dotaz právě běží.")
@@ -490,6 +484,9 @@ def run(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: u
         response = exc.response
         error = {"code": exc.code, "http_status": exc.http_status, "message": exc.message}
     status = "failed" if error else "success"
-    done = _one(conn, _FINISH_SQL, (status, None if response is None else Jsonb(response),
-                                    None if error is None else Jsonb(error), row["id"]))
-    return {"reused": False, "valuation": present(done or row)}
+    [done] = _rows(conn, _FINISH_SQL, (status, None if response is None else Jsonb(response),
+                                       None if error is None else Jsonb(error), row["id"])) or [None]
+    if done is None:  # the sweep abandoned it mid-call: a paid answer with no row to land on
+        LOG.warning("VALUO answer lost row=%s status=%s", row["id"], status)
+        done = row | {"status": "failed", "error": ABANDONED}
+    return {"reused": False, "valuation": present(done)}

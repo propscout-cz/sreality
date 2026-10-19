@@ -111,7 +111,7 @@ def test_a_flat_maps_from_its_ad_and_its_property():
     assert prov["garages"]["note"] == "Garáž: ne → 0"
     assert prov["as_of"]["class"] == "assumed"
     assert prov["balcony_area"] == {"class": "missing", "from": {"column": "has_balcony", "value": True},
-                                    "note": "Inzerát uvádí balkon, ne jeho plochu."}
+                                    "note": "Inzerát uvádí balkon, ne plochu."}
     assert prov["rooms"] == {"class": "missing", "from": None, "note": None}
     assert "land_type" not in prov and "house_type" not in prov
     assert valuo.blocking(request) == []
@@ -189,9 +189,17 @@ def test_land_sends_its_plot_and_waits_for_the_land_type():
     assert valuo.blocking(request) == []
 
 
-def test_an_underground_floor_is_not_sent():
+def test_an_underground_floor_is_not_sent_unless_the_user_sends_it():
     request, prov = _build(FLAT | {"floor": -1})
     assert "floor" not in request and prov["floor"]["from"] == {"column": "floor", "value": -1}
+    request, prov = _build(FLAT | {"floor": -1}, overrides={"floor": -1})
+    assert request["floor"] == -1 and prov["floor"]["class"] == "user"
+
+
+def test_an_ad_value_valuo_cannot_take_is_not_sent():
+    request, prov = _build(FLAT | {"total_floors": 0, "garden_area": Decimal("0"), "parking_lots": 2})
+    assert "total_floors" not in request and "garden_area" not in request
+    assert request["parking_spaces"] == 2 and prov["parking_spaces"]["class"] == "property"
 
 
 def test_a_town_level_point_is_sent_as_inferred_with_its_note():
@@ -204,7 +212,7 @@ def test_overrides_are_validated_against_the_field():
     request, prov = _build(FLAT, overrides={"elevator": None, "as_of": "2025-06-30", "rooms": 3})
     assert "elevator" not in request and prov["elevator"]["class"] == "user"
     assert request["as_of"] == "2025-06-30" and request["rooms"] == 3
-    for bad in ({"rating": "perfect"}, {"floor": -2}, {"floor_area": 0}, {"elevator": "yes"},
+    for bad in ({"rating": "perfect"}, {"floor": -4}, {"floor_area": 0}, {"elevator": "yes"},
                 {"as_of": "30.6.2025"}, {"place": "Praha"}, {"property_type": "house"},
                 {"land_type": "garden"}, {"colour": "red"}, {"rooms": True}):
         with pytest.raises(valuo.OverrideError):
@@ -217,6 +225,8 @@ def test_overrides_are_validated_against_the_field():
     (FLAT | {"category_main": None}, STREET, "unsupported_type"),
     (FLAT, None, "no_location"),
     (FLAT, STREET | {"country_status": "foreign"}, "not_cz"),
+    (FLAT, STREET | {"country_status": "undetermined"}, "country_unverified"),
+    (FLAT, STREET | {"country_status": "disputed"}, "country_unverified"),
     (FLAT, STREET | {"precision": "coarse"}, "too_coarse"),
 ])
 def test_refusals_name_one_reason(subject, location, code):
@@ -245,10 +255,10 @@ class _Store:
     def cursor(self, row_factory: Any = None) -> _Cur:
         return _Cur(self)
 
-    def live_twin(self, account: Any, env: str, request: Any) -> dict[str, Any] | None:
+    def live_twin(self, account: Any, env: str, listing_id: int, request: Any) -> dict[str, Any] | None:
         key = json.dumps(request, sort_keys=True)
-        return next((r for r in self.rows if (r["_account"], r["environment"]) == (account, env)
-                     and json.dumps(r["request"], sort_keys=True) == key
+        return next((r for r in self.rows if (r["_account"], r["environment"], r["listing_id"])
+                     == (account, env, listing_id) and json.dumps(r["request"], sort_keys=True) == key
                      and r["status"] in ("pending", "success")), None)
 
 
@@ -268,7 +278,7 @@ class _Cur:
         rows = self.store.rows
         if text.startswith("insert into valuo_valuations"):
             account, listing_id, env, sha, request, provenance = p
-            if self.store.live_twin(account, env, request):
+            if self.store.live_twin(account, env, listing_id, request):
                 self.result = []
                 return
             row = {"id": len(rows) + 1, "created_at": datetime.now(timezone.utc), "listing_id": listing_id,
@@ -288,16 +298,13 @@ class _Cur:
             for r in hit:
                 r.update(status=status, response=response, error=error)
             self.result = hit
-        elif "where account_id = %s and environment = %s and request = %s" in text:
-            twin = self.store.live_twin(p[0], p[1], p[2])
+        elif "where account_id = %s and environment = %s and listing_id = %s" in text:
+            twin = self.store.live_twin(*p)
             self.result = [twin] if twin else []
         elif "where account_id = %s and listing_id in" in text:
             self.result = sorted((r for r in rows if r["_account"] == p[0]), key=lambda r: -r["id"])
         else:
             raise AssertionError(f"unexpected statement: {text}")
-
-    def fetchone(self) -> dict[str, Any] | None:
-        return self.result[0] if self.result else None
 
     def fetchall(self) -> list[dict[str, Any]]:
         return list(self.result)
@@ -456,6 +463,38 @@ def test_a_stale_pending_twin_is_abandoned_and_the_call_proceeds(client, world, 
     assert res.status_code == 200 and res.json()["valuation"]["status"] == "success"
     assert store.rows[0]["status"] == "failed" and store.rows[0]["error"]["code"] == "abandoned"
     assert len(world["calls"]) == 1
+
+
+def test_the_get_settles_a_call_the_api_died_during(client, world, store, monkeypatch):
+    _configure(monkeypatch)
+    store.rows.append({"id": 1, "created_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+                       "listing_id": 42, "environment": "sandbox", "status": "pending", "request": {},
+                       "provenance": {}, "response": None, "error": None, "_account": ACCOUNT, "_sha": "x"})
+    [row] = client.get("/properties/7/valuo", headers=AUTH).json()["history"]
+    assert row["status"] == "failed" and row["error"]["code"] == "abandoned"
+
+
+def test_another_ads_identical_request_is_its_own_call(client, world, store, monkeypatch):
+    _configure(monkeypatch)
+    _post(client)
+    world["subject"] = FLAT | {"listing_id": 99}
+    again = _post(client).json()
+    assert again["reused"] is False and again["valuation"]["listing_id"] == 99
+    assert len(world["calls"]) == 2
+
+
+def test_an_answer_landing_on_an_abandoned_row_is_logged_not_shown_as_running(
+        client, world, store, monkeypatch, caplog):
+    _configure(monkeypatch)
+
+    def slow_calculate(cred: valuo_client.Credential, request: dict[str, Any]) -> dict[str, Any]:
+        store.rows[0].update(status="failed", error=valuo.ABANDONED)
+        return {"success": True, "result": {"avg_price": 1}}
+
+    monkeypatch.setattr(valuo_client, "calculate", slow_calculate)
+    row = _post(client).json()["valuation"]
+    assert row["status"] == "failed" and row["error"]["code"] == "abandoned"
+    assert "VALUO answer lost" in caplog.text
 
 
 def test_a_valuo_failure_is_a_stored_failed_row_answered_200(client, world, store, monkeypatch):

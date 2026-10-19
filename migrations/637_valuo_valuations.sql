@@ -15,8 +15,9 @@
 --
 -- THE WRITE ORDER (api/valuo.py, the only writer). The row is INSERTed `pending` BEFORE the paid call and
 -- UPDATEd once to its terminal state; the partial unique index makes an identical request (same account,
--- environment and body, `as_of` included) either reuse a success or meet its own pending twin, so a double
--- click or a proxy retry cannot pay twice. A pending row older than two minutes is abandoned (`failed`).
+-- environment, ad and body, `as_of` included) either reuse a success or meet its own pending twin, so a
+-- double click or a proxy retry cannot pay twice. The ad is in the key so a reuse is always this property's
+-- own row. A pending row older than two minutes is abandoned (`failed`).
 --
 -- Posture: service-role only. RLS on with zero policies and everything revoked from the browser roles; the
 -- SPA reads its own account's rows through GET /properties/{id}/valuo.
@@ -54,7 +55,7 @@ create index if not exists valuo_valuations_listing_created_idx
   on public.valuo_valuations (listing_id, created_at desc);
 
 create unique index if not exists valuo_valuations_live_request_uidx
-  on public.valuo_valuations (account_id, environment, md5(request::text))
+  on public.valuo_valuations (account_id, environment, listing_id, md5(request::text))
   where status in ('pending', 'success');
 
 alter table public.valuo_valuations enable row level security;

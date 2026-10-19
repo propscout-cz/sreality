@@ -97,9 +97,9 @@ def test_an_identical_request_is_reused_not_paid_again(cur, flat, fake_valuo):
 def test_a_double_submit_meets_its_running_twin_and_pays_once(cur, flat, fake_valuo):
     subject, location = valuo._load(flat["conn"], flat["pid"])
     request, provenance = valuo.build_request(subject, location, {})
-    twin = valuo._one(flat["conn"], valuo._INSERT_SQL, (flat["account"], flat["lid"], CRED.environment,
-                                                         CRED.token_sha, Jsonb(request), Jsonb(provenance)))
-    assert twin is not None and twin["status"] == "pending"
+    [twin] = valuo._rows(flat["conn"], valuo._INSERT_SQL, (flat["account"], flat["lid"], CRED.environment,
+                                                            CRED.token_sha, Jsonb(request), Jsonb(provenance)))
+    assert twin["status"] == "pending"
     with pytest.raises(HTTPException) as err:
         _run(flat)
     assert err.value.status_code == 409
@@ -115,6 +115,28 @@ def test_a_stale_pending_row_is_abandoned_before_the_insert(cur, flat, fake_valu
     assert _run(flat)["valuation"]["status"] == "success"
     statuses = [(r[0], (r[5] or {}).get("code")) for r in _rows(cur, flat["account"])]
     assert statuses == [("failed", "abandoned"), ("success", None)]
+
+
+def test_the_page_settles_a_call_the_api_died_during(cur, flat):
+    cur.execute("INSERT INTO valuo_valuations (account_id, listing_id, environment, token_sha, request, "
+                "provenance, created_at) VALUES (%s, %s, 'sandbox', 'x', '{}', '{}', now() - interval '3 minutes')",
+                (flat["account"], flat["lid"]))
+    [row] = valuo.page(flat["conn"], flat["pid"], account_id=flat["account"], cred=CRED)["history"]
+    assert (row["status"], row["error"]["code"]) == ("failed", "abandoned")
+
+
+def test_another_propertys_identical_request_is_its_own_row(cur, flat, fake_valuo):
+    """The ad is in the dedupe key: a byte-identical request (same pin, area, rating) for a second property
+    is paid and stored for it, never answered with a row its own history cannot show."""
+    _run(flat)
+    pid = _property(cur)
+    lid = _advert(cur, pid, source="idnes", condition="dobry")
+    _located(cur, lid)
+    _recompute(cur, pid)
+    out = valuo.run(flat["conn"], pid, {}, account_id=flat["account"], cred=CRED)
+    assert out["reused"] is False and out["valuation"]["listing_id"] == lid
+    assert len(fake_valuo.pending_at_call) == 2 and len(_rows(cur, flat["account"])) == 2
+    assert [r[3] for r in _rows(cur, flat["account"])][0] == out["valuation"]["request"]
 
 
 def test_a_valuo_failure_is_a_failed_row_with_valuos_answer(cur, flat, fake_valuo):
