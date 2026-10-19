@@ -3,8 +3,8 @@
  * streamed Mapy static image, never a WebGL map), facts, description, the ads
  * with their portal links, the brokers and the registered sales near the
  * property — the desktop page's reads and rules, drawn at phone width. The
- * sections the phone reuses whole (price history, estimates, manual estimates,
- * freshness, tags + notes) are mounted by PhoneProperty. */
+ * sections the phone reuses whole (price history, estimates, freshness, tags +
+ * notes) are mounted by PhoneProperty. */
 
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';

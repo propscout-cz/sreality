@@ -203,8 +203,8 @@ helpers, `current_account_ids()` and `is_platform_admin()` (keyed off the JWT `s
 `account_members`/`admins`), are the **sole** definition point for every per-account RLS policy
 since — don't hand-roll a second way to check tenancy.
 
-Per-table RLS pattern, repeated across migrations 290 (6 curation tables: `collections`, `tags`,
-`property_notes`, `filter_presets`, `notification_subscriptions`, `manual_rental_estimates`),
+Per-table RLS pattern, repeated across migrations 290 (5 live curation tables: `collections`, `tags`,
+`property_notes`, `filter_presets`, `notification_subscriptions`; its sixth was dropped by 639),
 291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM), 292 (6
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,

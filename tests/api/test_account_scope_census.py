@@ -123,12 +123,6 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
         "of it. `valuo_valuations` is RLS-on with zero policies, so the account predicate is the sole "
         "gate (tenancy shape 3) — and a None is never carried: this helper 400s on it"
     ),
-    "api/manual_estimates.py::create_manual_estimate": (
-        "an admin-only (require_admin) SERVICE-ROLE write to shared reference data: "
-        "migration 290 makes `manual_rental_estimates.account_id` PROVENANCE only "
-        "(nullable, ON DELETE SET NULL, reads are platform-wide), so an admin with no "
-        "membership records NULL rather than being refused"
-    ),
 }
 
 
