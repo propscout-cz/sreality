@@ -22,7 +22,10 @@ name: "CI: schema replay + SQL correctness"
 # Advisory until added to branch protection as a required check.
 
 on:
+  # push only on main: a branch push beside its pull_request run made a same-named twin
+  # whose cancellation read as a failed required check.
   push:
+    branches: [main]
     paths:
       - "**/*.py"
       - "migrations/**"
@@ -45,6 +48,9 @@ jobs:
   schema-and-sql:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       PGHOST: localhost
       PGPORT: "5432"
@@ -53,6 +59,19 @@ jobs:
       PGDATABASE: postgres
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The PR merge commit plus its parents: HEAD^1 is the base it was merged onto.
+          fetch-depth: 2
+
+      # tests/test_migration_numbers.py sees one checkout; two open PRs that each took the
+      # same "next" number both pass it and collide on the second merge. Fails fast, before
+      # the replay; a GitHub API error only warns.
+      - name: No other open PR carries this PR's migration number
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 scripts/check_migration_pr_collisions.py --base HEAD^1
 
       - name: Build + start Postgres (PostGIS + pgvector)
         # Build the image so pgvector is installed at BUILD time — the server
