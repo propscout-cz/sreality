@@ -95,6 +95,29 @@ The earlier automatic detector. Its merges remain in the data; its logic was del
 consulted.
 _Avoid_: old engine, legacy engine, legacy dedup
 
+**Apply scope**:
+The area, a set of towns and Prague quarters with the deals it covers, inside which the engine may
+merge. The operator sets it; outside it the engine may still decide, but merges nothing.
+_Avoid_: allowlist, rollout area, trial blocks, shadow (for what lies outside it)
+
+**Generation**:
+One complete store of the engine's decisions over an area. The live generation, begun by a seed, is
+the one the engine keeps current as ads arrive and change and its realtime lane merges from; a
+fresh seed empties it and starts again.
+_Avoid_: version, run, batch, snapshot, shadow
+
+**Build**:
+The engine deciding, for the first time, every ad of an area it has just been seeded on. While it
+builds it merges nothing (your merges go on), so a build pauses its merges; it ends once every
+town and quarter of the area has been read and what is left undecided fits in one pass.
+_Avoid_: bootstrap (in prose), rebuild, backfill, seeding (that is how a build starts)
+
+**Lease**:
+The one lock that lets a single engine pass, seed or batch run work at a time. Each takes it for a
+fixed time (40 minutes for a pass, 5 hours for a seed or a batch run) and releases it when done;
+one its holder never released blocks the engine until that time runs out.
+_Avoid_: lock (alone), mutex, claim, latch
+
 ### What users add
 
 **Curation**:

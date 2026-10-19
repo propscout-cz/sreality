@@ -3942,9 +3942,9 @@ export const getAutodedupStats = (): Promise<{
  * browser (the Supabase client is pinned to `public`), and `listings` is RLS
  * deny-all, so there is no second path to this data.
  *
- * SHADOW MODE (D4). Nothing here applies a merge. A verdict is the operator's
- * opinion recorded against a pair or a cluster; a negative PAIR verdict also
- * writes a permanent must-not-link server-side. The UI never says "merged".
+ * Nothing here applies a merge. A verdict is the operator's opinion recorded
+ * against a pair or a cluster; a negative PAIR verdict also writes a permanent
+ * must-not-link server-side. The UI never says "merged".
  *
  * Every filter below is a KEY the server validates against its own registry —
  * these are the names, never a predicate.
@@ -4152,8 +4152,8 @@ export interface AutodedupConflictRow {
   created_at: string;
 }
 
-/* One row of `autodedup.clusters`. `status` is never 'applied' in this program
- * (D4) and `property_id` never set. */
+/* One row of `autodedup.clusters`. `status` is never 'applied' and `property_id`
+ * never set: the engine's merges are recorded in `autodedup.applied_merges`. */
 export interface AutodedupClusterRow {
   cluster_key: number;
   generation: string;

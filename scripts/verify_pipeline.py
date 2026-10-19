@@ -53,6 +53,7 @@ from scripts.checks.clock import (
     fetchone as _fetchone,
     statement_timeout_clause as _statement_timeout_clause,
 )
+from scripts.checks.dedup import check_dedup
 from scripts.checks.delisting import check_delisting
 from scripts.checks.platform import (
     check_capacity,
@@ -109,10 +110,6 @@ THRESHOLDS: dict[str, Any] = {
     "outbound_url_conformance_warn_share": 0.05,
     "outbound_url_conformance_cell_min": 3,
     "outbound_url_conformance_cell_fail_share": 0.67,
-    # The suppression rail is a binary invariant, not a gradient: one active
-    # suppression whose two identities sit under the same broker means a NO the
-    # operator recorded was bypassed. No warn tier — there is no "slightly merged".
-    "broker_suppression_violations_fail": 1,
     # --- per-m2 measure plausibility (W9) -----------------------------------
     # Every number below is sized against a live measurement of production on
     # 2026-08-25, BEFORE the W2 backfill healed the two defects — so each one is
@@ -410,6 +407,32 @@ THRESHOLDS: dict[str, Any] = {
     "coverage_unnominated_warn": 25,
     # Problem at 100: 422 today, 124 on ceskereality and 298 on realitymix (a filed parser issue).
     "coverage_unnominated_fail": 100,
+    # --- dedup (engine alarm): are rulings honoured, is the engine deciding and merging ---
+    # Rulings are binary: Problem at 1 pair ruled apart that the engine merged after the ruling
+    # (live 0 of 765), or at 1 active broker suppression whose two identities share a broker.
+    "dedup_rulings_fail": 1,
+    # Decisions an hour over 3 h, clipped at the build start and the last brake lift: Problem at 0
+    # with ads waiting and the lane on. The 10-02 stall decided nothing; builds ran 100-16,300/h
+    # (the Prague build's first wave 16,275; 1,771-7,654 once the blocks were walked).
+    "dedup_build_window_h": 3,
+    # Watch past an ETA of 7 d (a lower bound: ads waiting / that rate); the largest ETA 50.7 h.
+    "dedup_build_eta_warn_d": 7,
+    # The engine's newest merge while building: Watch past 48 h, never Problem (Prague's: 52.3 h).
+    "dedup_pause_warn_h": 48,
+    # In-scope ads first seen 1-24 h ago with no decision, Wilson LB: Watch past 1 % (healthy: 0).
+    "dedup_lag_warn": 0.01,
+    # Problem past 10 %: arrival to decision p50 10.8 / p90 55.9 min; the 10-19 stall read 13.1 %
+    # undecided (lower bound 10.2 %) at 09:00Z, Problem.
+    "dedup_lag_fail": 0.10,
+    # Under 20 ads in that cohort the arm is Not measured (about 400 arrive in scope a day).
+    "dedup_lag_min_n": 20,
+    # Problem past expiry by more than the lane's interval + 10 min, counted from the later of the
+    # expiry, the last brake lift and the build end: 8-10 strands, each re-taken in ~1 min.
+    "dedup_lease_fail_past_expiry_min": 10,
+    # Splits: Wilson LB of the engine's 7-14 d old merge groups an operator split; Watch past 2 %...
+    "dedup_splits_warn": 0.02,
+    # ...over at least 100 groups, else Not measured (10-19: 0 of 149; 7 of 8,319 ever split).
+    "dedup_splits_min_groups": 100,
     # --- the registry ---------------------------------------------------------------------
     # GitHub delivers a scheduled run up to ~13.3 h late, so its keys stale at cadence + 18 h.
     "GITHUB_DELIVERY_SLACK_S": 18 * 3_600,
@@ -589,52 +612,6 @@ def _status_for_median_shift(
 
 
 # --- checks ----------------------------------------------------------------
-
-_BROKER_SUPPRESSION_SQL = """
-select
-  (select count(*) from broker_merge_suppressions where lifted_at is null) as active,
-  (select count(*) from broker_merge_suppressions where lifted_at is not null) as lifted,
-  (select count(*) from broker_merge_suppressions s
-     join broker_identities lo on lo.id = s.identity_lo
-     join broker_identities hi on hi.id = s.identity_hi
-    where s.lifted_at is null and lo.broker_id is not null
-      and lo.broker_id = hi.broker_id) as violations
-"""
-
-
-def check_broker_merge_suppression(
-    conn: Any, thresholds: dict[str, Any],
-) -> dict[str, Any]:
-    """Assert the one invariant the suppression rail exists to hold: two identities
-    the operator separated (unmerge) or refused (dismiss) never end up under one
-    broker again while the suppression is active. The nightly sweep re-derives its
-    whole candidate set from broker_identity_contacts, so before the rail an undone
-    merge simply came back the next night; a violation here means it was bypassed —
-    a lift that should have been recorded, a merge path that skips the rail, or the
-    apply-time backstop failing. An explicit operator merge LIFTS the suppression,
-    so a legitimate override never shows up as one."""
-    row = _fetchone(conn, _BROKER_SUPPRESSION_SQL)
-    active, lifted, violations = (
-        (0, 0, 0) if row is None
-        else (int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)))
-    fail_at = int(thresholds["broker_suppression_violations_fail"])
-    status = "fail" if violations >= fail_at else "ok"
-    message = (
-        f"{violations} active broker merge suppression(s) are co-located under one "
-        "broker — an operator NO was bypassed; check broker_merge_suppressions "
-        "against broker_identities.broker_id and the sweep's suppressed_pairs count."
-        if status == "fail"
-        else f"Broker merge suppressions holding ({active} active, {lifted} lifted)."
-    )
-    return {
-        "check_key": "broker_merge_suppression",
-        "status": status,
-        "value": violations,
-        "details": {"active_suppressions": active, "lifted": lifted,
-                    "violations": violations},
-        "message": message,
-    }
-
 
 _PLAUSIBILITY_COLS = (
     "source", "category_main", "category_type", "price_per_m2_basis", "n_active",
@@ -1792,8 +1769,8 @@ CHECKS: tuple[Check, ...] = (
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
           _GITHUB, _SIX_HOURLY, "Location coverage", unit="ads",
           owner_path="/location-quality"),
-    # The worker's health lane measures these seven (scripts/checks/: platform, then the portal
-    # checks). GitHub keeps what needs it: migration_drift reads a checkout, the outbound probe
+    # The worker's health lane measures these eight (scripts/checks/: platform, the portal checks,
+    # then dedup). GitHub keeps what needs it: migration_drift reads a checkout, the outbound probe
     # an address that is not the scrapers'.
     Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
           unit="cells"),
@@ -1809,9 +1786,8 @@ CHECKS: tuple[Check, ...] = (
           "Delisting", unit="cells"),
     Check("coverage", check_coverage, "coverage", "gauge", _WORKER, _HOURLY, "Coverage",
           unit="cells"),
-    Check("broker_merge_suppression", check_broker_merge_suppression, "dedup", "alarm",
-          _GITHUB, _HOURLY, "Broker merge rulings", unit="pairs",
-          owner_path="/brokers/review"),
+    Check("dedup", check_dedup, "dedup", "alarm", _WORKER, _TEN_MINUTES, "Engine",
+          unit="cells", owner_path="/autodedup/progress"),
     Check("ppm2_median_shift", check_ppm2_median_shift, "data_quality", "alarm", _GITHUB,
           _SIX_HOURLY, "Kč/m² median shift", unit="×"),
     Check("ppm2_basis_floor_share", check_ppm2_basis_floor_share, "data_quality", "gauge",

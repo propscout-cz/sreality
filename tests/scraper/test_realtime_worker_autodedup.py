@@ -134,7 +134,6 @@ def _summary(**over: Any) -> dict[str, Any]:
                    "ledger_skipped": 31, "ledger_written": 6, "dirty": 30,
                    "reads": {"claim": 12, "decided": 9}},
         "aborted": "",
-        "latency_s": {"n": 12, "p50": 310.2, "p95": 355.0},
         "claim_bound": {"bound_by": "count", "limit": 100},
         "reconcile": {"counts": {"applied": 2}},
         "peak_rss_mb": 412.5,
@@ -288,8 +287,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
     assert last == {
         "ran": True, "claimed": 12, "scored": 40, "grouped": 3, "merged": 2, "skipped": 0,
         "errors": 0, "seconds": last["seconds"], "held": 1, "retired": 0, "reconcile": "ran",
-        "deadline_exceeded": False, "latency_p50_s": 310.2, "latency_p95_s": 355.0,
-        "bound_by": "time", "reconcile_groups": 0, "reconcile_seconds": None,
+        "deadline_exceeded": False, "bound_by": "time", "reconcile_groups": 0,
+        "reconcile_seconds": None,
         # E951: the budget the claim was cut from (a build's 787.5 s), and the doubled rate
         "pass_budget_s": 787.5, "rate_doubled": True,
         "reconcile_refused": 0, "reconcile_failed": 0, "reconcile_waiting": 0,

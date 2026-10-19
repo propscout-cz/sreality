@@ -22,9 +22,9 @@ checks that are DUE: newest row older than `cadence_s` less a slack of min(caden
 comes a few minutes short of a full cadence after the last one does not skip a whole cadence. Only
 rows written since the key's `declared_at` count, as for the page and the ladder, so a newly
 registered or re-declared key is due in the run that projects it. Since wave 3 the platform alarms `jobs`, `capacity` and
-`llm`, and since wave 4 the portal checks `scraping`, `publishing`, `delisting` and `coverage`, are hosted on the worker
-and measured by its health lane (below); every other key is `github-actions`-hosted and
-measured by the middle step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
+`llm`, since wave 4 the portal checks `scraping`, `publishing`, `delisting` and `coverage`, and since Health dashboard
+sprint wave 5 the engine check `dedup` are hosted on the worker and measured by its health lane (below); every other
+key is `github-actions`-hosted and measured by the middle step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
 concurrency group, `pipeline-verification`, keeps two runs from measuring a check twice); the
 weekly `outbound_url_conformance` probe rides whichever run finds it due. No result reds a run
 (`--exit-nonzero-on-fail` is gone since wave 2): the canary's
@@ -45,11 +45,12 @@ pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, t
 ladder and every alarm are alive, and the canary checks the watcher and the ladder from GitHub
 ("Hosts, the watcher and the canary" below). The harness exists because the pipeline
 stalled silently for two days in 2026-07 (Anthropic credit exhaustion, 38k+ failed LLM calls) and
-the only alarm was a failing GH Actions cron the operator happened to miss. Among the registered
-checks: `broker_merge_suppression` (migration 401): active `broker_merge_suppressions` rows whose two
-identities share one broker — the invariant the suppression rail exists to hold. `fail` on the
-first violation, no warn tier. An operator NO (unmerge / dismissing a `contact_bridge_review`
-candidate) writes a suppression row keyed on the durable identity pair; the sweep loads the active
+the only alarm was a failing GH Actions cron the operator happened to miss. The broker suppression
+rail (migration 401) is judged by the `dedup` check's `rulings/brokers` cell since Health dashboard
+sprint wave 5 (below), with the retired `broker_merge_suppression` check's SQL moved verbatim:
+active `broker_merge_suppressions` rows whose two identities share one broker — the invariant the
+rail exists to hold — read Problem at the first, with no Watch tier. An operator NO (unmerge /
+dismissing a `contact_bridge_review` candidate) writes a suppression row keyed on the durable identity pair; the sweep loads the active
 set once and it gates BOTH `decide_merges` (the pair reaches neither auto-merge nor review —
 including through the oversized-component downgrade) and `_apply_merges` (a whole component that
 would newly co-locate a suppressed pair is dropped and logged — the transitive chain the pure layer
@@ -79,6 +80,9 @@ cell: a completed cycle (one run, or two through `app_settings.property_sweep_cu
 GitHub's 18 h delivery slack keeps its Problem at 56 h, as ruled for the two-run cycle; its 52 h
 Watch is gone, because an artifact cell has no Watch tier, and the sweep's own RED exit is the
 faster alarm. Their thresholds, SQL and tests went with them.
+Health dashboard sprint wave 5 retired `broker_merge_suppression` (hourly, on GitHub) into the
+`dedup` check's `rulings/brokers` cell (every 10 min, on the worker); its threshold
+(`broker_suppression_violations_fail`), its check function and its tests went with it.
 Four **per-m² plausibility** checks joined in W9 of the measure-unification program
 (migration 427, view `measure_plausibility_by_source`, one read per run shared by all four;
 they are registered at a 6-hour cadence, not hourly — a 12 s
@@ -140,8 +144,9 @@ nothing is `warn` ("compared NOTHING"), not a stable 1.00x; an empty view read (
 applied yet) is `unknown` naming the cause, never `ok` and never four red tiles.
 
 The six dedup-specific checks (street/geo debt, eligibility funnel,
-merge latency, engine health, merge-precision sample) went with the engine, along with their
-`pipeline_check_thresholds` rows.
+merge latency, engine health, merge-precision sample) went with the removed engine, along with
+their `pipeline_check_thresholds` rows. The engine that merges today is judged by the `dedup`
+check (Health dashboard sprint wave 5, below), which reads none of their stores (rule 15).
 
 ## Walks, queues, lanes and migrations — rationale moved out of the skill (2026-10-18)
 
@@ -601,7 +606,7 @@ is public) through `reconcile`, and asserts no recovery while a key's newest row
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
 fails the whole window. Its registry copy is host-aware since wave 3 (3 × cadence on the worker,
 cadence + 18 h on GitHub), and its fixture has held the surviving keys only since wave 4, which
-re-exported it with the header's SQL when the seven portal keys retired; the worker's seven
+re-exported it with the header's SQL when the seven portal keys retired; the worker's eight
 checks have input replays of their own (below).
 
 **Cutover.** After the deploy the ladder sends one grouped onset per currently failing check,
@@ -639,15 +644,16 @@ runtime the health system depends on an observer that does not run inside it. A 
 (`Check.host`, mirrored into `health_checks.host`) is where it is measured, and each host projects
 and deletes only its own registry rows:
 
-- **`github-actions`**: 13 keys since wave 4 (20 in wave 3, all 28 in wave 2), measured by the
-  canary's middle step at their cadences; waves 5–6 move the rest to the worker as they rebuild
-  them. Two stay for
+- **`github-actions`**: 12 keys since Health dashboard sprint wave 5 (13 in wave 4, 20 in wave 3,
+  all 28 in wave 2), measured by the canary's middle step at their cadences; wave 6 moves the rest
+  to the worker as it rebuilds them. Two stay for
   good: `migration_drift` needs the repository checkout, and the weekly URL probe needs an address
   other than the scrapers'.
 - **`pg_cron`**: `liveness`, the one watcher — a SQL function, not a `Check`, that upserts its own
   registry row.
 - **`realtime-worker`**: `jobs`, `capacity` and `llm` since wave 3, `scraping`, `publishing`,
-  `delisting` and the `coverage` gauge since wave 4, measured by the worker's health lane (below).
+  `delisting` and the `coverage` gauge since wave 4, `dedup` since Health dashboard sprint wave 5,
+  measured by the worker's health lane (below).
 
 **`run_due`.** `verify_pipeline.run_due(conn, thresholds, host, *, now, on_result=insert_result, lane_budget_s=None)`
 reads which of the host's checks are due from the database (`due_checks`, so a restart re-runs
@@ -694,8 +700,8 @@ any key; it never fired), which 620 unschedules and 624 drops.
 **The canary: `verify_pipeline.yml`**, "Monitoring: health canary (hourly)": cron `15 * * * *`
 plus a manual dispatch whose `dry_run` input reaches the harness step only. GitHub delivers about
 five of its runs a day (median gap ~4.9 h). One job — 35 minutes while it carries the legacy keys (the poller step 5, the harness step 21 for
-its budgets plus 180 s headroom, 8 for setup and the assertions; 13 budgets summing to 660 s since
-wave 4, 20 and 1,050 s in wave 3, 28 and 1,410 s before),
+its budgets plus 180 s headroom, 8 for setup and the assertions; 12 budgets summing to 615 s since
+Health dashboard sprint wave 5, 13 and 660 s in wave 4, 20 and 1,050 s in wave 3, 28 and 1,410 s before),
 concurrency group `pipeline-verification` (never cancelled in progress), permissions
 `contents: read` and `actions: read`, env `SUPABASE_DB_URL` and `GITHUB_TOKEN` — in three steps:
 
@@ -749,8 +755,9 @@ check measured elsewhere — the watcher's, or the worker's.
 - **The worker** (its health lane, since wave 3) runs the platform checks: `jobs` watches every
   production GitHub workflow (through the canary's poller, whose cursor is its `gh/poller` cell),
   every pg_cron job (`health-liveness` included), every worker lane and every derived artifact.
-  Since wave 4 it also runs the portal checks (`scraping`, `publishing`, `delisting`, `coverage`).
-  The watcher's `health_lane` cell watches the lane; waves 5–6 move the remaining checks to it.
+  Since wave 4 it also runs the portal checks (`scraping`, `publishing`, `delisting`, `coverage`),
+  and since Health dashboard sprint wave 5 the engine check (`dedup`). The watcher's `health_lane`
+  cell watches the lane; wave 6 moves the remaining checks to it.
 
 **Known gap.** A clean API shutdown leaves the lease NULL, which reads Not measured, not Problem:
 that is every deploy's normal state until the new process's first pass claims the lease. An API
@@ -770,8 +777,8 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   every deploy re-projects the worker's keys and deletes its undeclared ones, touching no other
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
-  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (360 s since wave 4: 8 × 45 s, its seven checks and
-  wave 5's dedup; 300 s in wave 3), which measures the due worker-hosted checks,
+  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (360 s since wave 4: 8 × 45 s, its eight checks since
+  Health dashboard sprint wave 5 and seven in wave 4; 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
 - once per 24 h in each process, the 35-day prune the operator ruled (Q5): `delete from
   pipeline_check_results where run_at < now() - interval '35 days'`, 10,000 rows at a time by
@@ -782,8 +789,8 @@ Its heartbeat `last` is `{"measured": [keys], "pruned": n}`. The worker imports
 dockerignored, which only `migration_drift` reads, and that check stays on GitHub);
 `verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
 worker's keys carry the 45 s per-check budget and a staleness budget of 3 × cadence (30 min for
-`jobs`, `llm`, `scraping`, `publishing` and `delisting`, 90 min for `capacity`, 3 h for the
-`coverage` gauge), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
+`jobs`, `llm`, `scraping`, `publishing`, `delisting` and `dedup`, 90 min for `capacity`, 3 h for
+the `coverage` gauge), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
 (it covers alarms only: a stopped gauge just reads Not measured on the page), its `health_lane` cell (no completed
 pass, a pass in flight or a failing spell for 10 min, which a full 360 s pass and its 60 s tick stay
 under) tells a stopped lane, and the lane is a `lane/health` job cell like any other.
@@ -841,7 +848,20 @@ worker's role already reads the cron tables, and the check reads them defensivel
 **Worker lanes**, from the newest `worker_heartbeats` row: its `details` per lane, and the worker's
 uptime from `started_at`. One `lane/<lane>` cell per lane carries the WORST of its conditions, each
 named in `facts.conditions`; the `heartbeat` lane has no cell (the watcher judges the beat), and
-`health` is judged like any lane.
+`health` is judged like any lane. Since Health dashboard sprint wave 5 a last pass that aborted
+reads Watch and, when a second pass aborts, Problem (the table); a clean pass recovers it. An
+abort is a completed pass to the heartbeat (`failed_passes` never counts it: the engine's lane
+livelocked for hours on 2026-10-19 while its cell read OK). The heartbeat replaces `last` when a
+pass completes or is refused, so one abort is read again while the next pass runs long or raises:
+a re-read keeps a Problem only the abort condition itself read (`facts.conditions` holds "fail: its
+last pass aborted…"), never one the cell read for another reason. Only `last.aborted` is read, and
+only as a non-empty reason string, which no lane but the engine's writes (`pair_budget`,
+`deadline`; fact `last_aborted`); its shutdown aborts, `stopping` (the worker is shutting down) and
+`lease_lost` (its lease was released under the pass), are no livelock and are not read (the check
+imports both from `autodedup.incremental_lane`). A refusal is a failed pass already, judged by the
+failing rule; the other lanes' `last.errors` count per-item failures inside completed passes;
+`text_extract`'s boolean `aborted` marks a pass its budget bounded; and a failed re-cut
+(`last.recut_failed`) has no arm.
 
 | reads | when |
 | --- | --- |
@@ -851,7 +871,8 @@ named in `facts.conditions`; the `heartbeat` lane has no cell (the watcher judge
 | Problem, late | `now − last_pass_at` > max(3 × `interval_s`, `interval_s` + 2 × `last_duration_s`, 15 min) (`jobs_lane_floor_s`), once the worker has been up longer than that bound; a lane with no pass yet counts from the worker's start; a lane with no pass in this process counts from the worker's boot, or from this check's previous measurement when the lane read off then (switched on after boot) |
 | Problem, failing | `failing_since` older than max(3 × `interval_s`, 15 min), or set at all when `interval_s` ≥ 1 h (`jobs_lane_daily_interval_s`; a daily lane passes about once per boot) |
 | Problem, in flight | a pass running more than 1,800 s (`jobs_lane_inflight_fail_s`, `LANE_PASS_TIMEOUT_SECONDS`) |
-| Watch | a pass running more than 1,200 s (`jobs_lane_inflight_warn_s`); the newest pass failed (`failing_since` set, not yet old); flapping: since this check's previous result, at least half of the lane's attempts failed (`jobs_lane_flap_share`, 0.5), that is `failed_passes` grew at least as much as `passes`, which counts completed passes only, over at least 3 attempts (`jobs_lane_flap_min_passes`) |
+| Problem, aborted again | the last pass aborted (`last.aborted`, a non-empty reason string other than the engine's shutdown aborts `stopping` and `lease_lost`), this check's previous measurement read an abort too, and the lane's `passes` has advanced since: a second pass aborted (the heartbeat replaces `last` when a pass completes or is refused, so one abort read twice while the next pass runs or raises stays Watch); or, with `passes` not advanced, the previous measurement's abort condition itself read Problem: the re-read keeps it ("its last pass aborted: pair_budget, after an earlier aborted pass"), while a Problem the cell read for another reason (late, failing) leaves one abort a Watch condition |
+| Watch | a pass running more than 1,200 s (`jobs_lane_inflight_warn_s`); the newest pass failed (`failing_since` set, not yet old); flapping: since this check's previous result, at least half of the lane's attempts failed (`jobs_lane_flap_share`, 0.5), that is `failed_passes` grew at least as much as `passes`, which counts completed passes only, over at least 3 attempts (`jobs_lane_flap_min_passes`); the last pass aborted (`last.aborted`, a non-empty reason string: the engine's `pair_budget` or `deadline`) |
 | no cell | the worker has been up under 15 min and the lane has not passed in this process yet |
 
 A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
@@ -1279,6 +1300,188 @@ list and the declared-total key rather than spell them, never joins on `sreality
 "maximum values" where English would say "maxima". It imports the queue priorities,
 `delist_policy`'s constants and the served-location rule by convention: numbers and SQL the rail
 cannot see.
+
+## `dedup` — is the engine deciding and merging, and does production honour your rulings? (Health dashboard sprint wave 5)
+
+`check_dedup` (`scripts/checks/dedup.py`; an alarm on the worker, cadence 600 s, label "Engine", unit
+"cells", owner page `/autodedup/progress`, after `coverage` in `CHECKS`). Its words (`GLOSSARY.md`
+§ Changing what belongs together): the **engine** merges only inside the **apply scope**
+(`app_settings.autodedup_apply_scope`), decides into the **live generation**
+(`autodedup.incremental.GENERATION`), pauses its merges while it **builds** an area it was just
+seeded on (`autodedup.settings` `rt_bootstrap:rt`), and runs one pass, seed or batch run at a time
+under the **lease** (`autodedup.rt_lease`). An ad's **decision** is its `autodedup.rt_fp` row:
+`first_decided_at` is stamped at the start of the pass that committed it and kept on every later
+refresh. An **engine merge** is a live `property_merge_events` row whose `source` is
+`autodedup.apply.MERGE_SOURCE`, an **operator merge** one whose `source` is `'operator'`; a split's
+birth rows (`property_identity.BIRTH_REASONS`) are not merges, and the joins of a split by letters
+are operator merges. A raised, late or stuck pass stays the `jobs` check's `lane/autodedup` cell;
+this check judges what the engine's own stores say.
+
+**The state is a fact, never a status.** Every cell carries `facts.state`. In precedence order:
+**off** (`realtime_autodedup_interval_seconds` absent, unparseable or ≤ 0, the key imported from
+`autodedup.apply`), **building** (`rt_bootstrap:rt` true under `incremental.setting_flag`),
+**merging** (the apply scope admits a live merge, parsed with `apply.Scope`) and **idle**
+(otherwise: the engine decides, and merges nothing). An arm the state makes irrelevant reads OK
+with the state and the reason in its message, never omitted, because an omitted subject would leave
+its incident open for 7 days.
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `state` | `<state> since <ago>`; facts `state`, `state_since`, `interval_s`, `scope_blocks`, `seed_version`, `newest_merge_age_s`, `last_commit_age_s` (the `rt_new` scan cursor's `updated_at`; a committed pass rewrites it only when its new-feed window held rows, so on a corpus with no new ad at all it ages while passes still commit), and merge groups in 24 h and 7 d, `merges_24h_engine`, `merges_7d_engine`, `merges_24h_operator`, `merges_7d_operator` | never | never |
+| `stream` | while the lane is on, whether the live stream is live: not when the area is unseeded (no `rt_calibration` row), its seed version (`rt_seed_version:rt`) is not `incremental.SEED_VERSION` (production merges stop silently: this is their only signal), or the store is absent (`RT_STORE_PRESENT_SQL`); the message names which | any of the three | never |
+| `build` | while building: first decisions per hour in the last 3 h (`dedup_build_window_h`), the window clipped at the build's start (`rt_bootstrap:rt` `updated_at`) and at the last brake lift (the newest `app_settings_history` row of the interval key whose stored OLD value is 0); the backlog (`RT_SCOPE_BACKLOG_SQL`, bound as the lane binds it) and ETA = backlog / rate, a lower bound; facts `blocks_total` and `blocks_walked` (`RT_SCOPE_SCAN_SEEN_SQL`) | the ETA above 7 d (`dedup_build_eta_warn_d`) | 0 decisions in a clipped window at least 3 h long, with backlog > 0 and the lane not braked |
+| `merge_pause` | while building: hours since the newest engine merge, measured from the build's start (operator merges go on during a build and do not count) | above 48 h (`dedup_pause_warn_h`) | never (Q3) |
+| `decision_lag` | while merging or idle: of the ads in the engine's area first seen 1-24 h ago (the lane's own new-feed statement, `RT_NEW_LISTINGS_SQL`, imported whole, with `RT_FP_READ_SQL` for their decisions in place of the contract's `RT_KNOWN_SQL`: the same predicate plus the first-decision stamp), the share with no decision, judged on its Wilson lower bound; Not measured within 24 h of a brake lift, a build's end, a seed or an engine change, unless the lane has stalled, or a Problem this arm read is still open and the cohort is clean, which then reads OK through the excuse (below); facts `n`, `undecided`, `share`, `lower_bound`, and `p50_min` / `p90_min` arrival to decision over the decided part, and while a Problem is open `open_reading`, `opened_at` and `recovering_since` | above 1 % (`dedup_lag_warn`) | above 10 % (`dedup_lag_fail`) |
+| `lease` | the `rt_lease` row (`RT_LEASE_READ_SQL`, imported); facts `holder_kind` (`pass`, `seed`, `dispatch`, `other` or `none`), `remaining_s` and, for an ended lease, `past_expiry_s`, `untaken_s`, `untaken_since` and `ended_by` (release or expiry) | a live lease held by anything but the live worker, after a 120 s deploy grace: a predecessor's pass (a pass holder whose start, its third field, is before the worker's `worker_heartbeats.started_at`), a seed, a batch run or an unknown holder | while merging or idle and seeded, no pass has taken the lease for the lane's interval + 10 min (`dedup_lease_fail_past_expiry_min`; 11 min at the 60 s interval), counted from the latest of its expiry, the last brake lift and the build's end: the lane stopped taking it |
+| `rulings/ads` | pairs whose standing negative ruling (the newest `autodedup.verdicts` row per pair in `ui_sql.NEGATIVE_VERDICTS`, or a `must_not_link` row of any source) has both ads on one property now while either ad carries a live engine merge newer than the ruling, timed at the start of its current negative spell; facts `breaches`, `negatives` (standing pairs), `together_now` and `set_rulings_unjudged` | never | 1 or more (`dedup_rulings_fail`) |
+| `rulings/brokers` | active `broker_merge_suppressions` whose two identities share a broker (the retired check's SQL, verbatim); facts `active`, `lifted`, `violations` | never | 1 or more (`dedup_rulings_fail`) |
+| `splits` | of the engine's merge groups created 7-14 d ago (a matured cohort: an operator had a week to notice), the share with a member an operator split off (`undone_by` not the engine's own `mode=unapply`, `UNAPPLY_BY_PREFIX`), judged on its Wilson lower bound; facts `groups`, `split`, `share`, `lower_bound` and `unapplied` (the engine's own unapply, a fact) | above 2 % (`dedup_splits_warn`) with at least 100 groups (`dedup_splits_min_groups`) | never |
+
+Each cell's `value` is the number it is judged on: decisions per hour (`build`), hours
+(`merge_pause`), the raw undecided share in percent (`decision_lag`), `remaining_s` or, once it has
+ended, the minutes the lease has gone untaken on the Problem's clock (`lease`), breaches and
+violations (`rulings/*`), the raw split share in percent (`splits`), none for `state` and `stream`;
+the shares follow wave 4's convention, the bound in `facts.lower_bound` and in the message.
+`together_now` counts ruled-apart pairs sharing a property by any path, read from
+`listings.property_id` alone (no ledger read): the operator's pending splits, a fact, never a
+status. The `splits` message reads "N of M groups the engine merged 7-14 d ago were split by an
+operator (x %; lower bound y %)".
+
+Minimum evidence: `decision_lag` needs 20 ads (`dedup_lag_min_n`). It reads Not measured while the
+lane is off or building ("building") and, with the reason, when a brake lift, a build's end, a seed
+(`rt_seed_version:rt` `updated_at`) or an engine change (`rt_engine:rt` `since`: E960 re-decides the
+old engine's groups within 12 h, and arrivals wait) sits inside the window's 24 h, because brakes,
+builds, seeds and engine changes are not lag. Two rules reach through the four excuses, the stall
+rule always and the recovery rule only for an OK. The stall rule: once no pass has committed a new
+ad for an hour, counted from the latest of the `rt_new` stamp, the last brake lift and the build's
+end, a lane that stopped deciding is judged whatever changed, and the message names the excuses it
+overrides. The recovery rule exists because Not measured is inert on the ladder, which closes an
+incident only on a second stored OK at least 1,800 s after the first, measured on `run_at`: an
+incident the excuses hid would otherwise wait up to a day for them to age out. A Problem opens the
+reading (`open_reading`, with `opened_at` the Problem's time, unchanged while it is open); a Watch
+opens nothing, as it opens no incident. While the reading is open and an excuse holds (the lane has
+not stalled), the cohort is read anyway: a clean one reads OK, its message ending "judged through
+the brake of the last 24 h so the open reading can recover", and one that would read Watch or
+Problem reads the excuse's Not measured message as before, because the excuses' backlogs are not
+lag; a reading judged through an excuse is therefore OK or Not measured, never a new onset or a
+reminder. With no excuse the arm is judged as usual. Every OK sets `recovering_since` when it is
+unset, a Watch or a Problem clears it (the ladder resets its own clock on any measured non-OK), and a
+Not measured reading carries it with `open_reading` and `opened_at`. The reading closes, and the arm follows the excuses again, when the previous stored
+reading was an OK whose `run_at` lies at least 2,400 s after `recovering_since` (`_RECOVERY_S`: the
+ladder's 1,800 s hold plus one 600 s cadence, measured time as the ladder's own recovery is, so a
+gap with no stored reading never expires it), when `opened_at` is older than 7 days (the ladder's
+unmeasured close), or when a seed or a build start follows `opened_at` (a new generation: the
+opening reading's cohort is gone).
+`splits` needs 100 groups, else Not measured. `build` reads OK "waiting for the walk of N blocks"
+when the backlog is 0 but blocks are still unwalked.
+
+Basis (the design's § 4, re-measured on 2026-10-19 where it had moved). Build: the Prague build
+(seeded 10-16 16:27Z, done 10-18 about 20:10Z) decided 6,659-16,275 ads an hour in its first wave
+(the 60 blocks the seed walked) and 1,771-7,654 in its second (median about 3,000; the design's band
+was 3,000-7,600), its largest ETA 50.7 h; the 10-02 statement-timeout stall decided nothing for
+about 27 h, braked for about 22 h of it. From 10-16 22:00Z to 10-17 16:00Z the build decided 1,583
+ads in 18 h (the design's ~90/h) because the seed's walk had spent the day's 60 block scans
+(`MAX_ENTER_SCANS_PER_DAY`): the other 60 blocks, about 95k ads, waited for the walk of 10-17
+16:28Z, and as they had no snapshot rows the backlog read about 0, so the ETA was about 0, not the
+design's ~30 d Watch. The cell reads that wait as OK "waiting for the walk of 60 blocks" and its
+facts name the blocks; the design's "64,432 of 155,801" was read after that walk.
+`RT_SCOPE_BACKLOG_SQL` ran 101 ms on 10-19 (the design's 48 ms was a smaller store's). Merge pause:
+the Prague build paused the engine's merges 52.3 h (10-16 16:01Z → 10-18 20:17Z; the design's 29 h
+was read mid-build), so Watch for its last ~4 h, and the S1-widened build of 10-10 → 10-13 about 80
+h, Watch for about 32 h. Decision lag: on 10-19 at 08:32Z, 41 of 414 such ads were undecided (9.9 %,
+lower bound 7.4 %), all newer than the `rt_new` cursor (no decision pass had committed since
+07:55Z), and at 09:00Z, an hour past the last commit, the stall rule judged 55 of 421 (13.1 %, lower
+bound 10.2 %): Problem; arrival to decision over the decided 373 was p50 10.8 min, p90 55.9 min, not
+the design's 5.9 / 8.0 min, with the 10-18/19 merge-window brake and the slow passes after 04:25Z
+inside the window. An as-of replay every 2 h from the durable stamps read 2.5-4.7 % (lower bound) at
+the end of that 5 h brake, which the brake exclusion keeps Not measured. Lease: a pass takes it for
+40 min (`LEASE_TTL_S`), a seed or batch run for 5 h (`DISPATCH_TTL_S`); every deploy shows the old
+container's lease to the new worker for about a minute, until the old container's SIGTERM path
+releases it (E941), hence the grace; the 8-10 strands on record (10-03 to 10-12) each ended by the
+TTL or a hand release and were re-taken within about a minute: Watch at most, never Problem. A brake
+leaves the lease as old as itself (14 lifts in 28 d), so Problem counts from the latest of the
+expiry, the last lift and the build's end, and a strand a database restart leaves under the live
+process (10-10 05:57Z) reads OK until the next deploy: no store tells its dead pass from a working
+one. Rulings: 765 standing negative pair rulings, the same 765 pairs as `must_not_link`, and 0
+breaches; one ruled-apart pair shares a property, held there by the removed engine's merges
+(`together_now`). The engine's two false merges on record (10-01 and 10-03) were ruled after they
+merged, so they are not breaches; from 10-19 08:18Z E969 relaxes the one-storey fact a "different"
+ruling rests on, and this cell is its safety net. `broker_merge_suppressions` has never held a row,
+and the retired check read OK on 61 of 61 runs in 7 d. Splits: on 10-19, 0 of the 149 engine groups
+created 7-14 d earlier had been split; all-time 7 of 8,319 (0.08 %, lower bound 0.04 %), all by an
+operator, none by `mode=unapply`, and 0 of the 6,693 created in the last 7 d. The design's "7 of
+1,626 = 0.43 %" counted the same 7 over the smaller store of its day. At Prague volume, about 6,700
+groups a week, the 2 % bound needs about 2.35 % split (157 groups); the operator accepted about 1.3
+% false merges for the Prague rollout.
+
+Known limits: builds before 10-16, the 10-02 stall and every lease strand left no durable trace (a
+fresh seed deletes the generation's decisions, and `rt_lease` is one row), so none is replayed but
+the 10-10 strand, as a SYNTHETIC replay (the hermetic tests hold their Problem shapes);
+`RT_SCOPE_BACKLOG_SQL` is blind to blocks not yet walked and to the part of a block past the walk's
+20,000-ad slice (`ENTER_SLICE`), the ETA is a lower bound (a pass costs more as the store grows), and
+the active/inactive split of the backlog § 4 asked for is dropped (0.35 s and 663k buffers at a
+build's start); set-level negative rulings that name no ads (3 today) cannot be judged
+(`set_rulings_unjudged`); a pass that aborts on its pair budget or deadline is a completed pass to the
+heartbeat (`failed_passes` stays 0): since Health dashboard sprint wave 5 `jobs` reads it from
+`last.aborted` (Watch once, Problem when a second pass aborts), and this check sees it as
+`last_commit_age_s` at once and as decision lag after an hour without a commit; a failed re-cut
+(`last.recut_failed`) has no arm, and neither have E939's "a reconcile wait past its bound" and
+"daily-cap skips" (`reconcile_waiting`, `reconcile_stale` and `reconcile_deferred` live in the
+heartbeat's per-pass `last` only); `decision_lag` is blind most hours at today's tempo of sittings
+(96 of the 169 hourly readings to 10-19 09:00Z fell within 24 h of a brake lift: 7 lifts in 7 d, 14
+in 28 d), before the Prague build, its end and the engine changes are counted; a lease stranded by
+a database restart under the live process reads OK until the next deploy; the lease holders'
+`rt_seed:` and `dispatch:` prefixes and a pass holder's shape are copied from the engine, which
+spells them inline, and pinned by tests to its writers (an `rt_lease` constant is owed to the E96x
+stack), and `autodedup.incremental_lane` is imported at load beside `autodedup.apply`; under the
+held E964, building and merging overlap, and the merge-pause arm then needs the per-block rail (owed
+to that PR); `app_settings.updated_at` is not stamped by its writers, so every age comes from
+`app_settings_history` (which stores the OLD value at `replaced_at`) or the engine's own stamps; and
+until wave 8 the page shows one row per check, so its unit renders "Ncells" and the cells live in
+`pipeline_checks_public.details`. Rule 15: the check reads only the live generation's stores and
+the `property_merge_events` rows whose `source` is the engine's or `'operator'`, by a positive
+filter (the merge window's id floor, which fixes an id boundary and reads no row's content, is the
+one ledger read without one); the removed engine's merges are the retire tool's business
+(`mode=unapply`, `retire_legacy=1`), never a Health arm.
+
+It replaces `broker_merge_suppression` (its SQL is the `rulings/brokers` cell's); the `verify_pipeline`
+judgement of the lane that `docs/design/autodedup/PROGRAM.md` E939 and E941 owed (CUTOFF C7 had
+deleted the removed engine's six checks); the heartbeat's `latency_p50_s` / `latency_p95_s`, deleted
+with their log fields (they measured seed age: arrival to decision is `decision_lag`'s `p50_min` /
+`p90_min`, from the stores); the heartbeat's `dirty` read as a backlog (a neighbourhood); and the
+engine progress page's `MODE = 'SHADOW'` chip as the de-facto status.
+
+**Replay rails (Health dashboard sprint wave 5).** `tests/scripts/test_checks_dedup_replay.py`
+replays the check's inputs hourly over 28 days (2026-09-22 00:00Z to 10-19 09:00Z, 658 ticks)
+through the real ladder from fixtures under `tests/fixtures/health_dedup_*.csv`, exported read-only
+from production with each export's SQL and query time in the test's header: the Prague build's
+hourly first decisions from 10-16 16:27Z (the only build any store keeps until the next fresh seed
+deletes it) with its walk waves and backlog, the decision-lag cohorts per hour since 10-16, merges
+per hour by source and splits per day over 28 d, the brakes and apply-scope changes from
+`app_settings_history`, rulings per day, and the commits per 10 min of 10-19. It opens one incident:
+`decision_lag` at 10-19 09:00Z (55 of 421 undecided, 13.1 %, lower bound 10.2 %, 65 min without a
+commit). The only other reading past OK is the Prague build's merge pause, Watch at 10-18
+17:00-20:00Z (48.5-51.5 h), never told; the build arm reads OK "waiting for the walk of 60 blocks"
+for 19 h and its largest ETA is 50.7 h, `splits` is worst at 6 of 487 (lower bound 0.6 %) and
+`rulings/ads` holds 0 breaches with 246 to 765 rulings standing. The lease, rulings and pre-seed
+decision-lag arms see constant or empty inputs there (no lease row, the export's breaches on every
+tick, no arrival before the seed), so their quiet is weak evidence. The 10-02 stall and the builds
+before 10-16 are not replayed (later fresh seeds wiped their decisions; the hermetic tests hold the
+build arm's Problem shape); the one SYNTHETIC replay, and its test says so, is the 10-10 lease
+strand at 10-minute ticks: Watch at 06:10-06:30Z, never Problem.
+`tests/test_checks_dedup_sql_live.py` (a step of CI's migrations lane) executes the check's
+statements, seeded and rolled back: a "different" pair joined by an engine merge after its ruling is
+a breach, the same with `source = 'auto'` is not (the executed rule-15 proof), and so is a pair
+merged before its ruling. `tests/scripts/test_checks_dedup_rule15.py` walks the module's string
+constants and the text of every statement it sends and fails on `'auto'` as a source literal, a `<>
+'auto'` filter, a generation other than the imported `GENERATION`, or an import of
+`autodedup.legacy_retire`; the rule-21 rail runs over it unchanged.
+
+To check after the merge: `health_checks` holds the eight `realtime-worker` keys, `dedup` among them
+(label "Engine"); within 10 minutes of the worker's deploy Health shows its row (a dot, the label,
+the value and the time; the cells render in wave 8); the `broker_merge_suppression` row leaves at the
+canary's first run from `main`; and the engine progress page says "The engine merges in production
+inside the apply scope; live lane health is on Health.", its link landing on the row.
 
 ## `location_payload_shape_drift` — can the location contracts still read new payloads?
 

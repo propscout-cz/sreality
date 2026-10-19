@@ -6,7 +6,6 @@ area_vs_usable_divergence,warn,2026-10-08T13:39:17Z,2026-10-08T13:39:17Z,1
 area_vs_usable_divergence,ok,2026-10-08T23:25:34Z,2026-10-09T13:27:47Z,3
 area_vs_usable_divergence,warn,2026-10-09T22:43:33Z,2026-10-09T22:43:33Z,1
 area_vs_usable_divergence,ok,2026-10-09T22:53:52Z,2026-10-18T23:15:34Z,32
-broker_merge_suppression,ok,2026-10-05T05:51:18Z,2026-10-19T00:40:45Z,111
 capacity,fail,2026-10-19T00:39:58Z,2026-10-19T04:44:25Z,10
 field_fill_matrix,warn,2026-10-05T05:51:18Z,2026-10-07T13:33:55Z,7
 field_fill_matrix,unknown,2026-10-07T23:10:03Z,2026-10-07T23:10:03Z,1

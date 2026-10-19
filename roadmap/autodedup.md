@@ -62,16 +62,20 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   once (every lane write fenced, 30 s drain). Follow-up 2026-10-10: a pass whose connections a
   database restart took retries the lease's release on new ones, every 20 s for up to 180 s,
   before falling back to its TTL.
-  Owed: the cgroup memory limit, `verify_pipeline`'s heartbeat check. The revive cap shipped
-  as E970 (2026-10-19): the revived feed takes its fifth of the claim, its cursor stopping at
-  the last id taken.
+  Owed: the cgroup memory limit (delivered by E948, below), the revive cap (shipped as E970,
+  2026-10-19: the revived feed takes its fifth of the claim, its cursor stopping at the last id
+  taken) and a `verify_pipeline` judgement of the lane (delivered as the Health `dedup` check, below).
 - **E948 (2026-10-10, a worker that died holding the lease):** its restart in place (same hostname
   and pid) releases that lease before its take and halves the claim cap in the same commit (floor
   25; only a seed or, E948b, a bigger container raises it); at the floor the lease waits out its
   TTL as before, so a death no claim can cure never loops the worker. The heartbeat adds
   `claim_cap`, `predecessor_released` / `predecessor_kept`, `rss_mb` and the cgroup
-  `memory_limit_mb` (E941's owed reading). Still owed (E941): the `verify_pipeline` heartbeat
-  check.
+  `memory_limit_mb` (E941's owed reading). The revive cap shipped as E970 (2026-10-19). The
+  `verify_pipeline` judgement E941 owed is delivered as the Health `dedup` check (label "Engine",
+  Health dashboard sprint wave 5, `scripts/checks/dedup.py`): it judges the engine's state, build,
+  merge pause, decision lag, lease, rulings and splits from the durable stores, not from the
+  heartbeat's per-pass counters (of the heartbeat it reads only the worker's start and its newest
+  beat, to tell a predecessor's lease from the live worker's).
   **E948b:** the cap row records the memory limit its deaths happened under (`limit_mb`, read
   each pass), and a container limit grown ≥ 25 % resets the cap to 500 before the next pass,
   without a seed; a boot that also finds a dead predecessor releases its lease without halving

@@ -23,9 +23,12 @@ from typing import Any
 
 from psycopg import errors as _pg_errors
 
+from autodedup.incremental_lane import LEASE_LOST as _LEASE_LOST, STOPPING as _STOPPING
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (
+    BEAT_FRESH_S as _BEAT_FRESH_S,
     CLOCK_SQL as _CLOCK_SQL,
+    WORKER as _WORKER,
     ago as _ago,
     as_utc as _as_utc,
     cell as _cell,
@@ -35,17 +38,13 @@ from scripts.checks.common import (
     now as _now,
     num as _num,
     oneline as _oneline,
+    previous_result as _previous_result,
     result as _result,
 )
 from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, load_migrations
 from scripts.record_workflow_failures import CURSOR_KEY, MONITOR_WORKFLOW_NAME
 
 _UTC = _dt.timezone.utc
-# scraper/realtime_worker.WORKER_NAME, the heartbeat's key (a check never imports the worker).
-_WORKER = "realtime-worker"
-# Migration 620's c_worker_dead: past it the watcher's `worker` cell judges a dead worker, and
-# lanes read from an older beat would ring the same outage a second time.
-_BEAT_FRESH_S = 600.0
 # A role without access to pg_cron's schema or tables reads no history: Not measured, never OK.
 _CRON_UNREADABLE = (_pg_errors.InsufficientPrivilege, _pg_errors.InvalidSchemaName,
                     _pg_errors.UndefinedTable)
@@ -268,15 +267,6 @@ _HEARTBEAT_SQL = """
 select beat_at, started_at, details from worker_heartbeats where worker = %(worker)s
 """
 
-# This check's own newest cells: the lane counters a flap is measured against, and the portals
-# failing then (a portal that recovers leaves the heartbeat, so its cell is carried as OK).
-_PREVIOUS_CELLS_SQL = """
-select run_at, details -> 'cells' from pipeline_check_results
- where check_key = %(key)s and jsonb_typeof(details -> 'cells') = 'array'
- order by run_at desc
- limit 1
-"""
-
 
 def _lane_cells(conn: Any, thresholds: dict[str, Any],
                 now: _dt.datetime) -> tuple[list[dict[str, Any]], str | None]:
@@ -291,10 +281,10 @@ def _lane_cells(conn: Any, thresholds: dict[str, Any],
                     "judges that")
     if not isinstance(details, dict):
         return [], "the heartbeat carries no lane state"
-    held = fetchone(conn, _PREVIOUS_CELLS_SQL, {"key": "jobs"})
-    previous_at = _as_utc(held[0]) if held else None
-    previous = {c.get("subject"): c for c in (held[1] if held and isinstance(held[1], list) else [])
-                if isinstance(c, dict)}
+    # The previous measurement and its cells: the lane counters a flap is measured against, and
+    # the portals failing then (a portal that recovers leaves the heartbeat, so its cell is
+    # carried as OK).
+    previous_at, previous = _previous_result(conn, "jobs")
     uptime = (now - booted).total_seconds()
     cells: list[dict[str, Any]] = []
     for lane in sorted(details):
@@ -365,9 +355,46 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
     flap = _flap(previous.get(subject), passes, failed, thresholds)
     if flap:
         conditions.append(("warn", flap))
+    # An abort (the engine's pair_budget or deadline: the pass rolled back, nothing committed) is
+    # a completed pass to the heartbeat, so failed_passes never counts it: the autodedup lane
+    # livelocked for hours on 2026-10-19 while this cell read OK. A refusal is a failed pass (the
+    # failing rule above reads it); a failed re-cut is a completed one and is not read here. Only a
+    # reason string is an abort: the other lanes' `errors` count items a completed pass failed,
+    # and text_extract's `aborted` is True for a pass its own ceiling bounded. The heartbeat
+    # replaces `last` when a pass completes or is refused, so one abort is read twice while the
+    # next pass runs long or raises: Problem needs the previous measurement to have read an abort
+    # too, and a pass to have completed since.
+    aborted = _abort_reason(last.get("aborted"))
+    facts["last_aborted"] = aborted
+    if aborted:
+        held_facts = held.get("facts") or {}
+        held_aborted = _abort_reason(held_facts.get("last_aborted"))
+        held_passes = _num(held_facts.get("passes"))
+        if held_aborted and held_passes is not None and passes > held_passes:
+            conditions.append(("fail", f"its last pass aborted: {aborted}, as had an earlier "
+                                       "pass read at the previous measurement"))
+        elif held_aborted and any(isinstance(c, str) and c.startswith("fail: its last pass aborted")
+                                  for c in held_facts.get("conditions") or []):
+            # A re-read of the same pass keeps a Problem only the abort condition itself read
+            # (common.judged stores each as "<level>: <text>"): the cell's status is its worst
+            # condition's, and a late or failing lane reads fail beside a single abort.
+            conditions.append(("fail", f"its last pass aborted: {aborted}, after an earlier "
+                                       "aborted pass"))
+        else:
+            conditions.append(("warn", f"its last pass aborted: {aborted}"))
     ok = f"last pass {_ago(since)} ago" if last_pass else "no completed pass yet"
     return [_judged(subject, conditions, ok, value=round(since), unit="s", facts=facts),
             *_portal_cells(lane, info, previous, max(3 * interval, floor), now)]
+
+
+def _abort_reason(value: Any) -> str | None:
+    """A pass's abort reason when it names one (the engine's pair_budget or deadline), else None."""
+    # The engine's shutdown aborts are excluded, being no livelock: `stopping` (the worker is
+    # shutting down) and `lease_lost` (its lease was released under the pass: the shutdown, or a
+    # dispatch that took the holder for dead).
+    if not isinstance(value, str) or value in (_STOPPING, _LEASE_LOST):
+        return None
+    return _oneline(value) or None
 
 
 def _flap(prev: dict[str, Any] | None, passes: int, failed: int,

@@ -2,8 +2,9 @@
 
 # The fixture is pipeline_check_results run-length encoded (check_key,status,from_run_at,to_run_at,
 # runs; UTC to the second), the unmeasured warns of the time read as unknown, with no ids and no
-# URLs, for the keys CHECKS declares (`:keys`; exported 2026-10-19 05:09Z). Refresh it read-only,
-# never by hand, from:
+# URLs, for the keys CHECKS declares (`:keys`; exported 2026-10-19 05:09Z, before wave 4's keys
+# had rows; wave 5 retired broker_merge_suppression and dropped its one row, 111 runs all OK).
+# Refresh it read-only, never by hand, from:
 #   with r as (select check_key, run_at,
 #                     case when status = 'warn' and (details ? 'timed_out' or details ? 'not_run')
 #                          then 'unknown' else status end as s
@@ -31,7 +32,7 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "health_replay_14d
 # 108 minutes and more, and keeps the replay well under a second.
 _TICK = _dt.timedelta(minutes=10)
 # Check.staleness_budget: cadence plus this slack on github-actions; three cadences on the worker,
-# whose wave-3 keys have rows from 2026-10-19 00:39Z and whose wave-4 keys have none yet.
+# whose wave-3 keys have rows from 2026-10-19 00:39Z and whose wave-4 and wave-5 keys have none.
 _GITHUB_SLACK = _dt.timedelta(hours=18)
 _GH, _RW = "github-actions", "realtime-worker"
 
@@ -42,7 +43,7 @@ _REGISTRY: dict[str, tuple[str, int, str]] = {
     "capacity": ("alarm", 1800, _RW), "llm": ("alarm", 600, _RW),
     "scraping": ("alarm", 600, _RW), "publishing": ("alarm", 600, _RW),
     "delisting": ("alarm", 600, _RW), "coverage": ("gauge", 3600, _RW),
-    "broker_merge_suppression": ("alarm", 3600, _GH),
+    "dedup": ("alarm", 600, _RW),
     "ppm2_median_shift": ("alarm", 21600, _GH), "ppm2_basis_floor_share": ("gauge", 21600, _GH),
     "area_vs_usable_divergence": ("gauge", 21600, _GH),
     "ppm2_measure_coverage": ("alarm", 21600, _GH), "migration_drift": ("alarm", 3600, _GH),

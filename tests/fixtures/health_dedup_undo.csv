@@ -1,0 +1,9 @@
+day,source,kind,merged_day,groups,rows
+2026-10-03,autodedup,operator,2026-09-27,1,1
+2026-10-03,autodedup,operator,2026-10-03,1,1
+2026-10-04,autodedup,operator,2026-09-26,1,1
+2026-10-05,autodedup,operator,2026-10-01,2,3
+2026-10-05,autodedup,operator,2026-10-02,1,4
+2026-10-13,operator,operator,2026-06-10,2,2
+2026-10-14,autodedup,operator,2026-10-01,1,4
+2026-10-15,operator,operator,2026-06-08,1,1

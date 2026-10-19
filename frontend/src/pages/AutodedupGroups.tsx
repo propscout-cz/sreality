@@ -1,9 +1,9 @@
 /* AUTODEDUP · Groups — the proposed clusters, weakest edge first.
  *
  * WHAT THE OPERATOR IS DOING HERE. The engine has proposed that these adverts
- * are the same real-world property. Nothing has been applied: the whole trial is
- * shadow mode (D4), so this page collects an opinion and writes it into the
- * program's own schema. That is said on the page, not left to be inferred —
+ * are the same real-world property. This page collects an opinion and writes it
+ * into the program's own schema; the engine merges in production inside the
+ * apply scope (E904). That is said on the page, not left to be inferred —
  * "Stejné" must never read as "merge now".
  *
  * WEAKEST EDGE FIRST IS THE DEFAULT SORT, because a cluster is only as right as
@@ -44,7 +44,7 @@ import {
   type AutodedupVerdictValue,
 } from '@/lib/api';
 import { useUrlFilters } from '@/lib/useUrlFilters';
-import { ROUTES, withQuery } from '@/lib/routes';
+import { ROUTES, withHash, withQuery } from '@/lib/routes';
 import { fmtCount } from '@/lib/format';
 import Dialog from '@/components/Dialog';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -245,9 +245,16 @@ export default function AutodedupGroups() {
         <h1 className="text-2xl leading-tight">AUTODEDUP · Groups</h1>
         <p className="mt-1 text-sm text-[var(--color-ink-2)] leading-relaxed max-w-[52rem]">
           Adverts the engine believes are one real-world property — the same flat on several
-          portals, or the same flat re-posted months later. <strong>Nothing has been merged</strong>
-          : the trial runs in shadow mode and this page records your opinion inside the program's
-          own schema. Weakest link first, because a group is only as right as its worst edge.
+          portals, or the same flat re-posted months later. The engine merges in production inside
+          the apply scope; live lane health is on{' '}
+          <Link
+            to={withHash(ROUTES.health.build(), '#dedup')}
+            className="text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"
+          >
+            Health
+          </Link>
+          . This page records your opinion inside the program's own schema. Weakest link first,
+          because a group is only as right as its worst edge.
         </p>
         <p className="mt-1 text-[0.78rem]">
           <Link
@@ -456,7 +463,7 @@ function GroupCard({
             {fmtCount(group.size)} adverts · {group.sources.join(' + ')}
           </span>
         </h2>
-        <Chip title="Nothing is applied in shadow mode — this is the proposal's own status">
+        <Chip title="This is the proposal's own status">
           {group.status}
         </Chip>
         <button

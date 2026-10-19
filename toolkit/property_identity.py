@@ -34,6 +34,9 @@ from toolkit.room_taxonomy import category_main_compatible
 # The `detach_listings` outcomes that move the advert: back to its origin, or to a new record
 # (a native advert, or a merged one the caller names in `new`).
 MOVED = frozenset({"detached", "split_native", "split_new"})
+# The `reason` of a split's birth row (`_born`): written as an operator merge but born undone, so
+# a reader that counts merges or their splits leaves these rows out.
+BIRTH_REASONS = frozenset({"ingest_grouping", "split_new"})
 
 
 class MergeError(ValueError):
