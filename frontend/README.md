@@ -123,7 +123,7 @@ bundles, the installable app's own files (below), and a `/healthz`
 endpoint that Railway uses for liveness.
 
 CI lives at `.github/workflows/frontend-build.yml` and runs
-`npm install && npm run build` on every push to catch broken builds
+`npm install && npm run build` on every pull request (and on a push to `main`) to catch broken builds
 before Railway sees them; it also fails when `dist/sw.js` or
 `dist/manifest.webmanifest` is missing.
 

@@ -1715,7 +1715,7 @@
     {
       "filename": "docs-budget.yml",
       "name": "Docs budget",
-      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill.",
+      "description": "Enforces the always-loaded context budgets from CLAUDE.md's Context-discipline rule (line caps on CLAUDE.md/ROADMAP.md/skill bodies, a word cap on skill frontmatter descriptions, and routing completeness — every .claude/skills/ dir must appear in CLAUDE.md's \"Where the detail lives\" table) on any PR touching those paths, and warns (non-blocking) when a PR changes code a skill documents without touching that skill or when a doc line it adds names a code symbol that exists nowhere in the code trees.",
       "portal": null,
       "manual": false,
       "schedules": [],
@@ -2096,7 +2096,7 @@
     {
       "filename": "frontend-build.yml",
       "name": "CI: frontend build",
-      "description": "Builds the frontend/ Vite SPA on every push or pull request that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
+      "description": "Builds the frontend/ Vite SPA on every pull request, and on a push to main that touches frontend code, to catch build/type errors before deploy. Type-checks (the service worker too), lints for Rules of Hooks, builds the production bundle, checks the service worker and web app manifest made it into dist/, reports every chunk's gzipped size, and enforces a blocking first-visit JS budget that also fails if maplibre or recharts return to the pre-lazy-import path. Does not deploy.",
       "portal": null,
       "manual": false,
       "schedules": [],
@@ -2974,7 +2974,7 @@
       "concurrencyGroup": null,
       "cancelInProgress": null,
       "timeoutMinutes": 15,
-      "permissions": null,
+      "permissions": "contents: read, pull-requests: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/migrations.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/migrations.yml"
     },
@@ -4787,7 +4787,7 @@
     {
       "filename": "test.yml",
       "name": "CI: tests",
-      "description": "CI test suite, runs on every push and pull request. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
+      "description": "CI test suite, runs on every pull request and on every push to main. Two parallel jobs: a Python job (verifies the filter-registry and workflow-docs codegen are fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest pure-function tests). This is the build gate for every branch.",
       "portal": null,
       "manual": false,
       "schedules": [],
