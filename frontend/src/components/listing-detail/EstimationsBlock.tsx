@@ -15,19 +15,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   estimationKeys,
   fetchEstimationsForListings,
+  propertyRunIds,
   submitEstimation,
 } from '@/lib/queries';
 import { ApiError } from '@/lib/api';
 import { buildRerunPayload, type RerunInput } from '@/lib/rerun';
-import {
-  fmtCzk,
-  fmtDateSlash,
-  fmtAbsolute,
-  fmtPct,
-  fmtRelative,
-  fmtTime24,
-} from '@/lib/format';
+import { fmtCzk, fmtPct, fmtRelative } from '@/lib/format';
+import EstimateCard from '@/components/estimation/EstimateCard';
 import { MfReferenceCard, YieldFigure } from '@/components/estimation/MfReferenceCard';
+import RunHistory, { type HistoryColumn } from '@/components/estimation/RunHistory';
 import { mfShape } from '@/lib/mfReference';
 import {
   ConfidencePill,
@@ -67,10 +63,7 @@ export default function EstimationsBlock({
   bare?: boolean;
   label?: string;
 }) {
-  const ids = useMemo(
-    () => [...new Set(listingIds)].sort((a, b) => a - b),
-    [listingIds],
-  );
+  const ids = useMemo(() => propertyRunIds(listingIds), [listingIds]);
 
   const runsQ = useQuery<EstimationListResponse, Error>({
     queryKey: estimationKeys.byListing(ids),
@@ -197,7 +190,9 @@ export default function EstimationsBlock({
 
         {runs.length > 1 && (
           <RunHistory
-            runs={runs}
+            title="All runs"
+            rows={runs}
+            columns={RUN_COLUMNS}
             selectedId={selected?.id ?? null}
             onPick={selectRun}
           />
@@ -218,13 +213,11 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
   const inFlight = run.status === 'pending' || run.status === 'running';
 
   return (
-    <div className="border border-[var(--color-copper)]/30 bg-[var(--color-copper-soft)]/40 rounded-[var(--radius-sm)] p-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
-          Náš odhad · {run.mode === 'agent' ? 'agentní analýza' : 'komparativní'}
-        </p>
-        {run.status !== 'success' && <RunStatusChip status={run.status} />}
-      </div>
+    <EstimateCard
+      tone="ours"
+      eyebrow={`Náš odhad · ${run.mode === 'agent' ? 'agentní analýza' : 'komparativní'}`}
+      aside={run.status !== 'success' && <RunStatusChip status={run.status} />}
+    >
       <div className="mt-1 flex items-baseline justify-between gap-3">
         <span className="text-lg font-medium tabular-nums">
           {inFlight ? (
@@ -261,7 +254,7 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
         run #{run.id} · {fmtRelative(run.created_at)}
         {run.skill_name ? ` · ${run.skill_name}` : ''}
       </p>
-    </div>
+    </EstimateCard>
   );
 }
 
@@ -276,10 +269,7 @@ function NoRunsCard({
 }) {
   const { open } = useNewEstimationModal();
   return (
-    <div className="border border-dashed border-[var(--color-rule)] rounded-[var(--radius-sm)] p-3 flex flex-col items-start justify-center gap-2">
-      <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">
-        Náš odhad
-      </p>
+    <EstimateCard tone="absent" eyebrow="Náš odhad" className="flex flex-col items-start justify-center gap-2">
       {loading ? (
         <p className="text-sm text-[var(--color-ink-3)]">Loading runs…</p>
       ) : (
@@ -298,104 +288,22 @@ function NoRunsCard({
           )}
         </>
       )}
-    </div>
+    </EstimateCard>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Run history — the append-only ledger of every run on this property         */
-/* -------------------------------------------------------------------------- */
-
-function RunHistory({
-  runs,
-  selectedId,
-  onPick,
-}: {
-  runs: EstimationRun[];
-  selectedId: number | null;
-  onPick: (id: number) => void;
-}) {
-  return (
-    <div className="mt-7">
-      <div className="flex items-baseline justify-between">
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-          All runs
-        </p>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {runs.length}
-        </p>
-      </div>
-      <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] bg-[var(--color-paper-2)]">
-              <th className="px-3 py-2 font-medium">When</th>
-              <th className="px-3 py-2 font-medium">Mode</th>
-              <th className="px-3 py-2 font-medium text-right">Estimate</th>
-              <th className="px-3 py-2 font-medium text-right">Yield</th>
-              <th className="px-3 py-2 font-medium">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((r) => {
-              const isSelected = r.id === selectedId;
-              const isSale = (r.estimate_kind ?? 'rent') === 'sale';
-              const value = isSale
-                ? r.estimated_sale_price_czk
-                : r.estimated_monthly_rent_czk;
-              return (
-                <tr
-                  key={r.id}
-                  onClick={() => onPick(r.id)}
-                  className={[
-                    'cursor-pointer border-t border-[var(--color-rule-soft)] transition-colors',
-                    isSelected
-                      ? 'bg-[var(--color-copper-soft)]/60'
-                      : 'hover:bg-[var(--color-copper-soft)]/30',
-                  ].join(' ')}
-                >
-                  <td
-                    className="px-3 py-2 tabular-nums text-[var(--color-ink-2)]"
-                    title={fmtAbsolute(r.created_at)}
-                  >
-                    {fmtDateSlash(r.created_at)}{' '}
-                    <span className="text-[0.7rem] text-[var(--color-ink-4)]">
-                      {fmtTime24(r.created_at)}
-                    </span>
-                    {isSelected && (
-                      <span className="ml-2 text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-copper)]">
-                        viewing
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-[0.8rem] text-[var(--color-ink-3)]">
-                    {r.mode}
-                    {isSale ? ' · sale' : ''}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-ink)]">
-                    {value != null ? (
-                      <>
-                        {fmtCzk(value)}
-                        {!isSale && (
-                          <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/mo</span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-[var(--color-ink-4)]">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-[var(--color-ink-2)]">
-                    {fmtPct(r.gross_yield_pct, { digits: 2 })}
-                  </td>
-                  <td className="px-3 py-2">
-                    <RunStatusChip status={r.status} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+/* The runs' ledger columns, after its "when". */
+const RUN_COLUMNS: ReadonlyArray<HistoryColumn<EstimationRun>> = [
+  { header: 'Mode', className: 'text-[0.8rem] text-[var(--color-ink-3)]', cell: (r) => `${r.mode}${r.estimate_kind === 'sale' ? ' · sale' : ''}` },
+  {
+    header: 'Estimate', right: true, className: 'font-mono tabular-nums text-[var(--color-ink)]',
+    cell: (r) => {
+      const isSale = r.estimate_kind === 'sale';
+      const value = isSale ? r.estimated_sale_price_czk : r.estimated_monthly_rent_czk;
+      if (value == null) return <span className="text-[var(--color-ink-4)]">—</span>;
+      return <>{fmtCzk(value)}{!isSale && <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/mo</span>}</>;
+    },
+  },
+  { header: 'Yield', right: true, className: 'font-mono tabular-nums text-[var(--color-ink-2)]', cell: (r) => fmtPct(r.gross_yield_pct, { digits: 2 }) },
+  { header: 'Status', cell: (r) => <RunStatusChip status={r.status} /> },
+];

@@ -1833,6 +1833,10 @@ export const fetchEstimationsList = (params: EstimationListParams) =>
  * renders the selected run without a second per-run request. */
 export const fetchEstimationsForListings = (ids: ReadonlyArray<number>) =>
   listEstimations({ listing_ids: ids.join(','), limit: 100 });
+/* The ids a property's run read is keyed by — ONE spelling, so a second reader
+ * of `estimationKeys.byListing` (the Valuo ruler's "náš odhad") hits its cache. */
+export const propertyRunIds = (listingIds: ReadonlyArray<number>): number[] =>
+  [...new Set(listingIds)].sort((a, b) => a - b);
 export const submitEstimation = (input: CreateEstimationIn) =>
   createEstimation(input);
 
