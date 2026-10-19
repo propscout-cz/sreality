@@ -172,8 +172,19 @@ def test_a_cell_under_min_n_ships_its_count_and_no_statistics(cur) -> None:
         small = cells[key]
         assert small["n"] < sr.MIN_N
         assert all(small[s] is None for s in sr.CHART_STATS), small
-    at_min = cells[(("3+kk", "novostavba"), None)]
-    assert at_min["n"] == sr.MIN_N and at_min["median"] == 5_000_000
+    assert cells[(("3+kk", "novostavba"), None)]["median"] == 5_000_000  # ten properties: over any floor here
+
+
+def test_the_floor_is_inclusive_at_min_n_and_exclusive_just_below(cur) -> None:
+    """The boundary itself, from the registry's floor: MIN_N properties show statistics, one fewer do not."""
+    pids = [_add(cur, disposition="2+kk") for _ in range(sr.MIN_N)]
+    pids += [_add(cur, disposition="3+kk") for _ in range(sr.MIN_N - 1)]
+    out = _pivot(cur, pids, {"rows": ["disposition"], "cols": [], "measure": "price"})
+    cells = _cells(out)
+    at, below = cells[(("2+kk",), None)], cells[(("3+kk",), None)]
+    assert out["min_n"] == sr.MIN_N
+    assert at["n"] == sr.MIN_N and at["median"] == 5_000_000
+    assert below["n"] == sr.MIN_N - 1 and all(below[st] is None for st in sr.CHART_STATS), below
 
 
 def test_a_column_dimension_rolls_up_per_column_value(cur) -> None:
