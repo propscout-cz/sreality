@@ -325,22 +325,24 @@ function RollupSection({ building }: { building: BuildingRun }) {
         {hasRent && (
           <RangeStrip
             label="Total monthly rent (Kč)"
-            triple={{
-              p25: building.total_rent_p25_czk ?? building.total_rent_p50_czk!,
-              p50: building.total_rent_p50_czk!,
-              p75: building.total_rent_p75_czk ?? building.total_rent_p50_czk!,
+            range={{
+              low: building.total_rent_p25_czk ?? building.total_rent_p50_czk!,
+              mid: building.total_rent_p50_czk!,
+              high: building.total_rent_p75_czk ?? building.total_rent_p50_czk!,
             }}
+            caption="p25 · median · p75"
             format={(n) => fmtCzk(n)}
           />
         )}
         {hasSale && (
           <RangeStrip
             label="Total sale price (Kč)"
-            triple={{
-              p25: building.total_sale_p25_czk ?? building.total_sale_p50_czk!,
-              p50: building.total_sale_p50_czk!,
-              p75: building.total_sale_p75_czk ?? building.total_sale_p50_czk!,
+            range={{
+              low: building.total_sale_p25_czk ?? building.total_sale_p50_czk!,
+              mid: building.total_sale_p50_czk!,
+              high: building.total_sale_p75_czk ?? building.total_sale_p50_czk!,
             }}
+            caption="p25 · median · p75"
             format={(n) => fmtCzk(n)}
           />
         )}
@@ -466,7 +468,8 @@ function UnitEstimateBlock({
       {median != null && p25 != null && p75 != null ? (
         <RangeStrip
           label={`${heading} (Kč)`}
-          triple={{ p25, p50: median, p75 }}
+          range={{ low: p25, mid: median, high: p75 }}
+          caption="p25 · median · p75"
           format={(n) => fmtCzk(n)}
         />
       ) : (

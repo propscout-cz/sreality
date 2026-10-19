@@ -431,7 +431,8 @@ function RentRange({ run }: { run: EstimationRun }) {
       <div className="mt-3">
         <RangeStrip
           label={stripLabel}
-          triple={{ p25, p50: median, p75 }}
+          range={{ low: p25, mid: median, high: p75 }}
+          caption="p25 · median · p75"
           format={(n) => fmtCzk(n)}
         />
       </div>
