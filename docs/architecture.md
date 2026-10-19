@@ -1410,33 +1410,40 @@ renumber.** Navigate by area:
     note), Valuo's answer verbatim (its min/max/std keep Valuo's names; nothing calls them
     quartiles), the environment and the token's 12-hex sha. The POST saves the row `pending`
     BEFORE the paid call and UPDATEs it once; the unique index on `(account_id, environment,
-    md5(request::text))` over pending/success rows turns an identical request into a reuse or a
-    409, so a double click cannot pay twice, and there is no automatic retry. A Valuo-side failure
-    is a stored `failed` row answered with HTTP 200, as for our runs; a refusal (komerční/ostatní,
-    no point, a point coarser than a town, outside Czechia, a missing required parameter) is a 4xx
-    and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
+    listing_id, md5(request::text))` over pending/success rows turns an identical request for the
+    same ad into a reuse or a 409, so a double click cannot pay twice (the ad is in the key, so a
+    reuse is always a row this property's history shows), and there is no automatic retry. A
+    pending row older than two minutes is settled `failed`/`abandoned` by the next GET or POST of
+    its account. A Valuo-side failure is a stored `failed` row answered with HTTP 200, as for our
+    runs; a refusal (komerční/ostatní, no point, a point coarser than a town, a country that is not
+    determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
     `velmi_dobry` is sent as Valuo's `good` (`assumed`), energy class G is not sent (`assumed` —
     Czech ads without a PENB certificate must state G too).
 
     Calibration — how a Valuo number is judged — reads production rows only, drops every row that
-    leaned on a guess for a required parameter or stood on a point coarser than a street, and sets
-    Valuo's `avg_price` against the registered sales in the same building around `as_of` and against
-    our own latest run of the same kind:
+    leaned on an assumption for a required parameter (a success never lacks one: the POST refuses)
+    or was sent from a point coarser than a street, and judges each row by what was SENT — the
+    request's point, area and type, never the ad or its pin as they read today — setting Valuo's
+    `avg_price` against the registered sales in the same building around `as_of` and against our
+    own latest run of the same kind:
 
     ```sql
     select v.id, v.request->>'kind' as kind, (v.response->'result'->>'avg_price')::numeric as valuo,
            sold.median_czk, sold.n, ours.czk as ours
       from valuo_valuations v
-      join listings l on l.id = v.listing_id
-      join listing_location ll on ll.listing_id = v.listing_id
-      join location_granularity_rank r on r.granularity = ll.granularity
+      cross join lateral (                     -- the subject as sent: "lat, lng", its area, its type
+        select st_setsrid(st_makepoint(split_part(v.request->>'place', ',', 2)::float8,
+                                       split_part(v.request->>'place', ',', 1)::float8), 4326)::geography as pt,
+               coalesce(v.request->>'floor_area', v.request->>'lot_area')::numeric as area,
+               case v.request->>'property_type' when 'flat' then 'byt' when 'house' then 'dum'
+                    else 'pozemek' end as category_main) q
       left join lateral (                      -- same building, same kind of unit, +-90 days of as_of
         select percentile_cont(0.5) within group (order by s.price_czk) as median_czk, count(*) as n
           from sold_transactions s
-         where v.request->>'kind' = 'sale' and s.category_main = l.category_main
-           and st_dwithin(s.geom::geography, ll.geom::geography, 50)
-           and s.area_m2 between l.area_m2 * 0.9 and l.area_m2 * 1.1
+         where v.request->>'kind' = 'sale' and s.category_main = q.category_main
+           and st_dwithin(s.geom::geography, q.pt, 50)
+           and s.area_m2 between q.area * 0.9 and q.area * 1.1
            and abs(s.sold_at - (v.request->>'as_of')::date) <= 90) sold on true
       left join lateral (
         select coalesce(er.estimated_sale_price_czk, er.estimated_monthly_rent_czk) as czk
@@ -1445,10 +1452,10 @@ renumber.** Navigate by area:
            and er.estimate_kind = case v.request->>'kind' when 'lease' then 'rent' else 'sale' end
          order by er.created_at desc limit 1) ours on true
      where v.environment = 'production' and v.status = 'success'
-       and r.rank >= (select t.rank from location_granularity_rank t where t.granularity = 'street')
+       and v.provenance->'place'->>'class' = 'ad'     -- `ad` = street precision or finer when sent
        and not exists (select 1 from jsonb_each(v.provenance) p
                         where p.key in ('kind', 'floor_area', 'lot_area', 'rating', 'land_type')
-                          and p.value->>'class' in ('assumed', 'missing'));
+                          and p.value->>'class' = 'assumed');
     ```
 13. **`building_runs` is the parent grouping for the paste-a-building workflow.** One row
     per pasted house listing (typically `category_main='dum'`). Children are normal
