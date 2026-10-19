@@ -18,6 +18,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
+import Skeleton from '@/components/Skeleton';
 import { useIsFetching, useMutation, useQuery } from '@tanstack/react-query';
 import Tabs, { type Tab } from '@/components/Tabs';
 import ResizeHandle from '@/components/ResizeHandle';
@@ -33,7 +34,9 @@ import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
 import ListingTable from '@/components/ListingTable';
 import ListingCards from '@/components/ListingCards';
-import StatsDashboard from '@/components/stats/StatsDashboard';
+/* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
+ * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
+const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
 import type { AnchorPoint, MapFlyToCommand } from '@/components/ListingMap';
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
@@ -879,7 +882,11 @@ export default function BrowseExperience({
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
               />
             )}
-            {tab === 'stats' && <StatsDashboard filters={filters} />}
+            {tab === 'stats' && (
+              <Suspense fallback={<Skeleton height={320} className="my-8" />}>
+                <StatsDashboard filters={filters} />
+              </Suspense>
+            )}
           </div>
         )}
 
