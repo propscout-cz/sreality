@@ -1705,6 +1705,22 @@ def _subject_attributes_from_result(
     return attrs
 
 
+def _resolution_from_listing(
+    matched: dict[str, Any], body: s.CreateEstimationIn, input_url: str | None,
+) -> _Resolution:
+    """The subject is an already-scraped listings row (by id or by URL): its spec under the
+    body's overrides, no parse."""
+    return _Resolution(
+        input_url=input_url,
+        input_sreality_id=matched["sreality_id"],
+        target_spec={**matched["spec"], **(body.spec_overrides or {})},
+        source_kind=None, parse_confidence=None, parse_confidence_per_field=None, source_html=None,
+        subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
+        subject_listing_category_type=matched.get("category_type"),
+        input_listing_id=matched.get("listing_id"),
+    )
+
+
 def _resolve_input(
     conn: "psycopg.Connection",
     sreality_client: "SrealityClient",
@@ -1727,23 +1743,7 @@ def _resolve_input(
             raise ValueError(
                 f"listing {body.sreality_id} not found or missing coordinates"
             )
-        spec = dict(matched["spec"])
-        if body.spec_overrides:
-            spec = {**spec, **body.spec_overrides}
-        return _Resolution(
-            input_url=None,
-            input_sreality_id=matched["sreality_id"],
-            target_spec=spec,
-            source_kind=None,
-            parse_confidence=None,
-            parse_confidence_per_field=None,
-            source_html=None,
-            parse_warnings=[],
-            subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
-            subject_listing_category_type=matched.get("category_type"),
-            subject_attributes=None,
-            input_listing_id=matched.get("listing_id"),
-        )
+        return _resolution_from_listing(matched, body, None)
     if body.url is not None:
         # Non-sreality portals don't resolve to a listings row through the
         # dispatcher, but we scrape them — so try the already-scraped row first.
@@ -1751,23 +1751,7 @@ def _resolve_input(
         if source_dispatcher.classify_url(body.url) != "sreality":
             matched = _match_listing_by_url(conn, body.url)
             if matched is not None:
-                spec = dict(matched["spec"])
-                if body.spec_overrides:
-                    spec = {**spec, **body.spec_overrides}
-                return _Resolution(
-                    input_url=body.url,
-                    input_sreality_id=matched["sreality_id"],
-                    target_spec=spec,
-                    source_kind=None,
-                    parse_confidence=None,
-                    parse_confidence_per_field=None,
-                    source_html=None,
-                    parse_warnings=[],
-                    subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
-                    subject_listing_category_type=matched.get("category_type"),
-                    subject_attributes=None,
-                    input_listing_id=matched["listing_id"],
-                )
+                return _resolution_from_listing(matched, body, body.url)
 
         result = source_dispatcher.parse_listing_url(
             body.url,
