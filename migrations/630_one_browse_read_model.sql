@@ -429,6 +429,7 @@ $function$;
 -- 2. rebuild_browse_list(): 605's body plus the map index and the identity re-patch. CREATE OR
 --    REPLACE keeps its ACL (service_role only).
 -- ---------------------------------------------------------------------------
+-- ci-allow-ungated: rebuild_browse_list it reads property_merge_events only to re-patch browse_list_next; execute revoked from public, anon and authenticated (605's grants, asserted in $post$)
 create or replace function public.rebuild_browse_list()
 returns void
 language plpgsql
