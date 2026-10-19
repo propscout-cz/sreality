@@ -177,3 +177,43 @@ migration 629 + its two tests.
 - **W5** merge in the window (`autodedup.settings rt_bootstrap:rt` false), Railway commit status,
   read-only production walk (old bookmarks, phone sheet, board), then the contract migration on
   the operator's word.
+
+## Delivered (2026-10-19, branch `feature/curated-set-scope`)
+
+- `f2164e99` migration 629 + `248b0e68` its live rail (W1).
+- `858a5b5b` layer A — value, codec, registry, query layer (W2).
+- `91812539` layer B — `CuratedSetFilter` on sidebar / phone sheet / board, preset lens carry (W3).
+- `1ed93180` layer C — `lib/curationSettle.ts`, the 52 cohort-scoped prop sites deleted (W3).
+- Layer D — docs (W4): architecture rules 18 / 22 / dismissal doctrine / board fail-open,
+  CLAUDE.md rule 22, database + interface-design skills, GLOSSARY, operator-workflow track.
+
+**Deviations from this brief** (each reported by the layer that made it):
+
+- The descriptor has a sixth field, `unitNoun: [one, few, many]`, so `scopeWords` prints counts
+  ("v kolekci (2 kolekce)", "−1 fáze") from data rather than a per-set branch.
+- `cycleSet(scope, side)` is a two-state toggle (off ↔ out, off ↔ in), not `cycle<T>`; only
+  `cycleUnit` and `cyclePortal` go through the generic `cycle<T>`.
+- Normal form for a unit on both sides, or `=any` on both sides: **out wins** (the later step of
+  the chip cycle). `cycleUnit` while the set side is `out` lifts the exclusion.
+- `FilterType.INT_LIST` lost its last user with the retype and was deleted (with FilterForm's
+  `int_list` branch) — pure dead-path subtraction, outside the ledger.
+- Grouped units (Mine / Shared with me / No longer available): the whole-set chips get a trailing
+  row of their own, so the not-in chip is still the control's last chip. Vanished `#id` chips
+  CLEAR on click (tags used to cycle them). Per-set frame wording (read-failed noun, empty text)
+  lives in a small `FRAME` table inside `CuratedSetFilter.tsx`, not in `CURATED_SETS`.
+- On the board the control's `query` is the member-map read (the board's offer and fail-open
+  retry depend on it), not the units read.
+- `settleCurationWrite(qc, propertyId, lens)` takes the lens that moved — without it the
+  newcomer / not-loaded re-reads would fire on every cohort hiding dismissals. It has two halves:
+  `settlePatches` (inside `useOptimisticWrite`, rolled back on failure; pipeline + dismiss settle
+  at the click) and `settleRereads` (after the write lands); `useOptimisticWrite`'s revalidate
+  gained a third argument, `qc`. Collection and tag writes stay non-optimistic: `markMember`
+  patches the landed delta, so their drop follows the ack (~one round trip), not the click.
+- Restore (un-dismiss) does not go through the settle: it re-reads every Browse surface, since
+  the phone Feed's hidden roll is not a `ListingFilters` cohort. Only the browse-count is
+  decremented in place; `no-price-count` is re-read.
+
+**Still open:** the contract migration (ruling 12, operator's word after the rollout); the phone
+Feed scope chip still strips the lenses (`feedFiltersForPreset`); whole-collection / tag DELETEs
+and merges revalidate broadly; a pipeline add that lifts a dismissal does not bring the row back
+into a hiding list; W5 (merge window, Railway status, read-only production walk).

@@ -223,8 +223,8 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
     one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
     stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API. The badge is
-    `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline=any|<stage ids>`) is a
-    property-id prefilter mirrored into `browse_stats_properties.property_ids_filter` (migration 378) and OUTSIDE preset identity; the chip LOADS
+    `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline[_excluded]=any|<stage ids>`) is a
+    curated-set scope judged in the database under the caller's RLS (migration 629, rule #18) and OUTSIDE preset identity; the chip LOADS
     A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable
     (`?deal=any`, the "Vše" pill, `FilterDef.nullable`) — NULL has always meant "no constraint" to comparables,
     the watchdog matcher and browse_stats; never an `any` enum member (it would reach the estimation agent).

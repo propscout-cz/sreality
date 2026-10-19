@@ -270,8 +270,8 @@ pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
 
 **Appending a column to `browse_projection`** (migration 584's recipe; append LAST, each body verbatim from its
 latest definer): take both rebuild advisory locks (`statement_timeout` > the 1800 s cron cap); in ONE transaction
-`alter table browse_list add column` FIRST (the positional `sync_browse_list` insert and `browse_list_visible()`'s
-`l.*` must never see it narrower than the view), the view, then bridge `properties_map_visible()` with
+`alter table browse_list add column` FIRST (the positional `sync_browse_list` insert and `browse_list_visible(...)`'s
+`l.*` must never see it narrower than the view), the view, then bridge `properties_map_visible(...)` with
 `null::<type> as <col>` ONLY while the matview lacks the column (EXECUTE + `-- ci-allow-dynamic:`; a static bridge
 breaks re-runs); then, `lock_timeout 0` under the held re-entrant keys, force the map rebuild + restore its source, then the list's.
 **Removing a column** (590's recipe): in ONE transaction alter `browse_list` FIRST (`sync_browse_list` locks it before the view), rename the
@@ -286,11 +286,11 @@ joins place/floor/description/broker through it, and `properties_public.listing_
 `city_proximity_computed_at` with it). The rollup also writes `all_sources` / `active_sources` (sorted
 portal lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since 590 together with `source_count` (one partial index per portal on `browse_list`).
 
-**Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot; `spec` and the map's `point_budget` shape the answer, never the cohort).
+**Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot) + 629's nine curated-set scope parameters (both functions; `spec` and the map's `point_budget` shape the answer, never the cohort).
 
-**Two functions depend on `browse_projection`'s row type** (migration 537: `browse_list_visible()`,
-`properties_map_visible()`) — the SPA's default Browse sources, minus the caller's dismissed
-properties. A non-CASCADE `drop view browse_projection` now fails; drop and recreate them in the
+**Two functions depend on `browse_projection`'s row type** (537; since 629 ten defaulted parameters: `hide_dismissed`
++ the nine `<set>_set/_in/_out`): `browse_list_visible(...)`, `properties_map_visible(...)` — the SPA's ONE Browse
+source, judging dismissals + curated membership under the caller's RLS (a zero-arg call = 537's answer). A non-CASCADE `drop view browse_projection` now fails; drop and recreate them in the
 same migration. Keep them `language sql stable`, invoker, no `SET`: that is what lets the planner
 inline them, so PostgREST's filters/ORDER BY/LIMIT still reach `browse_list`'s index.
 

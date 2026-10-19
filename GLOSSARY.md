@@ -126,7 +126,9 @@ a dismissal. Curation belongs to the user's account and follows the property.
 _Avoid_: operator state, user-defined information, user-created state, carried state
 
 **Pipeline card**:
-A property's place in one account's deal pipeline. At most one per property per account.
+A property's place in one account's deal pipeline. At most one per property per account. As a
+filter: in the pipeline (or in chosen stages), not in chosen stages, or in none of it ("Mimo
+pipeline": no card at any stage, closed ones included).
 _Avoid_: deal, card (alone)
 
 **Stage**:
@@ -135,7 +137,8 @@ _Avoid_: fáze (in code), column
 
 **Collection**:
 A named set of properties an account keeps, optionally watched for changes. It may be shared
-read-only with other accounts.
+read-only with other accounts. As a filter: in any chosen collection, in none of the excluded
+ones, or in no collection at all ("V žádné kolekci"); own and shared-with-me count alike.
 _Avoid_: list, folder, favourites, saved list
 
 **Share**:
@@ -151,7 +154,8 @@ _Avoid_: public note, team note
 
 **Tag**:
 A coloured label an account puts on a property; a property carries any number. A tag filter
-has two sides: must carry every chosen tag, must carry none of the excluded ones.
+has two sides: must carry every chosen tag, must carry none of the excluded ones; or carry no
+tag at all ("Bez štítků").
 _Avoid_: štítek (in code), label, category, flag
 
 **Dismissal**:
