@@ -7,6 +7,7 @@
  * matching the band as soon as a filter was set. The dot is decorative now;
  * the state rides on aria-describedby instead. */
 
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
@@ -73,5 +74,38 @@ describe('<DecimalField>', () => {
   it('ignores text that is not a number, and every edit when read-only', () => {
     expect(type('52 m')).toEqual([]);
     expect(type('52', { readOnly: true })).toEqual([]);
+  });
+
+  /* Typed key by key into a host that keeps the value: the box once showed
+   * String(value), so "52," lost its comma and the next key gave 525. */
+  it('keeps an unfinished number as typed, key by key', () => {
+    const seen: Array<number | null> = [];
+    function Host() {
+      const [v, setV] = useState<number | null>(null);
+      const onChange = (n: number | null) => {
+        seen.push(n);
+        setV(n);
+      };
+      return <DecimalField label="Plocha" value={v} onChange={onChange} />;
+    }
+    render(<Host />);
+    const box = screen.getByRole('textbox', { name: 'Plocha' });
+    for (const text of ['5', '52', '52,', '52,5', '-', '-1', '50.', '50.0']) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(box).toHaveValue(text);
+    }
+    expect(seen).toEqual([5, 52, 52, 52.5, -1, 50, 50]);
+  });
+
+  it('shows the value with a decimal comma again on blur and on an outside change', () => {
+    const { rerender } = render(<DecimalField label="Plocha" value={52.5} onChange={() => {}} />);
+    const box = screen.getByRole('textbox', { name: 'Plocha' });
+    expect(box).toHaveValue('52,5');
+    fireEvent.change(box, { target: { value: '52 m' } });
+    expect(box).toHaveValue('52 m');
+    fireEvent.blur(box);
+    expect(box).toHaveValue('52,5');
+    rerender(<DecimalField label="Plocha" value={60} onChange={() => {}} />);
+    expect(box).toHaveValue('60');
   });
 });

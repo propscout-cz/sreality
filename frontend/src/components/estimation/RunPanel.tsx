@@ -1530,7 +1530,7 @@ function AdjustPanel({
           required
           value={state.lat}
           step="0.000001"
-          placeholder="50.0875"
+          placeholder="50,0875"
           onChange={(v) => set('lat', v)}
         />
         <NumField
@@ -1538,7 +1538,7 @@ function AdjustPanel({
           required
           value={state.lng}
           step="0.000001"
-          placeholder="14.4205"
+          placeholder="14,4205"
           onChange={(v) => set('lng', v)}
         />
       </div>

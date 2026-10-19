@@ -422,10 +422,14 @@ export function NumberCell({
   );
 }
 
-/* DecimalField — a decimal-number input with an optional unit after it. A
- * comma is read as the decimal point, an empty box is null, and anything that
- * is not a finite number is ignored until it parses. `label` is the input's
- * accessible name; the visible caption is the caller's. */
+/* DecimalField — a decimal-number input with an optional unit after it. The
+ * typed text is buffered: rebuilding it from the parsed number dropped a
+ * trailing "52," on every key, so 52,5 could not be typed. Only text that
+ * parses emits (a comma is the decimal point, an empty box is null); a blur or
+ * an outside change of `value` shows the value again, with a decimal comma.
+ * `label` is the input's accessible name; the visible caption is the caller's. */
+const decimalText = (v: number | null) => (v == null ? '' : String(v).replace('.', ','));
+
 export function DecimalField({
   label,
   value,
@@ -445,6 +449,9 @@ export function DecimalField({
   readOnly?: boolean;
   className?: string;
 }) {
+  const [buf, setBuf] = useState({ text: decimalText(value), value });
+  // Adjust-state-during-render, as BufferedNumberInput: adopt an outside value.
+  if (buf.value !== value) setBuf({ text: decimalText(value), value });
   return (
     <div className={['flex items-stretch gap-2 min-w-0', className].join(' ')}>
       <input
@@ -452,16 +459,19 @@ export function DecimalField({
         aria-label={label}
         inputMode="decimal"
         readOnly={readOnly}
-        value={value == null ? '' : String(value)}
+        value={buf.text}
         placeholder={placeholder}
         step={step}
         onChange={(e) => {
           if (readOnly) return;
-          const raw = e.target.value.trim().replace(',', '.');
-          if (raw === '') return onChange(null);
-          const n = Number(raw);
-          if (Number.isFinite(n)) onChange(n);
+          const text = e.target.value;
+          const raw = text.trim().replace(',', '.');
+          const n = raw === '' ? null : Number(raw);
+          if (n !== null && !Number.isFinite(n)) return setBuf({ text, value });
+          setBuf({ text, value: n });
+          onChange(n);
         }}
+        onBlur={() => setBuf({ text: decimalText(value), value })}
         className={[
           'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
           readOnly
