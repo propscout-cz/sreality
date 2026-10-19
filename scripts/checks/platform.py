@@ -24,18 +24,28 @@ from typing import Any
 from psycopg import errors as _pg_errors
 
 from scripts.checks.clock import fetchall, fetchone
+from scripts.checks.common import (
+    CLOCK_SQL as _CLOCK_SQL,
+    ago as _ago,
+    as_utc as _as_utc,
+    cell as _cell,
+    graded as _graded,
+    iso as _iso,
+    judged as _judged,
+    now as _now,
+    num as _num,
+    oneline as _oneline,
+    result as _result,
+)
 from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, load_migrations
 from scripts.record_workflow_failures import CURSOR_KEY, MONITOR_WORKFLOW_NAME
 
 _UTC = _dt.timezone.utc
-_RANK = {"ok": 0, "warn": 1, "fail": 2}
 # scraper/realtime_worker.WORKER_NAME, the heartbeat's key (a check never imports the worker).
 _WORKER = "realtime-worker"
 # Migration 620's c_worker_dead: past it the watcher's `worker` cell judges a dead worker, and
 # lanes read from an older beat would ring the same outage a second time.
 _BEAT_FRESH_S = 600.0
-# The failing cells a check's own message names before it counts the rest.
-_NAMED = 5
 # A role without access to pg_cron's schema or tables reads no history: Not measured, never OK.
 _CRON_UNREADABLE = (_pg_errors.InsufficientPrivilege, _pg_errors.InvalidSchemaName,
                     _pg_errors.UndefinedTable)
@@ -45,33 +55,8 @@ _CREDIT_ERROR_PATTERNS = ("%credit balance%", "%no credits remaining%")
 # The checkout's migrations/ folder. The worker image ships none, so a run there probes nothing.
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
-_CLOCK_SQL = "select now()"
-
 
 # --- shared shape ------------------------------------------------------------------------
-
-
-def _now(conn: Any) -> _dt.datetime:
-    """The database's clock, the one every window in these checks' SQL is measured on."""
-    row = fetchone(conn, _CLOCK_SQL)
-    return _as_utc(row[0])
-
-
-def _as_utc(value: Any) -> _dt.datetime | None:
-    """A stored timestamp, or the worker's ISO text, as an aware UTC datetime."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, str):
-        value = _dt.datetime.fromisoformat(value)
-    return value.astimezone(_UTC) if value.tzinfo else value.replace(tzinfo=_UTC)
-
-
-def _iso(at: _dt.datetime | None) -> str | None:
-    return None if at is None else at.astimezone(_UTC).isoformat()
-
-
-def _num(value: Any) -> float | None:
-    return None if value is None else float(value)
 
 
 def _round(value: float | None, digits: int = 0) -> float | None:
@@ -82,71 +67,8 @@ def _hours(seconds: float | None) -> float | None:
     return None if seconds is None else round(seconds / 3600, 1)
 
 
-def _ago(seconds: float) -> str:
-    """A duration the way the page says it."""
-    if seconds < 90 * 60:
-        return f"{seconds / 60:.0f} min"
-    if seconds < 48 * 3600:
-        return f"{seconds / 3600:.1f} h"
-    return f"{seconds / 86400:.1f} d"
-
-
 def _stamp(at: _dt.datetime | None) -> str:
     return "none on record" if at is None else at.astimezone(_UTC).strftime("%Y-%m-%d %H:%M UTC")
-
-
-def _oneline(text: Any, limit: int = 200) -> str:
-    """An error as one bounded line (pg_cron's messages carry a CONTEXT block)."""
-    flat = " ".join(str(text or "").split())
-    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
-
-
-def _cell(subject: str, status: str, message: str, *, value: Any = None, unit: str = "",
-          portal: str | None = None, facts: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {"subject": subject, "portal": portal, "status": status, "value": value,
-            "unit": unit, "message": message, "facts": facts or {}}
-
-
-def _judged(subject: str, conditions: list[tuple[str, str]], ok_message: str,
-            **cell: Any) -> dict[str, Any]:
-    """One cell carrying the worst of its conditions, every condition's reason in its facts."""
-    if not conditions:
-        return _cell(subject, "ok", ok_message, **cell)
-    status = max((level for level, _ in conditions), key=_RANK.__getitem__)
-    cell["facts"] = {**cell.get("facts", {}),
-                     "conditions": [f"{level}: {why}" for level, why in conditions]}
-    return _cell(subject, status, "; ".join(why for level, why in conditions if level == status),
-                 **cell)
-
-
-def _result(key: str, cells: list[dict[str, Any]], not_measured: dict[str, str]) -> dict[str, Any]:
-    """A check's verdict: the worst measured cell; every cell and every unread arm kept."""
-    details: dict[str, Any] = {"cells": cells}
-    if not_measured:
-        details["not_measured"] = not_measured
-    unread = "; ".join(f"{arm}: {why}" for arm, why in not_measured.items())
-    measured = [c for c in cells if c["status"] in _RANK]
-    if not measured:
-        details["skipped"] = unread or "nothing to judge"
-        return {"check_key": key, "status": "unknown", "value": None, "details": details,
-                "message": f"Not measured: {details['skipped']}."}
-    status = max((c["status"] for c in measured), key=_RANK.__getitem__)
-    parts = []
-    for level, word in (("fail", "Problem"), ("warn", "Watch")):
-        named = [c for c in measured if c["status"] == level]
-        if named:
-            shown = "; ".join(f"{c['subject']}: {_oneline(c['message'], 160)}"
-                              for c in named[:_NAMED])
-            more = f"; {len(named) - _NAMED} more" if len(named) > _NAMED else ""
-            parts.append(f"{len(named)} {word} — {shown}{more}")
-    parts.append(f"{sum(c['status'] == 'ok' for c in measured)} OK")
-    if len(cells) > len(measured):
-        parts.append(f"{len(cells) - len(measured)} Not measured")
-    if unread:
-        parts.append(f"Not read: {unread}")
-    value = sum(c["status"] == status for c in measured) if status != "ok" else 0
-    return {"check_key": key, "status": status, "value": value, "details": details,
-            "message": ". ".join(parts) + "."}
 
 
 # --- jobs: GitHub workflows and the poller that records them --------------------------------
@@ -712,11 +634,6 @@ def _capacity_cron_cells(conn: Any, thresholds: dict[str, Any],
         cells.append(_judged(subject, conditions, f"24 h p50 {p50:.1f} s, p95 {p95:.1f} s",
                              value=_round(p50, 1), unit="s", facts=facts))
     return cells, None
-
-
-def _graded(value: float, warn: float, fail: float) -> str:
-    """Problem above `fail`, Watch above `warn`, else OK."""
-    return "fail" if value > fail else "warn" if value > warn else "ok"
 
 
 def _timeouts_cells(conn: Any, thresholds: dict[str, Any]) -> list[dict[str, Any]]:

@@ -55,7 +55,7 @@ One kept version of an ad's content. A new snapshot exists only when the content
 _Avoid_: version, revision, scrape
 
 **Sweep**:
-A day on which the platform first saw a portal category's existing stock all at once, rather than ads appearing one by one: the first walk of that category, or a catch-up after a gap.
+A day on which the platform first saw a portal category's existing stock all at once, rather than ads appearing one by one: the first walk of that category, or a catch-up after a gap. Not the property sweep, the daily job that recomputes every property's figures.
 _Avoid_: backfill day, horizon, go-live day
 
 **Newly listed ad**:
@@ -179,6 +179,29 @@ _Avoid_: job, execution, session
 The workflow that measures a property's rentable floor areas from its plans.
 _Avoid_: offtake, area offtake
 
+### Collecting ads
+
+**Walk**:
+One pass through a portal's lists of ads, page by page, to see which ads it shows right now. A walk
+reaches the end of a unit when it stops on the portal's own last page rather than on a limit of ours.
+_Avoid_: crawl, scan, index run
+
+**Unit (of a walk)**:
+One property type and deal that a portal lists, such as flats for sale, as a walk covers it; a walk
+may reach the end of one unit and not of another.
+_Avoid_: category pair, category (alone); a slice or scope is one part of a unit, never a unit
+
+**Declared total**:
+The number of ads a portal itself says a unit holds, read from its own pages during a walk. Where a
+portal shows no such number, the count of ads the walk saw stands in for it and is never read as one.
+_Avoid_: result size, portal count, expected count
+
+**Effective dwell**:
+How long an ad must stay gone from its portal, in practice, before the platform makes it inactive:
+24 hours today for an ad a walk nominates, because a walk re-checks no ad within 24 h of its last
+check, although the rule asks for 12.
+_Avoid_: dwell (alone), grace period, delisting delay
+
 ### Health
 
 **Check**:
@@ -244,7 +267,7 @@ _Avoid_: monitoring lane, acute lane, health workflow, smoke test
 
 **Health lane**:
 The realtime worker's lane that measures the checks hosted on the worker: every minute it runs
-those that are due, within a five-minute pass, and once a day it deletes check results older than
+those that are due, within a six-minute pass, and once a day it deletes check results older than
 35 days. The watcher judges whether it is running.
 _Avoid_: health worker, check lane, monitor lane
 

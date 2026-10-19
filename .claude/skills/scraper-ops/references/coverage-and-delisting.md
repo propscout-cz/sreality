@@ -1,4 +1,4 @@
-# Coverage and delisting: the (formerly parked) flag, the slice ledger, and the gate
+# Coverage and delisting: the (formerly parked) flag, the slice ledger, and the retired gate
 
 Loaded on demand from `scraper-ops`. Everything here is about one question —
 **may this portal delete listings?** — and the four layers that now answer it
@@ -8,15 +8,21 @@ instead of a boolean somebody typed once.
 
 > **2026-09-07:** delisting is now presence-verified (rule #3): a finished walk
 > nominates its unseen rows for a page check and the drain's fetch decides. The
-> flag below no longer gates anything; the ledger and the gate remain the
-> coverage evidence and the posture signal. The history stays because it is
-> why the design changed.
+> flag below no longer gates anything. The history stays because it is why the
+> design changed.
 >
 > **2026-09-08:** what "finished" means changed too. The nomination gate is
 > **structural** — `walk_reached_end`, "the walk reached the portal's end" — and
-> the count comparison (`walk_coverage`) is a LOGGED ALARM, never a gate. See
+> the count comparison (`walk_coverage`) is a LOGGED WARNING, never a gate. See
 > "The structural gate" below; the arithmetic in this file still governs the
 > descent/resample triggers and the ledger's `outcome`, which did not change.
+>
+> **2026-10-19 (Health wave 4):** the coverage gate is retired — it had nothing
+> left to evaluate once every scraper portal's flag was true (newest evaluation
+> 2026-09-13) — and with it the ceskereality and mmreality slice writes only it
+> read; idnes keeps its ledger for its own stalest-first order. Health measures
+> coverage instead: the `coverage` gauge and the `scraping` and `delisting`
+> alarms (`references/pipeline-verification.md`).
 
 `portals.supports_complete_walk` used to gate the absence sweep (architectural rule #3; the
 sweep, `mark_inactive`, was deleted in 2026-10):
@@ -135,7 +141,7 @@ Verified end-to-end through the real code path: `praha` → 3,825 / 3,840 =
 **A slice still short after descending is RESAMPLED** (`_RESAMPLE_PASSES`, 2).
 This is what makes praha reliable rather than a coin flip: it was landing at
 99.35 / 99.61 / 99.74% across runs against a 99.5% bar, so its category passed
-only sometimes — and the gate needs THREE CONSECUTIVE passes, which a coin flip
+only sometimes — and the gate needed THREE CONSECUTIVE passes, which a coin flip
 essentially never delivers. Bounded and self-limiting: only a short slice
 resamples, and it stops the moment a pass adds `<= _RESAMPLE_MIN_GAIN` rows,
 because a pass that adds nothing means the union has converged and the shortfall
@@ -187,18 +193,18 @@ One latest-wins row per `(source, category_main, category_type, slice_key)`:
 `walked_at`, `outcome`, `declared_total`, `collected`, `pages`.
 
 - Only `exhausted` is positive. `deadline`, `error`, `degraded` and `ceiling`
-  are **missing evidence**, and any one of them holds its whole category open
-  FOR THE GATE — 14 good slices and one hole is not 93% coverage for
-  `supports_complete_walk` purposes.
-- **`outcome` stayed NUMERIC on 2026-09-08 and must stay that way**:
-  `scripts/coverage_gate.py` counts `outcome='exhausted'` streaks, so re-pointing
-  it at the structural verdict would silently re-baseline the gate. The
-  structural verdict travels beside it, in code (a field on the slice result) and
-  in the `SLICE`/`CATEGORY` log lines, not in the ledger. Consequence to expect:
-  a slice can read `outcome='degraded'` (one row short) and `stop=pager_end`
-  (reached idnes's last page) at the same time. Both are true. The first decides
-  the posture flag; the second decides nomination. **Never read `exhausted` as
-  "this nominated".**
+  are **missing evidence**: any one of them held its whole category open for the
+  retired gate — 14 good slices and one hole is not 93% coverage.
+- **`outcome` stayed NUMERIC on 2026-09-08**: the gate counted
+  `outcome='exhausted'` streaks, so re-pointing it at the structural verdict would
+  have silently re-baselined it. Since the gate's retirement (2026-10-19) nothing
+  reads the column — idnes orders by `walked_at` alone — so it is evidence for a
+  human. The structural verdict travels beside it, in code (a field on the slice
+  result) and in the `SLICE`/`CATEGORY` log lines, not in the ledger. Consequence
+  to expect: a slice can read `outcome='degraded'` (one row short) and
+  `stop=pager_end` (reached idnes's last page) at the same time. Both are true;
+  only the second decides nomination. **Never read `exhausted` as "this
+  nominated".**
 - **Both the category order and the slice order are least-recently-walked
   first**, and an absent row sorts to *infinity*, not zero. Treating unknown as
   fresh would sort exactly the never-walked slices last, which is the starvation
@@ -215,100 +221,58 @@ select category_main, category_type, slice_key, outcome, collected, walked_at
   from portal_index_slices where source = 'idnes' order by walked_at;
 ```
 
-**mmreality writes one row per category.** Its ten per-(sale type, property type)
-indexes page to their tail with no second axis (the largest is ~300 pages of 12), so
-each category is one slice, `slice_key='national'`, `exhausted` only when the shared
-arithmetic accepts the collected count against the page's own `metadata.count`. A
-deadline stop records `deadline`, a page cap `ceiling`, a short or unmeasurable walk
-`degraded`. This is what un-parks it: the portal was parked in 2026-05 as "a single
-mixed index with no result total", and both halves were wrong (the bare feed was
-prodej-only and did declare a count — see `docs/architecture.md` § mmreality).
+**mmreality wrote one row per category until 2026-10-19**, when its slice write
+went with the gate (its ten rows stay, unread, until wave 9). Its ten per-(sale
+type, property type) indexes page to their tail with no second axis (the largest
+is ~300 pages of 12), so each category was one slice, `slice_key='national'`,
+`exhausted` only when the shared arithmetic accepted the collected count against
+the page's own `metadata.count`; the walk's verdict now shows in its
+`RECONCILE-INDEX` line. That evidence is what un-parked it: the portal was parked
+in 2026-05 as "a single mixed index with no result total", and both halves were
+wrong (the bare feed was prodej-only and did declare a count — see
+`docs/architecture.md` § mmreality).
 
-## The gate (`coverage_gate.yml`, migration 455)
+## The gate (`coverage_gate.yml`, migration 455) — retired 2026-10-19
 
-`scripts/coverage_gate.py`, cron `15 3,9,15,21` — three hours after each walk
-cycle starts (idnes `15 */6`, ceskereality `25 */6`), so it never reads a
-half-written ledger. Reading mid-walk would score a hold: harmless, but it would
-reset a streak that had done nothing wrong.
+`scripts/coverage_gate.py` (cron `15 3,9,15,21`, three hours after each walk cycle
+started) re-earned `supports_complete_walk` from the ledger on two questions.
+**Covered**: did every slice of every *declared* category finish inside 30 h
+(`FRESHNESS_HOURS`)? The declared count was the denominator, because a
+never-walked category has no ledger rows, and counting only what the ledger held
+would let a portal pass by walking a subset perfectly — precisely idnes's failure;
+and it counted CANONICAL categories (`portal_factory.canonical_category_count`:
+ceskereality's `rodinne-domy` and `chaty-chalupy` both canonicalise to `dum`).
+**Stable**: had that held for three consecutive evaluations with the
+delist-candidate count within 15% between them? A walk that reaches every slice
+but enumerates a different population each time is *sampling* the portal, not
+covering it. Every evaluation, holds included, went to `portal_coverage_gate`.
 
-**Only `kind='scraper'` rows are evaluated.** The `portals` registry also holds the
-on-demand URL-parser rows (`idnes_reality`, kind='parser': no categories, no walk,
-no ledger). One sat `supports_complete_walk=false` and was scored every cycle,
-writing a "no slice ledger" hold four times a day for a portal that never walks.
-A parser row is not a parked portal.
+Health wave 4 deleted it — the script, the workflow and its tests,
+`canonical_category_count` and `_config_for`, and the two slice writers only it
+read (ceskereality `_record_slices`, mmreality `_record_slice` and `SLICE_KEY`) —
+because since 2026-09-07 the flag gates nothing (a complete walk nominates and the
+page decides) and, once every scraper portal's flag was back to true, it had
+nothing left to evaluate (its newest evaluation is from 2026-09-13). What it
+reported as posture is measured now: the `coverage` gauge holds each unit's active
+ads against its declared total and counts the active ads no walk can nominate, and
+the `scraping` alarm's walks arm times each unit's newest walk that reached the
+end. Left for wave 9: `portal_coverage_gate` (153 rows),
+`portals.supports_complete_walk` (no writer now; the SPA's portal posture still
+reads it) and the 150 ceskereality and mmreality rows of `portal_index_slices`.
 
-Two questions, both from data:
+### ceskereality's descent over the 99-page ceiling
 
-**The denominator is CANONICAL categories, not config entries.** ceskereality
-declares both `rodinne-domy` and `chaty-chalupy` and both canonicalise to `dum`,
-so its 12 config entries can only ever write 10 slice-ledger rows. A gate
-demanding 12 could never be satisfied, and was not — it reported "8/12 categories
-fully covered" every cycle for a week with no path out. `portal_factory.
-canonical_category_count` resolves it through the framework's own
-`category_labels` seam rather than restating the mapping, and falls back to the
-raw count when it cannot, which is the strict direction: raw >= canonical, so a
-fallback can only hold a gate shut, never open one.
-
-1. **Covered** — did every slice of every *declared* category finish inside
-   `FRESHNESS_HOURS` (30)? The **declared** count is the denominator, not the
-   observed one: a never-walked category has no ledger rows at all, so counting
-   only what the ledger holds would let a portal pass by walking a subset
-   perfectly — precisely idnes's failure.
-2. **Stable** — has that held for `REQUIRED_CONSECUTIVE` (3) evaluations with
-   the delist-candidate count within `CANDIDATE_DRIFT_TOLERANCE` (15%) between
-   them? One run is luck, two is a coincidence. And a walk that reaches every
-   slice but enumerates a different population each time is *sampling* the
-   portal, not covering it — invisible in a coverage percentage, which is why
-   the candidate count is checked and not just the slice tally.
-
-Both pass → `supports_complete_walk` returns to true. Either fails → it stays
-down. Every evaluation appends to `portal_coverage_gate`, holds included: while a
-portal is parked the holds are the interesting rows, and a verdict that lives
-only in an expiring Actions log is a verdict nobody receives.
-
-**Why this is safe unattended.** Since 2026-09-07 the gate decides nothing that
-can delete: it re-earns a posture flag from ledger evidence, and the flag feeds
-Health. Closures come from page checks nominated by complete walks, one fetch
-each, throttled per walk by `delist_flip_cap`.
-
-**ceskereality now feeds the ledger too.** It was parked in migration 449 with no
-way back: the gate un-parks on ledger evidence and its walk wrote none, so it
-reported `no slice ledger` every cycle, forever. Its walk was already kraj-sliced,
-so wiring it was one call — but with one non-obvious rule.
-
-**ONE LEDGER ROW PER KRAJ, not per subtype.** A kraj past the 99-page ceiling is
-re-walked per subtype (and a subtype child itself past it, per okres —
-`_DESCENT_AXES`: the okres axis is a declared map, the subtype axis is declared
-where measured, else the kraj page's links; each level checked against its
-parent's declared total) and comes back as several `SliceResult`s sharing one
-kraj; an okres grandchild keeps its parent kraj in `kraj` and rides the okres in
-`okres`. Every descent logs `DESCENT cm=… axis=subtype|okres declared=… slugs=…`
-(INFO); `grep 'DESCENT.*axis=okres'` is how to see the okres level fire. A
-residue or deadline marker declares only its unwalked part, so the kraj row's
-`declared_total` stays the kraj's own total.
-Recording those individually would poison the ledger the first time a kraj stopped
-needing the descent: the `kraj/subtype-*` rows from the old shape would linger,
-never be re-walked, and age forever — and the gate reads "every slice of this
-category exhausted inside the window", so one permanently stale row holds the
-portal parked for good. Collapsing to the kraj keeps the key set stable. A kraj
-counts as exhausted only when every one of its parts did; a kraj the deadline
-never reached is not written at all, so it keeps its old timestamp and sorts first
-next run.
-
-mmreality still reports `no slice ledger` — an absent instrument is a different
-statement from a failed walk, and reading them alike makes an uninstrumented
-portal look broken.
-
-```bash
-gh workflow run coverage_gate.yml -f dry_run=true      # decide, write nothing
-gh workflow run coverage_gate.yml -f source=idnes
-```
-
-```sql
-select evaluated_at, source, verdict, covered, categories_ok, categories,
-       slices_ok, slices_total, candidates, consecutive, note
-  from portal_coverage_gate order by evaluated_at desc limit 20;
-```
+A kraj past the 99-page ceiling is re-walked per subtype (and a subtype child
+itself past it, per okres — `_DESCENT_AXES`: the okres axis is a declared map, the
+subtype axis is declared where measured, else the kraj page's links; each level
+checked against its parent's declared total) and comes back as several
+`SliceResult`s sharing one kraj; an okres grandchild keeps its parent kraj in
+`kraj` and rides the okres in `okres`. Every descent logs `DESCENT cm=…
+axis=subtype|okres declared=… slugs=…` (INFO); `grep 'DESCENT.*axis=okres'` is how
+to see the okres level fire. A residue or deadline marker declares only its
+unwalked part. Until 2026-10-19 the walk also wrote ONE LEDGER ROW PER KRAJ, never
+per subtype, for the gate alone: a `kraj/subtype-*` row from an old shape would
+never have been re-walked and would have held the gate shut forever.
 
 ## Why walks still stop short, and what that costs (2026-09-05)
 
@@ -439,7 +403,7 @@ lines changed shape:
 - `COVERAGE cm=… ct=…: the walk reached the portal's end but collected N of M
   (coverage=…) -- the gap is nominated, the page decides (rule #3)` — a WARNING
   emitted when a walk nominates while `walk_coverage != "complete"`. This is the
-  alarm that replaced the veto. **Do not silence it**: on a portal that could
+  warning that replaced the veto. **Do not silence it**: on a portal that could
   serve a forged terminator (a missing pager, an edge-cached repeat) it is the
   first thing that shows the walk ended early.
 - `VERIFY skipped cm=… ct=…: the walk did not reach the portal's end (our stop:
@@ -452,36 +416,48 @@ Portals also log their own stop per unit (`SLICE … stop=…`,
 is **not** in `scrape_runs.by_category` yet.
 
 **What lands in `scrape_runs.by_category`** (JSONB, no migration): each category
-entry now carries `walk_reached_end` (bool — did it nominate?) and
-`walk_coverage` (`complete` / `incomplete` / `unknown`) beside the existing
-`sreality_result_size`, `collected` and `active_db`. A category with
-`walk_reached_end: true, walk_coverage: "incomplete"` is the new normal case the
-old gate refused. `scripts/verify_pipeline.py`'s `walk_coverage` check reads the
-same rows and is now the standing rail on the count.
+entry carries `walk_reached_end` (bool — did it nominate?) and `walk_coverage`
+(`complete` / `incomplete` / `unknown`) beside the existing `sreality_result_size`
+(the declared total, spelled once as `portal_runner.DECLARED_TOTAL_KEY`),
+`collected` and `active_db`, and since Health wave 4 `total_is_count` (the
+adapter's "total" is the count of what it saw: remax, maxima) and
+`declared_is_upper_bound` (ceskereality's national count, wider than its kraj
+slices). A category with `walk_reached_end: true, walk_coverage: "incomplete"` is
+the new normal case the old gate refused. The `scraping` alarm's missing arm and
+the `coverage` gauge's residual arm read these rows (an entry whose
+`total_is_count` is true or absent is Not measured there, never 0%); they replaced
+the `walk_coverage` check.
 
-The other half of that record is a rail too. **`walk_end_streak`** (2026-10-13)
-counts, per (source, category_main, category_type), the finished index walks in a
-row in which the category was walked and `walk_reached_end` was false — walks that
-nominated nothing. Warn at 3 (~1 day at the real 6-9 h cron cadence for a
-category walked every run; idnes's rotated ones take ~twice as long), fail at 6
-(~2 days). A run that never started the category is skipped, not counted; a
-category its portal has not walked in its last 6 walks warns instead (starved, or
-dropped from the config) — `walk_coverage`'s truncation arm only compares category
-counts against a 7-day best and only warns, so it does not cover that case. The
-window is 14 days, so a streak with no reached end in it reads "at least N". It
-exists because ceskereality byt/prodej missed
-the end for 89 walks (2026-09-16 -> 10-13): nothing was nominated, 13,373 active
-rows piled up against 9,771 on the portal, each walk logged `VERIFY skipped`,
-and `walk_coverage` read ~4.6% because it averages the gap over the whole portal
-and lets `categories_nominating` move nothing. When it rings, the category's
-`VERIFY skipped` line names the stop and the portal's SLICE / DESCENT lines name
-the slice.
+The other half of that record is a rail too. **The `scraping` alarm's walks arm**
+(Health wave 4; it replaced 2026-10-13's `walk_end_streak`) times, per unit, the
+hours since the START of the newest finished walk in which it reached the end,
+against its portal's own rhythm G, the median start-to-start gap of its finished
+walks over 14 d: Watch above 3 G, Problem above 6 G — the operator's
+three/six-walk ruling of 10-13 in time, about 43-44 h on the ~7 h crawlers and
+26.5 h on sreality — or when a unit walked in the last 30 d has had no end-reached
+walk in 14 d; a portal with no finished walk in 14 d is scored on the slowest
+portal's G and reads Problem. Every portal of `claims_common.SOURCES` also gets
+a `<portal>/walks` cell on every pass: Problem while no walk in 30 d recorded a
+unit (no walk at all, or none finished), else OK with the hours since its
+newest finished walk started, its units judged by their own cells. So a portal
+cannot drop out (it keeps its inflow, fetch-error and unnominated cells), and
+that cell's incident recovers on a measured OK. The walks arm exists because
+ceskereality byt/prodej missed the end for 89 walks (2026-09-16 -> 10-13): nothing
+was nominated, 13,373 active rows piled up against 9,771 on the portal, each walk
+logged `VERIFY skipped`, and the old `walk_coverage` check read ~4.6% because it
+averaged the gap over the whole portal. When it rings, the unit's `VERIFY skipped`
+line names the stop and the portal's SLICE / DESCENT lines name the slice. Blind
+spots, known: a walk that stops between two scopes of one label reads as reached
+when every scope it walked reached the end (a scope it never started leaves no
+entry), and a dispatched `--max-pages` / `--limit` / bazos region run finishes as
+an index walk, which shortens G and never reaches the end (`scrape_runs` records
+no run arguments).
 
 ## The four layers, in order (as rebuilt 2026-09-07, regated 2026-09-08)
 
 1. **Coverage** — the sliced walk reaches everything (or records that it didn't).
    A walk that reached the portal's end nominates; the count comparison is a
-   logged alarm, never a gate.
+   logged warning, never a gate.
 2. **The ledger** — coverage accumulates across runs instead of restarting.
 3. **Nomination, not deletion** — a finished walk queues the rows it did not
    see for a page check; the drain fetches each page and only a positive gone
@@ -498,13 +474,16 @@ the slice.
    gone-rate breaker. The "~10% per walk" bound is a bound on the BIG scopes
    only; a small scope's protection is the page check itself. A
    walk that saw nothing nominates nothing; rows already in the queue or
-   checked within a day are not re-nominated; given-up rows are re-armed 50
+   checked in the last 24 h (`delist_policy.RECHECK_THROTTLE`) are not
+   re-nominated, which is why the effective dwell is 24 h (*Hysteresis*
+   below); given-up rows are re-armed 50
    per walk. The drain reserves 20% of each claim for checks so they can never
    starve behind refresh inflow, and Health reads the ingest queue through a
    view that excludes them (migration 483).
 
-The gate still runs and re-earns `supports_complete_walk` from the ledger, but
-as a posture signal for Health: nothing reads it to decide a deletion any more.
+The gate re-earned `supports_complete_walk` from the ledger as a posture signal
+until Health wave 4 retired it; nothing read the flag to decide a deletion after
+2026-09-07.
 The retired pieces — the staleness rail, the national cross-check, the latching
 refusal — all existed to make absence safe; presence does not need them.
 
@@ -533,14 +512,28 @@ cadence is the retry timer, so there is no column, no timer and no re-enqueue.
 An unrefuted verdict the dwell old: `db.mark_listing_inactive`, outcome `flipped`.
 The EARLIEST verdict is the anchor so consecutive provisional verdicts cannot
 reset the clock; a sighting (touch or detail write bumps `last_seen_at`) refutes
-every verdict before it. sreality's ~5 h walk gap closes a true removal on the
-fourth walk after the first verdict (~16 h); the ~7 h portals on the third.
+every verdict before it.
+
+**The effective dwell is 24 h, not 12.** A walk re-nominates no ad with a
+completion in the last 24 h (`delist_policy.RECHECK_THROTTLE`, read by
+`db.presence_candidates`), so a walk-nominated ad's second verdict comes no
+earlier than 24 h after its first, at the next end-reached walk of its unit after
+that: a true removal closes about 24 h plus one walk after the first verdict (p90
+27.8-35.2 h per portal, measured 2026-10-18), not on the fourth walk (~16 h) as
+first written here. A VERIFY row queued another way (the daily location refetch,
+sreality's freshness check) skips that throttle, so its second verdict can close
+an ad 12 h after the first. 24 h becomes the one rule in its own scraper PR
+(#1858, ruled 2026-10-18); `effective dwell = max(GONE_DWELL, RECHECK_THROTTLE)`
+is what the `delisting` check's limits are built on.
 
 **What to read in the logs.** `DETAIL id=… gone (first verdict recorded, not
 flipped; a second one 12h+ later flips)` is the provisional branch; `DETAIL id=…
 gone (is_active=false)` the flip; `gone (already inactive)` a confirmed verdict
 on a row something else closed. `DRAIN progress` and `RUN done` carry `pending=`
-beside `gone=`; `scrape_runs.listings_inactive` counts flips only.
+beside `gone=`; `scrape_runs.listings_inactive` (GitHub drains only — the
+worker writes no `scrape_runs` row) counts every verdict that is not pending —
+flipped, already inactive, no row — so it is not a flip count; the `delisting`
+check's outflow arm counts `listings.inactive_at` stamps instead.
 
 **What was deleted.** `sreality_client._is_not_found_body`: the live listing
 page carries "tato stránka neexistuje" inside its JavaScript bundle, so the scan
@@ -549,6 +542,14 @@ answers a real removal with a JSON 404 (62 of 62 re-probed removals did), and an
 HTML body is now a parse error, retried. `freshness._record_gone` no longer flips;
 it nominates at `QUEUE_PRIORITY_VERIFY` so the drain's one decider rules.
 
-**Health.** `verify_pipeline`'s `false_delist_share`: per portal, the share of
-`flipped` ledger rows (7 d) whose ad is active again — the false-flip rate the
-rule is meant to hold near the blink tail beyond the dwell.
+**Health.** The `delisting` alarm (wave 4) judges the rule per portal: its
+precision arm is the share of `flipped` ledger rows 48-72 h old whose ad is active
+again (a Wilson lower bound; Watch above 10%, Problem above 15%, n ≥ 50, else
+pooled over 2-7 d) — the false-flip rate the rule is meant to hold near the blink
+tail beyond the dwell — and its stuck arm counts the active ads whose first
+unrefuted verdict is older than the effective dwell + 2 × the portal's p90 walk
+gap + 1 h; outflow, the verify backlog and the flip cap's deferrals are its other
+arms (`references/pipeline-verification.md`). It replaced `false_delist_share` (a
+mixed 7-day window). At ship sreality's 10-18 flip cohort reads ~17.5% active
+again (Wilson lower bound ~15.5%), so its precision cell may open Problem on
+10-20/21: the blink tail #1858 addresses, told, not suppressed.

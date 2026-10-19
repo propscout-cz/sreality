@@ -341,19 +341,22 @@ completed by 440) — one row per artifact carrying `producer` / `host` / `caden
 `staleness_budget`, plus `complete_through`, `last_succeeded_at`, `last_duration_ms`,
 `last_rows`. It **replaced** the singleton `browse_read_model_state`, which migration 440
 dropped along with its `_public` view, 437's temporary UNION adapter, and the SPA reader —
-all 14 artifacts (12 matviews + `browse_list` + `llm_cost_hour_rollup`) are ordinary rows now.
-Same posture as 276: RLS on with zero policies, everything revoked, published through
-`derived_artifacts_public` (enumerated columns, `authenticated` only, not `security_invoker` —
-owner rights are what read through the RLS wall). **A new derived artifact needs a registry
-row**, and `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG`
-exemption set is now empty and **nothing may be added to it**. Two budgets are deliberately
-NOT their cadence and 440's header carries the measurements: the six health matviews get
-45 min (not 10 — the 30d p95 gap is 15.8 min and a 10-min budget reads red on the healthy
-case), and `broker_region_type_stats` gets 30 h (not 24 — its daily sweep itself runs up to
-2h01m, so 24 h alarms on every healthy run). `rent_map_cells`'s `host` is honestly
-`api-request`: it is refreshed inside a FastAPI request handler — don't launder it into a
-cron string. `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is
-deliberately unregistered.
+every artifact is an ordinary row now. Same posture as 276: RLS on with zero policies,
+everything revoked, published through `derived_artifacts_public` (enumerated columns,
+`authenticated` only, not `security_invoker` — owner rights are what read through the RLS
+wall). **A new derived artifact needs a registry row**, and
+`tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
+set is now empty and **nothing may be added to it**. Three budgets are deliberately NOT their
+cadence: the six health matviews get 45 min (not 10 — the 30d p95 gap is 15.8 min and a 10-min
+budget reads red on the healthy case) and `broker_region_type_stats` 30 h (not 24 — its daily
+sweep itself runs up to 2h01m, so 24 h alarms on every healthy run), both measured in 440's
+header; `property_sweep` (migration 622, the daily full sweep's completed cycle, stamped by
+`recompute_property_stats` in place of `app_settings.property_sweep_last_complete`) gets 38 h,
+because the `jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem
+at 56 h, as ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
+it is refreshed inside a FastAPI request handler — don't launder it into a cron string.
+`llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is deliberately
+unregistered.
 There is deliberately **no `last_error` column**: a plpgsql `exception when others then
 update …; raise;` handler cannot persist its write (the re-raise unwinds the subtransaction
 it ran in — verified live), so such a column could only ever be NULL and would publish

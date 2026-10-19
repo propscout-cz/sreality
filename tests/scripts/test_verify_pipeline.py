@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import datetime as _dt
-import io
 import json
 import re
 import pytest
@@ -24,10 +23,6 @@ from scripts.verify_pipeline import (
     CHECKS,
     THRESHOLDS,
     Check,
-    check_acquisition_lag,
-    check_false_delist_share,
-    check_walk_coverage,
-    check_walk_end_streak,
     run_checks,
 )
 
@@ -54,108 +49,14 @@ def _hosted(host: str) -> list[str]:
     return [c.key for c in CHECKS if c.host == host]
 
 
-# The keys the worker's health lane measures (wave 3); every other key runs on GitHub.
-_WORKER_KEYS = ["jobs", "capacity", "llm"]
+# The keys the worker's health lane measures (waves 3 and 4); every other key runs on GitHub.
+_WORKER_KEYS = ["jobs", "capacity", "llm", "scraping", "publishing", "delisting", "coverage"]
 
 
 def _stub(key: str, fn: Any, *, budget_s: float = 45.0, cls: str = "alarm",
           host: str = "github-actions", cadence_s: int = 3600) -> Check:
     """An unregistered check for exercising the harness itself."""
     return Check(key, fn, "platform", cls, host, cadence_s, key, budget_s=budget_s)
-
-
-# --- property_maintenance ----------------------------------------------------
-
-
-def test_property_maintenance_healthy_day_is_ok() -> None:
-    """~24-25h sweep age just before the next daily sweep is the healthy
-    steady state of a one-run cycle, not a warning; an empty dirty queue (None)
-    trips nothing."""
-    from scripts.verify_pipeline import _status_for_property_maintenance
-
-    t = THRESHOLDS
-    assert _status_for_property_maintenance(24.5, 0.1, t) == ("ok", [])
-    assert _status_for_property_maintenance(2.0, None, t) == ("ok", [])
-
-
-def test_property_maintenance_missing_stamp_warns_not_fails() -> None:
-    """No stamp on record = the state between deploying this check and the
-    first complete sweep. Permanently red would train the operator to ignore
-    the check; silently green would hide a sweep that has never completed."""
-    from scripts.verify_pipeline import _status_for_property_maintenance
-
-    status, offenders = _status_for_property_maintenance(None, 0.1, THRESHOLDS)
-    assert status == "warn"
-    assert any("no complete-sweep stamp" in o for o in offenders)
-
-
-def test_property_maintenance_worst_axis_wins() -> None:
-    from scripts.verify_pipeline import _status_for_property_maintenance
-
-    t = THRESHOLDS
-    # Warn axis alone → warn; a fail axis anywhere → fail overall.
-    status, offenders = _status_for_property_maintenance(53.0, None, t)
-    assert status == "warn" and "last complete sweep" in offenders[0]
-    status, offenders = _status_for_property_maintenance(53.0, 4.0, t)
-    assert status == "fail"
-    assert any("dirty-queue" in o for o in offenders)
-    # The 2026-08-06 incident shape: sweep dead for days + frozen dirt.
-    status, offenders = _status_for_property_maintenance(73.0, 2.8, t)
-    assert status == "fail" and len(offenders) == 2
-
-
-def test_property_sweep_thresholds_fit_a_two_run_cycle() -> None:
-    """A cycle may take two daily runs (the sweep's resume cursor), so its stamp
-    lands every ~48h plus the spread in when a run finishes (~2.5h: GH's
-    scheduled-run delay, the lease wait, the run itself). That must read ok —
-    at 26h/30h the check was red ~18h of every 48h while both runs were green —
-    and a cycle whose second run never stamped must still fail within a third day."""
-    from scripts.verify_pipeline import _status_for_property_maintenance
-
-    t = THRESHOLDS
-    two_run_gap_h = 48 + 2.5
-    assert two_run_gap_h < t["property_sweep_warn_hours"] < t["property_sweep_fail_hours"] < 72
-    assert _status_for_property_maintenance(two_run_gap_h, 0.1, t) == ("ok", [])
-    assert _status_for_property_maintenance(72.0, 0.1, t)[0] == "fail"
-
-
-def test_property_dirty_warn_clears_a_full_length_sweep() -> None:
-    """The daily sweep holds the maintenance lease for its whole budget
-    (_MAX_BUDGET_SECONDS, 100 min) and only clears dirty_properties at the end,
-    so oldest-dirt ages 1:1 with sweep elapsed. The warn threshold must sit
-    ABOVE that hold or a perfectly healthy long sweep turns the axis amber and
-    trains the operator to ignore it — the anti-pattern this module warns about.
-    Raising the sweep budget means raising this threshold in the same change."""
-    import scripts.recompute_property_stats as rps
-    from scripts.verify_pipeline import _status_for_property_maintenance
-
-    max_hold_h = rps._MAX_BUDGET_SECONDS / 3600
-    assert THRESHOLDS["property_dirty_warn_hours"] > max_hold_h
-    # ...and a sweep running its full budget stays green on the dirty axis.
-    assert _status_for_property_maintenance(1.0, max_hold_h, THRESHOLDS) == ("ok", [])
-
-
-def test_property_maintenance_offenders_do_not_round_a_fractional_threshold() -> None:
-    """`(warn > 2h)` next to `2.6h` reads as a contradiction. The dirty
-    thresholds are fractional, so the rendering must not round them away."""
-    from scripts.verify_pipeline import _status_for_property_maintenance
-
-    t = dict(THRESHOLDS, property_dirty_warn_hours=2.5)
-    _, offenders = _status_for_property_maintenance(1.0, 2.6, t)
-    assert offenders == ["oldest dirty-queue row 2.6h (warn > 2.5h)"]
-
-
-def test_property_maintenance_sql_is_o1() -> None:
-    """The check runs under the per-check 45 s budget (Check.budget_s): it must
-    read the completion stamp + the tiny dirty queue, never scan `properties`
-    — the per-row staleness variant measured ~3.5 min live and would be
-    cancelled, Not measured, on every run."""
-    from scripts.verify_pipeline import _PROPERTY_MAINTENANCE_SQL as sql
-
-    assert "property_sweep_last_complete" in sql
-    assert "dirty_properties" in sql
-    assert "from properties" not in sql.lower()
-    assert "listings" not in sql.lower()
 
 
 # --- broker_merge_suppression ------------------------------------------------
@@ -483,7 +384,7 @@ def test_lane_budget_is_reset_after_a_run() -> None:
 
 
 def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
-    """The outbound probes get 120 s, the database checks 45 s: the statement timeout a
+    """The outbound probe gets 120 s, the database checks 45 s: the statement timeout a
     check runs under is ITS budget, not one lane-wide number."""
     import scripts.verify_pipeline as vp
 
@@ -499,9 +400,8 @@ def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
     assert seen == {"db": "45000ms", "probe": "120000ms"}
-    assert _by_key("sreality_image_template").budget_s == 120.0
     assert _by_key("outbound_url_conformance").budget_s == 120.0
-    assert {c.budget_s for c in CHECKS[:-2]} == {vp._CHECK_BUDGET_S}
+    assert {c.budget_s for c in CHECKS[:-1]} == {vp._CHECK_BUDGET_S}
 
 
 # --- the registry ------------------------------------------------------------
@@ -511,11 +411,11 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     from scripts import verify_pipeline as vp
 
     keys = _keys()
-    assert len(keys) == len(set(keys)) == 23
-    # Wave 3: the worker hosts the platform checks; GitHub keeps what needs a checkout
-    # (migration_drift) or an address that is not the scrapers' (the outbound probes).
+    assert len(keys) == len(set(keys)) == 20
+    # Waves 3-4: the worker hosts the platform and portal checks; GitHub keeps what needs a
+    # checkout (migration_drift) or an address that is not the scrapers' (the outbound probe).
     assert _hosted("realtime-worker") == _WORKER_KEYS
-    assert len(_hosted("github-actions")) == 20 and not _hosted("pg_cron")
+    assert len(_hosted("github-actions")) == 13 and not _hosted("pg_cron")
     for c in CHECKS:
         assert c.label.strip(), c.key
         assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
@@ -573,27 +473,28 @@ def test_the_capacity_reference_is_blessed_at_most_90_days_back() -> None:
 
 
 def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() -> None:
-    """Q2 (2026-10-18): these eight are standing conditions, read as gauges; every other
-    key — the quiet regression detectors included — stays an alarm."""
+    """Q2 (2026-10-18): these are standing conditions, read as gauges (wave 4's coverage in
+    walk_coverage's place, delist_flip_refused's deferrals now an arm of the delisting alarm);
+    every other key — the quiet regression detectors included — stays an alarm."""
     assert {c.key for c in CHECKS if c.cls == "gauge"} == {
-        "location_town_coverage", "ppm2_basis_floor_share", "area_vs_usable_divergence",
-        "outbound_url_coverage", "text_extraction_lag", "floor_convention", "walk_coverage",
-        "delist_flip_refused",
+        "location_town_coverage", "coverage", "ppm2_basis_floor_share",
+        "area_vs_usable_divergence", "outbound_url_coverage", "text_extraction_lag",
+        "floor_convention",
     }
 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
-    """Wave 3 moves two cadences only: migration_drift from 6-hourly to hourly, and the
-    worker's checks every 10 or 30 minutes. The image probe stays daily, the URL probe
+    """The worker's checks run every 10 minutes, capacity every 30 and the coverage gauge
+    hourly; on GitHub broker_merge_suppression and migration_drift run hourly, the URL probe
     weekly, everything else 6-hourly."""
     assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
-        "jobs": 600, "capacity": 1_800, "llm": 600}
-    hourly = {c.key for c in CHECKS if c.cadence_s == 3_600}
-    assert hourly == {"property_maintenance", "broker_merge_suppression", "migration_drift"}
-    assert _by_key("sreality_image_template").cadence_s == 86_400
+        "jobs": 600, "capacity": 1_800, "llm": 600, "scraping": 600, "publishing": 600,
+        "delisting": 600, "coverage": 3_600}
+    github = set(_hosted("github-actions"))
+    hourly = {k for k in github if _by_key(k).cadence_s == 3_600}
+    assert hourly == {"broker_merge_suppression", "migration_drift"}
     assert _by_key("outbound_url_conformance").cadence_s == 604_800
-    rest = (set(_keys()) - hourly - set(_WORKER_KEYS)
-            - {"sreality_image_template", "outbound_url_conformance"})
+    rest = github - hourly - {"outbound_url_conformance"}
     assert {_by_key(k).cadence_s for k in rest} == {21_600}
 
 
@@ -664,21 +565,29 @@ def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
         return _NOW - _dt.timedelta(**kw)
 
     conn = _DueConn({
-        "property_maintenance": ago(minutes=30),      # hourly, half a cadence old: not due
+        "migration_drift": ago(minutes=30),           # hourly, half a cadence old: not due
         "broker_merge_suppression": ago(minutes=61),  # hourly, over a cadence old: due
-        "walk_coverage": ago(hours=5),        # 6-hourly: not due
-        "acquisition_lag": ago(hours=7),      # 6-hourly: due
+        "field_fill_matrix": ago(hours=5),    # 6-hourly: not due
+        "floor_convention": ago(hours=7),     # 6-hourly: due
         "outbound_url_conformance": ago(days=6),  # weekly: not due
     })
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
-    assert "property_maintenance" not in due and "walk_coverage" not in due
+    assert "migration_drift" not in due and "field_fill_matrix" not in due
     assert "outbound_url_conformance" not in due
-    assert "broker_merge_suppression" in due and "acquisition_lag" in due
+    assert "broker_merge_suppression" in due and "floor_convention" in due
     assert due == [k for k in _keys() if k in due], "registry order is the run order"
     assert len(due) == len(_hosted("github-actions")) - 3
     (sql, params), = conn.executed  # one round trip for the whole host
     assert "max(r.run_at)" in sql and "unnest(%(keys)s::text[])" in sql
     assert params["keys"] == _hosted("github-actions")
+    worker = _DueConn({
+        "capacity": ago(minutes=20),  # 30-minute: not due
+        "scraping": ago(minutes=11),  # 10-minute: due
+        "coverage": ago(minutes=30),  # hourly: not due
+    })
+    due = [c.key for c in due_checks(worker, "realtime-worker", _NOW)]
+    assert "capacity" not in due and "coverage" not in due and "scraping" in due
+    assert len(due) == len(_hosted("realtime-worker")) - 2
 
 
 def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measures_it() -> None:
@@ -691,37 +600,39 @@ def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measure
         conn = _DueConn({key: _NOW - _dt.timedelta(**age)})
         return key in [c.key for c in due_checks(conn, "github-actions", _NOW)]
 
-    assert due("property_maintenance", minutes=59)
-    assert due("property_maintenance", minutes=54)   # 60 min less the 6-min slack, inclusive
-    assert not due("property_maintenance", minutes=50)
-    assert due("walk_coverage", hours=5, minutes=45)
-    assert not due("walk_coverage", hours=5, minutes=44)
+    assert due("migration_drift", minutes=59)
+    assert due("migration_drift", minutes=54)   # 60 min less the 6-min slack, inclusive
+    assert not due("migration_drift", minutes=50)
+    assert due("field_fill_matrix", hours=5, minutes=45)
+    assert not due("field_fill_matrix", hours=5, minutes=44)
     assert due("outbound_url_conformance", days=7, minutes=-10)
     assert not due("outbound_url_conformance", days=7, minutes=-16)
     assert {c.cadence_s - c.due_after_s for c in CHECKS if c.host == "github-actions"} \
         == {360, 900}
-    # The worker's 60 s tick: a 10-minute check is due after 9 minutes, a 30-minute one 27.
+    # The worker's 60 s tick: a 10-minute check is due after 9 minutes, a 30-minute one 27,
+    # the hourly gauge 54.
     assert {c.cadence_s - c.due_after_s for c in CHECKS if c.host == "realtime-worker"} \
-        == {60, 180}
+        == {60, 180, 360}
 
 
 def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
     """The page and the ladder ignore rows older than declared_at, so a key whose newest row
     predates its registration read Not measured for a whole cadence before the lanes measured
-    it: the daily image probe and the weekly URL probe, last measured before wave 1."""
+    it: the weekly URL probe, last measured before wave 1, among them."""
     from scripts.verify_pipeline import due_checks
 
     registered = _NOW - _dt.timedelta(minutes=1)  # project_registry runs first in main()
     conn = _DueConn({"outbound_url_conformance": _NOW - _dt.timedelta(days=2),
-                     "sreality_image_template": _NOW - _dt.timedelta(hours=3),
-                     "property_maintenance": _NOW - _dt.timedelta(seconds=30)},
+                     "field_fill_matrix": _NOW - _dt.timedelta(hours=3),
+                     "broker_merge_suppression": _NOW - _dt.timedelta(seconds=30)},
                     declared=dict.fromkeys(
-                        ("outbound_url_conformance", "sreality_image_template",
-                         "property_maintenance"),
+                        ("outbound_url_conformance", "field_fill_matrix",
+                         "broker_merge_suppression"),
                         registered))
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
-    assert "outbound_url_conformance" in due and "sreality_image_template" in due
-    assert "property_maintenance" not in due, "a row written since the registration still counts"
+    assert "outbound_url_conformance" in due and "field_fill_matrix" in due
+    assert "broker_merge_suppression" not in due, \
+        "a row written since the registration still counts"
     (sql, _params), = conn.executed
     assert "left join health_checks h on h.key = k.key" in " ".join(sql.split())
 
@@ -825,17 +736,18 @@ def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> No
 
     then = _NOW - _dt.timedelta(days=3)
     conn = _HealthChecksConn({
-        "property_maintenance": {"host": "github-actions", "cadence_s": 3_600,
-                                 "declared_at": then},
+        "broker_merge_suppression": {"host": "github-actions", "cadence_s": 3_600,
+                                     "declared_at": then},
         # wave 3 moved migration_drift from 6-hourly to hourly
         "migration_drift": {"host": "github-actions", "cadence_s": 21_600, "declared_at": then},
-        "walk_coverage": {"host": "realtime-worker", "cadence_s": 21_600, "declared_at": then},
+        "floor_convention": {"host": "realtime-worker", "cadence_s": 21_600,
+                             "declared_at": then},
     })
     project_registry(conn, "github-actions", _NOW)
-    assert conn.table["property_maintenance"]["declared_at"] == then  # unchanged: kept
-    assert conn.table["migration_drift"]["declared_at"] == _NOW       # cadence moved
-    assert conn.table["walk_coverage"]["declared_at"] == _NOW         # host moved
-    assert conn.table["walk_coverage"]["host"] == "github-actions"
+    assert conn.table["broker_merge_suppression"]["declared_at"] == then  # unchanged: kept
+    assert conn.table["migration_drift"]["declared_at"] == _NOW           # cadence moved
+    assert conn.table["floor_convention"]["declared_at"] == _NOW          # host moved
+    assert conn.table["floor_convention"]["host"] == "github-actions"
     project_registry(conn, "github-actions", _NOW + _dt.timedelta(hours=1))
     assert conn.table["migration_drift"]["declared_at"] == _NOW, "a re-projection is a no-op"
 
@@ -870,6 +782,24 @@ def test_the_first_projection_from_main_retires_the_eight_legacy_keys() -> None:
                                     "declared_at": _NOW} for key in legacy})
     assert project_registry(conn, "github-actions", _NOW)["deleted"] == 8
     assert not set(legacy) & set(conn.table)
+
+
+def test_the_first_projection_from_main_retires_the_seven_portal_keys() -> None:
+    """Wave 4's scraping, publishing, delisting and coverage replace seven GitHub keys. Their rows
+    go at the canary's first projection from main, the ladder closes any incident of theirs as
+    retired, with no notice, and the worker projects the four on its first health pass."""
+    from scripts.verify_pipeline import project_registry
+
+    legacy = ("acquisition_lag", "property_maintenance", "walk_coverage", "walk_end_streak",
+              "delist_flip_refused", "false_delist_share", "sreality_image_template")
+    assert not set(legacy) & set(_keys())
+    conn = _HealthChecksConn({key: {"host": "github-actions", "cadence_s": 21_600,
+                                    "declared_at": _NOW} for key in legacy})
+    assert project_registry(conn, "github-actions", _NOW)["deleted"] == 7
+    assert not set(legacy) & set(conn.table)
+    assert project_registry(conn, "realtime-worker", _NOW) == {
+        "upserted": len(_WORKER_KEYS), "deleted": 0}
+    assert {"scraping", "publishing", "delisting", "coverage"} <= set(conn.table)
 
 
 # --- persistence --------------------------------------------------------------------
@@ -1006,7 +936,7 @@ def test_run_due_hands_each_result_on_the_moment_it_completes(monkeypatch: Any) 
 
 
 def test_run_due_caps_the_pass_at_the_lane_budget_it_is_given(monkeypatch: Any) -> None:
-    """The worker's health lane (wave 3) runs it under a 300 s pass; by default the due budgets sum."""
+    """The worker's health lane runs it under a 360 s pass (300 s in wave 3); by default the due budgets sum."""
     import scripts.verify_pipeline as vp
 
     log: list[str] = []
@@ -1776,319 +1706,6 @@ def test_a_measured_and_clean_corpus_still_reports_ok() -> None:
     assert [r["status"] for r in results] == ["ok", "ok"]
 
 
-# --- ingestion checks (2026-08-27) -----------------------------------------
-#
-# These two are the push half of the starvation incident: nothing in this harness
-# had ever looked at whether listings were actually being INGESTED, so a portal
-# could sit at zero for nine days without a signal leaving the database.
-
-
-class _RowsConn:
-    """Minimal conn whose cursor returns one canned result set."""
-
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self._rows = rows
-        self.executed: list[tuple[str, Any]] = []
-
-    def cursor(self) -> "_RowsConn":
-        return self
-
-    def transaction(self) -> "_RowsConn":
-        return self
-
-    def __enter__(self) -> "_RowsConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self.executed.append((sql, params))
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return list(self._rows)
-
-
-def _queries(conn: _RowsConn) -> list[tuple[str, Any]]:
-    """The statements a check sent, less the SET LOCAL statement_timeout armed before each."""
-    return [(sql, params) for sql, params in conn.executed
-            if not sql.startswith("SET LOCAL statement_timeout")]
-
-
-def test_acquisition_lag_ok_when_every_portal_is_current() -> None:
-    conn = _RowsConn([("bazos", 8, 1.6, 1.3), ("realitymix", 123, 0.8, 0.1)])
-    out = check_acquisition_lag(conn, T)
-    assert out["status"] == "ok"
-    assert out["value"] == 1.6
-    assert out["details"]["offenders"] == []
-
-
-def test_acquisition_lag_fails_on_the_starvation_signature() -> None:
-    """The live numbers on the morning of the fix: sreality 216h / 9,873 waiting."""
-    conn = _RowsConn([
-        ("sreality", 9873, 216.11, 86.29),
-        ("ceskereality", 2840, 89.31, 44.47),
-        ("bazos", 8, 1.6, 1.3),
-    ])
-    out = check_acquisition_lag(conn, T)
-    assert out["status"] == "fail"
-    assert out["value"] == 216.11
-    assert any("sreality" in o for o in out["details"]["offenders"])
-    assert not any("bazos" in o for o in out["details"]["offenders"])
-
-
-def test_acquisition_lag_warns_between_the_tiers() -> None:
-    conn = _RowsConn([("idnes", 1125, 12.0, 8.0)])
-    assert check_acquisition_lag(conn, T)["status"] == "warn"
-
-
-def test_acquisition_lag_queries_the_new_class_only() -> None:
-    """Keyed on the queue, not on listings.first_seen_at — a "no new rows in N
-    hours" check needs a baseline that the outage itself erodes."""
-    conn = _RowsConn([])
-    check_acquisition_lag(conn, T)
-    (sql, params), = _queries(conn)
-    assert "listing_detail_queue" in sql
-    assert "claimed_at is null" in sql and "given_up = false" in sql
-    assert params == (0,)  # db.QUEUE_PRIORITY_NEW
-
-
-def _cov(source, walked, best, age, collected, total, nominating=None):
-    # nominating defaults to "every walked category reached the portal's end"
-    return (source, walked, best, age, collected, total,
-            walked if nominating is None else nominating)
-
-
-def test_walk_coverage_ok_at_the_observed_noise_floor() -> None:
-    conn = _RowsConn([
-        _cov("sreality", 20, 20, 2.5, 102487, 102488),
-        _cov("bazos", 14, 14, 1.8, 29731, 29778),  # 0.16%
-    ])
-    out = check_walk_coverage(conn, T)
-    assert out["status"] == "ok"
-
-
-def test_walk_coverage_warns_on_the_ceskereality_facet_gap() -> None:
-    """43,431 of 48,235 advertised — the top-10-popularity facet widget is not a
-    partition. Amber, not red: it is a known bounded problem with its own fix."""
-    conn = _RowsConn([_cov("ceskereality", 12, 12, 13.9, 43431, 48235)])
-    out = check_walk_coverage(conn, T)
-    assert out["status"] == "warn"
-    assert out["value"] == 9.96
-
-
-def test_walk_coverage_fails_on_a_deep_hole() -> None:
-    conn = _RowsConn([_cov("idnes", 10, 10, 3.0, 12036, 35769)])
-    assert check_walk_coverage(conn, T)["status"] == "fail"
-
-
-def test_walk_coverage_flags_a_truncated_walk_even_at_zero_gap() -> None:
-    """A run that reached fewer categories than the portal's own recent best is
-    truncated — and truncation makes the GAP look better, because the categories
-    it never reached contribute no shortfall. Caught on the category count."""
-    conn = _RowsConn([_cov("idnes", 0, 10, 14.2, None, None)])
-    out = check_walk_coverage(conn, T)
-    assert out["status"] == "warn"
-    assert out["details"]["per_source"]["idnes"]["truncated"] is True
-
-
-def test_walk_coverage_reports_how_many_categories_nominated() -> None:
-    """Since 2026-09-08 the count does not gate nomination, so the run row carries
-    both facts. A category that reached the portal's end while short is the NORMAL
-    case now — it must be visible, and it must not move the status."""
-    conn = _RowsConn([_cov("ceskereality", 12, 12, 2.0, 48200, 48235, nominating=11)])
-    out = check_walk_coverage(conn, T)
-    assert out["details"]["per_source"]["ceskereality"]["categories_nominating"] == 11
-    assert out["status"] == "ok"
-
-
-def test_walk_coverage_never_certifies_a_self_reported_total() -> None:
-    """remax and maxima derive their "advertised total" as len(seen), so their gap
-    is 0% by construction; mmreality reports no total at all. Reporting any of them
-    as 100% covered would be a number that cannot be wrong."""
-    conn = _RowsConn([
-        _cov("remax", 10, 10, 13.0, 8132, 8132),
-        _cov("maxima", 10, 10, 13.0, 272, 272),
-        _cov("mmreality", 1, 1, 12.1, None, None),
-    ])
-    out = check_walk_coverage(conn, T)
-    assert out["details"]["unverified"] == ["maxima", "mmreality", "remax"]
-    for source in ("remax", "maxima", "mmreality"):
-        assert out["details"]["per_source"][source]["verifiable"] is False
-        assert out["details"]["per_source"][source]["gap_pct"] is None
-
-
-# --- walk_end_streak: walks in a row a category stopped short of the portal's end ---
-
-
-_T0 = _dt.datetime(2026, 10, 13, 6, 0, tzinfo=_dt.timezone.utc)
-
-
-def _walks(source: str, cm: str | None, ct: str, verdicts: list[bool | None], *,
-           every_hours: float = 7.0, skip_newest: int = 0) -> list[tuple[Any, ...]]:
-    """One (run id, source, started_at, cm, ct, reached_end) row per walk, NEWEST FIRST:
-    the first verdict is the latest run. Run i has id 10_000 - i, so rows built for two
-    categories of one source share their runs; `skip_newest` leaves the category out of
-    that many newest runs (they exist only if another category's rows carry them)."""
-    return [(10_000 - i, source, _T0 - _dt.timedelta(hours=every_hours * i), cm, ct, v)
-            for i, v in enumerate(verdicts, start=skip_newest)]
-
-
-def test_walk_end_streak_counts_back_to_the_last_walk_that_reached_the_end() -> None:
-    conn = _RowsConn(_walks("bazos", "byt", "prodej", [False, False, True, False, False]))
-    out = check_walk_end_streak(conn, T)
-    cell = out["details"]["per_category"][0]
-    assert cell["streak"] == 2  # the two older misses sit behind a reached end
-    assert cell["walks"] == 5 and cell["runs_since_walked"] == 0
-    assert cell["last_reached_end_at"] == "2026-10-12 16:00 UTC"
-    assert cell["last_walked_at"] == "2026-10-13 06:00 UTC"
-    assert out["status"] == "ok" and out["value"] == 2
-
-
-def test_walk_end_streak_resets_on_the_latest_walk_reaching_the_end() -> None:
-    conn = _RowsConn(_walks("sreality", "dum", "prodej", [True] + [False] * 9))
-    out = check_walk_end_streak(conn, T)
-    assert out["value"] == 0 and out["status"] == "ok"
-    assert out["details"]["offenders"] == []
-
-
-def test_walk_end_streak_skips_runs_that_never_walked_the_category() -> None:
-    """idnes walks 5 of its 10 categories per run: a run that omitted this one has no
-    row, so the streak runs straight through it."""
-    full = _walks("idnes", "byt", "prodej", [False] * 6)
-    sparse = [r for i, r in enumerate(_walks("idnes", "dum", "prodej", [False] * 6))
-              if i % 2 == 0]  # walked in 3 of the 6 runs
-    out = check_walk_end_streak(_RowsConn(full + sparse), T)
-    streaks = {c["category_main"]: c["streak"] for c in out["details"]["per_category"]}
-    assert streaks == {"byt": 6, "dum": 3}
-
-
-@pytest.mark.parametrize(("unwalked", "status"), [(5, "fail"), (6, "warn"), (12, "warn")])
-def test_walk_end_streak_caps_a_category_its_portal_stopped_walking_at_warn(
-        unwalked: int, status: str) -> None:
-    """A category dropped from the config (or starved by a deadline) keeps its last
-    streak in the window. Once its portal has walked `fail` times without it, it reads
-    amber and names when it was last walked, so a retired category cannot hold the bell
-    red for 14 days and a starved one does not read ok."""
-    rows = (_walks("mmreality", "byt", "prodej", [True] * (unwalked + 8))
-            + _walks("mmreality", "old", "prodej", [False] * 8, skip_newest=unwalked))
-    out = check_walk_end_streak(_RowsConn(rows), T)
-    assert out["status"] == status
-    cell = next(c for c in out["details"]["per_category"] if c["category_main"] == "old")
-    assert cell["runs_since_walked"] == unwalked and cell["status"] == status
-    if status == "warn":
-        assert out["value"] == 0  # a category nobody walks any more is not the worst streak
-        last = _T0 - _dt.timedelta(hours=7.0 * unwalked)
-        assert out["details"]["offenders"] == [
-            f"mmreality old/prodej not walked since {last:%Y-%m-%d %H:%M} UTC "
-            f"({unwalked} mmreality walks since)"
-        ]
-        assert "left the portal's config" in out["message"]
-
-
-def test_walk_end_streak_does_not_read_a_starved_category_as_ok() -> None:
-    """A category that last reached the end and was then never walked again has a
-    streak of 0; silence is not recovery, so it still warns."""
-    rows = (_walks("realitymix", "byt", "prodej", [True] * 10)
-            + _walks("realitymix", "dum", "prodej", [True, True], skip_newest=8))
-    out = check_walk_end_streak(_RowsConn(rows), T)
-    assert out["status"] == "warn" and out["value"] == 0
-    assert out["details"]["offenders"][0].startswith("realitymix dum/prodej not walked since ")
-
-
-def test_walk_end_streak_ignores_a_verdict_the_run_did_not_record() -> None:
-    """A row from before the key existed reads NULL: neither a miss nor a reached end."""
-    conn = _RowsConn(_walks("remax", "byt", "prodej", [False, None, False, False, True]))
-    cell = check_walk_end_streak(conn, T)["details"]["per_category"][0]
-    assert cell["streak"] == 3 and cell["walks"] == 4
-
-
-def test_walk_end_streak_does_not_trust_the_row_order() -> None:
-    rows = list(reversed(_walks("maxima", "byt", "pronajem", [False, False, False, True])))
-    assert check_walk_end_streak(_RowsConn(rows), T)["value"] == 3
-
-
-def test_walk_end_streak_breaks_a_started_at_tie_on_the_run_id() -> None:
-    newer = (2, "bazos", _T0, "byt", "prodej", False)
-    older = (1, "bazos", _T0, "byt", "prodej", True)
-    for rows in ([newer, older], [older, newer]):
-        assert check_walk_end_streak(_RowsConn(rows), T)["value"] == 1
-
-
-@pytest.mark.parametrize(("misses", "status"), [(2, "ok"), (3, "warn"), (5, "warn"),
-                                                 (6, "fail"), (40, "fail")])
-def test_walk_end_streak_warns_at_three_walks_and_fails_at_six(misses: int, status: str) -> None:
-    conn = _RowsConn(_walks("realitymix", "pozemek", "prodej", [False] * misses + [True]))
-    out = check_walk_end_streak(conn, T)
-    assert out["status"] == status
-    assert out["value"] == misses
-    assert bool(out["details"]["offenders"]) is (status != "ok")
-
-
-def test_walk_end_streak_fails_on_the_ceskereality_byty_signature() -> None:
-    """2026-09-16 -> 10-13: byt/prodej never reached the end, every other category
-    did. Per portal that was a ~4.6% gap under walk_coverage's 5% warn."""
-    rows = (_walks("ceskereality", "byt", "prodej", [False] * 48)
-            + _walks("ceskereality", "dum", "prodej", [True] * 48)
-            + _walks("bazos", "byt", "prodej", [False, False, False, True]))
-    out = check_walk_end_streak(_RowsConn(rows), T)
-    assert out["status"] == "fail" and out["value"] == 48
-    first = out["details"]["offenders"][0]
-    # the window cuts the streak, so the count is a floor, not an exact figure
-    assert first == ("ceskereality byt/prodej not at the portal's end for at least 48 "
-                     "walks (not reached in 14 d)")
-    assert out["message"].index("ceskereality byt/prodej") < out["message"].index("bazos")
-    assert "rule #3" in out["message"] and "VERIFY skipped" in out["message"]
-    assert "left the portal's config" not in out["message"]
-    assert len(out["details"]["offenders"]) == 2  # dum/prodej is not one
-
-
-def test_walk_end_streak_names_a_null_label_rather_than_crashing() -> None:
-    conn = _RowsConn(_walks("bezrealitky", None, "pronajem", [False] * 3))
-    out = check_walk_end_streak(conn, T)
-    assert out["details"]["offenders"][0].startswith("bezrealitky */pronajem ")
-
-
-def test_walk_end_streak_with_no_finished_walk_measured_nothing() -> None:
-    """No rows is not a clean bill of health: value None and Not measured, never a 0."""
-    out = check_walk_end_streak(_RowsConn([]), T)
-    assert out["status"] == "unknown" and out["value"] is None
-    assert "nothing was verified" in out["details"]["skipped"]
-    assert out["details"]["per_category"] == [] and out["details"]["offenders"] == []
-    assert "measured nothing" in out["message"]
-
-
-def test_walk_end_streak_with_no_recorded_verdict_measured_nothing() -> None:
-    """by_category losing its walk_reached_end key reads NULL on every row: the check
-    read categories but scored none, so it must not certify them."""
-    rows = [r for cm in ("byt", "dum", "pozemek")
-            for r in _walks("sreality", cm, "prodej", [None] * 24)]
-    out = check_walk_end_streak(_RowsConn(rows), T)
-    assert out["status"] == "unknown" and out["value"] is None
-    assert "measured nothing" in out["message"] and "3 categories read" in out["message"]
-
-
-def test_walk_end_streak_reads_finished_index_walks_in_the_window_only() -> None:
-    from scripts.verify_pipeline import _WALK_END_WINDOW_DAYS
-
-    conn = _RowsConn([])
-    check_walk_end_streak(conn, T)
-    assert conn.executed[0][0].startswith("SET LOCAL statement_timeout")
-    sql, params = conn.executed[1]
-    assert params == {"days": _WALK_END_WINDOW_DAYS}
-    assert "make_interval(days => %(days)s)" in sql
-    assert "run_type = 'index'" in sql and "ended_at is not null" in sql
-    # a non-array by_category must yield no rows, not a jsonb_array_elements error
-    assert "jsonb_typeof(r.by_category) = 'array'" in sql
-    assert "bool_and" in sql  # two descriptors behind one label: both must reach the end
-
-
-def test_walk_end_streak_is_registered_beside_walk_coverage() -> None:
-    keys = _keys()
-    assert _by_key("walk_end_streak").fn is check_walk_end_streak
-    assert keys.index("walk_end_streak") == keys.index("walk_coverage") + 1
-
-
 # --- migration_drift (scripts/checks/platform.py): merged is not applied ---------
 
 
@@ -2579,366 +2196,6 @@ def test_outbound_url_coverage_clean_is_ok() -> None:
     assert r["message"].startswith("Every active listing")
 
 
-# --- the sreality image template canary -------------------------------------
-#
-# The one check that leaves the database, so the one check whose tests must pin a
-# network seam: tests/conftest.py has no socket guard, and a real request here would
-# make the suite depend on sreality being up.
-#
-# Every payload here is built from the REAL captured fixtures, never hand-written: the
-# first cut of this check hand-wrote the index body in the DETAIL endpoint's image shape
-# ({url, order} dicts), which the search endpoint never returns (it sends bare URL
-# STRINGS), so the suite was green while the check was inert in production.
-
-_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-_SEARCH_FIXTURE = json.loads((_FIXTURES / "sample_search.json").read_text())
-_DETAIL_FIXTURE = json.loads((_FIXTURES / "sample_listing.json").read_text())
-_PROBE_INDEX_BODY = json.dumps(_SEARCH_FIXTURE).encode()
-_PROBE_DETAIL_BODY = json.dumps(_DETAIL_FIXTURE).encode()
-# The fixture's first image, as parse_images yields it and as the estate declares it.
-_PROBE_IMAGE_URL = "https:" + _DETAIL_FIXTURE["advert_images"][0]["url"]
-_PROBE_SOURCE = (
-    _DETAIL_FIXTURE["advert_images"][0]["width"],
-    _DETAIL_FIXTURE["advert_images"][0]["height"],
-)
-
-
-def _jpeg_bytes(width: int, height: int) -> bytes:
-    from PIL import Image
-
-    buf = io.BytesIO()
-    Image.new("RGB", (width, height), (128, 128, 128)).save(buf, format="JPEG")
-    return buf.getvalue()
-
-
-def _detail_body(width: int | None, height: int | None, url: str | None = None) -> bytes:
-    """The detail fixture with its first image's declared size (or host) overridden."""
-    payload = json.loads(_PROBE_DETAIL_BODY)
-    first = payload["advert_images"][0]
-    if url is not None:
-        first["url"] = url
-    for key, value in (("width", width), ("height", height)):
-        if value is None:
-            first.pop(key, None)
-        else:
-            first[key] = value
-    return json.dumps(payload).encode()
-
-
-def _probe_seam(
-    index: tuple[int, bytes] | Exception,
-    detail: tuple[int, bytes] | Exception,
-    cdn: tuple[int, bytes] | Exception,
-    calls: list[str],
-) -> Any:
-    """A seam that answers the index call, then the detail call, then the CDN call."""
-
-    def _fetch(url: str, timeout: Any, max_bytes: int, *, accept: str = "*/*") -> tuple[int, bytes]:
-        calls.append(url)
-        answer = (index, detail, cdn)[min(len(calls), 3) - 1]
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    return _fetch
-
-
-def _live_seam(cdn: tuple[int, bytes] | Exception, calls: list[str]) -> Any:
-    """The captured fixtures verbatim on both sreality legs — the negative control that
-    the probe actually REACHES the CDN with the endpoints' real payload shapes."""
-    return _probe_seam((200, _PROBE_INDEX_BODY), (200, _PROBE_DETAIL_BODY), cdn, calls)
-
-
-def test_sreality_image_template_is_registered_and_last_outbound() -> None:
-    """An unregistered check is dead code that never writes a row. The ordering rule:
-    the checks that leave the DB sit after every DB check of their class (both are alarms,
-    which `run_due` runs first), so a lane-budget exhaustion drops an outbound probe before
-    any database alarm."""
-    from scripts.verify_outbound_urls import check_outbound_url_conformance
-    from scripts.verify_pipeline import check_sreality_image_template
-
-    keys = _keys()
-    assert _by_key("sreality_image_template").fn is check_sreality_image_template
-    assert keys[-2:] == ["sreality_image_template", "outbound_url_conformance"], (
-        "the two outbound checks must stay AFTER every database check in CHECKS; "
-        "append new DB checks before them"
-    )
-    assert CHECKS[-1].fn is check_outbound_url_conformance
-
-
-def test_sreality_image_template_reaches_the_cdn_on_the_real_payload_shapes(
-    monkeypatch: Any,
-) -> None:
-    """The regression that shipped once: the v1 SEARCH endpoint sends advert_images as
-    bare STRINGS, which parse_images skips, so reading images off the index short-
-    circuited to a warn forever and the CDN leg never ran. Assert the third call."""
-    import scripts.verify_pipeline as vp
-
-    search_images = _SEARCH_FIXTURE["results"][0]["advert_images"]
-    assert isinstance(search_images[0], str), "the captured index shape is bare strings"
-    assert not vp.parse_images(_SEARCH_FIXTURE["results"][0]), (
-        "parse_images cannot read the index shape — the check must route via DETAIL"
-    )
-
-    calls: list[str] = []
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _live_seam((200, _jpeg_bytes(*_PROBE_SOURCE)), calls))
-    r = vp.check_sreality_image_template(None, T)
-    assert len(calls) == 3, f"the CDN leg never ran: {calls}"
-    assert str(_SEARCH_FIXTURE["results"][0]["hash_id"]) in calls[1]
-    assert r["status"] == "ok"
-
-
-def test_sreality_image_template_ok_on_a_full_size_frame(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
-
-    calls: list[str] = []
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _live_seam((200, _jpeg_bytes(*_PROBE_SOURCE)), calls))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["check_key"] == "sreality_image_template"
-    assert r["status"] == "ok" and r["value"] == _PROBE_SOURCE[0]
-    assert r["details"]["width"] == _PROBE_SOURCE[0]
-    assert (r["details"]["expected_width"], r["details"]["expected_height"]) == _PROBE_SOURCE
-    assert r["details"]["http_status"] == 200 and r["details"]["bytes"] > 0
-    assert "skipped" not in r["details"]
-    # the CDN leg's own latency; `elapsed_ms` is the harness's stamp for the whole check
-    assert isinstance(r["details"]["cdn_elapsed_ms"], int)
-    assert "elapsed_ms" not in r["details"]
-
-
-def test_sreality_image_template_probes_the_deployed_transform(monkeypatch: Any) -> None:
-    """The probe must never carry a literal chain: a hard-coded copy would keep
-    reporting green the day IMAGE_TRANSFORM_OPS changed and the CDN did not."""
-    import scripts.verify_pipeline as vp
-    from scraper.image_storage import with_transform
-
-    calls: list[str] = []
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _live_seam((200, _jpeg_bytes(*_PROBE_SOURCE)), calls))
-    r = vp.check_sreality_image_template(None, T)
-    expected = with_transform(_PROBE_IMAGE_URL)
-    assert r["details"]["image_url"] == _PROBE_IMAGE_URL
-    assert r["details"]["transform"] == expected
-    assert calls[2] == expected
-    assert calls[0].startswith("https://www.sreality.cz/api/v1/estates/search?")
-    assert "limit=1" in calls[0] and "locality_country_id=112" in calls[0]
-
-
-def test_sreality_image_template_ok_when_the_source_photo_is_small(monkeypatch: Any) -> None:
-    """The CDN does NOT upscale: res,1800,1800,1 fits inside the source, so a listing
-    whose first photo is a 640x480 original comes back at 640x480 through a perfectly
-    healthy template. An absolute px floor paged on ordinary data (~4% of live first
-    photos measure under 1000 px); the verdict is relative to the declared source."""
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        (200, _PROBE_INDEX_BODY), (200, _detail_body(640, 480)),
-        (200, _jpeg_bytes(640, 480)), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "ok" and r["value"] == 640
-    assert r["details"]["expected_width"] == 640
-
-
-def test_sreality_image_template_fails_on_the_superseded_749_rendition(monkeypatch: Any) -> None:
-    """A silent downgrade answers 200 with a smaller frame — invisible to any check
-    that only reads the HTTP status."""
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _live_seam((200, _jpeg_bytes(749, 562)), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "fail" and r["value"] == 749
-    assert "749x562" in r["message"] and "IMAGE_TRANSFORM_OPS" in r["message"]
-
-
-def test_sreality_image_template_fails_on_a_crop_that_keeps_its_width(monkeypatch: Any) -> None:
-    """A crop collapses ONE axis, so a width-only verdict would call it healthy."""
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _live_seam(
-        (200, _jpeg_bytes(_PROBE_SOURCE[0], int(_PROBE_SOURCE[1] * 0.75))), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "fail" and r["value"] == _PROBE_SOURCE[0]
-    assert "silently downgraded" in r["message"]
-
-
-def test_sreality_image_template_ok_when_the_estate_declares_no_size(monkeypatch: Any) -> None:
-    """No declared source means no yardstick — verify what CAN be verified (the CDN
-    accepted the template and returned a photo) and say the size went unjudged."""
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        (200, _PROBE_INDEX_BODY), (200, _detail_body(None, None)),
-        (200, _jpeg_bytes(800, 600)), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "ok" and r["details"]["expected_width"] is None
-    assert "not judged" in r["message"]
-
-
-def test_sreality_image_template_fails_on_a_non_image_body(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _live_seam((200, b"<html>not an image at all</html>"), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "fail" and r["value"] is None
-    assert "non-image body" in r["message"]
-    assert r["details"]["width"] is None
-
-
-def test_sreality_image_template_fails_when_the_cdn_refuses_the_template(monkeypatch: Any) -> None:
-    """400 is what an off-allowlist chain gets, and it is a verified verdict about OUR
-    transform — a fail, not the network-error warn."""
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _live_seam((400, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "fail" and r["details"]["http_status"] == 400
-    assert "REFUSED" in r["message"]
-
-
-@pytest.mark.parametrize("status_code", [403, 429, 502, 503])
-def test_sreality_image_template_is_unknown_when_the_cdn_throttles_or_errors(
-    monkeypatch: Any, status_code: int
-) -> None:
-    """403/429 is how sreality throttles and a 5xx is theirs — neither says anything
-    about our template, so a busy minute must read as 'verified nothing', never page."""
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _live_seam((status_code, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown" and "throttled or errored" in r["details"]["skipped"]
-    assert r["details"]["http_status"] == status_code
-
-
-def test_sreality_image_template_is_unknown_when_the_image_left_the_cdn_host(
-    monkeypatch: Any,
-) -> None:
-    """with_transform is a no-op off sdn.cz, so a host migration would serve a normal
-    photo and green a template that was never exercised."""
-    import scripts.verify_pipeline as vp
-
-    calls: list[str] = []
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        (200, _PROBE_INDEX_BODY),
-        (200, _detail_body(1280, 853, url="//images.example.com/d_18/abc.jpeg")),
-        (200, _jpeg_bytes(1280, 853)), calls))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown"
-    assert "not on the sreality CDN host" in r["details"]["skipped"]
-    assert len(calls) == 2, "the CDN must not be probed with an untransformed URL"
-
-
-def test_sreality_image_template_is_unknown_when_the_index_is_unreachable(
-    monkeypatch: Any,
-) -> None:
-    """A network error verified nothing, so it can never be a fail — a flaky lane must
-    not read as 'sreality rejected our template'."""
-    import requests
-
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        requests.ConnectionError("boom"), (200, b""), (200, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown" and r["value"] is None
-    assert "index is unreachable" in r["details"]["skipped"]
-    assert "verified NOTHING" in r["message"]
-
-
-def test_sreality_image_template_is_unknown_when_the_detail_is_unreachable(
-    monkeypatch: Any,
-) -> None:
-    import requests
-
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        (200, _PROBE_INDEX_BODY), requests.Timeout("slow"), (200, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown"
-    assert "detail endpoint is unreachable" in r["details"]["skipped"]
-
-
-def test_sreality_image_template_is_unknown_when_the_cdn_is_unreachable(
-    monkeypatch: Any,
-) -> None:
-    import requests
-
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _live_seam(requests.Timeout("slow"), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown" and "CDN is unreachable" in r["details"]["skipped"]
-    assert r["details"]["transform"].endswith("fl=res,1800,1800,1|shr,,20|jpg,80")
-
-
-def test_sreality_image_template_is_unknown_on_an_empty_index(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        (200, json.dumps({"results": []}).encode()), (200, b""), (200, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown"
-    assert "no estates" in r["details"]["skipped"]
-
-
-def test_sreality_image_template_is_unknown_on_an_estate_with_no_images(
-    monkeypatch: Any,
-) -> None:
-    import scripts.verify_pipeline as vp
-
-    estate = {k: v for k, v in _DETAIL_FIXTURE.items() if k != "advert_images"}
-    monkeypatch.setattr(vp, "_fetch_sreality_probe", _probe_seam(
-        (200, _PROBE_INDEX_BODY), (200, json.dumps(estate).encode()), (200, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown"
-    assert "no images" in r["details"]["skipped"]
-
-
-def test_sreality_image_template_is_unknown_on_a_non_200_index(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
-
-    monkeypatch.setattr(vp, "_fetch_sreality_probe",
-                        _probe_seam((503, b""), (200, b""), (200, b""), []))
-    r = vp.check_sreality_image_template(None, T)
-    assert r["status"] == "unknown" and r["details"]["http_status"] == 503
-
-
-def test_sreality_probe_seam_stops_on_its_wall_clock_deadline(monkeypatch: Any) -> None:
-    """requests' read timeout is per socket READ, not a total: a peer trickling one
-    chunk just inside it would hold the lane for minutes, and nothing outside can
-    preempt this call (the lane budget is armed only as a Postgres statement_timeout)."""
-    import requests
-
-    import scripts.verify_pipeline as vp
-
-    class _Response:
-        status_code = 200
-
-        def __enter__(self) -> "_Response":
-            return self
-
-        def __exit__(self, *exc: Any) -> bool:
-            return False
-
-        def iter_content(self, chunk_size: int) -> Any:
-            while True:
-                yield b"x" * 1024
-
-    monkeypatch.setattr(vp.requests, "get", lambda *a, **k: _Response())
-    try:
-        # A zero budget makes the deadline the FIRST thing the loop trips on; the cap
-        # (6 MB at 1 KB a chunk) would otherwise take 6144 iterations to reach.
-        vp._fetch_sreality_probe("https://example.test/x", (0.0, 0.0), 6 * 1024 * 1024)
-    except requests.Timeout as exc:
-        assert "wall-clock budget" in str(exc)
-    else:  # pragma: no cover - the guard is the point of the test
-        raise AssertionError("the seam never tripped its deadline")
-
-
 # --- field_fill_matrix (field capture W1) ----------------------------------
 
 
@@ -3328,57 +2585,6 @@ def test_text_extraction_lag_reads_a_pass_at_its_ceiling_as_bounded(
     assert out["status"] == "ok"
 
 
-# --- false_delist_share: a flip a later sighting reversed was a false delisting ---------
-
-
-def test_false_delist_share_ok_when_revivals_stay_under_the_warn_line() -> None:
-    conn = _RowsConn([("sreality", 400, 8), ("bazos", 120, 0)])
-    out = check_false_delist_share(conn, T)
-    assert out["status"] == "ok"
-    assert out["value"] == 2.0  # worst scored share, in percent
-    assert out["details"]["offenders"] == []
-    assert out["details"]["per_source"]["sreality"]["share"] == 0.02
-
-
-def test_false_delist_share_fails_on_the_pre_hysteresis_sreality_signature() -> None:
-    """The 2026-10-09 numbers: a third of sreality's flips were back within the week."""
-    conn = _RowsConn([("sreality", 18105, 6367), ("idnes", 11297, 670), ("bazos", 9218, 7)])
-    out = check_false_delist_share(conn, T)
-    assert out["status"] == "fail"
-    assert out["value"] == 35.17
-    assert any(o.startswith("sreality 35.2%") for o in out["details"]["offenders"])
-    assert any(o.startswith("idnes 5.9%") for o in out["details"]["offenders"])
-    assert not any("bazos" in o for o in out["details"]["offenders"])
-
-
-def test_false_delist_share_warns_between_the_tiers() -> None:
-    conn = _RowsConn([("remax", 60, 6)])
-    assert check_false_delist_share(conn, T)["status"] == "warn"
-
-
-def test_false_delist_share_skips_a_small_portal_rather_than_scoring_it_clean() -> None:
-    """12 flips, 6 back: noise, not a 50% alarm -- but it must not read as ok either when
-    nothing else was scored."""
-    conn = _RowsConn([("maxima", 12, 6)])
-    out = check_false_delist_share(conn, T)
-    assert out["status"] == "unknown" and out["value"] is None
-    assert "50+ ads" in out["details"]["skipped"]
-    assert out["details"]["unscored"] == ["maxima"]
-    assert out["details"]["per_source"]["maxima"]["scored"] is False
-    # Not measured states what was not scored, never a diagnosis of a quiet drain.
-    assert out["message"] == "No portal closed 50+ ads in the last 7 days; nothing to score."
-
-
-def test_false_delist_share_reads_flipped_rows_only() -> None:
-    """Provisional verdicts (outcome 'gone') are EXPECTED to revive -- that is the dwell
-    working. Only a confirmed flip that came back is a false delisting."""
-    conn = _RowsConn([])
-    check_false_delist_share(conn, T)
-    (sql, _params), = _queries(conn)
-    assert "outcome = 'flipped'" in sql and "detail_queue_completions" in sql
-    assert "'gone'" not in sql
-
-
 # --- the unmeasured rail (health wave 1) ----------------------------------------
 #
 # A measurement that did not happen is Not measured: never ok, and never a warn that the
@@ -3412,19 +2618,16 @@ def _unmeasured_results() -> list[dict[str, Any]]:
         vp._inert_measure_check("ppm2_basis_floor_share", "relation does not exist"),
         vp._unmeasured_check("area_vs_usable_divergence", 3, "100+ rows with both areas"),
         vp.check_floor_convention(_FloorConn([("maxima", 12, 0.9)]), T),
-        check_walk_end_streak(_RowsConn([]), T),
         vp.check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 10, 10)]), T),
-        vp._probe_skipped("the sreality index is unreachable (boom)"),
         check_outbound_url_conformance(_ShapeDriftConn([]), T),
         check_outbound_url_conformance(sampled, T, budget_s=0.0),
         vp.check_location_town_coverage(_TownCoverageConn([]), T),
-        check_false_delist_share(_RowsConn([("maxima", 12, 6)]), T),
     ]
 
 
 def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
     results = _unmeasured_results()
-    assert len(results) == 14
+    assert len(results) == 11
     errored, timed_out = results[:2]
     assert errored["details"]["errored"] is True and "kaboom" in errored["details"]["error"]
     assert timed_out["details"]["timed_out"] is True
@@ -3506,27 +2709,20 @@ def _own_sql(key: str) -> list[str]:
     from toolkit import description_extraction as text_lane
 
     return {
-        "acquisition_lag": [vp._ACQUISITION_LAG_SQL],
         "text_extraction_lag": ["SELECT value FROM app_settings WHERE key = %s",  # resolve_model
                                 text_lane.LLM_TEXT_SOURCES_SQL,  # lane_scope
                                 text_lane.ELIGIBLE_LAG_SQL, text_lane.EXTRACTION_LATENCY_SQL,
                                 vp._TEXT_EXTRACT_LANE_SQL],
-        "walk_coverage": [vp._WALK_COVERAGE_SQL],
         "migration_drift": [MIGRATION_OBJECT_PROBE_SQL],
-        "delist_flip_refused": [vp._DELIST_REFUSAL_SQL],
-        "false_delist_share": [vp._FALSE_DELIST_SQL],
         "outbound_url_coverage": [vp._OUTBOUND_URL_COVERAGE_SQL],
     }[key]
 
 
-@pytest.mark.parametrize("key", [
-    "acquisition_lag", "text_extraction_lag", "walk_coverage", "migration_drift",
-    "delist_flip_refused", "false_delist_share", "outbound_url_coverage",
-])
+@pytest.mark.parametrize("key", ["text_extraction_lag", "migration_drift", "outbound_url_coverage"])
 def test_each_formerly_raw_cursor_check_sends_its_sql_on_its_own_wall_clock(
     key: str, monkeypatch: Any,
 ) -> None:
-    """These seven read on a raw cursor, under the connection's default timeout and past any
+    """These three read on a raw cursor, under the connection's default timeout and past any
     budget. Each now sends the same SQL through _fetchone/_fetchall, every statement armed
     with what its check has left."""
     answers: dict[str, list[Any]] = {}

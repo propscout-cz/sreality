@@ -22,11 +22,12 @@ checks that are DUE: newest row older than `cadence_s` less a slack of min(caden
 comes a few minutes short of a full cadence after the last one does not skip a whole cadence. Only
 rows written since the key's `declared_at` count, as for the page and the ladder, so a newly
 registered or re-declared key is due in the run that projects it. Since wave 3 the platform alarms `jobs`, `capacity` and
-`llm` are hosted on the worker and measured by its health lane (below); every other key is `github-actions`-hosted and
+`llm`, and since wave 4 the portal checks `scraping`, `publishing`, `delisting` and `coverage`, are hosted on the worker
+and measured by its health lane (below); every other key is `github-actions`-hosted and
 measured by the middle step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
 concurrency group, `pipeline-verification`, keeps two runs from measuring a check twice); the
-daily `sreality_image_template` and weekly `outbound_url_conformance` probes ride whichever run
-finds them due. No result reds a run (`--exit-nonzero-on-fail` is gone since wave 2): the canary's
+weekly `outbound_url_conformance` probe rides whichever run finds it due. No result reds a run
+(`--exit-nonzero-on-fail` is gone since wave 2): the canary's
 own assertions do, below. The URL probe keeps its own 120 s budget
 (`PROBE_BUDGET_S` in `scripts/verify_outbound_urls.py`, its `Check.budget_s`): each HEAD's connect
 and read timeouts are min(20 s, time left); DNS is not bounded, so one request can run past it, and
@@ -37,8 +38,7 @@ sreality cannot starve the crawler portals; URLs it did not reach are `details.u
 path is `unknown` with its reason in `details` (`timed_out`, `errored`, `skipped`); a check the
 run's budget never reached gets no row at all and stays due. One "verified nothing" path still reads `warn`
 until wave 6 replaces its check: `ppm2_median_shift`'s "compared NOTHING";
-`location_town_coverage`'s "no listings read" and `false_delist_share` with no portal at 50 flips
-are Not measured since wave 1. The harness
+`location_town_coverage`'s "no listings read" is Not measured since wave 1. The harness
 writes no system alert: results reach the bell through the ladder below, the notification
 system's third producer, `system_health` (`docs/architecture.md` rule #16). Since wave 2 the
 pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, the API, the
@@ -46,9 +46,7 @@ ladder and every alarm are alive, and the canary checks the watcher and the ladd
 ("Hosts, the watcher and the canary" below). The harness exists because the pipeline
 stalled silently for two days in 2026-07 (Anthropic credit exhaustion, 38k+ failed LLM calls) and
 the only alarm was a failing GH Actions cron the operator happened to miss. Among the registered
-checks: `property_maintenance` (last-complete-cycle stamp age + oldest
-dirty-queue row — the 2026-08-06 sweep-death/stranded-lease incident; both axes O(1) reads,
-never a properties scan) and `broker_merge_suppression` (migration 401): active `broker_merge_suppressions` rows whose two
+checks: `broker_merge_suppression` (migration 401): active `broker_merge_suppressions` rows whose two
 identities share one broker — the invariant the suppression rail exists to hold. `fail` on the
 first violation, no warn tier. An operator NO (unmerge / dismissing a `contact_bridge_review`
 candidate) writes a suppression row keyed on the durable identity pair; the sweep loads the active
@@ -62,9 +60,6 @@ pair already co-located — that would erase evidence of a bypass); `POST
 /broker-review/suppressions` the ledger. Per-sweep counts land in
 `broker_resolution_runs.suppressed_pairs` (pairs, not merges: the rail blocks before grading) and
 the `RESOLVE full merge done … suppressed=N` line. Kill switch: `broker_auto_merge_enabled`=false.
-The property sweep axis ages a CYCLE (one run, or two through `app_settings.property_sweep_cursor`
-since 2026-10-03); its thresholds (warn 52h, fail 56h) are sized for the two-run cycle, so a dead
-sweep is flagged after about two days and the sweep's own RED exit is the faster alarm.
 Wave 3 retired eight platform keys into the three checks the worker measures (below): `llm_errors`
 and `llm_burn_rate` into `llm`; `long_open_transaction` and `db_saturation` into `capacity` (the
 latter's failure-rate arm into the `jobs` check's pg_cron cells); `worker_lane_stall`,
@@ -72,6 +67,18 @@ latter's failure-rate arm into the `jobs` check's pg_cron cells); `worker_lane_s
 onsets were edge flaps; `broker_maintenance` is a lane cell and `broker_region_type_stats` an
 artifact cell); and `dual_write_parity` (Q6) went with the R2 dual-write it guarded. Their
 thresholds and tests went with them.
+Wave 4 retired seven portal keys into the four portal checks the worker measures (below):
+`walk_coverage` (with `_SELF_CERTIFYING_TOTALS`, now the `Portal.total_is_count` seam) and
+`walk_end_streak` into `scraping` and the `coverage` gauge; `acquisition_lag`,
+`sreality_image_template` (its live CDN probe, `_fetch_sreality_probe` and the image imports) and
+`property_maintenance`'s dirty arm into `publishing`; `false_delist_share` and `delist_flip_refused`
+into `delisting`. `property_maintenance`'s sweep arm (the 2026-08-06 sweep death and stranded lease,
+read from a stamp, never a properties scan) became the `jobs` check's `artifact/property_sweep`
+cell: a completed cycle (one run, or two through `app_settings.property_sweep_cursor` since
+2026-10-03) stamps the `property_sweep` derived artifact (migration 622), whose 38 h budget plus
+GitHub's 18 h delivery slack keeps its Problem at 56 h, as ruled for the two-run cycle; its 52 h
+Watch is gone, because an artifact cell has no Watch tier, and the sweep's own RED exit is the
+faster alarm. Their thresholds, SQL and tests went with them.
 Four **per-m² plausibility** checks joined in W9 of the measure-unification program
 (migration 427, view `measure_plausibility_by_source`, one read per run shared by all four;
 they are registered at a 6-hour cadence, not hourly — a 12 s
@@ -140,21 +147,19 @@ merge latency, engine health, merge-precision sample) went with the engine, alon
 
 Moved here from the skill body when wave 1 cut its section to a summary.
 
-**`acquisition_lag` + `walk_coverage` (2026-08-27)** close the ingestion blind spot: until then
-every scraper health signal compared our data to our own data and rendered as a dot on a page,
-so sreality ingested ZERO new listings for nine days without anything leaving the database.
-`acquisition_lag` reads the oldest unclaimed never-fetched `listing_detail_queue` row per portal —
-deliberately the QUEUE and not `listings.first_seen_at`, because a "no new rows in N hours" check
-needs a baseline that the outage itself erodes (nine days of zeros makes zero the expected
-value). `walk_coverage` is the only comparison against EXTERNAL truth: collected vs the portal's
-advertised total from the latest COMPLETED index run's `by_category`, plus a truncation arm
-(categories walked vs that portal's own 7-day best) because a budget-stopped walk leaves no
-entry for the categories it never reached and so makes the gap look BETTER. remax and maxima
-derive their total as `len(seen)` and mmreality reports none — all three are reported
-`verifiable: false` rather than 100%. Its per-category twin, `walk_end_streak`, has its own
-section below.
+**The ingestion blind spot (2026-08-27).** Until then every scraper health signal compared our data
+to our own data and rendered as a dot on a page, so sreality ingested ZERO new listings for nine
+days without anything leaving the database. Two checks closed it, and wave 4 rebuilt both:
+`acquisition_lag` read the oldest unclaimed never-fetched queue row per portal — deliberately the
+QUEUE and not `listings.first_seen_at`, because a "no new rows in N hours" check needs a baseline
+that the outage itself erodes (nine days of zeros makes zero the expected value) — and is now
+`publishing`'s ingest arm; `walk_coverage`, collected against the portal's advertised total, was the
+only comparison against EXTERNAL truth, and is now `scraping`'s missing arm and the `coverage`
+gauge, which no longer certify a total the adapter derived from what it saw (remax and maxima
+declare `total_is_count`). Inflow is judged against the same 24 h window 7-28 days earlier PLUS the
+NEW queue rows, so a stopped drain reads as ingest's problem, never as lost discovery.
 
-**`text_extraction_lag`** (field capture W7) is `acquisition_lag`'s twin one layer later —
+**`text_extraction_lag`** (field capture W7) is the ingest arm's twin one layer later —
 oldest ELIGIBLE-unextracted advert + waiting count per portal, plus a wedge arm (rows eligible,
 lane claiming none, or the lane absent from the heartbeat) and an abort arm (the provider
 stopped the last pass: `fail` quoting its `fatal`, whatever the backlog's age or `claimed`;
@@ -215,7 +220,7 @@ from a balanced mix to 73 % commercial rentals in two days, moving `cellar` 40.2
 `disposition` 41.4 % → 6.3 % with no parser touched, twice over the fail tier. So the matrix is one
 aggregate pass over every `is_active` row: measured 12.2 s for all nine portals, inside the 45 s
 per-check budget, and registered late in `CHECKS` (only `text_extraction_lag`, `floor_convention`
-and the two outbound probes follow it) so the cheap checks are never
+and the outbound URL probe follow it) so the cheap checks are never
 the ones that go unrun. It never expands a row into (field, value) pairs — that form costs 32 s
 over the stock; per-value counts come from `count(*) filter (where col = '<canonical value>')`
 interpolated from `toolkit/filter_registry.COLUMN_CANONICAL_VALUES`, keyed by COLUMN — which is also
@@ -374,7 +379,8 @@ check was `warn`, which `emit_transition_alerts` read as not failing, so 6 of
 (each came 6.4-9.6 h after the last `fail`, past the 6 h flap cooldown). A timeout is now
 `unknown`, which the ladder never reads as a recovery.
 
-The symmetric pathology from the same edge-triggered rule: `property_maintenance` was `fail`
+The symmetric pathology from the same edge-triggered rule: `property_maintenance` (retired in
+wave 4) was `fail`
 continuously from 2026-08-20 13:08 UTC with its last alert at 11:37 UTC — six days red, six
 days silent. One rule produces both — and one fix retires both: the reminder ladder in
 `toolkit/system_alerts` (W3.4's `emit_transition_alerts`, replaced in wave 1 by `reconcile`; see
@@ -401,7 +407,7 @@ therefore wrote **zero rows and fired zero alerts** — blinding `db_saturation`
 `worker_liveness` at precisely the moment DB saturation would make checks slow. Now each result
 is inserted the instant its check returns, and since wave 1 the harness calls no alert function
 at all: the API's ladder reads the stored rows. Budgets: `_CHECK_BUDGET_S` (45 s) per check
-(`Check.budget_s`; 120 s for the two outbound probes), capped by whatever remains of the RUN
+(`Check.budget_s`; 120 s for the outbound URL probe), capped by whatever remains of the RUN
 budget — one per-check budget per DUE check (`lane_budget_for`); the summed budgets are proven
 to fit, with the 180 s headroom, the harness step's 21-minute limit (the poller step has 5, the job
 35 with 8 minutes for setup and the assertions) by `test_the_canary_job_fits_every_github_check_due_at_once`.
@@ -481,8 +487,9 @@ to 2026-09-21 the longest gap between `llm_calls` rows excluding that lane was *
 so `check_llm_liveness`, `_status_for_llm_silence` and `llm_silence_fail_hours` were all
 deleted. The replacement is not a global recency threshold at all: field-capture R8 makes each
 lane's health check read the lane's OWN eligibility predicate (oldest eligible-unextracted age
-per source), which needs no historical baseline — the same shape as `check_acquisition_lag`
-(field-capture W7 shipped it as `text_extraction_lag`). Beside it the `llm` check catches "calls
+per source), which needs no historical baseline — the same shape as the retired
+`check_acquisition_lag` (field-capture W7 shipped it as `text_extraction_lag`). Beside it the
+`llm` check catches "calls
 are failing" per provider (from state, not recency) and "attempting and never succeeding".
 
 ---
@@ -593,7 +600,9 @@ over one state emitting nothing.
 is public) through `reconcile`, and asserts no recovery while a key's newest row is `unknown`,
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
 fails the whole window. Its registry copy is host-aware since wave 3 (3 × cadence on the worker,
-cadence + 18 h on GitHub); the worker's three checks have input replays of their own (below).
+cadence + 18 h on GitHub), and its fixture has held the surviving keys only since wave 4, which
+re-exported it with the header's SQL when the seven portal keys retired; the worker's seven
+checks have input replays of their own (below).
 
 **Cutover.** After the deploy the ladder sends one grouped onset per currently failing check,
 alarm or gauge (today three gauges: `location_town_coverage`, `ppm2_basis_floor_share`,
@@ -607,6 +616,22 @@ minutes of the worker's deploy, opens a fresh onset for an outage still under wa
 open together for up to one canary gap). Legacy `sys:ops_incident:*` notices stay in the bell as
 they are.
 
+**Wave 4's cutover.** The worker projects the four portal keys on its first health pass after the
+deploy, but the seven retired GitHub keys leave `health_checks` only at the canary's next run from
+main (median gap ~4.9 h), so both sets show on the page in between. That projection deletes their
+registry rows, so the ladder closes their open cell incidents silently as `retired`
+(`false_delist_share`'s, open at merge, included); the new checks open fresh onsets where they
+measure Problem. Expected at ship: a `coverage` gauge Problem on realitymix's `unnominated` cell
+(151 NULL-category ads no walk can nominate, the oldest last seen 112 d ago, #1853) and a Watch on
+ceskereality's (96); from about 10-20, sreality's `precision` cell (its 10-18 flip cohort, #1858).
+`delisting` read idnes's outflow as a 423 % spike (Watch) on 10-19 against the same hour one to four
+weeks back; against the busiest 24 h within ±3 h of that hour it is about 210-240 %, under
+the 300 % line. The missing and residual arms stay Not measured for each unit until its first walk
+after the deploy writes `total_is_count`; from then ceskereality's `dum`/`prodej` residual reads
+Problem (about −14 %: 13.7 k declared against 11.8 k held, the chaty-chalupy double count, #1854).
+On a day the full property sweep holds the maintenance lease past about 40 min, `publishing`'s
+visible cells read Problem for its duration (its Known limits, below).
+
 ## Hosts, the watcher and the canary — who watches whom (wave 2, 2026-10-18)
 
 Wave 2 of the Health dashboard sprint (`docs/design/health-dashboard.md` § 3 and § 6) gives each
@@ -614,14 +639,15 @@ runtime the health system depends on an observer that does not run inside it. A 
 (`Check.host`, mirrored into `health_checks.host`) is where it is measured, and each host projects
 and deletes only its own registry rows:
 
-- **`github-actions`**: 20 keys since wave 3 (all 28 in wave 2), measured by the canary's middle
-  step at their cadences; waves 4–6 move the rest to the worker as they rebuild them. Two stay for
+- **`github-actions`**: 13 keys since wave 4 (20 in wave 3, all 28 in wave 2), measured by the
+  canary's middle step at their cadences; waves 5–6 move the rest to the worker as they rebuild
+  them. Two stay for
   good: `migration_drift` needs the repository checkout, and the weekly URL probe needs an address
   other than the scrapers'.
 - **`pg_cron`**: `liveness`, the one watcher — a SQL function, not a `Check`, that upserts its own
   registry row.
-- **`realtime-worker`**: `jobs`, `capacity` and `llm` since wave 3, measured by the worker's health
-  lane (below).
+- **`realtime-worker`**: `jobs`, `capacity` and `llm` since wave 3, `scraping`, `publishing`,
+  `delisting` and the `coverage` gauge since wave 4, measured by the worker's health lane (below).
 
 **`run_due`.** `verify_pipeline.run_due(conn, thresholds, host, *, now, on_result=insert_result, lane_budget_s=None)`
 reads which of the host's checks are due from the database (`due_checks`, so a restart re-runs
@@ -643,7 +669,7 @@ dead. Its cells judge what must not judge itself:
 | cell | Problem when | basis |
 | --- | --- | --- |
 | `worker` | a worker's newest heartbeat is more than 10 min old (with no heartbeat row at all, `unknown`: "no worker on record") | beats come every 30 s, the worker's watchdog exits at 300 s, a deploy gap is under 2 min |
-| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | 2 × the lane's 300 s pass budget |
+| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | a full pass (at most 360 s, the lane's pass budget since wave 4; 300 s in wave 3) plus its 60 s tick stays under it |
 | `stale:<key>` | an alarm other than `liveness` whose newest measured result (ok/warn/fail written since its `declared_at`) is past its staleness budget (`public.health_stale`); with no measured result it counts from `declared_at`, so a key whose every run is Not measured is still told; facts `key`, `host`, `last_measured_at`, `budget_s` | the budget is 3 × cadence on the worker and pg_cron, cadence + 18 h on GitHub, whose crons arrive up to ~13 h late |
 | `api` | the watchdog matcher's lease (`notification_matcher_lease`) is more than 2 × `notifications_matcher_interval_seconds` (300 by default) + 60 s past its `expires_at`; a NULL `expires_at` (a clean shutdown released it) is `unknown`; interval 0 (matcher off) is `ok` with the state fact `off` | the matcher renews the lease every pass (~300.5 s apart) in the API process that also runs the ladder's loop; the lease lasts 15 min (`api/notifications._MATCHER_LEASE_TTL`), so a crashed API reads Problem about 26 min after its last renewal |
 | `unalerted` | a cell fails in an alarm's newest result (in budget, written since `declared_at`) and also failed in its newest measured result at least 2 cadences older, and has no open `cell:<key>:<subject>` incident; cells are read as the ladder reads them (explicit `details.cells`, else the implicit cell named by the key); one cell, `value` = the cells counted, its facts naming the keys and cells | a fail that has stood for two cadences has had every 60 s ladder pass in between to open its incident; like the ladder, it counts no stale or unmeasured result |
@@ -668,8 +694,8 @@ any key; it never fired), which 620 unschedules and 624 drops.
 **The canary: `verify_pipeline.yml`**, "Monitoring: health canary (hourly)": cron `15 * * * *`
 plus a manual dispatch whose `dry_run` input reaches the harness step only. GitHub delivers about
 five of its runs a day (median gap ~4.9 h). One job — 35 minutes while it carries the legacy keys (the poller step 5, the harness step 21 for
-its budgets plus 180 s headroom, 8 for setup and the assertions; 20 budgets summing to 1,050 s since
-wave 3, 28 and 1,410 s before),
+its budgets plus 180 s headroom, 8 for setup and the assertions; 13 budgets summing to 660 s since
+wave 4, 20 and 1,050 s in wave 3, 28 and 1,410 s before),
 concurrency group `pipeline-verification` (never cancelled in progress), permissions
 `contents: read` and `actions: read`, env `SUPABASE_DB_URL` and `GITHUB_TOKEN` — in three steps:
 
@@ -723,7 +749,8 @@ check measured elsewhere — the watcher's, or the worker's.
 - **The worker** (its health lane, since wave 3) runs the platform checks: `jobs` watches every
   production GitHub workflow (through the canary's poller, whose cursor is its `gh/poller` cell),
   every pg_cron job (`health-liveness` included), every worker lane and every derived artifact.
-  The watcher's `health_lane` cell watches the lane; waves 4–6 move the remaining checks to it.
+  Since wave 4 it also runs the portal checks (`scraping`, `publishing`, `delisting`, `coverage`).
+  The watcher's `health_lane` cell watches the lane; waves 5–6 move the remaining checks to it.
 
 **Known gap.** A clean API shutdown leaves the lease NULL, which reads Not measured, not Problem:
 that is every deploy's normal state until the new process's first pass claims the lease. An API
@@ -743,7 +770,8 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   every deploy re-projects the worker's keys and deletes its undeclared ones, touching no other
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
-  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (300 s), which measures the due worker-hosted checks,
+  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (360 s since wave 4: 8 × 45 s, its seven checks and
+  wave 5's dedup; 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
 - once per 24 h in each process, the 35-day prune the operator ruled (Q5): `delete from
   pipeline_check_results where run_at < now() - interval '35 days'`, 10,000 rows at a time by
@@ -753,11 +781,12 @@ Its heartbeat `last` is `{"measured": [keys], "pruned": n}`. The worker imports
 `scripts.verify_pipeline` inside the pass (the image carries `scripts/`; `migrations/` is
 dockerignored, which only `migration_drift` reads, and that check stays on GitHub);
 `verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
-three keys are platform alarms with the 45 s per-check budget and a staleness budget of 3 × cadence
-(30 min for `jobs` and `llm`, 90 min for `capacity`), so the watcher's `stale:<key>` tells a stopped
-worker check within 5 min of that, its `health_lane` cell (no completed pass, a pass in flight or a
-failing spell for 10 min, 2 × the pass budget) tells a stopped lane, and the lane is a `lane/health`
-job cell like any other.
+worker's keys carry the 45 s per-check budget and a staleness budget of 3 × cadence (30 min for
+`jobs`, `llm`, `scraping`, `publishing` and `delisting`, 90 min for `capacity`, 3 h for the
+`coverage` gauge), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
+(it covers alarms only: a stopped gauge just reads Not measured on the page), its `health_lane` cell (no completed
+pass, a pass in flight or a failing spell for 10 min, which a full 360 s pass and its 60 s tick stay
+under) tells a stopped lane, and the lane is a `lane/health` job cell like any other.
 
 ## `jobs` — is every scheduled machine running and succeeding? (wave 3)
 
@@ -864,7 +893,11 @@ whose `host` is `github-actions` is stale only past the budget plus `GITHUB_DELI
 exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never succeeded") while `last_succeeded_at` is NULL. Facts: `producer`, `host`,
 `cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
 `is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
-`*/15`); every live row was inside its budget at build.
+`*/15`) except `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
+38 h on a daily cron, so with the slack it reads Problem at 56 h, the retired `property_maintenance`
+sweep arm's fail line, and its 52 h Watch has no equivalent; 622 seeded it from
+`app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every
+live row was inside its budget at build.
 
 ## The poller — production runs, reason lines and workflow facts (wave 3)
 
@@ -1009,6 +1042,244 @@ buckets; the artifact read runs there too, with the GitHub delivery slack the ch
 rail, `tests/test_platform_cron_sql_live.py`, is one `migrations.yml` step after 621's
 (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`), skipped locally.
 
+## `scraping` — is every portal still finding and fetching its ads? (wave 4)
+
+`check_scraping` (`scripts/checks/scraping.py`; an alarm on the worker, cadence 600 s, label
+"Scraping", unit "cells") judges four arms per portal, two of them per unit. Its words
+(`GLOSSARY.md` § Collecting ads): a **walk** is one `scrape_runs` row with `run_type = 'index'`,
+FINISHED when `ended_at` is set and `by_category` is not empty (a crashed or killed walk keeps `[]`
+and is stamped later by the API's boot sweep: never finished); a **unit** is one `(source,
+category_main, category_type)` label of `by_category`, which REACHED THE END in a walk when every
+entry of that label has `walk_reached_end = true` (a unit absent from a walk was not walked in it);
+**G** is the portal's median start-to-start gap of its finished walks over 14 d (the open gap never
+counts; with fewer than 10 gaps, the slowest portal's G).
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `<portal>/walks/<cm>-<ct>` | hours since the START of the newest finished walk in which the unit reached the end | above 3 G (`scraping_walk_watch_gaps`) | above 6 G (`scraping_walk_fail_gaps`), or a unit walked in the last 30 d (`scraping_walk_recent_days`) with no end-reached walk in 14 d (`scraping_walk_stale_days`); a portal short of 10 gaps (`scraping_walk_fallback_min_gaps`) is scored on the slowest portal's G |
+| `<portal>/walks` | for every portal of `claims_common.SOURCES`, on every pass: the hours since the START of its newest finished walk, with the units its walks of the last 30 d recorded (facts `finished_at`, `units`) | never: its units' own cells judge them | no walk in 30 d recorded a unit (no walk at all, or none finished), so a portal never drops out: it keeps its inflow, fetch-error and unnominated cells, and this cell's incident recovers on a measured OK |
+| `<portal>/inflow` | ads discovered in the trailing 24 h — ads first seen in it, plus NEW-priority queue rows enqueued in it that have no listings row — against the median of the same 24 h 7, 14, 21 and 28 d earlier (ads only: those queue rows are gone by then) | below 50 % (`scraping_inflow_warn_share`), or above 300 % (`scraping_inflow_spike_share`) | below 20 % (`scraping_inflow_fail_share`) |
+| `<portal>/fetch_errors` | of the ids attempted in 24 h (terminal `detail_queue_completions` plus live queue rows with `attempts > 0` claimed or enqueued in the window), the share with a failed attempt, judged on its Wilson lower bound | above 2 % (`scraping_fetch_err_warn`) | above 10 % (`scraping_fetch_err_fail`) |
+| `<portal>/missing/<cm>-<ct>` | at the unit's newest end-reached walk, (Σ declared − Σ collected) / Σ declared over its entries | above 2 % (`scraping_missing_warn`) | above 5 % (`scraping_missing_fail`) |
+
+Minimum evidence: inflow needs a baseline of 20 a day (`scraping_inflow_min_baseline`), else it
+compares 7-day windows, and under 20 per 7 d it is Not measured; fetch errors need 200 ids
+(`scraping_fetch_err_min_ids`), else 7 d, else Not measured, and ids given up 3 or more times in 7 d
+are named in the message, not excluded; missing needs a declared total of 500
+(`scraping_missing_min_declared`), and an entry whose `total_is_count` is true ("declared is a count
+of what was seen": remax, maxima) or absent ("not yet recorded by this walk's adapter": every entry
+written before wave 4) is Not measured, never 0 %. Its facts carry `declared_is_upper_bound`
+(ceskereality's national total includes ads filed under no kraj, about 0.8 % of its rentals, under
+the Watch line). One convention for every wave-4 share judged on a Wilson lower bound (fetch errors
+here; publishing's visible, stock and photos; delisting's precision): the cell's `value` is the raw
+share in percent (what happened), `facts.lower_bound` the bound it was judged on, and its message
+names both.
+
+Basis (the design's § 4): measured G is 7.15-7.33 h on the crawlers and 4.42 h on sreality, so a
+unit reads Problem after about 43-44 h and 26.5 h — the operator's three/six-walk ruling of 10-13 in
+time; over 14 days no unit crossed 6 G (the worst were transient Watch: bazos byt/pronajem 32.1 h,
+idnes komercni/pronajem 26.7 h). Inflow's weekday medians are bazos 1,618, sreality 1,456, idnes
+1,564 and ceskereality 807 a day; same-window baselines absorb the 30-45 % weekend dip, and an
+hourly backtest found 0 Problems in 14 d. A sustained partial drop erodes the baseline within 2-3
+weeks; the `coverage` gauge, judged against each portal's own declared totals, owns that case. The
+worst normal fetch-error day is 0.18 % (bazos); sreality's old 25 % false FAIL was one poison id
+(615387212, HTTP 409, #1851), here 1 of ~6,060 ids, 0.02 %. Missing: the latest walks collected
+99.96-100 % of declared and no incident is on record; it catches a parser that drops cards on a walk
+that still reaches the end.
+
+Known limits: missing is judged per unit, not per walk scope as the design said, because entries
+carry no scope key and labels repeat (bazos writes 22 entries over 10 labels; ceskereality and
+realitymix list `dum` twice); a walk that stops between two scopes of one label reads as reached
+when every scope it walked reached the end (a scope it never started leaves no entry); a dispatched
+`--max-pages` / `--limit` / bazos region run finishes as an index walk, which shortens G and never
+reaches the end (`scrape_runs` records no run arguments); and no per-attempt stamp exists, so the
+fetch-error denominator approximates "attempted in 24 h". It replaces `walk_end_streak` and
+`walk_coverage` (with `_SELF_CERTIFYING_TOTALS`, now the `Portal.total_is_count` seam); the old
+page's SQL checks on the same questions keep rendering until wave 9.
+
+## `publishing` — do new ads reach Browse quickly, with their photos? (wave 4)
+
+`check_publishing` (`scripts/checks/publishing.py`; an alarm on the worker, cadence 600 s, label
+"Publishing", unit "cells"):
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `<portal>/ingest` | age (from `enqueued_at`) of the oldest NEW-priority queue row, claimed or not, not given up, with no listings row for `(source, native_id)` — so `refresh_stale_image_urls`' known ads at that priority do not count | above 3 h (`publishing_queue_warn_h`) | above 6 h (`publishing_queue_fail_h`) |
+| `<portal>/changes` | the same for the oldest CHANGED or FAILURE row, not given up | above 3 h | above 6 h |
+| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property born after the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`), or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
+| `<portal>/stock`, `fleet/stock` | of properties with `status = 'active' AND is_active`, the share missing from `browse_list`, by the same stages; a portal cell counts the properties with an active ad on that portal (counted from listings' `source`, `is_active` and `property_id` columns), the fleet cell all of them | above 0.1 % (`publishing_stock_warn`) | Wilson lower bound above 1 % (`publishing_stock_fail`) |
+| `<portal>/photos` | of the photos of ads first written 1-24 h ago, excluding `unavailable_reason = 'listing_taken_down'`: not stored (`storage_path IS NULL`: pending, throttled, given up, `source_unavailable`, `not_an_image`), judged on its Wilson lower bound; and narrow, `stored_width` under 600 px (`publishing_photos_min_px`) among stored photos with a width | not stored above 2 % (`publishing_photos_unstored_warn`); narrow above 10 % (`publishing_photos_narrow_warn`) | not stored above 10 % (`publishing_photos_unstored_fail`); narrow above 50 % (`publishing_photos_narrow_fail`) |
+| `fleet/dirty` | age of the oldest `dirty_properties.marked_at` | above 4 h (`publishing_dirty_warn_h`) | above 8 h (`publishing_dirty_fail_h`) |
+
+Minimum evidence: visible needs 50 ads (`publishing_visible_min_n`), else a 72 h window, else Not
+measured; the stock Problem needs 200 properties (`publishing_stock_min_n`); photos need 200 photos
+(`publishing_photos_min_n`). The stock read is ONE short statement, because `browse_list`'s rebuild
+swaps the table in behind its readers. Photo facts: the top `last_error` reason and the count of new
+ads with no image rows, which the arm cannot judge (its denominator is photos, so a parser that
+stops emitting galleries scores nothing: the realitymix 19-day blackout class). The active stock's
+stored share is not computed: an 8M-row scan every 10 min; the image panels keep it until wave 8.
+
+Basis: the 7-day maximum waits were 119-122 min for NEW (bazos politeness bursts on 10-12, 10-13 and
+10-16, traced to the rate-ledger overflow, #1852) and 106 min for CHANGED, so the bazos 10-13 burst
+(about 1,110 ads waiting at once, the oldest 119 min) stays green — queued ads are ingest's, never
+visible's. Visible: 2 of 2,374 were not visible on 10-17. Stock: 20 of 362,883 active properties
+live (0.0055 %: ceskereality 18, realitymix 1, mmreality 1); the 09-14 regression (Browse ~350k →
+45,810 rows) reads ~87 %, the 09-17 one (29,545 bazos ads without a location) Problem on bazos.
+Photos: 30,136 of 30,137 stored at build (1 `source_unavailable`), 0-2.8 % narrow (medians
+1,199-1,600 px); the iDNES throttle took new ads with given-up photos from 5 % to 52 %, and a
+thumbnail-template regression drives narrow towards 100 %. A CDN that refuses our transform parks
+the photo `source_unavailable` (a 400 is terminal), so not-stored sees from our own rows the failure
+the retired `sreality_image_template` probe looked for from outside, and narrow sees a downgrade
+below 600 px (a thumbnail template: a 200 with a smaller rendition). Dirty: the 7-day maximum is 3.4
+h, mid-sweep; the 08-20 outage held dirty rows for 6 d (09-15's 165 h was the sweep's age, which
+`jobs`' `artifact/property_sweep` cell judges; the dirty queue stayed under 1 h that day, so the
+dirty arm alone would have missed it); a rail in `tests/scripts/test_checks_publishing.py` keeps the
+Watch above the full sweep's lease hold (`recompute_property_stats._MAX_BUDGET_SECONDS`, 6,000 s),
+the guard the deleted `test_property_dirty_warn_clears_a_full_length_sweep` used to be.
+
+Known limits: `listing_taken_down` can only be set for sreality, so a crawler ad made inactive
+within 24 h leaves photos pending or `source_unavailable`, which count as not stored; a failed
+`browse_list` rebuild only grows the "waiting for the next rebuild" fact on visible and stock, never
+a blocker, so it is told once, by the `jobs` check's `artifact/browse_list` cell; narrow's floor is
+an absolute 600 px, so a downgrade that stays above it (the one on record, the 749 px CROPPED frames
+`docs/architecture.md` describes under Photos) reads 0 % narrow (owed: judge the stored width
+against the declared source width); a change's age can include time its row spent at VERIFY, because
+a promotion keeps `enqueued_at`. The daily full property sweep attaches stragglers once, at its
+start, then holds the maintenance lease for up to its 6,000 s budget
+(`recompute_property_stats._MAX_BUDGET_SECONDS`) while the worker's maintenance lane skips, so ads
+first written meanwhile wait for their property until it lets go: on a sweep day longer than about
+40 min, visible reads Problem for the sweep's duration and recovers on a measured OK. The 28-day
+replay opens five such onsets on four days (ceskereality and sreality 10-02, ceskereality 10-05,
+sreality 10-08, bezrealitky 10-09; new ads held 41-100 min, each incident closed within 80 min); no
+visible cell has read even Watch since 10-17 (the 10-18 sweep ran 887 s). Those ads really were out
+of Browse past the 15-min target, so the onsets are disclosed, not silenced; attaching while the
+sweep runs is owed to the scraper track. It replaces `acquisition_lag` (unclaimed NEW rows only, 6 h
+/ 24 h), `property_maintenance`'s dirty arm (2.5 h / 3 h; its sweep arm is `jobs`'
+`artifact/property_sweep` cell) and `sreality_image_template` with its live CDN probe.
+
+## `delisting` — do ads that left their portal go inactive on time, and correctly? (wave 4)
+
+`check_delisting` (`scripts/checks/delisting.py`; an alarm on the worker, cadence 600 s, label
+"Delisting", unit "cells"). Its limits come from `scraper/delist_policy.py`'s `GONE_DWELL` (12 h)
+and `RECHECK_THROTTLE` (24 h: `db.presence_candidates` re-nominates no ad with a completion in the
+last 24 h; named in wave 4, unchanged), whose larger is the **effective dwell**, 24 h today
+(`docs/architecture.md` rule #3):
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `<portal>/outflow` | ads made inactive in the trailing 24 h (`listings.inactive_at`) against the four weeks 7, 14, 21 and 28 d earlier, each read at every 24 h window ending within ±3 h (`delisting_outflow_align_h`) of this hour: `baseline` is the median of each week's quietest window, `baseline_busy` the median of each week's busiest | below 50 % of `baseline` (`delisting_outflow_warn_share`), or above 300 % of `baseline_busy` (`delisting_outflow_spike_share`) and at least 500 (`delisting_outflow_spike_min`) | below 20 % of `baseline` (`delisting_outflow_fail_share`) |
+| `<portal>/stuck` | active ads whose first unrefuted gone verdict — the earliest `gone` completion newer than the ad's `last_seen_at`, found per ad before counting (`db.gone_evidence`'s rule) — is older than the effective dwell + 2 × the portal's p90 walk-start gap (finished walks, 14 d) + 1 h (`delisting_stuck_slack_h`) | 25 or more (`delisting_stuck_warn`) | 250 or more (`delisting_stuck_fail`) |
+| `<portal>/verify_backlog` | age of the oldest VERIFY-priority queue row, claimed or not, not given up | above 6 h (`delisting_verify_warn_h`) | above 24 h (`delisting_verify_fail_h`) |
+| `<portal>/deferrals` | the flip cap's `verify_deferred`, summed per finished walk | 2 consecutive walks in which a unit reached the end, each with deferrals (`delisting_deferral_walks`) | never: the cap is a throttle by design |
+| `<portal>/precision` | of the `flipped` completions 48-72 h old, the share whose ad is active again (`listings.is_active` now), judged on its Wilson lower bound | above 10 % (`delisting_precision_warn`) | above 15 % (`delisting_precision_fail`) |
+
+Minimum evidence: outflow needs a `baseline` of 50 a day (`delisting_outflow_min_baseline`), else
+Not measured — maxima is unscored by its volume, never by its name, and because the floor is judged
+on the quietest windows, remax and mmreality read Not measured about 68 % and 50 % of hours (45 %
+each on fixed windows; judging the floor on the busiest median is an open ruling); precision needs 50 flips
+(`delisting_precision_min_n`), else the cohort is pooled over 2-7 d. Outflow reads all its windows
+in one statement: one `listings_inactive_at_idx` range per lag (the 24 h widened by ±3 h), binned by
+the hour, then summed into the windows; a range per window made the planner seq-scan `listings`
+(4.6 s against 0.12 s, 10-19).
+The precision cohort reads a plain `completed_at` range over the pruned 7-day ledger with no portal
+predicate: the planner reads it whole (about 200k rows, a parallel seq scan, ~0.3 s) more cheaply
+than per portal through `detail_queue_completions_source_completed_idx`, which it prices about three
+times higher; the gone index is partial on `outcome = 'gone'`, so it cannot serve the `flipped`
+rows.
+
+Basis: on 10-10 all nine portals made 0 ads inactive (no `inactive_at` stamp from 2026-10-09 21:39Z
+to 10-11 06:04Z) against medians of 400-1,900 a day. A crawler's flips land in bursts at its walk
+times, so the same hour one to four weeks back reads a walk that starts two hours late as a dip: on
+2026-10-05 realitymix's midday walk started at 14:48 instead of 12:54 and one of its Sunday walks
+was missing, and the same-hour comparison read 17 % for one hour, a normal day told as a Problem and
+a recovery. Hence each week's quietest and busiest window within ±3 h of this hour: a dip is
+judged against the quietest, a spike against the busiest. Revivals clear `inactive_at` 48-72 h after
+a flip, so the baseline windows lose up to ~7 % of their flips (sreality; ≤ 5 % elsewhere) that the
+current window still holds, and the ratio reads high by that margin. Stuck: none at build, the
+oldest pending verdict 27.2 h; first verdict to inactive runs at p90 27.8-35.2 h, under limits of
+38.9 h (sreality) and 43.5-47.5 h (crawlers). Verify backlog: the 7-day maximum is 203 min.
+Deferrals: the 10-13/15 ceskereality catch-up deferred nominations in two runs (2 walks, then 3) and cleared itself each time. Precision: the
+post-dwell steady state is sreality ~7 % (lower bound ~6 %) and at most 4.9 % (≤ 2.1 %) elsewhere;
+the blink cohorts read 26-49 %, and the pre-hysteresis ledger, where one verdict flipped, put
+sreality at 35 %, mmreality 15 %, remax 11 %, bezrealitky 7 % and idnes 6 %. The fixed 48-72 h
+horizon removes the right-censoring that kept `false_delist_share` non-OK on 23 of its 24 runs. When
+precision rings, read the flipped rows' pages (`detail_queue_completions` → `listings.source_url`)
+before touching the dwell. At ship, sreality's 10-18 flip cohort reads ~17.5 % active again (lower
+bound ~15.5 %), so its precision cell may open Problem on 10-20/21: the blink tail that the 24 h
+rule (#1858) addresses, told truthfully, not suppressed.
+
+Known limits: the stuck limit uses the portal-level walk gap, which understates portals whose units
+rotate (idnes walks stalest-first; ceskereality and realitymix nominate per slice group; remax and
+maxima per agenda); deferrals are judged per portal, because an agenda portal files an agenda's
+deferrals on its first descriptor and a sibling-buffer portal on a group's last, and a walk counts
+there when any unit reached the end (coverage's portal-level walk needs every unit to: each answers
+its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
+weeks' timing than the alignment absorbs can still read as a dip; location-refetch rows share the
+VERIFY priority and count in the backlog; "active again" includes probe and refetch revivals; and a
+verdict older than the ledger's 7 days is pruned, so stuck can never see it. It replaces
+`false_delist_share` (a mixed 7-day window) and `delist_flip_refused` (7 days of
+`delist_flip_refusals`, a table nothing reads after it); the old page's `delisting_latency` and
+`delisting_spike` matview checks keep rendering until wave 9.
+
+## `coverage` — do we hold what each portal shows? (wave 4, gauge)
+
+`check_coverage` (`scripts/checks/scraping.py`, beside the scraping alarm because it reads the same
+walk ledgers; a GAUGE on the worker, cadence 3,600 s, label "Coverage", unit "cells"): a standing
+condition, told once when it first reads Problem and then once a day.
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `<portal>/residual/<cm>-<ct>` | at the unit's newest end-reached walk, R = (H − P − D) / D: D the Σ declared of its entries, H its active ads now, P the active ads with a pending unrefuted gone verdict (in dwell) | R beyond ±2 % (`coverage_residual_warn`) | R beyond ±5 % (`coverage_residual_fail`) |
+| `<portal>/unnominated` | active ads whose `last_seen_at` is before the start of their unit's newest end-reached walk (an ad with no unit: the portal's newest walk in which every entry reached the end), with no queue row and no completion newer than the ad's last sighting, less that walk's deferrals; a portal with no end-reached walk in 30 d reads Not measured | 25 or more (`coverage_unnominated_warn`) | 100 or more (`coverage_unnominated_fail`) |
+
+Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
+true or absent is Not measured, as in scraping's missing arm. Unnominated counts from the ad's last
+sighting, not from that walk's start: an ad checked inside the 24 h recheck throttle before the walk
+is in flight, not stuck (counted from the walk's start, 2026-10-19 read about 3,600 ads already
+being rechecked: Problem on five portals). Each cell's facts carry `trend_30d` (this check's own
+value 7 and 30 days ago, from `pipeline_check_results`) and `worse_than_7d`.
+
+Basis: with in-dwell ads subtracted R is 0-0.15 % on idnes, sreality and bazos (held +1,708 / +1,405
+/ +1,362 against in-dwell 1,600 / 1,251 / 1,371); ceskereality's houses (`dum`/`prodej`) read about
+−14 % from the chaty-chalupy double count (#1854: 13.7 k declared against 11.8 k held), a Problem
+every day of the replay and, live, from that unit's first walk after the deploy; ceskereality
+byt/prodej's 27-day hole read +37 % (13,373 held against 9,771 declared). Unnominated: the
+investigation counted 422 NULL-category ads on 10-18 (ceskereality 124, realitymix 298, the oldest
+unseen 110 d: the ads no walk can nominate, #1853); on 10-19 the cell read 151 on realitymix
+(Problem, the oldest last seen 112 d ago) and 96 on ceskereality (Watch), while bazos's ~9 in-flight
+ads stay OK; the outcome definition counts the NULL-category ads without naming a portal. It
+replaces `walk_coverage`'s gap arm; on the old page the SQL `stale_active` check (all of its rows
+were NULL-category ads) and the category-trends panels keep rendering until wave 9.
+
+**Replay rails (wave 4).** Each portal check replays its INPUTS
+(`tests/scripts/test_checks_{scraping,publishing,delisting}_replay.py`, coverage with scraping) from
+fixtures under `tests/fixtures/health_*.csv`, exported read-only from production with the refresh
+SQL in each test's header: walks, missing, residual, inflow and outflow from `scrape_runs` and
+`listings`, where 28 days exist; fetch errors, stuck, the verify backlog and precision from
+`detail_queue_completions` and the queue, where only 7 days exist, so that export ran first, before
+the 10-13 bazos burst and the 10-12/13 cohorts aged out. Where no store keeps history — the 08-17
+starvation, the 09-14 Browse drop, the 09-17 bazos location loss, the iDNES photo throttle, a 30 %
+revived cohort — the incident-shaped fixture is SYNTHETIC, and its test says so with the figures it
+reproduces; the 10-10 zero-flip day is real. What each replay opens, arm by arm, is listed in the
+design's wave-4 As built note: the quiet stretches the data holds open nothing (the outflow replay's
+are shorter than 14 days: its real stalls leave no onset-free fortnight), visible opens five
+Problems on four sweep days (publishing's Known limits), coverage's residual also opens on three
+single days of sreality byt/pronajem (09-21, 09-28 and 10-01) and on eleven units on 10-14/15 (for those the
+replay can set aside only the in-dwell count of 10-19, no store keeping an as-of count), the inflow
+replay's 09-28/29 onsets for idnes and mmreality are an artefact of its missing queue history (live,
+the arm adds the NEW rows still queued, so a stopped drain is publishing's ingest, past 6 h), and
+the bazos 10-13 burst stays green. Three seeded, rolled-back live tests
+(`tests/test_checks_{scraping,publishing,delisting}_sql_live.py`, one step of CI's migrations lane)
+run each module's statements with the check's own parameters, because the replays model the SQL in
+Python and PREPARE checks only names and types. A rule-21 rail
+(`tests/scripts/test_checks_rule21.py`) walks every `scripts/checks/*.py` and fails when a string
+literal outside a docstring holds a portal name as a whole word (any case), the value of
+`portal_runner.DECLARED_TOTAL_KEY` or the identifier `sreality_id`: so a check imports the portal
+list and the declared-total key rather than spell them, never joins on `sreality_id`, and says
+"maximum values" where English would say "maxima". It imports the queue priorities,
+`delist_policy`'s constants and the served-location rule by convention: numbers and SQL the rail
+cannot see.
+
 ## `location_payload_shape_drift` — can the location contracts still read new payloads?
 
 `location_payload_shape_drift` — W4's standing payload-schema-version check (06 §6.4 W4 gate,
@@ -1027,140 +1298,3 @@ the message names the remedy per source (sreality: update `sreality_payload_shap
 `claims_intake.py`, re-extract — the contract's `payload_schema_detector` block went with W1-c's
 six-key contract shape; bezrealitky: restore `ruianId` in `_DETAIL_QUERY`, then refetch
 the rows fetched meanwhile). Measured every 6 h (its registry cadence); an alarm.
-
-## `sreality_image_template` — does sreality's CDN still serve our template?
-
-`sreality_image_template` — one of the **two checks in the harness that leave the database** (the
-weekly `outbound_url_conformance` probe is the other), and the reason it has to: the database
-checks read a table we wrote, and a CDN that started refusing our transform writes nothing, so
-there is no row to read. Sreality's image CDN is an
-exact-template **allowlist**, not a transform language — the download path ships
-`scraper/image_storage.IMAGE_TRANSFORM_OPS` (`res,1800,1800,1|shr,,20|jpg,80`, their
-SQUARE_1800_JPG whole-frame template) and anything off the list 400s. Sreality re-cut that
-catalogue once before with no notice; `_classify_image_failure` parks a 400 **terminally**
-(`source_unavailable`, never retried), so a catalogue change would park every image in flight
-and surface only as a download lane that quietly stopped storing bytes.
-The probe, three calls behind one seam: GET the live v1 search (`INDEX_URL`, byt/prodej/CZ,
-`limit=1`) with the client's browser headers for a FRESH `hash_id` (never a stored URL — that
-proves only that the template worked the day we stored it), GET that listing's `DETAIL_URL`,
-and take `advert_images[0]` through `parse_images`. **The detail endpoint, not the search
-one**: v1 search returns `advert_images` as bare URL **strings** (`parse_images` skips every
-non-dict, so reading images off the index returns `[]` and the probe would short-circuit to a
-warn forever); only detail carries the `{url, width, height, order}` dicts — the same payload
-the real download path consumes. Then request `image_storage.with_transform(url)` — the
-**deployed** chain by construction, never a literal copy, so the probe cannot drift from the
-code it guards — and measure the bytes with `image_storage.image_dimensions`. The seam,
-`_fetch_sreality_probe(url, timeout, max_bytes)`, streams under two bounds: a 6 MB cap on
-MEMORY and a monotonic wall-clock deadline of `connect + read` (`timeout=(5, 8)`) per call,
-because requests' read timeout is per socket read — a peer trickling one chunk per 7.9 s would
-otherwise hold the lane for minutes, and nothing outside can preempt it (the lane budget is
-armed only as a Postgres `statement_timeout`, and `run_checks` tests the lane deadline only
-BEFORE a check starts). Worst case 3 × 13 s = 39 s, inside its 120 s budget (`Check.budget_s`).
-`fail` on CDN non-200 (the allowlist rejected us), a non-image or undecodable body, or a served
-frame under `sreality_image_template_min_ratio` (0.9) of what the deployed `res` op should
-yield **for that estate's own declared source size**, on EITHER axis. The size arm is the one
-that matters — the silent downgrade answers **HTTP 200** with a smaller or cropped rendition,
-which no status check would ever see, and the superseded `res,749,562,3` chain (the regression
-the master-template work undid) served 749 px and cropped 3:2 to 4:3, which is why both axes
-are compared. The verdict is RELATIVE, never an absolute px floor: `res,1800,1800,1` fits
-inside the source and **never upscales**, so a listing whose first photo is a 640×480 original
-comes back at 640×480 through a perfectly healthy template (~4% of live byt/prodej first
-photos measure under 1000 px; a 1867×1400 source measures 1800×1349 against an expected 1350,
-which is what the 0.9 tolerates). An estate that declares no size for the image is judged on
-the HTTP + decodability arms only, and says so in its message.
-A network error, a non-200/empty/idless index, an unreachable or non-200 detail, an imageless
-estate, or an image that has left the sdn.cz host (where `with_transform` is a no-op, so
-nothing would be exercised) is `unknown` with `details.skipped` ("verified NOTHING"), never
-`fail`: the canary reached nothing, and a flaky lane must not read as "sreality rejected our
-template". `value` is the measured width in px; `details` carries `image_url`, `transform`,
-`detail_url`, `http_status`, `width`, `height`, `source_width`, `source_height`,
-`expected_width`, `expected_height`, `min_ratio`, `bytes`, `cdn_elapsed_ms` (the harness stamps `elapsed_ms` for the whole check).
-Registered after every database check on purpose (only the weekly URL probe follows it), so the
-two outbound checks are the last alarms a run reaches (since wave 2 the gauges run after every
-alarm) and the first alarms a spent run budget drops. The remedy when it reds: re-derive the
-template from sreality's own frontend and update `IMAGE_TRANSFORM_OPS`.
-
-**No workflow of its own since wave 1.** `sreality_image_canary.yml` is deleted: the check's 24 h
-cadence makes it due once a day on the next canary run, after the database alarms so a slow CDN
-can never starve one; its `fail` is told by the ladder like any alarm's (no run goes red on a
-result since wave 2). A CDN 403/429 (sreality's throttle) or a 5xx is `unknown` — it verified
-nothing; only a 4xx refusal, a non-image body or a downgraded frame is a `fail`.
-
-## `false_delist_share` — did a confirmed gone verdict close an ad the portal still shows? (2026-10-09)
-
-Rule #3's hysteresis flips a listing only on a second gone verdict at least `GONE_DWELL`
-(12 h) after the first, with no sighting between. The check reads the only durable trace of
-a flip — `detail_queue_completions.outcome = 'flipped'` (migration 594; reactivation clears
-`listings.inactive_at`) — and reports, per portal, the share of the last 7 days' flips whose
-ad is active again. A revival after a confirmed verdict means the portal kept the ad down
-longer than the dwell and brought it back, or its gone signal misfires; either way the
-operator saw an active ad marked inactive. Sized on the pre-hysteresis ledger (one verdict
-flipped): sreality 35%, mmreality 15%, remax 11%, bezrealitky 7%, idnes 6%, the rest under
-2% — warn ≥5% (the dwell is meant to hold every portal under it), fail ≥20% (the old
-sreality order of magnitude: the rule stopped working). A portal with fewer than 50 flips in
-the window is listed in `details.unscored`, not scored; a window where no portal reached 50
-is Not measured (`unknown`, `value: None`) — verified nothing — which is the expected state
-in the first days after 594 ships. `value` is the worst scored share in percent;
-`details.per_source` carries flips / active_again / share / scored. Measured every 6 h (its
-registry cadence); an alarm. The remedy when it reds: read the flipped rows' pages
-(`detail_queue_completions` → `listings.source_url`) before touching the dwell.
-
-## `walk_end_streak` — how many walks in a row has a category nominated nothing? (2026-10-13)
-
-Rule #3 nominates a category's unseen rows only from a walk that REACHED THE PORTAL'S END;
-a walk that stops short (a slice over a page ceiling, a deadline, an error, a barren page)
-nominates nothing, and that is correct for one walk. Repeated, it is a category whose gone
-ads can never close. ceskereality byt/prodej did exactly that for 89 consecutive walks
-(2026-09-16 11:51 → 10-13): one kraj sat over the site's 99-page ceiling with no subtype
-axis, and 13,373 active rows accumulated against 9,771 on the portal. Each walk logged
-`VERIFY skipped` at WARNING; Health's `index_completeness` failed but is a dashboard matview,
-not an alert producer; and `walk_coverage` sums collected vs declared over the whole PORTAL,
-so the category's 22% gap read ~4.6%, under its 5% warn — and its `categories_nominating`
-count is reported but never moves the status.
-
-The check reads `scrape_runs` through `_fetchall` (so the per-check `statement_timeout`
-applies): one scan of finished `run_type='index'` rows started in the last 14 days
-(`make_interval(days => %(days)s)`, bound from `_WALK_END_WINDOW_DAYS`), unnesting
-`by_category` into one row per (run, source, category_main, category_type) with
-`bool_and(walk_reached_end)`. Python counts the streak per category, newest walk first
-(ties broken on the run id): each walked run that did not reach the end adds one, the first
-that did closes it; a NULL verdict (a row older than the key) is neither. Warn at 3 walks,
-fail at 6 — counted in walks because the gate is per walk, and GitHub fires the index crons
-every ~6–9 h whatever the cron line says, so that is ~1 and ~2 days for a category walked
-every run; idnes's rotated categories (~5 of 10 per run) take about twice as long.
-
-A run that OMITTED the category (deadline-truncated, or a rotation) has no row, so the
-streak skips it. Instead each cell carries `runs_since_walked` — its portal's finished walks
-newer than the cell's last walk — and a cell its portal has not walked in its last 6 walks
-reads **warn whatever its streak** ("<source> <cm>/<ct> not walked since <ts> (N <source>
-walks since)"). That one rule covers two cases: a category starved by a deadline that never
-reaches it (silence is not recovery — it must not read ok), and a category dropped from the
-portal's config, which would otherwise hold the bell red for 14 days on a stale streak; a
-warn opens nothing, though it keeps an open incident reminding. `walk_coverage`'s truncation
-arm does NOT cover a never-started category: it compares the latest run's category count
-with the 7-day best, only warns, and goes quiet once the truncation outlasts 7 days or a
-rotation keeps the count stable.
-
-`value` is the worst streak among categories still being walked; `details.per_category`
-carries streak / walks / `runs_since_walked` / `last_walked_at` / `last_reached_end_at` /
-`status` per cell (worst first). Offenders read "<source> <cm>/<ct> not at the portal's end
-for N walks (last reached <ts>)", or "for at least N walks (not reached in 14 d)" when no
-walk in the window reached it — the window cuts the count, so it is a floor. A window with
-no verdict at all (no finished walk anywhere, or `walk_reached_end` gone from
-`by_category`) is `unknown` with value None and `details.skipped`, "measured nothing" — never `ok`,
-value 0. No alerting check here judges index-walk liveness, so read `scrape_runs` when it says that.
-
-Blind spots, known: (1) two descriptors behind one label (bazos pozemek+zahrada, dum+chata,
-the komercni sections, garaz+ostatni) count as reached when every one the run WALKED reached
-the end, so a run that stops between them resets the label's streak; (2) a category out of
-the window entirely (unwalked 14 days) drops out and reads ok; (3) a dispatched
-`--max-pages` / `--limit` run, or a bazos `--locality/--radius-km` run, finalizes as an
-index walk with `walk_reached_end=false` on every category it walked, so each one counts as
-a miss — three between two crons turn the row amber — and a bazos dispatch narrowed to one
-scope counts as a portal walk for `runs_since_walked` of every other category; `scrape_runs`
-records no run arguments, so the check cannot tell them apart; (4) until this check emits
-one cell per category it has a single implicit cell, so while one category holds it red a
-SECOND that parks opens no new incident and is never named in a notice — read the Health
-row's `details.offenders` for the full list. Measured every 6 h (its registry cadence)
-beside `walk_coverage`; an alarm. When it rings: the category's `VERIFY skipped` line names
-our stop, and the portal's own `SLICE` / `DESCENT` lines name the slice.

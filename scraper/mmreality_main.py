@@ -20,10 +20,9 @@ category per (sale type, property type) — ten in all, partitioning the portal
 exactly (the per-type prodej counts sum to the prodej total) — each walked to
 the portal's OWN last page (the structural `reached_end` verdict rule #3
 nominates on since 2026-09-08), with the declared count kept as the numeric
-coverage signal that writes the slice ledger's outcome (`portal_index_slices`,
-one row per category) and never as the nomination gate. The flag itself is
-flipped by the coverage gate from ledger evidence, not here. Coordinates come
-from the estate JSON's own `point{}`; a row without one carries none.
+coverage signal (the RECONCILE-INDEX line's `outcome` and `coverage`) and never
+as the nomination gate. Coordinates come from the estate JSON's own `point{}`;
+a row without one carries none.
 """
 
 from __future__ import annotations
@@ -71,11 +70,6 @@ SALE_TYPE: dict[str, str] = {"prodej": "prodej", "pronajem": "pronajem"}
 # No staleness rail any more (rule #3, 2026-09-07): a complete walk nominates
 # the rows it did not see for a page check and the drain's fetch decides, so a
 # single walk-miss costs one fetch, never a live listing.
-
-# The ledger key for a category walked whole. mmreality's per-type indexes page
-# to their tail (the largest, pozemky/prodej, is ~300 pages of 12), so there is
-# no second axis; one row per category is the ledger's whole shape.
-SLICE_KEY = "national"
 
 # The site's own <title> suffix, in both encodings a body can carry it.
 _REF_ID_RE = re.compile(r"/nemovitosti/(\d+)")
@@ -179,9 +173,7 @@ class MmRealityPortal(portal_runner.PortalDefaults):
         ]
         if not usable:
             # A registry row still on the pre-2026-09 shape ({"index": ...}) —
-            # or none at all — walks the baked-in ten rather than nothing; the
-            # gate reads the DB row's own categories, so this fallback cannot
-            # widen what the gate demands, only what the walk covers.
+            # or none at all — walks the baked-in ten rather than nothing.
             if config.categories:
                 LOG.warning(
                     "mmreality: config categories %r carry no (sale_type, category) "
@@ -233,9 +225,9 @@ class MmRealityPortal(portal_runner.PortalDefaults):
         pager_said_end = False
         stopped_early = False
         outcome = "exhausted"
-        # mmreality is one unit per category (SLICE_KEY is a constant, there is no
-        # second axis), so the category's structural verdict IS this loop's stop
-        # reason. `error` is the fail-closed seed: a stop nobody classified must
+        # mmreality is one unit per category (its per-type indexes page to their
+        # tail, so there is no second axis), so the category's structural verdict
+        # IS this loop's stop reason. `error` is the fail-closed seed: a stop nobody classified must
         # read as ours and never nominate.
         stop: StopReason = "error"
 
@@ -351,8 +343,8 @@ class MmRealityPortal(portal_runner.PortalDefaults):
         # The shared two-sided verdict against the portal's OWN count for this
         # index. An unmeasurable count (no SSR state on page 1) is `unknown`,
         # never complete; a deadline or page cap short-circuits it. It gates
-        # nothing since 2026-09-08 — it is the coverage alarm and the ledger's
-        # outcome string, which the coverage gate still reads numerically.
+        # nothing since 2026-09-08 — it is the COVERAGE warning and the
+        # RECONCILE-INDEX line's numeric outcome string.
         coverage = walk_coverage(len(seen), declared, stopped_early=stopped_early)
         if coverage != "complete" and outcome == "exhausted":
             outcome = "degraded"
@@ -362,12 +354,6 @@ class MmRealityPortal(portal_runner.PortalDefaults):
             sale_type, cat, declared, len(seen), pages, stop, outcome, reached_end,
             coverage,
         )
-        if not self._max_pages:
-            # A page-capped walk is a probe or a bounded test, not coverage: the
-            # ledger is latest-wins, so recording its "ceiling" every few minutes
-            # would overwrite the real walk's "exhausted" and hold the coverage
-            # gate shut for good (the always-on worker probes under a cap).
-            self._record_slice(conn, category, outcome, declared, len(seen), pages)
 
         counts = portal_runner.reconcile_sightings(
             conn, SOURCE, {n: (ref_map[n], price_map.get(n)) for n in native_ids},
@@ -375,28 +361,8 @@ class MmRealityPortal(portal_runner.PortalDefaults):
         )
         return seen, counts, declared, pages, reached_end
 
-    def _record_slice(
-        self, conn: Any, category: dict[str, Any], outcome: str,
-        declared: int | None, collected: int, pages: int,
-    ) -> None:
-        """One ledger row per category: the coverage gate (migration 455) reads
-        "every slice of every declared category exhausted inside the window",
-        and `exhausted` is the only positive outcome it accepts. The string stays
-        NUMERIC (walk_coverage downgrades it) even though nomination is now
-        structural, so `exhausted` means to the gate exactly what it always did."""
-        if conn is None:
-            return
-        cm, ct = self.category_labels(category)
-        if cm is None or ct is None:
-            return
-        db.record_index_slice(
-            conn, source=SOURCE, category_main=cm, category_type=ct,
-            slice_key=SLICE_KEY, outcome=outcome, declared_total=declared,
-            collected=collected, pages=pages,
-        )
-
     def live_categories(self, limiter: RateLimiter) -> tuple[set[str], set[str]] | None:
-        """The coverage alarm's input (runner: _record_category_drift): the
+        """The CATEGORY DRIFT record's input (runner: _record_category_drift): the
         property-type groups the portal lists right now, per sale type, vs the
         ones this walk is configured to cover. Two requests, the sale-type root
         pages. None if either page carries no SSR state -- an unreadable page

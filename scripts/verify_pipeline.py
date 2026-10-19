@@ -40,23 +40,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
-from urllib.parse import urlencode
-
-import requests
 
 from location_data import location_steps
 from location_data.resolver.version import RESOLVER_VERSION
-from scraper import attribute_contract, field_census, media as _media
-from scraper.db import QUEUE_PRIORITY_NEW, connect
-from scraper.image_storage import IMAGE_TRANSFORM_OPS, image_dimensions, with_transform
-from scraper.parser import parse_images
-from scraper.portal_base import _BASE_HEADERS as _PORTAL_HEADERS
-from scraper.sreality_client import (
-    CZ_COUNTRY_ID,
-    DETAIL_URL as _SREALITY_DETAIL_URL,
-    INDEX_URL as _SREALITY_INDEX_URL,
-    _unwrap_estate as _unwrap_sreality_estate,
-)
+from scraper import attribute_contract, field_census
+from scraper.db import connect
 from scripts.checks.clock import (
     CHECK_BUDGET_S as _CHECK_BUDGET_S,
     DEFAULT_STATEMENT_TIMEOUT_MS as _DEFAULT_STATEMENT_TIMEOUT_MS,
@@ -65,12 +53,15 @@ from scripts.checks.clock import (
     fetchone as _fetchone,
     statement_timeout_clause as _statement_timeout_clause,
 )
+from scripts.checks.delisting import check_delisting
 from scripts.checks.platform import (
     check_capacity,
     check_jobs,
     check_llm,
     check_migration_drift,
 )
+from scripts.checks.publishing import check_publishing
+from scripts.checks.scraping import check_coverage, check_scraping
 from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
 from toolkit.system_alerts import due_after_s as _due_after_s
 
@@ -92,58 +83,18 @@ LOG = logging.getLogger("verify_pipeline")
 # reviewed PR. Nothing overrides it at run time (app_settings.pipeline_check_thresholds is
 # read by nothing since wave 3; migration 624 deletes the row).
 THRESHOLDS: dict[str, Any] = {
-    # false_delist_share: of the ads the drain CLOSED (ledger outcome 'flipped', 7 d), the
-    # share active again now -- a revival after a confirmed gone verdict is a flip that was
-    # wrong. Sized 2026-10-09 on the pre-hysteresis ledger (one verdict flipped): sreality
-    # 35%, mmreality 15%, remax 11%, bezrealitky 7%, idnes 6%, the rest under 2%. The dwell
-    # (12 h) is meant to hold every portal under the warn line; 20% is the old sreality
-    # order of magnitude, i.e. the rule stopped working. A portal with fewer than 50 flips in
-    # the window is not scored (a 12-flip share is noise) and a window where NO portal
-    # reached 50 is reported as unmeasured, never ok.
-    "false_delist_share_warn": 0.05,
-    "false_delist_share_fail": 0.20,
-    "false_delist_min_flips": 50,
-    # Ingestion. Measured on the QUEUE, so these are portal-size-independent: a
-    # healthy drain keeps the oldest never-fetched listing at minutes whatever the
-    # portal. Warn at 6h is well above the 6-hourly walk cadence (a listing found
-    # right after a drain legitimately waits until the next one) and far below the
-    # scale of a real fault; fail at 24h means a full day of a portal's new
-    # inventory is missing from Browse, the watchdog and every estimate. Under the
-    # 2026-08-17 starvation sreality reached 216h.
-    "acquisition_lag_warn_hours": 6,
-    "acquisition_lag_fail_hours": 24,
-    # The same shape one layer later (field-capture R8): how long a listing whose prose
-    # the text lane has not read has been waiting. The lane runs every 5 minutes and its
-    # 20-minute SLO is for INFLOW; a backlog drains at 500 rows a pass, and the age counts
-    # from first_seen_at, so a corpus re-read (a new SCHEMA_VERSION, prompt or model: ~31 h
-    # at W1) reads FAIL until it drains — expected. Warn at 48h, fail at 168h: a week of a
-    # portal's prose unread is the lane being dead, the failure nothing else can see.
+    # Field-capture R8: how long a listing whose prose the text lane has not read has been
+    # waiting. The lane runs every 5 minutes and its 20-minute SLO is for INFLOW; a backlog
+    # drains at 500 rows a pass, and the age counts from first_seen_at, so a corpus re-read (a
+    # new SCHEMA_VERSION, prompt or model: ~31 h at W1) reads FAIL until it drains — expected.
+    # Warn at 48h, fail at 168h: a week of a portal's prose unread is the lane being dead, the
+    # failure nothing else can see.
     "text_extraction_lag_warn_hours": 48,
     "text_extraction_lag_fail_hours": 168,
-    # Walk coverage against the portal's own advertised total. Healthy portals sit
-    # at 0.0-0.2% (measured 2026-08-27: sreality 0.00%, realitymix 0.00%, bazos
-    # 0.16%). Warn at 5% is ~25x the observed noise floor. Fail at 15% is a portal
-    # whose delisting rail is ALSO suppressed by the same completeness gate, so a
-    # coverage hole that deep silently stops history as well as intake --
-    # ceskereality sits at 9.96% today, which is the known facet-partition gap and
-    # should read amber, not red, until that is fixed on its own merits.
-    "walk_coverage_warn_gap": 0.05,
-    "walk_coverage_fail_gap": 0.15,
     # How many of the newest migrations to probe. 25 spans several weeks of this
     # repo's cadence, so a drift is caught long before the window rolls past it,
     # while keeping the probe to a few hundred catalog lookups.
     "migration_drift_window": 25,
-    # Consecutive index walks in which ONE category was walked and did not reach the
-    # portal's end, so it nominated nothing (rule #3). Counted in walks, not hours,
-    # because the gate is per walk: GitHub fires the index crons every ~6-9 h whatever
-    # the cron line says, so 3 walks is ~1 day and 6 is ~2 days for a category walked
-    # every run (idnes's rotated categories take about twice as long). A single short
-    # walk (a throttled page, a deadline) is routine and clears on the next one; a day
-    # of them is a category that has stopped closing anything. The 2026-09-16 -> 10-13
-    # ceskereality byt/prodej hole ran 89 walks and only ever logged a WARNING. A
-    # category its portal has not walked in its last `_fail` walks warns instead.
-    "walk_end_streak_warn": 3,
-    "walk_end_streak_fail": 6,
     # Portal-URL contract (docs/design/portal-listing-url.md). ABSOLUTE counts of active
     # rows with no source_url, per source: the failure being watched — sreality adds a
     # sub-category code the closed codebook does not know and every new row of it
@@ -158,28 +109,6 @@ THRESHOLDS: dict[str, Any] = {
     "outbound_url_conformance_warn_share": 0.05,
     "outbound_url_conformance_cell_min": 3,
     "outbound_url_conformance_cell_fail_share": 0.67,
-    # Property maintenance (2026-08-06 incident: 4 days of silently dead daily
-    # sweeps + a stranded lease freezing every maintenance lane). The sweep
-    # stamps app_settings.property_sweep_last_complete ONLY on a complete
-    # cycle, which is one run or two (its resume cursor), so a healthy stamp is
-    # ~24h or ~48h old. Sized for the two-run cycle (operator, 2026-10-03), as
-    # broker_sweep_* is for its two-run lap: warn above 48h plus the spread in
-    # when a run finishes (GH's scheduled-run delay, the lease wait, the run:
-    # ~2.5h), fail a few hours on — a cycle whose second run never stamped. The
-    # price is a dead sweep flagged after ~2 days instead of ~30h; a run that
-    # stops on budget twice, or sweeps nothing, exits RED on its own.
-    # Dirty rows drain within ~2 min of the worker lane's tick — EXCEPT while the
-    # daily full sweep holds the maintenance lease, which blocks every incremental
-    # pass and only clears dirty_properties at the very end, so oldest-dirt ages
-    # 1:1 with sweep elapsed. That hold is bounded by the sweep's own budget
-    # (recompute_property_stats._MAX_BUDGET_SECONDS, raised to 6000s = 100 min in
-    # #1026) plus lease wait + finalize, so warn must sit ABOVE it or a perfectly
-    # healthy long sweep turns this axis amber and trains the operator to ignore
-    # it. 1.5h -> 2.5h; fail stays 3h. Raise this together with the sweep budget.
-    "property_sweep_warn_hours": 52,
-    "property_sweep_fail_hours": 56,
-    "property_dirty_warn_hours": 2.5,
-    "property_dirty_fail_hours": 3,
     # The suppression rail is a binary invariant, not a gradient: one active
     # suppression whose two identities sit under the same broker means a NO the
     # operator recorded was bypassed. No warn tier — there is no "slightly merged".
@@ -280,25 +209,6 @@ THRESHOLDS: dict[str, Any] = {
     "ppm2_coverage_gap_warn": 0.95,
     "ppm2_coverage_gap_fail_7d": 0.90,
     "ppm2_coverage_min_rows": 200,
-    # Sreality image template canary. The CDN is an exact-template ALLOWLIST, not a
-    # transform language, and sreality has re-cut its catalogue once before with no
-    # notice: the day the deployed chain leaves the allowlist every request 400s,
-    # `_classify_image_failure` parks each one terminally, and the only symptom is a
-    # download lane that quietly stops storing bytes. The canary asks the live CDN,
-    # daily, whether the template we ACTUALLY ship still returns a full-size frame.
-    # The verdict is RELATIVE, never an absolute px floor: `res,1800,1800,1` fits inside
-    # the source and never upscales, so a listing whose first photo is a 640x480 original
-    # comes back at 640x480 through a perfectly healthy template (measured: ~4% of live
-    # byt/prodej first photos). An absolute floor would page on ordinary data. The
-    # estate's OWN declared width/height (the DETAIL payload carries them per image) says
-    # what the deployed chain should return; 0.9 tolerates the CDN's rounding (a
-    # 1867x1400 source measured 1800x1349 against an expected 1350) while the superseded
-    # `res,749,562,3` chain — the regression the master-template work undid — lands far
-    # under it on both axes, which is also how a CROP is caught. Timeout is the read half
-    # of a (5, 8) connect/read pair, bounded per call in the seam; worst case across the
-    # three calls is 39 s, inside the 45 s per-check budget.
-    "sreality_image_template_min_ratio": 0.9,
-    "sreality_image_template_timeout_s": 8.0,
     # Floor convention: the mean (portal storey − idnes storey) over sibling pairs.
     # A whole-storey offset is the defect (W8 measured +0.82..+1.05 on the six ground=1
     # portals against +0.20 ceskereality / +0.10 bazos, the two that were already
@@ -390,6 +300,116 @@ THRESHOLDS: dict[str, Any] = {
     "llm_spend_24h_fail_usd": 150,
     # A credit outage stays red after its callers back off: 72 h, never a 24 h window.
     "llm_lookback_h": 72,
+    # --- scraping (portal alarm): is every portal still finding and fetching its ads ------
+    # Watch past 3 G (the median walk-start gap, 14 d: crawlers 7.15-7.33 h, sreality 4.42 h).
+    "scraping_walk_watch_gaps": 3,
+    # Problem past 6 G (crawlers ~43 h, sreality 26.5 h); no unit crossed it in the 14-day replay.
+    "scraping_walk_fail_gaps": 6,
+    # Under 10 finished gaps in 14 d a portal is scored on the slowest portal's G, never dropped.
+    "scraping_walk_fallback_min_gaps": 10,
+    # A unit walked lately with no end-reached walk in 14 d is a Problem whatever its G.
+    "scraping_walk_stale_days": 14,
+    # "Lately" is 30 d: a unit absent from every walk for 30 d has left its portal's walk.
+    "scraping_walk_recent_days": 30,
+    # Inflow: Problem under 20 % of the same 24 h 7/14/21/28 d back (0 in a 14-day backtest).
+    "scraping_inflow_fail_share": 0.2,
+    # Watch under 50 %: same-window baselines absorb the 30-45 % weekend dip.
+    "scraping_inflow_warn_share": 0.5,
+    # A spike past 300 % of the baseline is Watch, never Problem.
+    "scraping_inflow_spike_share": 3.0,
+    # Under 20 a day 7-day windows are compared; under 20 a week the cell is Not measured.
+    "scraping_inflow_min_baseline": 20,
+    # Fetch errors, Wilson LB of the ids attempted in 24 h: Watch past 2 % (worst day 0.18 %).
+    "scraping_fetch_err_warn": 0.02,
+    # Problem past 10 %: the old 25 % false FAIL's poison id is 1 of ~6,060 ids (0.02 %) here.
+    "scraping_fetch_err_fail": 0.10,
+    # Under 200 ids the window widens to 7 d, else the cell is Not measured.
+    "scraping_fetch_err_min_ids": 200,
+    # Missing, declared − collected at an end-reached walk: Watch past 2 % (walks: 99.96-100 %).
+    "scraping_missing_warn": 0.02,
+    # Problem past 5 %: a parser dropping cards on a walk that still reaches the portal's end.
+    "scraping_missing_fail": 0.05,
+    # A unit declaring under 500 ads is not scored: 10 missing ads would read 2 % there.
+    "scraping_missing_min_declared": 500,
+    # --- publishing (portal alarm): do discovered ads reach Browse, with their photos -----
+    # Ingest (oldest NEW row) and changes (CHANGED/FAILURE): Watch past 3 h (7-day max 122 min).
+    "publishing_queue_warn_h": 3,
+    # Problem past 6 h: a starved NEW queue (08-17) fails here; a politeness burst never does.
+    "publishing_queue_fail_h": 6,
+    # Visible: Wilson LB of new active ads not in browse_list past 2 % (2 of 2,374 on 10-17).
+    "publishing_visible_warn": 0.02,
+    # Problem past 10 %; queued ads are ingest's, so the 10-13 burst (1,110 ads waiting, oldest 119 min) stays green.
+    "publishing_visible_fail": 0.10,
+    # Under 50 ads the window widens to 72 h, else the cell is Not measured.
+    "publishing_visible_min_n": 50,
+    # Stock: active properties missing from browse_list past 0.1 % (live 20 of 362,883).
+    "publishing_stock_warn": 0.001,
+    # Problem when the Wilson LB is past 1 %: the 09-14 Browse drop read ~87 %.
+    "publishing_stock_fail": 0.01,
+    # The Problem arm needs at least 200 properties behind the share.
+    "publishing_stock_min_n": 200,
+    # Photos of ads first written 1-24 h ago: Wilson LB not stored past 2 % (1 of 30,137 today).
+    "publishing_photos_unstored_warn": 0.02,
+    # Problem past 10 %: the iDNES throttle took new ads' given-up photos from 5 % to 52 %.
+    "publishing_photos_unstored_fail": 0.10,
+    # Under 200 photos the photo arms are Not measured.
+    "publishing_photos_min_n": 200,
+    # Stored narrower than min_px: Watch past 10 % (today 0-2.8 %).
+    "publishing_photos_narrow_warn": 0.10,
+    # Problem past 50 %: a thumbnail-template regression drives it towards 100 %.
+    "publishing_photos_narrow_fail": 0.50,
+    # Narrow is under 600 px wide; stored medians sit at 1,199-1,600 px.
+    "publishing_photos_min_px": 600,
+    # The oldest dirty property past 4 h, above the sweep's 100-min lease hold (7-day max 3.4 h).
+    "publishing_dirty_warn_h": 4,
+    # Problem past 8 h: the 08-20 outage held dirty rows for 6 d; 09-15's 165 h was the sweep's age (the
+    # dirty queue stayed under 1 h that day), so the dirty arm alone would have missed it: jobs' sweep cell has it.
+    "publishing_dirty_fail_h": 8,
+    # --- delisting (portal alarm): are gone ads made inactive, on time and correctly ------
+    # Outflow: Problem under 20 % of the quietest 24 h within ±3 h of this hour 7/14/21/28 d back
+    # (10-10: 0 against 400-1,900).
+    "delisting_outflow_fail_share": 0.2,
+    # Watch under 50 %; revivals clear inactive_at 48-72 h on, so the ratio reads up to ~7 % high.
+    "delisting_outflow_warn_share": 0.5,
+    # A spike past 300 % of the busiest windows' median (baseline_busy)...
+    "delisting_outflow_spike_share": 3.0,
+    # ...and of at least 500 ads is Watch, never Problem.
+    "delisting_outflow_spike_min": 500,
+    # Under a baseline of 50 a day the cell is Not measured: the smallest portal, by its volume.
+    "delisting_outflow_min_baseline": 50,
+    # Each week back is read ±3 h around this hour, a drop on its quietest 24 h, a spike on its
+    # busiest: fixed windows read Problem when a walk ran 1 h 53 min late (10-05); 2-4 h open the
+    # replay's same 13 incidents, 3 h with an hour to spare.
+    "delisting_outflow_align_h": 3,
+    # Stuck: active ads past effective dwell + 2 × the p90 walk gap + slack; Watch at 25 (live 0).
+    "delisting_stuck_warn": 25,
+    # Problem at 250: verdict to inactive runs at p90 27.8-35.2 h, under limits of 38.9-47.5 h.
+    "delisting_stuck_fail": 250,
+    # The hour of slack in that limit.
+    "delisting_stuck_slack_h": 1,
+    # The oldest VERIFY-priority row: Watch past 6 h (7-day maximum 203 min).
+    "delisting_verify_warn_h": 6,
+    # Problem past 24 h: a whole day of nominations unchecked.
+    "delisting_verify_fail_h": 24,
+    # Watch after 2 end-reached walks in a row with deferrals; never Problem (a throttle by design).
+    "delisting_deferral_walks": 2,
+    # Precision: Wilson LB of 48-72 h flips active again past 10 % (sreality ~7 %, rest ≤ 4.9 %).
+    "delisting_precision_warn": 0.10,
+    # Problem past 15 %: the blink cohorts read 26-49 %.
+    "delisting_precision_fail": 0.15,
+    # Under 50 flips the cohort is pooled over 2-7 d.
+    "delisting_precision_min_n": 50,
+    # --- coverage (portal gauge): do we hold what each portal shows -----------------------
+    # Residual (H − P − D) / D: Watch past 2 % (0-0.15 % on idnes, sreality and bazos).
+    "coverage_residual_warn": 0.02,
+    # Problem past 5 %: ceskereality byt/prodej's 27-day hole read +37 %.
+    "coverage_residual_fail": 0.05,
+    # A unit declaring under 500 ads is not scored.
+    "coverage_residual_min_declared": 500,
+    # Cannot be nominated: Watch at 25 per portal (in-flight ads, ~9 on bazos, stay ok).
+    "coverage_unnominated_warn": 25,
+    # Problem at 100: 422 today, 124 on ceskereality and 298 on realitymix (a filed parser issue).
+    "coverage_unnominated_fail": 100,
     # --- the registry ---------------------------------------------------------------------
     # GitHub delivers a scheduled run up to ~13.3 h late, so its keys stale at cadence + 18 h.
     "GITHUB_DELIVERY_SLACK_S": 18 * 3_600,
@@ -401,68 +421,6 @@ THRESHOLDS: dict[str, Any] = {
 # Process start and the registry projection, reserved out of the harness step's limit on top
 # of the lane budget (test_the_canary_job_fits_every_github_check_due_at_once).
 _JOB_HEADROOM_S = 180.0
-
-
-# --- pure status derivation (unit-tested without a DB) ---------------------
-
-
-def _status_for_property_maintenance(
-    sweep_age_hours: float | None,
-    oldest_dirty_hours: float | None,
-    thresholds: dict[str, Any],
-) -> tuple[str, list[str]]:
-    """Worst-of over the two maintenance liveness axes.
-
-    `sweep_age_hours` is the age of the stamp the last COMPLETE sweep cycle wrote
-    (app_settings.property_sweep_last_complete: one run, or two through the
-    sweep's resume cursor) —
-    None means no stamp on record, which is a warn, not a fail: it is the
-    expected state between deploying this check and the first complete sweep,
-    and permanently red would train the operator to ignore the check. A dirty
-    row aging past its axis means the incremental drain (worker lane + cron)
-    is frozen. Both axes are O(1) reads: a per-row staleness scan over 620k
-    properties measured ~3.5 min live and would blow the per-check 45 s budget
-    (Check.budget_s) on every run — a check that is always Not measured is the
-    silent mode this check exists to catch."""
-    return _status_over_age_axes(
-        [("last complete sweep", sweep_age_hours,
-          thresholds["property_sweep_warn_hours"],
-          thresholds["property_sweep_fail_hours"]),
-         ("oldest dirty-queue row", oldest_dirty_hours,
-          thresholds["property_dirty_warn_hours"],
-          thresholds["property_dirty_fail_hours"])],
-        stamp_missing=sweep_age_hours is None,
-    )
-
-
-def _status_over_age_axes(
-    axes: list[tuple[str, float | None, float, float]], *, stamp_missing: bool,
-) -> tuple[str, list[str]]:
-    """Worst-of over (label, age_hours, warn_h, fail_h) axes; a None age is skipped.
-
-    A missing completion stamp is a warn, not a fail: it is the expected state
-    between deploying a check and the first complete sweep, and permanently red
-    would train the operator to ignore the check."""
-    status = "ok"
-    offenders: list[str] = []
-    if stamp_missing:
-        status = "warn"
-        offenders.append(
-            "no complete-sweep stamp on record (first sweep since deploy "
-            "still pending, or the sweep has never completed)")
-    for name, hours, warn_h, fail_h in axes:
-        if hours is None:
-            continue
-        # :g, not :.0f — the dirty thresholds are fractional, and rounding 2.5 down
-        # to "2" renders self-contradictory offenders like "2.6h (warn > 2h)".
-        if hours > fail_h:
-            status = "fail"
-            offenders.append(f"{name} {hours:.1f}h (fail > {fail_h:g}h)")
-        elif hours > warn_h:
-            if status == "ok":
-                status = "warn"
-            offenders.append(f"{name} {hours:.1f}h (warn > {warn_h:g}h)")
-    return status, offenders
 
 
 # --- per-m2 measure plausibility (W9) --------------------------------------
@@ -631,67 +589,6 @@ def _status_for_median_shift(
 
 
 # --- checks ----------------------------------------------------------------
-
-# One O(1) round trip: the sweep-completion stamp + the tiny dirty queue.
-# Deliberately NOT a per-row staleness scan over properties — that measured
-# ~3.5 min live (620k-row heap × listings semi-join) and would blow the per-check
-# 45 s budget (Check.budget_s), so the check would be cancelled and read Not
-# measured on every run.
-_PROPERTY_MAINTENANCE_SQL = """
-select
-  (select extract(epoch from (now() - (value->>'completed_at')::timestamptz)) / 3600.0
-     from app_settings where key = 'property_sweep_last_complete')
-    as sweep_age_hours,
-  (select extract(epoch from (now() - min(d.marked_at))) / 3600.0
-     from dirty_properties d) as oldest_dirty_hours,
-  (select count(*) from dirty_properties) as dirty_depth
-"""
-
-
-def check_property_maintenance(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch the property-stats maintenance loop (rule 20): the daily full sweep,
-    the incremental dirty drain, and the lease that serializes them. Born from the
-    2026-08-06 incident — the sweep outgrew its job timeout and died `cancelled`
-    (not `failed`) for 4 days straight while each kill's stranded lease froze every
-    maintenance lane; no check watched any of it. The sweep axis reads the
-    completion stamp the (fixed) sweep writes on complete cycles only (one run,
-    or two through its resume cursor), so ANY way
-    the sweep dies — SIGKILL, runner death, chronic budget exhaustion — surfaces
-    as a stale stamp within hours."""
-    row = _fetchone(conn, _PROPERTY_MAINTENANCE_SQL)
-    sweep_age, oldest_dirty, dirty_depth = (
-        (None, None, 0) if row is None else (
-            float(row[0]) if row[0] is not None else None,
-            float(row[1]) if row[1] is not None else None,
-            int(row[2] or 0),
-        )
-    )
-    status, offenders = _status_for_property_maintenance(
-        sweep_age, oldest_dirty, thresholds)
-    if offenders:
-        message = (
-            "Property maintenance is falling behind: " + "; ".join(offenders)
-            + " — check the daily sweep's runs (timeout kills report as "
-            "cancelled) and the maintenance lease."
-        )
-    else:
-        message = (
-            f"Property maintenance healthy (last complete sweep "
-            f"{sweep_age:.1f}h ago, dirty queue {dirty_depth})."
-        )
-    return {
-        "check_key": "property_maintenance",
-        "status": status,
-        "value": round(sweep_age, 2) if sweep_age is not None else None,
-        "details": {
-            "sweep_age_hours": sweep_age,
-            "oldest_dirty_hours": oldest_dirty,
-            "dirty_depth": dirty_depth,
-            "offenders": offenders,
-        },
-        "message": message,
-    }
-
 
 _BROKER_SUPPRESSION_SQL = """
 select
@@ -1131,33 +1028,6 @@ def check_ppm2_median_shift(conn: Any, thresholds: dict[str, Any]) -> dict[str, 
     }
 
 
-# --- ingestion: the axis nothing watched until 2026-08-27 --------------------
-#
-# Sixteen scraper health checks existed and fifteen compared our data to our own
-# data; all of them rendered as a dot on a page nobody is required to open. So a
-# portal could ingest ZERO new listings for nine days -- sreality did, 2026-08-17
-# to 08-27, while 15,064 discovered listings sat unfetched -- without a single
-# signal leaving the database. These two checks are the push half.
-
-# Deliberately keyed on the QUEUE, not on listings.first_seen_at. A "no new rows
-# in N hours" check needs a historical baseline, and the outage itself erodes
-# that baseline: nine days of zeros makes "zero is normal" the expected value,
-# so the guard goes quiet exactly when it should scream. The oldest unclaimed
-# never-fetched row has no such feedback loop -- a healthy drain keeps it at
-# minutes whatever the portal's size, and a starved one grows without bound.
-_ACQUISITION_LAG_SQL = """
-select source,
-       count(*) as waiting,
-       max(extract(epoch from (now() - enqueued_at)) / 3600.0) as oldest_hours,
-       percentile_cont(0.5) within group (
-         order by extract(epoch from (now() - enqueued_at)) / 3600.0
-       ) as median_hours
-  from listing_detail_queue
- where priority = %s and claimed_at is null and given_up = false
- group by source
-"""
-
-
 # The floor convention, measured against another portal rather than against labels.
 #
 # `listings.floor` was a ~50/50 MIX of two Czech conventions until W8: idnes, bazos and
@@ -1285,57 +1155,10 @@ def check_floor_convention(conn: Any, thresholds: dict[str, Any]) -> dict[str, A
     }
 
 
-def check_acquisition_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """How long a DISCOVERED but never-fetched listing has been waiting, per portal."""
-    rows = _fetchall(conn, _ACQUISITION_LAG_SQL, (QUEUE_PRIORITY_NEW,))
-
-    warn_h = thresholds["acquisition_lag_warn_hours"]
-    fail_h = thresholds["acquisition_lag_fail_hours"]
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    status = "ok"
-    worst = 0.0
-    for source, waiting, oldest_hours, median_hours in rows:
-        oldest = float(oldest_hours or 0.0)
-        per_source[source] = {
-            "waiting": int(waiting),
-            "oldest_hours": round(oldest, 2),
-            "median_hours": round(float(median_hours or 0.0), 2),
-        }
-        worst = max(worst, oldest)
-        if oldest >= fail_h:
-            status = "fail"
-            offenders.append(f"{source} {oldest:.1f}h ({waiting} waiting)")
-        elif oldest >= warn_h:
-            if status != "fail":
-                status = "warn"
-            offenders.append(f"{source} {oldest:.1f}h ({waiting} waiting)")
-
-    if offenders:
-        message = (
-            "New listings are queued but not being fetched: " + "; ".join(offenders)
-            + " -- the drain is not reaching its acquisition class. Check the detail-drain "
-            "runs and the realtime worker's drain lane."
-        )
-    else:
-        message = (
-            f"Acquisition healthy (oldest never-fetched listing {worst:.1f}h across "
-            f"{len(per_source)} portals)."
-        )
-    return {
-        "check_key": "acquisition_lag",
-        "status": status,
-        "value": round(worst, 2),
-        "details": {"per_source": per_source, "offenders": offenders},
-        "message": message,
-    }
-
-
-# The R8 invariant, and a literal twin of check_acquisition_lag above for the same reason
-# its docstring gives: a "nothing extracted in N hours" alarm needs a baseline the outage
-# itself erodes, while the oldest UN-EXTRACTED row grows without bound and cannot be
-# normalised away. The outage this replaces is the reason the program exists — the deleted
-# enrichment lane selected 223 of 50,205 bazos rows for two months while llm_liveness read
+# The R8 invariant, read off the oldest UN-EXTRACTED row: a "nothing extracted in N hours"
+# alarm needs a baseline the outage itself erodes, while that row grows without bound and
+# cannot be normalised away. The outage this replaces is the reason the program exists — the
+# deleted enrichment lane selected 223 of 50,205 bazos rows for two months while llm_liveness read
 # a global max(called_at), llm_burn_rate's starvation arm needed attempts > 0 and
 # worker_lane_stall read only in_flight_s. Every one of those is blind to a lane that
 # selects nothing, so this check reads the lane's OWN eligibility predicate
@@ -1481,278 +1304,6 @@ def check_text_extraction_lag(conn: Any, thresholds: dict[str, Any]) -> dict[str
     }
 
 
-# The one comparison the platform makes against EXTERNAL truth: what the portal
-# says it has vs what the walk collected. It was already being recorded per
-# category in scrape_runs.by_category and read by nothing that can raise an alarm.
-#
-# `max_categories` is the portal's own recent best rather than portals.categories:
-# that registry row is stale for sreality (6 pairs on record, 20 walked in code),
-# so config would false-fire. Self-baselining also makes a TRUNCATED walk visible
-# -- categories a budget-stopped run never reached leave no by_category entry at
-# all, which otherwise makes the coverage number look BETTER by shrinking the
-# population it averages over.
-_WALK_COVERAGE_SQL = """
-with latest as (
-  select distinct on (source) source, started_at, by_category
-    from scrape_runs
-   where run_type = 'index' and ended_at is not null and by_category is not null
-     and started_at > now() - interval '48 hours'
-   order by source, started_at desc
-),
-best as (
-  select source, max(jsonb_array_length(by_category)) as max_categories
-    from scrape_runs
-   where run_type = 'index' and ended_at is not null and by_category is not null
-     and started_at > now() - interval '7 days'
-   group by source
-)
-select l.source,
-       jsonb_array_length(l.by_category) as categories_walked,
-       b.max_categories,
-       extract(epoch from (now() - l.started_at)) / 3600.0 as age_hours,
-       sum((c->>'collected')::bigint) filter (
-         where (c->>'sreality_result_size') is not null) as collected,
-       sum((c->>'sreality_result_size')::bigint) filter (
-         where (c->>'sreality_result_size') is not null) as portal_total,
-       count(*) filter (where (c->>'walk_reached_end')::boolean) as nominating
-  from latest l
-  join best b on b.source = l.source
-  left join lateral jsonb_array_elements(l.by_category) c on true
- group by l.source, l.by_category, l.started_at, b.max_categories
-"""
-
-# These portals derive their "advertised total" as len(seen) -- the number they
-# just collected -- so their gap is 0% BY CONSTRUCTION and proves nothing.
-# Reporting them as 100% covered would be the worst kind of green: a number that
-# cannot be wrong is not a measurement. (mmreality used to sit here too; since the
-# 2026-09 per-type split every mmreality category declares its own count, so it is
-# measured like the rest and only falls to `verifiable: false` if a walk records
-# no total at all.)
-_SELF_CERTIFYING_TOTALS = frozenset({"remax", "maxima"})
-
-
-def check_walk_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Collected vs portal-advertised inventory on the most recent index walk.
-
-    Since 2026-09-08 the count no longer gates nomination (rule #3), so this is the
-    standing rail on it. `categories_nominating` is reported beside the gap — the
-    count of categories whose walk reached the portal's end — but never changes the
-    status: a walk can legitimately reach the end and still be short. A category that
-    keeps NOT reaching it is `walk_end_streak`'s to ring."""
-    rows = _fetchall(conn, _WALK_COVERAGE_SQL)
-
-    warn_gap = thresholds["walk_coverage_warn_gap"]
-    fail_gap = thresholds["walk_coverage_fail_gap"]
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    unverified: list[str] = []
-    status = "ok"
-    worst = 0.0
-    for source, walked, max_cats, age_hours, collected, portal_total, nominating in rows:
-        entry: dict[str, Any] = {
-            "categories_walked": int(walked),
-            "categories_nominating": int(nominating or 0),
-            "categories_best_7d": int(max_cats or 0),
-            "age_hours": round(float(age_hours or 0.0), 2),
-            "collected": int(collected or 0),
-            "portal_total": int(portal_total) if portal_total is not None else None,
-        }
-        if int(walked) < int(max_cats or 0):
-            entry["truncated"] = True
-            offenders.append(
-                f"{source} walked {walked}/{max_cats} categories (truncated run)"
-            )
-            status = "fail" if status == "fail" else "warn"
-        if source in _SELF_CERTIFYING_TOTALS or not portal_total:
-            entry["gap_pct"] = None
-            entry["verifiable"] = False
-            unverified.append(source)
-        else:
-            gap = max(0.0, (float(portal_total) - float(collected or 0)) / float(portal_total))
-            entry["gap_pct"] = round(gap * 100, 2)
-            entry["verifiable"] = True
-            worst = max(worst, gap)
-            if gap >= fail_gap:
-                status = "fail"
-                offenders.append(f"{source} missing {gap * 100:.1f}% of its inventory")
-            elif gap >= warn_gap:
-                if status != "fail":
-                    status = "warn"
-                offenders.append(f"{source} missing {gap * 100:.1f}% of its inventory")
-        per_source[source] = entry
-
-    if offenders:
-        message = "Index walks are under-collecting: " + "; ".join(offenders) + "."
-    else:
-        message = (
-            f"Walk coverage healthy (worst verifiable gap {worst * 100:.1f}%; "
-            f"{len(unverified)} portal(s) cannot be verified: {', '.join(sorted(unverified)) or 'none'})."
-        )
-    return {
-        "check_key": "walk_coverage",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": {"per_source": per_source, "offenders": offenders,
-                    "unverified": sorted(unverified)},
-        "message": message,
-    }
-
-
-# One row per (index run, category) over the window: did that walk reach the portal's
-# end? Two descriptors behind one label count as reached only if every one the run
-# WALKED did, so a run that stops between them reads the label as reached (a known
-# blind spot). A run that never started the category has no row: its streak skips
-# that run, and the cell counts its portal's walks since it was last walked instead
-# (`runs_since_walked`). The streak is counted in Python (`_walk_end_streaks`): a
-# gaps-and-islands window query would be harder to read than the loop, and the rows
-# are few (one per category per finished walk, nine portals, 14 days).
-_WALK_END_WINDOW_DAYS = 14
-_WALK_END_STREAK_SQL = """
-select r.id,
-       r.source,
-       r.started_at,
-       c->>'category_main' as category_main,
-       c->>'category_type' as category_type,
-       bool_and((c->>'walk_reached_end')::boolean) as reached_end
-  from scrape_runs r
-  cross join lateral jsonb_array_elements(
-         case when jsonb_typeof(r.by_category) = 'array' then r.by_category end) c
- where r.run_type = 'index'
-   and r.ended_at is not null
-   and r.started_at > now() - make_interval(days => %(days)s)
- group by r.id, r.source, r.started_at, c->>'category_main', c->>'category_type'
-"""
-
-
-def _utc_minute(ts: Any) -> str | None:
-    """A timestamp as 'YYYY-MM-DD HH:MM UTC' for operator-facing text."""
-    if ts is None:
-        return None
-    if isinstance(ts, _dt.datetime):
-        if ts.tzinfo is not None:
-            ts = ts.astimezone(_dt.timezone.utc)
-        return ts.strftime("%Y-%m-%d %H:%M UTC")
-    return str(ts)
-
-
-def _walk_end_streaks(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
-    """Per (source, category_main, category_type): walks since it last reached the end
-    (a NULL verdict is neither), and its portal's walks since it was last walked."""
-    by_cell: dict[tuple[Any, Any, Any], list[tuple[Any, Any, Any]]] = {}
-    source_runs: dict[Any, set[tuple[Any, Any]]] = {}
-    for run_id, source, started_at, cm, ct, reached in rows:
-        by_cell.setdefault((source, cm, ct), []).append((started_at, run_id, reached))
-        source_runs.setdefault(source, set()).add((started_at, run_id))
-    cells: list[dict[str, Any]] = []
-    for (source, cm, ct), runs in by_cell.items():
-        runs.sort(key=lambda r: (r[0], r[1]), reverse=True)
-        streak = walks = 0
-        last_end = None
-        for started_at, _run_id, reached in runs:
-            if reached is None:
-                continue
-            walks += 1
-            if last_end is not None:
-                continue
-            if reached:
-                last_end = started_at
-            else:
-                streak += 1
-        last_walked = runs[0][:2]
-        cells.append({
-            "source": source, "category_main": cm, "category_type": ct,
-            "streak": streak, "walks": walks,
-            "runs_since_walked": sum(1 for r in source_runs[source] if r > last_walked),
-            "last_walked_at": _utc_minute(runs[0][0]),
-            "last_reached_end_at": _utc_minute(last_end),
-        })
-    return cells
-
-
-def _walk_end_offender(c: dict[str, Any], fail: int) -> str:
-    label = f"{c['source']} {c['category_main'] or '*'}/{c['category_type'] or '*'}"
-    if c["runs_since_walked"] >= fail:
-        return (f"{label} not walked since {c['last_walked_at']} "
-                f"({c['runs_since_walked']} {c['source']} walks since)")
-    if c["last_reached_end_at"] is None:
-        return (f"{label} not at the portal's end for at least {c['streak']} walks "
-                f"(not reached in {_WALK_END_WINDOW_DAYS} d)")
-    return (f"{label} not at the portal's end for {c['streak']} walks "
-            f"(last reached {c['last_reached_end_at']})")
-
-
-def check_walk_end_streak(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Walks in a row each category was walked and did not reach the portal's end."""
-    rows = _fetchall(conn, _WALK_END_STREAK_SQL, {"days": _WALK_END_WINDOW_DAYS})
-    warn = int(thresholds["walk_end_streak_warn"])
-    fail = int(thresholds["walk_end_streak_fail"])
-    cells = _walk_end_streaks(rows)
-    for c in cells:
-        # A category its portal has not walked for `fail` of its own walks is starved or
-        # gone from the config: amber, never the bell, so a retired one cannot hold the
-        # check red until it ages out of the window.
-        c["status"] = (
-            "warn" if c["runs_since_walked"] >= fail
-            else "fail" if c["streak"] >= fail
-            else "warn" if c["streak"] >= warn
-            else "ok"
-        )
-    cells.sort(key=lambda c: (-_STATUS_SEVERITY[c["status"]], -c["streak"],
-                              -c["runs_since_walked"], c["source"] or "",
-                              c["category_main"] or "", c["category_type"] or ""))
-    scored = [c for c in cells if c["walks"]]
-    offenders = [_walk_end_offender(c, fail) for c in cells if c["status"] != "ok"]
-    details: dict[str, Any] = {
-        "per_category": cells, "offenders": offenders,
-        "warn": warn, "fail": fail, "window_days": _WALK_END_WINDOW_DAYS,
-    }
-    if not scored:
-        details["skipped"] = "no walk in the window carried a verdict — nothing was verified"
-        return {
-            "check_key": "walk_end_streak",
-            "status": "unknown",
-            "value": None,
-            "details": details,
-            "message": (
-                f"walk_end_streak measured nothing: no finished index walk in the last "
-                f"{_WALK_END_WINDOW_DAYS} days carried a walk_reached_end verdict "
-                f"({len(cells)} categories read). Either no portal finished an index walk "
-                "in that window or portal_runner stopped writing walk_reached_end into "
-                "scrape_runs.by_category. No alerting check here judges index-walk "
-                "liveness, so read scrape_runs directly."
-            ),
-        }
-
-    worst = max((c["streak"] for c in scored if c["runs_since_walked"] < fail), default=0)
-    status = _worst_status("ok", *(c["status"] for c in cells))
-    if offenders:
-        unwalked = any(c["runs_since_walked"] >= fail for c in cells)
-        message = (
-            "Categories are not reaching the portal's end: "
-            + "; ".join(offenders[:6])
-            + (f" (+{len(offenders) - 6} more)" if len(offenders) > 6 else "")
-            + ". A walk that stops short of the end, or never starts the category, "
-            "nominates nothing for delisting (rule #3), so the category's gone ads stay "
-            "active and its stock drifts above the portal's own count. The index-walk log "
-            "names the stop: the category's 'VERIFY skipped' line, and the portal's "
-            "SLICE / DESCENT / COVERAGE lines for which slice it was."
-            + (" A category its portal no longer walks may instead have left the "
-               "portal's config." if unwalked else "")
-        )
-    else:
-        message = (
-            f"No category has missed the portal's end for {warn} walks in a row (worst "
-            f"{worst}; {len(scored)} categories scored in {_WALK_END_WINDOW_DAYS} days)."
-        )
-    return {
-        "check_key": "walk_end_streak",
-        "status": status,
-        "value": worst,
-        "details": details,
-        "message": message,
-    }
-
-
 # --- what every portal STATES vs what we STORED (field capture W1) ----------
 #
 # `data_quality_by_source` tests 26 fields for IS NOT NULL and nothing else, so it
@@ -1859,156 +1410,6 @@ def check_field_fill_matrix(conn: Any, thresholds: dict[str, Any]) -> dict[str, 
             "booleans_never_false": never_false,
             "baseline_generated_at": baseline.get("generated_at"),
         },
-        "message": message,
-    }
-
-
-# --- a refused delisting sweep is an operator decision, not a log line -------
-_DELIST_REFUSAL_SQL = """
-select source, category_main, category_type, candidates, active_rows, cap, refused_at
-  from delist_flip_refusals
- where refused_at > now() - interval '7 days'
- order by refused_at desc
- limit 20
-"""
-
-
-def check_delist_flip_refused(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Did a walk nominate far more of a category for a page check than the
-    per-walk throttle lets through?
-
-    Since 2026-09-07 (rule #3) a row in `delist_flip_refusals` means DEFERRED,
-    not refused: the walk nominated more unseen rows than `delist_flip_cap`
-    allows per walk, the oldest share was queued for a page check and the rest
-    waits for the next walk. That is routine while a backlog drains. What is
-    NOT routine is a walk that saw less than half of a category it called
-    complete -- that is the signature of a broken walk (a retired slug, a
-    throttled portal), so it warns. The operator's move is to check the walk,
-    not to raise anything: the drain is already fetching the pages.
-    """
-    rows = _fetchall(conn, _DELIST_REFUSAL_SQL)
-    if not rows:
-        return {
-            "check_key": "delist_flip_refused", "status": "ok", "value": 0,
-            "details": {"deferrals": []},
-            "message": "No walk nominated more than the per-walk throttle allows in 7 days.",
-        }
-    deferrals = [
-        {"source": s, "category_main": cm, "category_type": ct,
-         "candidates": int(cand), "active_rows": int(act), "cap": int(cap),
-         "deferred_at": ra.isoformat() if hasattr(ra, "isoformat") else str(ra)}
-        for s, cm, ct, cand, act, cap, ra in rows
-    ]
-    suspicious = [d for d in deferrals if d["active_rows"] and d["candidates"] > d["active_rows"] / 2]
-    worst = max(d["candidates"] for d in deferrals)
-    named = "; ".join(
-        f"{d['source']} {d['category_main'] or '*'}/{d['category_type']} "
-        f"{d['candidates']} of {d['active_rows']} (per-walk {d['cap']})"
-        for d in (suspicious or deferrals)[:3]
-    )
-    if suspicious:
-        return {
-            "check_key": "delist_flip_refused", "status": "warn", "value": worst,
-            "details": {"deferrals": deferrals},
-            "message": (
-                f"{len(suspicious)} walk(s) called complete while more than half of "
-                f"the category was unseen: {named}. Check the walk (a retired slug, a "
-                "throttled portal) -- nothing is deleted without a page check, but a "
-                "walk this short is not one to trust."
-            ),
-        }
-    return {
-        "check_key": "delist_flip_refused", "status": "ok", "value": worst,
-        "details": {"deferrals": deferrals},
-        "message": (
-            f"{len(deferrals)} nomination(s) throttled to the per-walk share, the rest "
-            f"deferred to the next walk: {named}. Routine while a backlog drains."
-        ),
-    }
-
-
-# --- a flip that a later sighting reversed was a false delisting -------------
-_FALSE_DELIST_SQL = """
-select c.source,
-       count(*) as flips,
-       count(*) filter (where l.is_active) as active_again
-  from detail_queue_completions c
-  join listings l on l.source = c.source and l.source_id_native = c.native_id
- where c.outcome = 'flipped'
-   and c.completed_at > now() - interval '7 days'
- group by c.source
- order by c.source
-"""
-
-
-def check_false_delist_share(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Of the ads the drain closed in the last 7 days, how many are active again?
-
-    Rule #3's hysteresis (2026-10-09) flips a listing only on a second gone verdict
-    at least GONE_DWELL after the first, so a revival after a flip means the portal
-    kept the ad down longer than the dwell and brought it back -- or the gone signal
-    misfired. Either way the flip was wrong and the operator saw an active ad marked
-    inactive. The ledger row (`detail_queue_completions.outcome = 'flipped'`, migration
-    594) is the only durable trace: reactivation clears `listings.inactive_at`.
-    Measured before the rule: sreality 35%, mmreality 15%, remax 11%.
-    """
-    rows = _fetchall(conn, _FALSE_DELIST_SQL)
-
-    warn = float(thresholds["false_delist_share_warn"])
-    fail = float(thresholds["false_delist_share_fail"])
-    min_flips = int(thresholds["false_delist_min_flips"])
-    per_source: dict[str, Any] = {}
-    offenders: list[str] = []
-    unscored: list[str] = []
-    status = "ok"
-    worst = 0.0
-    scored = 0
-    for source, flips, active_again in rows:
-        flips = int(flips)
-        active_again = int(active_again)
-        share = active_again / flips if flips else 0.0
-        per_source[source] = {
-            "flips": flips, "active_again": active_again,
-            "share": round(share, 4), "scored": flips >= min_flips,
-        }
-        if flips < min_flips:
-            unscored.append(source)
-            continue
-        scored += 1
-        worst = max(worst, share)
-        if share >= fail:
-            status = "fail"
-            offenders.append(f"{source} {share:.1%} of {flips} flips active again")
-        elif share >= warn:
-            status = _worst_status(status, "warn")
-            offenders.append(f"{source} {share:.1%} of {flips} flips active again")
-
-    details = {"per_source": per_source, "offenders": offenders, "unscored": unscored,
-               "warn": warn, "fail": fail, "min_flips": min_flips}
-    if not scored:
-        return {
-            "check_key": "false_delist_share", "status": "unknown", "value": None,
-            "details": {**details,
-                        "skipped": f"no portal closed {min_flips}+ ads in the last 7 days"},
-            "message": f"No portal closed {min_flips}+ ads in the last 7 days; nothing to score.",
-        }
-    if offenders:
-        message = (
-            "Ads closed by a confirmed gone verdict are back on the portal: "
-            + "; ".join(offenders[:6])
-            + " -- the portal keeps ads down longer than GONE_DWELL, or its gone "
-            "signal misfires. Read the flipped rows' pages before touching the dwell."
-        )
-    else:
-        message = (
-            f"False-delist share healthy (worst {worst:.1%} across {scored} scored "
-            f"portal(s); {len(unscored)} under {min_flips} flips not scored)."
-        )
-    return {
-        "check_key": "false_delist_share",
-        "status": status,
-        "value": round(worst * 100, 2),
-        "details": details,
         "message": message,
     }
 
@@ -2332,273 +1733,6 @@ def check_outbound_url_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[s
     }
 
 
-# --- the sreality image template canary (daily probe of the DEPLOYED chain) --
-#
-# The one check in this harness that leaves the database. Everything else reads
-# our own tables, which can only tell us what we already stored; a CDN that
-# started refusing our transform stores nothing, so there is no row to read.
-
-_SREALITY_PROBE_MAX_BYTES = 6 * 1024 * 1024
-
-# byt / prodej / CZ, one row, newest page — the same v1 search the walk uses, at
-# limit 1. Any live category would do; byt-prodej is simply the slice that is
-# never empty.
-_SREALITY_PROBE_PARAMS: dict[str, Any] = {
-    "category_main_cb": 1,
-    "category_type_cb": 1,
-    "locality_country_id": CZ_COUNTRY_ID,
-    "limit": 1,
-    "offset": 0,
-}
-
-
-def _fetch_sreality_probe(
-    url: str, timeout: tuple[float, float], max_bytes: int, *, accept: str = "*/*"
-) -> tuple[int, bytes]:
-    """The canary's ONE network seam — the whole check is hermetic behind it.
-
-    Two independent bounds, because neither covers the other and nothing outside can
-    preempt this call (the lane budget is armed only as a Postgres statement_timeout,
-    and run_checks tests the lane deadline BEFORE a check starts): `max_bytes` bounds
-    MEMORY if the CDN ever answers an image URL with a video, and the monotonic deadline
-    bounds WALL CLOCK — requests' read timeout is per socket read, so a peer trickling
-    one chunk per 7.9 s would otherwise hold the lane for minutes without ever tripping it.
-    """
-    connect_timeout, read_timeout = timeout
-    budget_s = connect_timeout + read_timeout
-    deadline = _time.monotonic() + budget_s
-    headers = {**_PORTAL_HEADERS, "Accept": accept}
-    with requests.get(url, timeout=timeout, headers=headers, stream=True) as response:
-        buf = bytearray()
-        for chunk in response.iter_content(chunk_size=65536):
-            buf += chunk
-            if len(buf) >= max_bytes:
-                break
-            if _time.monotonic() >= deadline:
-                raise requests.Timeout(
-                    f"probe exceeded its {budget_s:.0f}s wall-clock budget reading {url}"
-                )
-        return response.status_code, bytes(buf)
-
-
-def _probe_skipped(detail: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """unknown, never fail: the canary could not REACH sreality, so it verified nothing
-    about our transform — and a flaky network must not manufacture a red that reads as
-    'the CDN rejected our template'."""
-    return {
-        "check_key": "sreality_image_template",
-        "status": "unknown",
-        "value": None,
-        "details": {"skipped": detail, **(extra or {})},
-        "message": (
-            f"Sreality image template verified NOTHING this run — {detail}. The "
-            "deployed transform is Not measured, never healthy; if this persists the "
-            "probe itself needs attention."
-        ),
-    }
-
-
-def _fit_box(ops: str) -> tuple[int, int] | None:
-    """The (w, h) box the deployed chain's `res` op fits a frame inside.
-
-    Read OUT of IMAGE_TRANSFORM_OPS rather than restated beside it, so the expectation
-    moves with the template the day the template moves.
-    """
-    for op in ops.split("|"):
-        parts = op.split(",")
-        if parts[0] == "res" and len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
-            return int(parts[1]), int(parts[2])
-    return None
-
-
-def _expected_frame(source: tuple[int, int] | None, ops: str) -> tuple[int, int] | None:
-    """What the CDN should serve for a source frame of this size: fit inside the `res`
-    box, NEVER upscaled (verified live — a 1450x967 source comes back untouched)."""
-    box = _fit_box(ops)
-    if box is None or source is None:
-        return None
-    width, height = source
-    scale = min(1.0, box[0] / width, box[1] / height)
-    return max(1, round(width * scale)), max(1, round(height * scale))
-
-
-def _positive_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _declared_source_size(estate: dict[str, Any], image_url: str) -> tuple[int, int] | None:
-    """The estate's own width/height for this image — the only honest yardstick for what
-    the transform should return (the CDN does not upscale a small original)."""
-    for img in estate.get("advert_images") or []:
-        if not isinstance(img, dict):
-            continue
-        url = img.get("url")
-        if not isinstance(url, str) or not url:
-            continue
-        if ("https:" + url if url.startswith("//") else url) != image_url:
-            continue
-        width, height = img.get("width"), img.get("height")
-        if _positive_int(width) and _positive_int(height):
-            return int(width), int(height)
-        return None
-    return None
-
-
-def check_sreality_image_template(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Does sreality's CDN still serve the transform template the download path ships?
-
-    Walks the live v1 index (one row) to a FRESH listing id, fetches that listing's
-    DETAIL payload — the endpoint whose `advert_images` carries the `{url, width,
-    height}` dicts `parse_images` and the download path both read; the search endpoint
-    sends bare URL strings the parser skips — and requests the first image through
-    `image_storage.with_transform`, so the probe is the deployed chain by construction
-    and cannot drift from it. Nothing stored is consulted: a stored URL proves only that
-    the template worked the day we stored it.
-
-    The failure mode that matters answers HTTP 200 with a smaller or cropped rendition,
-    which no status check would ever see. The verdict is RELATIVE — the served frame
-    against what the `res` op should yield for THIS estate's declared source size —
-    because the CDN never upscales, so a small original is not a template fault.
-    """
-    min_ratio = float(thresholds["sreality_image_template_min_ratio"])
-    read_timeout = float(thresholds["sreality_image_template_timeout_s"])
-    timeout = (5.0, read_timeout)
-    index_url = f"{_SREALITY_INDEX_URL}?{urlencode(_SREALITY_PROBE_PARAMS)}"
-
-    try:
-        status_code, body = _fetch_sreality_probe(
-            index_url, timeout, _SREALITY_PROBE_MAX_BYTES, accept="application/json")
-    except requests.RequestException as exc:
-        return _probe_skipped(f"the sreality index is unreachable ({exc})")
-    if status_code != 200:
-        return _probe_skipped(f"the sreality index answered HTTP {status_code}",
-                              {"http_status": status_code})
-    try:
-        payload = json.loads(body)
-    except ValueError as exc:
-        return _probe_skipped(f"the sreality index body is not JSON ({exc})")
-    results = (payload or {}).get("results") or []
-    if not results or not isinstance(results[0], dict):
-        return _probe_skipped("the sreality index returned no estates")
-    hash_id = results[0].get("hash_id")
-    if not isinstance(hash_id, (int, str)) or not str(hash_id).strip():
-        return _probe_skipped("the newest sreality estate carries no hash_id")
-
-    detail_url = _SREALITY_DETAIL_URL.format(id=hash_id)
-    try:
-        detail_status, detail_body = _fetch_sreality_probe(
-            detail_url, timeout, _SREALITY_PROBE_MAX_BYTES, accept="application/json")
-    except requests.RequestException as exc:
-        return _probe_skipped(f"the sreality detail endpoint is unreachable ({exc})",
-                              {"detail_url": detail_url})
-    if detail_status != 200:
-        return _probe_skipped(f"the sreality detail endpoint answered HTTP {detail_status}",
-                              {"detail_url": detail_url, "http_status": detail_status})
-    try:
-        detail_payload = json.loads(detail_body)
-    except ValueError as exc:
-        return _probe_skipped(f"the sreality detail body is not JSON ({exc})")
-    if not isinstance(detail_payload, dict):
-        return _probe_skipped("the sreality detail body is not an estate object")
-    estate = _unwrap_sreality_estate(detail_payload)
-    images = parse_images(estate)
-    if not images:
-        return _probe_skipped(f"sreality estate {hash_id} carries no images",
-                              {"detail_url": detail_url})
-
-    image_url = images[0]["url"]
-    transform = with_transform(image_url)
-    if transform == image_url:
-        # with_transform is a no-op off the sreality CDN host, so the bare URL would
-        # serve a normal photo and the check would report health for a template it
-        # never exercised. A host migration must surface, not green.
-        return _probe_skipped(
-            "the probed image is not on the sreality CDN host, so our transform is a "
-            "no-op on it — the template was not exercised",
-            {"image_url": image_url, "detail_url": detail_url},
-        )
-    source = _declared_source_size(estate, image_url)
-    expected = _expected_frame(source, IMAGE_TRANSFORM_OPS)
-    source_width, source_height = source if source else (None, None)
-    expected_width, expected_height = expected if expected else (None, None)
-    started = _time.monotonic()
-    try:
-        cdn_status, data = _fetch_sreality_probe(
-            transform, timeout, _SREALITY_PROBE_MAX_BYTES, accept="image/*")
-    except requests.RequestException as exc:
-        return _probe_skipped(f"the sreality CDN is unreachable ({exc})",
-                              {"image_url": image_url, "transform": transform})
-    # 403/429 is how sreality throttles (never a dead template) and a 5xx is
-    # theirs to fix — a transient must read as "verified nothing", not as a
-    # catalogue change, or one busy minute pages the operator.
-    if cdn_status in (403, 429) or cdn_status >= 500:
-        return _probe_skipped(f"the sreality CDN throttled or errored: HTTP {cdn_status}",
-                              {"image_url": image_url, "transform": transform,
-                               "http_status": cdn_status})
-    elapsed_ms = int((_time.monotonic() - started) * 1000)
-    size = image_dimensions(data) if _media.is_image_bytes(data) is not None else None
-    width, height = size if size else (None, None)
-    details: dict[str, Any] = {
-        "image_url": image_url, "transform": transform, "http_status": cdn_status,
-        # `cdn_elapsed_ms`: the harness stamps `elapsed_ms` with the whole check's time.
-        "width": width, "height": height, "bytes": len(data), "cdn_elapsed_ms": elapsed_ms,
-        "source_width": source_width, "source_height": source_height,
-        "expected_width": expected_width, "expected_height": expected_height,
-        "min_ratio": min_ratio, "detail_url": detail_url,
-    }
-    # Both axes: a CROP keeps one of them and collapses the other (the superseded
-    # 749x562 chain cut a 3:2 frame to 4:3), so one-axis-only would miss it.
-    downgraded = bool(
-        expected_width and expected_height and width is not None and height is not None
-        and (width < expected_width * min_ratio or height < expected_height * min_ratio)
-    )
-
-    if cdn_status != 200:
-        message = (
-            f"Sreality REFUSED our image transform: HTTP {cdn_status} for "
-            f"`{IMAGE_TRANSFORM_OPS}`. Their CDN is an exact-template allowlist, so this "
-            "is a catalogue change — every image download is now parking terminally. "
-            "Re-derive the template from sreality's own frontend and update "
-            "scraper/image_storage.IMAGE_TRANSFORM_OPS."
-        )
-    elif width is None:
-        kind = "a non-image body" if _media.is_image_bytes(data) is None else "undecodable bytes"
-        message = (
-            f"Sreality answered HTTP 200 for our image transform but returned {kind} "
-            f"({len(data)} bytes) — the template is off their allowlist or the URL no "
-            "longer serves a photo. Check scraper/image_storage.IMAGE_TRANSFORM_OPS."
-        )
-    elif downgraded:
-        message = (
-            f"Sreality's CDN served {width}x{height} px for a "
-            f"{source_width}x{source_height} px source, where `{IMAGE_TRANSFORM_OPS}` "
-            f"should return {expected_width}x{expected_height} px — the template "
-            "silently downgraded (the superseded chain served 749 px and cropped to "
-            "4:3). Downloads are storing small, possibly cropped frames. Re-derive "
-            "IMAGE_TRANSFORM_OPS."
-        )
-    elif expected_width:
-        message = (
-            f"Sreality's image template is live: {width}x{height} px for a "
-            f"{source_width}x{source_height} px source, {len(data)} bytes in "
-            f"{elapsed_ms} ms."
-        )
-    else:
-        message = (
-            f"Sreality's image template is live: {width}x{height} px, {len(data)} bytes "
-            f"in {elapsed_ms} ms. The estate declares no source size for this image, so "
-            "the frame size itself was not judged this run."
-        )
-    status = "ok" if cdn_status == 200 and width is not None and not downgraded else "fail"
-    return {
-        "check_key": "sreality_image_template",
-        "status": status,
-        "value": width,
-        "details": details,
-        "message": message,
-    }
-
-
 # --- the registry ------------------------------------------------------------
 
 HOSTS = ("realtime-worker", "github-actions", "pg_cron")
@@ -2608,13 +1742,13 @@ DOMAINS = ("scraping", "publishing", "delisting", "dedup", "coverage", "data_qua
 
 _GITHUB, _WORKER = "github-actions", "realtime-worker"
 _TEN_MINUTES, _HALF_HOURLY = 600, 1_800
-_HOURLY, _SIX_HOURLY, _DAILY, _WEEKLY = 3_600, 21_600, 86_400, 604_800
+_HOURLY, _SIX_HOURLY, _WEEKLY = 3_600, 21_600, 604_800
 # The worker and pg_cron keep time, so a key they host reads stale after 3 cadences; GitHub's
 # keys get their cadence plus THRESHOLDS["GITHUB_DELIVERY_SLACK_S"].
 _STALE_CADENCES = 3
-# The two checks that leave the database wait on third-party round trips, not on Postgres.
-# The URL probe's budget is declared beside its HEAD loop, which stops itself at it (nothing
-# outside can preempt a request); the image probe gets the same.
+# The one check that leaves the database waits on third-party round trips, not on Postgres:
+# its budget is declared beside its HEAD loop, which stops itself at it (nothing outside can
+# preempt a request).
 _OUTBOUND_BUDGET_S = PROBE_BUDGET_S
 
 
@@ -2649,7 +1783,7 @@ class Check:
 
 # `run_due` runs a host's due alarms first, then its due gauges, each class in this order, and
 # a check its budget does not reach stays due for the next run, so the order is a priority
-# inside each class: cheap invariants first, the expensive reads late and the outbound probes
+# inside each class: cheap invariants first, the expensive reads late and the outbound probe
 # last. The page's `sort` is the position here.
 CHECKS: tuple[Check, ...] = (
     # FIRST of the gauges: 2026-09-11 21:02 lost the last seven checks to the budget, this
@@ -2658,17 +1792,23 @@ CHECKS: tuple[Check, ...] = (
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
           _GITHUB, _SIX_HOURLY, "Location coverage", unit="ads",
           owner_path="/location-quality"),
-    # The worker's health lane measures these three (scripts/checks/platform.py). GitHub keeps
-    # what needs it: migration_drift reads a checkout, the outbound probes an address that is
-    # not the scrapers'.
+    # The worker's health lane measures these seven (scripts/checks/: platform, then the portal
+    # checks). GitHub keeps what needs it: migration_drift reads a checkout, the outbound probe
+    # an address that is not the scrapers'.
     Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
           unit="cells"),
     Check("capacity", check_capacity, "platform", "alarm", _WORKER, _HALF_HOURLY, "Capacity",
           unit="cells"),
     Check("llm", check_llm, "platform", "alarm", _WORKER, _TEN_MINUTES, "LLM providers",
           unit="cells"),
-    Check("property_maintenance", check_property_maintenance, "publishing", "alarm",
-          _GITHUB, _HOURLY, "Property maintenance", unit="h"),
+    Check("scraping", check_scraping, "scraping", "alarm", _WORKER, _TEN_MINUTES, "Scraping",
+          unit="cells"),
+    Check("publishing", check_publishing, "publishing", "alarm", _WORKER, _TEN_MINUTES,
+          "Publishing", unit="cells"),
+    Check("delisting", check_delisting, "delisting", "alarm", _WORKER, _TEN_MINUTES,
+          "Delisting", unit="cells"),
+    Check("coverage", check_coverage, "coverage", "gauge", _WORKER, _HOURLY, "Coverage",
+          unit="cells"),
     Check("broker_merge_suppression", check_broker_merge_suppression, "dedup", "alarm",
           _GITHUB, _HOURLY, "Broker merge rulings", unit="pairs",
           owner_path="/brokers/review"),
@@ -2680,19 +1820,8 @@ CHECKS: tuple[Check, ...] = (
           "gauge", _GITHUB, _SIX_HOURLY, "Area vs usable area", unit="%"),
     Check("ppm2_measure_coverage", check_ppm2_measure_coverage, "data_quality", "alarm",
           _GITHUB, _SIX_HOURLY, "Kč/m² coverage", unit="%"),
-    Check("acquisition_lag", check_acquisition_lag, "scraping", "alarm", _GITHUB,
-          _SIX_HOURLY, "New ads waiting to be fetched", unit="h"),
-    Check("walk_coverage", check_walk_coverage, "coverage", "gauge", _GITHUB, _SIX_HOURLY,
-          "Walk coverage", unit="%"),
-    # walk_coverage's per-category twin: walks in a row that did not reach the portal's end.
-    Check("walk_end_streak", check_walk_end_streak, "scraping", "alarm", _GITHUB,
-          _SIX_HOURLY, "Walks not reaching the end", unit="walks"),
     Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB, _HOURLY,
           "Migration drift", unit="files"),
-    Check("delist_flip_refused", check_delist_flip_refused, "delisting", "gauge", _GITHUB,
-          _SIX_HOURLY, "Delist nominations deferred", unit="ads"),
-    Check("false_delist_share", check_false_delist_share, "delisting", "alarm", _GITHUB,
-          _SIX_HOURLY, "False delist share", unit="%"),
     Check("location_payload_shape_drift", check_location_payload_shape_drift, "scraping",
           "alarm", _GITHUB, _SIX_HOURLY, "Location payload shape", unit="%"),
     Check("outbound_url_coverage", check_outbound_url_coverage, "data_quality", "gauge",
@@ -2706,11 +1835,8 @@ CHECKS: tuple[Check, ...] = (
           _SIX_HOURLY, "Description reading", unit="h"),
     Check("floor_convention", check_floor_convention, "data_quality", "gauge", _GITHUB,
           _SIX_HOURLY, "Floor convention"),
-    # LAST of the alarms: the checks that leave the database, so a lane that runs out of
-    # budget drops an outbound probe before any database alarm.
-    Check("sreality_image_template", check_sreality_image_template, "scraping", "alarm",
-          _GITHUB, _DAILY, "Sreality image template", unit="px",
-          budget_s=_OUTBOUND_BUDGET_S),
+    # LAST of the alarms: the check that leaves the database, so a lane that runs out of budget
+    # drops the outbound probe before any database alarm.
     Check("outbound_url_conformance", check_outbound_url_conformance, "scraping", "alarm",
           _GITHUB, _WEEKLY, "Portal links open the right page", unit="%",
           budget_s=_OUTBOUND_BUDGET_S),
@@ -2917,7 +2043,7 @@ def run_due(
     lane_budget_s: float | None = None,
 ) -> list[dict[str, Any]]:
     """Measure this host's due checks, alarms before gauges, storing each result as it lands;
-    `lane_budget_s` caps the pass (the worker lane's 300 s), else the due budgets sum."""
+    `lane_budget_s` caps the pass (the worker lane's 360 s), else the due budgets sum."""
     # Due-ness is read from the stored results, so a restarted lane re-measures nothing, and
     # the sort is stable: registry order holds inside each class.
     due = sorted(due_checks(conn, host, now), key=lambda c: c.cls != "alarm")

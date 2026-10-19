@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from scraper import mmreality_main, portal_runner
 from scraper.mmreality_main import MmRealityPortal
 from scraper.portal import PortalConfig
@@ -188,9 +190,13 @@ def _page(items, *, total, next_offset=None) -> SimpleNamespace:
     return SimpleNamespace(total=total, next_offset=next_offset, items=list(items))
 
 
-def _stub_walk(monkeypatch, script: dict[str, SimpleNamespace], existing=None) -> dict[str, Any]:
-    """Wire the walk's DB seams to capture dicts; returns the capture."""
-    cap: dict[str, Any] = {"ledger": [], "touched": [], "entries": []}
+def _stub_walk(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    script: dict[str, SimpleNamespace], existing=None,
+) -> dict[str, Any]:
+    """Wire the walk's DB seams to capture dicts and its log lines to `caplog`; returns the capture."""
+    caplog.set_level("INFO", logger=mmreality_main.LOG.name)
+    cap: dict[str, Any] = {"touched": [], "entries": []}
     _ScriptedClient.calls = []
     monkeypatch.setattr(mmreality_main, "MmRealityClient", _ScriptedClient)
 
@@ -210,15 +216,20 @@ def _stub_walk(monkeypatch, script: dict[str, SimpleNamespace], existing=None) -
     monkeypatch.setattr(
         mmreality_main.db, "enqueue_detail",
         lambda _c, source, entries: (cap["entries"].extend(entries) or len(entries)))
-    monkeypatch.setattr(
-        mmreality_main.db, "record_index_slice", lambda _c, **kw: cap["ledger"].append(kw))
     return cap
 
 
-def test_walk_category_classifies_and_reaches_the_portals_last_page(monkeypatch):
+def _reconciled(caplog: pytest.LogCaptureFixture) -> dict[str, str]:
+    """The walk's one RECONCILE-INDEX line as its fields: where the numeric outcome is told."""
+    [line] = [r.getMessage() for r in caplog.records
+              if r.getMessage().startswith("RECONCILE-INDEX ")]
+    return dict(kv.split("=", 1) for kv in line.split()[1:])
+
+
+def test_walk_category_classifies_and_reaches_the_portals_last_page(monkeypatch, caplog):
     a, b, c = "944001", "944002", "944003"  # new, changed, unchanged
     cap = _stub_walk(
-        monkeypatch,
+        monkeypatch, caplog,
         {"1": _page([_item(a), _item(b, "6 000 000 Kč"), _item(c, "7 000 000 Kč")], total=3),
          # mmreality's real last page STILL emits <link rel="next">, so a page with
          # cards and no next link is walked PAST, not trusted: the items-less page
@@ -242,16 +253,13 @@ def test_walk_category_classifies_and_reaches_the_portals_last_page(monkeypatch)
     assert refs[b][3] == mmreality_main.db.QUEUE_PRIORITY_CHANGED
     assert refs[a][1] == f"https://www.mmreality.cz/nemovitosti/{a}/"
     assert c not in refs
-    [row] = cap["ledger"]
-    assert row == {
-        "source": "mmreality", "category_main": "byt", "category_type": "prodej",
-        "slice_key": "national", "outcome": "exhausted", "declared_total": 3,
-        "collected": 3, "pages": 2,
-    }
+    line = _reconciled(caplog)
+    assert {k: line[k] for k in ("declared", "collected", "pages", "outcome")} == {
+        "declared": "3", "collected": "3", "pages": "2", "outcome": "exhausted"}
 
 
-def test_walk_pages_to_the_tail_and_reports_every_page(monkeypatch):
-    cap = _stub_walk(monkeypatch, {
+def test_walk_pages_to_the_tail_and_reports_every_page(monkeypatch, caplog):
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2")], total=3, next_offset=2),
         "2": _page([_item("3")], total=3),
         "3": _page([], total=3),
@@ -262,56 +270,56 @@ def test_walk_pages_to_the_tail_and_reports_every_page(monkeypatch):
     assert _ScriptedClient.calls == [
         ("prodej", "byty", None), ("prodej", "byty", 2),
         ("prodej", "byty", 3), ("prodej", "byty", 3)]
-    assert cap["ledger"][0]["outcome"] == "exhausted"
+    assert _reconciled(caplog)["outcome"] == "exhausted"
 
 
-def test_a_walk_short_of_the_declared_count_still_reached_the_end(monkeypatch):
+def test_a_walk_short_of_the_declared_count_still_reached_the_end(monkeypatch, caplog):
     """Rule #3 since 2026-09-08: the gate is STRUCTURAL. A page that carried
     cards and no next link is the portal's tail even if the declared count says
     ten and we hold three — a live index churns, and the numeric veto is what
-    kept whole categories from ever nominating. The count stays visible in the
-    ledger, which the coverage gate still reads numerically."""
-    cap = _stub_walk(monkeypatch, {
+    kept whole categories from ever nominating. The count stays visible on the
+    RECONCILE-INDEX line, as a numeric outcome."""
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2"), _item("3")], total=10),
         "2": _page([], total=10),
     })
     _s, _c, total, _p, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (total, reached_end) == (10, True)
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
-def test_walk_with_no_declared_count_reaches_the_end_but_stays_numerically_unknown(monkeypatch):
+def test_walk_with_no_declared_count_reaches_the_end_but_stays_numerically_unknown(monkeypatch, caplog):
     """An SSR-less page measures nothing, so the arithmetic is 'unknown' and the
-    ledger says degraded — but the page carried a card and the portal offered no
-    next page, which is a finished walk. The 2026-08-27 fail-open lesson lives on
-    in the ledger + the runner's COVERAGE warning, not in the gate."""
-    cap = _stub_walk(monkeypatch, {
+    RECONCILE-INDEX line says degraded — but the page carried a card and the portal
+    offered no next page, which is a finished walk. The 2026-08-27 fail-open lesson
+    lives on in that line + the runner's COVERAGE warning, not in the gate."""
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1")], total=None),
         "2": _page([], total=None),
     })
     _s, _c, total, _p, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (total, reached_end) == (None, True)
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
-def test_walk_of_an_empty_category_with_declared_zero_is_complete(monkeypatch):
+def test_walk_of_an_empty_category_with_declared_zero_is_complete(monkeypatch, caplog):
     """A declared zero with nothing collected is a measured fact — but it is
     still read twice, because an items-less 200 is also what a block looks
     like."""
-    cap = _stub_walk(monkeypatch, {"1": _page([], total=0)})
+    _stub_walk(monkeypatch, caplog, {"1": _page([], total=0)})
     seen, _c, total, _p, reached_end = _portal().walk_category(
         BYTY, object(), False, _Limiter())
     assert (seen, total, reached_end) == (set(), 0, True)
     assert _ScriptedClient.calls == [("prodej", "byty", None), ("prodej", "byty", None)]
-    assert cap["ledger"][0]["outcome"] == "exhausted"
+    assert _reconciled(caplog)["outcome"] == "exhausted"
 
 
-def test_a_barren_page_mid_walk_is_our_stop_not_the_portals(monkeypatch):
+def test_a_barren_page_mid_walk_is_our_stop_not_the_portals(monkeypatch, caplog):
     """The load-bearing case: a soft block / blank proxy answer at page 2 of 100
     has no cards AND no pager, exactly like the true tail. It is re-fetched once,
     and with the declared count still far ahead of what we hold nothing
     corroborates it — so the walk must not nominate."""
-    cap = _stub_walk(monkeypatch, {
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2")], total=100, next_offset=2),
         "2": _page([], total=None),
     })
@@ -320,22 +328,22 @@ def test_a_barren_page_mid_walk_is_our_stop_not_the_portals(monkeypatch):
     # The same url, read twice: a confirmation that cannot be obtained is not one.
     assert _ScriptedClient.calls == [
         ("prodej", "byty", None), ("prodej", "byty", 2), ("prodej", "byty", 2)]
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
-def test_a_barren_first_page_with_nothing_declared_is_never_confirmed(monkeypatch):
+def test_a_barren_first_page_with_nothing_declared_is_never_confirmed(monkeypatch, caplog):
     """No cards, no count, no earlier page that carried cards: there is nothing
     to corroborate the emptiness with, so it stays ours."""
-    cap = _stub_walk(monkeypatch, {"1": _page([], total=None)})
+    _stub_walk(monkeypatch, caplog, {"1": _page([], total=None)})
     seen, _c, _t, _p, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (seen, reached_end) == (set(), False)
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
-def test_a_barren_page_the_refetch_fills_does_not_stop_the_walk(monkeypatch):
+def test_a_barren_page_the_refetch_fills_does_not_stop_the_walk(monkeypatch, caplog):
     """The re-fetch is a second read of the same url, not a stop: if the cards
     are there the second time, the walk carries on from them."""
-    _stub_walk(monkeypatch, {
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1")], total=2, next_offset=2),
         "2": [_page([], total=2), _page([_item("2")], total=2)],
         "3": _page([], total=2),
@@ -344,43 +352,43 @@ def test_a_barren_page_the_refetch_fills_does_not_stop_the_walk(monkeypatch):
     assert (seen, pages, reached_end) == ({"1", "2"}, 3, True)
 
 
-def test_a_barren_page_past_the_declared_total_is_the_portals_end(monkeypatch):
+def test_a_barren_page_past_the_declared_total_is_the_portals_end(monkeypatch, caplog):
     """Corroborated: we already hold everything the portal declared, so the empty
     page after it is the tail and not a block."""
-    cap = _stub_walk(monkeypatch, {
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2")], total=2, next_offset=2),
         "2": _page([], total=2),
     })
     _s, _c, _t, pages, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (pages, reached_end) == (2, True)
-    assert cap["ledger"][0]["outcome"] == "exhausted"
+    assert _reconciled(caplog)["outcome"] == "exhausted"
 
 
-def test_a_barren_page_past_the_last_page_the_count_implies_is_the_portals_end(monkeypatch):
+def test_a_barren_page_past_the_last_page_the_count_implies_is_the_portals_end(monkeypatch, caplog):
     """Position, not volume: page 3 is past ceil(4/2), so an empty page there is
     the tail even though the declared count outruns what churn left us."""
-    cap = _stub_walk(monkeypatch, {
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2")], total=4, next_offset=2),
         "2": _page([_item("3")], total=4, next_offset=3),
         "3": _page([], total=4),
     })
     _s, _c, _t, pages, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (pages, reached_end) == (3, True)
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
-def test_a_tail_landing_exactly_on_the_page_the_count_implies_is_confirmed(monkeypatch):
+def test_a_tail_landing_exactly_on_the_page_the_count_implies_is_confirmed(monkeypatch, caplog):
     """The boundary a strict `>` lost. Churn leaves an exact multiple of the page
     size, so the empty terminator arrives ON ceil(declared/page_size) — page 2 of a
     declared 4 at 2 a page. Filing that finished walk as barren nominated nothing,
     silently, every time the tail landed on a boundary."""
-    cap = _stub_walk(monkeypatch, {
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2")], total=4, next_offset=2),
         "2": _page([], total=4),
     })
     _s, _c, _t, pages, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (pages, reached_end) == (2, True)
-    assert cap["ledger"][0]["outcome"] == "degraded"   # the count still says short
+    assert _reconciled(caplog)["outcome"] == "degraded"   # the count still says short
 
 
 def test_the_portals_own_no_results_copy_confirms_a_countless_blank():
@@ -396,51 +404,50 @@ def test_the_portals_own_no_results_copy_confirms_a_countless_blank():
     assert mmreality_main._empty_page_is_confirmed(**kw, empty_marker=True) is True
 
 
-def test_a_page_of_cards_we_already_hold_is_our_stop(monkeypatch):
+def test_a_page_of_cards_we_already_hold_is_our_stop(monkeypatch, caplog):
     """It was read as mmreality clamping an out-of-range page back onto its last
     one. The live probe (2026-09-08) refutes the premise: a past-the-end request
     answers HTTP 200 with zero cards, no redirect and no clamp. So a page that adds
     no new id is an edge cache re-serving a body or a newest-first index that
     shifted — the loop still has to break, but it must never nominate."""
-    cap = _stub_walk(monkeypatch, {
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1"), _item("2")], total=2, next_offset=2),
         "2": _page([_item("1"), _item("2")], total=2, next_offset=3),
     })
     _s, _c, _t, pages, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (pages, reached_end) == (2, False)
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
-def test_deadline_stops_before_fetching_and_is_incomplete(monkeypatch):
-    cap = _stub_walk(monkeypatch, {"1": _page([_item("1")], total=1)})
+def test_deadline_stops_before_fetching_and_is_incomplete(monkeypatch, caplog):
+    _stub_walk(monkeypatch, caplog, {"1": _page([_item("1")], total=1)})
     monkeypatch.setattr(mmreality_main, "deadline_reached", lambda _d: True)
     _s, _c, total, pages, reached_end = _portal().walk_category(
         BYTY, object(), False, _Limiter(), deadline=1.0)
     assert (total, pages, reached_end) == (None, 0, False)
     assert _ScriptedClient.calls == []
-    assert cap["ledger"][0]["outcome"] == "deadline"
+    assert _reconciled(caplog)["outcome"] == "deadline"
 
 
-def test_page_cap_is_a_partial_walk(monkeypatch):
-    cap = _stub_walk(monkeypatch, {
+def test_page_cap_is_a_partial_walk(monkeypatch, caplog):
+    _stub_walk(monkeypatch, caplog, {
         "1": _page([_item("1")], total=2, next_offset=2),
         "2": _page([_item("2")], total=2),
     })
     _s, _c, _t, pages, reached_end = _portal(max_pages=1).walk_category(
         BYTY, object(), False, _Limiter())
     assert (pages, reached_end) == (1, False)
-    # A capped walk is a probe, not coverage: it must not overwrite the ledger
-    # (latest-wins) with "ceiling" every few minutes and hold the gate shut.
-    assert cap["ledger"] == []
+    line = _reconciled(caplog)
+    assert (line["stop"], line["outcome"]) == ("page_cap", "ceiling")
 
 
-def test_a_pager_that_does_not_advance_stops_the_walk(monkeypatch):
+def test_a_pager_that_does_not_advance_stops_the_walk(monkeypatch, caplog):
     """A next link pointing at the current page would loop forever. Stopping is
     OURS, so it vetoes nomination even when the count reconciles exactly."""
-    cap = _stub_walk(monkeypatch, {"1": _page([_item("1"), _item("2")], total=2, next_offset=1)})
+    _stub_walk(monkeypatch, caplog, {"1": _page([_item("1"), _item("2")], total=2, next_offset=1)})
     _s, _c, _t, pages, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (pages, reached_end) == (1, False)
-    assert cap["ledger"][0]["outcome"] == "degraded"
+    assert _reconciled(caplog)["outcome"] == "degraded"
 
 
 def test_delisting_uses_the_runners_default_nomination():

@@ -485,7 +485,8 @@ nothing else.
   is an operator decision (D901, rule 7).
 
 **Health lane (Health dashboard wave 3, ships LIVE):** the checks the registry hosts on
-`realtime-worker` (`jobs`, `capacity`, `llm`; `docs/design/health-dashboard.md` § 4) are measured
+`realtime-worker` (`jobs`, `capacity`, `llm` since wave 3; `scraping`, `publishing`, `delisting` and
+the `coverage` gauge since wave 4; `docs/design/health-dashboard.md` § 4) are measured
 here, every `HEALTH_TICK_SECONDS` (60 s), by THE harness:
 `scripts.verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=…,
 lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)`, never a copy.
@@ -493,7 +494,8 @@ lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)`, never a copy.
   that can fail and no fail-safe-0; the brake is a deploy. Due-ness is read from the stored
   results, so a pass with nothing due is one indexed read and a restarted worker re-measures
   nothing; alarms run before gauges, each check on its own clock (`CHECK_BUDGET_S`) inside the
-  300 s pass, and every result is stored as it lands, with `run_at` = the pass's start.
+  360 s pass (8 × 45 s since wave 4: its seven checks and wave 5's dedup), and every result is
+  stored as it lands, with `run_at` = the pass's start.
 - **One pass at a time.** `_HEALTH_PASS_LOCK`: the harness keeps per-run module state
   (`scripts.checks.clock.LANE`, its plausibility cache), so a pass abandoned at
   `LANE_PASS_TIMEOUT_SECONDS` must not overlap the next; a skipped pass is

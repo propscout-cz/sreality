@@ -384,10 +384,9 @@ SELECT l.id, l.source, l.first_seen_at, l.is_active,
  LIMIT %(limit)s
 """
 
-# Per source: how many rows are waiting and how long the oldest has waited. A literal twin
-# of `check_acquisition_lag` — the check whose own docstring argues this exact case: a
-# "nothing happened in N hours" alarm needs a baseline the outage itself erodes, while the
-# oldest un-extracted row grows without bound and cannot be normalised away.
+# Per source: how many rows are waiting and how long the oldest has waited. The oldest, not
+# a count: a "nothing happened in N hours" alarm needs a baseline the outage itself erodes,
+# while the oldest un-extracted row grows without bound and cannot be normalised away.
 _LAG_SQL_TEMPLATE = """
 SELECT l.source,
        count(*) AS waiting,

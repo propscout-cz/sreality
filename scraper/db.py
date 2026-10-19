@@ -949,6 +949,7 @@ def presence_candidates(
     scope_params.append(category_type)
     if scope_subtype:
         scope_params.append(subtype)
+    recheck_h = int(delist_policy.RECHECK_THROTTLE.total_seconds() // 3600)
     with conn.cursor() as cur:
         cur.execute(
             f"""
@@ -963,10 +964,10 @@ def presence_candidates(
         active_rows = int(cur.fetchone()[0])
         # Two exclusions keep the oldest-unseen order from jamming. A row that
         # already has a queue row (waiting, claimed, or given up after five
-        # failures) is in the drain's hands, and a row the drain finished in
-        # the last day was just checked; without these, a page that errors
-        # keeps its old last_seen_at, sorts first forever and eats every
-        # throttle slot while the rows behind it are never nominated.
+        # failures) is in the drain's hands, and a row the drain finished
+        # within delist_policy.RECHECK_THROTTLE was just checked; without these,
+        # a page that errors keeps its old last_seen_at, sorts first forever and
+        # eats every throttle slot while the rows behind it are never nominated.
         cur.execute(
             f"""
             SELECT {key_col}::text, source_url, price_czk
@@ -981,7 +982,7 @@ def presence_candidates(
               AND NOT EXISTS (
                     SELECT 1 FROM detail_queue_completions c
                     WHERE c.source = l.source AND c.native_id = l.{key_col}::text
-                      AND c.completed_at > now() - interval '24 hours')
+                      AND c.completed_at > now() - interval '{recheck_h} hours')
             ORDER BY l.last_seen_at ASC NULLS FIRST, l.id
             """,
             tuple(scope_params) + (ids,),

@@ -90,7 +90,7 @@ class SliceWalk:
 
     `outcome` is the NUMERIC one — `exhausted` means the slice collected its own
     declared total — and it stays the trigger for the descent, the resample and
-    the `portal_index_slices` ledger the coverage gate reads.
+    idnes's own `portal_index_slices` rows, which `slice_staleness` orders the next walk by.
 
     `stop` is WHY the page loop ended, and it is what the nomination gate reads
     (rule #3): a slice that paged to idnes's last page reached the end even if
@@ -447,8 +447,8 @@ class IdnesPortal(portal_runner.PortalDefaults):
         #
         # This is what makes praha reliable rather than a coin flip. It was
         # landing at 99.35 / 99.61 / 99.74% across runs against a 99.5% bar, so
-        # its category passed only sometimes — and the coverage gate needs THREE
-        # CONSECUTIVE passes, which a coin flip essentially never delivers.
+        # its category passed only sometimes — the retired coverage gate needed THREE
+        # CONSECUTIVE passes, which a coin flip essentially never delivered.
         #
         # Bounded and self-limiting: only a slice that came up short resamples,
         # it stops the moment a pass stops paying for itself, and the budget is
