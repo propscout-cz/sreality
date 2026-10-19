@@ -287,13 +287,9 @@ _FLOOR_ORDINAL_WORDS: dict[str, int] = {
 }
 _ORDINAL_ALTERNATION: str = "|".join(
     sorted(_FLOOR_ORDINAL_WORDS, key=len, reverse=True))
-# The third group names the noun: `nadzemním podlaží` and `NP` are the NP noun, a bare
-# `podlaží` is a noun of its own (E967) — `v prvním podlaží` is written for the ground floor and
-# for the first floor above it (one Prague 1+kk is `ve druhém patře` on sreality and `v prvním
-# podlaží` on bezrealitky).
 _WORD_NP = re.compile(
     r"\b(?:(" + _ORDINAL_ALTERNATION + r")" + _STOREY_JOINER + r")?("
-    + _ORDINAL_ALTERNATION + r")\s+(nadzemnim\s+podlazi|np|podlazi)\b")
+    + _ORDINAL_ALTERNATION + r")\s+(?:nadzemnim\s+)?(?:podlazi|np)\b")
 _WORD_PATRO = re.compile(r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|patro|poschodi)\b")
 
 
@@ -302,10 +298,8 @@ _WORD_PATRO = re.compile(r"\b(" + _ORDINAL_ALTERNATION + r")\s+(?:patre|patro|po
 # scale for no other reason than which noun their author reached for — and one Bílina agency
 # re-writes its own advert from `v šestém patře osmipodlažního objektu` to `ve 6. nadzemním
 # podlaží`, same flat, same rent, same house number. That is a vocabulary, not a storey, and
-# `_same_feed` cannot see it because it is one feed's two spellings. A bare worded `podlaží`
-# is kept apart from the NP noun (E967) and counted on its scale (`_FLOOR_SCALE`).
-FLOOR_FORMS: tuple[str, ...] = ("np", "patro", "podlazi")
-_FLOOR_SCALE: dict[str, str] = {"np": "np", "podlazi": "np", "patro": "patro"}
+# `_same_feed` cannot see it because it is one feed's two spellings.
+FLOOR_FORMS: tuple[str, ...] = ("np", "patro")
 
 
 def printed_floors(text: str | None, words: bool = False) -> frozenset[int]:
@@ -315,7 +309,7 @@ def printed_floors(text: str | None, words: bool = False) -> frozenset[int]:
 
 def printed_floors_by_form(text: str | None, words: bool = False
                            ) -> dict[str, frozenset[int]]:
-    """`printed_floors` split by the noun that carried each storey (`FLOOR_FORMS`)."""
+    """`printed_floors` split by the noun that carried each storey — `np` or `patro`."""
     return dict(_printed_floors_by_form(text, words)) if text else {}
 
 
@@ -323,29 +317,25 @@ def _numbered_np(match: re.Match[str]) -> set[int]:
     return {int(number) for number in match.group(1, 2) if number}
 
 
-def _add_worded_np(found: dict[str, set[int]], match: re.Match[str]) -> None:
-    form = "podlazi" if match.group(3) == "podlazi" else "np"
-    found[form] |= {_FLOOR_ORDINAL_WORDS[word] for word in match.group(1, 2) if word}
+def _worded_np(match: re.Match[str]) -> set[int]:
+    return {_FLOOR_ORDINAL_WORDS[word] for word in match.group(1, 2) if word}
 
 
-def _by_form(found: dict[str, set[int]]) -> tuple[tuple[str, frozenset[int]], ...]:
-    return tuple((form, frozenset(v for v in found[form] if 0 < v <= PROSE_FLOOR_MAX))
-                 for form in FLOOR_FORMS)
+def _by_form(np_side: set[int], patro: set[int]) -> tuple[tuple[str, frozenset[int]], ...]:
+    return tuple((name, frozenset(v for v in values if 0 < v <= PROSE_FLOOR_MAX))
+                 for name, values in (("np", np_side), ("patro", patro)))
 
 
 @body_cached
 def _printed_floors_by_form(text: str, words: bool) -> tuple[tuple[str, frozenset[int]], ...]:
     folded = fold(text)
-    found: dict[str, set[int]] = {form: set() for form in FLOOR_FORMS}
-    for match in _PROSE_NP.finditer(folded):
-        found["np"] |= _numbered_np(match)
-    found["patro"] |= {int(match.group(1)) + 1 for match in _PROSE_PATRO.finditer(folded)}
+    np_side = {value for match in _PROSE_NP.finditer(folded) for value in _numbered_np(match)}
+    patro = {int(match.group(1)) + 1 for match in _PROSE_PATRO.finditer(folded)}
     if words:
-        for match in _WORD_NP.finditer(folded):
-            _add_worded_np(found, match)
-        found["patro"] |= {_FLOOR_ORDINAL_WORDS[match.group(1)] + 1
-                           for match in _WORD_PATRO.finditer(folded)}
-    return _by_form(found)
+        np_side |= {value for match in _WORD_NP.finditer(folded) for value in _worded_np(match)}
+        patro |= {_FLOOR_ORDINAL_WORDS[match.group(1)] + 1
+                  for match in _WORD_PATRO.finditer(folded)}
+    return _by_form(np_side, patro)
 
 
 def _printed_floors(text: str, words: bool = False) -> frozenset[int]:
@@ -354,22 +344,20 @@ def _printed_floors(text: str, words: bool = False) -> frozenset[int]:
 
 def same_form_floor_gap(left: Mapping[str, frozenset[int]],
                         right: Mapping[str, frozenset[int]]) -> int | None:
-    """The smallest storey gap the two bodies state ON ONE SCALE, or None if they share none.
+    """The smallest storey gap the two bodies state IN ONE NOUN, or None if they share none.
 
     `patro` and `NP` are two scales and this module has no converter it trusts: `3. patro` is
     the fourth storey, `3. NP` the third, and a writer who means one and types the other is
     commonplace — one Bílina agency re-writes its own advert for č.p. 707 from `v šestém patře
     osmipodlažního objektu` to `ve 6. nadzemním podlaží`, and one Prague flat is `ve druhém
     patře` on sreality and `v prvním podlaží` on bezrealitky at the same 20,553 Kč. Across the
-    two scales the difference is the noun; within one scale it is a storey, and only that is
-    read. A bare `podlaží` counts on the NP scale. Returning 0 says the two agree.
+    two nouns the difference is the noun; within one noun it is a storey, and only that is
+    read. Returning 0 says the two agree.
     """
     gaps = [abs(value_a - value_b)
-            for form_a, values_a in left.items()
-            for form_b, values_b in right.items()
-            if _FLOOR_SCALE[form_a] == _FLOOR_SCALE[form_b]
+            for form, values_a in left.items()
             for value_a in values_a
-            for value_b in values_b]
+            for value_b in right.get(form, frozenset())]
     return min(gaps) if gaps else None
 
 
@@ -386,10 +374,14 @@ _PLACEMENT_CUE = re.compile(
     r"(?:byt|prostor|jednotk)\w*|(?:byt|prostor|jednotk|apartman|kancelar)\w*)\s+"
     r"(?:se\s+)?(?:v|ve)\s+"
 )
-# Every storey must START at the cue, so the window only bounds how long the storey phrase may
-# be: `ctvrtem nadzemnim podlazi` is 25 characters, and 14936's `se nachází ve 3 nadzemním
-# podlaží` needs 19 for the spelled-out noun (E967).
-PLACEMENT_WINDOW: int = 26
+# `umístěného v 1.NP` needs 0; `situovaný ve druhém nadzemním podlaží` is spelled out and is not
+# read; the window only has to cover an ordinal and its separator.
+PLACEMENT_WINDOW: int = 12
+
+
+# A worded ordinal is longer than a numeral, so the placement window has to reach past it:
+# `nachází se ve třetím patře` needs 12 characters for `tretim patre` alone.
+PLACEMENT_WORD_WINDOW: int = 26
 
 
 def subject_floors(text: str | None, words: bool = False) -> frozenset[int]:
@@ -399,27 +391,29 @@ def subject_floors(text: str | None, words: bool = False) -> frozenset[int]:
 
 def subject_floors_by_form(text: str | None, words: bool = False
                            ) -> dict[str, frozenset[int]]:
-    """`subject_floors` split by the noun that carried each storey (`FLOOR_FORMS`)."""
+    """`subject_floors` split by the noun that carried each storey — `np` or `patro`."""
     return dict(_subject_floors_by_form(text, words)) if text else {}
 
 
 @body_cached
 def _subject_floors_by_form(text: str, words: bool) -> tuple[tuple[str, frozenset[int]], ...]:
     folded = fold(text)
-    found: dict[str, set[int]] = {form: set() for form in FLOOR_FORMS}
+    np_side: set[int] = set()
+    patro: set[int] = set()
     for cue in _PLACEMENT_CUE.finditer(folded):
         window = folded[cue.end(): cue.end() + PLACEMENT_WINDOW]
         if (match := _PROSE_NP.match(window)) is not None:
-            found["np"] |= _numbered_np(match)
+            np_side |= _numbered_np(match)
         if (match := _PROSE_PATRO.match(window)) is not None:
-            found["patro"].add(int(match.group(1)) + 1)
+            patro.add(int(match.group(1)) + 1)
         if not words:
             continue
-        if (match := _WORD_NP.match(window)) is not None:
-            _add_worded_np(found, match)
-        if (match := _WORD_PATRO.match(window)) is not None:
-            found["patro"].add(_FLOOR_ORDINAL_WORDS[match.group(1)] + 1)
-    return _by_form(found)
+        wide = folded[cue.end(): cue.end() + PLACEMENT_WORD_WINDOW]
+        if (match := _WORD_NP.match(wide)) is not None:
+            np_side |= _worded_np(match)
+        if (match := _WORD_PATRO.match(wide)) is not None:
+            patro.add(_FLOOR_ORDINAL_WORDS[match.group(1)] + 1)
+    return _by_form(np_side, patro)
 
 
 def _subject_floors(text: str, words: bool = False) -> frozenset[int]:
@@ -1300,10 +1294,10 @@ def cross_form_floor_agreement(left: Mapping[str, frozenset[int]],
 
 
 # --- the storey the OFFER is, for a let of a whole floor (E212) ------------------------------
-# `subject_floors` needs a placement verb and a storey directly after it, so it sees neither
+# `subject_floors` needs a placement verb and reads a short window after it, so it sees neither
 # `Pronájem přízemního podlaží` (the offer is the storey, not a unit placed on one) nor `Místo
-# o ploše 14 m² se nachází v nejžádanějším přízemí` (an adjective stands in the window); it
-# has read `se nachází v 3 nadzemním podlaží` since E967 widened its window. All three name the
+# o ploše 14 m² se nachází v nejžádanějším přízemí` (an adjective stands in the window) nor
+# `se nachází v 3 nadzemním podlaží` (the noun is longer than the window). All three name the
 # storey OF THE OFFER as plainly as `v 2.NP` does. Read on the NP scale, where `přízemí` is 1.
 # Two cue families, both narrow. An OFFER verb answers "what is being let" directly. A
 # PLACEMENT verb answers it only when the clause's own subject is the offered object, so the

@@ -371,10 +371,11 @@ def test_a_subset_of_room_codes_is_not_a_conflict() -> None:
     assert "unit_code" not in stated(room(12273170, ROOMS_403_303), only)
 
 
-# --- E967: the storey stated in the NP noun on both sides ------------------------------------
-# náměstí Jiřího z Poděbrad: one agency's 93 m² 3+kk on NP 3 (sreality 14936, May) and the flat
-# above it on NP 4 (idnes 19241736, October); every stored floor column reads 3. The prices are
-# levelled here so the storey is the only thing left to read.
+# --- E969: one storey apart across two feeds is the vocabulary, in every noun --------------
+# The operator's ruling of 2026-10-19, withdrawing E967: `2. NP` may be `3. NP` through data
+# quality alone. náměstí Jiřího z Poděbrad: one agency's 93 m² 3+kk `ve 3 nadzemním podlaží`
+# (sreality 14936, May) and `ve čtvrtém nadzemním podlaží` (idnes 19241736, October); every
+# stored floor column reads 3. The prices are levelled so the storey is the only thing to read.
 NP_3 = ("Rádi bychom Vám nabídli nezařízený byt, který se nachází ve 3 nadzemním podlaží "
         "secesního domu s výtahem.")
 NP_4 = ("Nabízíme k pronájmu moderní stylový byt 3kk, který se nachází ve čtvrtém nadzemním "
@@ -383,6 +384,7 @@ PATRO_3 = ("Nabízíme Vám k pronájmu velmi moderní a luxusní byt po rekonst
            "z Poděbrad, 3+kk, 93m2, ve 3. patře v domě s výtahem.")
 PATRO_4_WORDED = ("Nabízíme k pronájmu byt 3+kk o užitné ploše 93 m² ve čtvrtém patře historického "
                   "činžovního domu s výtahem.")
+STOREY_FACTS = {"prose_floor", "subject_floor"}
 
 
 def flat(listing_id: int, body: str, source: str = "sreality", first: str = "2026-05-01",
@@ -393,105 +395,60 @@ def flat(listing_id: int, body: str, source: str = "sreality", first: str = "202
                    **fields)
 
 
-def test_one_storey_apart_in_the_np_noun_is_a_fact_across_portals() -> None:
-    a = flat(14936, NP_3, broker_key="phone-a")
-    b = flat(19241736, NP_4, source="idnes", first="2026-10-01", last="2026-10-18")
-    for mode in (PROMOTE, CLUSTER):
-        assert "subject_floor" in stated(a, b, mode)
-    a = listing(1, floor=None, description="Byt se nachází ve 2. NP cihlového domu.",
-                source="idnes")
-    b = listing(2, floor=None, description="Byt se nachází ve 3. NP cihlového domu.",
-                source="bezrealitky")
-    assert stated(a, b) == ["subject_floor"]
+def placed(listing_id: int, storey: str, source: str, **fields: object) -> Listing:
+    return listing(listing_id, floor=None, source=source,
+                   description=f"Byt se nachází {storey} cihlového domu.", **fields)
 
 
-def test_np_against_patro_is_still_the_two_nouns() -> None:
-    """sreality 14936 `ve 3 nadzemním podlaží` against sreality 19241633 `ve 3. patře`: on the
-    NP scale one storey apart, across the two nouns, never on sale together, two brokers."""
-    a = flat(14936, NP_3, broker_key="phone-a")
-    b = flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18", broker_key="identity-b")
-    assert "prose_floor" not in stated(a, b)
-
-
-def test_one_storey_apart_in_the_patro_noun_stays_the_vocabulary() -> None:
-    """sreality 19241633 `ve 3. patře` against idnes 19250437 `ve čtvrtém patře`."""
-    a = flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18")
-    b = flat(19250437, PATRO_4_WORDED, source="idnes", first="2026-10-01", last="2026-10-18")
-    assert "prose_floor" not in stated(a, b)
-
-
-def test_a_house_names_its_storeys_as_rooms_even_in_the_np_noun() -> None:
-    a = listing(1, category_main="dum", disposition=None,
-                description="V 1. NP se nachází kuchyně s obývacím pokojem.")
-    b = listing(2, source="idnes", category_main="dum", disposition=None,
-                description="Ve 2. NP jsou dvě ložnice a koupelna.")
-    assert "prose_floor" not in stated(a, b)
-
-
-# The NP noun is read at any gap only where it is the PLACEMENT and the author's only storey
-# vocabulary. Each pair is one storey apart across two feeds and stays the old rule's.
 @pytest.mark.parametrize(
-    "body_a, body_b",
+    "a, b",
     [
-        # The author's own +1 of a patro count carries the patro's doubt (Rokytnice, Bílina).
-        ("Byt se nachází ve 2. patře (3. NP) cihlového domu.",
-         "Byt se nachází ve 3. patře (4. NP) cihlového domu."),
-        ("Byt se nachází ve 2. patře (3. NP).", "Byt se nachází ve 2. NP."),
-        ("Byt 2+kk ve 2. patře (3. NP).", "Byt 2+kk ve 1. patře (2. NP)."),
-        ("Byt se nachází ve 3. patře. Sklep i kočárkárna se nachází v 1. NP.",
-         "Byt se nachází ve 3. NP."),
-        # The building's storeys in the set: an amenity, a storey count, the shops below.
-        ("Byt se nachází ve 2. podlaží cihlového domu. V 1. NP je kočárkárna a kolárna.",
-         "Byt se nachází ve 2. NP cihlového domu."),
-        ("Byt se nachází ve druhém podlaží. V 1. NP je kočárkárna.", "Byt se nachází ve 2. NP."),
-        ("Prodej bytu 3+kk v podkroví cihlového domu o 4 NP.",
-         "Prodej bytu 3+kk v 5. NP (podkroví) cihlového domu."),
-        ("Dům má 4 nadzemní podlaží, byt je v podkroví.",
-         "Byt se nachází v 5. nadzemním podlaží (podkroví)."),
-        ("Dům má 4 nadzemní podlaží a výtah.", "Byt se nachází ve 3. NP."),
-        ("Byt 2+1 v přízemí domu se 2 NP, se zahradou.", "Byt 2+1 v 1. NP domu, se zahradou."),
-        # A maisonette written as its range on one portal and its entry storey on the other.
-        ("Mezonetový byt 4+kk ve 2.-3. NP cihlového domu.",
-         "Mezonetový byt 4+kk ve 2. NP cihlového domu."),
-        ("Mezonetový byt se nachází ve 2. a 3. NP.", "Mezonetový byt se nachází ve 2. NP."),
-        ("Mezonet ve třetím a čtvrtém nadzemním podlaží.", "Mezonet ve 3. NP."),
+        # The NP noun on both sides, numbered against worded, then numbered on both.
+        (flat(14936, NP_3, broker_key="phone-a"),
+         flat(19241736, NP_4, source="idnes", first="2026-10-01", last="2026-10-18")),
+        (placed(1, "ve 2. NP", "idnes"), placed(2, "ve 3. NP", "bezrealitky")),
+        # The patro noun, and the two nouns against each other (two brokers, never live together).
+        (flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18"),
+         flat(19250437, PATRO_4_WORDED, source="idnes", first="2026-10-01", last="2026-10-18")),
+        (flat(14936, NP_3, broker_key="phone-a"),
+         flat(19241633, PATRO_3, first="2026-10-01", last="2026-10-18", broker_key="identity-b")),
     ],
 )
-def test_the_np_noun_outside_a_sole_placement_keeps_the_old_rule(body_a: str,
-                                                                  body_b: str) -> None:
-    a = listing(1, floor=None, description=body_a)
-    b = listing(2, floor=None, description=body_b, source="idnes")
+def test_one_storey_apart_across_two_feeds_is_no_fact(a: Listing, b: Listing) -> None:
     for mode in (PROMOTE, CLUSTER):
-        assert not {"prose_floor", "subject_floor"} & set(stated(a, b, mode))
+        assert not STOREY_FACTS & set(stated(a, b, mode))
 
 
-def test_an_office_above_a_shopping_floor_list_is_no_np_fact() -> None:
-    a = listing(1, category_main="komercni", disposition=None, floor=None,
-                description="Kancelář v 7. patře. V 1. NP Lidl, ve 2. NP drogerie, ve 3. NP Sinsay.")
-    b = listing(2, category_main="komercni", disposition=None, floor=None, source="realitymix",
-                description="Kancelář v 7. NP obchodního domu.")
-    assert not {"prose_floor", "subject_floor"} & set(stated(a, b))
+def test_two_storeys_apart_in_the_np_noun_is_a_fact() -> None:
+    a, b = placed(1, "ve 2. NP", "idnes"), placed(2, "ve 4. NP", "bezrealitky")
+    for mode in (PROMOTE, CLUSTER):
+        assert STOREY_FACTS <= set(stated(a, b, mode))
+
+
+def test_a_maisonette_range_meets_its_entry_storey() -> None:
+    """E967's range reader, kept: read for its last storey alone, `2.-3. NP` is one storey
+    from `2. NP` inside one feed, which is a fact there."""
+    for storeys in ("ve 2.-3. NP", "ve 2. a 3. NP"):
+        a = placed(1, storeys, "sreality", broker_key="b1")
+        b = placed(2, "ve 2. NP", "sreality", broker_key="b1")
+        for mode in (PROMOTE, CLUSTER):
+            assert not STOREY_FACTS & set(stated(a, b, mode))
 
 
 def test_a_bare_podlazi_keeps_its_two_storey_reading() -> None:
-    """E967 keeps the bare `podlaží` out of the NP noun, not out of the storey readers: two
-    storeys apart it is a fact as it always was, one apart it is the vocabulary."""
+    """A bare worded `podlaží` is read on the NP scale: two storeys apart it is a fact as it
+    always was, one apart it is the vocabulary."""
     def pair(first: str, second: str) -> tuple[Listing, Listing]:
         return (listing(1, floor=None, description=f"Byt 2+kk se nachází {first} cihlového domu."),
                 listing(2, floor=None, source="idnes",
                         description=f"Byt 2+kk se nachází {second} cihlového domu."))
 
     for mode in (PROMOTE, CLUSTER):
-        assert {"prose_floor", "subject_floor"} <= set(
-            stated(*pair("ve třetím podlaží", "v prvním podlaží"), mode))
-        assert {"prose_floor", "subject_floor"} <= set(
-            stated(*pair("ve druhém podlaží", "ve čtvrtém podlaží"), mode))
-        assert {"prose_floor", "subject_floor"} <= set(
-            stated(*pair("ve třetím podlaží", "v 1. NP"), mode))
-        assert not {"prose_floor", "subject_floor"} & set(
-            stated(*pair("v prvním podlaží", "ve druhém podlaží"), mode))
-        assert not {"prose_floor", "subject_floor"} & set(
-            stated(*pair("ve druhém podlaží", "ve 3. NP"), mode))
+        assert STOREY_FACTS <= set(stated(*pair("ve třetím podlaží", "v prvním podlaží"), mode))
+        assert STOREY_FACTS <= set(stated(*pair("ve druhém podlaží", "ve čtvrtém podlaží"), mode))
+        assert STOREY_FACTS <= set(stated(*pair("ve třetím podlaží", "v 1. NP"), mode))
+        assert not STOREY_FACTS & set(stated(*pair("v prvním podlaží", "ve druhém podlaží"), mode))
+        assert not STOREY_FACTS & set(stated(*pair("ve druhém podlaží", "ve 3. NP"), mode))
 
 
 # --- image facts, which come only from the engine's own feature row --------------------------

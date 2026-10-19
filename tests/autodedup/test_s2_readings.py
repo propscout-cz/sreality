@@ -294,6 +294,8 @@ def test_np_and_patro_are_one_storey_for_the_prose_fact() -> None:
 
 
 def test_a_one_storey_gap_across_portals_is_vocabulary_not_a_fact() -> None:
+    """In the NP noun too: `2. NP` may be `3. NP` through data quality alone (the operator's
+    ruling of 2026-10-19, E969)."""
     a = listing(1, description=_pad("Byt se nachází ve 2. NP cihlového domu."), source="idnes")
     b = listing(2, description=_pad("Byt se nachází ve 3. NP cihlového domu."),
                 source="bezrealitky")
