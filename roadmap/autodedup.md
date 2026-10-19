@@ -62,14 +62,16 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   once (every lane write fenced, 30 s drain). Follow-up 2026-10-10: a pass whose connections a
   database restart took retries the lease's release on new ones, every 20 s for up to 180 s,
   before falling back to its TTL.
-  Owed: the cgroup memory limit, the revive cap, `verify_pipeline`'s heartbeat check.
+  Owed: the cgroup memory limit, `verify_pipeline`'s heartbeat check. The revive cap shipped
+  as E970 (2026-10-19): the revived feed takes its fifth of the claim, its cursor stopping at
+  the last id taken.
 - **E948 (2026-10-10, a worker that died holding the lease):** its restart in place (same hostname
   and pid) releases that lease before its take and halves the claim cap in the same commit (floor
   25; only a seed or, E948b, a bigger container raises it); at the floor the lease waits out its
   TTL as before, so a death no claim can cure never loops the worker. The heartbeat adds
   `claim_cap`, `predecessor_released` / `predecessor_kept`, `rss_mb` and the cgroup
-  `memory_limit_mb` (E941's owed reading). Still owed (E941): the revive cap, since the revived
-  feed ignores the claim's limit, and the `verify_pipeline` heartbeat check.
+  `memory_limit_mb` (E941's owed reading). Still owed (E941): the `verify_pipeline` heartbeat
+  check.
   **E948b:** the cap row records the memory limit its deaths happened under (`limit_mb`, read
   each pass), and a container limit grown ≥ 25 % resets the cap to 500 before the next pass,
   without a seed; a boot that also finds a dead predecessor releases its lease without halving

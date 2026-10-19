@@ -1323,6 +1323,41 @@ def test_a_refusal_never_halves_the_rate(tmp_path, monkeypatch) -> None:
     assert conn.settings_by[pass_rate_key("rt")].endswith(":restored"), "the half went back"
 
 
+def test_a_pair_budget_refusal_puts_the_rate_back_and_a_dead_pass_halves_it(
+        tmp_path, monkeypatch) -> None:
+    """E970: the pair budget's refusal (E75) measures the neighbourhood a claim brings, not the
+    claim's size. After the 2026-10-19 deploy moved the engine digest the reject ledger answered
+    nothing, every pass was refused, and halving at each refusal took `rt_pass_rate_per_s:rt`
+    from 0.116 to 0.0002 and the claim to one advert, for ever. A refused pass leaves the rate
+    it started from; a pass the deadline or a raise killed still halves it (E913, E930)."""
+    from autodedup import incremental_lane
+    from autodedup.incremental import PassDeadline
+    from autodedup.incremental_lane import pass_rate_key, run_incremental
+    from tests.autodedup import lane_world
+
+    conn = lane_world.world()
+    lane_world.seed_lane(conn, tmp_path)
+    key = pass_rate_key("rt")
+    conn.settings[key] = 0.3
+    budget = incremental_lane.PASS_LIMITS
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", replace(budget, max_pairs=-1))
+
+    for _ in range(3):
+        refused = run_incremental(lambda: conn)
+        assert refused["aborted"] == "pair_budget" and refused["counts"]["attempts"] > 1
+        assert conn.settings[key] == 0.3 and conn.settings_by[key].endswith(":restored")
+
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS", budget)
+    _pass_that_raises(monkeypatch, PassDeadline("the pass ran past its deadline"))
+    assert run_incremental(lambda: conn)["aborted"] == "deadline"
+    assert conn.settings[key] == 0.15 and conn.settings_by[key].endswith(":halved")
+
+    _pass_that_raises(monkeypatch, RuntimeError("canceling statement due to statement timeout"))
+    with pytest.raises(RuntimeError, match="statement timeout"):
+        run_incremental(lambda: conn)
+    assert conn.settings[key] == 0.075 and conn.settings_by[key].endswith(":halved")
+
+
 # ------------------------------------------------------------ E941: the rate, halved AHEAD
 
 
@@ -1478,6 +1513,17 @@ def test_a_blend_that_beats_the_doubling_is_stored_and_not_called_a_doubling() -
 
     assert _measure_rate(25, 10.0, LIVE_RATE, _bound("time", 25)) == (
         round(0.5 * 25 / 10.0 + 0.5 * LIVE_RATE, 6), False)
+
+
+def test_the_first_floor_pass_after_the_refusals_is_measured_by_the_blend() -> None:
+    """E970: the 2026-10-19 refusals left the rate at 0.000056 and the claim at one advert a
+    feed. The first pass that commits is a clock-cut, filled claim (five adverts at a limit of
+    one), so it is measured, and at that rate E98's blend beats E951's doubling by far."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate, doubled = _measure_rate(5, 600.0, 0.000056, _bound("time", 1, 525.0))
+    assert (rate, doubled) == (0.004195, False)
+    assert rate > 70 * 0.000056 > 2 * 0.000056
 
 
 @pytest.mark.parametrize("claimed, bound", [

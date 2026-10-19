@@ -373,7 +373,9 @@ nothing else.
 - **The engine bounds its own time (E913).** A pass reads its deadline (1,050 s) between steps and
   every 256 pair decisions; past it the one transaction rolls back (nothing written, no cursor
   moved), the lease is freed and the pass records its rate HALVED, so the next claim is half the
-  size. The claim is the engine's: its time budget (half the deadline) × the rate it measured. The
+  size. The claim is the engine's: its time budget (half the deadline) × the rate it measured. A
+  pass the pair budget refuses keeps the rate it started from (E970): the refusal measures the
+  neighbourhood, not the claim, and halving it froze the lane at one advert after a digest move. The
   worker's statement-refusing deadline wrapper and in-process back-off are gone. Deadline + one
   120 s statement stays under the 1,200 s stall warn and `LANE_PASS_TIMEOUT_SECONDS`; the 2,400 s
   lease also covers the reconcile's last group. A calibration re-cut is a tick of its own under the
@@ -386,8 +388,8 @@ nothing else.
   engine logs the release as it happens and, in the same commit, halves
   `rt_claim_cap:<generation>` (floor 25). The cap lowers the limit the feeds' shares are cut
   from, min(`max_listings`, cap, the time budget's), `bound_by` `cap` when it binds: in the build
-  the entered feed takes the whole limit and the others a fifth each on top; only the revived
-  feed takes every revived id of its 20,000-row slice, whatever the limit. Only a seed or a
+  the entered feed takes the whole limit and the others a fifth each on top, the revived feed
+  among them (E970: its cursor stops at the last id it took). Only a seed or a
   bigger container raises the cap again, since the store keeps growing and a size that died in
   this container would die again (E948b): the row records the biggest memory limit its deaths
   since the last seed or reset happened under (`limit_mb`, the cgroup limit read each pass; an
