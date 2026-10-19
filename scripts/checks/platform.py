@@ -349,7 +349,7 @@ select beat_at, started_at, details from worker_heartbeats where worker = %(work
 # This check's own newest cells: the lane counters a flap is measured against, and the portals
 # failing then (a portal that recovers leaves the heartbeat, so its cell is carried as OK).
 _PREVIOUS_CELLS_SQL = """
-select details -> 'cells' from pipeline_check_results
+select run_at, details -> 'cells' from pipeline_check_results
  where check_key = %(key)s and jsonb_typeof(details -> 'cells') = 'array'
  order by run_at desc
  limit 1
@@ -370,18 +370,21 @@ def _lane_cells(conn: Any, thresholds: dict[str, Any],
     if not isinstance(details, dict):
         return [], "the heartbeat carries no lane state"
     held = fetchone(conn, _PREVIOUS_CELLS_SQL, {"key": "jobs"})
-    previous = {c.get("subject"): c for c in (held[0] if held and isinstance(held[0], list) else [])
+    previous_at = _as_utc(held[0]) if held else None
+    previous = {c.get("subject"): c for c in (held[1] if held and isinstance(held[1], list) else [])
                 if isinstance(c, dict)}
     uptime = (now - booted).total_seconds()
     cells: list[dict[str, Any]] = []
     for lane in sorted(details):
         if lane != "heartbeat" and isinstance(details[lane], dict):
-            cells += _lane(lane, details[lane], previous, thresholds, now, booted, uptime)
+            cells += _lane(lane, details[lane], previous, thresholds, now, booted, uptime,
+                           previous_at)
     return cells, None
 
 
 def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds: dict[str, Any],
-          now: _dt.datetime, booted: _dt.datetime, uptime: float) -> list[dict[str, Any]]:
+          now: _dt.datetime, booted: _dt.datetime, uptime: float,
+          previous_at: _dt.datetime | None = None) -> list[dict[str, Any]]:
     """The lane's cell (the worst of its conditions) and its portals' cells."""
     subject = f"lane/{lane}"
     interval = _num(info.get("interval_s"))
@@ -411,7 +414,14 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
         return []  # booting, and no pass in this process yet
     floor = float(thresholds["jobs_lane_floor_s"])
     bound = max(3 * interval, interval + 2 * (_num(info.get("last_duration_s")) or 0.0), floor)
-    since = (now - (last_pass or booted)).total_seconds()
+    # A lane switched on since the previous measurement (it read off then) has nothing to be late
+    # from until it completes a pass: its clock starts at that measurement, never at the boot
+    # (autodedup came off its brake at 02:40 on 2026-10-19 and read "late ... 2.1 h" at once).
+    held = previous.get(subject) or {}
+    held_interval = _num((held.get("facts") or {}).get("interval_s"))
+    was_off = held_interval is not None and held_interval <= 0
+    reference = last_pass or (max(previous_at, booted) if was_off and previous_at else booted)
+    since = (now - reference).total_seconds()
     conditions: list[tuple[str, str]] = []
     if since > bound and uptime > bound:
         conditions.append(("fail", f"late: no completed pass for {_ago(since)} (limit "

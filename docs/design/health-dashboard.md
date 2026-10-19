@@ -694,6 +694,8 @@ The review of draft #1871 (2026-10-19) changed or stated twelve things the contr
 
 - Measured against main at the merge (`git diff --numstat`, after the review fixes): code +1842/−2231 (net -389: the harness −1065, `toolkit/ops_incidents.py` −401, `failure_signature.py` -183, against `scripts/checks/platform.py` +1016, the worker +214 and the poller -32), migration 621 +371, tests +2354 (of which production-export fixtures and the job-log fixture +1231), docs +413: +2,749 in all. The plan's "about −900" did not count the three checks' rules (one cell family per runtime), the input-replay fixtures, the two live rails or the watcher's redefinition; the eight legacy checks, the signature engine and its tests did go. The canary job is 35 min with a 21-min harness step (20 budgets, 1,050 s; 40 and 27 before).
 
+- First night (2026-10-19 02:46, fixed the same morning on `fix/health-lane-start-grace`): the autodedup lane came off its brake with its first pass in flight and `jobs` read it "late: no completed pass for 2.1 h", counting from the worker's boot; a lane that read off at this check's previous measurement now counts from that measurement. One false onset and recovery were sent.
+
 **Depends on.** W2
 
 **Operator gate.** Q5 (the 35-day prune) and Q6 (dual_write_parity), answered upfront.

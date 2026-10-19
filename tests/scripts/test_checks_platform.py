@@ -151,6 +151,7 @@ def _artifact(name: str = "browse_list", *, last_ok: _dt.datetime | None = None,
 def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: Any = None,
           lanes: dict[str, Any] | None = None, booted: _dt.datetime | None = None,
           beat_at: _dt.datetime | None = None, previous: list[dict[str, Any]] | None = None,
+          previous_at: _dt.datetime | None = None,
           artifacts: list[Any] | None = None) -> tuple[dict[str, Any], _Conn]:
     """check_jobs over a healthy fleet, with the parts a test names replaced."""
     cursor_rows = [(_ago(hours=1),)] if cursor == "fresh" else ([(cursor,)] if cursor else [])
@@ -160,7 +161,8 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
         plat._CRON_JOBS_SQL: cron if cron is not None else [_cron()],
         plat._HEARTBEAT_SQL: [(beat_at or _ago(seconds=20), booted or _ago(days=2),
                                lanes if lanes is not None else {"probe": _lane()})],
-        plat._PREVIOUS_CELLS_SQL: [(previous,)] if previous is not None else [],
+        plat._PREVIOUS_CELLS_SQL: ([(previous_at or _ago(minutes=9), previous)]
+                                   if previous is not None else []),
         plat._ARTIFACTS_SQL: artifacts or [],
     })
     return plat.check_jobs(conn, T), conn
@@ -459,6 +461,22 @@ def test_one_cell_per_lane_carries_the_worst_with_every_reason() -> None:
     assert cell["status"] == "fail"
     assert [c.split(":")[0] for c in cell["facts"]["conditions"]] == ["fail", "fail", "warn"]
     assert "one pass in flight" not in cell["message"]
+
+
+def test_a_lane_switched_on_after_boot_counts_from_the_previous_measurement_not_the_boot() -> None:
+    """autodedup came off its brake (interval 0 → 60) at 02:40 on 2026-10-19 with its first pass
+    in flight and read "late: no completed pass for 2.1 h" at once: the clock had started at the
+    worker's boot. A lane that read off at the previous measurement is late from that measurement."""
+    off_before = [{"subject": "lane/autodedup", "facts": {"interval_s": 0.0, "passes": 0}}]
+    starting = {"autodedup": _lane(interval_s=60.0, passes=0, last_pass_at=None, in_flight_s=259.6)}
+    fresh = _cells(_jobs(lanes=starting, previous=off_before,
+                         previous_at=_ago(minutes=9))[0])["lane/autodedup"]
+    assert fresh["status"] == "ok" and fresh["message"] == "no completed pass yet"
+    overdue = _cells(_jobs(lanes=starting, previous=off_before,
+                           previous_at=_ago(minutes=20))[0])["lane/autodedup"]
+    assert overdue["status"] == "fail" and overdue["message"].startswith("late: no completed pass")
+    # With no previous measurement to date the switch-on, the boot is the clock, as before.
+    assert _cells(_jobs(lanes=starting)[0])["lane/autodedup"]["status"] == "fail"
 
 
 def test_flapping_is_half_of_three_or_more_passes_failed_since_the_previous_result() -> None:
