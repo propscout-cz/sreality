@@ -2911,7 +2911,7 @@ renumber.** Navigate by area:
     **Browse can be SCOPED to the pipeline** (`ListingFilters.pipeline`, a curated-set `SetScope`
     — rule #18; `?pipeline=any|<stage ids>` and `?pipeline_excluded=any|<stage ids>`, registry id
     `pipeline`, BROWSE agenda only): in the pipeline ("V pipeline"), in given stages, not in given
-    stages, or "Mimo pipeline" (no card at any stage, terminal included — operator ruling
+    stages, or "Mimo pipeline" (no pipeline card at any stage, terminal included — operator ruling
     2026-10-19). Since migration 629 it is judged in the database through
     `property_pipeline_public` under the caller's RLS, as `pipeline_set` / `_in` / `_out` on all
     four cohort functions, so list, map and Stats cannot disagree; until then it was a client
