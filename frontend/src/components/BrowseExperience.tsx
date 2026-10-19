@@ -18,7 +18,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useIsFetching, useMutation, useQuery } from '@tanstack/react-query';
 import Tabs, { type Tab } from '@/components/Tabs';
 import ResizeHandle from '@/components/ResizeHandle';
 import {
@@ -33,7 +33,7 @@ import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
 import ListingTable from '@/components/ListingTable';
 import ListingCards from '@/components/ListingCards';
-import BrowseStatsView from '@/components/BrowseStats';
+import StatsDashboard from '@/components/stats/StatsDashboard';
 import type { AnchorPoint, MapFlyToCommand } from '@/components/ListingMap';
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
@@ -42,8 +42,6 @@ import { useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   summarise,
   isDefault,
-  regionKeyFromFilters,
-  regionLabelFromFilters,
   filtersToWatchdogSpec,
   watchdogNameSuggestion,
   browseTitleSummary,
@@ -53,7 +51,6 @@ import {
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
-import { ppm2BasisFromToken } from '@/lib/measure';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import { MergeSelection } from '@/components/CurationMarks';
 import MergeTakenBack from '@/components/MergeTakenBack';
@@ -61,7 +58,6 @@ import PresetBar from '@/components/PresetBar';
 import type { ListingEstimate } from '@/lib/types';
 import {
   createEstimation,
-  fetchRegionDispositionAnnotations,
   isApiConfigured,
   latestEstimationsByListing,
 } from '@/lib/api';
@@ -78,12 +74,10 @@ import {
   fetchListingsForMap,
   fetchListingsForTable,
   fetchBrowseCount,
-  fetchBrowseStats,
   orderPortal,
   sortToParam,
   CARD_PAGE_SIZE,
   TABLE_PAGE_SIZE,
-  type BrowseStats,
   type CardRow,
   type CityIndexDefinition,
   type CityIndexValue,
@@ -543,79 +537,9 @@ export default function BrowseExperience({
     gcTime: 10 * 60_000,
   });
 
-  const statsQuery = useQuery<BrowseStats, Error>({
-    queryKey: browseKeys.stats(filters),
-    queryFn: ({ signal }) => fetchBrowseStats(filters, { signal }),
-    placeholderData: (prev) => prev,
-    enabled: tab === 'stats',
-  });
-
-  const regionKey = useMemo(() => regionKeyFromFilters(filters), [filters]);
-  /* The cohort's basis, decided SERVER-side over the rows the percentiles came
-   * from (browse_stats_properties.ppm2_basis, migration 425) — not guessed from
-   * the filters, so it stays right when a cohort happens to contain only one
-   * basis despite `deal=any`. */
-  const statsBasis = useMemo(
-    () => ppm2BasisFromToken(statsQuery.data?.ppm2_basis),
-    [statsQuery.data],
-  );
-  /* `placeholderData: (prev) => prev` keeps the PREVIOUS cohort's payload on
-   * screen while the new one loads, so on the render where `filters` changes
-   * `regionKey` is already the new cohort while `statsQuery.data` is still the
-   * old one. Everything derived from the payload — the basis, the boxes — is
-   * therefore stale for that window, and the annotations query below must not
-   * act on it: an enabled=true computed from the OLD basis fires a paid LLM
-   * call whose body is the old distributions but whose region_key (and server
-   * cache key) is the new cohort, poisoning that cohort for the rest of the
-   * day. `enabled: false` does not cancel an in-flight v5 query, so the gate
-   * has to be on freshness, not on a later correction. */
-  const statsIsStale = statsQuery.isPlaceholderData;
-  const boxDispositions = useMemo(
-    () =>
-      (statsQuery.data?.dispositions ?? []).filter(
-        (d) => d.ppm2_box != null && d.ppm2_box.n >= 5,
-      ),
-    [statsQuery.data],
-  );
-  /* The unit the boxes are in, off the STATS ROWS (browse_stats_properties
-   * resolves it from the cohort itself), not re-derived from the deal/category
-   * filters here — a second derivation is a second definition, and this one
-   * would be the one that disagrees. Part of the query key: two bases are two
-   * different annotation texts, so they must not share a cache entry. */
-  const ppm2Basis = statsQuery.data?.ppm2_basis ?? null;
-  const annotationsQuery = useQuery({
-    queryKey: ['region-annotations', regionKey, ppm2Basis],
-    queryFn: () =>
-      fetchRegionDispositionAnnotations({
-        region_key: regionKey,
-        region_label: regionLabelFromFilters(filters),
-        ppm2_overall: statsQuery.data?.ppm2 ?? null,
-        /* The basis the numbers below are on, in the migration-425 vocabulary —
-         * a service boundary carries the SQL token, not this app's render-side
-         * shorthand. Without it the model is narrating bare Kč/m² and cannot
-         * know whether "319" is cheap or absurd. `enabled` below guarantees a
-         * single row basis here, so the lookup is total. */
-        ppm2_basis: ppm2Basis,
-        dispositions: boxDispositions.map((d) => ({
-          disposition: d.disposition,
-          n: d.n,
-          ppm2_box: d.ppm2_box,
-        })),
-      }),
-    /* A mixed-basis cohort is NOT annotated at all — not "annotated with a
-     * caveat". The distributions being described would be sale and rent stacked
-     * on one axis, so every sentence about them would be false, and it is a paid
-     * LLM call to produce it. The chart itself withholds the same cohort. */
-    enabled:
-      tab === 'stats'
-      && isApiConfigured()
-      && !statsIsStale
-      && boxDispositions.length > 0
-      && statsBasis != null
-      && statsBasis !== 'mixed',
-    staleTime: 60 * 60 * 1000,
-    retry: false,
-  });
+  /* The Stats tab is the account's chart board (components/stats); each card reads
+   * its own pivot, so the header's spinner follows any of them. */
+  const statsFetching = useIsFetching({ queryKey: [browseKeys.root.stats] });
 
   const cityOverlay = useMemo(() => {
     const cities = citiesQuery.data;
@@ -695,12 +619,10 @@ export default function BrowseExperience({
   const activeError =
     tab === 'map' ? cards.error :
     tab === 'table' ? table.error :
-    tab === 'stats' ? statsQuery.error :
     null;
   const retryActive = () => {
     if (tab === 'map') cards.refetch();
     else if (tab === 'table') table.refetch();
-    else if (tab === 'stats') void statsQuery.refetch();
   };
   const mapError = mapVisible ? mapQuery.error : null;
 
@@ -760,7 +682,7 @@ export default function BrowseExperience({
             loading={
               tab === 'map' ? mapQuery.isLoading || cards.isLoading :
               tab === 'table' ? table.isLoading :
-              tab === 'stats' ? statsQuery.isLoading :
+              tab === 'stats' ? statsFetching > 0 :
               false
             }
             onClearBounds={filters.bounds ? () => view.setBounds(null) : undefined}
@@ -957,23 +879,7 @@ export default function BrowseExperience({
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
               />
             )}
-            {tab === 'stats' && (
-              <BrowseStatsView
-                stats={statsQuery.data ?? null}
-                isLoading={statsQuery.isLoading}
-                isEmpty={!statsQuery.isLoading && (statsQuery.data?.total ?? 0) === 0}
-                basis={statsBasis}
-                cohort={{
-                  categoryMain: filters.categoryMain,
-                  categoryType: filters.categoryType,
-                }}
-                annotations={annotationsQuery.data?.data.annotations}
-                annotationsLoading={annotationsQuery.isFetching}
-                annotationsNote={
-                  annotationsQuery.data?.metadata.notes?.[0] ?? null
-                }
-              />
-            )}
+            {tab === 'stats' && <StatsDashboard filters={filters} />}
           </div>
         )}
 

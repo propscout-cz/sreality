@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 
-import { StatTd, StatTh, Th } from './table';
+import { Th } from './table';
 
 function head(ui: React.ReactNode) {
   const { container } = render(
@@ -17,17 +17,6 @@ function head(ui: React.ReactNode) {
     </table>,
   );
   return container.querySelector('th') as HTMLTableCellElement;
-}
-
-function body(ui: React.ReactNode) {
-  const { container } = render(
-    <table>
-      <tbody>
-        <tr>{ui}</tr>
-      </tbody>
-    </table>,
-  );
-  return container.querySelector('td') as HTMLTableCellElement;
 }
 
 const TH_TAIL = 'tracking-[0.14em] uppercase font-medium text-[var(--color-ink-3)]';
@@ -48,27 +37,6 @@ describe('<Th>', () => {
     );
     expect(head(<Th size="xs" align="right">n</Th>).getAttribute('class')).toBe(
       `px-3 py-2 text-[0.65rem] ${TH_TAIL} text-right`,
-    );
-  });
-});
-
-describe('<StatTh> / <StatTd>', () => {
-  it('keeps the numeric-summary header right-aligned with its tighter tracking', () => {
-    const th = head(<StatTh>median</StatTh>);
-    expect(th.getAttribute('class')).toBe(
-      'px-3 py-2 font-medium text-right text-[var(--color-ink-3)] tracking-wide uppercase text-[0.65rem]',
-    );
-    /* Unlike <Th>, both originals omitted scope; adding it restyles nothing but
-     * changes the DOM of two live tables. */
-    expect(th).not.toHaveAttribute('scope');
-  });
-
-  it('marks the emphasised cell with ink, the rest with ink-2', () => {
-    expect(body(<StatTd>12</StatTd>).getAttribute('class')).toBe(
-      'px-3 py-1.5 text-right text-[var(--color-ink-2)]',
-    );
-    expect(body(<StatTd bold>12</StatTd>).getAttribute('class')).toBe(
-      'px-3 py-1.5 text-right font-medium text-[var(--color-ink)]',
     );
   });
 });

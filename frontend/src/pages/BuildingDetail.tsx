@@ -26,7 +26,7 @@ import {
 import { fmtAbsolute, fmtArea, fmtCzk } from '@/lib/format';
 import { usePageTitle } from '@/lib/pageTitle';
 import BuildingUnitEditor from '@/components/BuildingUnitEditor';
-import RangeStrip from '@/components/region/RangeStrip';
+import RangeStrip from '@/components/estimation/RangeStrip';
 import type {
   BuildingAttachment,
   BuildingChildRun,

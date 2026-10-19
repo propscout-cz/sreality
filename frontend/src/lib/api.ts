@@ -30,7 +30,6 @@ import type {
   EstimationRun,
   ListingEstimate,
   ListingSummaryBatchRow,
-  Ppm2Box,
   ManualRentalEstimate,
   CreateManualEstimateIn,
   UpdateManualEstimateIn,
@@ -348,6 +347,12 @@ export const apiPost = <T>(
   signal?: AbortSignal,
 ): Promise<T> => request<T>(path, { method: 'POST', json: body, signal });
 
+export const apiPut = <T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> => request<T>(path, { method: 'PUT', json: body, signal });
+
 /* GET for bytes (an image an <img> cannot fetch itself, since it sends no JWT). */
 export const apiGetBlob = (
   path: string,
@@ -484,60 +489,6 @@ export const fetchListingSummaries = (
     method: 'POST',
     json: { items },
   });
-
-/* POST /tools/summarize_region_dispositions — one-to-two-sentence
- * natural-language annotation per per-disposition Kč/m² box plot in
- * Browse > Stats. Generated server-side from the same ppm2_box payload
- * that drives the chart. Cached server-side per (region, calendar day):
- * the first viewer of a region today pays for the LLM call, everyone
- * else hits the cache. `region_key` is the caller's deterministic
- * serialization of the active filter set (see regionKeyFromFilters). */
-export interface RegionDispositionAnnotationsInput {
-  region_key: string;
-  dispositions: ReadonlyArray<{
-    disposition: string;
-    n: number;
-    ppm2_box: Ppm2Box | null;
-  }>;
-  ppm2_overall?: { p25: number; p50: number; p75: number } | null;
-  region_label?: string | null;
-  /* The unit those boxes are in — pass `BrowseStats.ppm2_basis` straight
-   * through, spelled in migration 425's own vocabulary. The annotator states it
-   * in the prompt instead of guessing, and REFUSES a `'mixed'` cohort outright
-   * (no LLM call, an explicit note): a box plot stacking monthly rents on
-   * purchase prices has no describable shape. Omitting it makes the annotator
-   * treat the unit as unknown, so it can no longer name Kč/m² even when the
-   * cohort is a plain sale cohort. It is also part of the server's per-day
-   * cache identity beside region_hash, so two bases never share one entry. */
-  ppm2_basis?: string | null;
-}
-
-export interface RegionDispositionAnnotationsResult {
-  data: {
-    region_key: string;
-    annotations: Record<string, string>;
-    model: string;
-    cost_usd: number | null;
-    cache_hit: boolean;
-    /* Echo of the basis, and its Czech unit — null for a cohort with no
-     * single one, which is exactly when nothing may name a unit. */
-    ppm2_basis?: string | null;
-    ppm2_unit?: string | null;
-  };
-  /* `notes` says WHY `annotations` is empty when the server declined to write
-   * any (today: a mixed cohort). Rendering it is the difference between an
-   * explained refusal and a blank panel. */
-  metadata: Record<string, unknown> & { notes?: string[] };
-}
-
-export const fetchRegionDispositionAnnotations = (
-  input: RegionDispositionAnnotationsInput,
-  signal?: AbortSignal,
-): Promise<RegionDispositionAnnotationsResult> =>
-  request<RegionDispositionAnnotationsResult>(
-    '/tools/summarize_region_dispositions',
-    { method: 'POST', json: input, signal },
-  );
 
 /* ----- freshness (Phase U2.5) -------------------------------------------- *
  *

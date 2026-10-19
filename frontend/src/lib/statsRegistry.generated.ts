@@ -42,14 +42,24 @@ export interface StatsMeasure {
   single_status: boolean;
 }
 
+/** ruling 7: how many row and column dimensions a view takes (line / bar: exactly one row). */
+export interface StatsViewLimits {
+  min_rows: number;
+  max_rows: number;
+  max_cols: number;
+}
+
 export interface StatsRegistryPayload {
   min_n: number;
   max_rows: number;
   max_cols: number;
   max_cells: number;
+  /** charts on one saved board; PUT /stats/dashboard refuses more. */
+  max_charts: number;
   stats: StatId[];
   chart_stats: ChartStat[];
   views: ViewId[];
+  view_limits: Record<ViewId, StatsViewLimits>;
   rent_basis: string;
   dimensions: StatsDimension[];
   measures: StatsMeasure[];
@@ -60,6 +70,7 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
   "max_rows": 6,
   "max_cols": 1,
   "max_cells": 2000,
+  "max_charts": 50,
   "stats": [
     "n",
     "mean",
@@ -83,6 +94,28 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
     "bar",
     "box"
   ],
+  "view_limits": {
+    "table": {
+      "min_rows": 0,
+      "max_rows": 6,
+      "max_cols": 1
+    },
+    "line": {
+      "min_rows": 1,
+      "max_rows": 1,
+      "max_cols": 1
+    },
+    "bar": {
+      "min_rows": 1,
+      "max_rows": 1,
+      "max_cols": 1
+    },
+    "box": {
+      "min_rows": 0,
+      "max_rows": 6,
+      "max_cols": 0
+    }
+  },
   "rent_basis": "rent_monthly_czk_m2",
   "dimensions": [
     {
@@ -282,7 +315,7 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
     },
     {
       "id": "ppm2_band_s",
-      "label_cs": "Kč/m² po 5 tis. (nájem 25)",
+      "label_cs": "Cena za m² po 5 tis. (nájem 25)",
       "label_en": "Price per m², 5k bands (rent 25)",
       "kind": "band",
       "categories": null,
@@ -295,7 +328,7 @@ export const STATS_REGISTRY: StatsRegistryPayload = {
     },
     {
       "id": "ppm2_band_l",
-      "label_cs": "Kč/m² po 10 tis. (nájem 50)",
+      "label_cs": "Cena za m² po 10 tis. (nájem 50)",
       "label_en": "Price per m², 10k bands (rent 50)",
       "kind": "band",
       "categories": null,

@@ -9,6 +9,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
 
 /* The broker allowlist is the one prefilter resolved over the JWT-gated API. */
 vi.mock('./brokers', async (importOriginal) => ({
@@ -26,7 +27,6 @@ import {
   applyPrefilters,
   buildBrowseStatsArgs,
   fetchBrowseCount,
-  fetchBrowseStats,
   fetchIsDismissed,
   fetchNoteCounts,
   fetchPropertySourcesByPropertyIds,
@@ -46,6 +46,7 @@ import {
   type DistrictMatchRow,
 } from './queries';
 import { fetchBrokerPropertyIds } from './brokers';
+import { fetchStatsPivot } from './stats';
 import { filterById } from './filterRegistry.generated';
 import type { DistrictChip, ListingFilters } from './filters';
 import { readFileSync } from 'node:fs';
@@ -851,13 +852,30 @@ describe('note counts and board ads, one read each', () => {
     expect(byProperty.get(42)?.map((a) => a.id)).toEqual([1, 3]);
   });
 });
-/* Rule #16 again, on the one Browse fetcher that used to name its prefilters by
- * hand. Every property-grain filter now resolves ONCE, in resolveBrowsePrefilters,
+/* Rule #16 again, on the Stats pivot (lib/stats.ts fetchStatsPivot), whose
+ * predecessor named its prefilters by hand. Every property-grain filter now resolves ONCE, in resolveBrowsePrefilters,
  * and reaches list, map and Stats through the same `property_ids_filter` seam
  * (migration 378) — so a new curated-set filter cannot narrow the list and leave
  * the panel above it counting the whole market. */
 describe('Browse Stats resolves through the one prefilter path', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  const SPEC = { rows: ['disposition'], cols: [], measure: 'ppm2' };
+
+  it('sends the chart spec beside the cohort to the one pivot RPC (migration 626)', async () => {
+    const { rpcArgs } = stubReads();
+    await fetchStatsPivot(DEFAULT_FILTERS, SPEC, { client: new QueryClient() });
+    expect(supabase.rpc).toHaveBeenCalledWith('browse_stats_properties', expect.anything());
+    /* The map's cohort object, byte for byte, plus the spec — one builder. */
+    expect(rpcArgs[0]).toEqual({
+      ...buildBrowseStatsArgs(DEFAULT_FILTERS, {
+        obec_ids_filter: null,
+        property_ids_filter: null,
+        property_ids_excluded: null,
+      }),
+      spec: SPEC,
+    });
+  });
 
   const MEMBERS = [
     { property_id: 1, collection_id: 10 },
@@ -867,13 +885,13 @@ describe('Browse Stats resolves through the one prefilter path', () => {
 
   it('sends the collection allowlist as property_ids_filter, OR across the selection', async () => {
     const { rpcArgs } = stubReads({ collection_properties_public: MEMBERS });
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, collections: [10, 12] });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, collections: [10, 12] }, SPEC, { client: new QueryClient() });
     expect(rpcArgs[0].property_ids_filter).toEqual([1, 3]);
   });
 
   it('sends [] — not null — for a selection nothing is in', async () => {
     const { rpcArgs } = stubReads({ collection_properties_public: MEMBERS });
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, collections: [99] });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, collections: [99] }, SPEC, { client: new QueryClient() });
     expect(rpcArgs[0].property_ids_filter).toEqual([]);
   });
 
@@ -885,7 +903,7 @@ describe('Browse Stats resolves through the one prefilter path', () => {
         { property_id: 2, tag_id: 5 },
       ],
     });
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, tags: [5, 6] });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, tags: [5, 6] }, SPEC, { client: new QueryClient() });
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].property_ids_excluded).toBeNull();
     /* The whole member map (the one every tag chip renders from), not the
@@ -903,12 +921,33 @@ describe('Browse Stats resolves through the one prefilter path', () => {
         { property_id: 3, tag_id: 6 },
       ],
     });
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, tagsExcluded: [6] });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, tagsExcluded: [6] }, SPEC, { client: new QueryClient() });
     expect(rpcArgs[0].property_ids_filter).toBeNull();
     expect(rpcArgs[0].property_ids_excluded).toEqual([1, 3]);
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, tags: [5], tagsExcluded: [6] });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, tags: [5], tagsExcluded: [6] }, SPEC, { client: new QueryClient() });
     expect(rpcArgs[1].property_ids_filter).toEqual([1, 2]);
     expect(rpcArgs[1].property_ids_excluded).toEqual([1, 3]);
+  });
+
+  it('resolves the prefilters once per filter set, however many charts read it', async () => {
+    const { from, rpcArgs } = stubReads({ property_tags_public: [{ property_id: 7, tag_id: 5 }] });
+    /* The app's client keeps a read fresh for a minute (main.tsx). */
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: 60_000 } } });
+    const f = { ...DEFAULT_FILTERS, tags: [5] };
+    await Promise.all([
+      fetchStatsPivot(f, SPEC, { client }),
+      fetchStatsPivot(f, { ...SPEC, measure: 'price' }, { client }),
+      fetchStatsPivot(f, { ...SPEC, rows: ['condition'] }, { client }),
+    ]);
+    expect(from.mock.calls.filter(([rel]) => rel === 'property_tags_public')).toHaveLength(1);
+    expect(rpcArgs.map((a) => a.property_ids_filter)).toEqual([[7], [7], [7]]);
+    /* The builder's next preview spec reuses them... */
+    await fetchStatsPivot(f, { ...SPEC, measure: 'area' }, { client });
+    expect(from.mock.calls.filter(([rel]) => rel === 'property_tags_public')).toHaveLength(1);
+    /* ...and a Browse sweep (invalidating the stats root) re-resolves them. */
+    await client.invalidateQueries({ queryKey: ['stats'] });
+    await fetchStatsPivot(f, SPEC, { client });
+    expect(from.mock.calls.filter(([rel]) => rel === 'property_tags_public')).toHaveLength(2);
   });
 
   it('intersects the curated sets: a property must satisfy both', async () => {
@@ -919,13 +958,13 @@ describe('Browse Stats resolves through the one prefilter path', () => {
         { property_id: 3, tag_id: 5 },
       ],
     });
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, collections: [10, 12], tags: [5] });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, collections: [10, 12], tags: [5] }, SPEC, { client: new QueryClient() });
     expect(rpcArgs[0].property_ids_filter).toEqual([3]);
   });
 
   it('never sends the parameters the RPCs ignore — tags and estimates resolve to ids', async () => {
     const { rpcArgs } = stubReads({ collection_properties_public: MEMBERS });
-    await fetchBrowseStats({ ...DEFAULT_FILTERS, tags: [5], withEstimates: true });
+    await fetchStatsPivot({ ...DEFAULT_FILTERS, tags: [5], withEstimates: true }, SPEC, { client: new QueryClient() });
     for (const key of ['tag_ids', 'with_estimates', 'city_index_rules', 'city_proximity',
       'districts_context_filter']) {
       expect(rpcArgs[0]).not.toHaveProperty(key);
@@ -934,10 +973,10 @@ describe('Browse Stats resolves through the one prefilter path', () => {
 
   it('carries the broker in property_ids_filter; the server judged its portal and status', async () => {
     const { rpcArgs } = stubReads();
-    await fetchBrowseStats({
+    await fetchStatsPivot({
       ...DEFAULT_FILTERS, brokerId: 527, portals: ['idnes'], status: 'active',
       portalsExcluded: ['sreality'], portalsExcludedActiveOnly: true,
-    });
+    }, SPEC, { client: new QueryClient() });
     expect(fetchBrokerPropertyIds).toHaveBeenCalledWith(527, 'active', ['idnes']);
     expect(rpcArgs[0].property_ids_filter).toEqual([1]);
     expect(rpcArgs[0].portal_filter).toBeNull();
