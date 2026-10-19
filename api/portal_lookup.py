@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any
 from psycopg.rows import dict_row
 
 from api.schemas import DEFAULT_FOND_CZK_PER_M2
-from toolkit.filter_registry import subtype_label_cs
+from toolkit.filter_registry import label_cs
 from toolkit.measures import LAND_CATEGORY_MAIN
 
 if TYPE_CHECKING:
@@ -264,7 +264,7 @@ def lookup_portal_listings(
         # The display "kind": the subtype label (commercial/houses) else the
         # disposition (apartments). Computed server-side from the one canonical
         # label source so the extension needs no slug dictionary of its own.
-        entry["kind_label"] = subtype_label_cs(row["subtype"]) or row["disposition"]
+        entry["kind_label"] = label_cs("subtype", row["subtype"]) or row["disposition"]
         acct = account_by_listing.get(row["listing_id"], {})
         est_id = acct.get("estimation_id")
         entry["latest_estimation"] = (

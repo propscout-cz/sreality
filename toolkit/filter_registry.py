@@ -361,8 +361,6 @@ SUBTYPE_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("ostatni", "Ostatní", "Other", group="komercni"),
 )
 
-_SUBTYPE_LABEL_CS: dict[str, str] = {o.value: o.label_cs for o in SUBTYPE_OPTIONS}
-
 # THE canon, by `listings` column: what a stored value may BE. The producer side
 # (`scraper.vocabulary`) and the validity matrix (`scraper.field_census`) both read this
 # one table. Spelled out rather than scanned off the filters, because a scan gets two
@@ -424,14 +422,6 @@ def building_material_values(buckets: Sequence[str]) -> list[str]:
     return out
 
 
-def subtype_label_cs(slug: str | None) -> str | None:
-    """Czech label for a portal-agnostic `subtype` slug, or None. The single
-    server-side label source (mirrors the SPA's enums.subtypeLabel, which is
-    generated from the same SUBTYPE_OPTIONS) — used where Python must render the
-    label itself, e.g. the Chrome-extension lookup payload."""
-    return _SUBTYPE_LABEL_CS.get(slug) if slug else None
-
-
 LIFECYCLE_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("active", "Aktivní", "Active"),
     EnumOption("delisted", "Stažené", "Delisted"),
@@ -485,6 +475,34 @@ PORTAL_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("remax", "RE/MAX", "RE/MAX"),
     EnumOption("realitymix", "RealityMix", "RealityMix"),
 )
+
+# The single server-side label source, by `listings` column (the SPA reads the same options through
+# the generated registry): where Python renders a stored value itself — the PDF sheet, the extension
+# lookup payload, Valuo's rule notes.
+_LABELS_CS: dict[str, dict[str, str]] = {
+    column: {o.value: o.label_cs for o in options}
+    for column, options in (
+        ("category_main", CATEGORY_MAIN_OPTIONS), ("category_type", CATEGORY_TYPE_OPTIONS),
+        ("condition", CONDITION_OPTIONS), ("building_type", BUILDING_TYPE_OPTIONS),
+        ("disposition", DISPOSITION_OPTIONS), ("energy_rating", ENERGY_RATING_OPTIONS),
+        ("furnished", FURNISHED_OPTIONS), ("ownership", OWNERSHIP_OPTIONS),
+        ("price_unit", PRICE_UNIT_OPTIONS), ("subtype", SUBTYPE_OPTIONS), ("source", PORTAL_OPTIONS),
+    )
+}
+# Singular nouns, as the SPA's enums.CATEGORY_MAIN_LABELS (the registry's options are plural).
+CATEGORY_MAIN_NOUN_CS: dict[str, str] = {
+    "byt": "Byt", "dum": "Dům", "komercni": "Komerční prostor", "pozemek": "Pozemek", "ostatni": "Ostatní",
+}
+
+
+def label_cs(column: str, slug: str | None) -> str | None:
+    """The registry's Czech label for one stored value of `column`; None when empty or off-canon."""
+    return _LABELS_CS[column].get(slug) if slug else None
+
+
+def type_label_cs(category_main: str | None, subtype: str | None) -> str:
+    """listingTypeLabel: the subtype when the portal gave one, else the category noun."""
+    return label_cs("subtype", subtype) or CATEGORY_MAIN_NOUN_CS.get(category_main or "", "Nemovitost")
 
 
 # --- category constants ---------------------------------------------------
