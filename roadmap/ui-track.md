@@ -7,6 +7,32 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Stats dashboard (2026-10-19, migration 626)
+- **Shipped: Browse › Stats is a dashboard the user composes** (`docs/design/stats-dashboard.md`,
+  operator rulings 2026-10-19). Charts = rows (up to six nested dimensions) × one column × a measure
+  (doba na trhu, plocha, cena, cena za m²), drawn as a table, a line, a bar or a box; one board per
+  account (`stats_dashboards`, `PUT /stats/dashboard`, whole-document upsert validated by
+  `toolkit/stats_registry.py`). ONE pivot RPC over 625's cohort WHERE byte for byte, ONE key
+  function (`stats_dim_key`), ONE registry rendered to SQL, TypeScript and the API validator; every
+  chart shows its sample ledger (in the filter / sample / excluded for missing data) and refuses
+  rather than guesses (mixed categories, turnover over mixed statuses, too many cells).
+- **Deleted, not patched:** the four fixed cards (`BrowseStats`, `PriceBandVelocity`,
+  `DispositionBoxPlots`) and the old aggregate body with their five box types, and the LLM box-plot
+  annotations (summarize-1: module, route, schemas, tests); migration 627 drops their cache and two
+  settings.
+- **Rule-25 clause (operator may veto):** a place cell keys on the RÚIAN CODE `browse_list` already
+  carries (two same-named towns or streets stay two cells; the pivot reads no listing location), and
+  the payload's `places` list resolves each key to its name through ONE new owner-rights view over
+  the open register mirror, `ruian_place_names_public(level, code, name)` — the register is dark to
+  browser roles and the pivot runs as its caller. A location read surface added by a PR that deletes
+  none: the PR body says why (the five place dimensions were asked for on 2026-10-19).
+- **Next:** (1) the legacy-vocabulary heal as its own PR — 89 condition spellings and 766
+  dispositions outside the canonical vocabulary are charted under their raw spellings, sorted after
+  the canonical members, until the heal lands (ruling 9);
+  (2) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
+  the operator rules; (3) apply 627 on the operator's word once the code is gone from production;
+  (4) the legacy heal (1) also empties the raw-spelling cells; nothing else is owed on places.
+
 ### Negative portal filters (2026-10-13, migration 597)
 - **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal
   cycles off → on it → not on it (Browse sidebar, Watchdog editor, phone Feed); once something is

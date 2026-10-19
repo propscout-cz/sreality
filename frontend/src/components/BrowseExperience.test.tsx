@@ -36,6 +36,12 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   listTags: vi.fn(() => new Promise<never>(() => {})),
 }));
 vi.mock('@/lib/pgRead', () => ({ pgRead: vi.fn(() => new Promise<never>(() => {})) }));
+/* The Stats tab's board has its own tests (components/stats); here only the wiring. */
+vi.mock('@/components/stats/StatsDashboard', () => ({
+  default: ({ filters }: { filters: ListingFilters }) => (
+    <div data-testid="stats-dashboard">{filters.portals.join(',')}</div>
+  ),
+}));
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
@@ -211,5 +217,31 @@ describe('<BrowseExperience> the filters column', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Show filters' }));
     expect(await screen.findByRole('heading', { name: 'Filters' })).toBeInTheDocument();
     expect(localStorage.getItem(SIDEBAR_COLLAPSED)).toBe('0');
+  });
+});
+
+/* The Stats tab is the account's chart board over the page's filters — one
+ * component, no stats read of the page's own. */
+describe('<BrowseExperience> Stats tab', () => {
+  function StatsHost({ filters }: { filters: ListingFilters }) {
+    const view = useMemoryBrowseState({ filters, sort: DEFAULT_SORT, tab: 'stats' });
+    return (
+      <BrowseExperience
+        view={view}
+        layout="modal"
+        features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar: false }}
+      />
+    );
+  }
+
+  it('renders <StatsDashboard> with the current filters', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <StatsHost filters={{ ...DEFAULT_FILTERS, portals: ['idnes'] }} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('stats-dashboard')).toHaveTextContent('idnes');
   });
 });

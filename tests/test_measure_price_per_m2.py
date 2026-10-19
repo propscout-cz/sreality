@@ -200,11 +200,17 @@ def _bases(cur: Any, pid: int, lid: int) -> dict[str, Any]:
     }
 
 
+_WHOLE_SAMPLE = '{"rows": [], "cols": [], "measure": "ppm2"}'
+
+
 def _browse_stats(cur: Any, pids: int | list[int]) -> dict[str, Any]:
+    """The Stats pivot (migration 626) over exactly these properties: one cell, the whole
+    sample, the per-m2 measure — the shape a "Cena za m2" chart with no dimension reads."""
     ids = [pids] if isinstance(pids, int) else list(pids)
     return _one(
-        cur, "SELECT browse_stats_properties(property_ids_filter => %s::bigint[])",
-        (ids,),
+        cur,
+        "SELECT browse_stats_properties(property_ids_filter => %s::bigint[], spec => %s::jsonb)",
+        (ids, _WHOLE_SAMPLE),
     )
 
 
@@ -242,15 +248,17 @@ def test_every_relation_publishes_the_identical_per_m2(cur, price, area, expecte
             f"(migration 200)"
         )
 
-    # browse_stats_properties publishes the same measure through percentile_cont
-    # ::int; with a single row every percentile IS that row.
-    stats = _browse_stats(cur, pid)
-    assert stats["total"] == 1, stats
-    assert stats["ppm2"] == {
-        "p25": int(expected),
-        "p50": int(expected),
-        "p75": int(expected),
-    }, f"browse_stats_properties disagrees with the views: {stats['ppm2']}"
+    # The Stats pivot publishes the same measure through percentile_cont, rounded to
+    # 2dp, and only for a cell of at least MIN_N (10) properties: nine more copies make
+    # the cell, and with identical rows every statistic IS that row's figure.
+    pids = [pid] + [_seed(cur, price=price, area=area)[0] for _ in range(9)]
+    stats = _browse_stats(cur, pids)
+    assert (stats["filtered"], stats["sample"], stats["refused"]) == (10, 10, None), stats
+    [cell] = stats["cells"]
+    assert (cell["keys"], cell["col"], cell["n"]) == ([], None, 10), cell
+    for stat in ("mean", "median", "p10", "p25", "p75", "p90"):
+        assert Decimal(str(cell[stat])) == expected, (
+            f"browse_stats_properties' {stat} disagrees with the views: {cell}")
 
 
 def test_every_relation_publishes_the_identical_basis_label(cur):
@@ -259,7 +267,7 @@ def test_every_relation_publishes_the_identical_basis_label(cur):
 
     bases = _bases(cur, pid, lid)
     assert set(bases.values()) == {"sale_capital_czk_m2"}, bases
-    assert _browse_stats(cur, pid)["ppm2_basis"] == "sale_capital_czk_m2"
+    assert _browse_stats(cur, pid)["basis"] == "sale_capital_czk_m2"
 
 
 @pytest.mark.parametrize(
@@ -358,10 +366,11 @@ def test_a_mixed_cohort_is_labelled_mixed_not_guessed(cur):
     rent, _l2 = _seed(cur, price=20_000, area=50.0, category_type="pronajem")
 
     stats = _browse_stats(cur, [sale, rent])
-    assert stats["total"] == 2, stats
-    assert stats["ppm2_basis"] == "mixed", (
+    assert stats["filtered"] == 2, stats
+    assert (stats["basis"], stats["category_type"], stats["refused"], stats["cells"]) == (
+        None, None, "mixed_category", []), (
         "a cohort pooling capital sale prices and monthly rents into one Kc/m2 "
-        "distribution must be labelled 'mixed'"
+        "distribution must be refused with no basis, never labelled as one of the two"
     )
 
 

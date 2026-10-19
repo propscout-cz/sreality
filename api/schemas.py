@@ -251,45 +251,6 @@ class CompareListingImagesIn(BaseModel):
     force_refresh: bool = False
 
 
-class Ppm2BoxIn(BaseModel):
-    n: int
-    min: float
-    p25: float
-    median: float
-    p75: float
-    max: float
-
-
-class RegionDispositionIn(BaseModel):
-    disposition: str
-    n: int
-    ppm2_box: Ppm2BoxIn | None = None
-
-
-class SummarizeRegionDispositionsIn(BaseModel):
-    """Annotate the per-disposition Kč/m² box plots in Browse > Stats.
-
-    `region_key` is the caller's deterministic serialization of the active
-    filter set; the server hashes it and caches the annotations per
-    (region, calendar day) so repeat browser sessions don't re-bill.
-    `dispositions` is the same `ppm2_box` payload that drives the chart.
-
-    `ppm2_basis` is the unit those boxes are in — one of migration 425's four
-    tokens, or the literal 'mixed' when the cohort spans sale and rental (rule
-    22 makes that the DEFAULT Browse cohort). 'mixed' is refused server-side.
-    Optional so a client that has not been taught to send it yet still works;
-    absent, the annotator is told the unit is unknown rather than guessing one.
-    It is also part of the cache identity: a cached sentence about a ~91 535
-    capital figure is false about a ~319 monthly one.
-    """
-    region_key: str = Field(min_length=1, max_length=8192)
-    dispositions: list[RegionDispositionIn] = Field(default_factory=list, max_length=40)
-    ppm2_overall: dict[str, Any] | None = None
-    region_label: str | None = Field(default=None, max_length=256)
-    ppm2_basis: str | None = Field(default=None, max_length=64)
-    force_refresh: bool = False
-
-
 class PreviewEstimationIn(BaseModel):
     """POST /estimations/preview body.
 
@@ -653,6 +614,16 @@ class UpdateStageIn(BaseModel):
 class ReorderStagesIn(BaseModel):
     # The complete set of non-archived stage ids in their new left-to-right order.
     ordered_ids: list[int]
+
+
+# --- Browse > Stats dashboard (migration 626) ------------------------------
+# The whole board, stored whole. The board and each chart are validated by
+# toolkit.stats_registry in api/stats_dashboard.py (a refusal is a 422 naming the
+# chart and the reason), so the shape is checked once, there.
+
+
+class StatsDashboardIn(BaseModel):
+    charts: list[dict[str, Any]]
 
 
 # --- manual rental estimates ---------------------------------------------

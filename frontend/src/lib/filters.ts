@@ -930,41 +930,6 @@ const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
 export const categoryTypeLabel = (t: CategoryType | null): string =>
   t == null ? '' : CATEGORY_TYPE_LABEL[t];
 
-export const categoryHeading = (f: ListingFilters): string =>
-  [categoryMainLabel(f.categoryMain), categoryTypeLabel(f.categoryType)]
-    .filter(Boolean)
-    .join(' ');
-
-/* Stable, order-independent serialization of the cohort-defining filters.
- * Reuses the canonical URL serializer (toSearchParams) and sorts the
- * entries so two equal filter sets always produce the same string —
- * used as the per-region cache key for box-plot annotations. */
-export const regionKeyFromFilters = (f: ListingFilters): string => {
-  const entries = [...toSearchParams(f).entries()].sort((a, b) =>
-    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0,
-  );
-  return new URLSearchParams(entries).toString();
-};
-
-/* Short human-readable label for the cohort — passed to the annotator
- * as context so it can say "in Praha" rather than "(filtered cohort)". */
-export const regionLabelFromFilters = (f: ListingFilters): string => {
-  const base = categoryHeading(f);
-  /* Only INCLUDE chips belong in an "in X" cohort label — an excluded
-   * district is a subtraction, not a place the cohort is "in". */
-  const inc = f.districts.filter((d) => !d.excluded);
-  if (inc.length) {
-    const shown = inc.slice(0, 3).map((d) => d.name).join(', ');
-    const extra = inc.length > 3 ? ` +${inc.length - 3}` : '';
-    return `${base} in ${shown}${extra}`;
-  }
-  if (f.locationMode === 'center_radius' && f.centerRadius) {
-    return `${base} within ${f.centerRadius.radius_m} m of a point`;
-  }
-  if (f.bounds) return `${base} in the current map area`;
-  return base;
-};
-
 const fmtDaysRange = (lo: number | null, hi: number | null): string => {
   if (lo == null && hi == null) return '';
   if (lo != null && hi != null) return `${lo}–${hi} d`;
@@ -1043,9 +1008,9 @@ export const watchdogNameSuggestion = (f: ListingFilters): string => {
  * filters, for the browser-tab title (the constraints that most identify a
  * Browse tab at a glance). Each segment is omitted when empty; returns null
  * when nothing relevant is set, so the caller falls back to the static
- * "Browse" route title. Reuses fmtArea + the include-only district logic of
- * regionLabelFromFilters; the tab form is tighter (one name + "+N") because
- * tab space is narrow. Dispositions are joined with ", " (they already contain
+ * "Browse" route title. Reuses fmtArea; only INCLUDE district chips name the
+ * place (an excluded district is a subtraction, not where the cohort is), one
+ * name + "+N" because tab space is narrow. Dispositions are joined with ", " (they already contain
  * "+", e.g. "2+kk"). */
 export const browseTitleSummary = (f: ListingFilters): string | null => {
   const segments: string[] = [];

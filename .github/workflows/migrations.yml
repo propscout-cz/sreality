@@ -590,6 +590,19 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_measure_tom_days.py -q
 
+      # The Stats dashboard's pivot (migration 626): one rollup over the Browse cohort. Seeded
+      # browse_list rows read back as the sample ledger (filtered / sample / excluded), every
+      # rollup level, min_n nulling, the refusals (empty, mixed_category, mixed_status,
+      # too_many_cells, and bad_spec for exactly what toolkit.stats_registry.validate_spec
+      # refuses), the band keys per basis, and a place chart run as `authenticated` (the
+      # names come through 626's owner-rights view; listing_location is dark to that role).
+      - name: The Stats pivot answers its contract (migration 626)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_stats_pivot_live.py -q
+
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed
       # above). Executed over a seeded rent map: every status code, the range for a

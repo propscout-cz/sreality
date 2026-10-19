@@ -44,7 +44,6 @@ import type {
   ListingSnapshotPublic,
   PortalHealth,
   PropertySource,
-  Ppm2Box,
   ReferenceRent,
   ScrapeRun,
   ScraperHealthChecks,
@@ -740,7 +739,8 @@ const intersectPrefilters = (
 /* All Browse prefilters resolved together. Each is an id allowlist at its
  * own grain (null = inactive); `empty` is true when any ACTIVE prefilter
  * matched nothing, so the caller can short-circuit to zero results without
- * issuing the main query. Shared by the Map / Table / Cards fetchers. */
+ * issuing the main query. Shared by the Map / Table / Cards fetchers and the
+ * Stats pivot (lib/stats.ts). */
 export interface BrowsePrefilters {
   obecIds: number[] | null;       // market growth (price-stats datasets)
   propertyIds: number[] | null;   // tags ∩ with-estimates ∩ pipeline ∩ collections ∩ broker
@@ -752,7 +752,7 @@ export interface BrowsePrefilters {
   empty: boolean;
 }
 
-async function resolveBrowsePrefilters(
+export async function resolveBrowsePrefilters(
   f: ListingFilters,
   signal?: AbortSignal,
 ): Promise<BrowsePrefilters> {
@@ -875,11 +875,7 @@ export const fetchListingsForMap = async (
    * emitted id space. */
   const { data: grid } = await pgRead<MapGrid>(
     supabase.rpc('browse_map_cells', {
-      ...buildBrowseStatsArgs(f, {
-        obec_ids_filter: pre.obecIds,
-        property_ids_filter: pre.propertyIds,
-        property_ids_excluded: pre.propertyIdsExcluded,
-      }),
+      ...buildBrowseStatsArgs(f, pre),
       point_budget: pinLimit,
     }),
     { signal },
@@ -1172,76 +1168,22 @@ export const fetchDismissedCards = async (
   return { rows, nextCursor };
 };
 
-
-export interface BrowseStatsDispositionRow {
-  disposition: string;
-  n: number;
-  ppm2_box: Ppm2Box | null;
-}
-
-export interface TomBox {
-  n: number;
-  min: number;
-  p25: number;
-  median: number;
-  mean: number;
-  p75: number;
-  max: number;
-}
-
-export interface PriceBandVelocityRow {
-  bucket: 1 | 2 | 3 | 4 | 5 | 6 | 7;
-  p_lo: number;
-  p_hi: number;
-  n: number;
-  pct_share: number | null;
-  price_min: number | null;
-  price_max: number | null;
-  tom_box: TomBox | null;
-}
-
-export interface BrowseStats {
-  total: number;
-  new_7d: number;
-  new_30d: number;
-  price: { p25: number; p50: number; p75: number } | null;
-  ppm2:  { p25: number; p50: number; p75: number } | null;
-  /* The unit every Kč/m² number above and in `dispositions[].ppm2_box` is in
-   * (migration 425): one of `sale_capital_czk_m2` / `rent_monthly_czk_m2` /
-   * `land_capital_czk_m2`, the literal `'mixed'` when the cohort spans two of
-   * them — which rule 22 makes the DEFAULT cohort, sale + rent — or null when
-   * no row resolved one. Server-derived from the rows themselves, never from
-   * the filter pins, so it can never disagree with the numbers it labels. */
-  ppm2_basis: string | null;
-  dispositions: ReadonlyArray<BrowseStatsDispositionRow>;
-  price_band_velocity: ReadonlyArray<PriceBandVelocityRow>;
-}
-
-/* The two id allowlists the caller has already resolved over the network. They
- * are arguments rather than derived here because the two consumers resolve them
- * from different places: Stats intersects city-quality with market-growth and
- * adds the pipeline scope, while the map hands over whatever
- * resolveBrowsePrefilters produced for the cohort reads. */
-export interface BrowseStatsResolvedFilters {
-  obec_ids_filter: number[] | null;
-  property_ids_filter: number[] | null;
-  property_ids_excluded: number[] | null;
-}
-
 /* The argument object `browse_stats_properties` takes.
  *
- * ONE builder, because there are now TWO callers: fetchBrowseStats and
- * fetchListingsForMap's `browse_map_cells` read (migration 439), which takes the
- * SAME named parameters plus its own `point_budget`. Built inline in each caller, this
+ * ONE builder, because there are TWO callers: lib/stats.ts fetchStatsPivot (plus
+ * its own `spec`, migration 626) and fetchListingsForMap's `browse_map_cells` read
+ * (migration 439), which takes the SAME named parameters plus its own `point_budget`. Built inline in each caller, this
  * object is the single richest opportunity for the Stats cohort and the map
  * cohort to silently disagree — a new filter wired into one literal and not the
  * other produces a map and a Stats tab describing different sets of properties,
  * with no error anywhere. Extracting it collapses that surface to zero.
  *
- * Pure: every value comes from `f` or from `resolved`. Exported for queries.test.ts. */
+ * Pure: every value comes from `f` or from `pre`, the id allowlists the caller
+ * has already resolved over the network (resolveBrowsePrefilters). Exported for
+ * queries.test.ts. */
 export const buildBrowseStatsArgs = (
   f: ListingFilters,
-  resolved: BrowseStatsResolvedFilters,
+  pre: BrowsePrefilters,
 ): Record<string, unknown> => {
   const triToBool = (t: typeof f.hasBalcony): boolean | null =>
     t === 'any' ? null : t === 'yes';
@@ -1357,32 +1299,12 @@ export const buildBrowseStatsArgs = (
      * Migration 378 — generic property-id allowlist; carries the deal-pipeline
      * scope (rule #22) today, and is the seam any future property-grain
      * prefilter should reuse instead of growing another bespoke param.
-     * Both are resolved over the network by the caller — see the interface. */
-    ...resolved,
+     * Migration 598 — the one denylist, properties carrying an excluded tag.
+     * All three are resolved over the network by the caller (`pre`). */
+    obec_ids_filter:         pre.obecIds,
+    property_ids_filter:     pre.propertyIds,
+    property_ids_excluded:   pre.propertyIdsExcluded,
   };
-};
-
-export const fetchBrowseStats = async (
-  f: ListingFilters,
-  { signal }: PgReadOptions = {},
-): Promise<BrowseStats> => {
-  /* Stats resolves through the SAME function every other Browse lane calls,
-   * rather than naming its prefilters one by one — which left the panel
-   * counting the whole market once per property-grain filter added. The broker
-   * allowlist rides in property_ids_filter like the rest. */
-  const pre = await resolveBrowsePrefilters(f, signal);
-  const { data } = await pgRead<BrowseStats>(
-    supabase.rpc(
-      'browse_stats_properties',
-      buildBrowseStatsArgs(f, {
-        obec_ids_filter: pre.obecIds,
-        property_ids_filter: pre.propertyIds,
-        property_ids_excluded: pre.propertyIdsExcluded,
-      }),
-    ),
-    { signal },
-  );
-  return data;
 };
 
 /* The listings_public select list: every column the view carries (the width is

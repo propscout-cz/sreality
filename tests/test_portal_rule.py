@@ -124,7 +124,8 @@ def _rpc_args(case: dict[str, Any]) -> dict[str, Any]:
 @live
 @pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
 def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
-    """browse_stats_properties reads browse_list (590's rebuild made it a real table)."""
+    """browse_stats_properties reads browse_list (590's rebuild made it a real table); since
+    626 it is the dashboard pivot, whose `filtered` is the cohort the portal rule picked."""
     with conn.cursor() as cur:
         cur.execute(
             "insert into browse_list (property_id, is_active, all_sources, active_sources) "
@@ -134,9 +135,10 @@ def test_stats_counts_the_table(conn, case: dict[str, Any]) -> None:
             "select public.browse_stats_properties(portal_filter => %(portal)s::text[], "
             "active_only_filter => %(active_only)s, inactive_only_filter => %(inactive_only)s, "
             "portal_excluded_filter => %(excluded)s::text[], "
-            "portal_excluded_active_only => %(excluded_active_only)s)",
+            "portal_excluded_active_only => %(excluded_active_only)s, "
+            "spec => '{\"rows\": [], \"cols\": [], \"measure\": \"price\"}'::jsonb)",
             _rpc_args(case))
-        assert cur.fetchone()[0]["total"] == int(case["expected"])
+        assert cur.fetchone()[0]["filtered"] == int(case["expected"])
 
 
 @live

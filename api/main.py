@@ -24,6 +24,7 @@ from api import note_attachments
 from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
 from api import price_stats as price_stats_module
+from api import stats_dashboard as stats_dashboard_module
 from api import manual_estimates as me
 from api import dependencies as deps
 from api import maps
@@ -105,12 +106,10 @@ from toolkit import (
     find_comparables_relaxed,
     find_distribution_outliers,
     summarize_listing,
-    summarize_region_dispositions,
     verify_listing_freshness,
 )
 from toolkit.image_similarity import ImageCompareError
 from toolkit.measures import MeasureBasisError
-from toolkit.region_annotations import RegionAnnotationError
 from toolkit.rent_map import compute_reference_rent
 from toolkit.summaries import SummarizeError
 
@@ -736,32 +735,6 @@ def post_listings_summaries(
                 "error": f"{type(exc).__name__}: {exc}",
             })
     return {"data": out}
-
-
-@app.post("/tools/summarize_region_dispositions")
-def post_summarize_region_dispositions(
-    body: s.SummarizeRegionDispositionsIn,
-    conn: Any = Depends(deps.get_db_conn),
-    llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Natural-language annotations for the Browse > Stats box plots.
-
-    Cached per (region, calendar day): the first viewer of a region today
-    pays for the LLM call; everyone else hits the cache.
-    """
-    try:
-        return summarize_region_dispositions(
-            conn, llm_client,
-            region_key=body.region_key,
-            dispositions=[d.model_dump() for d in body.dispositions],
-            ppm2_overall=body.ppm2_overall,
-            region_label=body.region_label,
-            ppm2_basis=body.ppm2_basis,
-            force_refresh=body.force_refresh,
-        )
-    except RegionAnnotationError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/tools/compare_listing_images")
@@ -1797,6 +1770,19 @@ def delete_pipeline_card(
     account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.remove_card(conn, property_id, account_id=account_id)
+
+
+# --- Browse > Stats dashboard (migration 626) --------------------------------
+# One board per account, written whole; the SPA reads it through RLS itself.
+
+@app.put("/stats/dashboard")
+def put_stats_dashboard(
+    body: s.StatsDashboardIn,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+) -> dict[str, Any]:
+    """Replace the caller's board; every chart is validated by the stats registry (422)."""
+    return stats_dashboard_module.save_dashboard(conn, body.charts, account_id=account_id)
 
 
 # --- dismissals (migration 536) ---------------------------------------------

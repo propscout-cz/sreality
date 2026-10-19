@@ -34,27 +34,3 @@ export function Th({
     </th>
   );
 }
-
-/* The numeric summary tables (price-band velocity, region disposition box
- * plots): every column is a number, so the header is always right-aligned and
- * rides tighter tracking than a <Th>. */
-
-export function StatTh({ children }: { children: ReactNode }) {
-  return (
-    <th className="px-3 py-2 font-medium text-right text-[var(--color-ink-3)] tracking-wide uppercase text-[0.65rem]">
-      {children}
-    </th>
-  );
-}
-
-export function StatTd({ children, bold }: { children: ReactNode; bold?: boolean }) {
-  return (
-    <td
-      className={`px-3 py-1.5 text-right ${
-        bold ? 'font-medium text-[var(--color-ink)]' : 'text-[var(--color-ink-2)]'
-      }`}
-    >
-      {children}
-    </td>
-  );
-}

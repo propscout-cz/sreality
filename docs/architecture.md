@@ -636,7 +636,7 @@ rules. Identify which one a task belongs to before you start.
   open list. The estimation trace payload and both `/feedback` routes moved onto the tenant
   pool 2026-10-02; the feedback POST's refiner is admin-only (the `database` skill's
   `references/tenancy.md`, named exception); `/filter-presets*` followed 2026-10-12 (per
-  account, migration 595).
+  account, migration 595); `PUT /stats/dashboard` was born there (migration 626).
 - Every PostgREST read runs as `authenticated`; `anon` is granted no relation (Phase 0,
   migrations 299/331), functions are born private since migration 612, and a CI census
   (`tests/test_tenant_isolation_live.py`) keeps every `SECURITY DEFINER` function in `public`
@@ -2143,6 +2143,26 @@ renumber.** Navigate by area:
     INNER join became a LEFT join + a `collections` join so monitor and system_health rows
     aren't dropped), and a red nav unread badge polls `GET /notifications/unread-count`;
     `POST /notifications/mark-all-seen` clears it.)
+    **The Stats tab is a dashboard over the SAME cohort (migration 626, `docs/design/stats-dashboard.md`).**
+    One pivot RPC, `browse_stats_properties(<625's 74 cohort parameters>, spec)`, keeps 625's WHERE byte
+    for byte (`tests/test_626_stats_dashboard.py`), so a chart counts exactly the properties the list
+    shows; `spec = {rows, cols, measure}` shapes the ANSWER, never the cohort (the read contract's
+    `_STATS_ONLY_PARAMS`, twin of the map's `point_budget`). One `group by kc, rollup(k1..k6)` gives
+    every nesting level, each key from ONE SQL function, `stats_dim_key`, rendered from
+    `toolkit/stats_registry.py` — which also emits `statsRegistry.generated.ts` and validates
+    `PUT /stats/dashboard`. Every answer carries its sample ledger (`filtered` / `sample` /
+    `excluded`: a NULL on a chosen dimension or on the measure excludes the property, never buckets
+    it), statistics only for a cell of at least 10 properties, and a refusal instead of a guess
+    (`empty`, `mixed_category`, `mixed_status` for turnover over a sample of two statuses,
+    `too_many_cells`, `bad_spec`). A place dimension keys on the RÚIAN code `browse_list` carries
+    (`region_id` … `ulice_id`, rule 25's one code predicate), so two towns or streets of one name stay
+    two cells and the pivot reads no listing location; the payload's `places` names each key through
+    the owner-rights view `ruian_place_names_public(level, code, name)` over the register mirror (381;
+    the pivot is INVOKER and the mirror is dark to browser roles) — a location read surface added
+    without deleting one, on the operator's ruling of 2026-10-19 (the five place dimensions). The
+    board is one row per account (`stats_dashboards`, read by the SPA through RLS, written whole by
+    the API). It replaced four fixed cards and the LLM box-plot annotations (summarize-1, deleted
+    with them; migration 627 drops their cache table and settings).
 17. **City-quality indexes are a normalized, operator-curated time series.** `curated_cities`
     + `city_index_revisions` + `city_index_values` + `city_index_definitions` +
     `city_population` (migration 078 onward) store per-city indexes long-form, so a new index
@@ -2307,9 +2327,9 @@ renumber.** Navigate by area:
     from the SAME member map the chips render from — and `tags` left `properties_with_tags(tag_ids)`
     for `property_tags_public` to get there: that RPC body carried `limit 5000` (migration 202)
     under a client comment asserting exhaustiveness (dropped in 553). The membership read is
-    complete-or-throw (`fetchAllRows`). `fetchBrowseStats` was the one Browse fetcher that named
-    its prefilters by hand; it now resolves through `resolveBrowsePrefilters` like every other
-    lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
+    complete-or-throw (`fetchAllRows`). The Stats fetcher (`fetchBrowseStats`, since 626
+    `fetchStatsPivot`) was the one Browse fetcher that named its prefilters by hand; it now
+    resolves through `resolveBrowsePrefilters` like every other lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
     property-grain filter cannot narrow the list and leave the panel above it counting the whole
     market. A membership write invalidates the Browse reads only when membership IS the cohort
     (`revalidateCollections`' `cohortScoped`, passed by the Browse card alone — the mirror of
@@ -3401,6 +3421,12 @@ renumber.** Navigate by area:
     ~1.1k ads, 0.1 % of the corpus); the flag of an ad first seen TODAY can flip when the hour's
     refresh learns the day was a sweep; mixing active and inactive ads (the first half) is
     unchanged and the operator's to live with.
+
+    **The Stats dashboard reads the measure, never re-derives it (migration 626).** Its `ppm2` measure
+    and its per-m² bands read `browse_list.price_per_m2`; a band's step follows the payload's `basis`
+    (5 000 / 10 000 on a capital basis, 25 / 50 on `rent_monthly_czk_m2`; total-price bands likewise),
+    a cohort spanning two categories is refused (`mixed_category`) so no cell pools two bases, and the
+    SPA labels every value with the unit of that one basis. Land keeps its basis until its own ruling.
 
 24. **Folded into 25.** The number is kept because rules are cited by number and never renumbered;
     the two-paths-until-W6 rule it used to state ended when W4-c dropped the legacy store.

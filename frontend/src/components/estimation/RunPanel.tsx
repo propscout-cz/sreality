@@ -57,7 +57,7 @@ import {
 } from '@/lib/api';
 import { DialogClose } from '@/components/Dialog';
 import { useDialog } from '@/lib/useDialog';
-import RangeStrip from '@/components/region/RangeStrip';
+import RangeStrip from '@/components/estimation/RangeStrip';
 import Timeline from '@/components/estimation/Timeline';
 import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';

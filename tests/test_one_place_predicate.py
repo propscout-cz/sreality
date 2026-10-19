@@ -7,7 +7,8 @@ rule, `<level>_id = any(codes)`, compiled by:
   * `api/location_filter.py`            — the API + the Watchdog matcher
   * `frontend/src/lib/districtCodes.ts` — the SPA (PostgREST string + the
                                           in-memory row predicate)
-  * `browse_stats_properties`           — migration 605, the Stats cohort
+  * `browse_stats_properties`           — migration 605, the Stats cohort (626's pivot
+                                          carries 625's WHERE byte for byte)
   * `browse_map_cells`                  — migration 605, the map cohort
 
 This file holds the API half of the shared table (`tests/fixtures/
@@ -80,10 +81,12 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 
 # The latest definition of both RPCs: 605 carries 598's stats body and 602's map
 # body forward byte for byte except the four chip arms, where `locality` (a street
-# pick filtered at its TOWN) became `ulice` (tests below). Re-read the chip arms
-# when this moves again.
+# pick filtered at its TOWN) became `ulice` (tests below); 625 appended
+# tom_observed_only to both; 626 replaced the Stats body with the dashboard pivot
+# over 625's WHERE verbatim (tests/test_626_stats_dashboard.py). Re-read the chip
+# arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "625_tom_observed.sql",
+    "browse_stats_properties": "626_stats_dashboard.sql",
     "browse_map_cells": "625_tom_observed.sql",
 }
 
@@ -196,18 +199,19 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     Since 436/439 the lists grew 537's `hide_dismissed`, 597's two exclusion
     parameters and 598's `property_ids_excluded`, and 597 dropped the five nothing
     sent (and the map's `listing_ids_filter`) — tests/test_portal_exclusion_migration.py
-    and tests/test_property_ids_excluded_migration.py pin each step."""
+    and tests/test_property_ids_excluded_migration.py pin each step. 626 appended the
+    Stats pivot's chart `spec`, which shapes the answer and never the cohort."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
-    for func, previous in (
-        ("browse_stats_properties", "436_city_quality_obec_key.sql"),
-        ("browse_map_cells", "439_browse_map_cells.sql"),
+    for func, previous, own in (
+        ("browse_stats_properties", "436_city_quality_obec_key.sql", ["spec"]),
+        ("browse_map_cells", "439_browse_map_cells.sql", []),
     ):
         new = _params_of(latest_definition(func).read_text(encoding="utf-8"), func)
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
         assert new == [p for p in old if p not in gone] + [
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
-            "property_ids_excluded", "tom_observed_only",
+            "property_ids_excluded", "tom_observed_only", *own,
         ], f"{func}: parameter list changed"
         for chip_param in (
             "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",

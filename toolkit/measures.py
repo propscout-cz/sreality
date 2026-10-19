@@ -495,16 +495,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "beside flats (a rate per m² of FLOOR).",
     ),
     RegisteredSite(
-        path="toolkit/region_annotations.py",
-        arm="unit",
-        hits=2,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="The LLM prompt for the Browse > Stats box-plot annotations. The "
-        "unit reaches a model, so it is a label like any other; the second "
-        "literal is the refusal text for a mixed sale+rent cohort.",
-    ),
-    RegisteredSite(
         path="scraper/price_stats_metrics.py",
         arm="unit",
         hits=2,
@@ -566,15 +556,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "its reader.",
     ),
     RegisteredSite(
-        path="api/schemas.py",
-        arm="unit",
-        hits=1,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="The docstring of the box-plot annotation request model, naming "
-        "the quantity the endpoint annotates.",
-    ),
-    RegisteredSite(
         path="api/estimate_yield.py",
         arm="unit",
         hits=2,
@@ -617,17 +598,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         why="Generated, never hand-edited: the mirror of the two "
         "two `unit` declarations in toolkit/filter_registry.py, kept "
         "fresh by scripts/generate_filter_registry --check in CI.",
-    ),
-    RegisteredSite(
-        path="frontend/src/components/region/DispositionBoxPlots.tsx",
-        arm="unit",
-        hits=2,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="The two refusal messages for a cohort with no single basis — "
-        "'so the axis has a unit' and 'no recognised basis for this group'. They "
-        "name the unit in order to explain its ABSENCE, "
-        "which is the north star's visible gap.",
     ),
     RegisteredSite(
         path="frontend/src/components/listing-detail/SoldCompsBlock.tsx",
@@ -759,8 +729,9 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "system prompt. A stored prompt is a render surface with a model as its "
         "reader, and this one spells the unit eight times while telling the "
         "model NOT to assume which basis it is on. Migration 426 later replaced "
-        "the row; both statements are registered, because the census reads what "
-        "is in migrations/, and migrations are append-only (rule #1).",
+        "the row and migration 627 deletes it with the feature (the Stats "
+        "dashboard, 626); the statements stay registered, because the census "
+        "reads what is in migrations/, and migrations are append-only (rule #1).",
     ),
     RegisteredSite(
         path="migrations/425_measure_price_per_m2.sql::statements",
@@ -845,14 +816,18 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "not a client-side ratio.",
     ),
     RegisteredSite(
-        path="frontend/src/components/BrowseStats.tsx",
+        path="frontend/src/lib/stats.ts",
         arm="vocab",
         hits=1,
         measure="ppm2",
         kind=KIND_LABELS,
-        why="The Browse stats tile labels the RPC's aggregate with the cohort "
-        "basis the server resolved, and renders an empty unit — a visible gap — "
-        "when the cohort has none.",
+        why="The Stats dashboard (migration 626) labels the pivot's figures and "
+        "band keys: measureUnit and keyLabel pick PPM2_UNIT / PRICE_PERIOD_UNIT "
+        "by the basis token the RPC published for the cohort "
+        "(ppm2BasisFromToken), and render an empty unit — a visible gap — when "
+        "the cohort has none. The numbers and the band keys are the server's "
+        "(stats_dim_key floors browse_list's price_per_m2, which IS the "
+        "measure); nothing here re-derives a ratio.",
     ),
     RegisteredSite(
         path="frontend/src/components/Filters.tsx",
@@ -896,15 +871,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "reads the rent-basis string from the shared map.",
     ),
     RegisteredSite(
-        path="frontend/src/components/region/DispositionBoxPlots.tsx",
-        arm="vocab",
-        hits=1,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="The box-plot axis caption, and the refusal path that removes the "
-        "axis entirely when the cohort spans more than one basis.",
-    ),
-    RegisteredSite(
         path="frontend/src/pages/Datasets.tsx",
         arm="vocab",
         hits=1,
@@ -932,6 +898,17 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         kind=KIND_GUARDS,
         why="The vocabulary's own pinning test; it consumes every table in the "
         "module in order to assert their exact contents.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/stats.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="Pins the Stats dashboard's labels to the shared vocabulary: a band "
+        "key and a measure are expected in PPM2_UNIT / PRICE_PERIOD_UNIT of the "
+        "payload's basis (sale, rent, land), so a label spelled any other way "
+        "fails a test.",
     ),
     RegisteredSite(
         path="frontend/src/lib/mapOverlays.test.ts",

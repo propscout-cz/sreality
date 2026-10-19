@@ -212,7 +212,7 @@ def test_a_resolved_but_empty_allowlist_yields_zero_rows(fn: str) -> None:
         assert f"{param} is null or" in sql, f"{label}: {param} lost its null guard"
         assert f"array_length({param}" not in sql, (
             f"{label}: {param} now treats '{{}}' as no constraint. The callers pass a "
-            f"resolved-empty allowlist straight through as [] (fetchBrowseStats does not "
+            f"resolved-empty allowlist straight through as [] (the Stats fetcher does not "
             f"short-circuit), so this widens the cohort to the whole market."
         )
 

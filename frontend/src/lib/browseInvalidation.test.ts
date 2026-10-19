@@ -45,7 +45,8 @@ describe('browse key factories', () => {
     browseKeys.cards(f, DEFAULT_SORT),
     browseKeys.table(f, DEFAULT_SORT),
     browseKeys.map(f, 200),
-    browseKeys.stats(f),
+    browseKeys.stats(f, { rows: [], cols: [], measure: 'ppm2' }),
+    browseKeys.statsPrefilters(f),
     browseKeys.count(f),
     browseKeys.noPriceCount(f),
   ];

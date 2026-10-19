@@ -37,6 +37,10 @@ MIGRATIONS = REPO / "migrations"
 
 # The one parameter browse_map_cells has on purpose and browse_stats_properties does not.
 _MAP_ONLY_PARAMS = {"point_budget"}
+# Its twin (migration 626): the chart spec the Stats pivot takes and the map does not. Like
+# point_budget it shapes the ANSWER, never the cohort, and the builder does not send it
+# (`fetchStatsPivot` spreads the builder's object and adds `spec` beside it).
+_STATS_ONLY_PARAMS = {"spec"}
 
 
 def _ts() -> str:
@@ -64,21 +68,20 @@ def _strip_ts_comments(src: str) -> str:
 
 
 def _builder_keys() -> set[str]:
-    """The snake_case keys `buildBrowseStatsArgs` puts on the wire, including the two it
-    spreads in from `resolved`."""
+    """The snake_case keys `buildBrowseStatsArgs` puts on the wire, the prefilter
+    allowlists it reads off `pre` included."""
     src = _ts()
     at = src.index("export const buildBrowseStatsArgs")
     block = _balanced_block(src, src.index("{", src.index("return {", at)))
     body = _strip_ts_comments(block)
     keys = set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:", body, flags=re.MULTILINE))
-    assert "...resolved" in body, (
-        "buildBrowseStatsArgs no longer spreads `resolved` — the two id allowlists the "
-        "caller resolves over the network have stopped reaching the RPC."
-    )
-    # `...resolved`'s own keys are declared on the interface, not in the literal.
-    iface = _balanced_block(src, src.index("{", src.index("interface BrowseStatsResolvedFilters")))
-    keys |= set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:", _strip_ts_comments(iface),
-                           flags=re.MULTILINE))
+    # The prefilter allowlists ride in from the ONE resolved object (`pre`), by name: a
+    # caller cannot hand the builder a hand-mapped subset any more.
+    for field in ("obecIds", "propertyIds", "propertyIdsExcluded"):
+        assert re.search(rf"\bpre\.{field}\b", body), (
+            f"buildBrowseStatsArgs no longer reads `pre.{field}` — that allowlist the "
+            "caller resolves over the network has stopped reaching the RPC."
+        )
     assert len(keys) > 60, f"only parsed {len(keys)} builder keys — the parse broke"
     return keys
 
@@ -133,7 +136,7 @@ def test_every_builder_key_is_a_parameter_of_both_rpcs() -> None:
 
 
 def test_the_two_rpcs_take_the_same_cohort_parameters() -> None:
-    """browse_map_cells = browse_stats_properties + point_budget.
+    """browse_map_cells - point_budget = browse_stats_properties - spec.
 
     RED by: adding a cohort parameter to one RPC and not the other. The map and the Stats
     tab would then answer for different cohorts under the same filters, and the only
@@ -144,15 +147,26 @@ def test_the_two_rpcs_take_the_same_cohort_parameters() -> None:
     assert not _MAP_ONLY_PARAMS - cells, (
         f"browse_map_cells lost {sorted(_MAP_ONLY_PARAMS - cells)}, which only the map takes."
     )
+    assert not _STATS_ONLY_PARAMS - stats, (
+        f"browse_stats_properties lost {sorted(_STATS_ONLY_PARAMS - stats)}, which only the "
+        "Stats pivot takes."
+    )
     assert not cells - stats - _MAP_ONLY_PARAMS, (
         f"browse_map_cells takes {sorted(cells - stats - _MAP_ONLY_PARAMS)} and "
         "browse_stats_properties does not — the map cohort can now be narrowed in a way "
         "the Stats cohort cannot."
     )
-    assert not stats - cells, (
-        f"browse_stats_properties takes {sorted(stats - cells)} and browse_map_cells does "
-        "not — the Stats cohort can now be narrowed in a way the map cohort cannot."
+    assert not stats - cells - _STATS_ONLY_PARAMS, (
+        f"browse_stats_properties takes {sorted(stats - cells - _STATS_ONLY_PARAMS)} and "
+        "browse_map_cells does not — the Stats cohort can now be narrowed in a way the map "
+        "cohort cannot."
     )
+
+
+def test_the_builder_sends_no_answer_shaping_parameter() -> None:
+    """`spec` and `point_budget` are each one reader's own; the shared builder carries neither,
+    or the other RPC would answer PGRST202 to every call."""
+    assert not _builder_keys() & (_MAP_ONLY_PARAMS | _STATS_ONLY_PARAMS)
 
 
 def test_the_map_rpc_carries_both_prefilter_id_spaces() -> None:
@@ -173,14 +187,20 @@ def test_the_map_rpc_carries_both_prefilter_id_spaces() -> None:
         f"applyPrefilters' id spaces changed: {pairs}"
     )
 
+    # The map call hands the builder the whole resolved object; the builder is where
+    # each allowlist is named (asserted by _builder_keys), so the call need only pass it.
     call = _rpc_call_block("browse_map_cells")
+    assert "buildBrowseStatsArgs(f, pre)" in call, (
+        "the browse_map_cells call no longer passes the resolved prefilters to the one "
+        "cohort builder — the map cohort would lose every id allowlist"
+    )
+    builder = _strip_ts_comments(_balanced_block(
+        _ts(), _ts().index("{", _ts().index("return {", _ts().index("export const buildBrowseStatsArgs")))))
     for column, field in pairs:
-        assert re.search(rf"pre\.{field}\b", call), (
-            f"applyPrefilters filters on `{column}` via `p.{field}`, but the "
-            f"browse_map_cells call never passes `pre.{field}` — that allowlist is "
-            "silently dropped on the map and applied everywhere else."
+        assert re.search(rf"pre\.{field}\b", builder), (
+            f"applyPrefilters filters on `{column}` via `p.{field}`, but buildBrowseStatsArgs "
+            f"never reads `pre.{field}` — that allowlist is silently dropped from the RPC cohorts"
         )
-    assert "listing_ids_filter" not in call
 
 
 def test_the_map_lane_is_chosen_from_the_filters_alone() -> None:
