@@ -220,8 +220,9 @@ migration 629 + its two tests.
   the write lands) and `settleMemberWrite(qc, set, propertyId, elementId, member)`;
   `useOptimisticWrite`'s revalidate gained a third argument, `qc`. Collection and tag writes stay
   non-optimistic: `settleMemberWrite` patches the landed delta, so their drop follows the ack
-  (~one round trip), not the click. **Awaiting the operator (2026-10-19):** accept this, or make
-  those two writes optimistic (their own rollback paths). A row the member map judged OUT before the write while the list shows
+  (~one round trip), not the click. **Operator ruling (2026-10-19 evening): accept the lag** — the two
+  writes stay non-optimistic. The same sitting closed the line-ledger question ("it's close, don't
+  worry"): the runtime ledger stands at +1096 / −1090 and is not chased further. A row the member map judged OUT before the write while the list shows
   it means the map is stale: nothing drops, that cohort re-reads. A dropped row's page keeps
   the length it was read with (`fetched`), so infinite scroll pages on.
 - Ruling 6's carry shipped for the three curated sets only (`withPresetLenses`, Browse and the
