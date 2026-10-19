@@ -29,6 +29,15 @@ The one ad whose facts a property shows: price, area, description, photos and li
 order, never by hand.
 _Avoid_: representative ad, repr, speaking ad, main ad, headline ad
 
+**Location ad**:
+The ad whose resolved location places a property: its map pin and precision, its address label, its
+town, quarter, street and KÚ codes, and what is computed from them (MF reference rent, city proximity,
+whether it is served); every property surface reads it from W4. Chosen by a fixed order, never by
+hand: an ad with a map point first (then one determined foreign), then the most precise location
+whatever the ad's status, ties by the canonical order (active ads first). Often the canonical ad, not
+always.
+_Avoid_: place, pin ad, anchor ad, located ad, representative location
+
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
 _Avoid_: dupe, match, twin

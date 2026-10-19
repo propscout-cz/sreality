@@ -1409,7 +1409,8 @@ def test_a_property_with_no_ads_is_reset_to_no_ads_once():
     assert m, sql
     columns, values, guarded, guard = (g.split(", ") for g in m.groups())
     assert dict(zip(columns, values, strict=True)) == {
-        "is_active": "false", "repr_listing_ref_id": "NULL", "repr_listing_id": "NULL",
+        "is_active": "false", "repr_listing_ref_id": "NULL", "location_listing_ref_id": "NULL",
+        "repr_listing_id": "NULL",
         "source_count": "0", "all_sources": "ARRAY[]::text[]", "active_sources": "ARRAY[]::text[]",
         **{f"newest_ad_at_{o.value}": "NULL" for o in PORTAL_OPTIONS}}
     assert guarded == [f"p.{c}" for c in columns] and guard == values

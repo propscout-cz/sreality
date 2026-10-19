@@ -1454,7 +1454,11 @@ renumber.** Navigate by area:
     (`docs/design/merge-sprint/PROGRAM.md` MS11): every advert field (price, area with no
     fallback, layout, category, subtype, source, condition with both derived levels -- rule #14
     --, furnished) is the canonical advert's, and `repr_listing_ref_id` names it for every read
-    model (`properties_public.listing_id` IS it). The six amenities (balcony, lift, parking,
+    model (`properties_public.listing_id` IS it). The same statement stores the LOCATION advert,
+    `location_listing_ref_id`, rank 1 of the function's `location_rank` (migration 635: a map
+    point, then determined foreign, then the finest `location_granularity_rank` rung whatever
+    the advert's status, then the canonical order); a singleton's birth sets both pointers to
+    its one advert and the no-ads reset nulls both. The six amenities (balcony, lift, parking,
     terrace, garage, cellar) are a union over every advert, active or not (MS6); every other
     physical fact (building type, ownership, energy rating, estate/usable/garden area, parking
     spaces) is the first non-empty value in the canonical order. The price figures are the
@@ -2657,7 +2661,8 @@ renumber.** Navigate by area:
     unchanged, non-reactivating refetch no longer refreshes `properties.last_seen_at`/
     `source_count` inline (sreality parity). A `listing_location` write does not dirty its
     property either: an advert gaining or losing its map point re-ranks the canonical advert
-    (migration 588) at that property's next recompute, at worst the daily sweep.
+    (migration 588), and that, a rung change or a foreign determination re-ranks the location
+    advert (migration 635), at that property's next recompute, at worst the daily sweep.
 21. **Every portal runs through ONE shared framework (Phase 4); per-portal code is a client
     (fetch + pacing) + a parser + a `Portal` adapter + a config row — and shared code grows no new
     portal-name branch.** The parser's outputs
@@ -3672,7 +3677,8 @@ the single KÚ of the BOUND entity, never a pin's: migration 566, resolver v5.4)
 all NOT NULL (`match_confidence`, `granularity`, `uncertainty_radius_m`); two status columns
 (`country_status` NOT NULL, `disputed`); and four housekeeping (`resolver_version`, `resolved_at`,
 `claim_set_hash`, `registry_version`). `location_data/resolver/projection.py`'s column tuple IS that
-contract. `listings` and `properties` carry no place column at all (migration 508), so a place read
+contract. `listings` and `properties` carry no place column at all (migration 508; 635's
+`location_listing_ref_id` points at an advert and stores no place), so a place read
 joins `listing_location ll on ll.listing_id = l.id`, and a property's place is its representative
 listing's (`repr_listing_ref_id`) — one child for place, price and area alike. The table is a
 **rebuildable cache, never a store of record**: truncating it is always legal, the `dirty_locations`

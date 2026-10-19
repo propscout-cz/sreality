@@ -8,7 +8,10 @@
    point, earliest first seen among active / latest last seen among inactive, trust, id). Every
    advert field is its own: price, area (no fallback), layout, category, subtype, source,
    condition with both derived levels (rule 14), furnished, and `repr_listing_ref_id`, through
-   which the read models take place, floor, description, photos, broker and link. The six
+   which the read models take place, floor, description, photos, broker and link. The location
+   advert (`location_listing_ref_id`) is rank 1 of the same function's location order (migration
+   635: a map point, then determined foreign, then the finest rung, then the canonical order),
+   set in the same statement as the canonical advert, so both are set or neither is. The six
    amenities are a union over every advert (MS6); every other physical fact is the first
    non-empty value in the canonical order. The price figures are the canonical advert's lineage
    (MS10): its own and its same-portal predecessors' `listing_price_steps` plus one handover step
@@ -100,15 +103,19 @@ _RECOMPUTE_BATCH_SQL = f"""
       SELECT id FROM properties WHERE id >= %(lo)s AND id < %(hi)s
     ),
     -- Every advert of the batch's properties in THE canonical order (migration 588, MS5); rank 1
-    -- is the canonical advert. The order is spelled there and nowhere else.
+    -- is the canonical advert, and location rank 1 the location advert (migration 635). Both
+    -- orders are spelled there and nowhere else.
     kids AS (
-      SELECT l.*, o.canonical_rank
+      SELECT l.*, o.canonical_rank, o.location_rank
       FROM batch b
       CROSS JOIN LATERAL property_canonical_listings(b.id) o
       JOIN listings l ON l.id = o.listing_id
     ),
     canon AS (
       SELECT * FROM kids WHERE canonical_rank = 1
+    ),
+    loc AS (
+      SELECT * FROM kids WHERE location_rank = 1
     ),
     -- Lifecycle and the portals over every advert, active or not; the six amenities are a union
     -- (yes when any advert says yes, MS6); every other physical fact is the first non-empty value
@@ -232,6 +239,7 @@ _RECOMPUTE_BATCH_SQL = f"""
       repr_since          = CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() ELSE p.repr_since END,
       city_proximity_computed_at = CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 OR p.city_proximity_computed_at < p.repr_since THEN NULL ELSE p.city_proximity_computed_at END,
       repr_listing_ref_id = c.id,
+      location_listing_ref_id = la.id,
       category_main       = c.category_main,
       category_type       = c.category_type,
       category_sub_cb     = c.category_sub_cb,
@@ -275,6 +283,7 @@ _RECOMPUTE_BATCH_SQL = f"""
       stats_computed_at   = now()
     FROM child_agg r
     JOIN canon c ON c.property_id = r.pid
+    JOIN loc la ON la.property_id = r.pid
     LEFT JOIN price_hist ph ON ph.pid = r.pid
     LEFT JOIN lineage_span cs ON cs.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid
@@ -341,6 +350,7 @@ _CLEAR_DIRTY_SWEPT_SQL = (
 # to nothing), and the R2 parity check skips it (both handles NULL on purpose).
 _NO_ADS = {
     "is_active": "false", "repr_listing_ref_id": "NULL", "repr_listing_id": "NULL",
+    "location_listing_ref_id": "NULL",
     "source_count": "0", "all_sources": "ARRAY[]::text[]", "active_sources": "ARRAY[]::text[]",
     **{f"newest_ad_at_{o.value}": "NULL" for o in PORTAL_OPTIONS},
 }
