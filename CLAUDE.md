@@ -173,9 +173,9 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,
     soft-retires the loser, logs `property_merge_events` (read by `detach_listings`: each advert back to its origin or a refusal, e.g. `moved_since`; a split by letters sends one that cannot go
     home to a new property (`new=`) and itself rules only `different`, across letters — a letter's join is a merge; a split is ONE call, and so is a group undo (`merge_group_id=`) — no replay; an operator merge rules `same` every negative pair it joins). A property shows ONE **canonical ad**, rank 1 of `property_canonical_listings` (migration 588): active first,
-    then with a map point, then the earliest first seen (active ads) / latest last seen (inactive ads), then portal trust, then id; its six amenities are a union (yes if any ad says yes). The chokepoint enforces **category compatibility** over the set's ads, a contentless record never counting (`CategoryClash`:
-    sale≠rent, flat≠house — except the sanctioned cross-type PAIRS: any two of **dům, komerční, pozemek**, and **byt↔komerční**; pairs, never classes, so byt↔dům stays refused). `db.presence_candidates` / `active_count` are source-scoped. **Merges are ordered by the
-    operator, or by the AUTODEDUP engine (source `autodedup`, through `merge_property_set`, only inside `app_settings.autodedup_apply_scope`, never a split):
+    then with a map point, then the earliest first seen (active ads) / latest last seen (inactive ads), then portal trust, then id; a property's LOCATION is its **location ad** (`properties.location_listing_ref_id`: a map point first, then determined foreign, then the finest RÚIAN rung, ties by the canonical order — migration 635; every property surface reads it since 636);
+    its six amenities are a union (yes if any ad says yes). The chokepoint enforces **category compatibility** over the set's ads, a contentless record never counting (`CategoryClash`: sale≠rent, flat≠house — except the sanctioned cross-type PAIRS: any two of **dům, komerční, pozemek**, and **byt↔komerční**; pairs, never classes, so byt↔dům stays refused).
+    `db.presence_candidates` / `active_count` are source-scoped. **Merges are ordered by the operator, or by the AUTODEDUP engine (source `autodedup`, through `merge_property_set`, only inside `app_settings.autodedup_apply_scope`, never a split):
     the worker's autodedup lane reconciles its `rt` groups (`autodedup/reconcile.py`); batch `mode=apply`/`unapply` stay until C2 (undo after C2: an open
     operator decision, `roadmap/autodedup.md`); until then the brake is interval 0, then `mode=unapply` — its only detach besides `retire_legacy=1` (W8, E953:
     undoes the removed engine's `source='auto'` merges per area under the live generation, `generation=rt,blocks=<area>`, dry run first; the only code that selects that output by source).** **The old automatic decision
@@ -242,7 +242,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 24. **Folded into 25** (kept so the citations don't break — rules are never renumbered).
 25. **Location: one store, one claim shape, one label, one code predicate; a location PR that adds more than it
     deletes says why in its body and needs the operator's ruling.** `listing_location` (27 columns, migs 501/566) is the ONLY place a listing's
-    location is stored — `listings`/`properties` carry none (mig 508), and there is no serving flag and no
+    location is stored — `listings`/`properties` carry no location VALUE (mig 508); properties carry one pointer (rule 15), and there is no serving flag and no
     granularity floor — so a place read joins `ll on ll.listing_id = l.id`, casting `ll.geom::geography` for metres
     (uncast = DEGREES). TWO producers write `location_claims`, both fingerprinted in SQL: the `claims_intake` lane
     (payload, page body, the text lane's reading) and `operator_corrections`; ONE four-step resolver writes the

@@ -1,4 +1,4 @@
-<!-- STATUS: APPROVED 2026-10-19. Rulings: R1 most precise even if inactive; R2+R10 retire the matview, no backup; R3 pointer; R4 "properties"; R5/R7/R8/R9 defaults; R11 drop the dead MF functions (verified off every live path); R12 no temp index. Execution: W0 done; W1 merged (#1887, migration 630); W2 = 631 (this PR); W3 = 635, W4 = 636. Investigation artifacts: ~/one-pin-artifacts on the operator machine. -->
+<!-- STATUS: APPROVED 2026-10-19. Rulings: R1 most precise even if inactive; R2+R10 retire the matview, no backup; R3 pointer; R4 "properties"; R5/R7/R8/R9 defaults; R11 drop the dead MF functions (verified off every live path); R12 no temp index. Execution: W0 done; W1–W3 delivered (W1 #1887 = 630, W2 #1896 = 631, W3 #1895 = 635, each merged and applied); W4 = 636 (this PR). Investigation artifacts: ~/one-pin-artifacts on the operator machine. -->
 
 # ONE PROPERTY, ONE LOCATION, ONE MAP: the approved plan (rulings taken 2026-10-19)
 
@@ -440,6 +440,14 @@ No single response mixes the two.
   - a sample of slice ids 1-158,046: 1,580 live conflicts, 1,568 of them involving a town or quarter centroid, 34 crossing a town line.
   - One bullet in roadmap/location-data.md: centroid radii drawn too small (town 60.4 %, quarter 86.1 % containment).
   - One bullet in roadmap/autodedup.md: the cross-town property ids as merge-quality input.
+- **[as built 2026-10-19] W3 merged as #1895 (22:07Z), migration 635 applied.** Backfill and verify, read-only:
+  - the full property sweep ran to success at 22:25Z; the status-agnostic fill (location = canonical where still NULL) finished at 22:35Z;
+  - rows of any status where `(repr_listing_ref_id IS NULL) <> (location_listing_ref_id IS NULL)`: **0**, so W4's `$pre$` gate and CHECK can pass;
+  - 15100 → 13193960, the ad holding the exact point;
+  - location ≠ canonical on **14,051** `active` properties, live and dormant (planned about 13,784 from the 10-19 census; the difference is merges and re-resolves since; 14,073 on a re-read 2026-10-20, mismatched pairs still 0);
+  - singletons: location = canonical on 100 %;
+  - a 3,000-property sample: the canonical ad unchanged against the inline 588 order (`repr_ne_inline_canon = 0`).
+  - The two hand-off bullets (roadmap/location-data.md, roadmap/autodedup.md) were owed by W3's PR and land with W4's.
 
 ### W4: every property surface reads the location ad (PR 4; migration 636 additive; visible)
 
@@ -502,8 +510,9 @@ No single response mixes the two.
      - curation.py (comment only, :139);
      - notifications.py (price lineage, :1510-1671);
      - autodedup/ui_sql.py (identity);
-     - comparables.py (Decision 13's identity gate).
+     - location_data/claims_common.py (defines R8's cohort shape, whose comparable is the canonical ad). [as built: comparables.py left the census when it took that shape from claims_common.]
    - This arm catches shapes assembled across functions, such as comparables' gate plus join.
+4. **[as built] Shape registry.** The R7 subject sites (estimation by id, by URL, the /estimations label, the subject MF facts, the watchdog kickoff, the velocity subject, scripts/smoke_agent.py) each reference `SUBJECT_LOCATION_JOIN`, and every function that calls `_shared_filter_where` references `COHORT_LOCATION_FROM`. An ad-keyed join (`ll.listing_id = l.id`) passes arm 1, so without this arm a new cohort could count every ad of a property.
 
    The definers (db.py, recompute_property_stats.py) do not name `listing_location`, so no allow-list entry is needed. The two dead MF functions are dropped in W2 (R11), so the rail starts with an empty allow-list.
 
@@ -515,6 +524,7 @@ No single response mixes the two.
 - tests/test_mf_reference.py:377;
 - tests/test_location_w5_serve_resolved.py:296. Its line 47 pins migration 514 and stays as history.
 - tests/toolkit/test_comparables.py:580.
+- [as built] tests/test_location_ad_order_live.py (a location-ad change now clears the proximity stamp), tests/test_merge_safety_live.py (a stamp older than `repr_since` is kept), tests/test_measure_price_per_m2.py (its fixture sets both pointers, for the CHECK), tests/test_one_place_predicate.py (claims_common's fragments count as the `listing_location` join), tests/test_filter_compiler_rows_live.py with tests/fixtures/filter_compile_golden.json and filter_compile_rows.json.
 
 **Docs, same PR:**
 - CLAUDE.md:
@@ -533,6 +543,14 @@ No single response mixes the two.
 > _Avoid_: place, pin ad, anchor ad, located ad, representative location
 
 **Pre-check, in the PR body.** Dry-run the watchdog matcher over properties whose location codes change, and count the once-ever ":new:" alerts the swap would fire. Town changes are measured at 84 (35 with both codes known). Street and KÚ gains are measured here, not predicted. If the count is above zero, the merge waits for your word.
+- **How the count is taken: read-only SQL after the apply, before the merge.** After 636 `properties_public` already reads the location ad, so for each active subscription:
+  - render its WHERE with this branch's `_build_match_clauses` (Python, no connection);
+  - run it as one read-only SELECT over `properties_public`, restricted to properties whose location ad ≠ canonical ad;
+  - keep only rows the matcher can still fire on: `first_seen_at` past the subscription's cursor or inside the lookback re-scan (`max(60, 2 × notifications_new_requires_image_timeout_minutes)` min, 60 by default);
+  - drop rows that already hold a `wd:{sub}:new:{property_id}` dispatch.
+  - The same SELECT counts the `:price_drop:` alerts the swap could add: a cut inside `notifications_price_drop_window_days` (2 days by default) on a property that only now matches.
+- **Why it is small by construction.** `:new:` is keyed on arrival (`first_seen_at`), so a place change on an older property never fires it; only properties first seen inside that window can.
+- **What the count does not do.** The apply itself moves `properties_public`, so the deployed matcher sees the new place at its next pass, before the merge. The count reports what that pass can fire; it does not hold it back. The PR body also reports the `change_kind = 'new'` dispatches written between the apply and the merge on properties whose location ad ≠ canonical ad.
 
 **Verify, live after apply:**
 - **15100.** `browse_list` (after the next tick), `properties_public` and `GET /properties/15100/location` all return 50.05995, 14.46709, rank 100, radius 10, "Pod Sychrovem II 850/43, Praha". Category is still komercni/ubytovani, and the price is unchanged.
@@ -543,7 +561,7 @@ No single response mixes the two.
   | newly unserved | 0 |
   | newly served | 1 (a foreign-only dormant property) |
   | town changes | about 84 |
-  | location ≠ canonical | about 13,784 |
+  | location ≠ canonical | about 13,784 (14,051 after W3's backfill) |
   | rings that become dots | about 10,797 |
   | live properties placed from an inactive ad (R1, accepted) | about 1,376 |
 
@@ -553,6 +571,21 @@ No single response mixes the two.
 - **Extension.** The panel's label and MF name one location on a sample of non-canonical active sale-flat ads. Today 1,391 of 9,074 (15.3 %) differ from their canonical ad by KÚ.
 - **Comparables.** EXPLAIN (ANALYZE) three comparables calls before and after; the cohort shape is spatial-first by design (W0 receipt), and any slowdown goes in the PR body for your call.
 - **Browser (read-only).** Your exact filter at phone and desktop width shows one solid dot and no ring, the same label on card and pin, and a pill reading 1.
+
+**[as built 2026-10-20] W4, one PR (migration 636 + code + docs):**
+- **Migration 636** (additive; applied and verified before the merge):
+  - the `$pre$` gate refuses while any row has one pointer without the other, and md5-gates each restated body on its live definition;
+  - `properties_location_ad_present`, added `not valid` under `lock_timeout`, then validated;
+  - `browse_projection`, `properties_public` and `recompute_city_proximity` key their `listing_location` join on `location_listing_ref_id`; `properties_public` appends that column; the proximity UPDATE writes a row only while its pointer is unchanged;
+  - the one-time proximity reset where location ≠ canonical and a stamp is set; a revert file in `migrations/reverts/`;
+  - the transaction commits before the reset and the VALIDATE; apply via apply_migration.yml only (header of 636), and re-dispatch on a lock timeout after the commit or on "deadlock detected".
+- **One definition, two shapes**, in location_data/claims_common.py beside the served rule:
+  - `SUBJECT_LOCATION_JOIN` (R7): estimation by id (it replaces the `ll` + `pll` pair), by URL, the subject MF facts, the /estimations label, the watchdog kickoff, the velocity subject and scripts/smoke_agent.py;
+  - `COHORT_LOCATION_FROM` (R8): comparables, velocity and the transit corridor. Decision 13's `EXISTS` is gone into it; `exclude_listing_ids` stays the one exclusion. Beyond R8's spelled shape it keeps `AND l.property_id = lp.id` (Decision 13's guard against a stale pointer; a filter on the `listings_pkey` probe, no plan change).
+- **Rails:** tests/test_property_location_ad_rail.py (arms 1-4; census: curation, notifications, autodedup/ui_sql, claims_common), tests/test_636_property_location_ad_readers.py (the file's text and md5 gates), tests/test_location_ad_readers_live.py, and a migrations.yml step running the live file and the rail's schema arm.
+- **Keyed on the pointer:** the property location route (phone Poloha + Mapy static map), the sold-comps lane's towns, the publishing check, the watchdog's served rule; the rollup clears `city_proximity_computed_at` when the location ad changes, and its `< repr_since` clause is deleted.
+- **Labels:** the in-app feed and the outbox print `properties_public.display_label` (R5; the outbox's two inline compositions are deleted); the extension panel prints `COALESCE(pp.display_label, the ad's own label)` (R9).
+- **Docs:** CLAUDE.md rules 15 and 25, GLOSSARY (Canonical ad, Location ad), the database skill, architecture § rules 15/16/20/25 and § Location data, location-serving-contract.md, and the roadmap tracks (location-data: the track bullet and the W3 radius hand-off; autodedup: the cross-town hand-off; ui-track: W3 and W4).
 
 ### F1 (named next subtraction, NOT in this sprint): delete the */15 list rebuild
 

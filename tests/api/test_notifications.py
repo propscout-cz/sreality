@@ -932,7 +932,10 @@ def test_dispatch_feed_reads_listings_through_the_public_view() -> None:
 
     assert "LEFT JOIN listings_public lp ON lp.id = d.listing_id" in _DISPATCH_FROM
     assert "JOIN listings l " not in _DISPATCH_FROM
-    assert "lp.display_label" in _LISTING_PROJECTION
+    # The place is the PROPERTY's location ad's (ruling R5), never the advert's own.
+    assert "LEFT JOIN properties_public pp ON pp.property_id = d.property_id" in _DISPATCH_FROM
+    assert "pp.display_label" in _LISTING_PROJECTION
+    assert "lp.display_label" not in _LISTING_PROJECTION
     # No column may sneak back onto the RLS-dark table alias.
     assert " l." not in f" {_LISTING_PROJECTION}"
 

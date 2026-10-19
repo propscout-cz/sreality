@@ -162,11 +162,15 @@ _NOT_DISMISSED = (
     "AND pd.lifted_at IS NULL)"
 )
 
+# The place is the PROPERTY's (ruling R5): a dispatch is property-grain (rule 16), so a
+# message names the address its property page, Browse, the map and the in-app feed name,
+# `properties_public.display_label` (its location ad's). The ad (`l`) still supplies the
+# layout, the price and the portal link.
 _NEW_COLS = (
     "d.id::text, d.source_kind, d.change_kind, d.sreality_id, "
     "d.subscription_id::text, d.collection_id, "
     "d.trigger_price_czk, d.prev_price_czk, "
-    "location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co, ll.obec_name, ll.cast_obce_name, ll.country_code, ll.country_status) AS display_label, "
+    "pp.display_label, "
     "l.disposition, l.price_czk, l.price_unit, l.category_main, "
     "l.source, l.source_id_native, d.message, d.dedupe_key, ch"
 )
@@ -175,7 +179,7 @@ _RETRY_COLS = (
     "cs.id, cs.channel, cs.recipient, cs.consumer, "
     "d.source_kind, d.change_kind, d.sreality_id, "
     "d.trigger_price_czk, d.prev_price_czk, "
-    "location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co, ll.obec_name, ll.cast_obce_name, ll.country_code, ll.country_status) AS display_label, "
+    "pp.display_label, "
     "l.disposition, l.price_czk, l.price_unit, l.category_main, "
     "l.source, l.source_id_native, d.message, d.dedupe_key"
 )
@@ -205,7 +209,7 @@ def drain_once(
             "LEFT JOIN channel_sends cs "
             "  ON cs.dedupe_key = 'notif:' || d.id::text || ':' || ch "
             "LEFT JOIN listings l ON l.id = d.listing_id "
-            "LEFT JOIN listing_location ll ON ll.listing_id = l.id "
+            "LEFT JOIN properties_public pp ON pp.property_id = d.property_id "
             "WHERE cs.id IS NULL "
             "  AND ch = ANY(%(channels)s) "
             "  AND d.dispatched_at > now() - %(win)s::interval "
@@ -256,7 +260,7 @@ def drain_once(
             "FROM channel_sends cs "
             "JOIN notification_dispatches d ON d.id = cs.notification_id "
             "LEFT JOIN listings l ON l.id = d.listing_id "
-            "LEFT JOIN listing_location ll ON ll.listing_id = l.id "
+            "LEFT JOIN properties_public pp ON pp.property_id = d.property_id "
             "WHERE cs.status = 'failed' AND cs.attempts < %(max_attempts)s "
             "  AND cs.channel = ANY(%(channels)s) "
             "  AND (cs.next_attempt_at IS NULL OR cs.next_attempt_at <= now()) "

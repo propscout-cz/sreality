@@ -206,11 +206,12 @@ def test_visible_reads_new_active_ads_per_portal_through_the_first_seen_index() 
     assert "a.source = any(%(sources)s::text[])" in flat and "and a.is_active" in flat
 
 
-def test_location_is_judged_on_the_canonical_ad_with_the_imported_served_predicate() -> None:
-    canonical = served_location_predicate("p.repr_listing_ref_id")
+def test_location_is_judged_on_the_location_ad_with_the_imported_served_predicate() -> None:
+    location = served_location_predicate("p.location_listing_ref_id")
     for sql in (pub._VISIBLE_SQL, pub._STOCK_SQL):
-        assert canonical in sql
+        assert location in sql
         assert served_location_predicate("a.id") not in sql
+        assert "repr_listing_ref_id" not in sql
 
 
 # --- stock -------------------------------------------------------------------------------------

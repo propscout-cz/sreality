@@ -689,7 +689,9 @@ def test_adverts_that_ran_at_the_same_time_never_form_a_step(cur):
 
 
 def test_a_canonical_change_clears_the_city_figure_stamp(cur):
-    """The city stamp survives a kept canonical advert, clears on a takeover and when older than it."""
+    """The city stamp survives a kept location advert and clears when the location advert changes (here the
+    takeover is both canonical and location advert); a stamp older than `repr_since` is kept, since
+    recompute_city_proximity's UPDATE guard covers that race (migration 636)."""
     pid = _property(cur)
     first = _advert(cur, pid, source="sreality")
     _recompute(cur, pid)
@@ -708,7 +710,7 @@ def test_a_canonical_change_clears_the_city_figure_stamp(cur):
     _located(cur, takeover)
     assert city() == (takeover, False)
     assert city("now()") == (takeover, True)
-    assert city("repr_since - interval '1 minute'") == (takeover, False)
+    assert city("repr_since - interval '1 minute'") == (takeover, True)
 
 
 def test_a_property_reset_to_no_ads_takes_its_next_ad_as_a_handover(cur):

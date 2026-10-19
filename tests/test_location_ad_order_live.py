@@ -113,7 +113,7 @@ def test_a_property_left_with_no_ads_nulls_both_pointers(cur: Any) -> None:
 
 
 def test_a_later_location_change_moves_only_the_location_pointer(cur: Any) -> None:
-    """The location ad moves while the canonical ad stays: repr_since and city proximity are the canonical ad's."""
+    """The location ad moves while the canonical ad stays: repr_since is kept and the city-proximity stamp is cleared (W4, migration 636)."""
     pid = _property(cur)
     street = _advert(cur, pid, source="idnes")
     closed = _advert(cur, pid, source="idnes", active=False)
@@ -128,7 +128,7 @@ def test_a_later_location_change_moves_only_the_location_pointer(cur: Any) -> No
     _recompute(cur, pid)
     assert _pointers(cur, pid) == (street, closed)
     cur.execute("SELECT repr_since, city_proximity_computed_at FROM properties WHERE id = %s", (pid,))
-    assert cur.fetchone() == stamps  # W3 is invisible; W4 resets the proximity stamp here on purpose
+    assert cur.fetchone() == (stamps[0], None)  # repr_since stays with the canonical ad; the location ad moved
 
 
 def test_the_function_still_inlines_into_a_lateral_call(cur: Any) -> None:

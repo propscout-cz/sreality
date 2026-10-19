@@ -293,7 +293,7 @@ def test_watchdog_matcher_renders_the_rule_first_and_unconditionally() -> None:
     from api.notifications import WatchdogFilterSpec, _build_match_clauses
 
     where, _ = _build_match_clauses(WatchdogFilterSpec())
-    assert where[0] == served_location_predicate("l.listing_id")
+    assert where[0] == served_location_predicate("l.location_listing_ref_id")
 
 
 def test_dedup_path_c_refuses_the_exempted_set() -> None:

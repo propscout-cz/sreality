@@ -242,7 +242,9 @@ def test_lookup_reads_mf_from_properties_public_by_property_id() -> None:
     assert "LEFT JOIN properties_public pp ON pp.property_id = l.property_id" in code
     assert "JOIN properties " not in code
     assert "l.mf_" not in code
-    assert "coalesce(" not in code.lower()
+    # The one COALESCE is the label's (ruling R9): an advert not yet attached keeps its own.
+    assert code.lower().count("coalesce(") == 1
+    assert "COALESCE(pp.display_label," in code
     assert "'pronajem'" not in code
     for col in ("mf_reference_rent_czk", "mf_gross_yield_pct", "mf_reference_rent"):
         assert f"pp.{col}" in code

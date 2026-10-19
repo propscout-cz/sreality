@@ -1,5 +1,5 @@
 /* Poloha on the phone: where the property is, drawn the same in the feed card's sheet and
- * on the property page. A 4:3 plate holding Mapy's static map of the canonical ad's point
+ * on the property page. A 4:3 plate holding Mapy's static map of the location ad's point
  * (streamed by the API on every view, never stored; dimmed after dusk like the photos),
  * under it the place as the page names it, a muted note when the point is only a town or a
  * part of one, and the three map apps an iPhone hands the point to.

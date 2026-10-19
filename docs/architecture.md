@@ -1522,7 +1522,20 @@ renumber.** Navigate by area:
     `location_listing_ref_id`, rank 1 of the function's `location_rank` (migration 635: a map
     point, then determined foreign, then the finest `location_granularity_rank` rung whatever
     the advert's status, then the canonical order); a singleton's birth sets both pointers to
-    its one advert and the no-ads reset nulls both. The six amenities (balcony, lift, parking,
+    its one advert, the no-ads reset nulls both, and a CHECK (migration 636) keeps the two NULL
+    together. **Every surface that places a PROPERTY reads the location advert since 636**
+    (`docs/design/one-pin/PROGRAM.md`): `browse_projection` (so `browse_list`, the map pins and
+    the tile counts), `properties_public` (so the property page and the watchdog's codes), the
+    phone's location route, the watchdog's served rule, the sold-comps lane's towns,
+    notifications (the property's `display_label`), the estimation subject
+    (`claims_common.SUBJECT_LOCATION_JOIN`: the property's location advert, or the ad's own row
+    while it has no live property), comparables, velocity and the transit corridor
+    (`claims_common.COHORT_LOCATION_FROM`, spatial-first: the place, then the live property it
+    locates, then that property's canonical advert as the comparable), and the extension's label
+    beside the property's MF. A surface about ONE advert (`listings_public`,
+    `location_pin_audit_mv`, autodedup, the location census) keeps that advert's own row. Only
+    the place moves: price, area, photos, link and every fact stay the canonical advert's, and
+    past estimation runs stay as they ran (rule 12). The six amenities (balcony, lift, parking,
     terrace, garage, cellar) are a union over every advert, active or not (MS6); every other
     physical fact (building type, ownership, energy rating, estate/usable/garden area, parking
     spaces) is the first non-empty value in the canonical order. The price figures are the
@@ -1533,11 +1546,13 @@ renumber.** Navigate by area:
     the shown price. The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
-    The city figures (`home_obec_pop`, `near_*`) follow the canonical advert's point: the rollup
-    clears `city_proximity_computed_at` when the canonical advert changes, or changed after they
-    were computed, and the hourly `recompute_city_proximity` refills them from that point. The
-    job reads only a point: a canonical advert without one keeps the figures of an earlier point
-    (or none) until it gains one. A property is born one way, `scraper.db.NEW_SINGLETONS_SQL`
+    The city figures (`home_obec_pop`, `near_*`) follow the LOCATION advert's point (since 636):
+    the rollup clears `city_proximity_computed_at` when the location advert changes, and the
+    hourly `recompute_city_proximity` refills them from that point, writing a row only while its
+    `location_listing_ref_id` is still the one the run read, so a run that races a change writes
+    nothing stale (that guard replaced 588's `< repr_since` repair). The job reads only a point:
+    a location advert without one keeps the figures of an earlier point (or none) until it gains
+    one. A property is born one way, `scraper.db.NEW_SINGLETONS_SQL`
     (a bare row linked in the same statement) then that recompute, in the straggler-attach. A
     linked advert's change reaches its property through `dirty_properties` (rule #20).
     **The SPA shows it one way (decision 11): ONE property page, `/property/:propertyId`**
@@ -1991,9 +2006,12 @@ renumber.** Navigate by area:
     advert changes: a merge, detach or delisting that hands the slot over replays nothing, and a
     same-portal re-list's handover step, which the property's price figures count, is no
     `listing_price_steps` row, so a cheaper re-list fires no price-drop alert), and
-    `_shared_filter_where` admits an advert only as its property's canonical advert and drops
-    every advert of the subject's property (`exclude_listing_ids`, the one exclusion; decision
-    13), so comparables, velocity and the corridor count each property once.
+    a cohort admits an advert only as its property's canonical advert — since 636 through its
+    FROM, `claims_common.COHORT_LOCATION_FROM` (the place, then the live property it locates,
+    then that property's canonical advert; rule 15), so a comparable stands where its property
+    does — and `_shared_filter_where` drops every advert of the subject's property
+    (`exclude_listing_ids`, the one exclusion; decision 13), so comparables, velocity and the
+    corridor count each property once.
     **PORTALS AND BROKERS are one rule too (MS19, migration 590; two-sided since 597): a filter
     selects ADS, the rows stay properties.** A property matches portal set P when any of its ads
     is on P, active or not (`properties.all_sources`); the status switch is judged on those ads
@@ -2744,7 +2762,9 @@ renumber.** Navigate by area:
     `source_count` inline (sreality parity). A `listing_location` write does not dirty its
     property either: an advert gaining or losing its map point re-ranks the canonical advert
     (migration 588), and that, a rung change or a foreign determination re-ranks the location
-    advert (migration 635), at that property's next recompute, at worst the daily sweep.
+    advert (migration 635), at that property's next recompute, at worst the daily sweep. Until
+    then every property surface keeps reading the stored location advert, whose point, label and
+    codes still refresh at every */15 list rebuild; only WHICH advert it is waits.
 21. **Every portal runs through ONE shared framework (Phase 4); per-portal code is a client
     (fetch + pacing) + a parser + a `Portal` adapter + a config row — and shared code grows no new
     portal-name branch.** The parser's outputs
@@ -3562,8 +3582,9 @@ renumber.** Navigate by area:
     the stored page body and the text lane's stored reading) and `operator_corrections`; TWELVE claim types, at most one contract entry per
     type, the town entry mandatory and naming a reader; ONE label function and ONE five-level code
     predicate for every place display and filter; no serving flags, no granularity floors, no
-    second store — `listings` and `properties` carry no place column, so a reader joins `ll on
-    ll.listing_id = l.id` and casts `ll.geom::geography` for anything measured in metres. The reason the answer is graded rather
+    second store — `listings` and `properties` carry no place column (a property carries one
+    pointer, its location advert, rule 15), so a reader joins `ll on ll.listing_id = l.id` (a
+    property's reader on `p.location_listing_ref_id`) and casts `ll.geom::geography` for anything measured in metres. The reason the answer is graded rather
     than a bare point: a `listings.geom` carried no statement of how precisely or trustworthily it
     was known, and a 75 m dedup circle around a town-centroid pin is exactly the false-merge class
     the axes prevent — remax disagreement is predicted on 54.3 % of raw addresses, bazos ran 5.56
@@ -3761,8 +3782,10 @@ all NOT NULL (`match_confidence`, `granularity`, `uncertainty_radius_m`); two st
 `claim_set_hash`, `registry_version`). `location_data/resolver/projection.py`'s column tuple IS that
 contract. `listings` and `properties` carry no place column at all (migration 508; 635's
 `location_listing_ref_id` points at an advert and stores no place), so a place read
-joins `listing_location ll on ll.listing_id = l.id`, and a property's place is its representative
-listing's (`repr_listing_ref_id`) — one child for place, price and area alike. The table is a
+joins `listing_location ll on ll.listing_id = l.id`, and a property's place is its LOCATION
+advert's (`location_listing_ref_id`, read by every property surface since 636) while its price
+and area are its canonical advert's (`repr_listing_ref_id`): two pointers, one function ranks
+both (rule 15). The table is a
 **rebuildable cache, never a store of record**: truncating it is always legal, the `dirty_locations`
 drain is its only writer, and each row is a pure function of the claims and the registry at the three
 versions stamped on it. NOT NULL on the grade axes is load-bearing — a NULL reads as "no gate" and
@@ -4293,10 +4316,11 @@ predicate over the store itself — `location_data.claims_common.SERVED_LOCATION
 rendered onto each surface's own listing-id expression — so it covers the 36,981-row migration-510
 audit set, every future listing whose page carries no location, and nothing else; a row returns the
 moment it has a geom, with no backfill and nothing to re-stamp. It is carried by the one LIST
-surface, `browse_projection` (keyed on the property's display listing, so `browse_list`,
+surface, `browse_projection` (keyed on the property's location advert since 636, so `browse_list`,
 `browse_stats_properties` and `browse_map_cells` all inherit it), plus,
 in code, the watchdog matcher (`api/notifications._build_match_clauses`,
-which reads `properties_public` and so cannot inherit) and path C candidate generation
+which reads `properties_public` and so cannot inherit; keyed on the `location_listing_ref_id`
+that view appends since 636) and path C candidate generation
 (`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
 its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS REACHABLE**:
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,

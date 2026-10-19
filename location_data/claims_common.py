@@ -34,11 +34,13 @@ SOURCES = (
 # whose page carries no location today as well as every one the lane resolves tomorrow,
 # and a row comes back the moment it has a geom with nothing to re-stamp and no backfill.
 #
-# ONE definition, rendered for whatever a surface calls the listing id (`l.id` on
-# `listings`, `l.listing_id` on `properties_public`, `p.repr_listing_ref_id` on
-# `browse_projection`). The inner alias is `sl` and not `ll`, because every surface that
-# carries this rule ALREADY joins `listing_location ll` for the label and the chip codes.
-# The SQL surfaces carry the rendered text verbatim, pinned against this constant by
+# ONE definition, rendered for whatever a surface calls the listing id. An ad-grain surface
+# keys it on the ad itself (`l.id` on `listings`); a PROPERTY-grain surface keys it on the
+# property's location ad (`l.location_listing_ref_id` on `properties_public`,
+# `p.location_listing_ref_id` on `properties` and `browse_projection`), never on the canonical
+# ad. The inner alias is `sl` and not `ll`, because every surface that carries this rule
+# ALREADY joins `listing_location ll` for the label and the chip codes. The SQL surfaces carry
+# the rendered text verbatim, pinned against this constant by
 # tests/test_location_w5_serve_resolved.py, so the two can never drift.
 _SERVED_LOCATION_TEMPLATE = (
     "EXISTS (SELECT 1 FROM listing_location {alias}"
@@ -53,6 +55,28 @@ def served_location_predicate(listing_id: str = "l.id", *, alias: str = "sl") ->
 
 
 SERVED_LOCATION_PREDICATE = served_location_predicate()
+
+# A PROPERTY stands at its location ad (`properties.location_listing_ref_id`, migration 635),
+# never at its canonical ad, which keeps price, area, photos and link. One definition in two
+# shapes, because Postgres cannot drive `listing_location_geog_gist` through a COALESCE key.
+#
+# The SUBJECT (ruling R7), a primary-key lookup from ONE ad `l`: its property's location ad,
+# or its own row while it has no live property. It follows `FROM listings l` and binds `lp`
+# (the property) and `ll` (the place).
+SUBJECT_LOCATION_JOIN = (
+    "LEFT JOIN properties lp ON lp.id = l.property_id AND lp.status = 'active' "
+    "LEFT JOIN listing_location ll ON ll.listing_id = COALESCE(lp.location_listing_ref_id, l.id)"
+)
+
+# The COHORT (ruling R8), spatial-first: the place, then the live property it locates, then
+# that property's canonical ad, which IS the comparable (price, area, snapshot_id: rule 8). A
+# property enters once and an ad with no live property never (Decision 13). It follows `FROM`
+# and binds `ll`, `lp` and `l`.
+COHORT_LOCATION_FROM = (
+    "listing_location ll "
+    "JOIN properties lp ON lp.location_listing_ref_id = ll.listing_id AND lp.status = 'active' "
+    "JOIN listings l ON l.id = lp.repr_listing_ref_id AND l.property_id = lp.id"
+)
 
 # The second rail, and the one that survives a pathological single row: no chunk budget can
 # split ONE array element, so a claim whose value alone dwarfs the budget would still be

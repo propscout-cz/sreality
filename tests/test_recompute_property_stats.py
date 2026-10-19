@@ -1368,8 +1368,9 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
     """`repr_since` moves only when the canonical advert changes from one advert to another, or
     when a property the sweep reset to no ads (`source_count` 0, which only that reset writes)
     gains one, and both alert producers count only steps after it (migration 561). The city
-    figures follow the canonical advert: their stamp clears with it, or when it predates
-    `repr_since`."""
+    figures follow the LOCATION advert (ruling R7/R8, migration 636): their stamp clears when
+    it changes, a reset property gaining one included (its pointer is NULL), and never on a
+    canonical handover alone."""
     import inspect
 
     from api import notifications as nf
@@ -1380,8 +1381,7 @@ def test_the_canonical_handover_is_stamped_for_the_price_alerts():
         "CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() "
         "ELSE p.repr_since END")
     assert _rhs(setc, "city_proximity_computed_at") == (
-        "CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 "
-        "OR p.city_proximity_computed_at < p.repr_since "
+        "CASE WHEN p.location_listing_ref_id IS DISTINCT FROM la.id "
         "THEN NULL ELSE p.city_proximity_computed_at END")
     assert ("add column if not exists repr_since timestamptz not null default '-infinity'"
             in " ".join(MIGRATION_561.read_text().split()))
@@ -1419,13 +1419,14 @@ def test_a_property_with_no_ads_is_reset_to_no_ads_once():
 
 def test_with_no_canonical_ad_a_property_leaves_the_read_models():
     """Why the reset needs no clause of its own in Browse or the map: the projection's consumer
-    rule (rule 25) reads the location row of the canonical ad, joined on `repr_listing_ref_id`,
-    so a NULL never passes it, and `browse_list` is its rows."""
+    rule (rule 25) reads the location row of the LOCATION ad, joined on `location_listing_ref_id`
+    (migration 636), which the reset NULLs with the canonical ad, so a NULL never passes it, and
+    `browse_list` is its rows."""
     from tests.test_browse_read_path_guardrail import _latest_migration_defining, _strip_comments
 
     sql = _strip_comments(_latest_migration_defining("browse_projection").read_text())
     body = " ".join(sql[sql.lower().index("view browse_projection as"):].split(";", 1)[0].split())
-    assert "left join listing_location ll on ll.listing_id = p.repr_listing_ref_id" in body
+    assert "left join listing_location ll on ll.listing_id = p.location_listing_ref_id" in body
     assert "(ll.geom IS NOT NULL OR ll.country_status = 'foreign')" in body
 
 

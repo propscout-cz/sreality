@@ -472,6 +472,16 @@ End-to-end browser flow over the U1b backend.
 - W2 of ONE PIN: `properties_map_mv` retired with its rebuild, cron job,
   registry row and `properties_map_visible`, plus the two dead MF
   functions (migration 631).
+- W3 of ONE PIN: each property stores its location ad
+  (`properties.location_listing_ref_id`: a map point first, then
+  determined foreign, then the finest RÚIAN rung, ties by the canonical
+  order), written with the canonical ad by the rollup and the singleton
+  birth (migration 635; invisible until W4).
+- W4 of ONE PIN: every property surface reads the location ad — Browse
+  list, map and counts, the property page and phone map, the watchdog,
+  notifications, the estimation subject and comparables, the extension
+  label; a CHECK keeps both pointers NULL together (migration 636). Pin
+  and card name one place: ~10.8k rings become dots.
 
 ### Chart axis unification (done)
 

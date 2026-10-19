@@ -370,11 +370,11 @@ def test_a_non_flat_has_no_row(conn, category_main):
 # --- the estimation hand-off and the inlining -------------------------------------------
 
 # The lateral browse_projection and properties_public run (567): the property's golden
-# facts + its representative's stored codes, the KÚ included.
+# facts + its location ad's stored codes (ruling R7), the KÚ included.
 _PROPERTY_MF_SQL = """
 SELECT mf.mf_reference_rent_czk, mf.mf_gross_yield_pct, mf.mf_reference_rent
   FROM properties p
-  LEFT JOIN listing_location ll ON ll.listing_id = p.repr_listing_ref_id
+  LEFT JOIN listing_location ll ON ll.listing_id = p.location_listing_ref_id
   LEFT JOIN LATERAL mf_reference(
       p.category_main, p.category_type, p.disposition, p.area_m2, p.current_price_czk,
       p.condition, p.has_balcony, p.terrace, p.furnished, p.garage, p.has_lift,
@@ -399,9 +399,10 @@ def _property(cur: Any, *, obec: int, katastr: int | None = None, disposition: s
         "UPDATE properties SET category_main = 'byt', category_type = 'prodej', "
         "  current_price_czk = %s, area_m2 = %s, disposition = %s, condition = 'dobry', "
         "  has_balcony = true, garage = true, has_lift = false, building_type = 'cihla', "
-        "  status = 'active', is_active = true, published_at = now(), repr_listing_ref_id = %s "
+        "  status = 'active', is_active = true, published_at = now(), repr_listing_ref_id = %s, "
+        "  location_listing_ref_id = %s "
         " WHERE id = %s",
-        (price, area, disposition, lid, pid),
+        (price, area, disposition, lid, lid, pid),
     )
     cur.execute(
         "INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, "

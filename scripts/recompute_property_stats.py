@@ -8,20 +8,21 @@
    point, earliest first seen among active / latest last seen among inactive, trust, id). Every
    advert field is its own: price, area (no fallback), layout, category, subtype, source,
    condition with both derived levels (rule 14), furnished, and `repr_listing_ref_id`, through
-   which the read models take place, floor, description, photos, broker and link. The location
-   advert (`location_listing_ref_id`) is rank 1 of the same function's location order (migration
-   635: a map point, then determined foreign, then the finest rung, then the canonical order),
-   set in the same statement as the canonical advert, so both are set or neither is. The six
-   amenities are a union over every advert (MS6); every other physical fact is the first
-   non-empty value in the canonical order. The price figures are the canonical advert's lineage
-   (MS10): its own and its same-portal predecessors' `listing_price_steps` plus one handover step
-   per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
+   which the read models take floor, description, photos, broker and link. The location advert
+   (`location_listing_ref_id`) is rank 1 of the same function's location order (migration 635:
+   a map point, then determined foreign, then the finest rung, then the canonical order), set in
+   the same statement as the canonical advert, so both are set or neither is; every read model
+   takes a property's place from it. The six amenities are a union over every advert (MS6);
+   every other physical fact is the first non-empty value in the canonical order. The price
+   figures are the canonical advert's lineage (MS10): its own and its same-portal predecessors'
+   `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
    the portal lists and one newest-advert date per offered portal (MS19). `repr_since` is
    stamped when the canonical advert changes, or when a property the full sweep reset to no ads
-   gains one (the price alerts start there), and
-   `city_proximity_computed_at` is cleared then and whenever it predates `repr_since`, so the
-   hourly city job recomputes the figures from the canonical advert's point (an advert without
-   one keeps the earlier figures until it gains one: the job reads only a point).
+   gains one (the price alerts start there). `city_proximity_computed_at` is cleared when the
+   LOCATION advert changes (a property reset to no ads gaining one included), so the hourly city
+   job recomputes the figures from the location advert's point (an advert without one keeps the
+   earlier figures until it gains one: the job reads only a point); the job's own UPDATE refuses
+   a row whose location advert moved while it ran (migration 636).
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
@@ -237,7 +238,7 @@ _RECOMPUTE_BATCH_SQL = f"""
       last_seen_at        = r.last_seen_at,
       repr_listing_id     = c.sreality_id,
       repr_since          = CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() ELSE p.repr_since END,
-      city_proximity_computed_at = CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 OR p.city_proximity_computed_at < p.repr_since THEN NULL ELSE p.city_proximity_computed_at END,
+      city_proximity_computed_at = CASE WHEN p.location_listing_ref_id IS DISTINCT FROM la.id THEN NULL ELSE p.city_proximity_computed_at END,
       repr_listing_ref_id = c.id,
       location_listing_ref_id = la.id,
       category_main       = c.category_main,

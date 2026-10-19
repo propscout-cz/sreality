@@ -1,4 +1,4 @@
-/* The phone's Poloha reads: where the property is (the canonical ad's point, its
+/* The phone's Poloha reads: where the property is (its location ad's point, its
  * granularity, label, zoom and a note when the point is coarse) and Mapy's static map
  * of it, which the API streams on every view and never stores (Mapy's terms). An <img>
  * cannot send the JWT, so the PNG comes through the transport as bytes and is shown
