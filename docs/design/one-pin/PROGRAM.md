@@ -236,9 +236,17 @@ No single response mixes the two.
   - `derived_artifacts.last_duration_ms` for `browse_list`: mean 61.9 s.
 - **Rule out the other explanations for the second pin.** Run your exact filter read-only against current data. List every property and pin in it, including 59364 and 603623.
 
+**W0 receipts, taken 2026-10-19 15:32Z** (file: `~/one-pin-artifacts/w0-receipts.md`, exact SQL for every number):
+- Gates: one overload each, every live body equals its file; `rebuild_browse_list` be7b0ec2… (605), `browse_map_cells` 7406f856… (629), `properties_map_visible` 9c1351bb…, `browse_list_visible` a19987a9….
+- Baselines, hot, matview / `browse_list`: (a) 29.7 / 72.6 ms; (b) 204 / 219 ms; (c) 1,501 ms cold / 904 ms; pin read 15.9 / 61.8 ms; list page 0.44 ms; exact count 49.7 ms. Every `browse_list` figure is inside its W1 target before any index exists.
+- Replay: both relations return the same 108 properties for the Praha bbox, row for row; 604858 is in neither (`merged_away`); the sreality chip plus active status leaves only 15100, which is the operator's "1 of 1". No row on Pod Sychrovem II is at rank ≥ 90, so the solid dot could only have been 604858.
+- R8: the spatial-first cohort shape reads 55.6k buffers against 42.5k for today's EXISTS (1.3×), both over the repr partial index; hence W3's twin index on the pointer.
+- Ruled-order totals: 67,892 multi-ad properties; 13,776 change location ad; 10,790 rings become dots; 84 change town (35 with both codes known); no dot becomes a ring; low-confidence location ads 259 of 13,776 (1.9 %).
+- Stray: one `browse-map-rebuild` row in `cron.job_run_details` reads `connecting` with a NULL start time; W2 looks at it before unscheduling the job.
+
 ### W1: one Browse read model, race closed (PR 1; migration 630 additive; SPA)
 
-**Migration 630, md5-gated on 605's `rebuild_browse_list` and 629's `browse_map_cells`:**
+**Migration 630, md5-gated on 605's `rebuild_browse_list` and 629's `browse_map_cells`** (the repo's gate hashes `prosrc`, per name: `be7b0ec2297d269f495a42fdcc474517` and `7406f8566504c33efc7fe4273b4f76cc`, read live 2026-10-19 15:32Z; 629's author confirmed no further change before merge)**:**
 - **`rebuild_browse_list()`, restated from 605:650-722 with two additions and nothing else** (heap order unchanged):
   1. **The map index**, built and renamed on swap like its siblings:
      `create index browse_list_next_map_idx on browse_list_next (category_main, category_type, lat, lng) include (property_id, is_active, price_czk, disposition, subtype, area_m2, last_seen_at, first_seen_at) where lat is not null and lng is not null`.
@@ -367,7 +375,8 @@ No single response mixes the two.
   - `alter table properties add column location_listing_ref_id bigint`:
     - nullable, metadata-only, guarded by `lock_timeout`;
     - a column comment states the rule;
-    - no foreign key, because ads are never deleted (rule 3) and validating one would scan two hot tables.
+    - no foreign key, because ads are never deleted (rule 3) and validating one would scan two hot tables;
+    - one partial index, `properties_location_listing_ref_active_idx (location_listing_ref_id) where status = 'active' and location_listing_ref_id is not null`, the twin of `properties_repr_listing_ref_active_idx`. W0's R8 receipt shows the spatial-first cohort shape probes exactly that index (index-only); without the twin, comparables would fall back to a heap scan after W4.
   - `property_canonical_listings` is dropped and re-created (md5-gated on 588), returning `(listing_id, canonical_rank, location_rank)`.
     - The canonical window is byte-identical to 588:60-76, and a test pins that.
     - `location_rank` = `row_number() over (order by served tier desc, rung desc nulls last, canonical_rank)`, adding one join to `location_granularity_rank`.
@@ -540,7 +549,7 @@ Not safe today:
 | | Added | Deleted |
 |---|---|---|
 | Relations | 0 | **1** matview (`properties_map_mv`, 824,675 rows, 464 MB with indexes) |
-| Indexes | 1 (`browse_list_map_idx`, ≈92 MB est.) | 2 (`properties_map_mv` pk + cover 92.4 MB) → **net −1** |
+| Indexes | 2 (`browse_list_map_idx`, ≈92 MB est.; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3) | 2 (`properties_map_mv` pk + cover 92.4 MB) → **net 0** |
 | Functions | 0 | **2** (`rebuild_properties_map_mv`, `properties_map_visible`) + **2** dead MF functions (R11) |
 | Cron jobs / registry rows / Health cells | 0 | **1 / 1 / 1** |
 | Table columns | **1** (`properties.location_listing_ref_id`) | 0 |
