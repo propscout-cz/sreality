@@ -1,6 +1,6 @@
-/* The one curated-set control (docs/design/curated-set-scope.md): unit chips
+/* The one curated-set control (docs/design/curated-set-scope.md): element chips
  * cycle off → in → not in, the dedicated "not in" chip closes the row and
- * disables the units, the pipeline alone offers "V pipeline", units group as
+ * disables the elements, the pipeline alone offers "V pipeline", elements group as
  * Mine / Shared with me / No longer available, and a failed read is a retry
  * (MS16), never "none yet". */
 
@@ -12,7 +12,7 @@ import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
 import { parseSetScope, type SetScope } from '@/lib/setScope';
 
-import { AccountCuratedSetFilter, CuratedSetFilter, joinReads, type SetUnit } from './CuratedSetFilter';
+import { AccountCuratedSetFilter, CuratedSetFilter, joinReads, type SetElement } from './CuratedSetFilter';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -25,7 +25,7 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
 }));
 
 const READ = { isLoading: false, isError: false, data: [], refetch: () => {} };
-const TAGS: SetUnit[] = [
+const TAGS: SetElement[] = [
   { id: 5, label: 'k prohlídce' },
   { id: 6, label: 'odmítnuto' },
 ];
@@ -38,10 +38,10 @@ const withQueries = (ui: React.ReactElement) =>
     </QueryClientProvider>,
   );
 
-describe('<CuratedSetFilter> unit chips', () => {
+describe('<CuratedSetFilter> element chips', () => {
   it('cycles a chip off → in → not → off and says which it is', () => {
     const onChange = vi.fn();
-    const props = { set: 'tags' as const, units: TAGS, onChange, query: READ };
+    const props = { set: 'tags' as const, elements: TAGS, onChange, query: READ };
     const { rerender } = render(<CuratedSetFilter {...props} value={null} />);
     fireEvent.click(screen.getByRole('button', { name: 'k prohlídce' }));
     expect(onChange).toHaveBeenLastCalledWith(IN([5]));
@@ -61,14 +61,14 @@ describe('<CuratedSetFilter> unit chips', () => {
 
   it('explains AND only for tags, and only once two are required', () => {
     const { rerender } = render(
-      <CuratedSetFilter set="tags" units={TAGS} value={IN([5])} onChange={() => {}} query={READ} />,
+      <CuratedSetFilter set="tags" elements={TAGS} value={IN([5])} onChange={() => {}} query={READ} />,
     );
     expect(screen.queryByText(/všechny vybrané/)).toBeNull();
-    rerender(<CuratedSetFilter set="tags" units={TAGS} value={IN([5, 6])} onChange={() => {}} query={READ} />);
+    rerender(<CuratedSetFilter set="tags" elements={TAGS} value={IN([5, 6])} onChange={() => {}} query={READ} />);
     expect(screen.getByText(/všechny vybrané/)).toBeInTheDocument();
     /* Collections are ANY: no AND hint. */
     rerender(
-      <CuratedSetFilter set="collections" units={TAGS} value={IN([5, 6])} onChange={() => {}} query={READ} />,
+      <CuratedSetFilter set="collections" elements={TAGS} value={IN([5, 6])} onChange={() => {}} query={READ} />,
     );
     expect(screen.queryByText(/všechny vybrané/)).toBeNull();
   });
@@ -78,7 +78,7 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
   it('ends the row with the dedicated "not in" chip, which cycles off ↔ out', () => {
     const onChange = vi.fn();
     const { rerender } = render(
-      <CuratedSetFilter set="collections" units={TAGS} value={IN([5])} onChange={onChange} query={READ} />,
+      <CuratedSetFilter set="collections" elements={TAGS} value={IN([5])} onChange={onChange} query={READ} />,
     );
     const chips = screen.getAllByRole('button');
     expect(chips.at(-1)).toHaveTextContent('V žádné kolekci');
@@ -88,7 +88,7 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
     rerender(
       <CuratedSetFilter
         set="collections"
-        units={TAGS}
+        elements={TAGS}
         value={{ set: 'out', in: [], out: [] }}
         onChange={onChange}
         query={READ}
@@ -96,7 +96,7 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
     );
     const notIn = screen.getByRole('button', { name: 'V žádné kolekci' });
     expect(notIn).toHaveAttribute('aria-pressed', 'true');
-    /* The units cannot be picked while the whole set is excluded. */
+    /* The elements cannot be picked while the whole set is excluded. */
     for (const u of TAGS) expect(screen.getByRole('button', { name: u.label })).toBeDisabled();
     fireEvent.click(notIn);
     expect(onChange).toHaveBeenLastCalledWith(null);
@@ -104,17 +104,17 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
 
   it('names the "not in" chip per set: Bez štítků, Mimo pipeline', () => {
     const { rerender } = render(
-      <CuratedSetFilter set="tags" units={TAGS} value={null} onChange={() => {}} query={READ} />,
+      <CuratedSetFilter set="tags" elements={TAGS} value={null} onChange={() => {}} query={READ} />,
     );
     expect(screen.getByRole('button', { name: 'Bez štítků' })).toBeInTheDocument();
-    rerender(<CuratedSetFilter set="pipeline" units={TAGS} value={null} onChange={() => {}} query={READ} />);
+    rerender(<CuratedSetFilter set="pipeline" elements={TAGS} value={null} onChange={() => {}} query={READ} />);
     expect(screen.getByRole('button', { name: 'Mimo pipeline' })).toBeInTheDocument();
   });
 
   it('offers the whole-set include chip for the pipeline only, leading the row', () => {
     const onChange = vi.fn();
     const { rerender } = render(
-      <CuratedSetFilter set="pipeline" units={TAGS} value={null} onChange={onChange} query={READ} />,
+      <CuratedSetFilter set="pipeline" elements={TAGS} value={null} onChange={onChange} query={READ} />,
     );
     expect(screen.getAllByRole('button')[0]).toHaveTextContent('V pipeline');
     fireEvent.click(screen.getByRole('button', { name: 'V pipeline' }));
@@ -124,7 +124,7 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
     rerender(
       <CuratedSetFilter
         set="pipeline"
-        units={TAGS}
+        elements={TAGS}
         value={{ set: 'in', in: [], out: [] }}
         onChange={onChange}
         query={READ}
@@ -135,7 +135,7 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
     expect(onChange).toHaveBeenLastCalledWith(IN([5]));
 
     for (const set of ['tags', 'collections'] as const) {
-      rerender(<CuratedSetFilter set={set} units={TAGS} value={null} onChange={onChange} query={READ} />);
+      rerender(<CuratedSetFilter set={set} elements={TAGS} value={null} onChange={onChange} query={READ} />);
       expect(screen.queryByRole('button', { name: 'V pipeline' })).toBeNull();
       expect(screen.getAllByRole('button')).toHaveLength(TAGS.length + 1);
     }
@@ -143,7 +143,7 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
   it('draws a whole-set include a link carries (?tags=any) for a set that does not offer it, and clears it', () => {
     const onChange = vi.fn();
     const value = parseSetScope(new URLSearchParams('tags=any'), 'tags');
-    render(<CuratedSetFilter set="tags" units={TAGS} value={value} onChange={onChange} query={READ} />);
+    render(<CuratedSetFilter set="tags" elements={TAGS} value={value} onChange={onChange} query={READ} />);
     const chip = screen.getByRole('button', { name: 'Se štítkem' });
     expect(chip).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(chip);
@@ -153,29 +153,29 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
 
 describe('joinReads', () => {
   it('fails while any read has nothing to show, so the frame retries both', () => {
-    const units = { isLoading: false, isError: true, data: undefined, refetch: vi.fn() };
+    const elements = { isLoading: false, isError: true, data: undefined, refetch: vi.fn() };
     const map = { ...READ, data: new Map(), refetch: vi.fn() };
-    const joined = joinReads(map, units);
+    const joined = joinReads(map, elements);
     expect(joined.isError).toBe(true);
     expect(joined.data).toBeUndefined();
     joined.refetch();
-    expect(units.refetch).toHaveBeenCalled();
+    expect(elements.refetch).toHaveBeenCalled();
     expect(map.refetch).toHaveBeenCalled();
     expect(joinReads(map, READ).isError).toBe(false);
   });
 });
 
-describe('<CuratedSetFilter> groups and vanished units', () => {
+describe('<CuratedSetFilter> groups and vanished elements', () => {
   it('groups mine and shared-with-me over one value, and keeps a vanished pick clearable', () => {
     const onChange = vi.fn();
-    const units: SetUnit[] = [
+    const elements: SetElement[] = [
       { id: 7, label: 'Šortlist', group: 'mine' },
       { id: 9, label: 'monitoring · petr@example.cz', group: 'shared' },
     ];
     render(
       <CuratedSetFilter
         set="collections"
-        units={units}
+        elements={elements}
         value={{ set: null, in: [9, 404], out: [] }}
         onChange={onChange}
         query={READ}
@@ -207,7 +207,7 @@ describe('<CuratedSetFilter> groups and vanished units', () => {
     render(
       <CuratedSetFilter
         set="collections"
-        units={[{ id: 7, label: 'Šortlist', group: 'mine' }]}
+        elements={[{ id: 7, label: 'Šortlist', group: 'mine' }]}
         value={null}
         onChange={() => {}}
         query={READ}
@@ -222,7 +222,7 @@ describe('<CuratedSetFilter> groups and vanished units', () => {
     render(
       <CuratedSetFilter
         set="tags"
-        units={TAGS}
+        elements={TAGS}
         value={{ set: null, in: [5], out: [99] }}
         onChange={onChange}
         query={READ}
@@ -236,24 +236,24 @@ describe('<CuratedSetFilter> groups and vanished units', () => {
 });
 
 describe('<CuratedSetFilter> the frame', () => {
-  it('says the units are loading, or that there are none yet', () => {
+  it('says the elements are loading, or that there are none yet', () => {
     const { rerender } = render(
       <CuratedSetFilter
         set="tags"
-        units={[]}
+        elements={[]}
         value={null}
         onChange={() => {}}
         query={{ ...READ, isLoading: true }}
       />,
     );
     expect(screen.getByText('Loading…')).toBeInTheDocument();
-    rerender(<CuratedSetFilter set="tags" units={[]} value={null} onChange={() => {}} query={READ} />);
+    rerender(<CuratedSetFilter set="tags" elements={[]} value={null} onChange={() => {}} query={READ} />);
     expect(screen.getByText(/No tags yet/)).toBeInTheDocument();
-    /* An active scope with no units left stays deselectable. */
+    /* An active scope with no elements left stays deselectable. */
     rerender(
       <CuratedSetFilter
         set="tags"
-        units={[]}
+        elements={[]}
         value={{ set: 'out', in: [], out: [] }}
         onChange={() => {}}
         query={READ}

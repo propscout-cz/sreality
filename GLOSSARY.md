@@ -125,10 +125,16 @@ Everything a user adds to a property by hand: notes, a pipeline card, collection
 a dismissal. Curation belongs to the user's account and follows the property.
 _Avoid_: operator state, user-defined information, user-created state, carried state
 
+**Curated set**:
+Tags, collections or pipeline stages read as one kind of filter: each tag, collection or stage is an
+element of its set, and the filter asks "in it", "not in it" or "in none of it"; the database judges
+membership under the caller's own row-level security, so shared collections count and nothing else does.
+_Avoid_: scope (alone), group, unit, bucket
+
 **Pipeline card**:
 A property's place in one account's deal pipeline. At most one per property per account. As a
 filter: in the pipeline (or in chosen stages), not in chosen stages, or in none of it ("Mimo
-pipeline": no card at any stage, closed ones included).
+pipeline": no pipeline card at any stage, closed ones included).
 _Avoid_: deal, card (alone)
 
 **Stage**:
@@ -161,6 +167,11 @@ _Avoid_: štítek (in code), label, category, flag
 **Dismissal**:
 An account's decision to hide a property from its own Browse.
 _Avoid_: hide, mute, ignore, archive
+
+**Lens**:
+A filter over the account's own curation that sits outside a preset's identity: the three curated-set
+scopes, the broker scope and the dismissed reveal; it never dirties a preset, and a preset click resets it.
+_Avoid_: view, mode, preset filter, overlay
 
 **Fold**:
 An item of one account's curation that gives way in a merge: the losing one of two of a kind (two

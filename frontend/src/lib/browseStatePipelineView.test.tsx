@@ -90,40 +90,29 @@ describe('loadPipelineView (URL adapter)', () => {
   });
 });
 
-/* Operator ruling 6 (2026-10-19): the curated sets are lenses OUTSIDE preset
- * identity — a preset click sets the market criteria and keeps every active set
- * (it used to clear them). The ruling names the three sets: the broker scope and
- * the dismissed reveal stay outside identity but still end on a preset click. */
-describe('loadPreset keeps the active lenses', () => {
-  const preset = (filters: Record<string, unknown>) => ({
-    id: 'vys',
-    name: 'Vysočany byty',
-    filter_spec: { filters, sort: null },
-    created_at: '2026-10-01T00:00:00Z',
-    updated_at: '2026-10-01T00:00:00Z',
-  });
-
-  it('carries the pipeline, collections and tags lenses across a preset click', () => {
+/* Operator ruling 2026-10-19: everything resets on a preset click and what the
+ * preset stores gets applied — the lenses stay outside preset identity, so a
+ * click turns them off like the broker scope and the dismissed reveal. */
+describe('loadPreset resets the lenses', () => {
+  it('turns off the active curated sets, the broker and the dismissed reveal', () => {
     const h = mount(
-      '/browse?cat=dum&pipeline_excluded=any&collections=4&collections_excluded=9&tags=1,2&tags_excluded=3&dismissed=show',
+      '/browse?cat=dum&pipeline_excluded=any&collections=4&tags=1,2&broker=7&dismissed=show',
     );
-    const before = h.filters;
-    expect(before.pipeline).toEqual({ set: 'out', in: [], out: [] });
-    act(() => h.state.loadPreset(preset({ categoryMain: ['byt'], categoryType: 'prodej', dispositions: ['2+kk'] }) as never));
-    const after = h.filters;
-    expect(after.categoryMain).toEqual(['byt']);
-    expect(after.dispositions).toEqual(['2+kk']);
-    expect(after.pipeline).toEqual(before.pipeline);
-    expect(after.collections).toEqual({ set: null, in: [4], out: [9] });
-    expect(after.tags).toEqual({ set: null, in: [1, 2], out: [3] });
-    expect(after.showDismissed).toBe(false);
-    expect(h.state.activePresetId).toBe('vys');
-  });
-
-  it('never lets a lens a pre-ruling preset still stores override the live one', () => {
-    const h = mount('/browse?cat=dum');
-    act(() => h.state.loadPreset(preset({ categoryMain: ['byt'], tags: [7], pipeline: { stage_ids: [] } }) as never));
-    expect(h.filters.tags).toBeNull();
+    expect(h.filters.pipeline).toEqual({ set: 'out', in: [], out: [] });
+    act(() => h.state.loadPreset({
+      id: 'vys',
+      name: 'Vysočany byty',
+      filter_spec: { filters: { categoryMain: ['byt'], categoryType: 'prodej', dispositions: ['2+kk'] }, sort: null },
+      created_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:00:00Z',
+    } as never));
+    expect(h.filters.categoryMain).toEqual(['byt']);
+    expect(h.filters.dispositions).toEqual(['2+kk']);
     expect(h.filters.pipeline).toBeNull();
+    expect(h.filters.collections).toBeNull();
+    expect(h.filters.tags).toBeNull();
+    expect(h.filters.brokerId).toBeNull();
+    expect(h.filters.showDismissed).toBe(false);
+    expect(h.state.activePresetId).toBe('vys');
   });
 });

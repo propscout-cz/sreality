@@ -75,7 +75,7 @@ class UiControl(StrEnum):
     BOOLEAN = "boolean"                # plain checkbox
     LOCATION = "location"              # composite: districts + map + dot/radius
     CITY_INDEX_RULES = "city_index_rules"  # repeatable {index, op, threshold} rows
-    SET_SCOPE = "set_scope"            # curated set: unit chips off/in/out + a "not in" chip
+    SET_SCOPE = "set_scope"            # curated set: element chips off/in/out + a "not in" chip
 
 
 class FilterType(StrEnum):
@@ -1694,10 +1694,10 @@ def _build_registry() -> dict[str, FilterDef]:
             pg_column=None,  # judged via property_pipeline_public (migration 629)
             default=None,
             description=(
-                "Deal-pipeline scope (rule #22) as a curated-set scope; units are "
-                "stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage "
-                "(the 'V pipeline' chip); `set` 'out' = no card at any stage, "
-                "terminal stages included (the 'Mimo pipeline' chip); `in` = a card "
+                "Deal-pipeline scope (rule #22) as a curated-set scope; elements "
+                "are stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage "
+                "(the 'V pipeline' chip); `set` 'out' = no pipeline card at any "
+                "stage, terminal stages included (the 'Mimo pipeline' chip); `in` = a card "
                 "at ANY listed stage; `out` = no card at a listed stage. Stage ids "
                 "are account-scoped, so only the `set` side is portable."
             ),

@@ -2307,18 +2307,18 @@ renumber.** Navigate by area:
     BROWSE-only for `pipeline`'s reasons (rule #22): a watchdog scoped to the operator's own
     groupings would fire on their own clicks, and the estimation agent must never see their taste.
     Like the other lenses it sits OUTSIDE preset identity (`PRESET_EXCLUDED_KEYS`), so toggling
-    it never dirties a loaded preset and a preset click keeps it (`withPresetLenses`).
+    it never dirties a loaded preset, and a preset click resets it (ruling 2026-10-19).
     **Curated sets are ONE kind of filter (2026-10-19, `docs/design/curated-set-scope.md`).**
     Tags, collections and pipeline stages share one value (`SetScope`: a whole-set side `in` /
-    `out` plus `in` and `out` unit lists — in it, not in it, in none of it), one URL grammar
+    `out` plus `in` and `out` element lists — in it, not in it, in none of it), one URL grammar
     (`<set>=any|<ids>`, `<set>_excluded=any|<ids>`; junk on any side degrades to off), one control
-    (`components/filter-controls/CuratedSetFilter`: unit chips cycle off → in → "− name", a
+    (`components/filter-controls/CuratedSetFilter`: element chips cycle off → in → "− name", a
     dedicated not-in chip — "V žádné kolekci" / "Mimo pipeline" / "Bez štítků" — and "V pipeline"
     for the pipeline only; Browse sidebar, phone sheet and the board bar) and one in-memory rule
     (`matchesScope`, the board and the phone roll). **Membership is judged in the database under
     the caller's RLS (migration 629)**: `browse_list_visible` / `properties_map_visible` /
     `browse_stats_properties` / `browse_map_cells` take `<set>_set` / `_in` / `_out` for each set,
-    judged through the `*_public` membership views; only unit ids travel (`scopeArgs`, active sides
+    judged through the `*_public` membership views; only element ids travel (`scopeArgs`, active sides
     only). This SUPERSEDES the 2026-10-14 client prefilters: `lib/tagScope.ts`,
     `lib/collectionScope.ts` and `resolveTag/Collection/PipelinePrefilter` turned membership rows
     into property-id allowlists, and migration 598's trailing `property_ids_excluded bigint[]` (the
@@ -2911,7 +2911,7 @@ renumber.** Navigate by area:
     **Browse can be SCOPED to the pipeline** (`ListingFilters.pipeline`, a curated-set `SetScope`
     — rule #18; `?pipeline=any|<stage ids>` and `?pipeline_excluded=any|<stage ids>`, registry id
     `pipeline`, BROWSE agenda only): in the pipeline ("V pipeline"), in given stages, not in given
-    stages, or "Mimo pipeline" (no card at any stage, terminal included — operator ruling
+    stages, or "Mimo pipeline" (no pipeline card at any stage, terminal included — operator ruling
     2026-10-19). Since migration 629 it is judged in the database through
     `property_pipeline_public` under the caller's RLS, as `pipeline_set` / `_in` / `_out` on all
     four cohort functions, so list, map and Stats cannot disagree; until then it was a client
@@ -2932,8 +2932,8 @@ renumber.** Navigate by area:
     the cohort the operator has since built, and the MODIFIER semantics still exist in the
     sidebar's Curation → Pipeline control (`CuratedSetFilter`: compose with current filters, pick
     or exclude stages). It is still **not a preset**: `PRESET_EXCLUDED_KEYS` keeps it out of what
-    a preset stores and out of the dirty comparison, so it never offers "Update preset" and it
-    survives loading one (`withPresetLenses`). A
+    a preset stores and out of the dirty comparison, so it never offers "Update preset"; loading
+    a preset resets it with every lens (ruling 2026-10-19). A
     watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger. The
     extension bookmarks AND changes stage property-grain like every other surface: it reads
     `property_id` + membership (incl. `stage_id`) off the batched `POST /listings/lookup` (and

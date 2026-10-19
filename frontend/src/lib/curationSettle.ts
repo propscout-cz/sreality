@@ -54,11 +54,11 @@ function cohorts(qc: QueryClient, lens: CurationLens) {
   return [...out.values()];
 }
 
-/* Each set's member map: its key, and a property's unit ids in it. */
-const unitIds = (map: Map<number, number[]>, propertyId: number) => map.get(propertyId) ?? [];
+/* Each set's member map: its key, and a property's element ids in it. */
+const elementIds = (map: Map<number, number[]>, propertyId: number) => map.get(propertyId) ?? [];
 const MEMBERS: Record<CuratedSet, { key: QueryKey; ids: (map: never, propertyId: number) => number[] }> = {
-  tags: { key: curationKeys.propertyTagMembers, ids: unitIds },
-  collections: { key: curationKeys.propertyCollectionMembers, ids: unitIds },
+  tags: { key: curationKeys.propertyTagMembers, ids: elementIds },
+  collections: { key: curationKeys.propertyCollectionMembers, ids: elementIds },
   pipeline: {
     key: pipelineKeys.members,
     ids: (map: PipelineMembers, propertyId) => {
@@ -156,15 +156,15 @@ export async function settleMemberWrite(
   qc: QueryClient,
   set: 'tags' | 'collections',
   propertyId: number,
-  unitId: number,
+  elementId: number,
   member: boolean,
 ): Promise<void> {
   const patches = settlePatches(qc, propertyId, set);
   qc.setQueryData<Map<number, number[]>>(MEMBERS[set].key, (prev) => {
     if (!prev) return prev;
     const next = new Map(prev);
-    const ids = (prev.get(propertyId) ?? []).filter((id) => id !== unitId);
-    if (member) ids.push(unitId);
+    const ids = (prev.get(propertyId) ?? []).filter((id) => id !== elementId);
+    if (member) ids.push(elementId);
     if (ids.length) next.set(propertyId, ids);
     else next.delete(propertyId);
     return next;

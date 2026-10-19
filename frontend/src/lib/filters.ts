@@ -246,7 +246,7 @@ export interface ListingFilters {
    * server-side (migration 537); true reveals them. A lens over the operator's
    * own state, so it sits OUTSIDE preset identity (PRESET_EXCLUDED_KEYS). */
   showDismissed: boolean;
-  /* Browse-only deal-pipeline scope (rule #22, lib/setScope; units = stage
+  /* Browse-only deal-pipeline scope (rule #22, lib/setScope; elements = stage
    * ids). Null = off. A lens over the operator's own state, so it sits OUTSIDE
    * a saved preset's identity (PRESET_EXCLUDED_KEYS), like tags + collections. */
   pipeline: SetScope | null;
@@ -260,7 +260,7 @@ export interface ListingFilters {
    * properties where one of this broker's ads matches the portal and status
    * filters, so one ad satisfies both (queries.ts:adScope). */
   brokerId: number | null;
-  /* Operator tags (migration 025, lib/setScope): the in side needs EVERY unit
+  /* Operator tags (migration 025, lib/setScope): the in side needs EVERY element
    * (AND). Ids, not names, so renames stay queryable. Null = off; a lens. */
   tags: SetScope | null;
   /* Browse-only collection scope (rule #18, lib/setScope; own + shared). Null = off. */
@@ -1075,7 +1075,8 @@ export const pipelineViewFilters = (): ListingFilters => ({
  * curated sets (tags, collections, pipeline), the broker and the dismissed
  * reveal are lenses over the operator's own state, orthogonal to every preset
  * and combinable with all of them — so toggling one must never offer to bake
- * itself into the saved filters.
+ * itself into the saved filters. A preset click resets every one of them and
+ * applies what the preset stores (operator ruling 2026-10-19).
  *
  * `bounds` is deliberately NOT here: it is opt-in per save (the "include map
  * area" toggle), which is a different rule, expressed below. */
@@ -1088,20 +1089,6 @@ const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
   for (const k of PRESET_EXCLUDED_KEYS) {
     (out as Record<string, unknown>)[k] = DEFAULT_FILTERS[k];
   }
-  return out;
-};
-
-/* A preset click keeps the active curated-set lenses (operator ruling 6,
- * 2026-10-19): the preset sets the market criteria, the sets ride along
- * unchanged — including a set a pre-ruling blob still stores, which never
- * overrides the live one. The ruling names the three sets only: the broker
- * scope and the dismissed reveal still end on a preset click, as before. */
-export const withPresetLenses = (
-  preset: ListingFilters,
-  current: ListingFilters,
-): ListingFilters => {
-  const out = { ...preset };
-  for (const name of CURATED_SET_NAMES) out[name] = current[name];
   return out;
 };
 

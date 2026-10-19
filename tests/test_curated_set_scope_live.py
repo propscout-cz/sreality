@@ -1,25 +1,12 @@
-"""Curated membership is judged under the caller's RLS (migration 629), on the replayed schema.
+"""Curated membership is judged under the caller's RLS (migration 629), on the replayed schema."""
 
-Two tenants and seven properties, each listed in `browse_list` (a real table since 590,
-`select *` of browse_projection; minimum columns, as tests/test_stats_pivot_live.py seeds it):
-
-  card    A's pipeline card + a member of A's PRIVATE collection
-  shared  a member of A's collection SHARED with B (migration 610)
-  t12     carries A's tags t1 and t2
-  t1      carries t1 only
-  t2      carries t2 only
-  plain   nothing
-  gone    dismissed by A (migration 536)
-
-Every read runs under `_scoped` (SET LOCAL ROLE authenticated + the caller's JWT claims,
-the shape api.tenant_pool.tenant_conn scopes a request with, as in
-tests/test_collection_shares_live.py), and every read goes through BOTH the SRF the SPA's
-list reads (`browse_list_visible`) and the aggregate RPC (`browse_stats_properties`, whose
-`filtered` must equal the SRF's row count), so the two clause blocks are proven to agree.
-Seeding runs as the owner login, which RLS never binds, inside one transaction that always
-rolls back (tests/_live_property.cur). The migrations lane sets DB_RAILS_REQUIRED=1, so a
-lost TEST_DATABASE_URL goes red instead of skipping green.
-"""
+# Two tenants and seven properties, each listed in `browse_list` (minimum columns, as
+# tests/test_stats_pivot_live.py seeds it): card (A's pipeline card + A's PRIVATE collection),
+# shared (A's collection SHARED with B, migration 610), t12 / t1 / t2 (A's tags), plain, gone
+# (dismissed by A, migration 536). Every read runs under `_scoped` (the tenant_conn shape) through
+# BOTH the SRF (`browse_list_visible`) and the stats RPC, whose `filtered` must match, so the two
+# clause blocks are proven to agree. Seeding runs as the owner login inside one rolled-back
+# transaction; the migrations lane sets DB_RAILS_REQUIRED=1, so a lost TEST_DATABASE_URL goes red.
 
 from __future__ import annotations
 
@@ -174,7 +161,7 @@ def _visible(cur: Any, w: _World, t: _Tenant, **args: Any) -> set[int]:
     return rows
 
 
-def test_a_card_and_a_collection_hide_the_property_from_their_owner_only(cur, world) -> None:
+def test_a_card_and_a_collection_hide_the_property_from_their_owner_only(cur: Any, world: _World) -> None:
     w = world
     assert _visible(cur, w, w.a) == w.everything - w.ids("gone")
     assert w.props["card"] not in _visible(cur, w, w.a, pipeline_set="out")
@@ -190,7 +177,7 @@ def test_a_card_and_a_collection_hide_the_property_from_their_owner_only(cur, wo
     assert _visible(cur, w, w.b, collections_in=[w.private]) == set()
 
 
-def test_a_shared_collection_counts_for_the_recipient(cur, world) -> None:
+def test_a_shared_collection_counts_for_the_recipient(cur: Any, world: _World) -> None:
     """Operator ruling 3: "any collection" spans own + shared with me."""
     w = world
     assert _visible(cur, w, w.b, collections_set="out") == w.everything - w.ids("shared")
@@ -200,7 +187,7 @@ def test_a_shared_collection_counts_for_the_recipient(cur, world) -> None:
     assert _visible(cur, w, w.a, collections_set="in") == w.ids("card", "shared")
 
 
-def test_tags_in_is_every_tag_and_tags_out_is_any_tag(cur, world) -> None:
+def test_tags_in_is_every_tag_and_tags_out_is_any_tag(cur: Any, world: _World) -> None:
     w = world
     assert _visible(cur, w, w.a, tags_in=[w.t1, w.t2]) == w.ids("t12")
     assert _visible(cur, w, w.a, tags_in=[w.t1, w.t2, w.t1]) == w.ids("t12")
@@ -216,12 +203,12 @@ def test_tags_in_is_every_tag_and_tags_out_is_any_tag(cur, world) -> None:
 
 @pytest.mark.parametrize("side", [f"{s}_{d}" for s in ("tags", "collections", "pipeline")
                                   for d in ("in", "out")])
-def test_an_empty_unit_list_constrains_nothing(cur, world, side: str) -> None:
+def test_an_empty_element_list_constrains_nothing(cur: Any, world: _World, side: str) -> None:
     w = world
     assert _visible(cur, w, w.a, **{side: []}) == w.everything - w.ids("gone")
 
 
-def test_hide_dismissed_is_the_default_and_per_account(cur, world) -> None:
+def test_hide_dismissed_is_the_default_and_per_account(cur: Any, world: _World) -> None:
     w = world
     with _scoped(cur, w.a):
         cur.execute(

@@ -14,17 +14,16 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   (`CuratedSetFilter`, with "V žádné kolekci" / "Mimo pipeline" / "Bez štítků" and "V pipeline") on
   the Browse sidebar, the phone sheet and the board bar. Membership is judged in the database under
   the caller's RLS (migration 629: nine scope parameters + `hide_dismissed` on the four cohort
-  functions), so no property id rides a URL. All three are lenses outside preset identity, kept
-  across a preset click. One settle (`lib/curationSettle.ts`) drops a card the moment a save,
+  functions), so no property id rides a URL. All three are lenses outside preset identity, reset
+  by a preset click (ruling 2026-10-19). One settle (`lib/curationSettle.ts`) drops a card the moment a save,
   funnel, tag or dismiss takes it out of the active lens. Layers A–C (858a5b5b, 91812539,
   1ed93180). Deleted: `tagScope`, `collectionScope`, `PipelineScopePicker`, `TagFilterControl`,
   `CollectionsPicker`, the three client resolvers + the denylist seam, `HIDING_DISMISSED`, the
   board's second codec, the `cohortScoped` / `pipelineScoped` / `collectionScoped` props, the
   registry's `tags_excluded`. Architecture § rules 18 + 22.
-- **Next:** the contract migration (drop `property_ids_excluded` + dead `listing_feed_visible()`)
-  on the operator's word after Railway confirms the rollout; the phone Feed's scope chip still
-  strips the lenses (`feedFiltersForPreset`); whole-collection / tag DELETEs and merges still
-  revalidate broadly instead of settling.
+- **Next:** the contract migration (drop `property_ids_excluded`) on the operator's word after
+  Railway confirms the rollout; whole-collection / tag DELETEs and merges still revalidate broadly
+  instead of settling.
 
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:

@@ -29,9 +29,9 @@ import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
 import {
   CuratedSetFilter,
-  collectionUnit,
+  collectionElement,
   joinReads,
-  tagUnit,
+  tagElement,
 } from '@/components/filter-controls/CuratedSetFilter';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { usePhoneShell } from '@/lib/phoneShell';
@@ -205,9 +205,9 @@ function PipelineBoardPage() {
     return {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
-      collections: offered.options.map(collectionUnit),
+      collections: offered.options.map(collectionElement),
       showCollections: offered.show,
-      tags: tags.options.map(tagUnit),
+      tags: tags.options.map(tagElement),
       showTags: tags.show,
     };
   }, [cards, members, collections, tagMembers, tagsQ.data, scopes]);
@@ -313,12 +313,12 @@ function PipelineBoardPage() {
           )}
           {/* The curation lenses fail open (rule #22) and say so (MS16): the
               control's read is the member map the offer stands on AND the
-              units it names, so a failed list is a retry, not "#id" chips. */}
+              elements it names, so a failed list is a retry, not "#id" chips. */}
           {(bar.showCollections || readFailed(collectionsRead)) && (
             <Field label="Kolekce">
               <CuratedSetFilter
                 set="collections"
-                units={bar.collections}
+                elements={bar.collections}
                 value={scopes.collections}
                 onChange={(next) => setScope('collections', next)}
                 query={collectionsRead}
@@ -329,7 +329,7 @@ function PipelineBoardPage() {
             <Field label="Štítky">
               <CuratedSetFilter
                 set="tags"
-                units={bar.tags}
+                elements={bar.tags}
                 value={scopes.tags}
                 onChange={(next) => setScope('tags', next)}
                 query={tagsRead}
