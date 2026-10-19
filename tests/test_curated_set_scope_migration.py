@@ -189,9 +189,14 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
     assert "portal_status_matches" not in outside
 
 
+# 632 restated the Stats pivot with its floor at five and nothing else changed (tests/test_stats_min_n_migration.py
+# pins that), so the pivot's latest definition is 632's; every other function is still 629's.
+_LATER = {"browse_stats_properties": "632_stats_min_n_5.sql"}
+
+
 def test_these_are_the_latest_definitions() -> None:
     for fn in (*SOURCES, *RPCS):
-        assert latest_definition(fn).name == NAME, fn
+        assert latest_definition(fn).name == _LATER.get(fn, NAME), fn
 
 
 def test_the_receipt_probes_the_four_functions() -> None:

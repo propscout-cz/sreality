@@ -2153,7 +2153,7 @@ renumber.** Navigate by area:
     `toolkit/stats_registry.py` — which also emits `statsRegistry.generated.ts` and validates
     `PUT /stats/dashboard`. Every answer carries its sample ledger (`filtered` / `sample` /
     `excluded`: a NULL on a chosen dimension or on the measure excludes the property, never buckets
-    it), statistics only for a cell of at least 10 properties, and a refusal instead of a guess
+    it), statistics only for a cell of at least 5 properties, and a refusal instead of a guess
     (`empty`, `mixed_category`, `mixed_status` for turnover over a sample of two statuses,
     `too_many_cells`, `bad_spec`). A place dimension keys on the RÚIAN code `browse_list` carries
     (`region_id` … `ulice_id`, rule 25's one code predicate), so two towns or streets of one name stay

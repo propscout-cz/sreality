@@ -42,7 +42,7 @@ describe('<PivotSeries kind="line">', () => {
       cell(['1+kk'], 20, 40, 'novostavba'),
       cell(['2+kk'], 20, 55, 'novostavba'),
       cell(['1+kk'], 20, 38, 'dobry'),
-      cell(['2+kk'], 6, null, 'dobry'),
+      cell(['2+kk'], 4, null, 'dobry'),
       cell(['1+kk'], 20, 30, 'spatny'),
       cell(['2+kk'], 20, 50, 'spatny'),
     ],
@@ -101,7 +101,7 @@ describe('<PivotSeries kind="line">', () => {
 
   it('leaves a gap for a cell under the minimum and says so', () => {
     draw(pivot, ['median'], 'line');
-    expect(screen.getByText(/Chybějící bod = buňka pod 10 nemovitostí/)).toBeInTheDocument();
+    expect(screen.getByText(/Chybějící bod = buňka pod 5 nemovitostí/)).toBeInTheDocument();
   });
 });
 

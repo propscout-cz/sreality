@@ -56,7 +56,7 @@ describe('<PivotTable> without a column dimension', () => {
     render(<PivotTable pivot={pivot} stats={['median']} />);
     const row = screen.getByRole('rowheader', { name: 'Špatný' }).closest('tr')!;
     const cells = within(row).getAllByRole('cell');
-    expect(cells.map((c) => sp(c.textContent))).toEqual(['4', 'pod 10méně než 10 nemovitostí, bez statistik']);
+    expect(cells.map((c) => sp(c.textContent))).toEqual(['4', 'pod 5méně než 5 nemovitostí, bez statistik']);
     const full = screen.getByRole('rowheader', { name: 'Celkem' }).closest('tr')!;
     expect(within(full).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
       '60', '55,3', '55,3', '35,3', '45,3', '65,3', '75,3',
@@ -86,7 +86,7 @@ describe('<PivotTable> with a column dimension', () => {
     ]);
     const row = screen.getByRole('rowheader', { name: '1+kk' }).closest('tr')!;
     expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
-      'pod 10méně než 10 nemovitostí, bez statistik', '3',
+      'pod 5méně než 5 nemovitostí, bez statistik', '3',
       '70', '40',
     ]);
   });
@@ -105,7 +105,7 @@ describe('<PivotTable> with a column dimension', () => {
     const row = screen.getByRole('rowheader', { name: '1+kk' }).closest('tr')!;
     const first = within(row).getAllByRole('cell')[0];
     expect(first).toHaveAttribute('colspan', '2');
-    expect(sp(first.textContent)).toContain('pod 10');
+    expect(sp(first.textContent)).toContain('pod 5');
   });
 
   it('marks a combination with no property as empty, not as zero, across all its sub-columns', () => {
