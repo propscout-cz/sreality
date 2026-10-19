@@ -15,9 +15,9 @@ import requests
 
 from scraper import sreality_url
 from scripts import verify_outbound_urls as mod
-from scripts.verify_pipeline import DEFAULT_THRESHOLDS
+from scripts.verify_pipeline import THRESHOLDS
 
-T = DEFAULT_THRESHOLDS
+T = THRESHOLDS
 CANON = "https://www.sreality.cz/detail/prodej/dum/rodinny/praha-michle-pod-sychrovem-i/1915215948"
 
 
@@ -371,11 +371,13 @@ def test_the_check_is_unknown_when_no_sample_was_drawn(monkeypatch: Any) -> None
 
 
 def test_the_check_is_registered_last_weekly_with_the_outbound_budget() -> None:
+    """On GitHub, never the worker: the probe needs an address other than the scrapers'."""
     from scripts.verify_pipeline import CHECKS
 
     last = CHECKS[-1]
     assert (last.key, last.fn) == (mod.CHECK_KEY, mod.check_outbound_url_conformance)
     assert (last.cls, last.cadence_s, last.budget_s) == ("alarm", 7 * 24 * 3600, 120.0)
+    assert last.host == "github-actions"
     # the budget the harness accounts for is the one the HEAD loop stops at
     assert last.budget_s == mod.PROBE_BUDGET_S
 

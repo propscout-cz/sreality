@@ -21,8 +21,9 @@ checks that are DUE: newest row older than `cadence_s` less a slack of min(caden
 (`toolkit/system_alerts.due_after_s`, the interval the recovery hold doubles), so a run that
 comes a few minutes short of a full cadence after the last one does not skip a whole cadence. Only
 rows written since the key's `declared_at` count, as for the page and the ladder, so a newly
-registered or re-declared key is due in the run that projects it. Every key is `github-actions`-hosted until wave 3 and is measured by the middle
-step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
+registered or re-declared key is due in the run that projects it. Since wave 3 the platform alarms `jobs`, `capacity` and
+`llm` are hosted on the worker and measured by its health lane (below); every other key is `github-actions`-hosted and
+measured by the middle step of the one hourly canary, `verify_pipeline.yml` (it also takes a manual `dry_run`; its
 concurrency group, `pipeline-verification`, keeps two runs from measuring a check twice); the
 daily `sreality_image_template` and weekly `outbound_url_conformance` probes ride whichever run
 finds them due. No result reds a run (`--exit-nonzero-on-fail` is gone since wave 2): the canary's
@@ -36,8 +37,8 @@ sreality cannot starve the crawler portals; URLs it did not reach are `details.u
 path is `unknown` with its reason in `details` (`timed_out`, `errored`, `skipped`); a check the
 run's budget never reached gets no row at all and stays due. One "verified nothing" path still reads `warn`
 until wave 6 replaces its check: `ppm2_median_shift`'s "compared NOTHING";
-`location_town_coverage`'s "no listings read", `false_delist_share` with no portal at 50 flips
-and `worker_lane_stall` with no heartbeat to read are Not measured since wave 1. The harness
+`location_town_coverage`'s "no listings read" and `false_delist_share` with no portal at 50 flips
+are Not measured since wave 1. The harness
 writes no system alert: results reach the bell through the ladder below, the notification
 system's third producer, `system_health` (`docs/architecture.md` rule #16). Since wave 2 the
 pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, the API, the
@@ -45,18 +46,9 @@ ladder and every alarm are alive, and the canary checks the watcher and the ladd
 ("Hosts, the watcher and the canary" below). The harness exists because the pipeline
 stalled silently for two days in 2026-07 (Anthropic credit exhaustion, 38k+ failed LLM calls) and
 the only alarm was a failing GH Actions cron the operator happened to miss. Among the registered
-checks: `llm_errors`, `llm_burn_rate`, `long_open_transaction` (every 6 h, from
-migration 437: warns when the oldest `pg_stat_activity.xact_start` passes an hour, because
-`refresh_llm_cost_rollups`' 3-hour trailing re-scan only absorbs a late arrival whose
-transaction was shorter than that — `called_at` defaults to now() = transaction START; the
-repair is `select refresh_llm_cost_rollups('-infinity');`), `db_saturation`,
-`dual_write_parity`, `property_maintenance` (last-complete-cycle stamp age + oldest
+checks: `property_maintenance` (last-complete-cycle stamp age + oldest
 dirty-queue row — the 2026-08-06 sweep-death/stranded-lease incident; both axes O(1) reads,
-never a properties scan) and `broker_resolution_freshness` (**three** axes over
-`app_settings.broker_resolution_last_complete`, `broker_resolution_runs.ended_at` and
-`dirty_broker_listings` — the 2026-08-12
-E2E review found the daily broker sweep truncating on its budget every day while exiting 0)
-and `broker_merge_suppression` (migration 401): active `broker_merge_suppressions` rows whose two
+never a properties scan) and `broker_merge_suppression` (migration 401): active `broker_merge_suppressions` rows whose two
 identities share one broker — the invariant the suppression rail exists to hold. `fail` on the
 first violation, no warn tier. An operator NO (unmerge / dismissing a `contact_bridge_review`
 candidate) writes a suppression row keyed on the durable identity pair; the sweep loads the active
@@ -73,20 +65,13 @@ the `RESOLVE full merge done … suppressed=N` line. Kill switch: `broker_auto_m
 The property sweep axis ages a CYCLE (one run, or two through `app_settings.property_sweep_cursor`
 since 2026-10-03); its thresholds (warn 52h, fail 56h) are sized for the two-run cycle, so a dead
 sweep is flagged after about two days and the sweep's own RED exit is the faster alarm.
-Note the broker sweep axis measures a rotation **lap**, not one run: attribution routinely
-spends its whole `--max-seconds` budget, so `resolve_brokers` carries cumulative coverage in
-`app_settings.broker_sweep_cursor` (`last_id` / `lap_swept` / `lap_started_at`) and stamps
-completion when the lap closes; with no lap closed yet the check ages the OPEN lap, so a
-rotation that never gets round reds instead of parking on the missing-stamp warn.
-The third axis exists because that lap stamp is written right after attribution, ~17-25 min
-BEFORE the tail (the auto-merge step, the three rollups, the matview, candidates,
-`_finalize`'s dirty-clear), so a sweep whose tail dies still leaves a minutes-old stamp while
-the leaderboard and rollups silently stop: `broker_finished_{warn,fail}_hours` (30/60) age the
-last full run that actually reached `ended_at`, tighter than the lap's deliberately wide 52/84
-because the tail runs on every sweep. Fail sits between ONE missed night (48h + the ~2.5h
-spread in when a run finishes = ~50.5h, deliberately only a warn — the skipped sweep's own red
-run already emails) and TWO (~69.5h). A NULL (no finished full run on record) is skipped, not
-red — only the missing LAP stamp is the deploy-day warn.
+Wave 3 retired eight platform keys into the three checks the worker measures (below): `llm_errors`
+and `llm_burn_rate` into `llm`; `long_open_transaction` and `db_saturation` into `capacity` (the
+latter's failure-rate arm into the `jobs` check's pg_cron cells); `worker_lane_stall`,
+`workflow_poller_liveness` and `broker_resolution_freshness` into `jobs` (33 of the last's 34
+onsets were edge flaps; `broker_maintenance` is a lane cell and `broker_region_type_stats` an
+artifact cell); and `dual_write_parity` (Q6) went with the R2 dual-write it guarded. Their
+thresholds and tests went with them.
 Four **per-m² plausibility** checks joined in W9 of the measure-unification program
 (migration 427, view `measure_plausibility_by_source`, one read per run shared by all four;
 they are registered at a 6-hour cadence, not hourly — a 12 s
@@ -177,8 +162,9 @@ stopped the last pass: `fail` quoting its `fatal`, whatever the backlog's age or
 computed from the text lane's OWN selector predicate, because the outage it replaces was a lane
 and its three monitors disagreeing about who was eligible.
 
-**`worker_lane_stall`** closes the gap the watcher's `worker` cell (and `worker_liveness` before
-it) structurally cannot see — a worker that is ALIVE with a wedged lane. The realtime worker
+**Lane cells** (the `jobs` check's `lane/<lane>` since wave 3; `worker_lane_stall` before it) close
+the gap the watcher's `worker` cell (and `worker_liveness` before it) structurally cannot see — a
+worker that is ALIVE with a wedged lane. The realtime worker
 beat every 30 s for nine hours while its drain lane completed ONE pass and its images lane
 completed 486; a pass was recorded only on
 COMPLETION, so a hung lane and an idle lane published byte-identical state. The worker now
@@ -187,20 +173,28 @@ bounds every pass with `LANE_PASS_TIMEOUT_SECONDS` (1800) — containment, not a
 stops one hang costing every later pass, and repeated timeouts on one lane are themselves the
 diagnosis. Caveat worth knowing: a pass blocked inside `asyncio.to_thread` keeps running after
 cancellation (Python cannot kill a thread), so the lane is freed but the thread is not — hence
-the pass locks and the watchdog in the skill's worker section.
+the pass locks and the watchdog in the skill's worker section. `worker_lane_stall` judged
+`in_flight_s` alone, so a lane failing every pass read OK (autodedup showed `failed_passes` 6 on
+10-02 while it did); a lane cell also judges lateness, a failing spell and flapping (`jobs`, below).
 
 **`migration_drift`** closes a different silent gap: it probes the live catalog for the objects
 the newest 25 migrations declare, so a migration merged but never applied is caught in one tick
 instead of the 29 h it took on 2026-08-25 (see the `database` skill). It cannot see a
 merged-but-unapplied migration that only redefines existing objects (the migration-438 class,
-issue #1855). Only the GitHub checkout has the files, so it stays on the canary for good; a run
-that finds none (the worker image has no `migrations/` folder) is `unknown` with
-`details.skipped` "no migration files on this host", never `ok`.
+issue #1855). Only the GitHub checkout has the files, so it stays on the canary for good, hourly
+(cadence 3,600 s since wave 3, 21,600 s before); a run that finds none (the worker image has no
+`migrations/` folder) is `unknown` with `details.skipped` "no migration files on this host", never
+`ok`. Since wave 3 it lives in `scripts/checks/platform.py`, and its probe SQL
+(`MIGRATION_OBJECT_PROBE_SQL`, `SAFE_IDENT`) in `scripts/migration_objects.py`, shared with
+`scripts/apply_migration_receipt.py`.
 
-**Thresholds.** Every other check's thresholds live in `DEFAULT_THRESHOLDS` beside their rationale,
-overridable by `app_settings.pipeline_check_thresholds` until wave 3 deletes that path (every
-override already equals its default); `field_fill_matrix` owns none (sized on its cohort's
-measured drift), and the watcher's live as constants inside `health_liveness()` (below).
+**Thresholds.** Every other check's thresholds live in one dict, `THRESHOLDS`
+(`scripts/verify_pipeline.py`), each entry with a one-line basis comment, passed to every check by
+`main()` and by the worker's health lane. Since wave 3 nothing overrides them: `DEFAULT_THRESHOLDS`,
+`load_thresholds` and its merge of `app_settings.pipeline_check_thresholds` are deleted (every
+override equalled its default; migration 624 deletes the row), so a threshold changes in a PR, with
+its basis. `field_fill_matrix` owns none (sized on its cohort's measured drift), and the watcher's
+live as constants inside `health_liveness()` (below).
 
 ## `field_fill_matrix` — fill AND validity per (source, field) (field capture W1)
 
@@ -239,7 +233,7 @@ median under 1 pp — a 6-hourly run sees ~0.15 pp of that. A fill drop ≥ 10 p
 fails, both only where the baseline was ≥ 10 % filled; below that the collapse arm binds instead —
 a cell with 50+ blessed filled rows keeping under a quarter of them fails. An off-canon share
 rising ≥ 5 pp warns, ≥ 15 pp fails. A cell that drifts past a threshold honestly is a re-bless,
-and the message says so. The check carries NO `pipeline_check_thresholds` entries: the numbers
+and the message says so. The check carries NO `THRESHOLDS` entries: the numbers
 belong to the cohort, not to a taste, and the program adds no settings.
 
 **A blessed cell that stops being measured is an offender.** The spine comes from
@@ -327,6 +321,8 @@ ended**.
 - It catches `BaseException`, not `Exception`: a SIGINT or `SystemExit` out of a phase leaves the
   run just as unfinished as a `CheckViolation`, and "did not finish" must never read as green.
 - Crash recording is best-effort — a failing bump can never mask the original exception.
+- Since wave 3 the crash path writes no incident (the signature engine is retired): the run goes
+  red, and the poller hands its reason line to the `jobs` check's `gh/<stem>` cell.
 
 Reading a finished row:
 
@@ -350,8 +346,9 @@ six portals that fell over on 2026-08-26 showed no error count anywhere
 `docs/design/reliability-program.md` W0.1/W0.3/W0.4. All three came out of a single finding:
 **the health system was not silent during the outages it was built for — it was loudly wrong.**
 
-**1. Silence is not recovery.** `llm_errors` derives `currently_failing` purely from state:
-`last_ok_at < last_err_at`. It used to additionally `and` in a 90-minute staleness window
+**1. Silence is not recovery.** `llm_errors` (retired in wave 3; the `llm` check keeps the rule)
+derived `currently_failing` purely from state: `last_ok_at < last_err_at`. It used to additionally
+`and` in a 90-minute staleness window
 (`min_live_at`), on the theory that a lone old error with no traffic since is not a live
 outage. That is backwards. The producers here have circuit breakers — `toolkit/vision_batch.py`
 stops the labelling pass on the first fatal provider error, and the autodedup judge lane aborts
@@ -362,13 +359,13 @@ credit-exhausted for 11 days (63,547 error rows, **zero** successful calls) and 
 alerting is edge-triggered, that produced **114 alerts alternating onset with a literal
 "✓ Recovered: llm_errors is healthy again"** for an outage that never recovered. Any
 recency-window detector downstream of a circuit breaker is sampling a duty cycle, not a state.
-Generalise it: a failure is superseded only by a newer success — of the SAME account. Credit
-(`credit_live`) is judged per provider: the text lane calls OpenAI up to every 5 minutes, so
-one comparison across providers would let it clear an empty Anthropic account within minutes.
-The alert names the provider and the models and jobs that failed: through OpenAI's
-2026-10-02..10 credit outage it said every paid LLM path was down and named no provider,
-Anthropic-backed jobs included. The rate arm's `currently_failing` still reads the newest call
-of any provider. The worker side of the same incident: a text-lane pass the provider stopped
+Generalise it: a failure is superseded only by a newer success — of the SAME account. Credit is
+judged per provider: the text lane calls OpenAI up to every 5 minutes, so one comparison across
+providers would let it clear an empty Anthropic account within minutes. Through OpenAI's
+2026-10-02..10 credit outage the old alert said every paid LLM path was down and named no provider,
+Anthropic-backed jobs included, and its rate arm read the newest call of ANY provider, so a stray
+error after a top-up could hold it red for ~24 h; the `llm` check judges both per provider (below).
+The worker side of the same incident: a text-lane pass the provider stopped
 was booked as a success (`failed_passes: 0`) — it is now a failed pass, and
 `text_extraction_lag` fails on its `fatal` whatever `claimed` says (it had blamed backlog age).
 The same rule, broken once more and closed in wave 1 of the Health dashboard sprint: a timed-out
@@ -383,20 +380,20 @@ days silent. One rule produces both — and one fix retires both: the reminder l
 `toolkit/system_alerts` (W3.4's `emit_transition_alerts`, replaced in wave 1 by `reconcile`; see
 "The ladder" below), where all checks inherit it, never in any one check.
 
-**2. A zero is ambiguous — name the arm.** `llm_burn_rate` had only upper arms ($90 warn /
-$150 fail), and `_record_failure` writes `cost_usd=0.0`, so a **total outage drives 24h spend
-to the maximally healthy number**: it reported `ok value=0.0` throughout the 11-day outage. It
-now carries `details.arm`:
-- `starved` → `fail`: a `called_for` lane with `attempts > 0 AND successes == 0 AND spend == 0`.
-- `idle` → `ok`: nothing attempted at all. No check judges silence (see §4).
-- `runaway`/`ok`: the pre-existing spend arms.
+**2. A zero is ambiguous — name the arm.** `llm_burn_rate` (retired in wave 3 into the `llm`
+check) had only upper arms ($90 warn / $150 fail), and `_record_failure` writes `cost_usd=0.0`, so
+a **total outage drives 24h spend to the maximally healthy number**: it reported `ok value=0.0`
+throughout the 11-day outage. It gained named arms, which the `llm` check keeps as cells:
+- starvation → Problem: a (provider, `called_for`) with ≥ 5 attempts and 0 successes in the last
+  hour (the old arm: a `called_for` with `attempts > 0 AND successes == 0 AND spend == 0` in 24 h).
+- idle → OK: a provider with no calls in 72 h, fact `state=idle`. No check judges silence (see §4).
+- spend: `fleet/spend`, the 24 h sum against Watch $130 and Problem $150.
 
 **Evaluated per `called_for`, and that is load-bearing.** A 24h aggregate arm is defeated by a
 single unrelated cheap success — verified: one `summarize_region_dispositions` call held the
 aggregate at $0.01 for ~24 of 30 sampled hours while the only recurring lane was completely
-dead. The upper arms are separately **parked as currently unreachable** (they were sized for
-dedup-vision burn deleted 2026-08-06; 24h spend is ~$0.01), recorded rather than silently left
-as arms that cannot fire.
+dead. The spend arms, parked as unreachable while 24 h spend was ~$0.01 (2026-08), are live again:
+normal spend is $22-32 a day, and wave 1 moved the Watch default from $90 to the operator's $130.
 
 **3. The acute lane must degrade, not vanish.** `run_checks` computed *all* results before
 `write_results` persisted *any*, inside `llm_health.yml`'s `timeout-minutes: 5`. A timeout
@@ -406,8 +403,8 @@ is inserted the instant its check returns, and since wave 1 the harness calls no
 at all: the API's ladder reads the stored rows. Budgets: `_CHECK_BUDGET_S` (45 s) per check
 (`Check.budget_s`; 120 s for the two outbound probes), capped by whatever remains of the RUN
 budget — one per-check budget per DUE check (`lane_budget_for`); the summed budgets are proven
-to fit, with the 180 s headroom, the harness step's 27-minute limit (the poller step has 5, the job
-40 with 8 minutes for setup and the assertions) by `test_the_canary_job_fits_every_github_check_due_at_once`.
+to fit, with the 180 s headroom, the harness step's 21-minute limit (the poller step has 5, the job
+35 with 8 minutes for setup and the assertions) by `test_the_canary_job_fits_every_github_check_due_at_once`.
 The full lane shared
 a 120 s budget until 2026-09-22, and in 13 of the 15 runs before that 7-17 of its 25 checks were
 never reached.
@@ -428,24 +425,22 @@ before each statement. A check that raised is `unknown` with `details.errored` �
 measure this" is a different claim from "this is broken", and fail-on-timeout would manufacture
 a wall of false reds exactly when the operator needs to read the real one. A check the run never
 reached gets **no row**: `run_checks` stops when the run budget is spent and logs the keys it
-did not reach, which stay due for the next run (on the worker, from wave 3, its next 60 s tick).
+did not reach, which stay due for the next run (on the worker, its next 60 s tick).
 Due-ness reads the newest row of any status, so the wave-1 `unknown` "not run" row
 (`details.not_run`) made an unreached check wait a whole cadence for its next try. Until wave 1
 timeouts and not-runs were stored as `warn` (which the old ladder read as "not failing", rule 1)
 and a raising check as `fail`.
 
-**`workflow_poller_liveness`** (W0.1) closes the matching blind spot on the other ops surface.
-A dead poller cannot appear in `workflow_failures`, the table it feeds — it simply stops
-accumulating rows, which is byte-identical to a quiet week. The check keys on the age of
-`app_settings.workflow_failures_cursor`: warn > 6h, fail > 12h, sized to clear the worst
-observed inter-poll gap when the poller had its own `*/30` cron (the Actions throttle ran it
-80–256 min apart). A missing cursor row is `warn`, not `fail` — it is also the legitimate first-run state,
-and a check that is red the day it ships teaches the operator to ignore every check. Registered
-at a 6-hour cadence (wave 1 replaced the lanes' `--only` lists with cadences). Since wave 2 the
-poller is the canary's first step, so this check, measured minutes later by the same run, reads
-a fresh cursor unless that step failed, and a failed step reds the canary run anyway; wave 3's
-jobs check replaces it with a poller cell. At 330–484 workflow runs a day (2026-10-15..17), even
-a 13 h canary gap is ~270 runs, far inside the poller's 1,000-run page budget below.
+**The poller cell** (`gh/poller` in `jobs` since wave 3; `workflow_poller_liveness`, W0.1, before
+it) closes the matching blind spot on the other ops surface. A dead poller cannot appear in
+`workflow_failures`, the table it feeds — it simply stops accumulating rows, which is
+byte-identical to a quiet week. The cell keys on the age of `app_settings.workflow_failures_cursor`:
+Problem past 18 h, the canary's measured 13.3 h maximum gap plus margin (the old check's 6 h / 12 h
+were sized on the poller's own `*/30` cron, which the Actions throttle ran 80–256 min apart; its
+46 fails 09-18..10-05 were real poller outages), and while it is stale every `gh/*` cell reads Not
+measured, because their facts stopped being refreshed. Measured on the worker, it no longer rides
+the run whose poll it judges. At 330–484 workflow runs a day (2026-10-15..17), even a 13 h canary
+gap is ~270 runs, far inside the poller's 1,000-run page budget below.
 
 Same wave, on the poller itself: when the page cap was hit, the cursor advanced to
 `min(completions)`. Pages arrive newest-first, so hitting the cap means every run seen is
@@ -474,8 +469,8 @@ cadence plus throttle slack, still inside one 6 h lane tick of a genuinely dead 
 
 The transferable rule: **a threshold is a claim about a workload, so deleting the workload
 invalidates the threshold.** When a producer is retired, grep the health harness for the
-numbers that were sized on it — `DEFAULT_THRESHOLDS` carries its own rationale per key for
-exactly this reason.
+numbers that were sized on it — `THRESHOLDS` carries its own basis per key for exactly this
+reason.
 
 **And the second time, the check went with it.** Field-capture W0 (2026-09-21) deleted the
 enrichment lane itself, leaving NO recurring LLM producer: everything left (autodedup judging,
@@ -486,112 +481,11 @@ to 2026-09-21 the longest gap between `llm_calls` rows excluding that lane was *
 so `check_llm_liveness`, `_status_for_llm_silence` and `llm_silence_fail_hours` were all
 deleted. The replacement is not a global recency threshold at all: field-capture R8 makes each
 lane's health check read the lane's OWN eligibility predicate (oldest eligible-unextracted age
-per source), which needs no historical baseline — the same shape as `check_acquisition_lag`.
-Until W7 ships it, `llm_errors` still catches "calls are failing" (from state, not recency) and
-`llm_burn_rate`'s starvation arm still catches "attempting and never succeeding".
+per source), which needs no historical baseline — the same shape as `check_acquisition_lag`
+(field-capture W7 shipped it as `text_extraction_lag`). Beside it the `llm` check catches "calls
+are failing" per provider (from state, not recency) and "attempting and never succeeding".
 
 ---
-
-## `ops_incidents` — the failure-signature producer (W3, migration 462)
-
-**Fenced from cell incidents since wave 1 of the Health dashboard sprint (both of its
-auto-resolve statements skip `signature LIKE 'cell:%'`, and since wave 2 no health run reaches
-it at all: the poller skips the canary, its own workflow, by name, and GitHub's email is a red
-canary's path, so its `check:` fence is dead until the wave-3 poller rewrite deletes it), and
-retiring in wave 3.**
-
-The verification harness measures the 28 `CHECKS` keys (the watcher writes the 29th, `liveness`)
-and rings nothing itself; the ladder below reads their results. Neither says anything about the
-~40 workflow failures/day that never
-touch a check: portal crashes, CI, backfills, LLM lanes. That is the seam the 2026-08-26 outage
-fell into — the surface that could alert had nothing to say about ingest, and
-`workflow_failures` (the surface that knew ingest was red) stores no failure reason of any
-kind. W3 closes it WITHOUT a second bell: `ops_incidents` emits an ordinary `system_health`
-`notification_dispatches` row and the shipped outbox delivers it.
-
-**The key.** `scripts/failure_signature.py` (pure stdlib, no DB) normalizes an error into a
-signature derived from the **error text only, never from `workflow_path`** — that asymmetry is
-the whole mechanism, and it is why six portals failing on one `CheckViolation` are one row:
-
-```
-checkviolation|new row for relation listings violates check constraint listings_area_basis_check
-check:property_maintenance|fail          # verify_pipeline's own CHECK line, one key per check (the poller skips it on a `failure` run since wave 1)
-aborting|consecutive errors provider outage   # scripts that catch their own error and exit 1
-step:run tests|exit:timed_out@.github/workflows/test.yml   # unreadable red — the ONE scoped key
-```
-
-Normalizer rails, each of which was a bug on the first pass: quoted identifiers survive the
-digit-strip (the constraint name IS the key — a placeholder containing digits destroys it);
-3-digit HTTP codes survive it too (else a 403 and a 500 collapse into `httperror|from`); only
-line 1 of a psycopg message is read (line 2 is `DETAIL: Failing row contains (…)` — a whole
-listing row); the exception class is matched by the dotted-module + CapWord grammar, never by
-an `*Error` suffix allowlist (`CheckViolation`, `QueryCanceled`, `AdminShutdown`,
-`AmbiguousFunction` and `InsufficientPrivilege` all fail that test).
-
-**Two producers, one function.** `portal_runner.record_failure_signature(conn, exc, source=,
-lane=)` is the single seam (rule 21):
-- `portal_runner._record_run_crash` — the in-process chokepoint. The exception is in hand, so
-  the signature is correct at t+0 with zero Actions-API cost. Writes on the SAME connection as
-  the `scrape_runs.errors` bump, inside the existing best-effort try/except: a bookkeeping
-  write must never mask the exception that got us here.
-- `realtime_worker._record_lane_failure` — the probe and drain lanes call `portal_runner`
-  directly (`run_id=None`, deliberately) and so bypass `run_phase` entirely. Before W3 a
-  `CheckViolation` on the latency-critical drain produced a log line and nothing else, forever.
-  **Always `await asyncio.to_thread(...)` it**, like every other DB touch in that file:
-  `db.connect()` sleeps up to ~20s per source on a transient failure, and a bare call would
-  stall the heartbeat lane during exactly the DB incident it exists to record.
-- `record_workflow_failures.record_incidents` — the backstop, and the MAJORITY path (portal
-  workflows are only ~22% of the failure corpus). For each NEWLY inserted failed run it reads
-  the failed job's log and extracts the terminal error. Two budgets, both real:
-  `MAX_LOG_FETCHES` per poll, and `INCIDENT_PASS_BUDGET_S` of wall clock — a fetch is up to 4
-  round trips at `API_TIMEOUT_S`, so the fetch cap alone is a ~50-minute worst case inside a
-  5-minute limit (its own job's until wave 2, now its step's in the canary, so a wedged poll
-  cannot eat the checks' time). The pass runs **after** `_write_cursor`, because a job kill is
-  not an exception and the cursor advance is the input-coverage guarantee W3 rests on.
-
-**One run is one failure (`ops_incident_runs`, migration 463).** Both producers see the same
-Actions run — the chokepoint at t+0, the poller hours later, at its next run — and the upsert bumps
-`failure_count` unconditionally, so before 463 every portal crash counted **twice** and a LONE
-crash crossed the measured onset threshold on its own. `claim_run(conn, run_id)` inserts the
-run id and returns whether this caller won it; the poller claims **before** downloading, so a
-run the chokepoint already recorded costs zero fetches too. That claim replaced an earlier
-workflow-keyed signature-reuse map, which had no run correlation and folded an unrelated new
-red (a timeout, say) into whatever incident last touched that workflow within the hour — the
-real reason was then never derived and could never alert. `run_id=None` (the Railway worker)
-always claims: it has no second observer. The ledger self-prunes at 30 days inside
-`auto_resolve`.
-
-**The log fetch has three hazards, all live-verified — do not simplify it.**
-`/actions/jobs/{id}/logs` answers **302** to a SAS-signed Azure blob URL, and CPython's
-`HTTPRedirectHandler` copies every header (`Authorization: Bearer` included) onto the redirect:
-that leaks `GITHUB_TOKEN` to a third-party host *and* returns 401. So redirects are disabled and
-the `Location` is re-requested **bare**. Azure **ignores suffix ranges** (`Range: bytes=-500`
-came back 200 with the whole 27 KB body), so the tail is two requests: `bytes=0-0` to read the
-length off `Content-Range`, then a real closed range. And the signed URL can 404 `BlobNotFound`
-(retention, or logs not yet flushed) — that is a degraded incident, never a poller failure.
-Never `tail` a log either: the last ~25 lines are always runner cleanup, so the extractor
-anchors on the error and walks backwards.
-
-**Alerting and closing.** Onset fires on `failure_count >= ops_incident_min_failures` (2) **or**
-the signature spanning 2 distinct workflows, whichever first — the breadth arm matters because
-the 2026-08-26 signature reached its 2nd workflow 8 minutes after onset while a same-workflow
-2nd failure can be 164 minutes away under the Actions throttle. Exactly one dispatch per
-incident (`sys:ops_incident:{id}:onset`), claimed with a conditional UPDATE before emitting so
-two producers racing cannot both alert — **claim and emit share one explicit
-`conn.transaction()`**, because every caller here is autocommit and a claim that committed
-alone before a failed emit would set `alerted_at` with no dispatch, permanently silencing that
-incident's only onset. Closing: every member workflow posting a newer
-`workflow_run_health.last_success_at` (primary), `ops_incident_max_age_hours` (168 — the
-backstop for retired/disabled/renamed workflows and for worker-origin incidents that have no
-member workflow at all), or `toolkit.ops_incidents.resolve_incident` (manual; there is no admin
-route yet). All three thresholds are scalars in `app_settings.pipeline_check_thresholds` —
-`load_thresholds` merges only int/float out of that blob, so an array key would be silently
-dropped and the code default would win forever.
-
-**External delivery is still off.** `system_health_channels` is `[]`, so incidents ring the
-in-app bell only. The flip is two `app_settings` rows plus a transport secret on the API
-service — see the `toolkit-api` skill for `RESEND_API_KEY` / `TELEGRAM_BOT_TOKEN`;
-`api/main.py` starts `outbox_loop` only when a transport `is_configured()`.
 
 ## The ladder — one incident per failing cell, told by the API (wave 1, 2026-10-18)
 
@@ -629,10 +523,14 @@ is for the page's `effective_status`. A cell whose status is not `ok`, `warn` or
 ignored.
 
 **One incident per failing cell.** One `ops_incidents` row per cell, signature
-`cell:<key>:<subject>` — a prefix the signature engine never produces, and the open-signature
-unique index allows one open row per cell. A measured `fail` opens it (`first_seen_at` =
-`last_seen_at` = the result's `run_at`) or, when it is open, advances `last_seen_at` and clears
-`ok_since`. A `warn` keeps an open incident open (clears `ok_since`) and opens nothing. A
+`cell:<key>:<subject>`; the open-signature unique index allows one open row per cell. It is the one
+incident model since wave 3: the reliability program's signature engine (`toolkit/ops_incidents.py`,
+migration 462: one incident per error-text signature of a red run or a crash) is deleted with its
+claim ledger and `failure_signature`'s signature tiers, and migration 621 closed its open rows
+(`resolve_reason = 'retired: signature engine'`, every row whose signature does not start `cell:`).
+A measured `fail` opens it (`first_seen_at` = `last_seen_at` = the result's `run_at`) or, when it
+is open, advances `last_seen_at` and clears `ok_since`. A `warn` keeps an open incident open (clears
+`ok_since`) and opens nothing. A
 measured `ok` starts `ok_since` at the first OK, and the incident resolves
 (`resolve_reason = 'measured ok'`) only on an OK measured across the hold, two cadences less the
 due slack, never under 30 min (`max(2 × due_after_s(cadence), 30 min)`: a lane measures a check
@@ -666,6 +564,18 @@ characters), reminder `<label>: still Problem|Watch for N h — <subjects>`, rec
 `✓ <label>: <subjects> recovered after N h`. An onset sets `alert_count = 1, alerted_at = now()`;
 a reminder adds one to `alert_count` and moves `alerted_at`.
 
+**Delivery.** `system_health_channels` is `[]` (Q1), so notices ring the in-app bell only; the flip
+is two `app_settings` rows plus a transport secret on the API service (the `toolkit-api` skill:
+`RESEND_API_KEY` / `TELEGRAM_BOT_TOKEN`; `api/main.py` starts `outbox_loop` only when a transport
+`is_configured()`). Ready since wave 3: the outbox's `compose_message` sends a `system_health` row
+with its message as the body, as subject the text before the first ` — ` (the messages above are
+one line of up to 1,500 characters) or else its first 120 characters ("System alert" when
+empty), and the link `{SPA_BASE_URL}/health#<key>` when the dedupe key starts `sys:<key>:`, else
+`{SPA_BASE_URL}/health`. Health's pipeline-check rows carry `id=<key>`, and because they render
+after their fetch (so the browser's own jump finds nothing), `PipelineChecksSection` scrolls to
+`location.hash` once its rows exist (the `EstimationsBlock` pattern): the link lands on the check.
+It replaced the fixed Czech subject and the `/notifications` link.
+
 **Read is not acknowledged.** Reading a notice in the bell sets
 `notification_dispatches.seen_at`, which platform admins can do on SYSTEM rows since migration
 619; it never acknowledges. The Acknowledge button on Health (wave 1 ships a minimal one on the
@@ -682,12 +592,20 @@ over one state emitting nothing.
 (run-length-encoded aggregates in `tests/fixtures/health_replay_14d.csv`, no ids or URLs: the repo
 is public) through `reconcile`, and asserts no recovery while a key's newest row is `unknown`,
 one incident per maximal fail streak, and one onset plus its rungs, nothing else, for a key that
-fails the whole window.
+fails the whole window. Its registry copy is host-aware since wave 3 (3 × cadence on the worker,
+cadence + 18 h on GitHub); the worker's three checks have input replays of their own (below).
 
 **Cutover.** After the deploy the ladder sends one grouped onset per currently failing check,
 alarm or gauge (today three gauges: `location_town_coverage`, `ppm2_basis_floor_share`,
 `text_extraction_lag`), once, each on its first pass after the new harness has measured it. The
 861 old system alerts can now be cleared with "Mark all read".
+
+**Wave 3's cutover.** The canary's first projection from main after the merge deletes the eight
+retired keys' registry rows, so the ladder closes their open cell incidents silently as `retired`
+(the `llm_errors` incident open at merge included), and the new `llm` check, measured within
+minutes of the worker's deploy, opens a fresh onset for an outage still under way (the two can be
+open together for up to one canary gap). Legacy `sys:ops_incident:*` notices stay in the bell as
+they are.
 
 ## Hosts, the watcher and the canary — who watches whom (wave 2, 2026-10-18)
 
@@ -696,14 +614,14 @@ runtime the health system depends on an observer that does not run inside it. A 
 (`Check.host`, mirrored into `health_checks.host`) is where it is measured, and each host projects
 and deletes only its own registry rows:
 
-- **`github-actions`**: every `CHECKS` key in this wave, measured by the canary's middle step at
-  the cadence it had; waves 3–6 move keys to the worker as they rebuild them. Two stay for good:
-  `migration_drift` needs the repository checkout, and the weekly URL probe needs an address other
-  than the scrapers'.
+- **`github-actions`**: 20 keys since wave 3 (all 28 in wave 2), measured by the canary's middle
+  step at their cadences; waves 4–6 move the rest to the worker as they rebuild them. Two stay for
+  good: `migration_drift` needs the repository checkout, and the weekly URL probe needs an address
+  other than the scrapers'.
 - **`pg_cron`**: `liveness`, the one watcher — a SQL function, not a `Check`, that upserts its own
   registry row.
-- **`realtime-worker`**: no key yet; wave 3's health lane calls `run_due(conn, thresholds,
-  "realtime-worker", now=…, lane_budget_s=300)` every 60 s under that 300 s pass budget.
+- **`realtime-worker`**: `jobs`, `capacity` and `llm` since wave 3, measured by the worker's health
+  lane (below).
 
 **`run_due`.** `verify_pipeline.run_due(conn, thresholds, host, *, now, on_result=insert_result, lane_budget_s=None)`
 reads which of the host's checks are due from the database (`due_checks`, so a restart re-runs
@@ -725,7 +643,7 @@ dead. Its cells judge what must not judge itself:
 | cell | Problem when | basis |
 | --- | --- | --- |
 | `worker` | a worker's newest heartbeat is more than 10 min old (with no heartbeat row at all, `unknown`: "no worker on record") | beats come every 30 s, the worker's watchdog exits at 300 s, a deploy gap is under 2 min |
-| `health_lane` | no `realtime-worker` key has had a result for 10 min; emitted only once `health_checks` holds such keys (wave 3), and folded into a failing `worker` cell | 2 × the lane's 300 s pass budget |
+| `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | 2 × the lane's 300 s pass budget |
 | `stale:<key>` | an alarm other than `liveness` whose newest measured result (ok/warn/fail written since its `declared_at`) is past its staleness budget (`public.health_stale`); with no measured result it counts from `declared_at`, so a key whose every run is Not measured is still told; facts `key`, `host`, `last_measured_at`, `budget_s` | the budget is 3 × cadence on the worker and pg_cron, cadence + 18 h on GitHub, whose crons arrive up to ~13 h late |
 | `api` | the watchdog matcher's lease (`notification_matcher_lease`) is more than 2 × `notifications_matcher_interval_seconds` (300 by default) + 60 s past its `expires_at`; a NULL `expires_at` (a clean shutdown released it) is `unknown`; interval 0 (matcher off) is `ok` with the state fact `off` | the matcher renews the lease every pass (~300.5 s apart) in the API process that also runs the ladder's loop; the lease lasts 15 min (`api/notifications._MATCHER_LEASE_TTL`), so a crashed API reads Problem about 26 min after its last renewal |
 | `unalerted` | a cell fails in an alarm's newest result (in budget, written since `declared_at`) and also failed in its newest measured result at least 2 cadences older, and has no open `cell:<key>:<subject>` incident; cells are read as the ladder reads them (explicit `details.cells`, else the implicit cell named by the key); one cell, `value` = the cells counted, its facts naming the keys and cells | a fail that has stood for two cadences has had every 60 s ladder pass in between to open its incident; like the ladder, it counts no stale or unmeasured result |
@@ -749,20 +667,22 @@ any key; it never fired), which 620 unschedules and 624 drops.
 
 **The canary: `verify_pipeline.yml`**, "Monitoring: health canary (hourly)": cron `15 * * * *`
 plus a manual dispatch whose `dry_run` input reaches the harness step only. GitHub delivers about
-five of its runs a day (median gap ~4.9 h). One job — 40 minutes while it carries the legacy keys (the poller step 5, the harness step 27 for
-28 budgets summing to 1,410 s plus 180 s headroom, 8 for setup and the assertions),
+five of its runs a day (median gap ~4.9 h). One job — 35 minutes while it carries the legacy keys (the poller step 5, the harness step 21 for
+its budgets plus 180 s headroom, 8 for setup and the assertions; 20 budgets summing to 1,050 s since
+wave 3, 28 and 1,410 s before),
 concurrency group `pipeline-verification` (never cancelled in progress), permissions
 `contents: read` and `actions: read`, env `SUPABASE_DB_URL` and `GITHUB_TOKEN` — in three steps:
 
-1. **Record failed workflow runs**: `python -m scripts.record_workflow_failures`, moved verbatim
+1. **Record failed workflow runs**: `python -m scripts.record_workflow_failures`, moved in wave 2
    from the deleted `monitor_workflow_failures.yml` with that job's 5-minute limit on the step, so
-   a wedged poll cannot eat the checks' time; wave 3 changes its logic.
+   a wedged poll cannot eat the checks' time; since wave 3 it records production runs with their
+   reason lines and workflow facts ("The poller", below).
 2. **Measure the GitHub-hosted checks**: `python -m scripts.verify_pipeline --host github-actions`
-   (`--dry-run` when asked), `if: ${{ !cancelled() }}` under its own 27-minute limit, so a poller failure never skips the
+   (`--dry-run` when asked), `if: ${{ !cancelled() }}` under its own 21-minute limit, so a poller failure never skips the
    checks (a cancel does, and an overrun fails this step rather than the job).
 3. **Assert the watchers and the teller are alive**: `python -m scripts.health_canary`,
    `if: always()`, the last step and the only one whose non-zero exit is meant to red the run. A
-   poller or harness crash reds it too, as does the harness step overrunning its 27 minutes, and rightly: the
+   poller or harness crash reds it too, as does the harness step overrunning its 21 minutes, and rightly: the
    canary did not complete.
 
 `scripts/health_canary.py` connects with `scraper.db.connect()` and runs one bounded SQL per
@@ -789,7 +709,7 @@ canary run after the onset, and again after each reminder (6 h, 24 h, 72 h, then
 the notice is read or delivered, the incident acknowledged, or the cell recovered. This replaces
 `--exit-nonzero-on-fail`, deleted with `llm_health.yml` and the 6-hourly lane: those lanes
 reddened a run whenever it measured a failing alarm, read or not, and could never speak for a
-check measured elsewhere — the watcher's, or the worker's from wave 3.
+check measured elsewhere — the watcher's, or the worker's.
 
 **Who watches whom.**
 - **pg_cron** (the watcher) watches the worker (its heartbeat), the API (the matcher's lease), the
@@ -800,13 +720,294 @@ check measured elsewhere — the watcher's, or the worker's from wave 3.
 - **GitHub** (the canary) watches pg_cron (`liveness_fresh`), the ladder
   (`failing_cells_have_incidents`) and whether anyone heard (`alarm_notices_handled`); its failure
   email needs neither Supabase's scheduler nor Railway.
-- From wave 3 the worker's health lane runs most checks; the watcher's `health_lane` cell watches
-  it, and the lane's jobs check watches the canary's poller.
+- **The worker** (its health lane, since wave 3) runs the platform checks: `jobs` watches every
+  production GitHub workflow (through the canary's poller, whose cursor is its `gh/poller` cell),
+  every pg_cron job (`health-liveness` included), every worker lane and every derived artifact.
+  The watcher's `health_lane` cell watches the lane; waves 4–6 move the remaining checks to it.
 
 **Known gap.** A clean API shutdown leaves the lease NULL, which reads Not measured, not Problem:
 that is every deploy's normal state until the new process's first pass claims the lease. An API
 that stops cleanly and never comes back is therefore no liveness Problem by itself; it shows only
 once a liveness cell fails and finds no incident, which the canary's third assertion then emails.
+
+## The health lane — the worker measures its own checks (wave 3, 2026-10-19)
+
+Wave 3 of the Health dashboard sprint (`docs/design/health-dashboard.md` § 6 and its "As built"
+note) gives the worker its first checks. The lane `health` in `scraper/realtime_worker.py`,
+registered in `LANES` after `text_extract`, wakes every `HEALTH_TICK_SECONDS` (60 s, a constant
+like `text_extract`'s: no settings row and no kill switch, so a brake is a deploy) and runs one pass
+at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a thread on its own
+`db.connect()`:
+
+- on the process's first pass, `verify_pipeline.project_registry(conn, "realtime-worker", now)`, so
+  every deploy re-projects the worker's keys and deletes its undeclared ones, touching no other
+  host's rows;
+- every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
+  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (300 s), which measures the due worker-hosted checks,
+  each on its own clock (self-rule 3);
+- once per 24 h in each process, the 35-day prune the operator ruled (Q5): `delete from
+  pipeline_check_results where run_at < now() - interval '35 days'`, 10,000 rows at a time by
+  `ctid`, until none is left.
+
+Its heartbeat `last` is `{"measured": [keys], "pruned": n}`. The worker imports
+`scripts.verify_pipeline` inside the pass (the image carries `scripts/`; `migrations/` is
+dockerignored, which only `migration_drift` reads, and that check stays on GitHub);
+`verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
+three keys are platform alarms with the 45 s per-check budget and a staleness budget of 3 × cadence
+(30 min for `jobs` and `llm`, 90 min for `capacity`), so the watcher's `stale:<key>` tells a stopped
+worker check within 5 min of that, its `health_lane` cell (no completed pass, a pass in flight or a
+failing spell for 10 min, 2 × the pass budget) tells a stopped lane, and the lane is a `lane/health`
+job cell like any other.
+
+## `jobs` — is every scheduled machine running and succeeding? (wave 3)
+
+`check_jobs` (`scripts/checks/platform.py`; platform alarm on the worker, cadence 600 s, label
+"Jobs", unit "cells") gives one job cell per scheduled machine on every runtime, with the subjects
+`gh/<workflow file stem>`, `gh/poller`, `cron/<jobname>`, `lane/<lane>`, `lane/<lane>/<portal>` (its
+`portal` field set) and `artifact/<name>`, so the ladder opens one incident per failing job and one
+grouped notice per pass lists every newly failing job with its reason. It replaces
+`worker_lane_stall`, `workflow_poller_liveness`, `broker_resolution_freshness` and
+`db_saturation`'s failure-rate arm (above).
+
+**GitHub workflows**, from the poller's tables (below). A cell exists for every
+`workflow_run_health` row with `on_main = true` — a workflow whose file left `main` has none, and a
+row the poller has not stamped yet (NULL) has none yet — and only a production run is a job's record
+(event `schedule`, or `push` on `main`; a row written before wave 3 has `event` NULL and never
+counts). A workflow whose `state` is not `active` (`disabled_manually`, …) reads OK with the fact
+`state`. The canary has no cell: GitHub emails its red runs.
+
+| reads | when | basis |
+| --- | --- | --- |
+| Problem | the newest production run failed and the workflow's median start gap is at least 24 h (`jobs_gh_long_cycle_h`); Not measured until 2 scheduled starts are recorded, one to two cycles for a weekly or monthly job, because `recent_starts` accumulates with no bootstrap | one red loses a whole cycle: `location_registry_load`'s single 09-01 timeout left ~91.6 % of katastr polygons missing for weeks |
+| Problem | 3 consecutive production reds since `last_success_at` (`jobs_gh_streak_fail`) | in migration 462's corpus 35 of 63 red streaks were a lone failure; `recompute_mf_yields`' 3rd red came at ~15:00 on 09-13 |
+| Problem | the time since `last_success_at` exceeds 3 × the p90 of the workflow's own start gaps (`jobs_gh_gap_p90_multiple`); it needs 10 `recent_starts` (`jobs_gh_gap_min_starts`), and until then this arm is Not measured inside the cell's facts, never a verdict; the time is counted to the poller's cursor, not to now: the cursor (the newest completion a whole poll has seen) is how far the workflow's runs are known | each workflow is judged by its own rhythm, not by one global clock |
+| Watch | a lone red | main-branch CI goes red after ~10 % of merges |
+
+`recent_starts` holds scheduled starts only ("The poller", below): a push has no cadence to be
+overdue against. So for a workflow that only runs on push, the long-cycle and overdue arms are Not
+measured, a lone red is Watch and 3 reds in a row are a Problem; its push runs still keep its
+`last_success_at`, `state` and `on_main`, and its reds still count.
+
+A failing cell's message carries the run's reason line and its link. The four stale streaks the
+investigation found get no cell: `recompute_mf_yields`, `autodedup_realtime` and
+`validate_vision_models` left `main`, and `dinov3_embed_backfill` runs on dispatch only.
+**`gh/poller`** is Problem when the poller's cursor is older than 18 h (`jobs_poller_stale_h`; its
+basis is "The poller cell", above), and while it is, every `gh/*` cell reads Not measured.
+
+**pg_cron jobs.** A `cron/<jobname>` cell for every `cron.job` row, the watcher's own
+`health-liveness` included (an inactive job reads OK with the fact `active=false`), judged over
+finished runs only for the failure arms (`end_time IS NOT NULL`; the lateness arm counts every start):
+
+| reads | when |
+| --- | --- |
+| Problem | 2 of the last 3 runs failed (`jobs_cron_fail_of_3`) |
+| Problem | no run started for 3 × the job's median start gap over 7 days (`jobs_cron_gap_multiple`); it needs 5 starts (`jobs_cron_gap_min_starts`), and until then this arm is Not measured |
+| Watch | any failure in 24 h |
+
+When the `cron` tables cannot be read, or `cron.job` reads empty, the pg_cron arm is Not measured
+with the reason, never OK: pg_cron's row security returns zero rows to the wrong role, so an empty
+read is a failed measurement, not a quiet scheduler. No migration grants anything for it; the
+worker's role already reads the cron tables, and the check reads them defensively.
+
+**Worker lanes**, from the newest `worker_heartbeats` row: its `details` per lane, and the worker's
+uptime from `started_at`. One `lane/<lane>` cell per lane carries the WORST of its conditions, each
+named in `facts.conditions`; the `heartbeat` lane has no cell (the watcher judges the beat), and
+`health` is judged like any lane.
+
+| reads | when |
+| --- | --- |
+| OK, `off` | `interval_s` ≤ 0, or the newest pass's `last.skipped == "slice<=0"` (what a drain or images pass with a slice ≤ 0 records; any other `skipped`, autodedup's included, is not off) |
+| Problem, never woke | `interval_s` is None and the worker has been up more than 15 min (`jobs_lane_boot_grace_s`) |
+| Not measured | the lane's entry has no `interval_s` key at all, which only a worker from before wave 3 writes (the seeded None, the key present and null, is "never woke"); this guards the first deploy, while the old process's beat can still be the newest row |
+| Problem, late | `now − last_pass_at` > max(3 × `interval_s`, `interval_s` + 2 × `last_duration_s`, 15 min) (`jobs_lane_floor_s`), once the worker has been up longer than that bound; a lane with no pass yet counts from the worker's start |
+| Problem, failing | `failing_since` older than max(3 × `interval_s`, 15 min), or set at all when `interval_s` ≥ 1 h (`jobs_lane_daily_interval_s`; a daily lane passes about once per boot) |
+| Problem, in flight | a pass running more than 1,800 s (`jobs_lane_inflight_fail_s`, `LANE_PASS_TIMEOUT_SECONDS`) |
+| Watch | a pass running more than 1,200 s (`jobs_lane_inflight_warn_s`); the newest pass failed (`failing_since` set, not yet old); flapping: since this check's previous result, at least half of the lane's attempts failed (`jobs_lane_flap_share`, 0.5), that is `failed_passes` grew at least as much as `passes`, which counts completed passes only, over at least 3 attempts (`jobs_lane_flap_min_passes`) |
+| no cell | the worker has been up under 15 min and the lane has not passed in this process yet |
+
+A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
+`portal_errors`: Problem once its `failing_since` is older than max(3 × the lane's interval,
+15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
+stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 6 while
+`worker_lane_stall` read OK.
+
+**What the heartbeat carries** (`scraper/realtime_worker.py`, wave 3). `_amain` registers every
+lane from the module constant `LANES` — `probe`, `drain`, `images`, `count_probe`, `maintenance`,
+`broker_maintenance`, `estimation`, `location_resolve`, `location_intake_fast`, `location_refetch`,
+`sold_comps`, `text_extract`, `health`, `autodedup`, `heartbeat` — seeds each with `interval_s`
+None before any task starts, and asserts that the names it registers equal `LANES`; nothing imports
+the worker to learn the list. `_lane_loop` writes `interval_s` on every wake, the idle branch
+included, so an off lane reads off, not absent. Per lane: `interval_s`, `passes`, `failed_passes`,
+`last_pass_at`, `last_duration_s`, `started_at`, `in_flight_s`, `last`, `failing_since`,
+`last_error` (at most 300 characters) and, on the probe and drain lanes, `portal_errors`
+(`{portal: {failing_since, last_error}}`); `last_failure_at` is gone. A pass fails exactly where it
+failed before — a raise (`last_error` = `<Type>: <message>`), the 1,800 s timeout (`pass exceeded
+1800 s`), `text_extract`'s `fatal`, autodedup's refusal — and nothing new counts as a failure:
+`_record_pass_failed` sets `failing_since` once and overwrites `last_error`; `_record_pass` clears
+both and carries `interval_s`, `portal_errors` and every key it does not set itself. The heartbeat
+lane records its own pass (`{"beat": true}`) like any lane, so no reader special-cases it. A probe
+or drain pass reports the portals it attempted and those that raised (a probe portal whose every
+category failed counts as raised, `every category failed`): a success deletes that portal's entry,
+a raise sets or keeps it, and a portal not attempted keeps it unless the lane's disabled-sources
+setting now holds it, which deletes it. `_record_lane_failure`, a blocking incident write per
+failing portal, is gone. **At boot**, before the first beat, `_seed_from_previous_beat(state)` reads
+this worker's previous `worker_heartbeats.details` in one bounded attempt (`connect_timeout` 10, no
+retry; a miss seeds nothing and logs once) and copies, per lane in `LANES`, every key except
+`started_at`, `in_flight_s`, `interval_s` and `last_failure_at`, so about 11 deploys a day reset no
+counter, failing spell or portal error, and a lane that never wakes in the new process reads
+"never woke", not late against its old interval.
+
+**Derived artifacts.** An `artifact/<name>` cell for every `derived_artifacts` row: Problem past its
+`staleness_budget` (`public.health_stale(last_succeeded_at, staleness_budget)`), except that a row
+whose `host` is `github-actions` is stale only past the budget plus `GITHUB_DELIVERY_SLACK_S`
+(18 h), because GitHub delivers a cron late by hours (54 of the canary's last 65 scheduled gaps
+exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never succeeded") while `last_succeeded_at` is NULL. Facts: `producer`, `host`,
+`cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
+`is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
+`*/15`); every live row was inside its budget at build.
+
+## The poller — production runs, reason lines and workflow facts (wave 3)
+
+`scripts/record_workflow_failures.py`, the canary's first step, writes the facts the `jobs` check
+judges for GitHub; it judges nothing itself.
+
+**Production runs only.** A job's record is its production runs: event `schedule`, or `push` on
+`main`. Pull-request, dispatch and branch runs are attended and stay in Settings › GitHub Actions,
+so a workflow that dispatches itself is recorded by its cron run only: its chained hops are
+dispatch runs. The canary (`MONITOR_WORKFLOW_NAME`, matched by its display name) is skipped for
+failures and successes alike, so its own runs never reach the tables; GitHub's email is their path.
+A poll whose `GITHUB_REF_NAME` is set and is not `main` (a dispatch from a branch) writes nothing
+and says so in one log line, the registry projection's rule. The cursor
+(`app_settings.workflow_failures_cursor`), the cancelled gate (a never-started supersession cancel
+is not a failure) and `_advance_cursor` are unchanged.
+
+**What it writes.** For every production run it sees, the workflow's `workflow_run_health` row is
+upserted, born on a failure too: `last_success_at` by `greatest()` from its successes; `state` from
+one `GET /repos/{repo}/actions/workflows` per poll (`active`, `disabled_manually`, …); `on_main`,
+whether the workflow file is in the checkout; and `recent_starts`, the stored array merged with the
+SCHEDULED starts this poll saw (event `schedule`, every conclusion; a push has no cadence to be
+overdue against), newest 20 kept. It accumulates with no history bootstrap, so the start-gap arm is
+Not measured until a workflow has 10 scheduled starts, about two weeks for a daily job, and the
+long-cycle arm until it has 2. Each new failure goes into `workflow_failures` with `event`,
+`head_branch` and `reason`, the reason line of its failed job's log tail (`LOG_TAIL_BYTES`),
+fetched for newly inserted rows within `MAX_LOG_FETCHES` (25 logs) and `REASON_PASS_BUDGET_S`
+(90 s) per poll; a row past either budget keeps `reason` NULL and is not retried, so its cell shows
+the run link without a reason. Migration 621 added those three columns and `state`, `on_main` and
+`recent_starts`.
+
+**The reason line.** `failure_signature.reason_line(text)`, at most 300 characters (None when the
+log has none), is the one line that explains a red run: (1) the LAST `CHECK <key> status=fail`
+line; else (2) the last exception line — `<CapWord>Error: …`, `<CapWord>Exception: …` or a
+traceback's final line — outside `##[group]` … `##[endgroup]` blocks and not starting with runner
+boilerplate (Image, Version, Commit, Region, Cloud, Contents, Metadata, Packages, Actions, `Note:
+switching to`); else (3) the last `##[error]` line. The Actions timestamp prefix is stripped and the
+rest of the line kept. The signature engine's exception-first tier took the last CapWord-colon line
+anywhere, so runner setup lines such as `Metadata: read` beat every CHECK line: it never produced a
+single CHECK signature. The fixture `tests/fixtures/workflow_job_116299577551.txt` (a 2026-10-15
+monitoring run's job log, scrubbed of tokens) pins that it yields its `CHECK llm_errors
+status=fail` line, not `Metadata: read`. Since wave 2 only the canary prints CHECK lines, and the
+poller skips it, so for today's workflows the reason is usually tier 2's exception.
+
+**The log fetch has three hazards, all live-verified — do not simplify it.**
+`/actions/jobs/{id}/logs` answers **302** to a SAS-signed Azure blob URL, and CPython's
+`HTTPRedirectHandler` copies every header (`Authorization: Bearer` included) onto the redirect:
+that leaks `GITHUB_TOKEN` to a third-party host *and* returns 401. So redirects are disabled and
+the `Location` is re-requested **bare**. Azure **ignores suffix ranges** (`Range: bytes=-500`
+came back 200 with the whole 27 KB body), so the tail is two requests: `bytes=0-0` to read the
+length off `Content-Range`, then a real closed range. And the signed URL can 404 `BlobNotFound`
+(retention, or logs not yet flushed) — that row keeps `reason` NULL, never a poller failure.
+Never `tail` a log either: the last ~25 lines are always runner cleanup, so the extractor
+anchors on the error and walks backwards.
+
+## `capacity` — is the database, and the worker's memory, keeping up? (wave 3)
+
+`check_capacity` (`scripts/checks/platform.py`; platform alarm on the worker, cadence 1,800 s,
+label "Capacity", unit "cells"):
+
+| cell | measures | Watch | Problem |
+| --- | --- | --- | --- |
+| `cron/<jobname>` | the 24 h p50 and p95 duration of its finished runs, against its reference, its interval (the median start gap) and its `statement_timeout` (parsed from the `set statement_timeout='NNNs'` prefix of `cron.job.command`; with none, that arm is not judged) | p50 ≥ 3 × reference and ≥ 30 s, or p95 ≥ 50 % of the interval | p50 ≥ 4 × reference and ≥ 60 s, or p95 ≥ 80 % of the interval or of the statement_timeout |
+| `check_timeouts/<host>` | one cell per host that measures through the harness (`github-actions`, `realtime-worker`): the share of the last 24 h's `pipeline_check_results` rows of that host's keys with `details ? 'timed_out'`, so one host's timeouts are not averaged into the other's; the watcher's `pg_cron`-hosted key is left out, and a host with no result in 24 h is Not measured | > 5 % | > 20 % |
+| `open_transaction` | the oldest `xact_start` in `pg_stat_activity`, autovacuum and the check's own backend excluded; Not measured while the view hides a session (below) | > 60 min | > 6 h |
+| `connections` | client connections against `max_connections`; Not measured while the view hides a session (below) | > 70 % | > 90 % |
+| `worker_memory` | the autodedup lane's `last.peak_rss_mb` over its `memory_limit_mb`, from a pass of this process only: Not measured ("no autodedup pass since the worker booted"; facts `last_pass_at` and `boot`) while the lane's `last_pass_at` is NULL or older than the heartbeat's `started_at`, because the boot seed carries `last` across a restart (`text_extraction_lag` reads the text lane's), so until then it is the dead process's peak | > 0.8 | > 0.9 |
+| `db_restart` | `pg_postmaster_start_time()`, a fact | — | — (always OK) |
+
+**A hidden session is not a quiet one.** `pg_stat_activity` shows a session the reading role may not
+inspect with its `backend_type` NULL, so `connections` and `open_transaction` also count those
+rows, and while there is any, both cells are Not measured ("pg_stat_activity hides other sessions
+from this role"): a count or an oldest transaction over the visible sessions alone reads low and
+passes.
+
+**The reference cannot be eroded by the incident.** A job's reference is its lowest weekly p50 of
+finished runs since `THRESHOLDS["CAPACITY_REFERENCE_FROM"]`, a blessed date: 2026-10-17, the first
+full day on the 2XL instance (p50 41-100 s). Before 7 days of post-reference history
+(`capacity_reference_min_days`) the relative arm is Not measured; re-blessing after a deliberate
+change is a dated PR that moves the date, and a rail in `tests/scripts/test_verify_pipeline.py`
+fails once the date is more than 90 days old, so that PR is forced, not remembered. Why not a trailing baseline: `browse-list-rebuild`'s
+daily p50 ran 151-277 s from 08-17 against a lowest weekly p50 of ~9.9 s (ratio 15-28) and hit
+1,800 s timeouts 09-26..10-03, while a trailing 28-day baseline rose from 25.7 s (08-18) to 49.5 s
+(08-31), 176.6 s (09-15) and 242 s (10-09), so it would have read "recovered" by early September.
+A known, stated limit: a cron tick that skips itself is indistinguishable from a run and biases p50
+down, the reference with it, which only makes the relative arm stricter.
+
+**The other cells' basis.** Check timeouts ran up to ~12 % a day during the saturation and 0 since
+10-10, measured on the GitHub population (the only host before wave 3); the worker's cell uses the
+same limits. The oldest open transaction peaked at 18.3 min in the saturation month; it matters
+beyond load because `refresh_llm_cost_rollups`' 3-hour trailing re-scan absorbs only a late arrival
+whose transaction was shorter than that (`called_at` defaults to now(), the transaction START; the
+repair is `select refresh_llm_cost_rollups('-infinity');`). Connections read 29 of 380 and the
+worker's memory 7.4 of 22.9 GB at build. It replaces `db_saturation` (a failure rate only, OK on
+all 61 runs of the saturation week) and `long_open_transaction` (never non-OK in 196 runs, with no
+fail tier).
+
+## `llm` — are the providers serving, and is spend sane? (wave 3)
+
+`check_llm` (`scripts/checks/platform.py`; platform alarm on the worker, cadence 600 s, label "LLM
+providers", unit "cells"), over `llm_calls` (24-72 h, ~2 s):
+
+| cell | Problem | Watch |
+| --- | --- | --- |
+| `<provider>/credit` | the newest error matching the credit patterns `llm_errors` used, quoted verbatim, is newer than that provider's own newest success, over a 72 h lookback (`llm_lookback_h`); an authentication failure does not count | — |
+| `<provider>/<called_for>` | at least 5 attempts and 0 successes in the last hour (`llm_starved_min_attempts`) | a 24 h error share of at least 20 % over at least 20 calls (`llm_error_share_warn`, `llm_error_share_min_calls`) while the provider's newest call is an error |
+| `fleet/spend` | 24 h `cost_usd` above $150 (`llm_spend_24h_fail_usd`) | above $130 (`llm_spend_24h_warn_usd`) |
+
+A provider with no calls in 72 h has one cell, OK, with the fact `state=idle`. Basis: 5 of 5 onsets
+of the old checks since 08-27 were real; normal spend is $22-32 a day. The 72 h lookback keeps a
+credit outage red after its callers back off (self-rule 1: a circuit breaker stops the traffic, and
+a recency window then reads the silence as recovery); judging per provider means one provider's
+success no longer masks another's outage; starvation per (provider, `called_for`) means one cheap
+success elsewhere cannot hold an aggregate healthy (self-rule 2). It replaces `llm_errors` (an
+any-provider rate gate over a 24 h window) and `llm_burn_rate` with its starved and idle arms, and
+spells the spend once (the code default was $90 against the settings row's $130 until wave 1).
+`text_extraction_lag`'s abort arm, a third detector of the same outage, goes with that key in
+wave 6. Until then the alarms tell a provider's credit outage twice, by its `<provider>/credit` cell
+and by the `jobs` check's `lane/text_extract` cell, because the text lane's provider-fatal pass is
+a failed pass.
+
+**Replay rails.** `tests/scripts/test_checks_platform_replay.py` replays aggregate INPUTS exported
+read-only from production — `tests/fixtures/health_jobs_14d.csv`, `health_capacity_cron_8w.csv`
+(weekly p50, p95 and start gap per pg_cron job from 2026-08-10, a week before the 08-17
+saturation) and `health_llm_14d.csv` (hourly calls, errors, credit errors and cost per provider
+and `called_for`), each with its refresh SQL in the test's header — through the checks and the
+ladder. The incident-shaped windows fire: the 09-13 `recompute_mf_yields` reds, the 10-02 and
+10-18 OpenAI outages, and the 08-17 → 10-10 `browse-list-rebuild` saturation, replayed on a
+reference date overridden to 08-10 (the blessed 10-17 postdates it): its incident opens inside that
+reference week through the p95 arm, before the relative arm can judge, and the sticky reference
+holds it red to the end. The quiet windows are what the data allows: a full fortnight for llm
+(09-14..09-27); 8 days for pg_cron (10-11..10-18, after the saturation's tail); one week for
+capacity (from 10-12), with the relative arm Not measured on the blessed reference; none for GitHub
+workflows, because only each workflow's newest success was stored before wave 3. The worker lanes
+and the derived artifacts keep no history, so only their hermetic tests judge them.
+`tests/scripts/test_checks_platform.py` pins every rule above on fake connections, which answer a
+statement by a fragment of its text, so the pg_cron SQL also runs for real: in CI's replay database
+(no pg_cron) a rolled-back transaction creates a stub `cron` schema (`job`, `job_run_details`),
+seeds runs and executes `_CRON_JOBS_SQL`, `_CAPACITY_CRON_SQL` and `_CAPACITY_REFERENCE_SQL`
+through psycopg with their real parameters, asserting that only finished runs count, that the
+7-day window counts back from the job's newest start, "2 of the last 3" and whole-week reference
+buckets; the artifact read runs there too, with the GitHub delivery slack the check sends. That
+rail, `tests/test_platform_cron_sql_live.py`, is one `migrations.yml` step after 621's
+(`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`), skipped locally.
 
 ## `location_payload_shape_drift` — can the location contracts still read new payloads?
 

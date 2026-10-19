@@ -17,26 +17,21 @@ from typing import Any
 
 from pathlib import Path
 
-from scripts.migration_objects import load_migrations
+from scripts.checks import platform as platform_checks
+from scripts.checks.platform import check_migration_drift
+from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, load_migrations
 from scripts.verify_pipeline import (
     CHECKS,
-    DEFAULT_THRESHOLDS,
-    _SAFE_IDENT,
+    THRESHOLDS,
     Check,
     check_acquisition_lag,
     check_false_delist_share,
-    check_migration_drift,
-    check_worker_lane_stall,
     check_walk_coverage,
     check_walk_end_streak,
-    _status_for_cron,
-    _status_for_burn,
-    _status_for_llm_errors,
-    load_thresholds,
     run_checks,
 )
 
-T = DEFAULT_THRESHOLDS
+T = THRESHOLDS
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
@@ -54,75 +49,22 @@ def _keys() -> list[str]:
     return [c.key for c in CHECKS]
 
 
+def _hosted(host: str) -> list[str]:
+    """The keys this host measures, in registry order."""
+    return [c.key for c in CHECKS if c.host == host]
+
+
+# The keys the worker's health lane measures (wave 3); every other key runs on GitHub.
+_WORKER_KEYS = ["jobs", "capacity", "llm"]
+
+
 def _stub(key: str, fn: Any, *, budget_s: float = 45.0, cls: str = "alarm",
           host: str = "github-actions", cadence_s: int = 3600) -> Check:
     """An unregistered check for exercising the harness itself."""
     return Check(key, fn, "platform", cls, host, cadence_s, key, budget_s=budget_s)
 
 
-# --- llm_errors ------------------------------------------------------------
-
-
-def test_llm_errors_credit_live_forces_fail() -> None:
-    status, offenders = _status_for_llm_errors(
-        [], credit_live=True, currently_failing=True, thresholds=T,
-    )
-    assert status == "fail" and offenders == []
-
-
-def test_llm_errors_recovered_credit_window_is_ok() -> None:
-    # The 2026-07-09 stale-alarm regression: credit errors sit in the 24h window but a
-    # success has flowed since, so it's NOT live — must be ok, not "everything is down".
-    assert _status_for_llm_errors(
-        [{"called_for": "compare_listings_visually", "total": 40, "errors": 30}],
-        credit_live=False, currently_failing=False, thresholds=T,
-    ) == ("ok", [])
-
-
-def test_llm_errors_rate_only_fails_while_live() -> None:
-    offender = [{"called_for": "score_listing_condition", "total": 20, "errors": 6}]  # 30% > 20%, >= 20
-    # Live → fail, named.
-    status, offenders = _status_for_llm_errors(offender, False, True, T)
-    assert status == "fail" and offenders == ["score_listing_condition"]
-    # Same window but recovered (not live) → ok. This is the trailing-window fix.
-    assert _status_for_llm_errors(offender, False, False, T) == ("ok", [])
-    # Live but only 5 calls (< 20) → too little signal → ok.
-    low_volume = [{"called_for": "parse_url", "total": 5, "errors": 3}]
-    assert _status_for_llm_errors(low_volume, False, True, T)[0] == "ok"
-
-
-def test_llm_errors_clean_is_ok() -> None:
-    clean = [{"called_for": "parse_url", "total": 100, "errors": 1}]
-    assert _status_for_llm_errors(clean, False, True, T) == ("ok", [])
-
-
-def test_burn_rate_thresholds() -> None:
-    warn, fail = T["llm_spend_24h_warn_usd"], T["llm_spend_24h_fail_usd"]
-    assert _status_for_burn(10.0, warn, fail) == "ok"          # normal daily burn
-    assert _status_for_burn(warn, warn, fail) == "ok"          # at warn boundary, not over
-    assert _status_for_burn(warn + 1, warn, fail) == "warn"    # top-up cadence risk (no bell/email)
-    assert _status_for_burn(fail, warn, fail) == "warn"        # at fail boundary, not over
-    assert _status_for_burn(fail + 1, warn, fail) == "fail"    # runaway burn -> email
-
-
-# --- db_saturation (a blind-spot detector) ---------------------------------
-
-
-def test_cron_flags_only_jobs_over_rate_with_enough_runs() -> None:
-    jobs = [
-        {"jobname": "refresh-health-dashboard", "ok": 14, "failed": 22},  # 61% of 36 → offender
-        {"jobname": "browse-list-rebuild", "ok": 71, "failed": 1},        # 1.4% → fine
-        {"jobname": "flaky-but-rare", "ok": 1, "failed": 1},              # 50% but only 2 runs → ignored
-    ]
-    status, offenders = _status_for_cron(jobs, fail_rate=0.5)
-    assert status == "fail"
-    assert offenders == ["refresh-health-dashboard 22/36"]
-
-
-def test_cron_all_healthy_is_ok() -> None:
-    jobs = [{"jobname": "browse-list-rebuild", "ok": 71, "failed": 1}]
-    assert _status_for_cron(jobs, 0.5) == ("ok", [])
-    assert _status_for_cron([], 0.5) == ("ok", [])  # no jobs in window → ok
+# --- property_maintenance ----------------------------------------------------
 
 
 def test_property_maintenance_healthy_day_is_ok() -> None:
@@ -131,7 +73,7 @@ def test_property_maintenance_healthy_day_is_ok() -> None:
     trips nothing."""
     from scripts.verify_pipeline import _status_for_property_maintenance
 
-    t = DEFAULT_THRESHOLDS
+    t = THRESHOLDS
     assert _status_for_property_maintenance(24.5, 0.1, t) == ("ok", [])
     assert _status_for_property_maintenance(2.0, None, t) == ("ok", [])
 
@@ -142,7 +84,7 @@ def test_property_maintenance_missing_stamp_warns_not_fails() -> None:
     the check; silently green would hide a sweep that has never completed."""
     from scripts.verify_pipeline import _status_for_property_maintenance
 
-    status, offenders = _status_for_property_maintenance(None, 0.1, DEFAULT_THRESHOLDS)
+    status, offenders = _status_for_property_maintenance(None, 0.1, THRESHOLDS)
     assert status == "warn"
     assert any("no complete-sweep stamp" in o for o in offenders)
 
@@ -150,7 +92,7 @@ def test_property_maintenance_missing_stamp_warns_not_fails() -> None:
 def test_property_maintenance_worst_axis_wins() -> None:
     from scripts.verify_pipeline import _status_for_property_maintenance
 
-    t = DEFAULT_THRESHOLDS
+    t = THRESHOLDS
     # Warn axis alone → warn; a fail axis anywhere → fail overall.
     status, offenders = _status_for_property_maintenance(53.0, None, t)
     assert status == "warn" and "last complete sweep" in offenders[0]
@@ -170,7 +112,7 @@ def test_property_sweep_thresholds_fit_a_two_run_cycle() -> None:
     and a cycle whose second run never stamped must still fail within a third day."""
     from scripts.verify_pipeline import _status_for_property_maintenance
 
-    t = DEFAULT_THRESHOLDS
+    t = THRESHOLDS
     two_run_gap_h = 48 + 2.5
     assert two_run_gap_h < t["property_sweep_warn_hours"] < t["property_sweep_fail_hours"] < 72
     assert _status_for_property_maintenance(two_run_gap_h, 0.1, t) == ("ok", [])
@@ -188,9 +130,9 @@ def test_property_dirty_warn_clears_a_full_length_sweep() -> None:
     from scripts.verify_pipeline import _status_for_property_maintenance
 
     max_hold_h = rps._MAX_BUDGET_SECONDS / 3600
-    assert DEFAULT_THRESHOLDS["property_dirty_warn_hours"] > max_hold_h
+    assert THRESHOLDS["property_dirty_warn_hours"] > max_hold_h
     # ...and a sweep running its full budget stays green on the dirty axis.
-    assert _status_for_property_maintenance(1.0, max_hold_h, DEFAULT_THRESHOLDS) == ("ok", [])
+    assert _status_for_property_maintenance(1.0, max_hold_h, THRESHOLDS) == ("ok", [])
 
 
 def test_property_maintenance_offenders_do_not_round_a_fractional_threshold() -> None:
@@ -198,7 +140,7 @@ def test_property_maintenance_offenders_do_not_round_a_fractional_threshold() ->
     thresholds are fractional, so the rendering must not round them away."""
     from scripts.verify_pipeline import _status_for_property_maintenance
 
-    t = dict(DEFAULT_THRESHOLDS, property_dirty_warn_hours=2.5)
+    t = dict(THRESHOLDS, property_dirty_warn_hours=2.5)
     _, offenders = _status_for_property_maintenance(1.0, 2.6, t)
     assert offenders == ["oldest dirty-queue row 2.6h (warn > 2.5h)"]
 
@@ -216,179 +158,7 @@ def test_property_maintenance_sql_is_o1() -> None:
     assert "listings" not in sql.lower()
 
 
-# --- broker resolution freshness (2026-08-12 E2E review) --------------------
-
-
-def test_broker_resolution_healthy_day_is_ok() -> None:
-    """A lap that closed on the second daily run — the measured steady state, since
-    attribution truncates on its budget on most days — is the healthy case."""
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    assert _status_for_broker_resolution(24.5, 0.2, DEFAULT_THRESHOLDS) == ("ok", [])
-    assert _status_for_broker_resolution(49.0, 0.2, DEFAULT_THRESHOLDS) == ("ok", [])
-    assert _status_for_broker_resolution(2.0, None, DEFAULT_THRESHOLDS) == ("ok", [])
-
-
-def test_broker_resolution_missing_stamp_warns_not_fails() -> None:
-    """The state between deploying this check and the first complete sweep."""
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    status, offenders = _status_for_broker_resolution(None, 0.1, DEFAULT_THRESHOLDS)
-    assert status == "warn"
-    assert any("no complete-sweep stamp" in o for o in offenders)
-
-
-def test_broker_resolution_catches_the_rotation_that_stopped_advancing() -> None:
-    """The bug this check exists for: the sweep broke out on its budget every day
-    and still exited 0, so the tail above the break was never attributed. The signal
-    is now the ROTATION's lap age — a rotation that stops getting round the corpus
-    (a cursor that stops advancing, a lock never won, a sweep that dies before its
-    first chunk) ages past the fail line even though every individual run is red-free."""
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    status, offenders = _status_for_broker_resolution(90.0, 0.1, DEFAULT_THRESHOLDS)
-    assert status == "fail"
-    assert any("last complete broker sweep" in o for o in offenders)
-    # ...and the two axes are independent: a frozen incremental drain alone reds.
-    # Derived from the threshold, not hardcoded: the dirty lines move whenever
-    # resolve_brokers_full.yml's backstop does (they are asserted against it above),
-    # and a literal sentinel silently decays into a warn when they do.
-    status, offenders = _status_for_broker_resolution(
-        2.0, DEFAULT_THRESHOLDS["broker_dirty_fail_hours"] + 1.0, DEFAULT_THRESHOLDS)
-    assert status == "fail"
-    assert any("broker dirty-queue" in o for o in offenders)
-
-
-def test_broker_sweep_axis_is_reachable_as_fail_before_any_lap_closes() -> None:
-    """Without the open-lap fallback a rotation that NEVER completes a lap would sit
-    on the missing-stamp warn forever, and warn rings nothing: the ladder opens an
-    incident on fail only. The check would have been inert for exactly the condition it
-    was written for."""
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    label = "open rotation lap (no lap closed yet)"
-    status, offenders = _status_for_broker_resolution(
-        200.0, 0.1, DEFAULT_THRESHOLDS, sweep_label=label)
-    assert status == "fail"
-    assert any(label in o for o in offenders)
-
-
-def test_broker_thresholds_clear_the_workflow_backstop() -> None:
-    """The full sweep holds broker_resolution_lock for its whole run (every */10
-    incremental skips meanwhile) and clears dirty_broker_listings only at finalize,
-    so the dirty axis ages 1:1 with the sweep — bounded by resolve_brokers_full.yml's
-    timeout-minutes. The sweep axis measures a rotation LAP, which takes one or two
-    daily runs at the measured attribution throughput, so warn must clear two runs
-    plus that backstop and fail must clear three: below either, a healthy rotation
-    turns the check amber (or emails hourly) and trains the operator to ignore it.
-    Raising the workflow backstop means raising these in the same change."""
-    import pathlib
-    import re
-
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    yml = pathlib.Path(__file__).resolve().parents[2] / (
-        ".github/workflows/resolve_brokers_full.yml")
-    backstop_h = int(re.search(r"^\s*timeout-minutes:\s*(\d+)", yml.read_text(),
-                               re.MULTILINE)[1]) / 60
-    assert DEFAULT_THRESHOLDS["broker_dirty_warn_hours"] > backstop_h
-    assert DEFAULT_THRESHOLDS["broker_sweep_warn_hours"] > 2 * 24 + backstop_h
-    assert DEFAULT_THRESHOLDS["broker_sweep_fail_hours"] > 3 * 24 + backstop_h
-    # ...and a two-run lap finishing at its full backstop stays green on both axes.
-    assert _status_for_broker_resolution(
-        48 + backstop_h, backstop_h, DEFAULT_THRESHOLDS) == ("ok", [])
-
-
-def test_a_dead_sweep_tail_is_caught_by_the_finished_run_axis() -> None:
-    """_record_sweep_progress stamps lap completion right after attribution, ~17-25
-    min before the tail (cross-source merge, rollups, matview, candidates, the
-    dirty-clear) that _finalize closes with ended_at. So a sweep whose tail dies
-    leaves a MINUTES-old lap stamp, and the */10 incrementals keep the dirty queue
-    young — both of the original axes report healthy while the leaderboard and
-    rollups have silently stopped. Only the finished-run axis sees it."""
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    # the exact shape: lap just stamped, dirty queue fresh, tail dead for 3 days
-    assert _status_for_broker_resolution(0.4, 0.3, DEFAULT_THRESHOLDS) == ("ok", [])
-    status, offenders = _status_for_broker_resolution(
-        0.4, 0.3, DEFAULT_THRESHOLDS, finished_age_hours=72.0)
-    assert status == "fail"
-    assert any("last finished full sweep" in o for o in offenders)
-    status, offenders = _status_for_broker_resolution(
-        0.4, 0.3, DEFAULT_THRESHOLDS, finished_age_hours=36.0)
-    assert status == "warn"
-    assert any("last finished full sweep" in o for o in offenders)
-
-
-def test_finished_run_axis_grades_tighter_than_the_lap_axis() -> None:
-    """The lap spans one to three daily runs, so 52/84 is deliberately slack. The
-    tail runs on EVERY sweep regardless of lap closure, so steady state is ~24h and
-    reusing the lap thresholds would let two dead nights pass as healthy."""
-    assert (DEFAULT_THRESHOLDS["broker_finished_warn_hours"]
-            < DEFAULT_THRESHOLDS["broker_sweep_warn_hours"])
-    assert (DEFAULT_THRESHOLDS["broker_finished_fail_hours"]
-            < DEFAULT_THRESHOLDS["broker_sweep_fail_hours"])
-    # ...and one ordinary daily sweep plus the workflow backstop stays green.
-    assert DEFAULT_THRESHOLDS["broker_finished_warn_hours"] > 24 + 1.9
-
-
-# The gap between consecutive ended_at is a whole number of daily runs plus the
-# spread in when a run finishes: GH's scheduled-run delay, the <=21-min lock wait
-# and the run itself. Live spread to 2026-08-12 is ~2.5h (06:25 to 08:52 UTC on a
-# 04:35 cron), and the workflow backstop bounds only the last of those three.
-_FINISH_SPREAD_H = 2.5
-
-
-def test_one_missed_night_warns_and_two_fail() -> None:
-    """The calibration this axis was sized for, pinned on BOTH sides. A single
-    missed night is 48h plus the finish spread — up to ~50.5h — so a fail line at
-    50 failed the alarm for it: an onset notice from the ladder for the night the
-    sweep's own red run already reported. Two missed
-    nights are >=69.5h even when the recovery run finishes at its earliest, so the
-    fail line has to live strictly between the two — which is what makes the axis
-    mean 'the tail has stopped', not 'a night was skipped'."""
-    import pathlib
-    import re
-
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    yml = pathlib.Path(__file__).resolve().parents[2] / (
-        ".github/workflows/resolve_brokers_full.yml")
-    backstop_h = int(re.search(r"^\s*timeout-minutes:\s*(\d+)", yml.read_text(),
-                               re.MULTILINE)[1]) / 60
-    fail_h = DEFAULT_THRESHOLDS["broker_finished_fail_hours"]
-    # the same convention the lap axis uses (N runs + the backstop drift), then the
-    # wider real spread, which the backstop alone does not bound
-    assert fail_h > 2 * 24 + backstop_h
-    assert fail_h > 2 * 24 + _FINISH_SPREAD_H
-    assert fail_h < 3 * 24 - _FINISH_SPREAD_H
-
-    # ...and the graded axis agrees: worst single miss ambers, best double miss reds.
-    status, offenders = _status_for_broker_resolution(
-        0.4, 0.3, DEFAULT_THRESHOLDS, finished_age_hours=2 * 24 + _FINISH_SPREAD_H)
-    assert status == "warn"
-    assert any("last finished full sweep" in o for o in offenders)
-    status, _ = _status_for_broker_resolution(
-        0.4, 0.3, DEFAULT_THRESHOLDS, finished_age_hours=3 * 24 - _FINISH_SPREAD_H)
-    assert status == "fail"
-    # an ordinary night, finish spread included, stays green
-    assert _status_for_broker_resolution(
-        0.4, 0.3, DEFAULT_THRESHOLDS,
-        finished_age_hours=24 + _FINISH_SPREAD_H) == ("ok", [])
-
-
-def test_a_missing_finished_run_is_skipped_not_a_fail() -> None:
-    """A fresh DB (or a rename on broker_resolution_runs) yields NULL. Only the LAP
-    stamp's absence is the deploy-day warn; a third axis that red on NULL would ring
-    the operator's hourly email lane for a database that has simply never run."""
-    from scripts.verify_pipeline import _status_for_broker_resolution
-
-    assert _status_for_broker_resolution(
-        24.0, 0.2, DEFAULT_THRESHOLDS, finished_age_hours=None) == ("ok", [])
-    status, offenders = _status_for_broker_resolution(
-        None, 0.2, DEFAULT_THRESHOLDS, finished_age_hours=None)
-    assert status == "warn"
-    assert all("last finished full sweep" not in o for o in offenders)
+# --- broker_merge_suppression ------------------------------------------------
 
 
 class _OneRow:
@@ -416,56 +186,12 @@ class _OneRow:
         return self.row
 
 
-def test_broker_resolution_check_reads_all_three_axes_off_one_row() -> None:
-    """One O(1) round trip: the finished-run axis is another scalar in the same
-    single-row query, not a second read in the per-check 45 s budget (Check.budget_s)."""
-    from scripts.verify_pipeline import check_broker_resolution_freshness
-
-    conn = _OneRow((0.4, 0.4, 61.0, 0.3, 12))
-    out = check_broker_resolution_freshness(conn, DEFAULT_THRESHOLDS)
-    assert len([s for s in conn.executed if "select" in s.lower()]) == 1
-    assert out["status"] == "fail"
-    assert out["details"]["finished_age_hours"] == 61.0
-    assert out["details"]["dirty_depth"] == 12
-
-
-def test_broker_resolution_sql_is_o1() -> None:
-    """The per-check 45 s budget (Check.budget_s). resolve_brokers deleted exactly
-    this scan from its own incremental: `broker_identity_id IS NULL` is a permanent
-    state for ~110k listings, so it detoasted the whole raw_json corpus for ~7
-    genuine stragglers and timed out."""
-    from scripts.verify_pipeline import _BROKER_RESOLUTION_SQL as sql
-
-    assert "broker_resolution_last_complete" in sql
-    assert "dirty_broker_listings" in sql
-    # the completion axis reads only FINISHED full runs — an unfinished run has a
-    # NULL ended_at and must not be mistaken for a sweep that got to the end
-    assert "broker_resolution_runs" in sql
-    assert "r.mode = 'full' and r.ended_at is not null" in sql
-    assert "listings l" not in sql.lower() and "broker_identity_id" not in sql.lower()
-
-
-def test_broker_completion_stamp_key_matches_the_writer() -> None:
-    """The check and the sweep are one contract across two modules — a rename on
-    either side would silently produce a permanently-missing stamp (a soft warn),
-    not an error. Both keys count: the stamp AND the cursor the open-lap fallback
-    ages when no lap has closed."""
-    import scripts.resolve_brokers as rb
-    from scripts.verify_pipeline import _BROKER_RESOLUTION_SQL
-
-    assert rb._SWEEP_COMPLETE_KEY == "broker_resolution_last_complete"
-    assert f"'{rb._SWEEP_COMPLETE_KEY}'" in _BROKER_RESOLUTION_SQL
-    assert f"'{rb._SWEEP_CURSOR_KEY}'" in _BROKER_RESOLUTION_SQL
-    assert "completed_at" in rb._STAMP_SWEEP_COMPLETE_SQL
-    assert "lap_started_at" in rb._WRITE_SWEEP_CURSOR_SQL
-
-
 def test_broker_merge_suppression_is_ok_on_an_empty_rail() -> None:
     """The table starts empty and only grows by operator action, so "no rows" is the
     healthy steady state, not a missing signal."""
     from scripts.verify_pipeline import check_broker_merge_suppression
 
-    out = check_broker_merge_suppression(_OneRow((0, 0, 0)), DEFAULT_THRESHOLDS)
+    out = check_broker_merge_suppression(_OneRow((0, 0, 0)), THRESHOLDS)
     assert out["status"] == "ok"
     assert out["details"] == {"active_suppressions": 0, "lifted": 0, "violations": 0}
 
@@ -476,7 +202,7 @@ def test_a_single_bypassed_suppression_fails_the_check() -> None:
     pair is either separated or it is not."""
     from scripts.verify_pipeline import check_broker_merge_suppression
 
-    out = check_broker_merge_suppression(_OneRow((4, 2, 1)), DEFAULT_THRESHOLDS)
+    out = check_broker_merge_suppression(_OneRow((4, 2, 1)), THRESHOLDS)
     assert out["status"] == "fail" and out["value"] == 1
     assert out["details"] == {"active_suppressions": 4, "lifted": 2, "violations": 1}
     assert "bypassed" in out["message"]
@@ -492,7 +218,7 @@ def test_a_lifted_suppression_is_not_a_violation() -> None:
     assert "s.lifted_at is null" in sql
     assert sql.count("join broker_identities") == 2
     assert "lo.broker_id = hi.broker_id" in sql
-    out = check_broker_merge_suppression(_OneRow((3, 9, 0)), DEFAULT_THRESHOLDS)
+    out = check_broker_merge_suppression(_OneRow((3, 9, 0)), THRESHOLDS)
     assert out["status"] == "ok" and out["details"]["lifted"] == 9
 
 
@@ -501,59 +227,6 @@ def test_broker_suppression_check_is_registered() -> None:
     from scripts.verify_pipeline import check_broker_merge_suppression
 
     assert _by_key("broker_merge_suppression").fn is check_broker_merge_suppression
-
-
-def test_broker_check_is_registered() -> None:
-    """An unregistered check is dead code that never writes a row."""
-    from scripts.verify_pipeline import check_broker_resolution_freshness
-
-    assert _by_key("broker_resolution_freshness").fn is check_broker_resolution_freshness
-
-
-# --- thresholds ------------------------------------------------------------
-
-
-class _ThresholdConn:
-    def __init__(self, value: Any) -> None:
-        self._value = value
-
-    def cursor(self) -> "_ThresholdConn":
-        return self
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self._row = (self._value,) if self._value is not _MISSING else None
-
-    def fetchone(self) -> Any:
-        return self._row
-
-    def __enter__(self) -> "_ThresholdConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-
-_MISSING = object()
-
-
-def test_thresholds_missing_row_is_all_defaults() -> None:
-    assert load_thresholds(_ThresholdConn(_MISSING)) == DEFAULT_THRESHOLDS
-
-
-def test_thresholds_partial_override_merges_over_defaults() -> None:
-    merged = load_thresholds(_ThresholdConn({"llm_spend_24h_fail_usd": 99999}))
-    assert merged["llm_spend_24h_fail_usd"] == 99999
-    assert merged["llm_spend_24h_warn_usd"] == DEFAULT_THRESHOLDS["llm_spend_24h_warn_usd"]
-
-
-def test_thresholds_json_string_is_parsed() -> None:
-    merged = load_thresholds(_ThresholdConn(json.dumps({"llm_error_rate_warn": 0.5})))
-    assert merged["llm_error_rate_warn"] == 0.5
-
-
-def test_thresholds_ignores_non_numeric_values() -> None:
-    merged = load_thresholds(_ThresholdConn({"llm_spend_24h_fail_usd": "lots"}))
-    assert merged["llm_spend_24h_fail_usd"] == DEFAULT_THRESHOLDS["llm_spend_24h_fail_usd"]
 
 
 # --- run_checks isolation --------------------------------------------------
@@ -603,287 +276,6 @@ def test_every_result_carries_the_time_its_check_took() -> None:
     assert isinstance(slow["details"]["elapsed_ms"], int)
     assert slow["details"]["elapsed_ms"] >= 20
     assert isinstance(boom["details"]["elapsed_ms"], int)
-
-
-# --- W0.3: currently_failing is derived from STATE, not recency -------------
-#
-# The old tests injected `currently_failing` as a literal into _status_for_llm_errors and
-# never exercised the derivation — which is where the bug actually lived. These drive it
-# from raw last_ok_at / last_err_at instead.
-
-
-def _t(**kw: Any) -> Any:
-    import datetime as dt
-    base = dt.datetime(2026, 8, 26, 12, 0, tzinfo=dt.timezone.utc)
-    return base + dt.timedelta(**kw)
-
-
-def test_live_state_newest_call_is_a_failure() -> None:
-    from scripts.verify_pipeline import _llm_live_state
-
-    failing, credit = _llm_live_state(
-        last_err_at=_t(minutes=10), last_ok_at=_t(minutes=5), last_credit_err_at=None)
-    assert failing is True and credit is False
-
-
-def test_live_state_a_newer_success_clears_it() -> None:
-    from scripts.verify_pipeline import _llm_live_state
-
-    failing, credit = _llm_live_state(
-        last_err_at=_t(minutes=5), last_ok_at=_t(minutes=10),
-        last_credit_err_at=_t(minutes=5))
-    assert failing is False and credit is False
-
-
-def test_live_state_stale_failure_with_no_traffic_since_is_still_failing() -> None:
-    """The regression. A total outage stops producing traffic (every LLM lane aborts
-    its pass on a fatal provider error), so the last error ages past the old 90-minute
-    window and the check flipped to `ok` — 11 days of real outage read healthy, and
-    edge-triggered alerting emitted 114 alerts alternating onset with a literal
-    'Recovered' for something that never recovered. Silence is not recovery."""
-    from scripts.verify_pipeline import _llm_live_state
-
-    failing, credit = _llm_live_state(
-        last_err_at=_t(hours=-20),          # 20h old, far outside any staleness window
-        last_ok_at=_t(hours=-23),           # and the last success is older still
-        last_credit_err_at=_t(hours=-20),
-    )
-    assert failing is True
-    assert credit is True
-
-
-def test_live_state_no_calls_at_all_is_not_failing() -> None:
-    from scripts.verify_pipeline import _llm_live_state
-
-    assert _llm_live_state(None, None, None) == (False, False)
-
-
-def test_live_state_errors_but_never_a_success_is_failing() -> None:
-    from scripts.verify_pipeline import _llm_live_state
-
-    failing, credit = _llm_live_state(
-        last_err_at=_t(hours=-6), last_ok_at=None, last_credit_err_at=_t(hours=-6))
-    assert failing is True and credit is True
-
-
-class _LlmErrorsConn:
-    """Two-query fake for check_llm_errors: per-called_for rates, per-provider state rows
-    (provider, last_err_at, last_ok_at, last_credit_err_at, credit_errors, models, jobs)."""
-
-    def __init__(self, rates: list[tuple[Any, ...]],
-                 providers: list[tuple[Any, ...]]) -> None:
-        self._rates, self._providers = rates, providers
-        self._last = ""
-        self.provider_params: Any = None
-
-    def cursor(self) -> "_LlmErrorsConn":
-        return self
-
-    def transaction(self) -> "_LlmErrorsConn":
-        return self
-
-    def __enter__(self) -> "_LlmErrorsConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self._last = sql
-        if "group by provider" in sql:
-            self.provider_params = params
-
-    def fetchall(self) -> Any:
-        return self._providers if "group by provider" in self._last else self._rates
-
-    def fetchone(self) -> Any:
-        return None
-
-
-def test_check_llm_errors_reds_on_a_days_old_credit_outage() -> None:
-    """End-to-end through the real check: a credit outage with no success since must
-    be `fail` no matter how old the last error is."""
-    from scripts.verify_pipeline import check_llm_errors
-
-    conn = _LlmErrorsConn(
-        rates=[("extract_location_claims", 500, 500)],
-        providers=[("openai", _t(hours=-30), _t(hours=-40), _t(hours=-30), 63547,
-                    ["gpt-5-mini"], ["extract_location_claims"])],
-    )
-    out = check_llm_errors(conn, T)
-    assert out["status"] == "fail"
-    assert out["details"]["currently_failing"] is True
-    assert out["details"]["credit_live"] is True
-    # Operator copy names the provider the rows name and no other, nor a subsystem that
-    # was deleted 2026-08-06 (rule 15).
-    assert "openai" in out["message"]
-    assert "anthropic" not in out["message"].lower()
-    assert "dedup vision" not in out["message"]
-
-
-def test_check_llm_errors_is_ok_once_a_success_lands() -> None:
-    from scripts.verify_pipeline import check_llm_errors
-
-    conn = _LlmErrorsConn(
-        rates=[("extract_location_claims", 500, 400)],
-        # Credit errors still in the 24h window, superseded by the SAME provider's success.
-        providers=[("openai", _t(hours=-30), _t(minutes=-2), _t(hours=-30), 63547,
-                    ["gpt-5-mini"], ["extract_location_claims"])],
-    )
-    out = check_llm_errors(conn, T)
-    assert out["status"] == "ok"
-    assert out["details"]["currently_failing"] is False
-    assert out["details"]["credit_live"] is False
-
-
-def _openai_out_of_credit_anthropic_answering() -> Any:
-    """OpenAI out of credit as on 2026-10-02..10 (the text lane), and an Anthropic success
-    after its newest credit error."""
-    return _LlmErrorsConn(
-        rates=[("enrich_listing_description", 96, 96), ("agent_estimation", 12, 0)],
-        providers=[
-            ("anthropic", None, _t(minutes=-1), None, 0, None, None),
-            ("openai", _t(minutes=-5), None, _t(minutes=-5), 96, ["gpt-5.6-luna"],
-             ["enrich_listing_description"]),
-        ],
-    )
-
-
-def test_one_providers_success_never_clears_anothers_credit_outage() -> None:
-    """Credit is one account's state. Read across all providers, as before, Anthropic's
-    success a minute ago superseded OpenAI's credit error and the check read healthy."""
-    from scripts.verify_pipeline import _CREDIT_ERROR_PATTERNS, check_llm_errors
-
-    conn = _openai_out_of_credit_anthropic_answering()
-    out = check_llm_errors(conn, T)
-
-    assert out["status"] == "fail"
-    assert out["details"]["credit_live"] is True
-    per = {p["provider"]: p for p in out["details"]["per_provider"]}
-    assert per["openai"]["credit_live"] is True
-    assert per["anthropic"]["credit_live"] is False
-    # The rate arm's gate still reads the newest call of any provider: Anthropic's success.
-    assert out["details"]["currently_failing"] is False
-    # Patterns bound as values (psycopg-%-safe), and details stay JSON for insert_result.
-    assert conn.provider_params == _CREDIT_ERROR_PATTERNS
-    json.dumps(out["details"])
-
-
-def test_the_credit_alert_names_the_provider_and_model_that_failed() -> None:
-    """The onset alert is the check's message. It names what failed, from the rows, and no
-    job that runs on another provider's account."""
-    from scripts.verify_pipeline import check_llm_errors
-
-    msg = check_llm_errors(_openai_out_of_credit_anthropic_answering(), T)["message"]
-
-    assert "openai" in msg and "gpt-5.6-luna" in msg
-    assert "enrich_listing_description" in msg
-    for elsewhere in ("anthropic", "estimation", "summar", "url parsing", "labelling"):
-        assert elsewhere not in msg.lower()
-
-
-# --- W0.3: llm_burn_rate starvation arm ------------------------------------
-
-
-def test_burn_starvation_arm_fails_a_lane_that_spends_nothing() -> None:
-    from scripts.verify_pipeline import _status_for_burn_lanes
-
-    lanes = [{"called_for": "extract_location_claims",
-              "attempts": 5000, "successes": 0, "spend": 0.0}]
-    status, arm, starved = _status_for_burn_lanes(lanes, 0.0, T["llm_spend_24h_warn_usd"],
-                                                  T["llm_spend_24h_fail_usd"])
-    assert status == "fail" and arm == "starved"
-    assert starved == ["extract_location_claims"]
-
-
-def test_burn_starvation_is_per_lane_so_one_cheap_success_cannot_mask_it() -> None:
-    """Measured: a single `summarize_region_dispositions` call held the 24h aggregate at
-    $0.01 for ~24 of 30 sampled hours while the only recurring lane was totally dead. An
-    aggregate arm cannot see that; a per-lane arm must."""
-    from scripts.verify_pipeline import _status_for_burn_lanes
-
-    lanes = [
-        {"called_for": "extract_location_claims", "attempts": 5000,
-         "successes": 0, "spend": 0.0},
-        {"called_for": "summarize_region_dispositions", "attempts": 1,
-         "successes": 1, "spend": 0.01},
-    ]
-    status, arm, starved = _status_for_burn_lanes(lanes, 0.01, 90, 150)
-    assert status == "fail" and arm == "starved"
-    assert starved == ["extract_location_claims"]
-
-
-def test_burn_idle_is_ok_and_flagged_not_starved() -> None:
-    """No attempts is not a burn failure — every producer is dispatch-driven."""
-    from scripts.verify_pipeline import _status_for_burn_lanes
-
-    status, arm, starved = _status_for_burn_lanes([], 0.0, 90, 150)
-    assert status == "ok" and arm == "idle" and starved == []
-
-
-def test_burn_healthy_traffic_keeps_the_upper_arms() -> None:
-    from scripts.verify_pipeline import _status_for_burn_lanes
-
-    lanes = [{"called_for": "parse_url", "attempts": 100, "successes": 98, "spend": 200.0}]
-    assert _status_for_burn_lanes(lanes, 200.0, 90, 150)[:2] == ("fail", "runaway")
-    assert _status_for_burn_lanes(lanes, 100.0, 90, 150)[:2] == ("warn", "runaway")
-    assert _status_for_burn_lanes(lanes, 10.0, 90, 150)[:2] == ("ok", "ok")
-
-
-def test_burn_lane_with_successes_but_zero_cost_is_not_starved() -> None:
-    """A free/cached model books cost_usd=0 on a SUCCESS. Only attempts-without-
-    successes is starvation."""
-    from scripts.verify_pipeline import _status_for_burn_lanes
-
-    lanes = [{"called_for": "parse_url", "attempts": 10, "successes": 10, "spend": 0.0}]
-    assert _status_for_burn_lanes(lanes, 0.0, 90, 150)[:2] == ("ok", "ok")
-
-
-# --- W0.1: workflow poller liveness ----------------------------------------
-
-
-def test_poller_staleness_arms() -> None:
-    from scripts.verify_pipeline import _status_for_poller_staleness
-
-    warn_h = T["workflow_poller_stale_warn_hours"]
-    fail_h = T["workflow_poller_stale_fail_hours"]
-    assert _status_for_poller_staleness(0.5, warn_h, fail_h) == "ok"
-    assert _status_for_poller_staleness(4.3, warn_h, fail_h) == "ok"   # worst real cadence
-    assert _status_for_poller_staleness(warn_h, warn_h, fail_h) == "ok"   # at, not over
-    assert _status_for_poller_staleness(warn_h + 0.1, warn_h, fail_h) == "warn"
-    assert _status_for_poller_staleness(fail_h + 0.1, warn_h, fail_h) == "fail"
-
-
-def test_poller_staleness_missing_cursor_is_warn_not_fail() -> None:
-    """A check that is red the moment it ships trains the operator to ignore every
-    check; no-cursor-yet is also the legitimate first-run state."""
-    from scripts.verify_pipeline import _status_for_poller_staleness
-
-    assert _status_for_poller_staleness(None, 6.0, 12.0) == "warn"
-
-
-def test_poller_liveness_check_reads_the_cursor_age() -> None:
-    from scripts.verify_pipeline import check_workflow_poller_liveness
-
-    out = check_workflow_poller_liveness(_OneRow((30.0,)), T)
-    assert out["status"] == "fail"
-    assert out["details"]["cursor_age_hours"] == 30.0
-    assert out["details"]["cursor_present"] is True
-
-
-def test_poller_liveness_check_handles_no_row() -> None:
-    from scripts.verify_pipeline import check_workflow_poller_liveness
-
-    out = check_workflow_poller_liveness(_OneRow(None), T)
-    assert out["status"] == "warn"
-    assert out["details"]["cursor_present"] is False
-    assert out["value"] is None
-
-
-def test_poller_liveness_is_registered() -> None:
-    from scripts.verify_pipeline import check_workflow_poller_liveness
-
-    assert _by_key("workflow_poller_liveness").fn is check_workflow_poller_liveness
 
 
 # --- W0.4: a lane degrades gracefully -------------------------------------
@@ -1119,13 +511,16 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     from scripts import verify_pipeline as vp
 
     keys = _keys()
-    assert len(keys) == len(set(keys)) == 28
+    assert len(keys) == len(set(keys)) == 23
+    # Wave 3: the worker hosts the platform checks; GitHub keeps what needs a checkout
+    # (migration_drift) or an address that is not the scrapers' (the outbound probes).
+    assert _hosted("realtime-worker") == _WORKER_KEYS
+    assert len(_hosted("github-actions")) == 20 and not _hosted("pg_cron")
     for c in CHECKS:
         assert c.label.strip(), c.key
         assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
         assert c.domain in vp.DOMAINS, c.key
         assert c.host in vp.HOSTS, c.key
-        assert c.host == "github-actions", f"{c.key}: waves 1-2 move no check off GitHub"
         assert isinstance(c.cadence_s, int) and c.cadence_s > 0, c.key
         assert c.budget_s > 0, c.key
         assert c.owner_path == "" or c.owner_path.startswith("/"), c.key
@@ -1140,9 +535,41 @@ def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
     from scripts import verify_pipeline as vp
 
     assert "worker_liveness" not in _keys()
-    assert "worker_stale_fail_minutes" not in DEFAULT_THRESHOLDS
+    assert "worker_stale_fail_minutes" not in THRESHOLDS
     assert not hasattr(vp, "check_worker_liveness")
     assert vp.HOSTS == ("realtime-worker", "github-actions", "pg_cron")
+
+
+_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+
+
+def test_every_threshold_a_check_reads_is_declared_and_every_declared_one_is_read() -> None:
+    """THRESHOLDS is the one home, with no override (wave 3): a key a check reads that it
+    lacks is a KeyError, so that check errors into Not measured on every run, and a key no
+    check names is a basis nobody is judged by (some are named in a tuple, then read)."""
+    head, _, rest = (_SCRIPTS / "verify_pipeline.py").read_text().partition(
+        "THRESHOLDS: dict[str, Any] = {")
+    _declarations, _, tail = rest.partition("\n}\n")
+    text = "\n".join([head, tail, (_SCRIPTS / "verify_outbound_urls.py").read_text(),
+                      *(path.read_text() for path in sorted((_SCRIPTS / "checks").glob("*.py")))])
+    read = set(re.findall(
+        r"""(?:thresholds|THRESHOLDS)(?:\[|\.get\()\s*["']([A-Za-z0-9_]+)["']""", text))
+    assert sorted(read - set(THRESHOLDS)) == [], "read but not declared"
+    named = {key for key in THRESHOLDS if re.search(rf"""["']{key}["']""", text)}
+    assert sorted(set(THRESHOLDS) - named) == [], "declared but named by no check"
+
+
+def test_the_capacity_reference_is_blessed_at_most_90_days_back() -> None:
+    """Design § 4: the sticky reference is a blessed date at most 90 d back, so this rail goes red
+    the day it expires and forces the dated re-blessing PR (the lowest weekly p50 since an old
+    date judges today's jobs against a workload and an instance they no longer have)."""
+    blessed = THRESHOLDS["CAPACITY_REFERENCE_FROM"]
+    today = _dt.datetime.now(_dt.timezone.utc).date()
+    assert isinstance(blessed, _dt.date) and not isinstance(blessed, _dt.datetime)
+    assert blessed <= today, f"CAPACITY_REFERENCE_FROM {blessed} is in the future"
+    assert (today - blessed).days <= 90, (
+        f"CAPACITY_REFERENCE_FROM {blessed} is {(today - blessed).days} days back, past 90: "
+        "re-bless it to a measured quiet week's first day in a dated PR")
 
 
 def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() -> None:
@@ -1156,16 +583,17 @@ def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() 
 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
-    """Waves 1-2 move no measurement: the hourly lane's six left stay hourly, the image
-    probe daily, the URL probe weekly, everything else 6-hourly."""
+    """Wave 3 moves two cadences only: migration_drift from 6-hourly to hourly, and the
+    worker's checks every 10 or 30 minutes. The image probe stays daily, the URL probe
+    weekly, everything else 6-hourly."""
+    assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
+        "jobs": 600, "capacity": 1_800, "llm": 600}
     hourly = {c.key for c in CHECKS if c.cadence_s == 3_600}
-    assert hourly == {
-        "llm_errors", "llm_burn_rate", "db_saturation", "property_maintenance",
-        "broker_resolution_freshness", "broker_merge_suppression",
-    }
+    assert hourly == {"property_maintenance", "broker_merge_suppression", "migration_drift"}
     assert _by_key("sreality_image_template").cadence_s == 86_400
     assert _by_key("outbound_url_conformance").cadence_s == 604_800
-    rest = set(_keys()) - hourly - {"sreality_image_template", "outbound_url_conformance"}
+    rest = (set(_keys()) - hourly - set(_WORKER_KEYS)
+            - {"sreality_image_template", "outbound_url_conformance"})
     assert {_by_key(k).cadence_s for k in rest} == {21_600}
 
 
@@ -1225,7 +653,8 @@ _NOW = _dt.datetime(2026, 10, 18, 12, 0, tzinfo=_dt.timezone.utc)
 def test_a_check_with_no_result_is_due() -> None:
     from scripts.verify_pipeline import due_checks
 
-    assert [c.key for c in due_checks(_DueConn({}), "github-actions", _NOW)] == _keys()
+    for host in ("github-actions", "realtime-worker"):
+        assert [c.key for c in due_checks(_DueConn({}), host, _NOW)] == _hosted(host)
 
 
 def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
@@ -1235,21 +664,21 @@ def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
         return _NOW - _dt.timedelta(**kw)
 
     conn = _DueConn({
-        "llm_errors": ago(minutes=30),        # hourly, half a cadence old: not due
-        "llm_burn_rate": ago(minutes=61),     # hourly, over a cadence old: due
+        "property_maintenance": ago(minutes=30),      # hourly, half a cadence old: not due
+        "broker_merge_suppression": ago(minutes=61),  # hourly, over a cadence old: due
         "walk_coverage": ago(hours=5),        # 6-hourly: not due
         "acquisition_lag": ago(hours=7),      # 6-hourly: due
         "outbound_url_conformance": ago(days=6),  # weekly: not due
     })
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
-    assert "llm_errors" not in due and "walk_coverage" not in due
+    assert "property_maintenance" not in due and "walk_coverage" not in due
     assert "outbound_url_conformance" not in due
-    assert "llm_burn_rate" in due and "acquisition_lag" in due
+    assert "broker_merge_suppression" in due and "acquisition_lag" in due
     assert due == [k for k in _keys() if k in due], "registry order is the run order"
-    assert len(due) == len(CHECKS) - 3
+    assert len(due) == len(_hosted("github-actions")) - 3
     (sql, params), = conn.executed  # one round trip for the whole host
     assert "max(r.run_at)" in sql and "unnest(%(keys)s::text[])" in sql
-    assert params["keys"] == _keys()
+    assert params["keys"] == _hosted("github-actions")
 
 
 def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measures_it() -> None:
@@ -1262,14 +691,18 @@ def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measure
         conn = _DueConn({key: _NOW - _dt.timedelta(**age)})
         return key in [c.key for c in due_checks(conn, "github-actions", _NOW)]
 
-    assert due("llm_errors", minutes=59)
-    assert due("llm_errors", minutes=54)          # 60 min less the 6-min slack, inclusive
-    assert not due("llm_errors", minutes=50)
+    assert due("property_maintenance", minutes=59)
+    assert due("property_maintenance", minutes=54)   # 60 min less the 6-min slack, inclusive
+    assert not due("property_maintenance", minutes=50)
     assert due("walk_coverage", hours=5, minutes=45)
     assert not due("walk_coverage", hours=5, minutes=44)
     assert due("outbound_url_conformance", days=7, minutes=-10)
     assert not due("outbound_url_conformance", days=7, minutes=-16)
-    assert {c.cadence_s - c.due_after_s for c in CHECKS} == {360, 900}
+    assert {c.cadence_s - c.due_after_s for c in CHECKS if c.host == "github-actions"} \
+        == {360, 900}
+    # The worker's 60 s tick: a 10-minute check is due after 9 minutes, a 30-minute one 27.
+    assert {c.cadence_s - c.due_after_s for c in CHECKS if c.host == "realtime-worker"} \
+        == {60, 180}
 
 
 def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
@@ -1281,27 +714,30 @@ def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
     registered = _NOW - _dt.timedelta(minutes=1)  # project_registry runs first in main()
     conn = _DueConn({"outbound_url_conformance": _NOW - _dt.timedelta(days=2),
                      "sreality_image_template": _NOW - _dt.timedelta(hours=3),
-                     "llm_errors": _NOW - _dt.timedelta(seconds=30)},
+                     "property_maintenance": _NOW - _dt.timedelta(seconds=30)},
                     declared=dict.fromkeys(
-                        ("outbound_url_conformance", "sreality_image_template", "llm_errors"),
+                        ("outbound_url_conformance", "sreality_image_template",
+                         "property_maintenance"),
                         registered))
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
     assert "outbound_url_conformance" in due and "sreality_image_template" in due
-    assert "llm_errors" not in due, "a row written since the registration still counts"
+    assert "property_maintenance" not in due, "a row written since the registration still counts"
     (sql, _params), = conn.executed
     assert "left join health_checks h on h.key = k.key" in " ".join(sql.split())
 
 
-def test_due_selection_never_reaches_another_hosts_checks(monkeypatch: Any) -> None:
-    import scripts.verify_pipeline as vp
+def test_due_selection_never_reaches_another_hosts_checks() -> None:
+    """The canary never measures the worker's checks and the health lane never GitHub's: each
+    host's one read names only its own keys."""
+    from scripts.verify_pipeline import due_checks
 
-    worker = _stub("worker_only", None, host="realtime-worker")
-    monkeypatch.setattr(vp, "CHECKS", (*vp.CHECKS, worker))
-    conn = _DueConn({})
-    assert "worker_only" not in [c.key for c in vp.due_checks(conn, "github-actions", _NOW)]
-    assert "worker_only" not in conn.executed[0][1]["keys"]
-    assert vp.due_checks(_DueConn({}), "realtime-worker", _NOW) == [worker]
-    assert vp.due_checks(_DueConn({}), "pg_cron", _NOW) == []
+    hosts = ("github-actions", "realtime-worker")
+    for host, other in (hosts, hosts[::-1]):
+        conn = _DueConn({})
+        due = [c.key for c in due_checks(conn, host, _NOW)]
+        assert not set(due) & set(_hosted(other)), host
+        assert conn.executed[0][1]["keys"] == _hosted(host), host
+    assert due_checks(_DueConn({}), "pg_cron", _NOW) == []
 
 
 # --- the registry projection -----------------------------------------------------
@@ -1362,19 +798,25 @@ class _HealthChecksConn:
         return self._rows
 
 
-def test_projection_inserts_every_check_of_its_host_with_its_metadata() -> None:
+@pytest.mark.parametrize("host", ["github-actions", "realtime-worker"])
+def test_projection_inserts_every_check_of_its_host_with_its_metadata(host: str) -> None:
+    """Each host projects only its own rows, sorted by their place in the whole registry; a
+    GitHub key may age its cadence plus 18 h before it reads stale, a worker key 3 cadences."""
     from scripts.verify_pipeline import project_registry
 
     conn = _HealthChecksConn()
-    assert project_registry(conn, "github-actions", _NOW) == {"upserted": 28, "deleted": 0}
-    assert list(conn.table) == _keys()
+    assert project_registry(conn, host, _NOW) == {"upserted": len(_hosted(host)), "deleted": 0}
+    assert list(conn.table) == _hosted(host)
     for sort, c in enumerate(CHECKS):
+        if c.host != host:
+            continue
         row = conn.table[c.key]
         assert (row["domain"], row["class"], row["host"], row["cadence_s"]) == (
-            c.domain, c.cls, "github-actions", c.cadence_s)
+            c.domain, c.cls, host, c.cadence_s)
         assert (row["label"], row["unit"], row["owner_path"], row["sort"]) == (
             c.label, c.unit, c.owner_path, sort)
-        assert row["staleness_budget"] == _dt.timedelta(seconds=c.cadence_s + 18 * 3_600)
+        stale_s = c.cadence_s + 18 * 3_600 if host == "github-actions" else 3 * c.cadence_s
+        assert row["staleness_budget"] == _dt.timedelta(seconds=stale_s)
         assert row["declared_at"] == _NOW
 
 
@@ -1383,17 +825,19 @@ def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> No
 
     then = _NOW - _dt.timedelta(days=3)
     conn = _HealthChecksConn({
-        "llm_errors": {"host": "github-actions", "cadence_s": 3_600, "declared_at": then},
-        "walk_coverage": {"host": "github-actions", "cadence_s": 3_600, "declared_at": then},
-        "db_saturation": {"host": "realtime-worker", "cadence_s": 3_600, "declared_at": then},
+        "property_maintenance": {"host": "github-actions", "cadence_s": 3_600,
+                                 "declared_at": then},
+        # wave 3 moved migration_drift from 6-hourly to hourly
+        "migration_drift": {"host": "github-actions", "cadence_s": 21_600, "declared_at": then},
+        "walk_coverage": {"host": "realtime-worker", "cadence_s": 21_600, "declared_at": then},
     })
     project_registry(conn, "github-actions", _NOW)
-    assert conn.table["llm_errors"]["declared_at"] == then        # unchanged: kept
-    assert conn.table["walk_coverage"]["declared_at"] == _NOW     # cadence moved
-    assert conn.table["db_saturation"]["declared_at"] == _NOW     # host moved
-    assert conn.table["db_saturation"]["host"] == "github-actions"
+    assert conn.table["property_maintenance"]["declared_at"] == then  # unchanged: kept
+    assert conn.table["migration_drift"]["declared_at"] == _NOW       # cadence moved
+    assert conn.table["walk_coverage"]["declared_at"] == _NOW         # host moved
+    assert conn.table["walk_coverage"]["host"] == "github-actions"
     project_registry(conn, "github-actions", _NOW + _dt.timedelta(hours=1))
-    assert conn.table["walk_coverage"]["declared_at"] == _NOW, "a re-projection is a no-op"
+    assert conn.table["migration_drift"]["declared_at"] == _NOW, "a re-projection is a no-op"
 
 
 def test_projection_retires_only_its_own_hosts_undeclared_keys() -> None:
@@ -1408,6 +852,24 @@ def test_projection_retires_only_its_own_hosts_undeclared_keys() -> None:
     assert project_registry(conn, "github-actions", _NOW)["deleted"] == 1
     assert "outbound_url_parity" not in conn.table
     assert {"health_lane", "liveness"} <= set(conn.table)
+    assert project_registry(conn, "realtime-worker", _NOW)["deleted"] == 1
+    assert "health_lane" not in conn.table and "liveness" in conn.table
+    assert set(_hosted("github-actions")) <= set(conn.table), "the lane leaves GitHub's rows be"
+
+
+def test_the_first_projection_from_main_retires_the_eight_legacy_keys() -> None:
+    """Wave 3's jobs, capacity and llm replace eight GitHub keys. Their rows go at the canary's
+    first projection from main, and the ladder then closes their open incidents as retired,
+    with no notice (an open llm_errors incident included)."""
+    from scripts.verify_pipeline import project_registry
+
+    legacy = ("worker_lane_stall", "broker_resolution_freshness", "workflow_poller_liveness",
+              "db_saturation", "long_open_transaction", "llm_errors", "llm_burn_rate",
+              "dual_write_parity")
+    conn = _HealthChecksConn({key: {"host": "github-actions", "cadence_s": 3_600,
+                                    "declared_at": _NOW} for key in legacy})
+    assert project_registry(conn, "github-actions", _NOW)["deleted"] == 8
+    assert not set(legacy) & set(conn.table)
 
 
 # --- persistence --------------------------------------------------------------------
@@ -1503,11 +965,13 @@ def test_the_harness_projects_only_hosts_that_declare_a_check(monkeypatch: Any) 
     retire it, and the ladder would silently close every open liveness incident as retired."""
     from scripts import verify_pipeline as vp
 
-    assert "github-actions" in vp._HARNESS_HOSTS and "pg_cron" not in vp._HARNESS_HOSTS
+    assert vp._HARNESS_HOSTS == ("github-actions", "realtime-worker")
     with pytest.raises(ValueError, match="pg_cron"):
         vp.project_registry(object(), "pg_cron", _NOW)
-    with pytest.raises(SystemExit):
-        _run_main(monkeypatch, ["--host", "pg_cron"], [])
+    # main() is GitHub's runner only: the worker's health lane calls run_due itself.
+    for host in ("pg_cron", "realtime-worker"):
+        with pytest.raises(SystemExit):
+            _run_main(monkeypatch, ["--host", host], [])
 
 
 def test_run_due_measures_only_the_due_checks_alarms_before_gauges(monkeypatch: Any) -> None:
@@ -1630,7 +1094,6 @@ def _run_main(monkeypatch: Any, argv: list[str], due: list[Check], *,
     else:
         monkeypatch.setenv("GITHUB_REF_NAME", ref)
     monkeypatch.setattr(vp, "connect", lambda: _MainConn())
-    monkeypatch.setattr(vp, "load_thresholds", lambda conn: dict(T))
     monkeypatch.setattr(vp, "project_registry", _project)
     monkeypatch.setattr(vp, "due_checks", _due)
     monkeypatch.setattr(vp, "insert_result",
@@ -1649,12 +1112,22 @@ def test_main_projects_the_registry_then_measures_and_stores_the_due_checks(
 ) -> None:
     import logging
 
+    import scripts.verify_pipeline as vp
+
     caplog.set_level(logging.INFO, logger="verify_pipeline")
-    code, seen = _run_main(monkeypatch, [], [_returning("a", "ok"), _returning("b", "warn")])
+    handed: list[Any] = []
+
+    def _reads(conn: Any, thresholds: Any) -> dict[str, Any]:
+        handed.append(thresholds)
+        return {"check_key": "t", "status": "ok", "value": 1, "details": {}}
+
+    code, seen = _run_main(monkeypatch, [], [_returning("a", "ok"), _returning("b", "warn"),
+                                             _stub("t", _reads)])
     assert code == 0
     assert seen["order"] == ["project:github-actions", "due:github-actions"]
-    assert seen["inserted"] == ["a", "b"]
+    assert seen["inserted"] == ["a", "b", "t"]
     assert "CHECK a status=ok value=1" in caplog.text  # failure_signature reads this line
+    assert len(handed) == 1 and handed[0] is vp.THRESHOLDS, "no run-time override"
 
 
 def test_only_a_run_from_main_projects_the_registry(monkeypatch: Any, caplog: Any) -> None:
@@ -1688,170 +1161,6 @@ def test_no_measured_status_reds_the_run(monkeypatch: Any) -> None:
                                        _returning("b", "unknown")])[0] == 0
     with pytest.raises(SystemExit):
         _run_main(monkeypatch, ["--exit-nonzero-on-fail"], [_returning("a", "fail")])
-
-
-# --- R2 dual-write parity --------------------------------------------------
-
-
-class _ParityConn:
-    """Serves the armed-carriers query, then one aggregate row per carrier query."""
-
-    def __init__(self, armed: set[str], per_table: dict[str, tuple[int, ...]]) -> None:
-        self._armed = armed
-        self._per_table = per_table
-        self.queries: list[str] = []
-
-    def cursor(self) -> "_ParityConn":
-        return self
-
-    def transaction(self) -> "_ParityConn":
-        return self
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self.queries.append(sql)
-        if sql.startswith("SET LOCAL"):
-            return
-        if "select child from dual_write_watermark" in sql:
-            self._rows = [(c,) for c in sorted(self._armed)]
-            return
-        # Key off the watermark predicate, not the first " from ": the counting
-        # query contains subquery FROMs (listings, and the table's own max())
-        # ahead of its real one. The clean default is sized from the query itself
-        # — a pair carrier returns two counters per side plus the row total.
-        table = sql.split("w.child = '")[1].split("'")[0]
-        clean = (0,) * sql.count("count(*)")
-        self._rows = [self._per_table.get(table, clean)]
-
-    def fetchall(self) -> Any:
-        return self._rows
-
-    def __enter__(self) -> "_ParityConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-
-def _parity(armed: set[str], per_table: dict[str, tuple[int, ...]]) -> dict[str, Any]:
-    from scripts.verify_pipeline import check_dual_write_parity
-
-    return check_dual_write_parity(_ParityConn(armed, per_table), T)
-
-
-def _all_carrier_names() -> set[str]:
-    from scripts.verify_pipeline import _PARITY_CARRIERS
-
-    return {c["table"] for c in _PARITY_CARRIERS}
-
-
-def test_parity_unarmed_is_warn_never_ok() -> None:
-    """An unarmed carrier must never read as clean: its aggregate-only query returns
-    a row of zeros with no watermark, so armedness is established separately."""
-    res = _parity(set(), {})
-    assert res["status"] == "warn"
-    assert "INERT" in res["message"]
-    assert set(res["details"]["unarmed"]) == _all_carrier_names()
-
-
-def test_parity_partially_armed_warns_and_names_the_gap() -> None:
-    armed = _all_carrier_names() - {"images"}
-    res = _parity(armed, {})
-    assert res["status"] == "warn"
-    assert res["details"]["unarmed"] == ["images"]
-
-
-def test_parity_all_armed_and_clean_is_ok() -> None:
-    res = _parity(_all_carrier_names(), {})
-    assert res["status"] == "ok"
-    assert res["value"] == 0
-    assert res["details"]["gaps"] == {} and res["details"]["mismatches"] == {}
-
-
-def test_parity_missing_surrogate_fails() -> None:
-    res = _parity(_all_carrier_names(), {"images": (7, 0, 100)})
-    assert res["status"] == "fail"
-    assert res["details"]["gaps"] == {"images.listing_id": 7}
-    assert "missing surrogate" in res["message"]
-
-
-def test_parity_wrong_surrogate_fails() -> None:
-    """A mismatch is the positional-zip bug: a surrogate that belongs to another row."""
-    res = _parity(_all_carrier_names(), {"listing_snapshots": (0, 3, 100)})
-    assert res["status"] == "fail"
-    assert res["details"]["mismatches"] == {"listing_snapshots.listing_id": 3}
-    assert "WRONG surrogate" in res["message"]
-
-
-def test_parity_pair_carrier_reports_each_side() -> None:
-    # (gap_a, mismatch_a, orphan_a, gap_b, mismatch_b, orphan_b, scanned)
-    res = _parity(_all_carrier_names(), {"listing_visual_matches": (1, 0, 0, 2, 0, 0, 50)})
-    assert res["status"] == "fail"
-    assert res["details"]["gaps"] == {
-        "listing_visual_matches.listing_id_a": 1,
-        "listing_visual_matches.listing_id_b": 2,
-    }
-
-
-def test_parity_orphan_null_legacy_and_null_surrogate_is_reported() -> None:
-    """Post-Gate-2-flip shape: a new non-sreality row has NULL legacy id by design,
-    so the gap/mismatch filters (both anchored on legacy IS NOT NULL) can't see it —
-    only the orphan bucket (legacy IS NULL and surrogate IS NULL too) catches it."""
-    res = _parity(_all_carrier_names(), {"images": (0, 0, 3, 50)})
-    assert res["status"] == "fail"
-    assert res["details"]["gaps"] == {}
-    assert res["details"]["mismatches"] == {}
-    assert res["details"]["orphans"] == {"images.listing_id": 3}
-    assert res["value"] == 3
-
-
-def test_parity_registry_is_the_shared_one() -> None:
-    """The parity check and the backfill MUST walk the same carrier list — a table
-    in one and not the other is a silent hole (unwatched, or never filled)."""
-    from scripts.verify_pipeline import _PARITY_CARRIERS
-    from toolkit.listing_identity import R2_CARRIERS
-
-    assert _PARITY_CARRIERS is R2_CARRIERS
-
-
-def test_notification_dispatches_skips_system_health_rows() -> None:
-    """A system_health bell row anchors on no listing by construction, so its NULL/NULL
-    is correct — counting it as an orphan pinned the check red from 2026-08-02, and its
-    own recovery alert re-broke it one run after every recovery."""
-    from scripts.verify_pipeline import _parity_carrier_sql
-    from toolkit.listing_identity import R2_CARRIERS_BY_TABLE
-
-    carrier = R2_CARRIERS_BY_TABLE["notification_dispatches"]
-    assert carrier["skip"] == "t.source_kind = 'system_health'"
-    sql = _parity_carrier_sql(carrier)
-    assert sql.count("not (t.source_kind = 'system_health')") == 3
-
-
-def test_properties_skips_a_property_reset_to_no_ads() -> None:
-    """The recompute resets a property whose ads all moved away: both ids NULL and a count of 0,
-    which only that reset writes. Counted as an orphan it would read as a writer's gap."""
-    from scripts.recompute_property_stats import _NO_ADS
-    from scripts.verify_pipeline import _parity_carrier_sql
-    from toolkit.listing_identity import R2_CARRIERS_BY_TABLE
-
-    carrier = R2_CARRIERS_BY_TABLE["properties"]
-    assert _NO_ADS["repr_listing_id"] == _NO_ADS["repr_listing_ref_id"] == "NULL"
-    assert carrier["skip"] == f"t.source_count = {_NO_ADS['source_count']}"
-    assert _parity_carrier_sql(carrier).count("not (t.source_count = 0)") == 3
-
-
-def test_carrier_skip_is_applied_by_counting_and_by_updating() -> None:
-    """Skip one side but not the other and `remaining` never reaches zero, which
-    re-dispatches the self-chaining backfill workflow forever."""
-    from scripts.backfill_child_listing_ids import _predicate
-    from toolkit.listing_identity import R2_CARRIERS
-
-    for carrier in R2_CARRIERS:
-        skip = carrier.get("skip")
-        if not skip:
-            continue
-        for legacy, new in carrier["cols"]:
-            for repair in (False, True):
-                assert f"NOT ({skip})" in _predicate(new, legacy, repair, skip)
 
 
 # --- per-m2 measure plausibility (W9) --------------------------------------
@@ -2297,8 +1606,7 @@ def test_run_checks_clears_the_plausibility_cache_between_runs() -> None:
 
 def test_empty_plausibility_view_is_unknown_never_ok() -> None:
     """The view is gated on is_platform_admin(); read it from a role that fails the
-    gate and it returns zero rows. That is an INERT check, not a clean bill of health —
-    exactly the db_saturation precedent."""
+    gate and it returns zero rows. That is an INERT check, not a clean bill of health."""
     from scripts.verify_pipeline import (
         check_area_vs_usable_divergence, check_ppm2_basis_floor_share,
         check_ppm2_measure_coverage, check_ppm2_median_shift,
@@ -2323,7 +1631,7 @@ class _BrokenViewConn(_PlausibilityConn):
 def test_missing_view_is_unknown_and_names_the_migration_not_three_red_tiles() -> None:
     """Between merging this PR and applying migration 427 the view does not exist. Three
     checks red with `relation does not exist` are indistinguishable from three real
-    defects, so the read is reported, never raised — the db_saturation precedent."""
+    defects, so the read is reported, never raised."""
     results = run_checks(_BrokenViewConn([]), T, checks=_registered(*_MEASURE_CHECK_KEYS))
     assert [r["status"] for r in results] == ["unknown"] * 4
     for r in results:
@@ -2466,18 +1774,6 @@ def test_a_measured_and_clean_corpus_still_reports_ok() -> None:
         _PlausibilityConn(_LIVE_DUM_CELLS + [_clean_scored("remax")], None, 1.0), T,
         checks=_registered("ppm2_basis_floor_share", "ppm2_measure_coverage"))
     assert [r["status"] for r in results] == ["ok", "ok"]
-
-
-def test_every_measure_threshold_has_a_code_default() -> None:
-    """load_thresholds merges app_settings OVER the defaults, so a key the seed lacks
-    must still resolve — a KeyError here is a check that fails on every run."""
-    for key in ("ppm2_median_shift_warn_ratio", "ppm2_median_shift_fail_ratio",
-                "ppm2_median_shift_min_rows", "ppm2_basis_floor_share_warn",
-                "ppm2_basis_floor_share_fail", "ppm2_basis_floor_min_rows",
-                "area_divergence_share_warn", "area_divergence_share_fail",
-                "area_divergence_min_rows", "ppm2_coverage_gap_warn",
-                "ppm2_coverage_gap_fail_7d", "ppm2_coverage_min_rows"):
-        assert key in DEFAULT_THRESHOLDS
 
 
 # --- ingestion checks (2026-08-27) -----------------------------------------
@@ -2793,7 +2089,7 @@ def test_walk_end_streak_is_registered_beside_walk_coverage() -> None:
     assert keys.index("walk_end_streak") == keys.index("walk_coverage") + 1
 
 
-# --- migration_drift: merged is not applied --------------------------------
+# --- migration_drift (scripts/checks/platform.py): merged is not applied ---------
 
 
 class _DriftConn:
@@ -2851,7 +2147,7 @@ def test_migration_drift_fails_when_a_migration_is_wholly_absent() -> None:
     # breaking the exactly-one assertion for a reason that is not drift.
     target = next(
         m for m in migs
-        if m.objects and all(_SAFE_IDENT.match(o.ident) for o in m.objects)
+        if m.objects and all(SAFE_IDENT.match(o.ident) for o in m.objects)
         and not any(
             {(o.kind, o.ident) for o in m.objects} & {(o.kind, o.ident) for o in other.objects}
             for other in migs if other is not m and other.objects))
@@ -2889,12 +2185,10 @@ def test_migration_drift_with_no_migration_files_is_not_measured(
 ) -> None:
     """The worker image ships no migrations/ folder. Zero files probed is zero files
     verified: it read `ok` ("All 0 checkable of the newest 0 migrations are present")."""
-    import scripts.verify_pipeline as vp
-
     target = tmp_path / "migrations"
     if folder == "empty":
         target.mkdir()
-    monkeypatch.setattr(vp, "_MIGRATIONS_DIR", target)
+    monkeypatch.setattr(platform_checks, "_MIGRATIONS_DIR", target)
     conn = _DriftConn({}, default=True)
     out = check_migration_drift(conn, T)
     assert out["status"] == "unknown" and out["value"] is None
@@ -2909,75 +2203,7 @@ def test_migration_drift_probes_only_safe_identifiers() -> None:
     conn = _DriftConn({}, default=True)
     check_migration_drift(conn, T)
     for _kind, ident in conn.probed:
-        assert _SAFE_IDENT.match(ident), ident
-
-
-# --- worker_lane_stall: a live heartbeat with a wedged lane -----------------
-
-
-class _LaneConn:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self._rows = rows
-
-    def transaction(self) -> "_LaneConn":
-        return self
-
-    def cursor(self) -> "_LaneConn":
-        return self
-
-    def __enter__(self) -> "_LaneConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        return None
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return list(self._rows)
-
-
-def _lane(name, in_flight, passes=1, failed=0, last_dur=None, uptime=600.0):
-    return ("realtime-worker", name, in_flight, passes, failed, last_dur, uptime)
-
-
-def test_worker_lane_stall_ok_when_lanes_are_idle_or_briefly_busy() -> None:
-    out = check_worker_lane_stall(
-        _LaneConn([_lane("images", None, passes=486), _lane("drain", 42.0)]), T)
-    assert out["status"] == "ok"
-
-
-def test_worker_lane_stall_fails_on_the_observed_wedge() -> None:
-    """The live signature: heartbeat healthy, images lane at 486 passes, drain
-    lane stuck inside a single pass for hours. The liveness watcher's worker cell
-    reads this as perfectly fine, because the worker IS alive."""
-    out = check_worker_lane_stall(
-        _LaneConn([_lane("images", None, passes=486), _lane("drain", 9 * 3600.0, passes=1)]), T)
-    assert out["status"] == "fail"
-    assert any("drain" in o for o in out["details"]["offenders"])
-    assert not any("images" in o for o in out["details"]["offenders"])
-
-
-def test_worker_lane_stall_warns_before_it_fails() -> None:
-    out = check_worker_lane_stall(_LaneConn([_lane("drain", 1500.0)]), T)
-    assert out["status"] == "warn"
-
-
-def test_worker_lane_stall_tolerates_a_long_but_legitimate_drain_pass() -> None:
-    """Eight portals at up to DRAIN_MAX_SECONDS each is ~16 min of honest work."""
-    out = check_worker_lane_stall(_LaneConn([_lane("drain", 900.0)]), T)
-    assert out["status"] == "ok"
-
-
-def test_worker_lane_stall_does_not_double_alarm_a_dead_worker() -> None:
-    """No heartbeat at all is the liveness watcher's worker cell to judge. Claiming ok
-    would be a lie, claiming fail would ring two bells for one fault, and a warn would
-    hold an incident open as a measured Watch: no lane was measured."""
-    out = check_worker_lane_stall(_LaneConn([]), T)
-    assert out["status"] == "unknown" and out["value"] is None
-    assert "heartbeat" in out["details"]["skipped"]
-    assert "liveness watcher's worker cell" in out["message"]
+        assert SAFE_IDENT.match(ident), ident
 
 
 # --- location_town_coverage (rule 25's invariant; every listing since W15) --------
@@ -3247,10 +2473,10 @@ def test_location_payload_shape_drift_rings_on_the_first_tick_after_a_cutover() 
     """The window is the detection latency: after a total cutover the share is
     elapsed/window, so one 6-hourly tick into a 48 h window reads 12.5% — above fail.
     A 7-day window would sit below the same line for ~1.4 days."""
-    from scripts.verify_pipeline import DEFAULT_THRESHOLDS, check_location_payload_shape_drift
+    from scripts.verify_pipeline import THRESHOLDS, check_location_payload_shape_drift
 
-    window = DEFAULT_THRESHOLDS["location_payload_shape_drift_window_hours"]
-    fail = DEFAULT_THRESHOLDS["location_payload_shape_drift_fail"]
+    window = THRESHOLDS["location_payload_shape_drift_window_hours"]
+    fail = THRESHOLDS["location_payload_shape_drift_fail"]
     assert 6 / window >= fail, "one lane tick after a cutover must already read fail"
     out = check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 800, 100)]), T)
     assert out["status"] == "fail"
@@ -3438,13 +2664,6 @@ def test_sreality_image_template_is_registered_and_last_outbound() -> None:
         "append new DB checks before them"
     )
     assert CHECKS[-1].fn is check_outbound_url_conformance
-
-
-def test_sreality_image_template_thresholds_have_code_defaults() -> None:
-    """load_thresholds merges app_settings OVER the defaults, so a key no seed
-    migration carries must still resolve — a KeyError here reds the check every run."""
-    for key in ("sreality_image_template_min_ratio", "sreality_image_template_timeout_s"):
-        assert key in DEFAULT_THRESHOLDS
 
 
 def test_sreality_image_template_reaches_the_cdn_on_the_real_payload_shapes(
@@ -3830,7 +3049,7 @@ def test_a_lane_owes_every_check_it_runs_its_own_budget() -> None:
 
     assert vp.lane_budget_for([]) == 0.0
     assert vp.lane_budget_for(CHECKS) == sum(c.budget_s for c in CHECKS)
-    assert vp.lane_budget_for(_registered("llm_errors", "outbound_url_conformance")) == 165.0
+    assert vp.lane_budget_for(_registered("jobs", "outbound_url_conformance")) == 165.0
 
 
 _WORKFLOWS = Path(__file__).resolve().parents[2] / ".github/workflows"
@@ -3859,9 +3078,10 @@ def test_the_canary_job_fits_every_github_check_due_at_once() -> None:
 
 
 def test_no_workflow_passes_a_flag_the_harness_deleted() -> None:
-    """--exit-nonzero-on-fail went in wave 2 (the canary's assertions red a run), --only and
-    --weekly in wave 1. argparse refuses them, so a workflow still passing one would crash
-    its harness step on every run instead of measuring."""
+    """--arm-dual-write-parity went in wave 3 with its check, --exit-nonzero-on-fail in wave 2
+    (the canary's assertions red a run), --only and --weekly in wave 1. argparse refuses them,
+    so a workflow still passing one would crash its harness step on every run instead of
+    measuring."""
     import yaml
 
     runs = [step["run"] for path in sorted(_WORKFLOWS.glob("*.yml"))
@@ -3870,7 +3090,8 @@ def test_no_workflow_passes_a_flag_the_harness_deleted() -> None:
             if "scripts.verify_pipeline" in step.get("run", "")]
     assert runs, "a workflow runs the harness"
     for run in runs:
-        for flag in ("--exit-nonzero-on-fail", "--only", "--weekly"):
+        for flag in ("--arm-dual-write-parity", "--exit-nonzero-on-fail", "--only",
+                     "--weekly"):
             assert not re.search(rf"{flag}(?![\w-])", run), (flag, run)
 
 
@@ -4166,13 +3387,6 @@ def test_false_delist_share_reads_flipped_rows_only() -> None:
 _UNMEASURED_MARKERS = {"timed_out", "errored", "skipped"}
 
 
-class _CronUnreadableConn(_ShapeDriftConn):
-    def execute(self, sql: str, params: Any = None) -> None:
-        if "cron.job_run_details" in sql:
-            raise RuntimeError("permission denied for schema cron")
-        super().execute(sql, params)
-
-
 def _unmeasured_results() -> list[dict[str, Any]]:
     """One result from every path that measures nothing (a check the lane budget does not
     reach writes no result at all, so it has none here)."""
@@ -4188,12 +3402,12 @@ def _unmeasured_results() -> list[dict[str, Any]]:
         raise RuntimeError("canceling statement due to statement timeout")
 
     sampled = _ShapeDriftConn([(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")])
-    with mock.patch.object(vp, "_MIGRATIONS_DIR", Path("/no-such-checkout/migrations")):
+    with mock.patch.object(platform_checks, "_MIGRATIONS_DIR",
+                           Path("/no-such-checkout/migrations")):
         no_migration_files = check_migration_drift(_DriftConn({}), T)
     return [
         *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled)]),
         no_migration_files,
-        vp.check_db_saturation(_CronUnreadableConn([]), T),
         vp._inert_measure_check("ppm2_basis_floor_share", None),
         vp._inert_measure_check("ppm2_basis_floor_share", "relation does not exist"),
         vp._unmeasured_check("area_vs_usable_divergence", 3, "100+ rows with both areas"),
@@ -4205,13 +3419,12 @@ def _unmeasured_results() -> list[dict[str, Any]]:
         check_outbound_url_conformance(sampled, T, budget_s=0.0),
         vp.check_location_town_coverage(_TownCoverageConn([]), T),
         check_false_delist_share(_RowsConn([("maxima", 12, 6)]), T),
-        check_worker_lane_stall(_LaneConn([]), T),
     ]
 
 
 def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
     results = _unmeasured_results()
-    assert len(results) == 16
+    assert len(results) == 14
     errored, timed_out = results[:2]
     assert errored["details"]["errored"] is True and "kaboom" in errored["details"]["error"]
     assert timed_out["details"]["timed_out"] is True
@@ -4299,8 +3512,7 @@ def _own_sql(key: str) -> list[str]:
                                 text_lane.ELIGIBLE_LAG_SQL, text_lane.EXTRACTION_LATENCY_SQL,
                                 vp._TEXT_EXTRACT_LANE_SQL],
         "walk_coverage": [vp._WALK_COVERAGE_SQL],
-        "migration_drift": [vp._MIGRATION_OBJECT_PROBE_SQL],
-        "worker_lane_stall": [vp._WORKER_LANE_SQL],
+        "migration_drift": [MIGRATION_OBJECT_PROBE_SQL],
         "delist_flip_refused": [vp._DELIST_REFUSAL_SQL],
         "false_delist_share": [vp._FALSE_DELIST_SQL],
         "outbound_url_coverage": [vp._OUTBOUND_URL_COVERAGE_SQL],
@@ -4309,12 +3521,12 @@ def _own_sql(key: str) -> list[str]:
 
 @pytest.mark.parametrize("key", [
     "acquisition_lag", "text_extraction_lag", "walk_coverage", "migration_drift",
-    "worker_lane_stall", "delist_flip_refused", "false_delist_share", "outbound_url_coverage",
+    "delist_flip_refused", "false_delist_share", "outbound_url_coverage",
 ])
 def test_each_formerly_raw_cursor_check_sends_its_sql_on_its_own_wall_clock(
     key: str, monkeypatch: Any,
 ) -> None:
-    """These eight read on a raw cursor, under the connection's default timeout and past any
+    """These seven read on a raw cursor, under the connection's default timeout and past any
     budget. Each now sends the same SQL through _fetchone/_fetchall, every statement armed
     with what its check has left."""
     answers: dict[str, list[Any]] = {}

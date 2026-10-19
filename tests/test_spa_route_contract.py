@@ -16,7 +16,7 @@ Deliberately narrow. It pins ONLY the patterns actually emitted across a
 boundary — verified by reading both emitters, not assumed:
   /listing/:source/:nativeId   api/notification_outbox.py + chrome-extension
   /listing/:sreality_id        api/notification_outbox.py
-  /notifications               api/notification_outbox.py (system-health rows)
+  /health                      api/notification_outbox.py (system alerts, `#<check key>`)
   /collections                 chrome-extension (the save checklist's "Spravovat kolekce")
 Widening it past what actually crosses the boundary would make it a second full
 route table to maintain, which is the failure mode it exists to prevent.
@@ -41,7 +41,7 @@ _DEF = re.compile(r"^\s*(\w+):\s*def\('([^']+)'\),", re.MULTILINE)
 CROSS_TERRITORY = {
     "listingCanonical": "/listing/:source/:nativeId",
     "listingLegacy": "/listing/:sreality_id",
-    "notifications": "/notifications",
+    "health": "/health",
     "collections": "/collections",
 }
 
@@ -120,13 +120,21 @@ def test_api_legacy_deep_link_matches_the_registry_pattern(spa_base: str) -> Non
 
 
 def test_api_system_health_deep_link_matches_the_registry_pattern(spa_base: str) -> None:
-    """System-health rows are not property-grain (migration 462) and land on the feed."""
-    msg = _compose({"source_kind": "system_health", "message": "disk full", "sreality_id": None})
-    path = msg.deep_link[len(spa_base) :]
-    assert path == CROSS_TERRITORY["notifications"], (
-        f"system-health deep link {path!r} no longer matches the SPA's "
-        f"{CROSS_TERRITORY['notifications']!r}"
+    """A system alert is not property-grain: it lands on Health, anchored at its check."""
+    msg = _compose(
+        {
+            "source_kind": "system_health",
+            "message": "Capacity: Problem — connections: 360 of 380",
+            "dedupe_key": "sys:capacity:onset:2026-10-18T08:20:00Z",
+            "sreality_id": None,
+        }
     )
+    path, _, fragment = msg.deep_link[len(spa_base) :].partition("#")
+    assert _pattern_to_regex(CROSS_TERRITORY["health"]).match(path), (
+        f"system-health deep link {path!r} no longer matches the SPA's "
+        f"{CROSS_TERRITORY['health']!r}"
+    )
+    assert fragment == "capacity"
 
 
 def test_extension_builds_the_canonical_listing_route() -> None:

@@ -1,4 +1,4 @@
-"""`health_liveness()`, the pg_cron watcher, writes one `liveness` row of cells (migration 620).
+"""`health_liveness()`, the pg_cron watcher, writes one `liveness` row of cells (migration 620, its lane cell 621).
 
 Executed against the replayed schema inside a transaction that always rolls back. Runs in CI's migrations
 lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
@@ -62,6 +62,22 @@ def _beat(cur: Any, worker: str, age: str) -> None:
     """A worker whose last heartbeat is `age` old."""
     cur.execute("insert into worker_heartbeats (worker, beat_at, started_at) "
                 "values (%s, now() - %s::interval, now() - interval '1 day')", (worker, age))
+
+
+def _health_beat(cur: Any, *, passed: str | None, failing: str | None = None, error: str | None = None,
+                 in_flight_s: float | None = None, beat: str = "0 minutes", boot: str = "1 day") -> None:
+    """The realtime worker's beat `beat` ago, booted `boot` ago, with its health lane entry as the wave-3 heartbeat
+    writes it: the last pass `passed` ago and a failing spell begun `failing` ago (None: none on record)."""
+    cur.execute("insert into worker_heartbeats (worker, beat_at, started_at, details) "
+                "values ('realtime-worker', now() - %(beat)s::interval, now() - %(boot)s::interval, "
+                "        jsonb_build_object('health', jsonb_build_object("
+                "          'interval_s', 60, 'last_pass_at', now() - %(passed)s::interval, "
+                "          'failing_since', now() - %(failing)s::interval, 'last_error', %(error)s::text, "
+                "          'in_flight_s', %(flight)s::numeric))) "
+                "on conflict (worker) do update "
+                "set beat_at = excluded.beat_at, started_at = excluded.started_at, details = excluded.details",
+                {"beat": beat, "boot": boot, "passed": passed, "failing": failing, "error": error,
+                 "flight": in_flight_s})
 
 
 def _check(cur: Any, key: str, *, cls: str = "alarm", host: str = "github-actions", cadence_s: int = 3600,
@@ -156,38 +172,85 @@ def test_everything_alive_writes_one_ok_row(cur):
     assert all(c["status"] == "ok" for c in details["cells"])
 
 
-def test_the_health_lane_is_judged_once_the_worker_hosts_checks(cur):
-    _beat(cur, "realtime-worker", "0 minutes")
-    assert "health_lane" not in _liveness(cur)[3]
-
+def test_the_health_lane_is_judged_on_its_last_pass_never_on_result_rows(cur):
+    """The lane passes every 60 s but writes a result only for a due check, so a 15-min-old result is normal."""
     _check(cur, "ccc_lane", host="realtime-worker", cadence_s=600, budget="30 minutes")
-    _result(cur, "ccc_lane", "ok", "2 minutes")
-    [lane] = _liveness(cur)[3]["health_lane"]
-    assert (lane["status"], lane["message"]) == ("ok", "the worker's health lane measured 2 min ago")
+    _result(cur, "ccc_lane", "ok", "15 minutes")
+    _beat(cur, "realtime-worker", "0 minutes")
+    assert "health_lane" not in _liveness(cur)[3], "no health entry: the wave-3 worker is not deployed"
 
-    cur.execute("update pipeline_check_results set run_at = now() - interval '15 minutes' "
-                "where check_key = 'ccc_lane'")
+    _health_beat(cur, passed="2 minutes")
+    status, _value, _details, cells = _liveness(cur)
+    [lane] = cells["health_lane"]
+    assert status == "ok"
+    assert (lane["status"], lane["value"], lane["unit"]) == ("ok", 2.0, "min")
+    assert lane["message"] == "the worker's health lane passed 2 min ago"
+    assert set(lane["facts"]) == {"last_pass_at", "failing_since", "last_error", "in_flight_s", "boot"}
+    assert lane["facts"]["last_pass_at"] is not None and lane["facts"]["boot"] is not None
+    assert lane["facts"]["failing_since"] is None and lane["facts"]["last_error"] is None
+
+    _health_beat(cur, passed="11 minutes")
     status, _value, _details, cells = _liveness(cur)
     assert status == "fail"
-    assert [(c["status"], c["message"]) for c in cells["health_lane"]] == [
-        ("fail", "the worker's health lane has not measured for 15 min")]
+    assert [(c["status"], c["value"], c["message"]) for c in cells["health_lane"]] == [
+        ("fail", 11.0, "the worker's health lane has not completed a pass for 11 min")]
     assert "stale:ccc_lane" not in cells
+
+    _health_beat(cur, passed="12 minutes", failing="11 minutes", error="OperationalError: the pooler hung up")
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["value"]) == ("fail", 12.0)
+    assert lane["message"] == ("the worker's health lane has been failing for 11 min: "
+                               "OperationalError: the pooler hung up")
+    assert lane["facts"]["last_error"] == "OperationalError: the pooler hung up"
+
+    _health_beat(cur, passed="12 minutes", failing="9 minutes", error="OperationalError: the pooler hung up")
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["message"]) == ("fail", "the worker's health lane has not completed a pass for 12 min")
+
+
+def test_a_lane_with_no_pass_on_record_counts_from_the_workers_boot(cur):
+    _health_beat(cur, passed=None, boot="2 minutes")
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["value"], lane["message"]) == (
+        "ok", 2.0, "the worker's health lane has not passed yet; the worker booted 2 min ago")
+    assert lane["facts"]["last_pass_at"] is None
+
+    _health_beat(cur, passed=None, boot="11 minutes")
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["value"], lane["message"]) == (
+        "fail", 11.0, "the worker's health lane has not completed a pass for 11 min")
+
+
+def test_a_wedged_pass_fails_the_lane_though_skipped_passes_stamp_their_time(cur):
+    """A pass abandoned at 1,800 s keeps the lane's lock, and every later pass is skipped yet recorded as a pass: only
+    in_flight_s, the lock's age, shows the wedge until the watchdog restarts the worker."""
+    _health_beat(cur, passed="1 minute", in_flight_s=2700.0)
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["value"]) == ("fail", 1.0)
+    assert lane["message"] == "the worker's health lane has had a pass in flight for 45 min"
+    assert lane["facts"]["in_flight_s"] == 2700
+
+    _health_beat(cur, passed="1 minute", in_flight_s=42.5)
+    [lane] = _liveness(cur)[3]["health_lane"]
+    assert (lane["status"], lane["message"]) == ("ok", "the worker's health lane passed 1 min ago")
 
 
 def test_a_dead_worker_folds_its_keys_and_its_lane_into_its_cell(cur):
-    _beat(cur, "realtime-worker", "20 minutes")
+    _health_beat(cur, beat="20 minutes", passed="20 minutes")
     _check(cur, "ccc_lane", host="realtime-worker", cadence_s=600, budget="30 minutes")
     _result(cur, "ccc_lane", "ok", "40 minutes")
     _check(cur, "aaa_stale")
     _result(cur, "aaa_stale", "ok", "20 hours")
     _incident(cur, "cell:liveness:stale:ccc_lane")
+    _incident(cur, "cell:liveness:health_lane")
 
     status, _value, _details, cells = _liveness(cur)
 
     assert status == "fail"
-    assert [c["status"] for c in cells["worker"]] == ["fail"]
+    assert [(c["status"], c["facts"]["worker"]) for c in cells["worker"]] == [("fail", "realtime-worker")]
     assert "stale:aaa_stale" in cells
     assert "stale:ccc_lane" not in cells
+    # Folded subjects stay inert: their open incidents get no "no longer failing" cell either.
     assert "health_lane" not in cells
 
 

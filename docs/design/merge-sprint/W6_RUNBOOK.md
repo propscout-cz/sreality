@@ -320,7 +320,7 @@ first.
     select beat_at, details->'autodedup'->>'passes' passes, details->'autodedup'->>'failed_passes' failed,
            details->'autodedup'->>'last_pass_at' last_pass_at, details->'autodedup'->'last'->>'ran' ran,
            details->'autodedup'->'last'->>'reconcile' reconcile, details->'autodedup'->'last'->>'merged' merged,
-           details->'autodedup'->'last'->>'claimed' claimed, details->'autodedup'->>'last_failure_at' last_failure_at
+           details->'autodedup'->'last'->>'claimed' claimed, details->'autodedup'->>'failing_since' failing_since, details->'autodedup'->>'last_error' last_error
       from public.worker_heartbeats where worker = 'realtime-worker';
     select outcome, count(*) from autodedup.applied_merges where applied_at > '<restore time>' group by 1;
     ```

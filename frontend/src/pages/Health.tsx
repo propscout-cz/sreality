@@ -1,5 +1,5 @@
-import { useState, type MouseEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import {
   CartesianGrid,
@@ -743,6 +743,23 @@ function PipelineChecksSection() {
   const checks = checksQuery.data ?? [];
   const summary = summarizePipelineChecks(checks);
 
+  // A system alert links `/health#<check key>`, and the row exists only once the checks
+  // arrive, after the browser's own jump on load found nothing. Scroll once per hash; the
+  // ref is set inside the frame so a cancelled frame (StrictMode's double effect) retries.
+  const { hash } = useLocation();
+  const target = hash.slice(1);
+  const scrolledTo = useRef<string | null>(null);
+  const rows = checksQuery.data;
+  useEffect(() => {
+    if (!target || scrolledTo.current === target) return;
+    if (!rows?.some((c) => c.check_key === target)) return;
+    const raf = requestAnimationFrame(() => {
+      scrolledTo.current = target;
+      document.getElementById(target)?.scrollIntoView({ block: 'start' });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [target, rows]);
+
   return (
     <section>
       <SectionHeading>Pipeline</SectionHeading>
@@ -831,6 +848,7 @@ function PipelineChecksPanel({
     );
   }
 
+  // Each row's id is the target of a system alert's link from outside the SPA (`/health#<check key>`, the outbox).
   const sorted = sortPipelineChecks(rows);
   return (
     <ul className="space-y-1.5">
@@ -838,7 +856,7 @@ function PipelineChecksPanel({
         const st = pipelineCheckStatus(c);
         const stored = normalizePipelineStatus(c.status);
         return (
-          <li key={c.check_key} className="flex items-center gap-3 text-sm">
+          <li key={c.check_key} id={c.check_key} className="flex scroll-mt-20 items-center gap-3 text-sm">
             <span
               className="h-2 w-2 rounded-full shrink-0"
               style={{ backgroundColor: PIPELINE_DOT[st] }}

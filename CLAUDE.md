@@ -33,7 +33,7 @@ that overlays estimates on portal pages.
 A **dark-by-default always-on worker** (`scraper/realtime_worker.py`, a 2nd Railway service from the SAME image, gated by
 `REALTIME_WORKER_ENABLED`) runs every lane registered in `_amain`: the latency layer over the GH crons (newest-first probes,
 bounded detail drain, images-first downloads, sreality count-probe), plus property/broker maintenance, estimation jobs, location
-resolve/intake/refetch, sold comps, text extraction, autodedup and heartbeats (design: `docs/design/realtime-scrapers.md`).
+resolve/intake/refetch, sold comps, text extraction, health checks, autodedup and heartbeats (design: `docs/design/realtime-scrapers.md`).
 ## Territories
 
 Three top-level territories with deliberately different rules — identify which one a task is
@@ -187,7 +187,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
     **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
     per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    `ops_incidents`, mig 462) + `collection_share` (not property-grain; recipient-stamped by the share route, in-app only, mig 610). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `collection_share` (not property-grain; recipient-stamped by the share route, in-app only, mig 610). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).

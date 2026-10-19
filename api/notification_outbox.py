@@ -1,16 +1,16 @@
 """The notification delivery outbox (Sprint N PR 3).
 
-A source-agnostic drainer: it reads `notification_dispatches` (both watchdog and
-collection_monitor producers, migration 206/211) and, for every external channel
-the producer stamped into `target_channels`, delivers one message through the
-audited `ChannelClient` into the `channel_sends` ledger. in-app needs nothing —
-the feed reads the event row directly.
+A source-agnostic drainer: it reads `notification_dispatches` (the watchdog and
+collection_monitor producers, migrations 206/211, and system alerts, 274) and, for
+every external channel the producer stamped into `target_channels`, delivers one
+message through the audited `ChannelClient` into the `channel_sends` ledger.
+in-app needs nothing — the feed reads the event row directly.
 
 Gated dark: the loop only starts when a transport is configured (see
 api/main.py), and a channel with no configured transport OR no operator
 recipient is skipped (no `failed` rows pile up). So nothing sends until the
-operator provisions Resend / Telegram AND opts a watchdog/collection into a
-channel.
+operator provisions Resend / Telegram AND opts a watchdog/collection (system
+alerts: `app_settings.system_health_channels`) into a channel.
 
 Two passes per drain:
   - NEW:   un-sent (event, channel) pairs (LEFT JOIN channel_sends on the
@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -54,6 +55,10 @@ _SUBJECTS = {
     "broker_change": "Změna makléře",
 }
 
+# Every system alert's dedupe key opens with its check key (toolkit.system_alerts.emit_system_alert).
+_SYSTEM_KEY = re.compile(r"^sys:([a-z0-9_]+):")
+_SYSTEM_SUBJECT_MAX_CHARS = 120
+
 
 def _spa_base() -> str:
     return os.environ.get("SPA_BASE_URL", "").rstrip("/")
@@ -81,14 +86,15 @@ def compose_message(row: dict[str, Any]) -> RenderedMessage:
     Pure read over already-joined columns; each transport renders the slice it
     needs (email → subject + text; telegram → text + deep_link)."""
     if row.get("source_kind") == "system_health":
-        # A system alert is about the pipeline, not a listing — deliver its stored
-        # message verbatim (no listing join fields; sreality_id is NULL).
-        text = row.get("message") or "Systémové upozornění"
-        return RenderedMessage(
-            subject="Systémové upozornění",
-            body_text=text,
-            deep_link=f"{_spa_base()}/notifications" if _spa_base() else "",
-        )
+        # About the pipeline, not a listing: the stored message is the body. A ladder notice is one line of up to
+        # 1,500 characters, so the subject is its first line's `{label}: {state}` head before ` — `. The link opens
+        # Health at the check; with no SPA base a relative link would lead nowhere from an inbox, so there is none.
+        text = row.get("message") or "System alert"
+        subject = text.splitlines()[0].split(" — ", 1)[0][:_SYSTEM_SUBJECT_MAX_CHARS] or "System alert"
+        key = _SYSTEM_KEY.match(row.get("dedupe_key") or "")
+        base = _spa_base()
+        link = f"{base}/health#{key.group(1)}" if key else f"{base}/health"
+        return RenderedMessage(subject=subject, body_text=text, deep_link=link if base else "")
     kind = row.get("change_kind") or "new"
     disposition = row.get("disposition") or ""
     # Subject fallback when the listing has no place at all: prefer the natural
@@ -162,7 +168,7 @@ _NEW_COLS = (
     "d.trigger_price_czk, d.prev_price_czk, "
     "location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co, ll.obec_name, ll.cast_obce_name, ll.country_code, ll.country_status) AS display_label, "
     "l.disposition, l.price_czk, l.price_unit, l.category_main, "
-    "l.source, l.source_id_native, d.message, ch"
+    "l.source, l.source_id_native, d.message, d.dedupe_key, ch"
 )
 
 _RETRY_COLS = (
@@ -171,7 +177,7 @@ _RETRY_COLS = (
     "d.trigger_price_czk, d.prev_price_czk, "
     "location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co, ll.obec_name, ll.cast_obce_name, ll.country_code, ll.country_status) AS display_label, "
     "l.disposition, l.price_czk, l.price_unit, l.category_main, "
-    "l.source, l.source_id_native, d.message"
+    "l.source, l.source_id_native, d.message, d.dedupe_key"
 )
 
 
@@ -214,13 +220,13 @@ def drain_once(
         (dispatch_id, source_kind, change_kind, sreality_id, subscription_id,
          collection_id, trigger_price_czk, prev_price_czk, display_label, disposition,
          price_czk, price_unit, _category_main, source, source_id_native,
-         message, ch) = r
+         message, dispatch_key, ch) = r
         recipient = recipients.get(ch)
         if not recipient:
             skipped += 1
             continue
         msg = compose_message({
-            "source_kind": source_kind, "message": message,
+            "source_kind": source_kind, "message": message, "dedupe_key": dispatch_key,
             "change_kind": change_kind, "sreality_id": sreality_id,
             "source": source, "source_id_native": source_id_native,
             "display_label": display_label, "disposition": disposition,
@@ -271,11 +277,12 @@ def drain_once(
     for r in retry_rows:
         (send_id, ch, recipient, _consumer, source_kind, change_kind, sreality_id,
          trigger_price_czk, prev_price_czk, display_label, disposition,
-         price_czk, price_unit, _category_main, source, source_id_native, message) = r
+         price_czk, price_unit, _category_main, source, source_id_native, message,
+         dispatch_key) = r
         if not recipient:
             continue
         msg = compose_message({
-            "source_kind": source_kind, "message": message,
+            "source_kind": source_kind, "message": message, "dedupe_key": dispatch_key,
             "change_kind": change_kind, "sreality_id": sreality_id,
             "source": source, "source_id_native": source_id_native,
             "display_label": display_label, "disposition": disposition,

@@ -2019,15 +2019,17 @@ renumber.** Navigate by area:
     `docs/design/health-dashboard.md`): `system_health`.** Its measurer is ONE registry,
     `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
     `gauge`), host, cadence, label, unit and owner page, and each host projects (and deletes) only
-    its own keys in `health_checks`. Hosts: `github-actions` — every `CHECKS` key until wave 3
-    starts moving them, measured by the hourly canary's `run_due`; `pg_cron` — the watcher's one
-    `liveness` key; `realtime-worker` — the worker's health lane from wave 3. A
+    its own keys in `health_checks`. Hosts: `realtime-worker` — the platform alarms `jobs`,
+    `capacity` and `llm` since wave 3, measured by the worker's health lane (`run_due` on a 60 s
+    tick); `github-actions` — every other `CHECKS` key until waves 4-6 move them, measured by the
+    hourly canary's `run_due`; `pg_cron` — the watcher's one `liveness` key. A
     `pipeline_check_results` row carries one of FOUR statuses — `ok` / `warn` / `fail` / `unknown`,
     shown as OK / Watch / Problem / Not measured — where `unknown` means the measurement did not
     happen (timed out, errored, nothing to score) and is never OK; a check a run never reached
     writes no row and stays due. The row keeps the check's `message` and, when the check emits
     them, its `cells` (one verdict per portal, job or lane). Each check runs under a real wall
-    clock: every statement's `statement_timeout` is the check's remaining budget (wave 2).
+    clock: every statement's `statement_timeout` is the check's remaining budget (wave 2); its
+    thresholds live once, in `THRESHOLDS`, each with its basis, and nothing overrides them (wave 3).
     Measuring writes no system alert and reds no run. The ONE teller is
     `toolkit/system_alerts.reconcile`, run by the API every 60 s beside the watchdog matcher (the
     outbox delivers its rows once a transport is configured):
@@ -2053,7 +2055,7 @@ renumber.** Navigate by area:
     job `health-liveness`, every 5 min, under a 60 s statement timeout), runs outside the worker
     and the API and writes ONE `liveness` result per call (host `pg_cron`; no incident, no notice —
     the teller tells it like any check): a `worker` cell per worker (heartbeat over 10 min old), a
-    `health_lane` cell once `realtime-worker` keys exist (wave 3), a `stale:<key>` cell per alarm
+    `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per alarm
     past its staleness budget (worker keys fold into a failing `worker` cell), an `api` cell (the
     watchdog matcher's lease lapsed; a NULL lease left by a clean shutdown is Not measured;
     interval 0 = off) and an `unalerted` cell (an alarm cell measured failing now and two cadences
@@ -2061,32 +2063,32 @@ renumber.** Navigate by area:
     so it recovers with a notice. It replaced the `worker_liveness` check and migration 274's 24 h
     dead-man job (`emit-verification-stale-alert`, unscheduled by 620; its function goes in 624). **The
     canary** is the ONE monitoring workflow, `verify_pipeline.yml` (cron hourly; GitHub delivers
-    about five runs a day): it records failed workflow runs (the poller), measures the
-    `github-actions` checks, then `scripts/health_canary.py` asserts that the database answers
+    about five runs a day): it records every other workflow's production runs (the poller: event
+    `schedule`, or `push` on `main`; each red with its reason line, judged by the `jobs` check as a
+    job cell), measures the `github-actions` checks, then `scripts/health_canary.py` asserts that the database answers
     (exit 2), the newest `liveness` row is under 30 min old, every failing liveness cell has an
     open incident after 15 min, and every alarm onset or reminder sent 15 min to 12 h ago was
     seen or delivered, or its key's cell incidents are all acknowledged or closed (exit 1; gauge
     notices are never asserted). A failing check never reds the run; the assertions do, as does a crash
-    of the poller or the harness or the harness step overrunning its 27 minutes, so GitHub's failure email is
+    of the poller or the harness or the harness step overrunning its 21 minutes, so GitHub's failure email is
     the one path to the operator that needs neither Supabase's scheduler nor Railway — with the
     bell the only channel (2026-10-18 ruling), it is how an unread alarm leaves the app. Who
     watches whom: pg_cron watches the worker, the API's loops, the teller and every alarm's
     freshness (the canary's own keys included); the API tells; the canary watches pg_cron, the
-    teller and whether an alarm was heard. **The `system_health` arm is
+    teller and whether an alarm was heard; the worker's `jobs` check watches every scheduled
+    machine, the canary's poller included (wave 3). **The `system_health` arm is
     one of the two producers (with `collection_share`) that are NOT property-grain** — it is about
     the pipeline, not a listing, so `listing_id` / `sreality_id` / `subscription_id` /
     `collection_id` are all NULL, the operator-state merge reconciler has nothing to re-point on it,
-    and `compose_message()` renders its stored `message` verbatim instead of building a listing
-    subject. Since the reliability program's W3 (migration 462) a **second emitter, the
-    `ops_incidents` signature engine**, runs beside it: one open row per failure SIGNATURE derived
-    from the error TEXT (`scripts/failure_signature.py`), fed by `scraper.portal_runner`'s crash path and
-    `scripts/record_workflow_failures.py`'s job-log backstop, one dispatch per incident — no second
-    alert table, no parallel bell namespace. **It is fenced from cell incidents** (both of its
-    auto-resolve statements skip `signature LIKE 'cell:%'`, so it can never close or "recover" one,
-    and since wave 2 no health run reaches it: the poller skips the canary, its own workflow, by
-    name, and GitHub's email is a red canary's path, so its `check:` fence is dead until the wave-3
-    poller rewrite deletes it)
-    **and retires in wave 3**, leaving one incident model.
+    and `compose_message()` sends its stored `message` verbatim as the body instead of building a
+    listing subject: the subject is the text before its first ` — ` (else its first 120
+    characters) and the link `{SPA_BASE_URL}/health#<key>`, the key read off its `sys:<key>:`
+    dedupe key (wave 3). **One incident model since wave 3 (migration 621):** the reliability
+    program's `ops_incidents` signature engine (migration 462: one open row per error-TEXT
+    signature, fed by `scraper.portal_runner`'s crash path, the worker's lane failures and the
+    poller's job-log backstop) is deleted and its open rows closed as `retired: signature engine`;
+    a red production run is now a `jobs` cell carrying its reason line
+    (`scripts/failure_signature.reason_line`), and a portal failing inside the worker a lane cell.
     Delivery, watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
     **A FOURTH producer is live (migration 610): `collection_share`.** `POST
     /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
@@ -3743,9 +3745,9 @@ new listings the drain is fetching) and `given_up=false, attempts=0`, since the 
 are exactly the ones the drain gave up on and no claim can see (rule #5). The bound is what makes it
 polite: bazos's share of that bucket is dead ads whose page answers with the category listing, which
 raises `ListingGoneError` and delists the row, so a portal carrying thousands of them drains over
-days instead of flooding one drain pass. A daily lane never reads as a dead one —
-`check_worker_lane_stall` alarms on `in_flight_s` (a pass running too long), never on the gap
-between passes.
+days instead of flooding one drain pass. A daily lane never reads as a dead one: the `jobs` check
+calls a lane late only past max(3 × its interval, its interval + 2 × its last pass's duration,
+15 min) since its last pass.
 
 **The cursor is the lane's only memory, and every run has a budget.**
 `location_claim_batches.cursor_after_id` holds a `listings.id` in full mode and a

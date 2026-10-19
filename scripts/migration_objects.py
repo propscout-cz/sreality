@@ -292,3 +292,49 @@ def load_migrations(migrations_dir: Path, newest: int = 25) -> list[Migration]:
         retired |= _dropped(sql) - {_key(o.kind, o.ident) for o in mig.objects}
         out[i] = Migration(mig.number, mig.filename, objects)
     return out
+
+
+# --- the live-catalog probe ----------------------------------------------------
+#
+# One probe for both readers of "applied": the `migration_drift` alarm
+# (scripts/checks/platform.py) and apply_migration_receipt's post-apply receipt. It asks
+# the catalog, never the ledger: for each declared object, does it exist right now?
+
+MIGRATION_OBJECT_PROBE_SQL = """
+select o.kind, o.ident,
+  case o.kind
+    when 'relation' then to_regclass(o.ident) is not null
+    when 'function' then exists (
+      select 1 from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.proname = split_part(o.ident, '.', greatest(
+               array_length(string_to_array(o.ident, '.'), 1), 1)))
+    when 'column' then exists (
+      select 1 from information_schema.columns c
+       where c.table_schema = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                                   then split_part(o.ident, '.', 1) else 'public' end
+         and c.table_name = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                                 then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
+         and c.column_name = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
+    when 'constraint' then exists (
+      select 1 from pg_constraint k
+        join pg_class rel on rel.oid = k.conrelid
+        join pg_namespace n on n.oid = rel.relnamespace
+       where n.nspname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                              then split_part(o.ident, '.', 1) else 'public' end
+         and rel.relname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
+                                then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
+         and k.conname = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
+    when 'policy' then exists (
+      select 1 from pg_policies pl
+       where pl.schemaname = 'public'
+         and pl.tablename = split_part(o.ident, '.', 1)
+         and pl.policyname = split_part(o.ident, '.', 2))
+  end as present
+from unnest(%(kinds)s::text[], %(idents)s::text[]) as o(kind, ident)
+"""
+
+# to_regclass raises on a malformed identifier rather than returning NULL, so an
+# ident that survived parsing but is not a plain dotted name never reaches SQL.
+SAFE_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_$]*(?:\.[a-zA-Z_][a-zA-Z0-9_$]*){0,2}$")

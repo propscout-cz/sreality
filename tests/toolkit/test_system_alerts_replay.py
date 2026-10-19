@@ -28,28 +28,31 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "health_replay_14d
 # Production reconciles every 60 s; every row's arrival plus a 10-minute tick resolves holds of
 # 108 minutes and more, and keeps the replay well under a second.
 _TICK = _dt.timedelta(minutes=10)
-# Check.staleness_budget on the github-actions host, where every key of the window ran.
+# Check.staleness_budget: cadence plus this slack on github-actions, where every key of the
+# window ran; three cadences on the worker, whose keys (wave 3) have no rows in the window.
 _GITHUB_SLACK = _dt.timedelta(hours=18)
+_GH, _RW = "github-actions", "realtime-worker"
 
-# The registry (scripts/verify_pipeline.py CHECKS). The window also measured `worker_liveness`,
-# deleted in wave 2 for the watcher's `worker` cell; the loader drops a retired key's rows, as
-# the ladder reads none of them.
-_REGISTRY: dict[str, tuple[str, int]] = {
-    "location_town_coverage": ("gauge", 21600), "llm_errors": ("alarm", 3600),
-    "llm_burn_rate": ("alarm", 3600), "long_open_transaction": ("alarm", 21600),
-    "db_saturation": ("alarm", 3600),
-    "dual_write_parity": ("alarm", 21600), "property_maintenance": ("alarm", 3600),
-    "broker_resolution_freshness": ("alarm", 3600), "broker_merge_suppression": ("alarm", 3600),
-    "workflow_poller_liveness": ("alarm", 21600), "ppm2_median_shift": ("alarm", 21600),
-    "ppm2_basis_floor_share": ("gauge", 21600), "area_vs_usable_divergence": ("gauge", 21600),
-    "ppm2_measure_coverage": ("alarm", 21600), "acquisition_lag": ("alarm", 21600),
-    "walk_coverage": ("gauge", 21600), "walk_end_streak": ("alarm", 21600),
-    "migration_drift": ("alarm", 21600), "worker_lane_stall": ("alarm", 21600),
-    "delist_flip_refused": ("gauge", 21600), "false_delist_share": ("alarm", 21600),
-    "location_payload_shape_drift": ("alarm", 21600), "outbound_url_coverage": ("gauge", 21600),
-    "field_fill_matrix": ("alarm", 21600), "text_extraction_lag": ("gauge", 21600),
-    "floor_convention": ("gauge", 21600), "sreality_image_template": ("alarm", 86400),
-    "outbound_url_conformance": ("alarm", 604800),
+# The registry (scripts/verify_pipeline.py CHECKS) as (class, cadence, host). The window also
+# measured `worker_liveness`, deleted in wave 2 for the watcher's `worker` cell, and the eight
+# platform keys wave 3 replaced with jobs, capacity and llm; the loader drops a retired key's
+# rows, as the ladder reads none of them.
+_REGISTRY: dict[str, tuple[str, int, str]] = {
+    "location_town_coverage": ("gauge", 21600, _GH), "jobs": ("alarm", 600, _RW),
+    "capacity": ("alarm", 1800, _RW), "llm": ("alarm", 600, _RW),
+    "property_maintenance": ("alarm", 3600, _GH),
+    "broker_merge_suppression": ("alarm", 3600, _GH),
+    "ppm2_median_shift": ("alarm", 21600, _GH), "ppm2_basis_floor_share": ("gauge", 21600, _GH),
+    "area_vs_usable_divergence": ("gauge", 21600, _GH),
+    "ppm2_measure_coverage": ("alarm", 21600, _GH), "acquisition_lag": ("alarm", 21600, _GH),
+    "walk_coverage": ("gauge", 21600, _GH), "walk_end_streak": ("alarm", 21600, _GH),
+    "migration_drift": ("alarm", 3600, _GH), "delist_flip_refused": ("gauge", 21600, _GH),
+    "false_delist_share": ("alarm", 21600, _GH),
+    "location_payload_shape_drift": ("alarm", 21600, _GH),
+    "outbound_url_coverage": ("gauge", 21600, _GH), "field_fill_matrix": ("alarm", 21600, _GH),
+    "text_extraction_lag": ("gauge", 21600, _GH), "floor_convention": ("gauge", 21600, _GH),
+    "sreality_image_template": ("alarm", 86400, _GH),
+    "outbound_url_conformance": ("alarm", 604800, _GH),
 }
 
 _Rows = list[tuple[_dt.datetime, str]]
@@ -67,7 +70,10 @@ class _Told:
 
 
 def _budget(key: str) -> _dt.timedelta:
-    return _dt.timedelta(seconds=_REGISTRY[key][1]) + _GITHUB_SLACK
+    _cls, cadence_s, host = _REGISTRY[key]
+    if host == _GH:
+        return _dt.timedelta(seconds=cadence_s) + _GITHUB_SLACK
+    return _dt.timedelta(seconds=3 * cadence_s)
 
 
 def _hold(key: str) -> _dt.timedelta:
@@ -104,7 +110,7 @@ def _replay() -> tuple[dict[str, _Rows], list[_dt.datetime], _FakeConn, list[_To
     passes = _passes(history)
     conn = _FakeConn()
     for key in history:
-        cls, cadence_s = _REGISTRY[key]
+        cls, cadence_s, _host = _REGISTRY[key]
         conn.register(key, cls=cls, cadence_s=cadence_s,
                       budget_s=_budget(key).total_seconds())
     fed = dict.fromkeys(history, 0)
@@ -153,10 +159,10 @@ def _utc(stamp: str) -> _dt.datetime:
 
 
 def test_the_replay_registry_is_the_harness_registry() -> None:
-    """A class, cadence or budget change in CHECKS must reach this rail, not drift past it."""
+    """A class, cadence, host or budget change in CHECKS must reach this rail, not drift past it."""
     from scripts.verify_pipeline import CHECKS
 
-    assert _REGISTRY == {c.key: (c.cls, c.cadence_s) for c in CHECKS}
+    assert _REGISTRY == {c.key: (c.cls, c.cadence_s, c.host) for c in CHECKS}
     assert {c.key: c.staleness_budget for c in CHECKS} == {key: _budget(key) for key in _REGISTRY}
 
 
@@ -202,14 +208,16 @@ def test_each_maximal_fail_streak_opens_exactly_one_incident_and_one_onset() -> 
 
 
 def test_a_lone_ok_inside_a_fail_streak_does_not_split_its_incident() -> None:
-    """llm_errors 2026-10-12/13: one OK at 20:15 between fails, then fails again until 02:00."""
+    """walk_coverage 2026-10-08/09: a fail at 23:25, one OK at 06:17, a fail again at 13:27 —
+    inside the gauge's 11.5 h hold, so one incident spans all three."""
     _history, _passes, conn, told = _replay()
-    lone_ok, refail = _utc("2026-10-12T20:15:16Z"), _utc("2026-10-13T02:00:40Z")
-    llm = sorted((i for i in conn.incidents if i["signature"] == "cell:llm_errors:llm_errors"),
-                 key=lambda i: i["first_seen_at"])
-    assert llm[0]["first_seen_at"] < lone_ok and llm[0]["resolved_at"] > refail
-    assert not [i for i in llm if lone_ok <= i["first_seen_at"] <= refail]
-    assert not [t for t in told if t.key == "llm_errors" and t.kind == "recovery"
+    lone_ok, refail = _utc("2026-10-09T06:17:43Z"), _utc("2026-10-09T13:27:47Z")
+    walk = [i for i in conn.incidents if i["signature"] == "cell:walk_coverage:walk_coverage"]
+    spanning = [i for i in walk if i["first_seen_at"] < lone_ok
+                and (i["resolved_at"] is None or i["resolved_at"] > refail)]
+    assert len(spanning) == 1
+    assert not [i for i in walk if lone_ok <= i["first_seen_at"] <= refail]
+    assert not [t for t in told if t.key == "walk_coverage" and t.kind == "recovery"
                 and lone_ok <= t.at <= refail]
 
 

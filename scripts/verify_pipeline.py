@@ -12,7 +12,9 @@ reads the stored results, opens one incident per failing cell and sends the noti
 result changes the exit code: the canary's assertions (`scripts/health_canary.py`) are the one
 way a monitoring run goes red.
 
-Thresholds are the code defaults below, merged under `app_settings.pipeline_check_thresholds`.
+Thresholds live in `THRESHOLDS` below, each beside its basis; changing one is a PR. The canary
+runs `main()` for `github-actions`; the worker's health lane calls `project_registry` and
+`run_due` for `realtime-worker` itself.
 
 There is deliberately NO total-silence LLM check: every LLM producer left is dispatch-driven or
 on demand, so silence is the normal resting state (the longest gap in the 30 days to
@@ -32,13 +34,11 @@ import datetime as _dt
 import json
 import logging
 import os
-import re
 import sys
 import time as _time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -65,8 +65,13 @@ from scripts.checks.clock import (
     fetchone as _fetchone,
     statement_timeout_clause as _statement_timeout_clause,
 )
+from scripts.checks.platform import (
+    check_capacity,
+    check_jobs,
+    check_llm,
+    check_migration_drift,
+)
 from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
-from toolkit.listing_identity import R2_CARRIERS as _PARITY_CARRIERS
 from toolkit.system_alerts import due_after_s as _due_after_s
 
 
@@ -83,16 +88,10 @@ SREALITY_SHAPE_CASE_SQL = """
 
 LOG = logging.getLogger("verify_pipeline")
 
-# Code fallbacks. The pipeline_check_thresholds seed (migration 274) is merged OVER
-# these in load_thresholds, so a key present here but not in the DB seed (e.g.
-# long_open_txn_warn_minutes, added with the llm-cost rollup) is served from this
-# default until a future seed migration includes it.
-DEFAULT_THRESHOLDS: dict[str, float] = {
-    "llm_error_rate_warn": 0.2,
-    # 130, not the old 90: the value the app_settings override has carried since migration
-    # 297, so the code default and production say the same number.
-    "llm_spend_24h_warn_usd": 130,
-    "llm_spend_24h_fail_usd": 150,
+# Every threshold a check reads, each beside its basis: the one home, so changing one is a
+# reviewed PR. Nothing overrides it at run time (app_settings.pipeline_check_thresholds is
+# read by nothing since wave 3; migration 624 deletes the row).
+THRESHOLDS: dict[str, Any] = {
     # false_delist_share: of the ads the drain CLOSED (ledger outcome 'flipped', 7 d), the
     # share active again now -- a revival after a confirmed gone verdict is a flip that was
     # wrong. Sized 2026-10-09 on the pre-hysteresis ledger (one verdict flipped): sreality
@@ -104,17 +103,6 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "false_delist_share_warn": 0.05,
     "false_delist_share_fail": 0.20,
     "false_delist_min_flips": 50,
-    # The llm-cost rollup (migration 437) absorbs late arrivals by re-scanning the
-    # trailing 3 hours on every tick: called_at defaults to now() = TRANSACTION START,
-    # so a call whose transaction opened at 10:59:59 and committed at 11:00:05 lands in
-    # the already-closed hour 10 and is repaired by the next tick. That holds ONLY while
-    # no transaction stays open longer than the window. Measured 2026-08-25 the oldest
-    # open transaction on this instance was 28.7 minutes — 6x inside the margin, but not
-    # a comfortable order of magnitude on an instance that runs 600-second cron
-    # statements. Warn at 1 hour: a third of the window, so there is time to act before
-    # correctness is at stake. No fail tier — a long transaction is not itself a fault.
-    "long_open_txn_warn_minutes": 60,
-    "db_cron_fail_rate_fail": 0.5,
     # Ingestion. Measured on the QUEUE, so these are portal-size-independent: a
     # healthy drain keeps the oldest never-fetched listing at minutes whatever the
     # portal. Warn at 6h is well above the 6-hourly walk cadence (a listing found
@@ -139,18 +127,12 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # coverage hole that deep silently stops history as well as intake --
     # ceskereality sits at 9.96% today, which is the known facet-partition gap and
     # should read amber, not red, until that is fixed on its own merits.
+    "walk_coverage_warn_gap": 0.05,
+    "walk_coverage_fail_gap": 0.15,
     # How many of the newest migrations to probe. 25 spans several weeks of this
     # repo's cadence, so a drift is caught long before the window rolls past it,
     # while keeping the probe to a few hundred catalog lookups.
-    # The drain lane legitimately loops eight portals at up to DRAIN_MAX_SECONDS
-    # (120 s) each, so ~16 min is a normal long pass. Warn above that, fail at an
-    # hour — no lane has a legitimate reason to spend an hour in one pass, and
-    # the observed wedge sat for NINE HOURS.
-    "worker_lane_stall_warn_seconds": 1200,
-    "worker_lane_stall_fail_seconds": 3600,
     "migration_drift_window": 25,
-    "walk_coverage_warn_gap": 0.05,
-    "walk_coverage_fail_gap": 0.15,
     # Consecutive index walks in which ONE category was walked and did not reach the
     # portal's end, so it nominated nothing (rule #3). Counted in walks, not hours,
     # because the gate is per walk: GitHub fires the index crons every ~6-9 h whatever
@@ -198,47 +180,6 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "property_sweep_fail_hours": 56,
     "property_dirty_warn_hours": 2.5,
     "property_dirty_fail_hours": 3,
-    # Broker resolution. Same two axes as property maintenance, but the sweep axis
-    # measures a ROTATION LAP, not one run: attribution truncates on its --max-seconds
-    # budget on most days (480,000 of 535,007 ids on 2026-08-10), so the corpus is
-    # covered across one or two daily runs and the stamp lands once per lap. Warn
-    # above a two-run lap plus the 110-min backstop drift (48 + 1.9); fail above a
-    # three-run lap plus a fully missed day, which is a rotation that has genuinely
-    # stopped reconciling rather than one having a slow week.
-    "broker_sweep_warn_hours": 52,
-    "broker_sweep_fail_hours": 84,
-    # A third, independent axis on the RUN rather than the rotation.
-    # _record_sweep_progress stamps lap completion straight after attribution,
-    # ~17-25 min ahead of the tail (cross-source merge, the three rollups, the
-    # matview, the candidate generator, _finalize's dirty-clear) — so a sweep
-    # whose tail dies still leaves a minutes-old lap stamp and the lap axis
-    # certifies it. Deferring the stamp would only move the wrongness (a lap that
-    # HAS closed would then age from the previous one), so completion gets its own
-    # axis: the age of the last full run that reached _finalize's ended_at. That
-    # tail runs on every sweep regardless of lap closure, so steady state is ~24h
-    # and the lap's deliberately wide 52/84 would be far too slack here.
-    #
-    # Sized on the GAP between consecutive ended_at, which is a whole number of
-    # daily runs PLUS the spread in when a run finishes — GH's scheduled-run delay,
-    # the <=21-min lock wait and the run itself, ~2.5h live to 2026-08-12 (06:25 to
-    # 08:52 UTC on a 04:35 cron). So one ordinary night reaches ~26.5h (warn 30
-    # clears it), one MISSED night ~50.5h and two ~69.5h. Fail therefore has to sit
-    # between those last two: 50 sat below one missed night's worst case, which fails
-    # this hourly alarm — an onset notice — for a single miss the sweep's own red run
-    # already emailed about. 60 keeps one miss a warn and still fails
-    # two, and costs ~10h of detection latency on the nightly-dead tail this axis
-    # exists for, which warn already ambers within ~30h.
-    "broker_finished_warn_hours": 30,
-    "broker_finished_fail_hours": 60,
-    # The full sweep holds broker_resolution_lock for its whole run — every */10
-    # incremental skips cleanly meanwhile — and clears dirty_broker_listings only at
-    # finalize, so oldest-dirt ages 1:1 with the sweep and can legitimately reach
-    # that same 3h backstop (raised from 1.9h with resolve_brokers_full.yml's
-    # timeout-minutes 110 -> 180). Warn above it or a healthy long sweep turns the
-    # axis amber; the extra headroom covers the post-sweep catch-up drain (the
-    # incremental claims --batch-size 5000 per */10 tick = 30k/h).
-    "broker_dirty_warn_hours": 4,
-    "broker_dirty_fail_hours": 5,
     # The suppression rail is a binary invariant, not a gradient: one active
     # suppression whose two identities sit under the same broker means a NO the
     # operator recorded was bypassed. No warn tier — there is no "slightly merged".
@@ -339,18 +280,6 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "ppm2_coverage_gap_warn": 0.95,
     "ppm2_coverage_gap_fail_7d": 0.90,
     "ppm2_coverage_min_rows": 200,
-    # Workflow-failure poller liveness, keyed on the AGE of its own high-water cursor.
-    # Sized when its cron was `*/30` and the Actions throttle ran it 80-256 min apart, so
-    # the fail tier had to clear the worst observed gap (~4.3h) with room to spare: warn
-    # at 6h is "two throttled polls missed", fail at 12h is unambiguous. Since wave 2 the
-    # poller is the canary's first step, so this check reads the cursor moments after a
-    # successful poll; after one failed poll (itself a red canary run) it reads the gap
-    # since the previous run, ~4.9 h at the median. The poller deliberately excludes its
-    # own runs from workflow_failures, so a dead poller cannot show up in the table it
-    # feeds — it just stops accumulating rows, which is exactly what a quiet week looks
-    # like. The cursor is the only thing that distinguishes them.
-    "workflow_poller_stale_warn_hours": 6.0,
-    "workflow_poller_stale_fail_hours": 12.0,
     # Sreality image template canary. The CDN is an exact-template ALLOWLIST, not a
     # transform language, and sreality has re-cut its catalogue once before with no
     # notice: the day the deployed chain leaves the allowlist every request 400s,
@@ -368,6 +297,8 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     # under it on both axes, which is also how a CROP is caught. Timeout is the read half
     # of a (5, 8) connect/read pair, bounded per call in the seam; worst case across the
     # three calls is 39 s, inside the 45 s per-check budget.
+    "sreality_image_template_min_ratio": 0.9,
+    "sreality_image_template_timeout_s": 8.0,
     # Floor convention: the mean (portal storey − idnes storey) over sibling pairs.
     # A whole-storey offset is the defect (W8 measured +0.82..+1.05 on the six ground=1
     # portals against +0.20 ceskereality / +0.10 bazos, the two that were already
@@ -390,182 +321,89 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "floor_convention_delta_warn": 0.35,
     "floor_convention_delta_fail": 0.50,
     "floor_convention_min_pairs": 40,
-    "sreality_image_template_min_ratio": 0.9,
-    "sreality_image_template_timeout_s": 8.0,
+    # --- jobs (platform alarm): every scheduled machine, one cell per job ------------------
+    # One red loses a whole cycle at a 24 h gap: location_registry_load's lone 09-01 timeout.
+    "jobs_gh_long_cycle_h": 24,
+    # 35 of migration 462's 63 red streaks were lone; recompute_mf_yields' 3rd red came 09-13.
+    "jobs_gh_streak_fail": 3,
+    # Late past 3 x the job's own p90 start gap: GitHub delivers about a fifth of cron's runs.
+    "jobs_gh_gap_p90_multiple": 3,
+    # recent_starts accumulates from wave 3, so the p90 arm is Not measured until 10 starts.
+    "jobs_gh_gap_min_starts": 10,
+    # The canary's measured 13.3 h maximum gap plus margin; the old check's 46 fails were real.
+    "jobs_poller_stale_h": 18,
+    # pg_cron keeps time: 2 of a job's last 3 finished runs failing is the job, not a blip.
+    "jobs_cron_fail_of_3": 2,
+    # 3 median start gaps with no start is two missed cycles, never a scheduler's jitter.
+    "jobs_cron_gap_multiple": 3,
+    # Under 5 starts in 7 days a job's gap is unknown, so its lateness arm is Not measured.
+    "jobs_cron_gap_min_starts": 5,
+    # Never late or failing under 15 min: each of ~11 deploys a day pauses lanes under 2 min.
+    "jobs_lane_floor_s": 900,
+    # 15 min of worker uptime before a lane that has not woken or passed can be judged.
+    "jobs_lane_boot_grace_s": 900,
+    # Eight portals at up to 120 s each make ~16 min an honest drain pass (the old stall warn).
+    "jobs_lane_inflight_warn_s": 1200,
+    # LANE_PASS_TIMEOUT_SECONDS: past it the worker abandons the pass (a wedge sat nine hours).
+    "jobs_lane_inflight_fail_s": 1800,
+    # Hourly-or-slower lanes pass about once per boot, so any failing_since there is a Problem.
+    "jobs_lane_daily_interval_s": 3600,
+    # Half the passes since the previous result failed: autodedup's failed_passes 6 on 10-02.
+    "jobs_lane_flap_share": 0.5,
+    # ...over at least 3 passes, so one failure in two passes is not a flap.
+    "jobs_lane_flap_min_passes": 3,
+    # --- capacity (platform alarm): is the database, and the worker's memory, keeping up ----
+    # browse-list-rebuild ran 15-28 x its ~9.9 s reference from 08-17: Watch at 3 x and 30 s.
+    "capacity_p50_warn_multiple": 3,
+    "capacity_p50_warn_floor_s": 30,
+    # Problem at 4 x and 60 s; a trailing 28-day baseline read recovered by early September.
+    "capacity_p50_fail_multiple": 4,
+    "capacity_p50_fail_floor_s": 60,
+    # Watch at a p95 of half the schedule interval: at twice that, runs overlap.
+    "capacity_p95_interval_warn": 0.5,
+    # 80 % of interval or statement_timeout: browse-list-rebuild hit 1,800 s 09-26..10-03.
+    "capacity_p95_interval_fail": 0.8,
+    # A whole post-reference week (one weekly p50) before the relative arm may judge.
+    "capacity_reference_min_days": 7,
+    # The first full day on the 2XL instance (p50 41-100 s); re-blessing is a dated PR. A rail fails once it is over 90 days old.
+    "CAPACITY_REFERENCE_FROM": _dt.date(2026, 10, 17),
+    # Timed-out health checks per 24 h: up to ~12 %/day in the saturation, 0 since 10-10.
+    "capacity_timeout_share_warn": 0.05,
+    "capacity_timeout_share_fail": 0.20,
+    # The saturation month's oldest open transaction was 18.3 min.
+    "capacity_open_xact_warn_min": 60,
+    "capacity_open_xact_fail_min": 360,
+    # Connections against max_connections: live 29 of 380.
+    "capacity_connections_warn": 0.7,
+    "capacity_connections_fail": 0.9,
+    # The worker's peak RSS against its container limit: live 7.4 of 22.9 GB.
+    "capacity_memory_warn": 0.8,
+    "capacity_memory_fail": 0.9,
+    # --- llm (platform alarm): are the providers serving, and is spend sane ----------------
+    # 20 % of 20+ calls in 24 h while the provider's newest call errors; 5 of 5 onsets real.
+    "llm_error_share_warn": 0.2,
+    "llm_error_share_min_calls": 20,
+    # 5+ attempts, no success in an hour: a refusing provider books $0 (the 11-day outage).
+    "llm_starved_min_attempts": 5,
+    # Normal spend is $22-32 a day; 130, not 90, is what production carried since mig 297.
+    "llm_spend_24h_warn_usd": 130,
+    "llm_spend_24h_fail_usd": 150,
+    # A credit outage stays red after its callers back off: 72 h, never a 24 h window.
+    "llm_lookback_h": 72,
+    # --- the registry ---------------------------------------------------------------------
+    # GitHub delivers a scheduled run up to ~13.3 h late, so its keys stale at cadence + 18 h.
+    "GITHUB_DELIVERY_SLACK_S": 18 * 3_600,
 }
 
 # --- per-check wall clock: scripts/checks/clock.py. The harness keeps its own spellings for
-# the clock's names until wave 3 moves the checks beside it. -------------------------------
+# the clock's names, read by the checks that still live here. ------------------------------
 #
-# Process start, the threshold read and the registry projection, reserved out of the harness
-# step's limit on top of the lane budget (test_the_canary_job_fits_every_github_check_due_at_once).
+# Process start and the registry projection, reserved out of the harness step's limit on top
+# of the lane budget (test_the_canary_job_fits_every_github_check_due_at_once).
 _JOB_HEADROOM_S = 180.0
 
 
 # --- pure status derivation (unit-tested without a DB) ---------------------
-
-
-def _status_for_llm_errors(
-    per_called_for: list[dict[str, Any]],
-    credit_live: bool,
-    currently_failing: bool,
-    thresholds: dict[str, Any],
-) -> tuple[str, list[str]]:
-    """Return (status, offending called_for keys), gated on LIVE state.
-
-    The old check failed on ANY credit-balance error in a trailing 24h window, so it kept
-    screaming "everything is down" for up to a day after the account was topped up (it fired
-    ~22h post-recovery on 2026-07-09). Now a red state requires the outage to be LIVE —
-    `currently_failing` = the most recent llm_call is a failure (healthy traffic since the
-    last error clears it within minutes). Credit exhaustion (`credit_live`) is the
-    unconditional fail; otherwise a called_for erroring >warn_rate over >=20 calls fails only
-    while still live."""
-    if credit_live:
-        return "fail", []
-    if not currently_failing:
-        return "ok", []
-    warn_rate = thresholds["llm_error_rate_warn"]
-    offenders = [
-        c["called_for"]
-        for c in per_called_for
-        if c["total"] >= 20 and c["total"] > 0 and c["errors"] / c["total"] > warn_rate
-    ]
-    return ("fail" if offenders else "ok"), offenders
-
-
-def _llm_live_state(
-    last_err_at: Any, last_ok_at: Any, last_credit_err_at: Any,
-) -> tuple[bool, bool]:
-    """Derive (currently_failing, credit_live) from STATE, not recency.
-
-    `currently_failing` is simply "the newest call is a failure": `last_ok_at <
-    last_err_at`. It used to additionally require the failure to be newer than a
-    90-minute window (`min_live_at`), which is wrong for a reason worth stating —
-    **silence is not recovery.** A failure is superseded only by a newer SUCCESS,
-    never by elapsed time. The producers here have circuit breakers (`toolkit/
-    vision_batch.py` stops the labelling pass on the first fatal provider error;
-    the autodedup judge lane aborts its pass the same way), so once an outage is
-    total the traffic stops, the last error ages past the window, and the check
-    reads `ok`.
-
-    Measured: OpenAI was credit-exhausted for 11 days (63,547 error rows, zero
-    successes) and `llm_errors` read `ok` for most of it, flapping `fail` -> `ok`
-    within an hour on unchanged inputs and emitting 114 alerts alternating onset with
-    a literal "Recovered: llm_errors is healthy again" for an outage that never
-    recovered. Edge-triggered alerting turns a duty-cycle sample into a siren.
-    """
-    currently_failing = bool(
-        last_err_at is not None
-        and (last_ok_at is None or last_err_at > last_ok_at)
-    )
-    credit_live = bool(
-        currently_failing
-        and last_credit_err_at is not None
-        and (last_ok_at is None or last_credit_err_at > last_ok_at)
-    )
-    return currently_failing, credit_live
-
-
-def _status_for_poller_staleness(
-    hours: float | None, warn_hours: float, fail_hours: float,
-) -> str:
-    """Age of the workflow-failure poller's cursor -> status.
-
-    `None` (no cursor row at all) is `warn`, not `fail`: it is also the legitimate
-    first-run state, and a check that is red from the moment it ships teaches the
-    operator to ignore every check.
-    """
-    if hours is None:
-        return "warn"
-    if hours > fail_hours:
-        return "fail"
-    if hours > warn_hours:
-        return "warn"
-    return "ok"
-
-
-def _status_for_burn(spend_24h: float, warn_usd: float, fail_usd: float) -> str:
-    """Credit-depletion early warning: the account has run dry repeatedly (Jul 3-10)
-    because paid burn silently outpaces manual top-ups. Balance isn't queryable via
-    API, so trailing-24h SPEND is the runway proxy: warn = top-up cadence risk, fail =
-    runaway burn worth an email before the hard gate hits.
-
-    Upper arms only — see _status_for_burn_lanes for the arm that catches the OPPOSITE
-    failure, where spend collapses to zero because nothing is succeeding."""
-    if spend_24h > fail_usd:
-        return "fail"
-    if spend_24h > warn_usd:
-        return "warn"
-    return "ok"
-
-
-def _starved_lanes(per_called_for: list[dict[str, Any]]) -> list[str]:
-    """`called_for` lanes that are trying and getting nothing: attempts but no
-    success and no spend. Evaluated PER LANE on purpose — a 24h aggregate arm is
-    defeated by a single unrelated cheap success, which is exactly what happened: one
-    `summarize_region_dispositions` call held `llm_burn_rate` at $0.01 for ~24 of 30
-    sampled hours while the only recurring lane was totally dead."""
-    return [
-        c["called_for"] for c in per_called_for
-        if c.get("attempts", 0) > 0
-        and c.get("successes", 0) == 0
-        and (c.get("spend", 0) or 0) == 0
-    ]
-
-
-def _status_for_burn_lanes(
-    per_called_for: list[dict[str, Any]],
-    spend_24h: float,
-    warn_usd: float,
-    fail_usd: float,
-) -> tuple[str, str, list[str]]:
-    """Return (status, arm, starved lanes) for llm_burn_rate.
-
-    Three arms on two different axes, because `value=0.0` is otherwise ambiguous —
-    it is the maximally healthy number AND the signature of a total outage:
-      - `starved`: some lane has attempts but zero successes and zero spend -> fail.
-        `_record_failure` writes `cost_usd=0.0`, so a total outage drives spend DOWN.
-      - `idle`: nothing was attempted at all -> ok. Every LLM producer left is
-        dispatch-driven or on demand, so silence is the normal resting state and
-        no check judges it (see the module docstring's note on llm_liveness).
-      - `runaway`/`ok`: the existing upper spend arms.
-    The arm is carried in `details.arm` so a red or green zero is legible in logs.
-    """
-    starved = _starved_lanes(per_called_for)
-    if starved:
-        return "fail", "starved", starved
-    if not any(c.get("attempts", 0) for c in per_called_for):
-        return "ok", "idle", []
-    status = _status_for_burn(spend_24h, warn_usd, fail_usd)
-    return status, ("runaway" if status != "ok" else "ok"), []
-
-
-def _status_for_long_open_txn(oldest_minutes: float, warn_minutes: float) -> str:
-    """Warn (never fail) once the oldest open transaction passes `warn_minutes`.
-
-    A long transaction is not a fault in itself — it is the one condition under which the
-    llm-cost rollup's trailing re-scan stops being self-healing, so this is an advisory
-    axis, not a gate."""
-    return "warn" if oldest_minutes > warn_minutes else "ok"
-
-
-_MIN_CRON_RUNS = 3  # ignore jobs with too few finished runs to judge a rate
-
-
-def _status_for_cron(
-    jobs: list[dict[str, Any]], fail_rate: float,
-) -> tuple[str, list[str]]:
-    """Fail (naming the offenders) when any pg_cron job's failure rate over the window
-    exceeds `fail_rate` with >= _MIN_CRON_RUNS finished runs. This is the DB-saturation
-    signal: the fleet's heaviest jobs (health-matview refresh, browse-list rebuild) tip
-    over the pooler statement_timeout en masse when the DB is overloaded, and nothing
-    watched them (the 2026-07 incident surfaced as ~8 unrelated red workflows instead)."""
-    offenders = []
-    for j in jobs:
-        finished = j["ok"] + j["failed"]
-        if finished >= _MIN_CRON_RUNS and j["failed"] / finished > fail_rate:
-            offenders.append(f"{j['jobname']} {j['failed']}/{finished}")
-    return ("fail" if offenders else "ok"), offenders
 
 
 def _status_for_property_maintenance(
@@ -593,43 +431,6 @@ def _status_for_property_maintenance(
          ("oldest dirty-queue row", oldest_dirty_hours,
           thresholds["property_dirty_warn_hours"],
           thresholds["property_dirty_fail_hours"])],
-        stamp_missing=sweep_age_hours is None,
-    )
-
-
-def _status_for_broker_resolution(
-    sweep_age_hours: float | None,
-    oldest_dirty_hours: float | None,
-    thresholds: dict[str, Any],
-    *,
-    finished_age_hours: float | None = None,
-    sweep_label: str = "last complete broker sweep",
-) -> tuple[str, list[str]]:
-    """Worst-of over the three broker-resolution liveness axes (rule-20 shape).
-
-    `sweep_age_hours` is how long ago the rotation last covered the whole corpus —
-    app_settings.broker_resolution_last_complete, which the sweep stamps when a LAP
-    closes, falling back to the open lap's start so a rotation that has never closed
-    one still ages into `fail` instead of parking on the missing-stamp warn. That is
-    the axis that matters: attribution breaks out on --max-seconds and, before the
-    rotation cursor, silently re-walked the same head every day — a green exit code
-    over a permanently unattributed tail. `finished_age_hours` is the independent
-    completion axis: the lap stamp lands before the sweep's whole tail, so it says
-    nothing about whether the merges, rollups, matview and dirty-clear ever ran —
-    only broker_resolution_runs.ended_at does. `oldest_dirty_hours` watches the */10
-    incremental drain of dirty_broker_listings, which is what attributes a new or
-    re-brokered listing inside the day. A missing completion axis is skipped, never
-    a fail: only the LAP stamp's absence is the deploy-day warn."""
-    return _status_over_age_axes(
-        [(sweep_label, sweep_age_hours,
-          thresholds["broker_sweep_warn_hours"],
-          thresholds["broker_sweep_fail_hours"]),
-         ("last finished full sweep", finished_age_hours,
-          thresholds["broker_finished_warn_hours"],
-          thresholds["broker_finished_fail_hours"]),
-         ("oldest broker dirty-queue row", oldest_dirty_hours,
-          thresholds["broker_dirty_warn_hours"],
-          thresholds["broker_dirty_fail_hours"])],
         stamp_missing=sweep_age_hours is None,
     )
 
@@ -829,400 +630,7 @@ def _status_for_median_shift(
     return status, offenders, worst, compared
 
 
-# --- thresholds ------------------------------------------------------------
-
-
-def load_thresholds(conn: Any) -> dict[str, Any]:
-    """app_settings.pipeline_check_thresholds merged over the code defaults, so a
-    missing key (or a whole missing row) always resolves to the seeded default."""
-    merged = dict(DEFAULT_THRESHOLDS)
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT value FROM app_settings WHERE key = 'pipeline_check_thresholds'"
-        )
-        row = cur.fetchone()
-    raw = row[0] if row and row[0] is not None else None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (TypeError, ValueError):
-            raw = None
-    if isinstance(raw, dict):
-        for k, v in raw.items():
-            if isinstance(v, (int, float)):
-                merged[k] = v
-    return merged
-
-
-
 # --- checks ----------------------------------------------------------------
-
-_LLM_ERRORS_SQL = """
-select called_for,
-       count(*) as total,
-       count(*) filter (where error is not null) as errors
-from llm_calls
-where called_at > now() - interval '24 hours'
-group by called_for
-order by total desc
-"""
-
-# Liveness, PER PROVIDER: is a provider failing RIGHT NOW? Its newest failure vs ITS newest
-# success — a success after the last error means recovered, and nothing else does. Per
-# provider because credit is one account's state: the text lane calls OpenAI up to every
-# 5 minutes, so one comparison across all providers would let those successes clear an empty
-# Anthropic account (summaries, URL parsing, condition scoring) within minutes, and one
-# Anthropic success clear an OpenAI outage. The `min_live_at` staleness column was removed
-# in W0.3: see _llm_live_state for why bounding "live" by elapsed time made a total outage
-# read `ok`.
-_LLM_PROVIDER_STATE_SQL = """
-select provider,
-       max(called_at) filter (where error is not null) as last_err_at,
-       max(called_at) filter (where error is null) as last_ok_at,
-       max(called_at) filter (where credit) as last_credit_err_at,
-       count(*) filter (where credit) as credit_errors,
-       array_agg(distinct model) filter (where credit) as credit_models,
-       array_agg(distinct called_for) filter (where credit) as credit_jobs
-  from (select provider, model, called_for, called_at, error,
-               (error ilike %s or error ilike %s) as credit
-          from llm_calls
-         where called_at > now() - interval '24 hours') calls
- group by provider
-"""
-
-# Two providers, two wordings for the same outage: OpenAI's 429 says "You have no credits
-# remaining"; Anthropic's says "credit balance". 2026-08-25: the OpenAI wording went
-# unmatched since 08-15, so health stayed green through a real 10-day outage.
-_CREDIT_ERROR_PATTERNS = ("%credit balance%", "%no credits remaining%")
-
-
-def _llm_provider_states(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
-    """One JSON-ready live state per provider, from _LLM_PROVIDER_STATE_SQL's rows."""
-    states: list[dict[str, Any]] = []
-    for provider, last_err, last_ok, last_credit, credit_errors, models, jobs in rows:
-        failing, credit_live = _llm_live_state(last_err, last_ok, last_credit)
-        states.append({
-            "provider": provider, "currently_failing": failing, "credit_live": credit_live,
-            "credit_errors": int(credit_errors or 0),
-            "credit_models": sorted(models or []), "credit_jobs": sorted(jobs or []),
-            "last_error_at": str(last_err) if last_err else None,
-            "last_success_at": str(last_ok) if last_ok else None,
-        })
-    return states
-
-
-def check_llm_errors(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    rows = _fetchall(conn, _LLM_ERRORS_SQL)
-    state_rows = _fetchall(conn, _LLM_PROVIDER_STATE_SQL, _CREDIT_ERROR_PATTERNS)
-    providers = _llm_provider_states(state_rows)
-    credit_errors = sum(p["credit_errors"] for p in providers)
-    dead = [p for p in providers if p["credit_live"]]
-    credit_live = bool(dead)
-    # The rate arm still reads the newest call of ANY provider; only credit is per account.
-    last_err_at = max((r[1] for r in state_rows if r[1] is not None), default=None)
-    last_ok_at = max((r[2] for r in state_rows if r[2] is not None), default=None)
-    currently_failing = _llm_live_state(last_err_at, last_ok_at, None)[0]
-
-    per_called_for: list[dict[str, Any]] = []
-    tot = err = 0
-    for (called_for, total, errors) in rows:
-        total, errors = int(total), int(errors)
-        tot += total
-        err += errors
-        per_called_for.append({
-            "called_for": called_for, "total": total, "errors": errors,
-            "rate": round(errors / total, 4) if total else 0.0,
-        })
-    overall_rate = round(err / tot, 4) if tot else 0.0
-    status, offenders = _status_for_llm_errors(
-        per_called_for, credit_live, currently_failing, thresholds,
-    )
-
-    if credit_live:
-        # Names what failed, from the rows. The fixed list it replaces named every paid job and
-        # no provider: 2026-10-02..10 that took in Anthropic's (summaries, URL parsing), though
-        # no Anthropic call had failed.
-        message = "Out of LLM credit right now — " + "; ".join(
-            f"{p['provider']}: {p['credit_errors']} credit-balance errors in 24h on "
-            f"{', '.join(p['credit_models'])} ({', '.join(p['credit_jobs'])}) and no "
-            f"successful {p['provider']} call since" for p in dead
-        ) + (". Top up that account." if len(dead) == 1 else ". Top up those accounts.")
-    elif offenders:
-        message = (
-            f"LLM error rate exceeded {thresholds['llm_error_rate_warn']:.0%} and is still "
-            f"live for: {', '.join(offenders)} (24h window, >= 20 calls) — the provider is erroring."
-        )
-    else:
-        message = f"LLM calls healthy ({overall_rate:.1%} error rate over 24h)."
-    return {
-        "check_key": "llm_errors",
-        "status": status,
-        "value": overall_rate,
-        "details": {
-            "overall_rate": overall_rate,
-            "credit_balance_errors": credit_errors,
-            "currently_failing": currently_failing,
-            "credit_live": credit_live,
-            "last_error_at": str(last_err_at) if last_err_at else None,
-            "last_success_at": str(last_ok_at) if last_ok_at else None,
-            "warn_rate": thresholds["llm_error_rate_warn"],
-            "offending_called_for": offenders,
-            "per_called_for": per_called_for,
-            "per_provider": providers,
-        },
-        "message": message,
-    }
-
-
-_LLM_BURN_SQL = """
-select coalesce(sum(cost_usd), 0) as spend_24h
-from llm_calls where called_at > now() - interval '24 hours'
-"""
-
-# Per-lane attempts / successes / spend. NOT filtered on `cost_usd > 0` — that filter is
-# precisely what made a starved lane invisible: a lane that attempts and never succeeds
-# books cost_usd=0.0 on every row and simply vanishes from a spend-ranked query.
-_LLM_BURN_BY_LANE_SQL = """
-select called_for,
-       count(*) as attempts,
-       count(*) filter (where error is null) as successes,
-       round(coalesce(sum(cost_usd), 0)::numeric, 2) as spend
-from llm_calls
-where called_at > now() - interval '24 hours'
-group by called_for order by spend desc, attempts desc
-"""
-
-
-def check_llm_burn_rate(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Credit-runway guard on TWO axes (see _status_for_burn_lanes).
-
-    Upper arms catch runaway burn. The starvation arm catches the opposite and far more
-    common failure: `_record_failure` writes `cost_usd=0.0`, so a total provider outage
-    drives 24h spend toward zero — the maximally healthy number. This check reported
-    `ok value=0.0` for the entire 11-day OpenAI outage. Evaluated per `called_for` so one
-    unrelated cheap success cannot mask a dead lane.
-    """
-    warn_usd = float(thresholds["llm_spend_24h_warn_usd"])
-    fail_usd = float(thresholds["llm_spend_24h_fail_usd"])
-    row = _fetchone(conn, _LLM_BURN_SQL)
-    spend = float(row[0]) if row and row[0] is not None else 0.0
-    per_called_for = [
-        {"called_for": str(cf), "attempts": int(a), "successes": int(s), "spend": float(c)}
-        for (cf, a, s, c) in _fetchall(conn, _LLM_BURN_BY_LANE_SQL)
-    ]
-    top = [(c["called_for"], c["spend"]) for c in per_called_for if c["spend"] > 0][:3]
-    status, arm, starved = _status_for_burn_lanes(
-        per_called_for, spend, warn_usd, fail_usd)
-    top_str = ", ".join(f"{cf} ${s:.2f}" for cf, s in top) or "none"
-
-    if arm == "starved":
-        attempts = sum(
-            c["attempts"] for c in per_called_for if c["called_for"] in starved)
-        message = (
-            f"LLM lanes are burning attempts and producing nothing: {', '.join(starved)} "
-            f"({attempts} calls in 24h, zero successes, $0.00 spent). Spend near zero here "
-            "is the SYMPTOM, not health — the provider is refusing every call (credit "
-            "exhausted, key revoked, or model access lost)."
-        )
-    elif arm == "idle":
-        message = (
-            "No LLM calls attempted in 24h — nothing to bill and nothing to judge. "
-            "Every producer is dispatch-driven or on demand, so silence is normal."
-        )
-    elif status == "fail":
-        message = (
-            f"LLM spend is ${spend:.2f} in 24h (> ${fail_usd:.0f}) — at this burn the credit "
-            f"balance drains in days; check Plans & Billing / top up or throttle. Top spenders: {top_str}."
-        )
-    elif status == "warn":
-        message = (
-            f"LLM spend is ${spend:.2f} in 24h (> ${warn_usd:.0f}) — top-up cadence risk. "
-            f"Top spenders: {top_str}."
-        )
-    else:
-        message = f"LLM spend ${spend:.2f} in 24h (top: {top_str})."
-    return {
-        "check_key": "llm_burn_rate",
-        "status": status,
-        "value": round(spend, 2),
-        "details": {
-            "spend_24h_usd": round(spend, 2), "warn_usd": warn_usd,
-            "fail_usd": fail_usd, "top_spenders": dict(top),
-            # Which arm decided this, so a red or green `value=0.0` is legible.
-            "arm": arm, "starved_called_for": starved,
-            "per_called_for": per_called_for,
-        },
-        "message": message,
-    }
-
-
-# The cursor is stored as a jsonb scalar by record_workflow_failures._write_cursor, so it
-# comes back out with #>> '{}' exactly as that module's _read_cursor does.
-_WORKFLOW_POLLER_CURSOR_SQL = """
-select extract(epoch from (now() - (value #>> '{}')::timestamptz)) / 3600.0 as age_hours
-from app_settings where key = 'workflow_failures_cursor'
-"""
-
-
-def check_workflow_poller_liveness(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Is the workflow-failure poller still polling?
-
-    `workflow_failures` cannot answer this about itself. The poller excludes its own runs
-    from the table it feeds (or one red poll would re-alarm the surface forever), so when
-    it dies the table simply stops growing — indistinguishable from a healthy week. On
-    2026-08-26 the ingest fleet was red for hours and the ops surface stayed quiet.
-
-    The liveness signal is the age of its high-water cursor in `app_settings`, which every
-    successful poll rewrites. O(1): one indexed row by primary key.
-    """
-    warn_hours = float(thresholds["workflow_poller_stale_warn_hours"])
-    fail_hours = float(thresholds["workflow_poller_stale_fail_hours"])
-    row = _fetchone(conn, _WORKFLOW_POLLER_CURSOR_SQL)
-    hours = float(row[0]) if row and row[0] is not None else None
-    status = _status_for_poller_staleness(hours, warn_hours, fail_hours)
-    if hours is None:
-        message = (
-            "The workflow-failure poller has no cursor on record — it has never completed "
-            "a poll, or the app_settings row was cleared. Until it does, nothing is "
-            "watching for red workflow runs."
-        )
-    elif status == "ok":
-        message = f"Workflow-failure poller last advanced its cursor {hours:.1f}h ago."
-    else:
-        message = (
-            f"The workflow-failure poller has not advanced its cursor in {hours:.1f}h "
-            f"(warn > {warn_hours:.0f}h, fail > {fail_hours:.0f}h) — the canary's poller step "
-            "(verify_pipeline.yml) is failing, disabled, or wedged. Red workflow runs are going "
-            "unrecorded right now, and the Health page's failure list is silently frozen, not "
-            "empty."
-        )
-    return {
-        "check_key": "workflow_poller_liveness",
-        "status": status,
-        "value": round(hours, 2) if hours is not None else None,
-        "details": {
-            "cursor_age_hours": round(hours, 2) if hours is not None else None,
-            "warn_hours": warn_hours, "fail_hours": fail_hours,
-            "cursor_present": hours is not None,
-        },
-        "message": message,
-    }
-
-
-_LONG_OPEN_TXN_SQL = """
-select coalesce(max(extract(epoch from (now() - xact_start)) / 60.0), 0) as oldest_min
-from pg_stat_activity
-where xact_start is not null and pid <> pg_backend_pid()
-"""
-
-_LONG_OPEN_TXN_TOP_SQL = """
-select coalesce(nullif(application_name, ''), backend_type) as who,
-       coalesce(state, 'unknown') as state,
-       round((extract(epoch from (now() - xact_start)) / 60.0)::numeric, 1) as age_min
-from pg_stat_activity
-where xact_start is not null and pid <> pg_backend_pid()
-order by xact_start
-limit 3
-"""
-
-
-def check_long_open_transaction(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """The one condition under which the llm-cost rollup stops self-healing.
-
-    `llm_calls.called_at` defaults to now() = transaction START, so a call whose transaction
-    opened just before an hour boundary and committed just after it lands in an
-    already-closed hour. `refresh_llm_cost_rollups` absorbs that by fully recomputing the
-    trailing 3 hours on every tick — never a double-count, never a drop that outlives one
-    tick — but only while no transaction outlives the window. Names the oldest backends so
-    the alert says WHAT to look at; the repair, if it ever fires, is one statement:
-    `select refresh_llm_cost_rollups('-infinity');`"""
-    warn_minutes = float(thresholds["long_open_txn_warn_minutes"])
-    row = _fetchone(conn, _LONG_OPEN_TXN_SQL)
-    oldest = float(row[0]) if row and row[0] is not None else 0.0
-    top = [
-        (str(who), str(state), float(age))
-        for (who, state, age) in _fetchall(conn, _LONG_OPEN_TXN_TOP_SQL)
-    ]
-    status = _status_for_long_open_txn(oldest, warn_minutes)
-    top_str = ", ".join(f"{who} [{state}] {age:.1f}m" for who, state, age in top) or "none"
-    if status == "warn":
-        message = (
-            f"Oldest open transaction is {oldest:.1f}m (> {warn_minutes:.0f}m) — the "
-            "llm-cost rollup's 3h trailing re-scan only absorbs late arrivals shorter than "
-            "the transaction that produced them. Oldest: "
-            f"{top_str}. Repair after it clears: select refresh_llm_cost_rollups('-infinity');"
-        )
-    else:
-        message = f"Oldest open transaction {oldest:.1f}m (oldest backends: {top_str})."
-    return {
-        "check_key": "long_open_transaction",
-        "status": status,
-        "value": round(oldest, 1),
-        "details": {"oldest_minutes": round(oldest, 1), "warn_minutes": warn_minutes,
-                    "oldest_backends": [
-                        {"who": who, "state": state, "age_minutes": age}
-                        for who, state, age in top
-                    ]},
-        "message": message,
-    }
-
-
-_DB_CRON_SQL = """
-select j.jobname,
-       count(*) filter (where d.status = 'succeeded') as ok,
-       count(*) filter (where d.status = 'failed')    as failed
-from cron.job_run_details d
-join cron.job j using (jobid)
-where d.start_time > now() - interval '6 hours'
-group by j.jobname
-"""
-
-
-def check_db_saturation(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Watch pg_cron's own run ledger for the DB-saturation signature. An unreadable cron
-    schema (e.g. a branch DB without pg_cron) is Not measured, never a false fail."""
-    fail_rate = float(thresholds["db_cron_fail_rate_fail"])
-    try:
-        rows = _fetchall(conn, _DB_CRON_SQL)
-    except Exception as exc:  # noqa: BLE001 — cron schema not readable → unknown, never false-fail
-        # verify connects via SUPABASE_DB_URL (postgres role, which has cron access); this
-        # path only trips if that changes to a role lacking USAGE on schema cron. unknown
-        # (not ok) so the /health page shows the check is INERT rather than silently green.
-        return {
-            "check_key": "db_saturation", "status": "unknown", "value": None,
-            "details": {"skipped": f"cron.job_run_details unreadable: {exc}",
-                        "fix": "GRANT USAGE ON SCHEMA cron TO service_role;"},
-            "message": ("DB-saturation check is inert — can't read pg_cron's ledger. "
-                        "Fix: GRANT USAGE ON SCHEMA cron TO service_role;"),
-        }
-    jobs = [{"jobname": jn, "ok": int(ok), "failed": int(fl)} for (jn, ok, fl) in rows]
-    status, offenders = _status_for_cron(jobs, fail_rate)
-    worst_rate = max(
-        (j["failed"] / (j["ok"] + j["failed"]) for j in jobs if j["ok"] + j["failed"] > 0),
-        default=0.0,
-    )
-    if len(offenders) >= 2:
-        message = (
-            f"{len(offenders)} pg_cron jobs failing over the last 6h (> {fail_rate:.0%}): "
-            f"{', '.join(offenders)} — the database is likely saturated (statement timeouts hitting "
-            "multiple jobs at once)."
-        )
-    elif offenders:
-        message = (
-            f"pg_cron job failing over the last 6h (> {fail_rate:.0%}): {offenders[0]} — that job "
-            "(or a query it runs) is over the statement-timeout ceiling."
-        )
-    else:
-        message = f"pg_cron healthy (worst job failure rate {worst_rate:.0%} over 6h)."
-    return {
-        "check_key": "db_saturation",
-        "status": status,
-        "value": round(worst_rate, 3),
-        "details": {"offenders": offenders, "fail_rate": fail_rate,
-                    "jobs": {j["jobname"]: {"ok": j["ok"], "failed": j["failed"]} for j in jobs}},
-        "message": message,
-    }
-
 
 # One O(1) round trip: the sweep-completion stamp + the tiny dirty queue.
 # Deliberately NOT a per-row staleness scan over properties — that measured
@@ -1283,247 +691,6 @@ def check_property_maintenance(conn: Any, thresholds: dict[str, Any]) -> dict[st
         },
         "message": message,
     }
-
-
-# The broker analogue of _PROPERTY_MAINTENANCE_SQL, and O(1) for the same reason:
-# a per-row scan for unattributed listings is exactly the query resolve_brokers
-# deleted from its incremental (broker_identity_id IS NULL is a permanent state for
-# ~110k listings, so it detoasted the whole raw_json corpus for ~7 stragglers).
-_BROKER_RESOLUTION_SQL = """
-select
-  (select extract(epoch from (now() - (value->>'completed_at')::timestamptz)) / 3600.0
-     from app_settings where key = 'broker_resolution_last_complete')
-    as sweep_age_hours,
-  (select extract(epoch from (now() - (value->>'lap_started_at')::timestamptz)) / 3600.0
-     from app_settings where key = 'broker_sweep_cursor') as lap_age_hours,
-  (select extract(epoch from (now() - max(r.ended_at))) / 3600.0
-     from broker_resolution_runs r where r.mode = 'full' and r.ended_at is not null)
-    as finished_age_hours,
-  (select extract(epoch from (now() - min(d.marked_at))) / 3600.0
-     from dirty_broker_listings d) as oldest_dirty_hours,
-  (select count(*) from dirty_broker_listings) as dirty_depth
-"""
-
-
-def check_broker_resolution_freshness(
-    conn: Any, thresholds: dict[str, Any],
-) -> dict[str, Any]:
-    """Watch the broker-resolution loop — the daily full sweep and the */10
-    incremental drain. Born from the 2026-08-12 E2E review: the sweep broke out of
-    attribution on its budget, wiped the whole dirty queue anyway and restarted at
-    the same low id next time, so the newest ~10% of broker-bearing listings were
-    skipped every single day — and nothing watched it, because the job still exited
-    0. The sweep axis ages the rotation's last closed LAP; before any lap has
-    closed it ages the open one, so a rotation that never gets around the corpus
-    reds instead of hiding behind a missing stamp. The lap stamp lands before the
-    sweep's 17-25 min tail, so a separate axis ages the last run that actually
-    reached ended_at — a tail that dies is invisible to the other two."""
-    row = _fetchone(conn, _BROKER_RESOLUTION_SQL)
-    stamp_age, lap_age, finished_age, oldest_dirty, dirty_depth = (
-        (None, None, None, None, 0) if row is None else (
-            float(row[0]) if row[0] is not None else None,
-            float(row[1]) if row[1] is not None else None,
-            float(row[2]) if row[2] is not None else None,
-            float(row[3]) if row[3] is not None else None,
-            int(row[4] or 0),
-        )
-    )
-    sweep_age = stamp_age if stamp_age is not None else lap_age
-    status, offenders = _status_for_broker_resolution(
-        sweep_age, oldest_dirty, thresholds, finished_age_hours=finished_age,
-        sweep_label=("last complete broker sweep" if stamp_age is not None
-                     else "open rotation lap (no lap closed yet)"))
-    if offenders:
-        message = (
-            "Broker resolution is falling behind: " + "; ".join(offenders)
-            + " — check the daily sweep's runs (a budget-truncated sweep logs "
-            "'time budget reached during attribution' and still exits 0, and a "
-            "sweep whose tail dies still stamps its lap) and "
-            "broker_resolution_lock."
-        )
-    else:
-        finished_txt = (f"{finished_age:.1f}h ago" if finished_age is not None
-                        else "none on record")
-        message = (
-            f"Broker resolution healthy (last complete sweep "
-            f"{sweep_age:.1f}h ago, last finished run {finished_txt}, "
-            f"dirty queue {dirty_depth})."
-        )
-    return {
-        "check_key": "broker_resolution_freshness",
-        "status": status,
-        "value": round(sweep_age, 2) if sweep_age is not None else None,
-        "details": {
-            "sweep_age_hours": sweep_age,
-            "stamp_age_hours": stamp_age,
-            "lap_age_hours": lap_age,
-            "finished_age_hours": finished_age,
-            "oldest_dirty_hours": oldest_dirty,
-            "dirty_depth": dirty_depth,
-            "offenders": offenders,
-        },
-        "message": message,
-    }
-
-
-# Keep every parity scan bounded so the 6-hourly run never degenerates into a seq
-# scan of 8M images rows: look only at the newest slice above the watermark. A live
-# writer gap shows up continuously, so the recent window catches it just as well as
-# a full scan would — and stays index-driven as the tables grow.
-_PARITY_ID_LOOKBACK = 200_000
-_PARITY_TS_LOOKBACK_DAYS = 7
-
-
-def _parity_carrier_sql(carrier: dict[str, Any]) -> str:
-    table, cursor = carrier["table"], carrier["cursor"]
-    if carrier.get("kind") == "ts":
-        floor = f"greatest(w.cursor_ts, now() - interval '{_PARITY_TS_LOOKBACK_DAYS} days')"
-    else:
-        floor = (
-            f"greatest(w.cursor_id, coalesce((select max({cursor}) from {table}), 0)"
-            f" - {_PARITY_ID_LOOKBACK})"
-        )
-    skip = carrier.get("skip")
-    skip_clause = f" and not ({skip})" if skip else ""
-    parts: list[str] = []
-    for legacy, new in carrier["cols"]:
-        parts.append(f"count(*) filter (where t.{legacy} is not null and t.{new} is null{skip_clause})")
-        parts.append(
-            f"count(*) filter (where t.{legacy} is not null and t.{new} is not null"
-            f" and t.{new} is distinct from"
-            f" (select l.id from listings l where l.sreality_id = t.{legacy}){skip_clause})"
-        )
-        # Once Gate-2 flips, a brand-new non-sreality-portal row carries a NULL
-        # legacy id by design — the two filters above (both anchored on
-        # `t.{legacy} is not null`) silently stop seeing it. This counts rows
-        # where the surrogate is ALSO missing despite the legacy id being absent:
-        # the one shape of gap that is still detectable with no legacy value to
-        # cross-check against (existence, not correctness — there's nothing to
-        # compare a NULL legacy id to).
-        parts.append(f"count(*) filter (where t.{legacy} is null and t.{new} is null{skip_clause})")
-    return (
-        f"select {', '.join(parts)}, count(*) "
-        f"from {table} t, dual_write_watermark w "
-        f"where w.child = '{table}' and t.{cursor} > {floor}"
-    )
-
-
-def check_dual_write_parity(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """R2 dual-write parity: every row written since the watermark that carries a
-    legacy listing id must carry the matching surrogate, and it must be the RIGHT one.
-
-    Three distinct failures, all otherwise silent: a writer nobody censused keeps
-    stamping only the legacy id (gap), a writer stamps a surrogate belonging to a
-    different listing (mismatch — what a positional zip of an unordered RETURNING
-    produces), or — once Gate-2 flips and new non-sreality-portal rows carry a NULL
-    legacy id by design — a writer stamps NEITHER id (orphan; the gap/mismatch
-    filters are both anchored on "legacy is not null" and go blind to these rows).
-    Gap detection is structural: it observes rows, not code paths, so it catches
-    writers this refactor never enumerated.
-    """
-    unarmed: list[str] = []
-    gaps: dict[str, int] = {}
-    mismatches: dict[str, int] = {}
-    orphans: dict[str, int] = {}
-    scanned: dict[str, int] = {}
-    # Which carriers are armed has to be established SEPARATELY, before counting.
-    # The per-carrier query is aggregate-only, so with no watermark row it still
-    # returns one row of zeros — indistinguishable from "clean". Reading armedness
-    # off the counts would make every unarmed carrier silently green, which is the
-    # exact failure this check exists to catch.
-    armed = {str(r[0]) for r in _fetchall(conn, "select child from dual_write_watermark")}
-    for carrier in _PARITY_CARRIERS:
-        table = carrier["table"]
-        if table not in armed:
-            unarmed.append(table)
-            continue
-        rows = _fetchall(conn, _parity_carrier_sql(carrier))
-        row = rows[0]
-        for idx, (_legacy, new) in enumerate(carrier["cols"]):
-            gap, bad, orphan = (
-                int(row[idx * 3]), int(row[idx * 3 + 1]), int(row[idx * 3 + 2]),
-            )
-            if gap:
-                gaps[f"{table}.{new}"] = gap
-            if bad:
-                mismatches[f"{table}.{new}"] = bad
-            if orphan:
-                orphans[f"{table}.{new}"] = orphan
-        scanned[table] = int(row[-1])
-
-    if gaps or mismatches or orphans:
-        status = "fail"
-        bits: list[str] = []
-        if gaps:
-            bits.append("missing surrogate on "
-                        + ", ".join(f"{k} ({v} rows)" for k, v in sorted(gaps.items())))
-        if mismatches:
-            bits.append("WRONG surrogate on "
-                        + ", ".join(f"{k} ({v} rows)" for k, v in sorted(mismatches.items())))
-        if orphans:
-            bits.append("NEITHER id on (NULL-legacy, i.e. post-flip) "
-                        + ", ".join(f"{k} ({v} rows)" for k, v in sorted(orphans.items())))
-        message = (
-            "R2 dual-write parity broken: " + "; ".join(bits) + ". A writer is not "
-            "stamping listings.id (or is stamping the wrong one) — the child FK backfill "
-            "cannot converge until it is fixed."
-        )
-    elif len(unarmed) == len(_PARITY_CARRIERS):
-        status = "warn"
-        message = (
-            "R2 dual-write parity is INERT — no carrier has a dual_write_watermark row. "
-            "Arm it after the dual-write deploy: "
-            "python -m scripts.verify_pipeline --arm-dual-write-parity"
-        )
-    elif unarmed:
-        status = "warn"
-        message = (
-            f"R2 dual-write parity is partially armed — {len(unarmed)} carrier(s) have no "
-            f"watermark and are unwatched: {', '.join(sorted(unarmed))}."
-        )
-    else:
-        status = "ok"
-        message = (
-            f"R2 dual-write parity clean across {len(_PARITY_CARRIERS)} carriers "
-            f"({sum(scanned.values())} recent rows checked)."
-        )
-    return {
-        "check_key": "dual_write_parity",
-        "status": status,
-        "value": sum(gaps.values()) + sum(mismatches.values()) + sum(orphans.values()),
-        "details": {"gaps": gaps, "mismatches": mismatches, "orphans": orphans,
-                    "unarmed": unarmed, "scanned": scanned},
-        "message": message,
-    }
-
-
-def arm_dual_write_parity(conn: Any) -> list[str]:
-    """Seed/refresh each carrier's watermark from where its cursor stands NOW.
-
-    Run once, AFTER the dual-write deploy is live. Arming late is safe (rows written
-    in between merely look like backfill work); arming before the deploy would mark
-    old-code rows as post-dual-write and alarm falsely.
-    """
-    armed: list[str] = []
-    for carrier in _PARITY_CARRIERS:
-        table, cursor = carrier["table"], carrier["cursor"]
-        legacy, new = carrier["cols"][0]
-        is_ts = carrier.get("kind") == "ts"
-        col = "cursor_ts" if is_ts else "cursor_id"
-        default = "now()" if is_ts else "0"
-        with conn.cursor() as cur:
-            cur.execute(
-                f"insert into dual_write_watermark "
-                f"(child, legacy_col, new_col, cursor_col, {col}) "
-                f"select %s, %s, %s, %s, coalesce(max({cursor}), {default}) from {table} "
-                f"on conflict (child) do update set "
-                f"{col} = excluded.{col}, legacy_col = excluded.legacy_col, "
-                f"new_col = excluded.new_col, cursor_col = excluded.cursor_col, "
-                f"armed_at = now()",
-                (table, legacy, new, cursor),
-            )
-        armed.append(table)
-    return armed
 
 
 _BROKER_SUPPRESSION_SQL = """
@@ -1600,7 +767,7 @@ def _plausibility_cells(conn: Any) -> tuple[list[dict[str, Any]], str | None]:
     """(cells, unavailable_reason). An unreadable view is reported, never raised:
     between merging this PR and applying migration 427 the relation does not exist
     yet, and three red tiles reading `relation does not exist` would be indistinguishable
-    from three real defects — the db_saturation precedent."""
+    from three real defects: an unreadable source is Not measured, never a red."""
     if "cells" not in _PLAUSIBILITY_CACHE:
         try:
             rows = _fetchall(conn, _MEASURE_PLAUSIBILITY_SQL)
@@ -2696,219 +1863,6 @@ def check_field_fill_matrix(conn: Any, thresholds: dict[str, Any]) -> dict[str, 
     }
 
 
-# --- migration drift: merged is not applied (2026-08-25 outage) -------------
-#
-# Applying a migration is a SEPARATE act from merging it, and nothing connected
-# the two. Migration 438 merged at 17:12 and was applied 29 hours later; in
-# between, every write on six portals violated a CHECK constraint the code
-# assumed existed, and scrape_runs.errors read 0 the whole time. CI proves a
-# migration REPLAYS against an empty database; it says nothing about production.
-#
-# This asks the live catalog directly: for each of the newest migrations, do the
-# objects it declares actually exist? The ledger (supabase_migrations.
-# schema_migrations) is deliberately NOT the oracle — see scripts/
-# migration_objects.py for why its names cannot be matched reliably.
-
-_MIGRATION_OBJECT_PROBE_SQL = """
-select o.kind, o.ident,
-  case o.kind
-    when 'relation' then to_regclass(o.ident) is not null
-    when 'function' then exists (
-      select 1 from pg_proc p
-        join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public'
-         and p.proname = split_part(o.ident, '.', greatest(
-               array_length(string_to_array(o.ident, '.'), 1), 1)))
-    when 'column' then exists (
-      select 1 from information_schema.columns c
-       where c.table_schema = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                                   then split_part(o.ident, '.', 1) else 'public' end
-         and c.table_name = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                                 then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
-         and c.column_name = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
-    when 'constraint' then exists (
-      select 1 from pg_constraint k
-        join pg_class rel on rel.oid = k.conrelid
-        join pg_namespace n on n.oid = rel.relnamespace
-       where n.nspname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                              then split_part(o.ident, '.', 1) else 'public' end
-         and rel.relname = case when array_length(string_to_array(o.ident, '.'), 1) = 3
-                                then split_part(o.ident, '.', 2) else split_part(o.ident, '.', 1) end
-         and k.conname = split_part(o.ident, '.', array_length(string_to_array(o.ident, '.'), 1)))
-    when 'policy' then exists (
-      select 1 from pg_policies pl
-       where pl.schemaname = 'public'
-         and pl.tablename = split_part(o.ident, '.', 1)
-         and pl.policyname = split_part(o.ident, '.', 2))
-  end as present
-from unnest(%(kinds)s::text[], %(idents)s::text[]) as o(kind, ident)
-"""
-
-# to_regclass raises on a malformed identifier rather than returning NULL, so an
-# ident that survived parsing but is not a plain dotted name never reaches SQL.
-_SAFE_IDENT = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_$]*(?:\.[a-zA-Z_][a-zA-Z0-9_$]*){0,2}$")
-# The checkout's migrations/ folder. The worker image ships none, so a run there probes nothing.
-_MIGRATIONS_DIR = Path(os.path.abspath(__file__)).parents[1] / "migrations"
-
-
-def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Are the newest merged migrations actually present in this database?"""
-    from scripts.migration_objects import load_migrations
-
-    newest = int(thresholds["migration_drift_window"])
-    migrations = load_migrations(_MIGRATIONS_DIR, newest=newest)
-    if not migrations:
-        detail = "no migration files on this host"
-        return {
-            "check_key": "migration_drift", "status": "unknown", "value": None,
-            "details": {"window": newest, "skipped": detail},
-            "message": (f"Migration drift is Not measured: {detail}, so no merged migration "
-                        "was probed (the probe reads a repository checkout's migrations/)."),
-        }
-
-    probes: list[tuple[str, str]] = []
-    for mig in migrations:
-        for obj in mig.objects:
-            if _SAFE_IDENT.match(obj.ident):
-                probes.append((obj.kind, obj.ident))
-    present: dict[tuple[str, str], bool] = {}
-    if probes:
-        for kind, ident, is_present in _fetchall(conn, _MIGRATION_OBJECT_PROBE_SQL, {
-            "kinds": [k for k, _ in probes], "idents": [i for _, i in probes],
-        }):
-            present[(kind, ident)] = bool(is_present)
-
-    missing_all: list[str] = []   # merged and demonstrably not applied
-    partial: list[str] = []       # some objects landed, some did not
-    unverifiable: list[str] = []  # declares nothing this parser can probe
-    for mig in migrations:
-        checkable = [o for o in mig.objects if _SAFE_IDENT.match(o.ident)]
-        if not checkable:
-            unverifiable.append(mig.filename)
-            continue
-        absent = [o for o in checkable if not present.get((o.kind, o.ident), False)]
-        if len(absent) == len(checkable):
-            missing_all.append(f"{mig.filename} ({checkable[0]} absent)")
-        elif absent:
-            partial.append(f"{mig.filename} ({len(absent)}/{len(checkable)} absent: {absent[0]})")
-
-    if missing_all:
-        status = "fail"
-        message = (
-            "Merged migrations are NOT applied to this database: "
-            + "; ".join(missing_all)
-            + " -- code that assumes this schema will fail on every write. Apply them."
-        )
-    elif partial:
-        status = "warn"
-        message = (
-            "Migrations only partly present: " + "; ".join(partial)
-            + " -- either a half-applied migration, or the object parser mis-read the file."
-        )
-    else:
-        status = "ok"
-        message = (
-            f"All {len(migrations) - len(unverifiable)} checkable of the newest "
-            f"{len(migrations)} migrations are present."
-        )
-    return {
-        "check_key": "migration_drift",
-        "status": status,
-        "value": len(missing_all),
-        "details": {
-            "window": newest,
-            "missing_entirely": missing_all,
-            "partially_missing": partial,
-            # Surfaced, not swallowed: these declare only grants, drops, data
-            # updates or cron changes, which this probe cannot see. A guard whose
-            # blind spot is invisible is worse than no guard.
-            "unverifiable": unverifiable,
-            "objects_probed": len(probes),
-        },
-        "message": message,
-    }
-
-
-# --- worker lanes: alive is not the same as working -------------------------
-#
-# The liveness watcher's `worker` cell (migration 620) catches a DEAD worker (stale
-# heartbeat). It cannot catch a live worker with a wedged lane, which is what happened: the
-# realtime worker beat every 30 s for nine hours while its detail-drain lane
-# completed ONE pass and its images lane completed 486. `_lane_loop` awaits
-# run_pass() with no timeout and `_supervised` catches exceptions rather than
-# hangs, so an unbounded await inside a pass is both invisible and unrecoverable
-# short of a redeploy. The worker now stamps when a pass BEGINS and publishes
-# `in_flight_s`; this is the check that reads it.
-_WORKER_LANE_SQL = """
-select h.worker, l.key as lane,
-       (l.value->>'in_flight_s')::numeric as in_flight_s,
-       (l.value->>'passes')::int as passes,
-       (l.value->>'failed_passes')::int as failed_passes,
-       (l.value->>'last_duration_s')::numeric as last_duration_s,
-       extract(epoch from (now() - h.started_at)) / 60.0 as worker_uptime_min
-  from worker_heartbeats h, lateral jsonb_each(h.details) l
- where h.beat_at > now() - interval '10 minutes'
-   and jsonb_typeof(l.value) = 'object'
-"""
-
-
-def check_worker_lane_stall(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Is any always-on worker lane stuck inside a single pass?"""
-    rows = _fetchall(conn, _WORKER_LANE_SQL)
-
-    warn_s = float(thresholds["worker_lane_stall_warn_seconds"])
-    fail_s = float(thresholds["worker_lane_stall_fail_seconds"])
-    lanes: dict[str, Any] = {}
-    offenders: list[str] = []
-    status = "ok"
-    worst = 0.0
-    for worker, lane, in_flight, passes, failed, last_duration, uptime in rows:
-        elapsed = float(in_flight) if in_flight is not None else None
-        lanes[f"{worker}.{lane}"] = {
-            "in_flight_s": elapsed,
-            "passes": int(passes or 0),
-            "failed_passes": int(failed or 0),
-            "last_duration_s": float(last_duration) if last_duration is not None else None,
-            "worker_uptime_min": round(float(uptime or 0), 1),
-        }
-        if elapsed is None:
-            continue
-        worst = max(worst, elapsed)
-        if elapsed >= fail_s:
-            status = "fail"
-            offenders.append(f"{worker}.{lane} stuck {elapsed / 60:.0f}min")
-        elif elapsed >= warn_s:
-            if status != "fail":
-                status = "warn"
-            offenders.append(f"{worker}.{lane} running {elapsed / 60:.0f}min")
-
-    if not rows:
-        # No beating worker at all is the liveness watcher's `worker` cell to judge, not
-        # this check's. Saying "ok" here would be a lie; saying "fail" would double-alarm.
-        return {
-            "check_key": "worker_lane_stall", "status": "unknown", "value": None,
-            "details": {"lanes": {},
-                        "skipped": "no worker heartbeat with lane state in the last 10 minutes"},
-            "message": ("No worker heartbeat with lane state in the last 10 minutes, so no "
-                        "lane was measured — the liveness watcher's worker cell judges a "
-                        "silent worker."),
-        }
-    if offenders:
-        message = (
-            "Worker lane(s) stuck inside a single pass: " + "; ".join(offenders)
-            + " -- run_pass() has no timeout, so this will not clear without a redeploy."
-        )
-    else:
-        message = f"All {len(lanes)} worker lane(s) idle or mid-pass within budget."
-    return {
-        "check_key": "worker_lane_stall",
-        "status": status,
-        "value": round(worst, 1),
-        "details": {"lanes": lanes, "offenders": offenders},
-        "message": message,
-    }
-
-
 # --- a refused delisting sweep is an operator decision, not a log line -------
 _DELIST_REFUSAL_SQL = """
 select source, category_main, category_type, candidates, active_rows, cap, refused_at
@@ -3652,11 +2606,11 @@ CLASSES = ("alarm", "gauge")
 DOMAINS = ("scraping", "publishing", "delisting", "dedup", "coverage", "data_quality",
            "platform")
 
-_GITHUB = "github-actions"
+_GITHUB, _WORKER = "github-actions", "realtime-worker"
+_TEN_MINUTES, _HALF_HOURLY = 600, 1_800
 _HOURLY, _SIX_HOURLY, _DAILY, _WEEKLY = 3_600, 21_600, 86_400, 604_800
-# GitHub delivers a scheduled run up to ~13 h late, so a key it hosts reads stale only past
-# its cadence plus this slack; the worker and pg_cron keep time, so theirs is 3 cadences.
-_GITHUB_DELIVERY_SLACK_S = 18 * 3_600
+# The worker and pg_cron keep time, so a key they host reads stale after 3 cadences; GitHub's
+# keys get their cadence plus THRESHOLDS["GITHUB_DELIVERY_SLACK_S"].
 _STALE_CADENCES = 3
 # The two checks that leave the database wait on third-party round trips, not on Postgres.
 # The URL probe's budget is declared beside its HEAD loop, which stops itself at it (nothing
@@ -3683,7 +2637,7 @@ class Check:
     def staleness_budget(self) -> _dt.timedelta:
         """How old the newest result may grow before the page reads the key Not measured."""
         if self.host == _GITHUB:
-            return _dt.timedelta(seconds=self.cadence_s + _GITHUB_DELIVERY_SLACK_S)
+            return _dt.timedelta(seconds=self.cadence_s + THRESHOLDS["GITHUB_DELIVERY_SLACK_S"])
         return _dt.timedelta(seconds=self.cadence_s * _STALE_CADENCES)
 
     @property
@@ -3704,26 +2658,20 @@ CHECKS: tuple[Check, ...] = (
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
           _GITHUB, _SIX_HOURLY, "Location coverage", unit="ads",
           owner_path="/location-quality"),
-    Check("llm_errors", check_llm_errors, "platform", "alarm", _GITHUB, _HOURLY,
-          "LLM errors", owner_path="/costs"),
-    Check("llm_burn_rate", check_llm_burn_rate, "platform", "alarm", _GITHUB, _HOURLY,
-          "LLM spend", unit="USD", owner_path="/costs"),
-    Check("long_open_transaction", check_long_open_transaction, "platform", "alarm",
-          _GITHUB, _SIX_HOURLY, "Oldest open transaction", unit="min"),
-    Check("db_saturation", check_db_saturation, "platform", "alarm", _GITHUB, _HOURLY,
-          "Scheduled jobs failing"),
-    Check("dual_write_parity", check_dual_write_parity, "platform", "alarm", _GITHUB,
-          _SIX_HOURLY, "Dual-write parity", unit="rows"),
+    # The worker's health lane measures these three (scripts/checks/platform.py). GitHub keeps
+    # what needs it: migration_drift reads a checkout, the outbound probes an address that is
+    # not the scrapers'.
+    Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
+          unit="cells"),
+    Check("capacity", check_capacity, "platform", "alarm", _WORKER, _HALF_HOURLY, "Capacity",
+          unit="cells"),
+    Check("llm", check_llm, "platform", "alarm", _WORKER, _TEN_MINUTES, "LLM providers",
+          unit="cells"),
     Check("property_maintenance", check_property_maintenance, "publishing", "alarm",
           _GITHUB, _HOURLY, "Property maintenance", unit="h"),
-    Check("broker_resolution_freshness", check_broker_resolution_freshness, "platform",
-          "alarm", _GITHUB, _HOURLY, "Broker resolution", unit="h",
-          owner_path="/brokers/review"),
     Check("broker_merge_suppression", check_broker_merge_suppression, "dedup", "alarm",
           _GITHUB, _HOURLY, "Broker merge rulings", unit="pairs",
           owner_path="/brokers/review"),
-    Check("workflow_poller_liveness", check_workflow_poller_liveness, "platform", "alarm",
-          _GITHUB, _SIX_HOURLY, "GitHub failure poller", unit="h"),
     Check("ppm2_median_shift", check_ppm2_median_shift, "data_quality", "alarm", _GITHUB,
           _SIX_HOURLY, "Kč/m² median shift", unit="×"),
     Check("ppm2_basis_floor_share", check_ppm2_basis_floor_share, "data_quality", "gauge",
@@ -3739,10 +2687,8 @@ CHECKS: tuple[Check, ...] = (
     # walk_coverage's per-category twin: walks in a row that did not reach the portal's end.
     Check("walk_end_streak", check_walk_end_streak, "scraping", "alarm", _GITHUB,
           _SIX_HOURLY, "Walks not reaching the end", unit="walks"),
-    Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB,
-          _SIX_HOURLY, "Migration drift", unit="files"),
-    Check("worker_lane_stall", check_worker_lane_stall, "platform", "alarm", _GITHUB,
-          _SIX_HOURLY, "Worker lane stall", unit="s"),
+    Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB, _HOURLY,
+          "Migration drift", unit="files"),
     Check("delist_flip_refused", check_delist_flip_refused, "delisting", "gauge", _GITHUB,
           _SIX_HOURLY, "Delist nominations deferred", unit="ads"),
     Check("false_delist_share", check_false_delist_share, "delisting", "alarm", _GITHUB,
@@ -3771,8 +2717,8 @@ CHECKS: tuple[Check, ...] = (
 )
 
 
-# The hosts this harness projects: those with a Check. pg_cron's registry row is the watcher's
-# own (migration 620); projecting that host would retire it.
+# The hosts this harness projects: those with a Check (`project_registry` refuses any other).
+# pg_cron's registry row is the watcher's own (migration 620); projecting that host would retire it.
 _HARNESS_HOSTS = tuple(dict.fromkeys(c.host for c in CHECKS))
 
 # --- the harness ---------------------------------------------------------------
@@ -3829,10 +2775,10 @@ def due_checks(conn: Any, host: str, now: _dt.datetime) -> list[Check]:
 
 def project_registry(conn: Any, host: str, now: _dt.datetime) -> dict[str, int]:
     """Upsert this host's CHECKS into health_checks; delete its rows that no Check declares."""
-    declared = [(sort, c) for sort, c in enumerate(CHECKS) if c.host == host]
-    if not declared:
+    if host not in _HARNESS_HOSTS:
         raise ValueError(f"no Check is hosted on {host!r}: its registry rows (the watcher's, "
                          "migration 620) are not this harness's to retire")
+    declared = [(sort, c) for sort, c in enumerate(CHECKS) if c.host == host]
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(_HEALTH_CHECKS_ROWS_SQL, {"keys": [c.key for _, c in declared]})
         prior = {key: (row_host, cadence_s, declared_at)
@@ -3991,14 +2937,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="Select and compute the due checks and log them; write nothing "
                              "(no registry rows, no result rows).")
-    parser.add_argument("--host", default=_GITHUB, choices=_HARNESS_HOSTS,
+    parser.add_argument("--host", default=_GITHUB, choices=(_GITHUB,),
                         help="The host whose registry rows this run projects and whose due "
-                             "checks it measures.")
-    parser.add_argument("--arm-dual-write-parity", action="store_true",
-                        help="Seed each R2 carrier's dual_write_watermark from where its "
-                             "cursor stands now, then exit. Run ONCE, after the dual-write "
-                             "deploy is live — arming before it would mark old-code rows as "
-                             "post-dual-write and alarm falsely.")
+                             "checks it measures: GitHub's only (the worker's health lane "
+                             "calls run_due itself).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -4011,16 +2953,9 @@ def main() -> int:
         print("ERROR: SUPABASE_DB_URL is not set.", file=sys.stderr)
         return 2
 
-    if args.arm_dual_write_parity:
-        with connect() as conn:
-            armed = arm_dual_write_parity(conn)
-        LOG.info("armed dual-write parity watermarks for %d carriers", len(armed))
-        return 0
-
     run_at = _dt.datetime.now(_dt.timezone.utc)
     written = 0
     with connect() as conn:
-        thresholds = load_thresholds(conn)
         # A dispatch from a branch measures with that branch's CHECKS but never projects them:
         # its registry would delete main's keys from the page until main's next run.
         ref = os.environ.get("GITHUB_REF_NAME", "main")
@@ -4044,7 +2979,7 @@ def main() -> int:
             insert_result(db, result, at)
             written += 1
 
-        results = run_due(conn, thresholds, args.host, now=run_at, on_result=_persist)
+        results = run_due(conn, THRESHOLDS, args.host, now=run_at, on_result=_persist)
     LOG.info("verify_pipeline host=%s measured %d checks, wrote %d rows",
              args.host, len(results), written)
     return 0

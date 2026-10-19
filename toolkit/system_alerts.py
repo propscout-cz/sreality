@@ -34,7 +34,7 @@ DUE_SLACK_MAX_S = 900
 RECOVERY_HOLD_MIN_S = 1800
 # A cell nobody has measured for a week can never close on a measured OK, so it closes silently.
 UNMEASURED_CLOSE_DAYS = 7
-# The signature namespace of cell incidents; the retiring signature engine never produces it.
+# The signature namespace of cell incidents, the only kind since the signature engine retired (621).
 CELL_PREFIX = "cell:"
 # Room for every failing cell's reason, yet one readable bell entry and one Telegram message.
 MESSAGE_MAX_CHARS = 1500
