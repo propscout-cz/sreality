@@ -1,4 +1,4 @@
--- 629_stats_min_n_5.sql -- a Stats cell shows its statistics from five properties, not ten.
+-- 630_stats_min_n_5.sql -- a Stats cell shows its statistics from five properties, not ten.
 --
 -- WHY. Operator ruling 2026-10-19: "show the statistics if n >= 5, not n >= 10". Ruling 6 of the dashboard
 -- (docs/design/stats-dashboard.md) had set the floor at ten; the operator lowers it. The floor is enforced
@@ -9,10 +9,14 @@
 -- statistics and p10 / p90 are interpolated between the extremes: the cell's n stays beside every figure.
 --
 -- WHAT CHANGES. One function, one constant. The pivot is restated whole (the Browse RPC rails parse the
--- latest definition as text) and is byte for byte 626's body except the `v_min_n` line
--- (tests/test_629_stats_min_n.py pins exactly that). Same signature, so the ACL stays; `language plpgsql
--- stable set plan_cache_mode to 'force_custom_plan'` is restated because a replace resets what it omits.
--- No table, column or row.
+-- latest definition as text) and is byte for byte 629_curated_set_scope.sql's statement except the `v_min_n` line
+-- (tests/test_stats_min_n_migration.py pins exactly that). Same signature, so the ACL stays; `language
+-- plpgsql stable set plan_cache_mode to 'force_custom_plan'` is restated because a replace resets what
+-- it omits. No table, column or row.
+--
+-- WHY IT NAMES ITS PREDECESSOR. This file restates whatever the pivot IS: the first draft restated 626's
+-- body and was refused by its own md5 gate, because 629_curated_set_scope.sql had already changed the live function.
+-- A restatement is only safe on top of the body it was copied from, which is what the gate proves.
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) BEFORE merging. The SPA reads `min_n` from the
 -- payload, so it needs no deploy to follow: applying changes what every open tab draws on its next refetch.
@@ -28,13 +32,13 @@ begin
   select count(*) = 100000 into populated
     from (select 1 from public.properties limit 100000) probe;
   if not populated then
-    raise notice '629: replay container (corpus < 100k properties), precondition skipped';
+    raise notice '630: replay container (corpus < 100k properties), precondition skipped';
     return;
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), '')
-     not in ('a69d5fb1b9f1ae2321d8952683919757', '8a0eaee4a34f6e41229d8abe29b47a28') then
-    raise exception '629 refused: browse_stats_properties is not 626''s body nor this file''s (or has two overloads)';
+     not in ('17eb17021b8150b731910fcd13547f63', '2740668e7151535fd730db17ca7410c1') then
+    raise exception '630 refused: browse_stats_properties is not 629''s body nor this file''s (or has two overloads)';
   end if;
 end
 $pre$;
@@ -118,6 +122,17 @@ create or replace function public.browse_stats_properties(
   tom_observed_only boolean default false,
   -- migration 626: the chart spec (see the header); null = refused as bad_spec.
   spec jsonb default null
+,
+  -- migration 629: the curated-set scope, three sets x three sides (see the header).
+  tags_set text default null,
+  tags_in bigint[] default null::bigint[],
+  tags_out bigint[] default null::bigint[],
+  collections_set text default null,
+  collections_in bigint[] default null::bigint[],
+  collections_out bigint[] default null::bigint[],
+  pipeline_set text default null,
+  pipeline_in bigint[] default null::bigint[],
+  pipeline_out bigint[] default null::bigint[]
 )
 returns jsonb
 language plpgsql
@@ -287,6 +302,40 @@ begin
       and (obec_ids_filter is null or l.obec_id = any(obec_ids_filter))
       and (property_ids_filter is null or l.property_id = any(property_ids_filter))
       and (property_ids_excluded is null or not (l.property_id = any(property_ids_excluded)))
+      -- migration 629: the curated-set scope. Three sets, three sides each, one clause shape,
+      -- judged through the *_public membership views under the caller's RLS. A NULL side is
+      -- off and its subquery never runs; `{}` on a unit list constrains nothing.
+      and (tags_set is distinct from 'in' or exists (
+            select 1 from property_tags_public c where c.property_id = l.property_id))
+      and (tags_set is distinct from 'out' or not exists (
+            select 1 from property_tags_public c where c.property_id = l.property_id))
+      and (tags_in is null or array_length(tags_in, 1) is null or l.property_id in (
+            select c.property_id from property_tags_public c where c.tag_id = any(tags_in)
+            group by c.property_id
+            having count(distinct c.tag_id) = (select count(distinct u) from unnest(tags_in) u)))
+      and (tags_out is null or not exists (
+            select 1 from property_tags_public c
+            where c.property_id = l.property_id and c.tag_id = any(tags_out)))
+      and (collections_set is distinct from 'in' or exists (
+            select 1 from collection_properties_public c where c.property_id = l.property_id))
+      and (collections_set is distinct from 'out' or not exists (
+            select 1 from collection_properties_public c where c.property_id = l.property_id))
+      and (collections_in is null or array_length(collections_in, 1) is null or exists (
+            select 1 from collection_properties_public c
+            where c.property_id = l.property_id and c.collection_id = any(collections_in)))
+      and (collections_out is null or not exists (
+            select 1 from collection_properties_public c
+            where c.property_id = l.property_id and c.collection_id = any(collections_out)))
+      and (pipeline_set is distinct from 'in' or exists (
+            select 1 from property_pipeline_public c where c.property_id = l.property_id))
+      and (pipeline_set is distinct from 'out' or not exists (
+            select 1 from property_pipeline_public c where c.property_id = l.property_id))
+      and (pipeline_in is null or array_length(pipeline_in, 1) is null or exists (
+            select 1 from property_pipeline_public c
+            where c.property_id = l.property_id and c.stage_id = any(pipeline_in)))
+      and (pipeline_out is null or not exists (
+            select 1 from property_pipeline_public c
+            where c.property_id = l.property_id and c.stage_id = any(pipeline_out)))
       and (not hide_dismissed or not exists (
             select 1 from property_dismissals_public d where d.property_id = l.property_id))
       and (city_pop_min is null or l.home_obec_pop >= city_pop_min)
@@ -394,11 +443,11 @@ begin
   select count(*), min(p.prosrc) into n, src from pg_proc p
    where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties';
   if n <> 1 or position('v_min_n     constant int := 5;' in src) = 0 or position('rollup(k1, k2, k3, k4, k5, k6)' in src) = 0 then
-    raise exception '629 did not land: browse_stats_properties (% overloads) does not carry the floor of five', n;
+    raise exception '630 did not land: browse_stats_properties (% overloads) does not carry the floor of five', n;
   end if;
   if not has_function_privilege('authenticated', (select p.oid from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), 'execute') then
-    raise exception '629 did not land: authenticated lost execute on browse_stats_properties';
+    raise exception '630 did not land: authenticated lost execute on browse_stats_properties';
   end if;
 end
 $post$;

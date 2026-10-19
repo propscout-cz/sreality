@@ -83,8 +83,9 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # body forward byte for byte except the four chip arms, where `locality` (a street
 # pick filtered at its TOWN) became `ulice` (tests below); 625 appended
 # tom_observed_only to both; 626 replaced the Stats body with the dashboard pivot
-# over 625's WHERE verbatim (tests/test_626_stats_dashboard.py); 629 restated it with the
-# floor at five and nothing else changed (tests/test_629_stats_min_n.py). Re-read the chip
+# over 625's WHERE verbatim (tests/test_626_stats_dashboard.py); 629 (curated-set scope) added
+# nine trailing parameters and one clause block to both RPCs; 630 restated the Stats pivot with the
+# floor at five and nothing else changed (tests/test_stats_min_n_migration.py). Re-read the chip
 # arms when this moves again.
 _LATEST_RPC_DEFINITION = {
     "browse_stats_properties": "630_stats_min_n_5.sql",

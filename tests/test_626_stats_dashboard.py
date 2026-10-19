@@ -25,7 +25,7 @@ SQL = (MIGRATIONS / NAME).read_text(encoding="utf-8")
 CODE = re.sub(r"--[^\n]*", "", SQL)
 S625 = (MIGRATIONS / "625_tom_observed.sql").read_text(encoding="utf-8")
 FN = "browse_stats_properties"
-# The pivot is restated whole by every migration that touches it (629 moved the floor), so the pins
+# The pivot is restated whole by every migration that touches it (629 added the curated scope, 630 moved the floor), so the pins
 # about its BODY read the effective definition; the ones about what 626 itself creates read 626.
 EFFECTIVE = latest_definition(FN).read_text(encoding="utf-8")
 LIVE_625 = "6b102dd7960cced4ffbbf31127048428"  # pg_proc md5(prosrc), read live 2026-10-19
@@ -118,19 +118,16 @@ def test_the_cohort_where_is_625s_byte_for_byte() -> None:
     assert len(_where(SQL)) > 5000
     assert _where(SQL) == _where(S625)
     # Every later restatement keeps 625's WHERE and may only ADD a block: 629 (curated-set scope) put its
-    # `tags_` / `collections_` / `pipeline_` clauses after the id denylist. Nothing of 625's may go.
+    # clauses for the three curated sets right after the id denylist. Nothing of 625's may go, and the
+    # one inserted block is that scope's and nothing else.
     base, later = _where(S625).split("\n"), _where(EFFECTIVE).split("\n")
-    rest, at = [], 0
-    for line in later:
-        if at < len(base) and line == base[at]:
-            at += 1
-        else:
-            rest.append(line)
-    assert at == len(base), f"a line of 625's WHERE is gone from the effective definition: {base[at]!r}"
-    assert all(re.search(r"tags_|collections_|pipeline_|^\s*--|^\s*$|^\s*(and|or)?\s*[()]*\s*$", ln) or "exists" in ln.lower()
-               or "select" in ln.lower() or "from " in ln.lower() or "where" in ln.lower() or "=" in ln or ")" in ln
-               for ln in rest), rest
-
+    anchor = next(i for i, ln in enumerate(base) if "property_ids_excluded" in ln)
+    start = later.index(base[anchor]) + 1
+    end = later.index(base[anchor + 1], start)
+    assert later[:start] + later[end:] == base, "the effective WHERE is not 625's plus one inserted block"
+    block = " ".join(later[start:end])
+    assert later[start].lstrip().startswith("-- migration 629: the curated-set scope")
+    assert all(f"{c}_set" in block for c in ("tags", "collections", "pipeline")), block
 
 def test_the_signature_is_625s_plus_spec() -> None:
     old, new = _params(S625, FN), _params(SQL, FN)
