@@ -1,6 +1,6 @@
 ---
 name: llm-pipelines
-description: Use when working on any LLM-backed path — the on-demand URL parser (source_dispatcher + per-source parsers), the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers, summarize_region_dispositions), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: parse_url, source_parsers, app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
+description: Use when working on any LLM-backed path — the on-demand URL parser (source_dispatcher + per-source parsers), the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: parse_url, source_parsers, app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
 ---
 
 # LLM pipelines
@@ -72,19 +72,6 @@ calls an LLM must do the same.
 - `score_listing_condition` (`toolkit/condition_scoring.py`, migration 072, cache
   `listing_condition_scores`) — two-axis building/apartment condition levels (1..5) from the
   curated rubric + marker dictionary. See architectural rule #14.
-- `summarize_region_dispositions` (`toolkit/region_annotations.py`, migration 104, cache
-  `region_disposition_annotations`) — a one-to-two-sentence factual annotation per
-  per-disposition Kč/m² box plot in Browse > Stats, from the same `ppm2_box` payload that
-  drives the chart. Cached per `(region_hash, day)` — invalidates by calendar day, not by
-  snapshot; `region_hash` folds in the `basis` when one is sent, so a capital and a monthly
-  reading of the same cohort can never share a cached sentence. Powers the `summarize-1`
-  annotated-charts feature; FACTS not opinions (toolkit rule #1) — it describes the
-  distribution, never recommends a price.
-  **`basis` is required in practice** (migration 425's vocabulary:
-  `sale_capital_czk_m2` / `rent_monthly_czk_m2` / `land_capital_czk_m2`): the prompt payload
-  names the unit AND the period from it, and without one the model narrates bare Kč/m² and
-  cannot tell a ~91 535 capital figure from a ~319 monthly one. Browse skips the call
-  entirely for a cohort whose basis is mixed rather than sending an unlabelled payload.
 - `enrich_listing_description` — the post-publication text lane (`toolkit/description_extraction.py`),
   rebuilt by field-capture W7 on the **realtime worker** (lane `text_extract`, constant 300 s, no
   flag / setting / env var). **A field is in scope only once its `Cell.gate.passed` is true** (R7,

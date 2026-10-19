@@ -288,6 +288,17 @@ centre. At or under the limit every property is its own pin, at any zoom. One ti
 the marks on a map add up to the mapped total.
 _Avoid_: cluster, bubble, cell, bin, group
 
+**Chart (Stats)**:
+One saved view on the Browse Stats tab: up to six nested row dimensions, at most one column
+dimension and one measure, drawn as a table, lines, bars or boxes over the properties the filter
+picks. A user's charts together are their dashboard; the title is derived, never typed.
+_Avoid_: card, widget, report, graph (for the saved thing)
+
+**Sample ledger**:
+The line every Stats chart shows first: how many properties the filter holds, how many the chart
+stands on, and how many it left out because a chosen dimension or the measure has no value.
+_Avoid_: coverage, n, data quality bar
+
 ### A property's working files
 
 **Workbook**:

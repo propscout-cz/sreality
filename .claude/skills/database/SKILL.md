@@ -286,7 +286,7 @@ joins place/floor/description/broker through it, and `properties_public.listing_
 `city_proximity_computed_at` with it). The rollup also writes `all_sources` / `active_sources` (sorted
 portal lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since 590 together with `source_count` (one partial index per portal on `browse_list`).
 
-**Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body.
+**Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot; `spec` and the map's `point_budget` shape the answer, never the cohort).
 
 **Two functions depend on `browse_projection`'s row type** (migration 537: `browse_list_visible()`,
 `properties_map_visible()`) — the SPA's default Browse sources, minus the caller's dismissed

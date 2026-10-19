@@ -1048,16 +1048,16 @@ Net about −700 lines (nine legacy keys and floor_convention against four check
 
 **Goal.** Every admin page draws one status, panel, stat, skeleton and error banner the same way, with no visual change.
 
-**PR.** Draft PR on cleanup/admin-shared-primitives. Costs, LocationQuality, LocationPinAudit, NewDedupDashboard, BrowseStats and AutodedupProgress move onto W8's primitives. Presentational only; net about −150 lines.
+**PR.** Draft PR on cleanup/admin-shared-primitives. Costs, LocationQuality, LocationPinAudit, NewDedupDashboard and AutodedupProgress move onto W8's primitives. Presentational only; net about −150 lines. (BrowseStats is gone: the Stats dashboard, migration 626, replaced it with components/stats/, which already draws its placeholders with components/Skeleton.)
 
 **Depends on.** W8
 
 **Adds.**
 
 **Deletes.**
-- Local Card copies in Costs, LocationQuality, LocationPinAudit, NewDedupDashboard and BrowseStats
+- Local Card copies in Costs, LocationQuality, LocationPinAudit and NewDedupDashboard
 - Stat and Tile copies in Costs, LocationQuality and AutodedupProgress
-- Local animate-pulse skeletons in Costs, LocationQuality and BrowseStats, in favour of components/Skeleton
+- Local animate-pulse skeletons in Costs and LocationQuality, in favour of components/Skeleton
 - Error-banner copies in settings/SectionChrome, LocationQuality and Costs, in favour of components/ErrorBanner
 - Per-file sage/ochre/brick status maps, in favour of StatusDot
 

@@ -34,8 +34,10 @@ is added there.
 **Migration 290 — curation tables**, `account_id` on the row directly (not
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
 `notification_subscriptions`, `manual_rental_estimates`. Later siblings: `property_dismissals`
-(536) and `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
-caller-supplied account, API-only reads and writes). The column was added nullable (the tables
+(536), `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
+caller-supplied account, API-only reads and writes) and `stats_dashboards` (626, `account_id` is the
+primary key: one Browse › Stats board per account, caller-supplied account; the SPA reads it through
+RLS, `PUT /stats/dashboard` writes it whole). The column was added nullable (the tables
 already held rows); it is NOT NULL on four of the six since `notification_subscriptions` 364,
 `filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
 about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row);

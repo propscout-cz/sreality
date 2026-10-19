@@ -187,7 +187,7 @@ coalesce of two ratios — the extension divides a property-grain rent by a list
 today, which is wrong for every merged group); `analyze_distribution` /
 `find_distribution_outliers` / `cluster_comparables` carry `basis` in their envelopes and
 degrade to `'unknown'` for the caller-supplied rows `POST /tools/analyze_distribution` accepts;
-`summarize_region_dispositions` takes `ppm2_basis`, states the unit in the payload, and REFUSES
+the Stats box-plot annotator (removed 2026-10-19, migration 627) takes `ppm2_basis`, states the unit in the payload, and REFUSES
 a `'mixed'` cohort outright (no LLM call, no cache write). Migration 426 adds
 `estimation_cohort_entries.price_per_m2_basis` (nullable; historical rows stay NULL =
 "basis unknown, pre-426", never backfilled — rules 8 and 12) and supersedes migration 104's
@@ -228,7 +228,7 @@ region-annotator prompt, guarded on `updated_by = 'seed'` (verified still `seed`
   stripped the correct `Kč/m²` from every single-basis annotation for the whole W5→W6 window.
   `BrowseExperience` passes `BrowseStats.ppm2_basis` — the basis `browse_stats_properties`
   already resolves from the cohort's own rows (migration 425), not a second derivation off the
-  filters — through `fetchRegionDispositionAnnotations`, and it is part of the React Query key.
+  filters — through the annotations fetcher (removed 2026-10-19), and it is part of the React Query key.
   **Consequence, now rather than at W6: a mixed cohort's Stats annotations disappear** —
   verified on production, the DEFAULT Browse cohort reads `mixed` (rule 22), a `deal=prodej`
   one reads `sale_capital_czk_m2`. So the server's `metadata.notes` is now RENDERED in the

@@ -51,6 +51,16 @@ migration 626 (pinned by `tests/test_626_stats_dashboard.py`); `registry_json()`
 `frontend/src/lib/statsRegistry.generated.ts` by `scripts/generate_filter_registry.py` (CI `--check`);
 `validate_chart` gates `PUT /stats/dashboard`.
 
+A place dimension (`kraj`, `okres`, `obec`, `cast_obce`, `ulice`) keys on the RÚIAN CODE `browse_list` already
+carries (`region_id`, `okres_id`, `obec_id`, `cast_obce_id`, `ulice_id`; rule 25's one code predicate), as text,
+never on a name: two towns or streets that share a name stay two cells, and the pivot reads no listing location.
+The names come back in the payload's `places`, resolved through `public.ruian_place_names_public(level, code,
+name)` — an owner-rights view over the register mirror (381: `ruian_admin_units` rows not retired for the four
+admin levels, `ruian_streets` as level `ulice`), granted SELECT to `authenticated` and `service_role` — because
+the pivot runs as its caller and the mirror is dark to browser roles. Rule 25 clause: this is a location read
+surface added by a PR that deletes none; the PR body says why (the operator asked for the five place dimensions
+on 2026-10-19) and it stands on the operator's ruling.
+
 ### Pivot RPC — `public.browse_stats_properties(<625's 74 cohort params>, spec jsonb)`
 
 Same name and cohort parameters as before (the 625 WHERE byte for byte, so every rail that pins a cohort
@@ -64,6 +74,7 @@ fragment still holds; `tests/test_browse_map_read_contract.py` learns that `spec
   basis: <migration-425 token> | null,         -- rent_monthly_czk_m2 ⇒ rent steps and "Kč / měs"
   min_n: 10,
   refused: null | 'empty' | 'mixed_category' | 'mixed_status' | 'too_many_cells' | 'bad_spec', reason?,
+  places: [ { dim, key, name | null } ],       -- every place key among the cells, named by the register
   cells: [ { keys: [k1 … kL], col: kc | null, n, mean, median, p10, p25, p75, p90 } ] }
 ```
 
@@ -71,34 +82,47 @@ One pass: `group by kc, rollup(k1 … k6)` over the sample, six fixed row slots 
 `public.stats_dim_key(dim, …)` (SQL-language, IMMUTABLE, inlined). A cell with `keys.length = L` is the rollup
 at level L (L = 0 is the whole sample, per column value). Statistics are `null` below `min_n`. Measured live
 2026-10-19: five dimensions + a column over 60k properties 381 ms; two dimensions over 139k rows 493 ms. A refused
-payload still carries the counts and the cohort facts; `cells` is empty.
+payload still carries the counts and the cohort facts; `cells` and `places` are empty. (`bad_spec` alone answers before the
+cohort is read: `{refused, reason, cells: []}`.) `places` is read from the view on the ≤ 2,000 result cells only; `name` is
+null when the register has no live name for the code.
 
 ### Saved board — `public.stats_dashboards(account_id pk, charts jsonb, updated_at)`
 
 One row per account. Read by the SPA through RLS (`current_account_ids()`); written only by
 `PUT /stats/dashboard {charts: [...]}` (tenant connection, `require_account_id`, whole-document upsert). A chart
-is `{id, view, rows, cols, measure, stat}`; `stat` (one of the chart stats, default `median`) is read by line
-and bar only; the title is derived, never stored. No row ⇒ the SPA shows `DEFAULT_CHARTS` and the first save
-persists the whole list.
+is `{id, view, rows, cols, measure, stat}`; `stat` (one of the chart stats, default `median`) is read by line,
+bar and a table with a column dimension (one value per column); the title is derived, never stored. No row ⇒
+the SPA shows `DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one
+status, and no byty-only dimension) and the first save persists the whole list. A board holds at most
+`MAX_CHARTS` charts (registry); the SPA offers no "Přidat graf" at the cap. Single-membership assumption: the
+RLS read spans every account the user belongs to while the write names the first one; a second membership (out
+of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the RLS read.
 
 ### SPA — `frontend/src/lib/stats.ts` + `frontend/src/components/stats/`
 
 - `lib/stats.ts`: the types above; `fetchStatsPivot(filters, spec)` = `resolveBrowsePrefilters` +
   `supabase.rpc('browse_stats_properties', {...buildBrowseStatsArgs(f, resolved), spec})`, query key
-  `[browseKeys.root.stats, f, spec]` (so `browseInvalidation`'s aggregate root keeps working);
-  `fetchDashboard` / `saveDashboard`; `cellTree` (cells → nested rows, children by key prefix); `sortKeys`
-  (enum/bool by registry order, unknown members after, bands numeric, places `localeCompare('cs')`);
-  `keyLabel` (band ⇒ "80 – 90 m²" / "5 000 – 10 000 Kč/m²" from the step for the payload's basis; enum ⇒
-  `label_cs`); `measureUnit` (price ⇒ `PRICE_PERIOD_UNIT` by basis, ppm2 ⇒ `PPM2_UNIT[ppm2BasisFromToken]`,
-  area ⇒ "m²", tom_days ⇒ "dní"); `chartTitle`; `DEFAULT_CHARTS`; the refusal texts (Czech).
+  `[browseKeys.root.stats, f, spec]` (so `browseInvalidation`'s aggregate root keeps working); the prefilters
+  resolve ONCE per filter set for the whole board through a shared cached query
+  (`browseKeys.statsPrefilters(f)` = `[root.stats, f, 'prefilters']`, swept with the same root);
+  `fetchDashboard` / `saveDashboard`; `placeNames(pivot)` (the payload's `places` as one (dimension, code) →
+  name lookup, built once per pivot and handed to every sort and label); `cellTree` (cells → nested rows,
+  children by key prefix); `sortKeys` (enum/bool by registry order, unknown members after, bands numeric,
+  places by their label with Czech collation, two of one name by code); `keyLabel` (band ⇒ "80 – 90 m²" /
+  "5 000 – 10 000 Kč/m²" from the step for the payload's basis; enum ⇒ `label_cs`; place ⇒ its name from
+  `places`, the code itself when the register has none); `measureUnit` (price ⇒ `PRICE_PERIOD_UNIT` by basis, ppm2 ⇒ `PPM2_UNIT[ppm2BasisFromToken]`,
+  area ⇒ "m²", tom_days ⇒ "dní"); `chartTitle` (a band named by its step in the payload's unit, e.g. "Cena
+  po 2 500 Kč / měs"; the two-step registry label only while the basis is unknown, and on the palette chip);
+  `DEFAULT_CHARTS`; the refusal texts (Czech).
 - `components/stats/StatsDashboard.tsx`: the tab. Reads the board, renders one `StatsChart` per chart, "Přidat
   graf" at the end, saves through the API, invalidates.
 - `components/stats/StatsChart.tsx`: one card — derived title, `SampleLedger`, the view, Upravit / Odebrat; in
   edit mode the card flips in place to `ChartBuilder` (same card, same width), Uložit / Zrušit.
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
   Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker and
-  the stat picker (line / bar). Drag with dnd-kit; every drop also has a click path (a chip click appends to
-  Řádky; a slot's × removes) so the keyboard works. Rules enforced in the UI exactly as in the registry: a
+  the stat picker (line / bar, and a table with a column). Drag with dnd-kit (mouse; a long press on touch, so
+  the palette still scrolls on a phone; the row grip also sorts from the keyboard); every drop also has a click
+  path (a chip click appends to Řádky; a slot's × removes) so the keyboard works. Rules enforced in the UI exactly as in the registry: a
   dimension once, six rows, one column, box ⇒ no column, line / bar ⇒ one row; dimensions outside the
   cohort's category (area bands off byty) are shown disabled with the reason. The preview re-queries as the spec
   changes.
@@ -108,7 +132,8 @@ persists the whole list.
 - `components/stats/views/PivotTable.tsx` (nested rows with indent, a column dimension ⇒ one value per column
   showing the chart's `stat` with n beneath; no column dimension ⇒ the seven statistics), `PivotLines.tsx` and
   `PivotBars.tsx` (recharts, axes through `lib/chartAxis.valueAxisSpec`, series = column values: copper first,
-  ink tints after), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
+  ink tints after, at most `MAX_SERIES` (each colour solid, then dashed) or a one-sentence refusal; the SVG is
+  hidden from assistive tech and a screen-reader table carries the same numbers), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
   rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers are
   columns of the same table).
 - Refusals render as one sentence in the card body; the ledger still shows the counts.
@@ -131,11 +156,15 @@ deleted files are replaced by rows for the files that now carry the unit strings
 - `tests/test_626_stats_dashboard.py` (offline): the effective `stats_dim_key` text equals
   `dim_key_function_sql()`; the stats statement contains `measure_value_sql()`, `v_min_n constant int := 10`
   and `v_max_cells constant int := 2000`; 626's cohort WHERE equals 625's; the signature is 625's 74 parameters
-  plus `spec jsonb default null`; `--check` of the generated TS passes.
+  plus `spec jsonb default null`; the seven `stats_dim_key` calls end on the five place codes and the pivot
+  names no listing location; the register view's text and grants, and the `places` block that joins it;
+  `--check` of the generated TS passes.
 - `tests/test_stats_pivot_live.py` (CI DB job, a `migrations.yml` step): seeds two dispositions × three stavs
   (one NULL) with prices and areas; asserts filtered / sample / excluded, the rollup levels, `min_n` nulling,
-  `mixed_category`, `mixed_status`, `too_many_cells` (rows on a high-cardinality key), `bad_spec`, and the band
-  keys for rent vs sale.
+  `mixed_category`, `mixed_status`, `too_many_cells` (rows on a high-cardinality key), `bad_spec`, the band
+  keys for rent vs sale, and the place keys: codes as text, two same-named towns as two cells, `places` named
+  from seeded register rows (null for a retired unit), every place level read as `authenticated` through the
+  view's grant.
 - `tests/api/test_stats_dashboard.py`: PUT validates through the registry (422 on a bad chart), upserts, scopes
   to the caller's account.
 - Updated: `test_browse_map_read_contract` (`_STATS_ONLY_PARAMS`), `test_one_place_predicate` (latest = 626,

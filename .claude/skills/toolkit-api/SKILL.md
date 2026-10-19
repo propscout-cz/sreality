@@ -34,7 +34,7 @@ it (`api/`). They do not apply to the scraper.
 4. **"Active" filter is `is_active = true AND last_seen_at > now() - interval 'X days'`
    (default 7).** Don't trust `is_active` alone — a listing not seen for 30 days is
    functionally inactive.
-5. **No writes from the toolkit, with ten explicit exceptions.** Read-only by default. The
+5. **No writes from the toolkit, with nine explicit exceptions.** Read-only by default. The
    exceptions are:
    - `verify_listing_freshness` (and `scraper.freshness.freshness_check` that it wraps), so
      an agent can confirm a comparable is still valid before relying on it. Every call logs to
@@ -64,17 +64,10 @@ it (`api/`). They do not apply to the scraper.
      on `(sreality_id, snapshot_id)`) AND updates the two derived columns on `listings`
      (`building_condition_level`, `apartment_condition_level`) in one transaction, guarded by
      a latest-wins subquery.
-   - `summarize_region_dispositions`, which writes the per-disposition box-plot annotations
-     for a Browse > Stats cohort to `region_disposition_annotations` (migration 104, keyed on
-     `(region_hash, day)`) on cache miss. Unlike the snapshot-keyed caches above this one
-     invalidates by **calendar day**: a region's annotations are generated once per day so
-     repeat browser sessions don't re-bill. `region_hash` is the sha256 of the caller's
-     deterministic serialization of the active filter set.
    Every write-allowed exception caches an expensive external/LLM fact locally and
-   auto-invalidates (a new snapshot, a model bump, or the calendar day rolling over yields a
-   fresh key); the LLM/OSM source is the truth, the table is a mirror. No other toolkit
+   auto-invalidates (a new snapshot or a model bump yields a fresh key); the LLM/OSM source is the truth, the table is a mirror. No other toolkit
    function may write. The API service should still connect with a read-only role if Postgres
-   permits; these ten paths then need a separately-elevated route. For now we ship with one
+   permits; these nine paths then need a separately-elevated route. For now we ship with one
    role and discipline.
    **Broker merge-review writes are durable decisions, not just status flips** (`api/broker_review.py`,
    migration 401). The nightly sweep re-derives every merge from scratch — name-gated and
@@ -116,7 +109,7 @@ it (`api/`). They do not apply to the scraper.
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
    `/skill-refinements/*`, `/location/*`, dataset-write/dispatch routes on price-stats, and the manual-estimate writes (shared
    reference data, mig 290; stamp the admin into `updated_by`, + `account_id` on insert) use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*`, `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE gates, then the service role writes the share + its notification), `/tags`, `/filter-presets` (per account, mig 595), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
+   `/pipeline/*`, `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE gates, then the service role writes the share + its notification), `/tags`, `/filter-presets` (per account, mig 595), `PUT /stats/dashboard` (per account, mig 626: the Browse › Stats board, a whole-document upsert validated by `toolkit/stats_registry.py`; the SPA reads it through RLS), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,

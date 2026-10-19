@@ -390,7 +390,7 @@ throughout the 11-day outage. It gained named arms, which the `llm` check keeps 
 - spend: `fleet/spend`, the 24 h sum against Watch $130 and Problem $150.
 
 **Evaluated per `called_for`, and that is load-bearing.** A 24h aggregate arm is defeated by a
-single unrelated cheap success — verified: one `summarize_region_dispositions` call held the
+single unrelated cheap success — verified: one cheap call of an unrelated tool held the
 aggregate at $0.01 for ~24 of 30 sampled hours while the only recurring lane was completely
 dead. The spend arms, parked as unreachable while 24 h spend was ~$0.01 (2026-08), are live again:
 normal spend is $22-32 a day, and wave 1 moved the Watch default from $90 to the operator's $130.
