@@ -18,7 +18,7 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { listCollections } from '@/lib/api';
 import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
-import { invalidateBrowseQueries } from '@/lib/browseInvalidation';
+import { settleMemberWrite } from '@/lib/curationSettle';
 import type { Collection } from '@/lib/types';
 
 const NO_COLLECTIONS: Collection[] = [];
@@ -136,13 +136,8 @@ export function useCollectionMembership(property_id: number) {
  * add/remove, a collection DELETE (migration 202 cascades its memberships away)
  * and a merge (property_carriers re-points collection_properties onto the
  * survivor) each change it. Pass `collection_id` when the write names one
- * collection, so its own page refetches too.
- *
- * `cohortScoped` is the same knob as `usePipelineCard({ cohortScoped })`: when
- * Browse is scoped to collections, membership IS the cohort, so the Browse
- * reads refetch too. Only a caller that knows the current filters can say so;
- * everyone else leaves it false (refetching every Browse surface on a save is
- * otherwise waste).
+ * collection, so its own page refetches too. What a membership change does to
+ * the Browse reads is `settleCollectionWrite`'s job, not this one's.
  *
  * `shareChanged` marks a share, revoke or leave: it changes which other
  * authors' shared notes the caller can read (migration 610), so every note
@@ -151,18 +146,23 @@ export function revalidateCollections(
   qc: QueryClient,
   {
     collection_id,
-    cohortScoped = false,
     shareChanged = false,
-  }: { collection_id?: number; cohortScoped?: boolean; shareChanged?: boolean } = {},
+  }: { collection_id?: number; shareChanged?: boolean } = {},
 ): void {
   qc.invalidateQueries({ queryKey: curationKeys.propertyCollectionMembers });
   qc.invalidateQueries({ queryKey: curationKeys.collections });
   if (collection_id != null) {
     qc.invalidateQueries({ queryKey: curationKeys.collection(collection_id) });
   }
-  if (cohortScoped) invalidateBrowseQueries(qc);
   if (shareChanged) {
     qc.invalidateQueries({ queryKey: curationKeys.allPropertyNotes });
     qc.invalidateQueries({ queryKey: curationKeys.noteCounts });
   }
 }
+
+/** One property added to / removed from one collection, landed: settled in the
+ * Browse reads (lib/curationSettle, ruling 9), then the collection reads re-read. */
+export const settleCollectionWrite = (qc: QueryClient, property_id: number, collection_id: number, member: boolean) =>
+  settleMemberWrite(qc, 'collections', property_id, collection_id, member).then(() =>
+    revalidateCollections(qc, { collection_id }),
+  );

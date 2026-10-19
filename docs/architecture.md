@@ -2292,52 +2292,56 @@ renumber.** Navigate by area:
     menu forgot the shared map — the same failure `lib/browseInvalidation.ts` records for Browse. The
     extension holds no such cache, so this is an SPA-scoped claim.
     **`collections` is also a Browse COHORT FILTER** (`ListingFilters.collections`,
-    `?collections=<ids>`, registry id `collections`, BROWSE agenda only). Semantics are **OR** —
-    a property matches if it is in ANY selected collection — stated once, in the registry
-    description, and deliberately the opposite of `tags` (AND): collections read as folders,
-    so two of them mean "either folder". BROWSE-only for
-    `pipeline`'s reasons (rule #22): a watchdog scoped to the operator's own groupings would
-    fire on their own clicks, and the estimation agent must never see their taste. Like the
-    other lenses it sits OUTSIDE preset identity (`PRESET_EXCLUDED_KEYS` + `_PARAMS`), so
-    toggling it never dirties a loaded preset. `lib/collectionScope.ts` holds the ONE definition
-    of what a selection means, rendered for whichever surface asks — today a property-id
-    allowlist for Browse; the pipeline board's in-memory predicate joins it there rather than
-    growing a second answer. The allowlist resolves from the SAME member map
-    the glyphs render from, and "nothing selected" (no constraint, `null`) stays distinguishable
-    from "a selection nothing is in" (zero rows, `[]`) all the way to the query.
+    `?collections=<ids>` / `?collections_excluded=<ids>|any`, registry id `collections`, BROWSE
+    agenda only). The in side is **OR** — a property matches if it is in ANY selected collection —
+    stated once, in `CURATED_SETS` (`lib/setScope.ts`) and the registry description, and
+    deliberately the opposite of `tags` (AND): collections read as folders, so two of them mean
+    "either folder". "Any collection" spans own + shared-with-me (the sharing ruling, 10-17).
+    BROWSE-only for `pipeline`'s reasons (rule #22): a watchdog scoped to the operator's own
+    groupings would fire on their own clicks, and the estimation agent must never see their taste.
+    Like the other lenses it sits OUTSIDE preset identity (`PRESET_EXCLUDED_KEYS`), so toggling
+    it never dirties a loaded preset and a preset click keeps it (`withPresetLenses`).
+    **Curated sets are ONE kind of filter (2026-10-19, `docs/design/curated-set-scope.md`).**
+    Tags, collections and pipeline stages share one value (`SetScope`: a whole-set side `in` /
+    `out` plus `in` and `out` unit lists — in it, not in it, in none of it), one URL grammar
+    (`<set>=any|<ids>`, `<set>_excluded=any|<ids>`; junk on any side degrades to off), one control
+    (`components/filter-controls/CuratedSetFilter`: unit chips cycle off → in → "− name", a
+    dedicated not-in chip — "V žádné kolekci" / "Mimo pipeline" / "Bez štítků" — and "V pipeline"
+    for the pipeline only; Browse sidebar, phone sheet and the board bar) and one in-memory rule
+    (`matchesScope`, the board and the phone roll). **Membership is judged in the database under
+    the caller's RLS (migration 629)**: `browse_list_visible` / `properties_map_visible` /
+    `browse_stats_properties` / `browse_map_cells` take `<set>_set` / `_in` / `_out` for each set,
+    judged through the `*_public` membership views; only unit ids travel (`scopeArgs`, active sides
+    only). This SUPERSEDES the 2026-10-14 client prefilters: `lib/tagScope.ts`,
+    `lib/collectionScope.ts` and `resolveTag/Collection/PipelinePrefilter` turned membership rows
+    into property-id allowlists, and migration 598's trailing `property_ids_excluded bigint[]` (the
+    one DENYLIST, for `tags_excluded`) carried exclusions — lists that only grow (the edge rejects
+    a GET past ~2,300 ids, measured 2026-10-19) and could not say "in none of my collections". 598's parameter stays until the
+    contract migration (operator's word); the bundle no longer sends it.
     **Tags are collections' twin (2026-10-14).** The same five pieces, one each: ONE whole
     member map (`fetchPropertyTagMemberSet` under `curationKeys.propertyTagMembers`, the one
-    `fetchMemberSet` reader both maps share — a per-property read and a second,
-    selection-filtered read inside Browse's prefilter were deleted with it), ONE scope module
-    (`lib/tagScope.ts`: AND over `tags`, NONE OF over `tagsExcluded`, `cycleTag` off → on → not —
-    the portal rule's shape, rendered as Browse's id lists and the board's in-memory predicate),
-    ONE revalidation (`lib/tagCache.ts`, called by attach / detach / create / rename / delete; the
+    `fetchMemberSet` reader both maps share — glyphs and the board read it; Browse's cohort no
+    longer does), ONE scope (the `tags` entry of `CURATED_SETS`, AND over the in side), ONE
+    revalidation (`lib/tagCache.ts`, called by attach / detach / create / rename / delete; the
     edit popover used to invalidate a `listing-tags` key that stopped existing at migration 202,
     so a deleted tag stayed on the property page until staleTime), ONE assign list
     (`components/curation/TagAssignList`: rows that attach or detach, a find-or-create box, the
     edit pencil — inline on the property page, a popover from the board card's chip row, a
-    bottom sheet from the phone card) and ONE chip (`TagChip`). The filter control is tri-state
-    (`TagFilterControl`, Browse's sidebar and the board's bar; `tags` / `tags_excluded` in the
-    URL, both inside preset identity unlike `collections`); it filters and nothing else — editing
-    a tag is the assign list's job. **Browse's exclusion is the one DENYLIST**: a property-grain
-    allowlist cannot say "not tagged X" over the market, so migration 598 gave both aggregate
-    RPCs a generic trailing `property_ids_excluded bigint[]` (597's pattern), the list reads add
-    the matching `not in`, and `BrowsePrefilters.propertyIdsExcluded` carries it — named for its
-    id space, so a future "not in collection" reuses it with no schema change. Both curated-set
-    prefilters otherwise share one shape — membership rows reduced to property-id lists, resolved
-    from the SAME member map the chips render from — and `tags` left `properties_with_tags(tag_ids)`
-    for `property_tags_public` to get there: that RPC body carried `limit 5000` (migration 202)
-    under a client comment asserting exhaustiveness (dropped in 553). The membership read is
-    complete-or-throw (`fetchAllRows`). The Stats fetcher (`fetchBrowseStats`, since 626
-    `fetchStatsPivot`) was the one Browse fetcher that named its prefilters by hand; it now
-    resolves through `resolveBrowsePrefilters` like every other lane (the broker allowlist rides in `property_ids_filter` since W5, MS19), so a new
-    property-grain filter cannot narrow the list and leave the panel above it counting the whole
-    market. A membership write invalidates the Browse reads only when membership IS the cohort
-    (`revalidateCollections`' `cohortScoped`, passed by the Browse card alone — the mirror of
-    `pipelineRevalidation`'s knob; tags have no Browse-card writer yet, so `revalidateTags` takes
-    no knob). The board offers its collection and tag chips by ONE rule (`lib/curatedSetOffer.ts`:
-    sets with a member on the board plus any selected one, shown only when they could change the
-    view).
+    bottom sheet from the phone card) and ONE chip (`TagChip`). The filter control filters and
+    nothing else — editing a tag is the assign list's job; since 2026-10-19 `tags` is a lens
+    outside preset identity like the other two (0 of 7 stored presets held one). The membership
+    read is complete-or-throw (`fetchAllRows`). **A curation write settles Browse in one place**
+    (`lib/curationSettle.ts`, ruling 9): the write names the property and the lens it moved; every
+    cached Browse cohort that engages that lens re-judges the property in memory against the
+    patched member maps — no longer matching, the row drops in place from every loaded page and
+    the exact count drops by one (map, stats and counts re-read); an unknown member map or a
+    possible newcomer re-reads that cohort whole. Pipeline writes and dismissals settle at the
+    click (`settlePatches` inside `useOptimisticWrite`, rolled back on failure); collection and
+    tag writes (`settleCollectionWrite` / `settleTagWrite`) after the ack. It replaced the
+    `cohortScoped` / `pipelineScoped` / `collectionScoped` props. Whole-collection and tag
+    DELETEs and merges still revalidate broadly. The board offers its collection and tag chips by
+    ONE rule (`lib/curatedSetOffer.ts`: sets with a member on the board plus any selected one,
+    shown only when they could change the view).
     **Adding notes is reachable from the Chrome-extension panel too** — it lists the property's
     existing notes + an add box, writing through the SAME `POST /properties/{id}/notes` the
     `CurationBlock` uses (the viewed advert's surrogate id as `origin_listing_ref_id`); notes are
@@ -2421,19 +2425,24 @@ renumber.** Navigate by area:
     `Pipeline` — a SET collapse would DELETE history — so a colliding active row is lifted
     (`merge`), every row re-points, and a survivor holding that account's LIVE card lifts the
     dismissal (`pipeline`). A detach leaves them on the property left.
-    **Browse hides dismissed properties by default, server-side (migration 537).** Every other
-    Browse prefilter is an id ALLOWLIST sent as `.in(...)` in the GET URL; a dismissed set is an
-    exclusion that grows without bound, so it never leaves the database. Each Browse relation has
-    a dismissal-aware twin — `browse_list_visible()`, `properties_map_visible()` — an
+    **Browse hides dismissed properties by default, server-side (migration 537).** A dismissed
+    set is an exclusion that grows without bound, so it never leaves the database — the rule
+    migration 629 extended to every curated set (rule #18). Each Browse relation has a
+    dismissal-aware twin — `browse_list_visible(...)`, `properties_map_visible(...)` — an
     inlinable SECURITY INVOKER SQL function (`NOT EXISTS` against `property_dismissals_public`);
     functions rather than views because `browse_list` and
     `properties_map_mv` are blue-green rebuilt (a view or policy on them would block the DROP or
     vanish with it), and they return `browse_projection`'s row type, never the rebuilt
-    relation's. `browse_stats_properties` / `browse_map_cells` take a
-    `hide_dismissed` flag (default false). The SPA's `queries.ts:readSource` is the one seam:
-    every cohort read starts from the twin unless `?dismissed=show` reveals them — a lens outside
-    preset identity, like the pipeline scope — and the sidebar says how many the cohort hides
-    (the difference of two cached totals, fetched only once something is dismissed). Merge mode
+    relation's. Since 629 they take ten defaulted parameters: `hide_dismissed` (default true)
+    first, then the nine curated-set scope parameters, so ONE source serves both lenses (a
+    zero-arg call keeps 537's answer). `browse_stats_properties` / `browse_map_cells` take the
+    same `hide_dismissed` flag (default false) and the nine. The SPA's `queries.ts:readSource`
+    is the one seam: every cohort read calls the twin with `hide_dismissed: !showDismissed` plus
+    `scopeArgs(f)` — `?dismissed=show` reveals them, a lens outside preset identity like the
+    curated sets — and the sidebar says how many the cohort hides
+    (the difference of two cached totals, fetched only once something is dismissed). A dismiss
+    is the `dismissed` lens of `lib/curationSettle` (the row drops and the count drops by one at
+    the click); a restore re-reads every Browse surface. Merge mode
     reads the same source: to merge a dismissed duplicate, reveal it first. Measured on
     production with 20,000 dismissals stacked on the newest rows: card page 49 ms, exact count
     115 ms (31 ms baseline), Stats no slower, map clusters +95 ms.
@@ -2831,15 +2840,15 @@ renumber.** Navigate by area:
     write had a third shape to patch and every listing header paid its own read; collapsing it
     into `members` made the chokepoint smaller, which is the only sanctioned direction for it.
     `lib/pipelineCache` holds the pure patches (`placeCard` / `dropCard`), the re-read list
-    (`PIPELINE_REVALIDATE`, widened to Browse by `pipelineRevalidation` when the cohort is
-    pipeline-scoped; `revalidatePipeline` for a merge or split, which move cards between
+    (`PIPELINE_REVALIDATE`, joined by `lib/curationSettle`'s Browse patches and re-reads for the
+    `pipeline` lens; `revalidatePipeline` for a merge or split, which move cards between
     properties) and the stage lookup `cachedStage`; the **write policy is ONE hook,
     `lib/useOptimisticWrite`**, shared by
     every optimistic write in the SPA (pipeline, dismissals, the border-case flag, the autodedup
     verdict overlay, the admin toggles, the training-set marks, the preset reorder, the exam-review
     edits): HOLD (cancel in-flight reads of
     exactly the queries it patches, snapshot them) → patch → write → on failure roll back FROM
-    `onSettled`, BEFORE the re-read → revalidate. Deliberately NOT `onError`, because the global
+    `onSettled`, BEFORE the re-read → revalidate (`revalidate(vars, failed, qc)`). Deliberately NOT `onError`, because the global
     `MutationCache.onError` (`lib/mutationCache`) stays silent for any mutation that defines its
     own — which is why a failed board drag used to snap back with no explanation. A site may still
     declare `onError`, but only to show its OWN message (inline text, the split's 409 prompt): the
@@ -2892,13 +2901,17 @@ renumber.** Navigate by area:
     and the kanban's drag and trash — go through one hook, `lib/usePipelineCard.ts`; the property
     id travels with each call, so one instance serves a whole board. It writes over
     `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches and the re-read list.
-    **Browse can be SCOPED to the pipeline** (`ListingFilters.pipeline`, `?pipeline=any` or
-    `?pipeline=<stage ids>`, registry id `pipeline`, BROWSE agenda only): a property-grain id
-    allowlist resolved from `property_pipeline_public` by `resolvePipelinePrefilter` and AND'd
-    onto the cohort exactly like tags / with-estimates, plus `browse_stats_properties`'
-    `property_ids_filter` (migration 378) so the Stats tab can never disagree with the list. The
-    scope reads its membership through the SAME `fetchPipelineMembers` the funnels render from —
-    one definition of "in my pipeline". It is surfaced as a chip in the preset row, and it behaves like the
+    **Browse can be SCOPED to the pipeline** (`ListingFilters.pipeline`, a curated-set `SetScope`
+    — rule #18; `?pipeline=any|<stage ids>` and `?pipeline_excluded=any|<stage ids>`, registry id
+    `pipeline`, BROWSE agenda only): in the pipeline ("V pipeline"), in given stages, not in given
+    stages, or "Mimo pipeline" (no card at any stage, terminal included — operator ruling
+    2026-10-19). Since migration 629 it is judged in the database through
+    `property_pipeline_public` under the caller's RLS, as `pipeline_set` / `_in` / `_out` on all
+    four cohort functions, so list, map and Stats cannot disagree; until then it was a client
+    property-id allowlist (`resolvePipelinePrefilter`) mirrored into `browse_stats_properties`'
+    `property_ids_filter` (migration 378), which now carries only with-estimates ∩ broker. The
+    funnels still render from `fetchPipelineMembers`. It is surfaced as a chip in the preset row
+    (lit on the IN side only, `scopeIncludes`), and it behaves like the
     other chips in that row: clicking it **loads a VIEW** — the scope over a NEUTRAL cohort
     (`pipelineViewFilters`: no category, no deal type, no price/area/location), with any active
     preset deselected, in ONE atomic write (`browseState.loadPipelineView`; two writes against
@@ -2910,9 +2923,10 @@ renumber.** Navigate by area:
     deal whose listing was delisted mid-negotiation does not vanish; Back undoes the load
     (the write is pushed, not replaced). Turning the chip OFF is a plain filter edit that keeps
     the cohort the operator has since built, and the MODIFIER semantics still exist in the
-    sidebar's Curation → Pipeline control (compose with current filters, pick stages). It is
-    still **not a preset**: `PRESET_EXCLUDED_KEYS` keeps it out of what a preset stores and out
-    of the dirty comparison, so it never offers "Update preset" and it survives loading one. A
+    sidebar's Curation → Pipeline control (`CuratedSetFilter`: compose with current filters, pick
+    or exclude stages). It is still **not a preset**: `PRESET_EXCLUDED_KEYS` keeps it out of what
+    a preset stores and out of the dirty comparison, so it never offers "Update preset" and it
+    survives loading one (`withPresetLenses`). A
     watchdog can't use it (`UNSUPPORTED_LABELS`) — the operator's own state can't be a trigger. The
     extension bookmarks AND changes stage property-grain like every other surface: it reads
     `property_id` + membership (incl. `stage_id`) off the batched `POST /listings/lookup` (and
@@ -2968,11 +2982,14 @@ renumber.** Navigate by area:
     The board's **filter bar is built from the app's shared primitives**
     (`Field` + `Segmented` + `MultiselectChips`, the horizontal grammar `Brokers.tsx` already uses):
     **Stav** (any/active/inactive), **Typ** (`category_main`), **Lokalita** (the shared
-    `LocationTypeahead`) and **Kolekce** (collection membership, OR — rule #18). Labels come from
+    `LocationTypeahead`), **Kolekce** and **Štítky** (Browse's one `CuratedSetFilter`, "V žádné
+    kolekci" / "Bez štítků" included — rule #18; the board has no pipeline set). Labels come from
     the SAME generated filter registry as Browse's own controls (`FILTER_REGISTRY`, never a parallel
     hardcode) and the URL spellings are Browse's (`status` / `cat` / the `districts` family /
-    `collections`). Every row applies **client-side** over ONE board read plus the shared
-    member map (`curationKeys.propertyCollectionMembers`) — no per-filter read, no widened view —
+    `collections` / `tags`, each with its `_excluded` side, through the same `lib/setScope` codec).
+    Every row applies **client-side** over ONE board read plus the shared member maps
+    (`matchesScope` over `curationKeys.propertyCollectionMembers` / `propertyTagMembers`) — no
+    per-filter read, no widened view —
     and is offered only when it could change the view, or while it already constrains it: Stav
     needs a delisted card, Typ ≥2 present types, Kolekce a RESOLVED member map plus either a
     selection in the URL (a live constraint is always visible, so it is always liftable — before
@@ -2982,10 +2999,11 @@ renumber.** Navigate by area:
     Štítky keep theirs.
     Clearing is ONE header **Reset** gated on a derived `filtersActive`, never a per-row
     clear. **Fail-open contract** (pinned by `Pipeline.test.tsx`): an unresolved member map
-    (loading or errored) means no constraint, no Kolekce row and nothing counted — a `?collections=`
-    link must never empty a board that cannot see membership; an errored one says so with a retry
-    where the row sits (merge sprint MS16) — while a RESOLVED selection matching
-    nothing is zero cards, never everything. Stav's default stays `any`, so a delisted member of a
+    (loading or errored) skips that set's clause for BOTH sides — in and not-in — so nothing is
+    counted and no chip is offered: a `?collections=` or `?collections_excluded=` link must never
+    empty (or fail to narrow, then suddenly narrow) a board that cannot see membership; an errored
+    one says so with a retry inside the row (merge sprint MS16) — while a RESOLVED selection
+    matching nothing is zero cards, never everything. Stav's default stays `any`, so a delisted member of a
     collection stays in the cohort. **On the kanban board** stage moves are
     **drag-and-drop ONLY** (`@dnd-kit`, `Pipeline.tsx`: each column a `useDroppable`, each card a
     `useDraggable` with a grip handle; one optimistic move mutation; keyboard moves via the

@@ -773,8 +773,6 @@ export default function BrowseExperience({
                 onCoverTag={cardCoverTag.set}
                 hasFilters={!isDefault(filters)}
                 hasBounds={filters.bounds != null}
-                pipelineScoped={filters.pipeline != null}
-                collectionScoped={filters.collections.length > 0}
                 hoveredIds={hoveredIds}
                 hoverOrigin={hoverState.origin}
                 onHover={setHoveredFromList}
@@ -875,7 +873,6 @@ export default function BrowseExperience({
                 hasNextPage={table.hasNextPage}
                 onReachEnd={table.fetchNextPage}
                 hasFilters={!isDefault(filters)}
-                pipelineScoped={filters.pipeline != null}
                 hoveredIds={hoveredIds}
                 onHover={setHoveredFromList}
                 onSort={setSortByField}

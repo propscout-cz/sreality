@@ -6,9 +6,10 @@
 
 import type { FilterDef } from '@/lib/filterRegistry.generated';
 import { subtypeOptions } from '@/lib/filterLayout';
-import type { ListingFilters, PipelineScope } from '@/lib/filters';
+import type { ListingFilters } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
 import { portalScopeLabel } from '@/lib/portals';
+import { scopeWords, type CuratedSet, type SetScope } from '@/lib/setScope';
 
 import type { SheetRow } from './filterRows';
 import { placeLabelOf } from './placeLabel';
@@ -52,16 +53,12 @@ function formWords(
   if (maxDef) return rangeWords((value as number | null) ?? null, (view[maxDef.id] as number | null) ?? null, unit);
   if (value == null) return null;
   switch (def.ui_control) {
-    case 'pipeline_scope': {
-      const n = (value as PipelineScope).stage_ids.length;
-      return n === 0 ? 'celá pipeline' : countWords(n, 'fáze', 'fáze', 'fází');
-    }
+    case 'set_scope':
+      return scopeWords(def.id as CuratedSet, value as SetScope);
     case 'city_index_rules':
       return countWords((value as unknown[]).length, 'pravidlo', 'pravidla', 'pravidel');
     case 'multiselect':
-      return def.enum_values
-        ? listWords((value as unknown[]).map((v) => optionLabel(def, v)))
-        : countWords((value as unknown[]).length, 'vybraná', 'vybrané', 'vybraných');
+      return listWords((value as unknown[]).map((v) => optionLabel(def, v)));
     case 'pill_group':
     case 'single_select':
       /* `any` is the registry's own "no constraint" option (status). */
@@ -85,13 +82,6 @@ function customWords(row: Extract<SheetRow, { kind: 'custom' }>, f: ListingFilte
     }
     case 'districts':
       return f.districts.length ? placeLabelOf(f.districts) : null;
-    case 'tags': {
-      const parts = [
-        countWords(f.tags.length, 'štítek', 'štítky', 'štítků'),
-        f.tagsExcluded.length ? `−${num(f.tagsExcluded.length)}` : null,
-      ].filter(Boolean);
-      return parts.length ? parts.join(', ') : null;
-    }
     case 'portals':
       return portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
     case 'market_growth':

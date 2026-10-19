@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 
 import { autodedupKeys } from '@/lib/autodedupKeys';
 import { browseKeys } from '@/lib/browseKeys';
-import { pipelineRevalidation } from '@/lib/pipelineCache';
+import { PIPELINE_REVALIDATE } from '@/lib/pipelineCache';
 import { dismissalKeys, pipelineKeys } from '@/lib/queries';
 
 import type { ImagePublic } from '@/lib/types';
@@ -43,9 +43,9 @@ describe('hydration key namespace', () => {
   it('is disjoint from every write sweep prefix', () => {
     const sweeps: ReadonlyArray<readonly unknown[]> = [
       ['pipeline'],                   // the pipeline namespace root itself
-      ...pipelineRevalidation(true),  // every card write, cohort-scoped (the widest)
+      ...PIPELINE_REVALIDATE,         // every card write
       pipelineKeys.stages,            // the stage editor, with the board
-      ...browseKeys.all,              // merge / split / link / dismissal
+      ...browseKeys.all,              // merge / split / link / dismissal / a curation settle (the widest)
       autodedupKeys.all,              // the rulings page's wholesale sweep
       dismissalKeys.all,
     ];

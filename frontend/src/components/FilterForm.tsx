@@ -457,7 +457,6 @@ function FilterRow({
         <Caption label={label} bare={bare}>
           <MultiselectRow
             def={def}
-            label={label}
             value={(value as Array<string | number> | null) ?? []}
             onChange={onChange}
           />
@@ -507,13 +506,6 @@ function FilterRow({
             ariaLabel={label}
           />
           {unit ? <UnitHint unit={unit} /> : null}
-        </Caption>
-      );
-
-    case 'csv_input':
-      return (
-        <Caption label={label} bare={bare}>
-          <CsvRow def={def} ariaLabel={label} value={value} onChange={onChange} />
         </Caption>
       );
 
@@ -689,75 +681,18 @@ function SingleSelectRow({
 
 function MultiselectRow({
   def,
-  label,
   value,
   onChange,
 }: {
   def: FilterDef;
-  label: string;
   value: ReadonlyArray<string | number>;
   onChange: (v: Array<string | number> | null) => void;
 }) {
-  const opts = optionsFor(def);
-  if (opts.length === 0) {
-    // Free-form list with no closed taxonomy — fall back to CSV.
-    return (
-      <CsvRow
-        def={def}
-        ariaLabel={label}
-        value={value}
-        onChange={(v) => onChange(v as Array<string | number> | null)}
-      />
-    );
-  }
   return (
     <MultiselectChips
       value={value}
-      options={opts}
+      options={optionsFor(def)}
       onChange={(next) => onChange(next.length === 0 ? null : next)}
-    />
-  );
-}
-
-function CsvRow({
-  def,
-  ariaLabel,
-  value,
-  onChange,
-}: {
-  def: FilterDef;
-  /* This file's idiom (BufferedNumberInput takes ariaLabel too). */
-  ariaLabel: string;
-  value: unknown;
-  onChange: (v: unknown) => void;
-}) {
-  const arr = Array.isArray(value) ? value : [];
-  const isIntList = def.type === 'int_list';
-  return (
-    <input
-      type="text"
-      aria-label={ariaLabel}
-      value={arr.map((x) => String(x)).join(', ')}
-      placeholder="comma-separated"
-      onChange={(e) => {
-        const parts = e.target.value
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (parts.length === 0) {
-          onChange(null);
-          return;
-        }
-        if (isIntList) {
-          const ints = parts
-            .map((p) => Number(p))
-            .filter((n) => Number.isFinite(n) && n > 0);
-          onChange(ints.length === 0 ? null : ints);
-        } else {
-          onChange(parts);
-        }
-      }}
-      className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
     />
   );
 }

@@ -7,6 +7,25 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
+- **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
+  `docs/design/curated-set-scope.md`): one value (`lib/setScope.ts` `SetScope`: in it / not in it /
+  in none of it), one URL grammar (`<set>` + `<set>_excluded`, `=any` on both), one control
+  (`CuratedSetFilter`, with "V žádné kolekci" / "Mimo pipeline" / "Bez štítků" and "V pipeline") on
+  the Browse sidebar, the phone sheet and the board bar. Membership is judged in the database under
+  the caller's RLS (migration 629: nine scope parameters + `hide_dismissed` on the four cohort
+  functions), so no property id rides a URL. All three are lenses outside preset identity, kept
+  across a preset click. One settle (`lib/curationSettle.ts`) drops a card the moment a save,
+  funnel, tag or dismiss takes it out of the active lens. Layers A–C (858a5b5b, 91812539,
+  1ed93180). Deleted: `tagScope`, `collectionScope`, `PipelineScopePicker`, `TagFilterControl`,
+  `CollectionsPicker`, the three client resolvers + the denylist seam, `HIDING_DISMISSED`, the
+  board's second codec, the `cohortScoped` / `pipelineScoped` / `collectionScoped` props, the
+  registry's `tags_excluded`. Architecture § rules 18 + 22.
+- **Next:** the contract migration (drop `property_ids_excluded` + dead `listing_feed_visible()`)
+  on the operator's word after Railway confirms the rollout; the phone Feed's scope chip still
+  strips the lenses (`feedFiltersForPreset`); whole-collection / tag DELETEs and merges still
+  revalidate broadly instead of settling.
+
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:
   `docs/design/collection-sharing.md`; a share is one row that widens READS only, `owner_email` is
@@ -68,9 +87,9 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   the edit popover's stale `listing-tags` invalidation. Architecture § rule 18.
 - **Next (unscheduled):**
   - Browse cards and the Chrome-extension panel show no tag and cannot assign one; when they do,
-    `revalidateTags` grows the same `cohortScoped` knob `revalidateCollections` has.
-  - "Not in collection" on Browse: `property_ids_excluded` already carries it; only the
-    control and `collectionScope` are missing.
+    their writes settle through `settleTagWrite` (the `cohortScoped` knob is gone, U-CURATED-SCOPE).
+  - ~~"Not in collection" on Browse~~ — done 2026-10-19 in U-CURATED-SCOPE ("V žádné kolekci",
+    judged in SQL by migration 629, not by `property_ids_excluded`).
 
 ### Phase U-NOTE-FILES: Attachments on notes (done, 2026-10-07)
 - **Done:** files on a property's notes. Drop, paste or pick them into the Notes composer

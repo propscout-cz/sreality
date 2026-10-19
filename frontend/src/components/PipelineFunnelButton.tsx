@@ -27,9 +27,6 @@ import { usePipelineCard } from '@/lib/usePipelineCard';
 
 export interface PipelineFunnelButtonProps {
   property_id: number;
-  /* True when the surrounding cohort is filtered by pipeline membership — a
-   * write then changes which rows match, so Browse must refetch. */
-  cohortScoped?: boolean;
   /* Cards float this over the photo (translucent chrome); the table renders it
    * inline on the row background. */
   variant?: 'overlay' | 'inline';
@@ -37,7 +34,6 @@ export interface PipelineFunnelButtonProps {
 
 export default function PipelineFunnelButton({
   property_id,
-  cohortScoped = false,
   variant = 'overlay',
 }: PipelineFunnelButtonProps) {
   const membersQ = useQuery({
@@ -59,7 +55,7 @@ export default function PipelineFunnelButton({
   const badge = look ? stageBadge(look, stagesQ.data ?? []) : null;
   const accent = stageAccent(look);
 
-  const { add, pending: pendingFor } = usePipelineCard({ cohortScoped });
+  const { add, pending: pendingFor } = usePipelineCard();
   const pending = pendingFor(property_id);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -128,7 +124,6 @@ export default function PipelineFunnelButton({
         <PipelineStageMenu
           property_id={property_id}
           stageId={member.stage_id}
-          cohortScoped={cohortScoped}
           anchorRef={btnRef}
           onClose={closeMenu}
         />

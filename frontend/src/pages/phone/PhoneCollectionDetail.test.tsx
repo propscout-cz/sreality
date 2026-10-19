@@ -122,7 +122,7 @@ describe('<CollectionDetail> on the phone', () => {
     await screen.findByRole('link', { name: /Místo 1/ });
     const [filters] = vi.mocked(queries.fetchListingsForCards).mock.calls[0];
     expect(filters).toEqual(collectionCardFilters(7));
-    expect(filters.collections).toEqual([7]);
+    expect(filters.collections).toEqual({ set: null, in: [7], out: [] });
     expect(filters.status).toBe('any');
     expect(filters.showDismissed).toBe(true);
     expect(filters.categoryType).toBeNull();

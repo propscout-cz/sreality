@@ -22,6 +22,10 @@ Three drifts are possible and all three are silent. This file is the net for eac
      spaces, obec_id and property_id (the broker allowlist among the latter since W5,
      MS19), and the RPC read has no `.in()` to inherit.
 
+The curated-set scope (migration 629) rides beside them as nine named arguments built
+ONCE (`scopeArgs` in frontend/src/lib/setScope.ts) and spread into the builder AND the
+list/pin source read (`readSource`), so all four cohort functions must take all nine.
+
 Offline; runs in the normal `pytest -q` lane. Nothing here needs a database — the
 behaviour of the shipped SQL is tests/test_browse_map_cells_live.py's subject.
 """
@@ -77,13 +81,23 @@ def _builder_keys() -> set[str]:
     keys = set(re.findall(r"^\s*([a-z][a-z0-9_]*)\s*:", body, flags=re.MULTILINE))
     # The prefilter allowlists ride in from the ONE resolved object (`pre`), by name: a
     # caller cannot hand the builder a hand-mapped subset any more.
-    for field in ("obecIds", "propertyIds", "propertyIdsExcluded"):
+    for field in ("obecIds", "propertyIds"):
         assert re.search(rf"\bpre\.{field}\b", body), (
             f"buildBrowseStatsArgs no longer reads `pre.{field}` — that allowlist the "
             "caller resolves over the network has stopped reaching the RPC."
         )
     assert len(keys) > 60, f"only parsed {len(keys)} builder keys — the parse broke"
-    return keys
+    # The curated-set scope arrives as a spread of the one scope builder (migration 629).
+    assert re.search(r"\.\.\.scopeArgs\(f\)", body), (
+        "buildBrowseStatsArgs no longer spreads scopeArgs(f) — the Stats and map cohorts "
+        "would ignore the tag / collection / pipeline scope the list honours."
+    )
+    return keys | SCOPE_ARGS
+
+
+SETSCOPE_TS = REPO / "frontend" / "src" / "lib" / "setScope.ts"
+SCOPE_ARGS = {f"{s}_{side}" for s in ("tags", "collections", "pipeline")
+              for side in ("set", "in", "out")}
 
 
 def _rpc_call_block(fn: str) -> str:
@@ -100,7 +114,7 @@ def _latest_migration_defining(func: str) -> Path:
     return max(hits, key=lambda p: int(p.name.split("_", 1)[0]))
 
 
-def _sql_params(func: str) -> set[str]:
+def _sql_params(func: str, minimum: int = 60) -> set[str]:
     """Parameter names of the LATEST definition of `func`, read from the migration."""
     sql = _latest_migration_defining(func).read_text(encoding="utf-8")
     at = re.search(rf"create or replace function (?:public\.)?{func}\s*\(",
@@ -114,7 +128,7 @@ def _sql_params(func: str) -> set[str]:
         i += 1
     args = re.sub(r"--[^\n]*", "", sql[at: i - 1])
     names = set(re.findall(r"(?:^|,)\s*([a-z][a-z0-9_]*)\s+[a-z]", args))
-    assert len(names) > 60, f"only parsed {len(names)} params for {func} — the parse broke"
+    assert len(names) > minimum, f"only parsed {len(names)} params for {func} — the parse broke"
     return names
 
 
@@ -133,6 +147,31 @@ def test_every_builder_key_is_a_parameter_of_both_rpcs() -> None:
             f"buildBrowseStatsArgs sends {missing} but public.{func} has no such "
             f"parameter ({_latest_migration_defining(func).name} is its latest definition)."
         )
+
+
+def test_the_scope_arguments_reach_every_cohort_function() -> None:
+    """The nine curated-set arguments are the same names on the wire and in all four
+    cohort functions; the list/pin sources also take `hide_dismissed`.
+
+    RED by: renaming a set or a side in lib/setScope.ts without a migration (a PGRST202 on
+    every Browse read), or dropping the spread from readSource (the list ignores a scope
+    the map and Stats honour).
+    """
+    ts = SETSCOPE_TS.read_text(encoding="utf-8")
+    for side in ("set", "in", "out"):
+        assert f"`${{name}}_{side}`" in ts, f"scopeArgs no longer builds `<set>_{side}`"
+    sets = _balanced_block(ts, ts.index("{", ts.index("export const CURATED_SETS")))
+    assert set(re.findall(r"^  ([a-z]+): \{", sets, flags=re.MULTILINE)) == {
+        "tags", "collections", "pipeline"}
+    for func in ("browse_stats_properties", "browse_map_cells"):
+        assert SCOPE_ARGS <= _sql_params(func), func
+    for func in ("browse_list_visible", "properties_map_visible"):
+        assert SCOPE_ARGS | {"hide_dismissed"} <= _sql_params(func, minimum=9), func
+    src = _ts()
+    read = _strip_ts_comments(src[src.index("const readSource"): src.index("const listSource")])
+    assert "hide_dismissed: !f.showDismissed, ...scopeArgs(f)" in read, (
+        "readSource no longer hands the source function the dismissed flag and the scope"
+    )
 
 
 def test_the_two_rpcs_take_the_same_cohort_parameters() -> None:

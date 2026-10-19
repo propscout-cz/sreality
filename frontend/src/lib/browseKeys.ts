@@ -2,8 +2,8 @@
  * every sweep derived from it, so a new surface cannot be read under a key the
  * merge / dismissal / pipeline sweeps never reach.
  *
- * Slot 0 is the surface, slot 1 the filters: useDismissal's hiding predicate
- * reads `queryKey[1]`. No namespace prefix — the roots ARE the namespace, and
+ * Slot 0 is the surface, slot 1 the filters: lib/curationSettle judges a
+ * curation write against `queryKey[1]`. No namespace prefix — the roots ARE the namespace, and
  * none of them may equal lib/hydration's (hydration.test.ts pins that). */
 
 import type { ListingFilters } from '@/lib/filters';
@@ -34,7 +34,7 @@ export const browseKeys = {
   statsAll: [root.stats] as const,
   count: (f: ListingFilters) => [root.count, f] as const,
   noPriceCount: (f: ListingFilters) => [root.noPriceCount, f] as const,
-  /** The paged lists: patched in place by a dismissal, never refetched for one. */
+  /** The paged lists: patched in place by a curation settle, never refetched for one. */
   lists: [[root.cards], [root.table]] as const,
   /** Every other read of the browse read model. */
   aggregates: [[root.map], [root.stats], [root.count], [root.noPriceCount]] as const,

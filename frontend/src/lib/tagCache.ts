@@ -7,6 +7,7 @@
 
 import type { QueryClient } from '@tanstack/react-query';
 
+import { settleMemberWrite } from '@/lib/curationSettle';
 import { curationKeys } from '@/lib/queries';
 
 /** Re-read tags after ANY tag write: an attach / detach moves the member map,
@@ -17,3 +18,8 @@ export function revalidateTags(qc: QueryClient): void {
   qc.invalidateQueries({ queryKey: curationKeys.propertyTagMembers });
   qc.invalidateQueries({ queryKey: curationKeys.tags });
 }
+
+/** One tag attached to / detached from one property, landed: settled in the
+ * Browse reads (lib/curationSettle, ruling 9), then the tag reads re-read. */
+export const settleTagWrite = (qc: QueryClient, property_id: number, tag_id: number, member: boolean) =>
+  settleMemberWrite(qc, 'tags', property_id, tag_id, member).then(() => revalidateTags(qc));

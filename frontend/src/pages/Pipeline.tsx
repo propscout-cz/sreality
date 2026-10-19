@@ -18,16 +18,21 @@ import {
   reorderPipelineStages,
   updatePipelineStage,
 } from '@/lib/api';
-import { collectionLabel, useCollectionMembers, useCollections } from '@/lib/collectionCache';
+import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
   curationKeys,
   fetchPropertyTagMemberSet,
   matchesDistricts,
   pipelineKeys,
 } from '@/lib/queries';
-import { matchesTags, tagChoiceActive } from '@/lib/tagScope';
+import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
-import { TagFilterControl, tagOptionsFor } from '@/components/filter-controls/TagFilterControl';
+import {
+  CuratedSetFilter,
+  collectionUnit,
+  joinReads,
+  tagUnit,
+} from '@/components/filter-controls/CuratedSetFilter';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
 import { usePhoneShell } from '@/lib/phoneShell';
 import PhonePipelineSkeleton from '@/components/phone/PhonePipelineSkeleton';
@@ -38,12 +43,11 @@ import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahea
 import { MultiselectChips } from '@/components/filter-controls/MultiselectChips';
 import { type EnumOptionLite } from '@/components/filter-controls/types';
 import { Field, Segmented } from '@/components/controls';
-import { matchesCollections } from '@/lib/collectionScope';
 import { type ListingStatus } from '@/lib/filters';
 import { filterById } from '@/lib/filterRegistry.generated';
 import TagColorPicker from '@/components/TagColorPicker';
 import ErrorBanner from '@/components/ErrorBanner';
-import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
+import { readFailed } from '@/components/ReadFailedMark';
 import { FunnelIcon, InfoIcon } from '@/components/icons';
 import SizeToggle, {
   LargeImageGlyph,
@@ -118,14 +122,12 @@ function PipelineBoardPage() {
     status,
     types,
     districts,
-    collectionIds,
-    tagChoice,
+    scopes,
     sort,
     setStatus,
     setTypes,
     setDistricts,
-    setCollections,
-    setTagChoice,
+    setScope,
     setSort,
     reset,
   } = usePipelineViewState();
@@ -138,7 +140,7 @@ function PipelineBoardPage() {
 
   /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
-  const { collections } = useCollections();
+  const { collections, query: collectionsQ } = useCollections();
   const membersQ = useCollectionMembers();
   const tagsQ = useQuery({
     queryKey: curationKeys.tags,
@@ -154,6 +156,8 @@ function PipelineBoardPage() {
    * contract, docs/architecture.md rule #22). */
   const members = membersQ.data;
   const tagMembers = tagMembersQ.data;
+  const collectionsRead = joinReads(membersQ, collectionsQ);
+  const tagsRead = joinReads(tagMembersQ, tagsQ);
 
   const stages = stagesQ.data ?? [];
   const cards = boardQ.data ?? NO_CARDS;
@@ -167,14 +171,18 @@ function PipelineBoardPage() {
     }
     if (districts.length > 0) out.push((c) => matchesDistricts(c, districts));
     if (status !== 'any') out.push((c) => c.is_active === (status === 'active'));
-    if (members && collectionIds.length > 0) {
-      out.push((c) => matchesCollections(members.get(c.property_id), collectionIds));
-    }
-    if (tagMembers && tagChoiceActive(tagChoice)) {
-      out.push((c) => matchesTags(tagMembers.get(c.property_id), tagChoice));
+    const sets = [
+      ['collections', members],
+      ['tags', tagMembers],
+    ] as const;
+    for (const [name, map] of sets) {
+      const scope = scopes[name];
+      if (map && scope) {
+        out.push((c) => matchesScope(map.get(c.property_id), scope, CURATED_SETS[name].inRule));
+      }
     }
     return out;
-  }, [types, districts, status, members, collectionIds, tagMembers, tagChoice]);
+  }, [types, districts, status, members, tagMembers, scopes]);
 
   const filtersActive = predicates.length > 0;
   const filteredCards = useMemo(
@@ -192,23 +200,17 @@ function PipelineBoardPage() {
       if (c.category_main) present.add(c.category_main);
       if (!c.is_active) inactive += 1;
     }
-    const offered = offerCuratedSet(cards, members, collections, collectionIds);
-    const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], [
-      ...tagChoice.tags,
-      ...tagChoice.tagsExcluded,
-    ]);
+    const offered = offerCuratedSet(cards, members, collections, scopes.collections);
+    const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], scopes.tags);
     return {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
-      collections: [
-        ...offered.options.map((c) => ({ value: c.id, label: collectionLabel(c) })),
-        ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
-      ],
+      collections: offered.options.map(collectionUnit),
       showCollections: offered.show,
-      tags: tagOptionsFor(tags.options, tagChoice),
+      tags: tags.options.map(tagUnit),
       showTags: tags.show,
     };
-  }, [cards, members, collections, collectionIds, tagMembers, tagsQ.data, tagChoice]);
+  }, [cards, members, collections, tagMembers, tagsQ.data, scopes]);
 
   /* The decoration cohort: the representative listing of every card ON the
    * board (not just the filtered view — filtering is client-side and instant,
@@ -309,25 +311,29 @@ function PipelineBoardPage() {
               />
             </Field>
           )}
-          {readFailed(membersQ) && (
-            /* The filter fails open (rule #22) and says so (MS16). */
-            <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void membersQ.refetch()} />
-          )}
-          {bar.showCollections && (
+          {/* The curation lenses fail open (rule #22) and say so (MS16): the
+              control's read is the member map the offer stands on AND the
+              units it names, so a failed list is a retry, not "#id" chips. */}
+          {(bar.showCollections || readFailed(collectionsRead)) && (
             <Field label="Kolekce">
-              <MultiselectChips
-                value={collectionIds}
-                options={bar.collections}
-                onChange={setCollections}
+              <CuratedSetFilter
+                set="collections"
+                units={bar.collections}
+                value={scopes.collections}
+                onChange={(next) => setScope('collections', next)}
+                query={collectionsRead}
               />
             </Field>
           )}
-          {readFailed(tagMembersQ) && (
-            <ReadFailedMark what="Štítky" variant="header" onRetry={() => void tagMembersQ.refetch()} />
-          )}
-          {bar.showTags && (
+          {(bar.showTags || readFailed(tagsRead)) && (
             <Field label="Štítky">
-              <TagFilterControl tags={bar.tags} value={tagChoice} onChange={setTagChoice} />
+              <CuratedSetFilter
+                set="tags"
+                units={bar.tags}
+                value={scopes.tags}
+                onChange={(next) => setScope('tags', next)}
+                query={tagsRead}
+              />
             </Field>
           )}
           <Field label="Lokalita" className="min-w-[16rem] max-w-xl flex-1">

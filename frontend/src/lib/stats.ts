@@ -145,8 +145,8 @@ export function normalizePivot(raw: PivotPayload | BadSpecStub, requested: Stats
   };
 }
 
-/* The Browse prefilters of one filter set (tags, collections, pipeline,
- * estimates, broker, city quality, growth), resolved ONCE per set however many
+/* The Browse prefilters of one filter set (estimates, broker, city quality,
+ * growth; the curated sets ride as scope arguments), resolved ONCE per set however many
  * charts read it: every pivot awaits the same cached query, so a board of N
  * charts, and each spec change of the builder's preview, reuses one resolution.
  * Keyed under the stats root, so every Browse sweep that refreshes a pivot also

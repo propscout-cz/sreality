@@ -14,6 +14,16 @@ import { fmtArea } from './format';
  * this file, and the level list and the chip guard must have ONE definition. */
 import { isDistrictChip, type LocationLevel } from './districtCodes';
 import { portalScopeLabel } from './portals';
+import {
+  CURATED_SET_NAMES,
+  normalizeScope,
+  parseSetScope,
+  scopeActive,
+  scopeWords,
+  setScopeToParams,
+  type CuratedSet,
+  type SetScope,
+} from './setScope';
 
 export type TriState = 'any' | 'yes' | 'no';
 export type ListingStatus = 'active' | 'inactive' | 'any';
@@ -108,21 +118,6 @@ export interface DistrictChip {
  * the entered rent/sale growth p.a. (CAGR ≥), computed for the [fromYm, toYm]
  * window of a chosen dataset by the price_stat_growth RPC. Multiple rules AND.
  * BROWSE-only (window-dependent, live-computed). */
-/* Deal-pipeline scope (rule #22) — "show only properties I'm working".
- *
- * `null` on ListingFilters = off. `{ stage_ids: [] }` = a card at ANY stage;
- * a non-empty list narrows to those stages (e.g. hide the closed ones). Snake-
- * cased inside the object because composite filter values cross into the
- * registry / watchdog JSON world verbatim (same convention as CenterRadius's
- * `radius_m`).
- *
- * Stage ids are ACCOUNT-scoped (migration 294), so a URL carrying ids only
- * reproduces for the account that wrote it — the empty-list form is the
- * portable one. Same trade-off as `tags`, which stores tag ids. */
-export interface PipelineScope {
-  stage_ids: number[];
-}
-
 export interface PriceGrowthRule {
   datasetId: number;
   fromYm: string | null;   // 'YYYY-MM' or null = dataset's full window
@@ -251,11 +246,10 @@ export interface ListingFilters {
    * server-side (migration 537); true reveals them. A lens over the operator's
    * own state, so it sits OUTSIDE preset identity (PRESET_EXCLUDED_KEYS). */
   showDismissed: boolean;
-  /* Browse-only deal-pipeline scope (rule #22). Null = off. Deliberately NOT
-   * part of a saved preset's identity (see PRESET_EXCLUDED_KEYS): a preset
-   * describes market criteria, the pipeline scope is a lens over the
-   * operator's own state — so toggling it never dirties a loaded preset. */
-  pipeline: PipelineScope | null;
+  /* Browse-only deal-pipeline scope (rule #22, lib/setScope; units = stage
+   * ids). Null = off. A lens over the operator's own state, so it sits OUTSIDE
+   * a saved preset's identity (PRESET_EXCLUDED_KEYS), like tags + collections. */
+  pipeline: SetScope | null;
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
    * Deliberately NOT part of a saved preset's identity (PRESET_EXCLUDED_KEYS),
    * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
@@ -266,15 +260,11 @@ export interface ListingFilters {
    * properties where one of this broker's ads matches the portal and status
    * filters, so one ad satisfies both (queries.ts:adScope). */
   brokerId: number | null;
-  /* Migration 025 — operator tags. AND-semantics: a listing must carry
-   * every selected tag id. Stored as ids (not names) so renames /
-   * recolour-by-delete-recreate stay queryable. */
-  tags: number[];
-  /* The other side (lib/tagScope): a listing must carry NONE of these. */
-  tagsExcluded: number[];
-  /* Browse-only collection scope (rule #18). Empty = off. Like `pipeline`
-   * above, a lens over operator state, so it sits outside preset identity. */
-  collections: number[];
+  /* Operator tags (migration 025, lib/setScope): the in side needs EVERY unit
+   * (AND). Ids, not names, so renames stay queryable. Null = off; a lens. */
+  tags: SetScope | null;
+  /* Browse-only collection scope (rule #18, lib/setScope; own + shared). Null = off. */
+  collections: SetScope | null;
   bounds: MapBounds | null;
   /* `viewport` (default) = map pan/zoom emits bounds, those filter
    * the cohort. `center_radius` = a sidebar-set point + radius drives
@@ -362,9 +352,8 @@ export const DEFAULT_FILTERS: ListingFilters = {
   showDismissed: false,
   pipeline: null,
   brokerId: null,
-  tags: [],
-  tagsExcluded: [],
-  collections: [],
+  tags: null,
+  collections: null,
   bounds: null,
   locationMode: 'viewport',
   centerRadius: null,
@@ -621,11 +610,10 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     totalPriceChangePct: parseFloatOrNull(sp.get('total_change_pct')),
     withEstimates: sp.get('with_est') === '1',
     showDismissed: sp.get('dismissed') === 'show',
-    pipeline: parsePipelineScope(sp.get('pipeline')),
+    pipeline: parseSetScope(sp, 'pipeline'),
     brokerId: parseIntOrNull(sp.get('broker')),
-    tags: parseIntList(sp.get('tags')),
-    tagsExcluded: parseIntList(sp.get('tags_excluded')),
-    collections: parseIntList(sp.get('collections')),
+    tags: parseSetScope(sp, 'tags'),
+    collections: parseSetScope(sp, 'collections'),
     bounds: parseBounds(sp.get('bbox')),
     locationMode: sp.get('locmode') === 'center_radius'
       ? 'center_radius'
@@ -732,27 +720,6 @@ const parseCenterRadius = (s: string | null): CenterRadius | null => {
   return { lat, lng, radius_m: Math.trunc(radius) };
 };
 
-export const parseIntList = (s: string | null): number[] => {
-  if (!s) return [];
-  const out: number[] = [];
-  for (const part of s.split(',')) {
-    const n = Number(part);
-    if (Number.isInteger(n) && n > 0) out.push(n);
-  }
-  return out;
-};
-
-/* `?pipeline=any` → any stage; `?pipeline=12,13` → those stages; absent or
- * unparseable → off. A list that parses to nothing (stale ids from another
- * account, or junk) degrades to "any stage" rather than to "off": the operator
- * asked to see their pipeline, so showing the whole pipeline is the honest
- * failure, while silently dropping the scope would show them the whole market. */
-const parsePipelineScope = (s: string | null): PipelineScope | null => {
-  if (!s) return null;
-  if (s === 'any') return { stage_ids: [] };
-  return { stage_ids: parseIntList(s) };
-};
-
 const fmtRange = (lo: number | null, hi: number | null): string =>
   `${lo ?? ''}-${hi ?? ''}`;
 
@@ -852,16 +819,10 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.totalPriceChangePct != null) sp.set('total_change_pct', String(f.totalPriceChangePct));
   if (f.withEstimates) sp.set('with_est', '1');
   if (f.showDismissed) sp.set('dismissed', 'show');
-  if (f.pipeline) {
-    sp.set(
-      'pipeline',
-      f.pipeline.stage_ids.length ? f.pipeline.stage_ids.join(',') : 'any',
-    );
-  }
+  setScopeToParams(sp, 'pipeline', f.pipeline);
   if (f.brokerId != null) sp.set('broker', String(f.brokerId));
-  if (f.tags.length) sp.set('tags', f.tags.join(','));
-  if (f.tagsExcluded.length) sp.set('tags_excluded', f.tagsExcluded.join(','));
-  if (f.collections.length) sp.set('collections', f.collections.join(','));
+  setScopeToParams(sp, 'tags', f.tags);
+  setScopeToParams(sp, 'collections', f.collections);
   if (f.bounds) {
     const { west, south, east, north } = f.bounds;
     sp.set(
@@ -914,8 +875,8 @@ const categoryMainLabel = (cats: ReadonlyArray<CategoryMain>): string =>
     ? 'listings'
     : cats.map((c) => CATEGORY_MAIN_PLURAL[c]).join(' / ');
 
-/* URL token for "no deal-type constraint". Spelled the same as the pipeline
- * scope's `any` so the two read as one vocabulary. */
+/* URL token for "no deal-type constraint". Spelled the same as a curated
+ * set's whole-set `any` (lib/setScope) so the two read as one vocabulary. */
 export const ANY_DEAL_TYPE = 'any';
 
 const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
@@ -967,9 +928,9 @@ export const summarise = (f: ListingFilters, count: number | null): string => {
   const tomLabel = fmtDaysRange(f.tomDaysMin, f.tomDaysMax);
   if (tomLabel) bits.push(`TOM ${tomLabel}`);
   if (f.tomObservedOnly) bits.push('newly listed');
-  if (f.pipeline) {
-    const n = f.pipeline.stage_ids.length;
-    bits.push(n === 0 ? 'in pipeline' : `in pipeline (${n} stage${n > 1 ? 's' : ''})`);
+  for (const name of CURATED_SET_NAMES) {
+    const words = scopeWords(name, f[name]);
+    if (words) bits.push(words);
   }
   if (f.brokerId != null) bits.push('for one broker');
   if (f.bounds) bits.push('in this map area');
@@ -1105,30 +1066,42 @@ export const pipelineViewFilters = (): ListingFilters => ({
   ...DEFAULT_FILTERS,
   categoryMain: [],
   categoryType: null,
-  pipeline: { stage_ids: [] },
+  pipeline: { set: 'in', in: [], out: [] },
 });
 
 /* Filter fields that ride ALONGSIDE a preset rather than inside it: they are
  * reset before persisting and ignored when deciding whether a loaded preset is
  * dirty. A preset describes MARKET CRITERIA ("2+kk, 60–90 m², Praha"); the
- * pipeline scope and the dismissed reveal are lenses over the operator's own
- * state, orthogonal to every preset and combinable with all of them — so
- * toggling one must never offer to bake itself into the saved filters.
+ * curated sets (tags, collections, pipeline), the broker and the dismissed
+ * reveal are lenses over the operator's own state, orthogonal to every preset
+ * and combinable with all of them — so toggling one must never offer to bake
+ * itself into the saved filters.
  *
  * `bounds` is deliberately NOT here: it is opt-in per save (the "include map
  * area" toggle), which is a different rule, expressed below. */
 const PRESET_EXCLUDED_KEYS = [
-  'pipeline', 'brokerId', 'showDismissed', 'collections',
+  'tags', 'collections', 'pipeline', 'brokerId', 'showDismissed',
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
-
-/* The same fields as URL params — the form preset equality is computed in. */
-const PRESET_EXCLUDED_PARAMS: readonly string[] = ['pipeline', 'broker', 'dismissed', 'collections'];
 
 const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
   const out = { ...f };
   for (const k of PRESET_EXCLUDED_KEYS) {
     (out as Record<string, unknown>)[k] = DEFAULT_FILTERS[k];
   }
+  return out;
+};
+
+/* A preset click keeps the active curated-set lenses (operator ruling 6,
+ * 2026-10-19): the preset sets the market criteria, the sets ride along
+ * unchanged — including a set a pre-ruling blob still stores, which never
+ * overrides the live one. The ruling names the three sets only: the broker
+ * scope and the dismissed reveal still end on a preset click, as before. */
+export const withPresetLenses = (
+  preset: ListingFilters,
+  current: ListingFilters,
+): ListingFilters => {
+  const out = { ...preset };
+  for (const name of CURATED_SET_NAMES) out[name] = current[name];
   return out;
 };
 
@@ -1155,8 +1128,10 @@ const coerceStoredFilters = (stored: unknown): ListingFilters => {
   const def = DEFAULT_FILTERS as unknown as Record<string, unknown>;
   const out: Record<string, unknown> = { ...def };
   if (stored && typeof stored === 'object') {
-    for (const [k, vRaw] of Object.entries(stored as Record<string, unknown>)) {
-      if (!(k in def)) continue;
+    const blob = stored as Record<string, unknown>;
+    for (const name of CURATED_SET_NAMES) out[name] = storedScope(name, blob);
+    for (const [k, vRaw] of Object.entries(blob)) {
+      if (!(k in def) || (CURATED_SET_NAMES as string[]).includes(k)) continue;
       // Migration shim: categoryMain went scalar -> array. Lift an old stored
       // scalar (e.g. "dum") to ["dum"] so a preset saved before the multiselect
       // change keeps its category instead of silently reverting to ['byt'].
@@ -1170,6 +1145,33 @@ const coerceStoredFilters = (stored: unknown): ListingFilters => {
   }
   return out as unknown as ListingFilters;
 };
+
+const idList = (v: unknown): number[] | null =>
+  Array.isArray(v) && v.every((x) => Number.isInteger(x) && x > 0) ? (v as number[]) : null;
+
+/* A curated set as a stored blob may hold it: a SetScope, or a shape from
+ * before lib/setScope — `tags: number[]` + `tagsExcluded: number[]`,
+ * `collections: number[]`, `pipeline: {stage_ids}` ([] = any stage) — lifted
+ * losslessly; anything else is dropped (off). */
+function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope | null {
+  const v = blob[name];
+  const ids = idList(v);
+  if (ids) {
+    const out = name === 'tags' ? idList(blob.tagsExcluded) ?? [] : [];
+    return normalizeScope({ set: null, in: ids, out });
+  }
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (name === 'pipeline' && 'stage_ids' in o) {
+    const stages = idList(o.stage_ids);
+    if (!stages) return null;
+    return stages.length ? { set: null, in: stages, out: [] } : { set: 'in', in: [], out: [] };
+  }
+  const inc = idList(o.in);
+  const exc = idList(o.out);
+  if (!inc || !exc || !(o.set === null || o.set === 'in' || o.set === 'out')) return null;
+  return normalizeScope({ set: o.set, in: inc, out: exc });
+}
 
 /** Read a stored preset blob, tolerating the legacy bare-`ListingFilters`
  *  shape (presets saved before sort was captured) and fields whose type drifted
@@ -1202,16 +1204,12 @@ export const filtersEqualForPreset = (
   current: ListingFilters,
   saved: ListingFilters,
 ): boolean => {
-  const a = toSearchParams({ ...DEFAULT_FILTERS, ...current });
-  const b = toSearchParams({ ...DEFAULT_FILTERS, ...saved });
+  // The lenses sit outside preset identity: switching one on must not light up
+  // "Update preset", and a preset saved before they existed must not read as
+  // dirty the moment one is toggled.
+  const a = toSearchParams(stripPresetExcluded({ ...DEFAULT_FILTERS, ...current }));
+  const b = toSearchParams(stripPresetExcluded({ ...DEFAULT_FILTERS, ...saved }));
   if (!b.has('bbox')) a.delete('bbox');
-  // The lenses (pipeline scope) sit outside preset identity: switching one on
-  // must not light up "Update preset", and a preset saved before they existed
-  // must not read as dirty the moment one is toggled.
-  for (const p of PRESET_EXCLUDED_PARAMS) {
-    a.delete(p);
-    b.delete(p);
-  }
   return canonicalParams(a) === canonicalParams(b);
 };
 
@@ -1277,7 +1275,6 @@ export const REGISTRY_KEY_MAP = {
   show_dismissed: 'showDismissed',
   pipeline: 'pipeline',
   tags: 'tags',
-  tags_excluded: 'tagsExcluded',
   collections: 'collections',
   tom_days_min: 'tomDaysMin',
   tom_days_max: 'tomDaysMax',
@@ -1440,17 +1437,15 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
   },
   { test: (f) => f.tomDaysMin != null || f.tomDaysMax != null, label: 'time on market' },
   { test: (f) => f.tomObservedOnly, label: 'newly listed only' },
-  { test: (f) => f.tags.length > 0 || f.tagsExcluded.length > 0, label: 'tags' },
   { test: (f) => f.priceGrowthRules.length > 0, label: 'market growth (datasets)' },
   { test: (f) => f.withEstimates, label: 'with estimates' },
   /* A watchdog never surfaces a dismissed property, whatever the spec says. */
   { test: (f) => f.showDismissed, label: 'dismissed properties' },
-  /* The pipeline and collections are the operator's own state: a watchdog
-   * scoped to either would only ever fire on properties they already put
-   * there — and "new listing" events can't match a card, or a membership,
-   * that doesn't exist yet. */
-  { test: (f) => f.pipeline != null, label: 'pipeline' },
-  { test: (f) => f.collections.length > 0, label: 'collections' },
+  /* The curated sets are the operator's own state: a watchdog scoped to one
+   * would only ever fire on properties they already put there — and "new
+   * listing" events can't match a card, or a membership, that doesn't exist
+   * yet. */
+  ...CURATED_SET_NAMES.map((name) => ({ test: (f: ListingFilters) => scopeActive(f[name]), label: name })),
   /* "Alert me when broker X lists something new" is a real, separable feature
    * idea, not built yet — the matcher has no broker join today. */
   { test: (f) => f.brokerId != null, label: 'broker' },

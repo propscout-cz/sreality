@@ -86,8 +86,8 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # over 625's WHERE verbatim (tests/test_626_stats_dashboard.py). Re-read the chip
 # arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "626_stats_dashboard.sql",
-    "browse_map_cells": "625_tom_observed.sql",
+    "browse_stats_properties": "629_curated_set_scope.sql",
+    "browse_map_cells": "629_curated_set_scope.sql",
 }
 
 
@@ -200,7 +200,8 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     parameters and 598's `property_ids_excluded`, and 597 dropped the five nothing
     sent (and the map's `listing_ids_filter`) — tests/test_portal_exclusion_migration.py
     and tests/test_property_ids_excluded_migration.py pin each step. 626 appended the
-    Stats pivot's chart `spec`, which shapes the answer and never the cohort."""
+    Stats pivot's chart `spec`, which shapes the answer and never the cohort; 629 the
+    nine curated-set scope parameters (tests/test_curated_set_scope_migration.py)."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
     for func, previous, own in (
@@ -212,6 +213,9 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
         assert new == [p for p in old if p not in gone] + [
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
             "property_ids_excluded", "tom_observed_only", *own,
+            # 629: the curated-set scope, three sets x (set, in, out), judged under RLS.
+            "tags_set", "tags_in", "tags_out", "collections_set", "collections_in",
+            "collections_out", "pipeline_set", "pipeline_in", "pipeline_out",
         ], f"{func}: parameter list changed"
         for chip_param in (
             "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",

@@ -126,12 +126,6 @@ interface Props {
   mergeMode: boolean;
   selectedPropertyIds: ReadonlySet<number>;
   onToggleSelect: (propertyId: number) => void;
-  /* The cohort is filtered by deal-pipeline membership right now (the Pipeline
-   * scope chip). Bookmark writes then change the result set, so the card
-   * funnels must invalidate the Browse reads — see usePipelineCard. */
-  pipelineScoped: boolean;
-  /* The same claim for collection membership — see revalidateCollections. */
-  collectionScoped: boolean;
   /* On-card estimate: latest rent estimate per listing id (keyed by
    * sreality_id), the set of ids whose run is being kicked off right now
    * (optimistic spinner), and the trigger. Estimate runs on apartment cards
@@ -166,8 +160,6 @@ export default function ListingCards({
   mergeMode,
   selectedPropertyIds,
   onToggleSelect,
-  pipelineScoped,
-  collectionScoped,
   estimates,
   estimatingIds,
   onEstimate,
@@ -250,8 +242,6 @@ export default function ListingCards({
                     estimate={r.sreality_id != null ? estimates?.[r.sreality_id] : undefined}
                     estimating={r.sreality_id != null && estimatingIds.has(r.sreality_id)}
                     onEstimate={onEstimate}
-                    pipelineScoped={pipelineScoped}
-                    collectionScoped={collectionScoped}
                     orderPortal={orderPortal}
                   />
                 </li>
@@ -282,13 +272,7 @@ export default function ListingCards({
  * the split mirrors PipelineFunnelButton / PipelineToggle over their one menu.
  * Membership is the one shared member map (one request for the whole grid);
  * a failed read is a retry, never "in no collection" (MS16). */
-function CollectionSaveButton({
-  property_id,
-  cohortScoped,
-}: {
-  property_id: number;
-  cohortScoped: boolean;
-}) {
+function CollectionSaveButton({ property_id }: { property_id: number }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
@@ -330,7 +314,6 @@ function CollectionSaveButton({
           memberIds={memberIds}
           anchorRef={btnRef}
           onClose={close}
-          cohortScoped={cohortScoped}
         />
       )}
     </>
@@ -351,8 +334,6 @@ function Card({
   estimate,
   estimating,
   onEstimate,
-  pipelineScoped,
-  collectionScoped,
   orderPortal,
 }: {
   r: CardRow;
@@ -371,11 +352,6 @@ function Card({
   estimate: ListingEstimate | undefined;
   estimating: boolean;
   onEstimate: (srealityId: number) => void;
-  /* The cohort is currently scoped to the deal pipeline, so a bookmark write
-   * changes which cards match — see usePipelineCard's cohortScoped. */
-  pipelineScoped: boolean;
-  /* The same claim for collection membership — see revalidateCollections. */
-  collectionScoped: boolean;
   orderPortal: string | null;
 }) {
   /* The card element itself, for the map-origin scrollIntoView below. Both
@@ -530,14 +506,8 @@ function Card({
         )}
         {!mergeMode && (
           <div className="absolute top-1 left-1 z-[var(--z-card-action)] flex items-center gap-1">
-            <PipelineFunnelButton
-              property_id={r.property_id}
-              cohortScoped={pipelineScoped}
-            />
-            <CollectionSaveButton
-              property_id={r.property_id}
-              cohortScoped={collectionScoped}
-            />
+            <PipelineFunnelButton property_id={r.property_id} />
+            <CollectionSaveButton property_id={r.property_id} />
             <DismissButton property_id={r.property_id} />
             <NoteMark property_id={r.property_id} />
           </div>

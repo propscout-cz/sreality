@@ -10,7 +10,7 @@
  * A `form` block is one <FilterForm> slice: its ids render in REGISTRY order with
  * min/max pairs folded into one row (FilterForm `formRows`), whatever order they
  * are listed in here. A `custom` block is a control the registry form cannot
- * draw (the place typeahead, the two-sided tag and portal chips, …); what it
+ * draw (the place typeahead, the two-sided portal chips, …); what it
  * edits is the phone's concern (components/phone/filterRows `CUSTOM_REACH`),
  * kept out of here so the desktop's first visit does not carry it. */
 
@@ -21,7 +21,6 @@ export type CustomBlockKey =
   | 'subtype'
   | 'districts'
   | 'include_no_price'
-  | 'tags'
   | 'show_dismissed'
   | 'city_population_hint'
   | 'market_growth'
@@ -211,7 +210,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Curation & quality',
     keys: [
-      'pipeline', 'tags', 'tagsExcluded', 'collections', 'withEstimates', 'showDismissed',
+      'pipeline', 'tags', 'collections', 'withEstimates', 'showDismissed',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
@@ -221,9 +220,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
       {
         title: 'Curation',
         blocks: [
-          form({ pipeline: 'Pipeline', collections: 'Kolekce', with_estimates: 'With estimates' }),
-          /* Two registry ids, one two-sided control (the portal control's shape). */
-          { kind: 'custom', key: 'tags', label: 'Tags', caption: true },
+          form({ tags: 'Tags', collections: 'Kolekce', pipeline: 'Pipeline', with_estimates: 'With estimates' }),
           { kind: 'custom', key: 'show_dismissed', label: 'Show dismissed properties' },
         ],
       },

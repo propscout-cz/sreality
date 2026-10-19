@@ -8,7 +8,8 @@
  * Every write is the SPA's own, unchanged (rule 22): the funnel is
  * `usePipelineCard` (out → a tap adds at the entry stage; in → the stage menu,
  * never a remove toggle), the bookmark is the collection save list, the eye is
- * `useDismissal` (hide with an undo toast; on a hidden property, restore); the pin
+ * `useDismissal` (hide with an undo toast; on a hidden property, restore), and
+ * each settles the feed's own Browse read in place (lib/curationSettle); the pin
  * writes nothing (the location sheet reads only while open). The
  * reads are the shared ones every Browse card dedupes onto: pipeline members +
  * stages, the collection member map, the per-property dismissal state. A failed

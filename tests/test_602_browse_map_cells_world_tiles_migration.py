@@ -119,7 +119,7 @@ def test_the_latest_definitions() -> None:
     (tests/test_one_place_predicate.py pins the swap); 625 restated 605's with one appended
     parameter and one predicate (tom_observed_only). The Stats RPC's latest definition is
     pinned where it lives: tests/test_626_stats_dashboard.py."""
-    assert latest_definition(FN).name == "625_tom_observed.sql"
+    assert latest_definition(FN).name == "629_curated_set_scope.sql"
 
 
 def test_the_receipt_probes_the_function() -> None:

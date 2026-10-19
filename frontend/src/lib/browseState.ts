@@ -22,6 +22,7 @@ import {
   pipelineViewFilters,
   readPresetSpec,
   toSearchParams,
+  withPresetLenses,
   type ListingFilters,
   type MapBounds,
 } from '@/lib/filters';
@@ -241,14 +242,14 @@ export function useUrlBrowseState(): BrowseViewState {
   const loadPreset = useCallback(
     (p: FilterPreset) => {
       const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
-      const sp = preserveExtras(toSearchParams(pf));
+      const sp = preserveExtras(toSearchParams(withPresetLenses(pf, filters)));
       const presetSort = ps ?? sortToParam(DEFAULT_SORT);
       if (presetSort === sortToParam(DEFAULT_SORT)) sp.delete('sort');
       else sp.set('sort', presetSort);
       sp.set('preset', p.id);
       setSearchParams(sp, { replace: false });
     },
-    [preserveExtras, setSearchParams],
+    [filters, preserveExtras, setSearchParams],
   );
 
   const loadPipelineView = useCallback(() => {
@@ -299,7 +300,7 @@ export function useMemoryBrowseState(init: {
       setActivePresetId,
       loadPreset: (p) => {
         const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
-        setFiltersState(pf);
+        setFiltersState((f) => withPresetLenses(pf, f));
         if (ps) setSortState(parseSort(ps));
       },
       loadPipelineView: () => {

@@ -170,20 +170,13 @@ describe('collection revalidation contract', () => {
     ]);
   });
 
-  /* When Browse is scoped to collections, membership IS the cohort: a removal
-   * has to drop the row from the list, not just un-fill a glyph. */
-  it('re-reads the Browse surfaces only when membership is the cohort', () => {
-    const off = vi.fn();
-    revalidateCollections({ invalidateQueries: off } as never, { collection_id: 7 });
-    expect(off).toHaveBeenCalledTimes(3);
-
-    const on = vi.fn();
-    revalidateCollections({ invalidateQueries: on } as never, { cohortScoped: true });
-    expect(on.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
-      curationKeys.propertyCollectionMembers,
-      curationKeys.collections,
-      ...browseKeys.all,
-    ]);
+  /* What a membership change does to Browse is the settle's (lib/curationSettle):
+   * revalidating the collection reads never re-reads a Browse surface. */
+  it('never re-reads a Browse surface', () => {
+    const invalidateQueries = vi.fn();
+    revalidateCollections({ invalidateQueries } as never, { collection_id: 7, shareChanged: true });
+    const roots = invalidateQueries.mock.calls.map(([arg]) => arg.queryKey[0]);
+    for (const [root] of browseKeys.all) expect(roots).not.toContain(root);
   });
 });
 

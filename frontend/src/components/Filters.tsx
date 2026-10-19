@@ -26,20 +26,15 @@ import {
   fetchDismissedCount,
   fetchNoPriceCount,
 } from '@/lib/queries';
-import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
-import { collectionLabel, useCollections } from '@/lib/collectionCache';
 import { browseKeys } from '@/lib/browseKeys';
 import { FilterForm, type CustomFilterWidget } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
 import MarketGrowthFilter from '@/components/MarketGrowthFilter';
-import {
-  LocationTypeahead,
-  MultiselectChips,
-  PipelineScopePicker,
-} from '@/components/filter-controls';
-import { AccountTagFilter } from '@/components/filter-controls/TagFilterControl';
+import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
+import { AccountCuratedSetFilter } from '@/components/filter-controls/CuratedSetFilter';
+import type { CuratedSet, SetScope } from '@/lib/setScope';
 /* Lazy: this is the only control here that draws a map, it renders only in
  * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
  * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
@@ -154,82 +149,6 @@ export function IncludeNoPriceToggle({
   );
 }
 
-/* Collection scope (rule #18). The registry's `int_list` fallback is a box you
- * type ids into, so the sidebar picks from the ONE collections list instead. A
- * failed read is a retry, never "No collections yet" (MS16). Collections shared
- * with the caller sit in their own group over the SAME value array (one
- * `collections` URL parameter); a picked id the list no longer holds (revoked,
- * deleted) stays as a clearable `#id` chip rather than filtering invisibly. */
-export function CollectionsPicker({
-  value,
-  onChange,
-}: {
-  value: ReadonlyArray<number> | null;
-  onChange: (next: number[] | null) => void;
-}) {
-  const { collections, mine, shared, byId, query: q } = useCollections();
-
-  if (q.isLoading) {
-    return (
-      <p className="text-[0.75rem] text-[var(--color-ink-4)]">Loading…</p>
-    );
-  }
-
-  if (readFailed(q)) {
-    return <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void q.refetch()} />;
-  }
-
-  const picked = value ?? [];
-  const missing = picked.filter((id) => !byId.has(id));
-
-  if (collections.length === 0 && missing.length === 0) {
-    return (
-      <p className="text-[0.75rem] text-[var(--color-ink-4)]">
-        No collections yet. Create one from the Collections page.
-      </p>
-    );
-  }
-
-  const set = (next: number[]) => onChange(next.length === 0 ? null : next);
-  const chips = (items: typeof collections) =>
-    items.map((c) => ({ value: c.id, label: collectionLabel(c) }));
-  const grouped = shared.length > 0;
-  return (
-    <div className="flex flex-col gap-2">
-      {mine.length > 0 && (
-        <PickerGroup label={grouped ? 'Mine' : null}>
-          <MultiselectChips value={picked} options={chips(mine)} onChange={set} />
-        </PickerGroup>
-      )}
-      {grouped && (
-        <PickerGroup label="Shared with me">
-          <MultiselectChips value={picked} options={chips(shared)} onChange={set} />
-        </PickerGroup>
-      )}
-      {missing.length > 0 && (
-        <PickerGroup label="No longer available">
-          <MultiselectChips
-            value={picked}
-            options={missing.map((id) => ({ value: id, label: `#${id}` }))}
-            onChange={set}
-          />
-        </PickerGroup>
-      )}
-    </div>
-  );
-}
-
-function PickerGroup({ label, children }: { label: string | null; children: ReactNode }) {
-  if (label == null) return <>{children}</>;
-  return (
-    <div role="group" aria-label={label} className="flex flex-col gap-1">
-      {/* The sidebar's sub-group caption (as PipelineScopePicker's "Fáze"). */}
-      <p className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">{label}</p>
-      {children}
-    </div>
-  );
-}
-
 /* Curation "show dismissed" toggle (migration 537). Dismissed properties are
  * hidden by default; the hint says how many the CURRENT cohort is hiding — the
  * difference of the two cohort totals, one of which is the header's own cached
@@ -305,12 +224,21 @@ export const sidebarUnits = (f: ListingFilters): Record<string, string> => {
   return { min_price_per_m2: unit, max_price_per_m2: unit };
 };
 
+/* A curated set (tags, collections, pipeline) is ONE registry value, so the
+ * registry form draws it as a widget: the one curated-set control. */
+const curatedSetWidget =
+  (set: CuratedSet): CustomFilterWidget =>
+  ({ value, onChange }) => (
+    <AccountCuratedSetFilter set={set} value={value as SetScope | null} onChange={onChange} />
+  );
+
 /* Rich widgets the registry form cannot express generically, keyed by registry
  * id; each owns its own reads, the form wires value / onChange through. */
 export const SIDEBAR_WIDGETS: Record<string, CustomFilterWidget> = {
-  collections: CollectionsPicker as never,
+  tags: curatedSetWidget('tags'),
+  collections: curatedSetWidget('collections'),
+  pipeline: curatedSetWidget('pipeline'),
   city_index_rules: CityIndexRulesPicker as never,
-  pipeline: PipelineScopePicker as never,
 };
 
 /* The folded sidebar: a slim full-height strip, one click anywhere on it brings
@@ -419,10 +347,6 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         );
       case 'include_no_price':
         return <IncludeNoPriceToggle filters={filters} onChange={onChange} />;
-      case 'tags':
-        return (
-          <AccountTagFilter value={filters} onChange={(next) => onChange({ ...filters, ...next })} />
-        );
       case 'show_dismissed':
         return <ShowDismissedToggle filters={filters} onChange={onChange} />;
       case 'city_population_hint':

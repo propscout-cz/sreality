@@ -25,7 +25,6 @@
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
 import { dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
-import { browseKeys } from '@/lib/browseKeys';
 import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
@@ -83,15 +82,6 @@ export const PIPELINE_REVALIDATE: readonly QueryKey[] = [
   pipelineKeys.board,
   dismissalKeys.all,
 ];
-
-/* `cohortScoped` is the caller's one knob: when Browse is scoped to the
- * pipeline, membership IS the cohort — un-bookmarking must drop the row from
- * the list — so the Browse read surfaces have to refetch too. With the scope
- * off, membership changes nothing about which properties match, and refetching
- * map + every loaded card page + count + stats on a funnel click is pure waste. */
-export function pipelineRevalidation(cohortScoped: boolean): readonly QueryKey[] {
-  return cohortScoped ? [...PIPELINE_REVALIDATE, ...browseKeys.all] : PIPELINE_REVALIDATE;
-}
 
 /* The same re-read for a write that is not a card write: a merge or split moves
  * cards between properties (the Browse merge, lib/mergedAdverts.refreshAfterSplit). */

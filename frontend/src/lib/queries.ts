@@ -13,7 +13,6 @@ import {
   type ListingFilters,
   type ListingStatus,
   type MapBounds,
-  type PipelineScope,
   buildingMaterialToValues,
   isoNDaysAgo,
   priceChangeCountColumn,
@@ -22,8 +21,7 @@ import {
   OWNERSHIP_CANONICAL,
 } from './filters';
 import { applyAgendaFilters, applyRegistryFilters } from './registryQueryBuilder';
-import { propertyIdsInCollections } from './collectionScope';
-import { propertyIdsForTags, tagChoiceActive } from './tagScope';
+import { scopeArgs } from './setScope';
 import {
   applyKeyset,
   nextCursorFrom,
@@ -296,15 +294,13 @@ const solePortal = (f: ListingFilters): string | null =>
 /* Relation names, in one place so a fetcher cannot read one relation and count
  * another. */
 const BROWSE_LIST_RELATION = 'browse_list';
-const MAP_RELATION = 'properties_map_mv';
 
-/* Each relation's dismissal-aware twin (migration 537): the same rows minus the
- * caller's dismissed properties, excluded server-side under the caller's RLS —
- * a dismissed set grows without bound, so it can never ride in the GET URL. */
-const HIDING_DISMISSED: Record<string, string> = {
-  [BROWSE_LIST_RELATION]: 'browse_list_visible',
-  [MAP_RELATION]: 'properties_map_visible',
-};
+/* Each read model's source function (migrations 537 + 629): the same rows, minus
+ * the caller's dismissed properties unless revealed, narrowed by the curated-set
+ * scope — membership judged server-side under the caller's RLS, because an
+ * operator's own sets only grow and can never ride in the GET URL. */
+const BROWSE_LIST_SOURCE = 'browse_list_visible';
+const MAP_SOURCE = 'properties_map_visible';
 
 interface CountOption {
   count?: 'exact';
@@ -315,24 +311,23 @@ const selectFrom = (relation: string, columns: string, opts?: CountOption) =>
   supabase.from(relation).select(columns, opts);
 
 /* THE start of every Browse cohort read, so the list, its count, the map pins
- * and the no-price hint cannot disagree about which properties are hidden. */
+ * and the no-price hint cannot disagree about which properties are hidden. Only
+ * the active scope sides are sent (lib/setScope.scopeArgs). */
 const readSource = (
-  relation: string,
+  fn: string,
   f: ListingFilters,
   columns: string,
   opts: CountOption = {},
 ): ReturnType<typeof selectFrom> =>
-  f.showDismissed
-    ? selectFrom(relation, columns, opts)
-    : (supabase
-        .rpc(HIDING_DISMISSED[relation], {}, { get: true, ...opts })
-        .select(columns) as unknown as ReturnType<typeof selectFrom>);
+  supabase
+    .rpc(fn, { hide_dismissed: !f.showDismissed, ...scopeArgs(f) }, { get: true, ...opts })
+    .select(columns) as unknown as ReturnType<typeof selectFrom>;
 
 const listSource = (f: ListingFilters, columns: string, opts?: CountOption) =>
-  readSource(BROWSE_LIST_RELATION, f, columns, opts);
+  readSource(BROWSE_LIST_SOURCE, f, columns, opts);
 
 const mapSource = (f: ListingFilters, columns: string) =>
-  readSource(MAP_RELATION, f, columns);
+  readSource(MAP_SOURCE, f, columns);
 
 /* One portal's "Newest first" (MS19, Q49 b): with exactly one portal P selected,
  * "Newest first" and "Oldest first" order properties by when their newest ad on
@@ -549,37 +544,6 @@ export interface MapResult {
   total: number | null;
 }
 
-/* The two curated-set prefilters share ONE shape: read the membership rows
- * whole (complete-or-throw, via fetchAllRows — the SAME member map every tag
- * chip and collection glyph renders from) and reduce them to property-id
- * lists. They differ only in the predicate — tags AND (plus a "none of" side),
- * collections OR.
- *
- * Returns null when the filter is off, [] when it matched nothing (the caller
- * short-circuits to zero results), else the ids. Hoistable functions so the
- * Map/Table fetchers below can call them without forward-ref issues. */
-async function resolveTagPrefilter(
-  f: ListingFilters,
-  signal?: AbortSignal,
-): Promise<{ allow: number[] | null; deny: number[] | null }> {
-  if (!tagChoiceActive(f)) return { allow: null, deny: null };
-  return propertyIdsForTags(await fetchPropertyTagMemberSet({ signal }), f);
-}
-
-/* Collection scope (rule #18). Reads through the SAME member map every
- * collection glyph renders from, so "which collections is this property in"
- * has one answer on screen and in the cohort. OR across the selection. */
-async function resolveCollectionPrefilter(
-  f: ListingFilters,
-  signal?: AbortSignal,
-): Promise<number[] | null> {
-  if (f.collections.length === 0) return null;
-  return propertyIdsInCollections(
-    await fetchPropertyCollectionMemberSet({ signal }),
-    f.collections,
-  );
-}
-
 /* min/max city population and the near_* proximity filters are NOT here:
  * since migration 142 they're precomputed columns on properties_public, so
  * they dispatch directly via applyRegistryFilters (no prefilter RPC, no anon
@@ -660,8 +624,8 @@ async function resolvePriceGrowthPrefilter(
 /* With-estimates prefilter (migration 173). property_estimates_public is the
  * anon-readable property-grain projection of successful estimation runs —
  * tiny (one row per estimated property), so fetching the full id list and
- * AND'ing it via `.in('property_id', ids)` is the same composition pattern
- * as the tags prefilter. Returns null when the filter is off. */
+ * AND'ing it via `.in('property_id', ids)` is cheap. Returns null when the
+ * filter is off. */
 async function resolveEstimatesPrefilter(
   f: ListingFilters,
   signal?: AbortSignal,
@@ -679,36 +643,6 @@ async function resolveEstimatesPrefilter(
   return rows.map((r) => r.property_id);
 }
 
-/* Deal-pipeline scope prefilter (rule #22, migration 205). Same composition
- * pattern as tags / with-estimates: resolve the property-id allowlist, AND it
- * onto the cohort via `.in('property_id', …)`. Reads through the SAME
- * `fetchPipelineMembers` every funnel uses, so "what is in my pipeline" has one
- * definition — a second query here could disagree with the badges on screen.
- *
- * An empty `stage_ids` means "any stage"; a non-empty one narrows to those
- * stages (ids are account-scoped, and the map only ever holds this account's
- * cards, so a foreign id simply matches nothing). Returns null when off. */
-export const pipelineIdsForScope = (
-  members: PipelineMembers,
-  scope: PipelineScope | null,
-): number[] | null => {
-  if (scope == null) return null;
-  const wanted = new Set(scope.stage_ids);
-  const ids: number[] = [];
-  for (const m of members.values()) {
-    if (wanted.size === 0 || wanted.has(m.stage_id)) ids.push(m.property_id);
-  }
-  return ids;
-};
-
-async function resolvePipelinePrefilter(
-  f: ListingFilters,
-  signal?: AbortSignal,
-): Promise<number[] | null> {
-  if (f.pipeline == null) return null;
-  return pipelineIdsForScope(await fetchPipelineMembers({ signal }), f.pipeline);
-}
-
 /* Broker scope prefilter ("Explore this broker's listings"). Broker data is
  * architecturally dark to the anon path this whole file otherwise reads —
  * migration 299 revoked every broker relation from anon AND authenticated —
@@ -724,7 +658,7 @@ async function resolveBrokerPrefilter(f: ListingFilters): Promise<number[] | nul
 }
 
 /* Intersect two prefilter id sets (null = "no constraint"). Used so a
- * filter that combines tags + city-quality applies both prefilters
+ * filter that combines with-estimates + a broker applies both prefilters
  * before paging the main query. */
 const intersectPrefilters = (
   a: number[] | null,
@@ -743,12 +677,7 @@ const intersectPrefilters = (
  * Stats pivot (lib/stats.ts). */
 export interface BrowsePrefilters {
   obecIds: number[] | null;       // market growth (price-stats datasets)
-  propertyIds: number[] | null;   // tags ∩ with-estimates ∩ pipeline ∩ collections ∩ broker
-  /* The one DENYLIST: properties carrying an excluded tag (migration 598's
-   * `property_ids_excluded`). A denylist cannot ride in an allowlist — "not
-   * tagged X" is the market minus a few — so it is its own id space, and a
-   * future "not in collection" joins it here rather than growing a parameter. */
-  propertyIdsExcluded: number[] | null;
+  propertyIds: number[] | null;   // with-estimates ∩ broker
   empty: boolean;
 }
 
@@ -756,44 +685,31 @@ export async function resolveBrowsePrefilters(
   f: ListingFilters,
   signal?: AbortSignal,
 ): Promise<BrowsePrefilters> {
-  const [
-    tagProps, cityObec, growthObec, estimateProps, pipelineProps, collectionProps, brokerProps,
-  ] = await Promise.all([
-    resolveTagPrefilter(f, signal),
+  const [cityObec, growthObec, estimateProps, brokerProps] = await Promise.all([
     resolveCityQualityObecPrefilter(f, signal),
     resolvePriceGrowthPrefilter(f, signal),
     resolveEstimatesPrefilter(f, signal),
-    resolvePipelinePrefilter(f, signal),
-    resolveCollectionPrefilter(f, signal),
     resolveBrokerPrefilter(f),
   ]);
   // The property-grain allowlists intersect into the one .in('property_id', …)
   // applyPrefilters emits.
-  const propertyIds = [estimateProps, pipelineProps, collectionProps, brokerProps].reduce(
-    intersectPrefilters,
-    tagProps.allow,
-  );
+  const propertyIds = intersectPrefilters(estimateProps, brokerProps);
   // City-quality and market-growth are BOTH obec-grain now, and applyPrefilters applies
   // .in('obec_id', …) once — so they must be intersected here, not applied twice.
   const obecIds = intersectPrefilters(cityObec, growthObec);
   const empty =
     (obecIds != null && obecIds.length === 0)
     || (propertyIds != null && propertyIds.length === 0);
-  return { obecIds, propertyIds, propertyIdsExcluded: tagProps.deny, empty };
+  return { obecIds, propertyIds, empty };
 }
 
 /* Exported for queries.test.ts. */
 export const applyPrefilters = <T>(q: T, p: BrowsePrefilters): T => {
   let r = q as unknown as {
     in: (c: string, v: readonly unknown[]) => typeof r;
-    not: (c: string, op: 'in', v: string) => typeof r;
   };
   if (p.obecIds != null) r = r.in('obec_id', p.obecIds);
   if (p.propertyIds != null) r = r.in('property_id', p.propertyIds);
-  /* An empty denylist drops nothing, so it emits nothing. */
-  if (p.propertyIdsExcluded?.length) {
-    r = r.not('property_id', 'in', `(${p.propertyIdsExcluded.join(',')})`);
-  }
   return r as unknown as T;
 };
 
@@ -1296,14 +1212,13 @@ export const buildBrowseStatsArgs = (
     portal_excluded_filter:      f.portalsExcluded.length ? f.portalsExcluded : null,
     portal_excluded_active_only: f.portalsExcludedActiveOnly,
     /* Migration 162 — market-growth obec allowlist (price-stats datasets).
-     * Migration 378 — generic property-id allowlist; carries the deal-pipeline
-     * scope (rule #22) today, and is the seam any future property-grain
-     * prefilter should reuse instead of growing another bespoke param.
-     * Migration 598 — the one denylist, properties carrying an excluded tag.
-     * All three are resolved over the network by the caller (`pre`). */
+     * Migration 378 — generic property-id allowlist (with-estimates ∩ broker).
+     * Both are resolved over the network by the caller (`pre`). */
     obec_ids_filter:         pre.obecIds,
     property_ids_filter:     pre.propertyIds,
-    property_ids_excluded:   pre.propertyIdsExcluded,
+    /* Migration 629 — the curated-set scope, judged server-side; only the
+     * active sides are sent, as on the list read (readSource). */
+    ...scopeArgs(f),
   };
 };
 
@@ -2175,14 +2090,14 @@ export const useUrlPreview = (): UseMutationResult<
 /* FastAPI service (lib/api.ts) so listing_count + ordering live in one      */
 /* place. The reverse-index reads below — "which tags / collections does      */
 /* property X belong to" — read the property-grain *_public views directly,  */
-/* whole, matching the read-only pattern Browse / Region use. Both Browse     */
-/* curated-set facets (tags, collections) resolve from those same membership  */
-/* rows — see resolveTagPrefilter / resolveCollectionPrefilter.              */
+/* whole, matching the read-only pattern Browse / Region use. The Browse     */
+/* cohort judges the same rows server-side (migration 629, lib/setScope); the */
+/* maps here feed the glyphs, the pipeline board and in-place settling.       */
 /* -------------------------------------------------------------------------- */
 
 /* All (property_id → member ids) rows of one membership view in ONE read,
  * shared (React Query dedupes the key) by every card control, glyph and cohort
- * filter that asks — the curation analogue of fetchPipelineMemberSet, so Browse
+ * filter that asks — the curation analogue of fetchPipelineMembers, so Browse
  * fires one query instead of one-per-card.
  *
  * It is also the ONLY membership read of its view: a per-property key existed
@@ -2363,7 +2278,8 @@ export const fetchDismissedCount = async (
 
 /* Every pipeline card the caller's account holds, keyed by property_id — one
  * cheap read shared (React Query dedupes the key) by every funnel on every
- * surface: Browse cards, the Table rows, and the pipeline scope's prefilter.
+ * surface (Browse cards, the Table rows), the board and lib/curationSettle.
+ * It narrows no cohort: the pipeline scope is judged by migration 629.
  *
  * It carries the stage, not just membership, because the funnel renders the
  * stage badge (migration 377) — the earlier "set of ids" shape forced each
@@ -2371,9 +2287,8 @@ export const fetchDismissedCount = async (
  * read. `property_pipeline_public` is RLS-scoped + security_invoker (migration
  * 316), so this returns the caller's own board and nothing else.
  *
- * Exhaustive via fetchAllRows for the same reason the tag prefilter is: a
- * silently truncated membership map would both blank funnels and, once the
- * pipeline scope is on, drop properties the operator explicitly asked to see. */
+ * Exhaustive via fetchAllRows: a silently truncated membership map would blank
+ * funnels and misjudge the in-place settle of a pipeline-scoped list. */
 export interface PipelineMembership {
   property_id: number;
   stage_id: number;

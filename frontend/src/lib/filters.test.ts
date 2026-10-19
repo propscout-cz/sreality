@@ -31,6 +31,7 @@ import {
   type BuildingMaterial,
   type ListingFilters,
   type MapBounds,
+  type PresetSpec,
   listingFiltersToRegistryView,
   summarise,
   toSearchParams,
@@ -302,7 +303,7 @@ describe('URL round-trip', () => {
 describe('pipelineViewFilters', () => {
   it('constrains nothing except the pipeline itself', () => {
     const f = pipelineViewFilters();
-    expect(f.pipeline).toEqual({ stage_ids: [] });
+    expect(f.pipeline).toEqual({ set: 'in', in: [], out: [] });
     expect(f.categoryMain).toEqual([]);   // not ['byt']
     expect(f.categoryType).toBeNull();    // not 'pronajem'
     expect(f.districts).toEqual([]);
@@ -358,14 +359,14 @@ describe('nullable deal type', () => {
 
 describe('pipeline scope URL codec', () => {
   it('round-trips "any stage"', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { stage_ids: [] } };
+    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { set: 'in', in: [], out: [] } };
     const sp = toSearchParams(f);
     expect(sp.get('pipeline')).toBe('any');
     expect(fromSearchParams(sp)).toEqual(f);
   });
 
   it('round-trips a stage narrowing', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { stage_ids: [12, 13] } };
+    const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline: { set: null, in: [12, 13], out: [] } };
     const sp = toSearchParams(f);
     expect(sp.get('pipeline')).toBe('12,13');
     expect(fromSearchParams(sp)).toEqual(f);
@@ -376,17 +377,31 @@ describe('pipeline scope URL codec', () => {
     expect(fromSearchParams(new URLSearchParams()).pipeline).toBeNull();
   });
 
-  it('degrades an unparseable stage list to "any stage", never to off', () => {
-    // Losing the scope entirely would swap the operator's pipeline for the
-    // whole market — the loud failure is showing them all their cards.
-    const got = fromSearchParams(new URLSearchParams('pipeline=abc'));
-    expect(got.pipeline).toEqual({ stage_ids: [] });
+  /* The one behaviour change of the curated-set codec (lib/setScope): junk once
+   * meant "any stage" here alone; now junk on ANY side of ANY set reads as off,
+   * uniformly. An old bundle shown a new param ignores it and shows a WIDER
+   * cohort, never an inverted one. */
+  it('degrades an unparseable stage list to off, like every curated-set side', () => {
+    expect(fromSearchParams(new URLSearchParams('pipeline=abc')).pipeline).toBeNull();
+    expect(fromSearchParams(new URLSearchParams('pipeline_excluded=abc')).pipeline).toBeNull();
+  });
+
+  it('round-trips "mimo pipeline" and a stage excluded from the whole pipeline', () => {
+    for (const pipeline of [
+      { set: 'out' as const, in: [], out: [] },
+      { set: 'in' as const, in: [], out: [9] },
+    ]) {
+      const f: ListingFilters = { ...DEFAULT_FILTERS, pipeline };
+      expect(fromSearchParams(toSearchParams(f))).toEqual(f);
+    }
+    expect(toSearchParams({ ...DEFAULT_FILTERS, pipeline: { set: 'out', in: [], out: [] } })
+      .get('pipeline_excluded')).toBe('any');
   });
 });
 
 describe('collection scope URL codec', () => {
   it('round-trips a selection as a CSV of ids', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, collections: [4, 9] };
+    const f: ListingFilters = { ...DEFAULT_FILTERS, collections: { set: null, in: [4, 9], out: [] } };
     const sp = toSearchParams(f);
     expect(sp.get('collections')).toBe('4,9');
     expect(fromSearchParams(sp)).toEqual(f);
@@ -394,12 +409,19 @@ describe('collection scope URL codec', () => {
 
   it('emits nothing when nothing is selected, and parses absence as off', () => {
     expect(toSearchParams(DEFAULT_FILTERS).has('collections')).toBe(false);
-    expect(fromSearchParams(new URLSearchParams()).collections).toEqual([]);
+    expect(fromSearchParams(new URLSearchParams()).collections).toBeNull();
   });
 
   it('drops junk ids rather than inventing a selection', () => {
     expect(fromSearchParams(new URLSearchParams('collections=4,abc,0')).collections)
-      .toEqual([4]);
+      .toEqual({ set: null, in: [4], out: [] });
+  });
+
+  it('round-trips "v žádné kolekci" as collections_excluded=any', () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, collections: { set: 'out', in: [], out: [] } };
+    const sp = toSearchParams(f);
+    expect(sp.toString()).toContain('collections_excluded=any');
+    expect(fromSearchParams(sp)).toEqual(f);
   });
 });
 
@@ -525,21 +547,43 @@ describe('applyRegistryUpdate', () => {
   });
 
   it('normalises null to empty arrays for the multi-value fields', () => {
-    let f: ListingFilters = { ...DEFAULT_FILTERS, tags: [1, 2, 3] };
+    let f: ListingFilters = { ...DEFAULT_FILTERS, dispositions: ['2+kk'] };
+    f = applyRegistryUpdate(f, 'dispositions', null);
+    expect(f.dispositions).toEqual([]);
+  });
+
+  it('passes a curated-set scope through both ways, null = off', () => {
+    const tags = { set: null, in: [5], out: [7] };
+    let f = applyRegistryUpdate(DEFAULT_FILTERS, 'tags', tags);
+    expect(f.tags).toEqual(tags);
+    expect(listingFiltersToRegistryView(f).tags).toEqual(tags);
     f = applyRegistryUpdate(f, 'tags', null);
-    expect(f.tags).toEqual([]);
-    f = applyRegistryUpdate(f, 'tags', [5, 7]);
-    expect(f.tags).toEqual([5, 7]);
+    expect(f.tags).toBeNull();
   });
 
   it('round-trips the tag rule\'s second side through the URL (`tags_excluded`)', () => {
-    const sp = toSearchParams({ ...DEFAULT_FILTERS, tags: [5], tagsExcluded: [7, 9] });
+    const tags = { set: null, in: [5], out: [7, 9] };
+    const sp = toSearchParams({ ...DEFAULT_FILTERS, tags });
     expect(sp.get('tags')).toBe('5');
     expect(sp.get('tags_excluded')).toBe('7,9');
-    expect(fromSearchParams(sp).tagsExcluded).toEqual([7, 9]);
+    expect(fromSearchParams(sp).tags).toEqual(tags);
     expect(toSearchParams(DEFAULT_FILTERS).has('tags_excluded')).toBe(false);
     /* The watchdog has no tag clause on either side (rule 16). */
-    expect(filtersToWatchdogSpec({ ...DEFAULT_FILTERS, tagsExcluded: [7] }).unsupported).toContain('tags');
+    expect(filtersToWatchdogSpec({ ...DEFAULT_FILTERS, tags: { set: null, in: [], out: [7] } })
+      .unsupported).toContain('tags');
+  });
+
+  it('names every active curated set in the headline, in Czech', () => {
+    const line = summarise({
+      ...DEFAULT_FILTERS,
+      tags: { set: 'out', in: [], out: [] },
+      collections: { set: null, in: [4], out: [] },
+      pipeline: { set: 'out', in: [], out: [] },
+    }, 3);
+    expect(line).toContain('bez štítků');
+    expect(line).toContain('v kolekci (1 kolekce)');
+    expect(line).toContain('mimo pipeline');
+    expect(summarise(DEFAULT_FILTERS, 3)).not.toMatch(/pipeline|kolekc|štít/);
   });
 
   it('accepts DistrictChip[] for districts; null clears the list', () => {
@@ -718,8 +762,8 @@ describe('filtersToWatchdogSpec', () => {
       ...DEFAULT_FILTERS,
       status: 'active',
       lastSeenMaxDays: 7,
-      tags: [3],
-      collections: [4],
+      tags: { set: null, in: [3], out: [] },
+      collections: { set: 'out', in: [], out: [] },
     });
     expect(unsupported).toContain('listing status');
     expect(unsupported).toContain('last/first-seen date range');
@@ -796,7 +840,7 @@ describe('filter presets', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
       priceMax: 6_000_000,
-      pipeline: { stage_ids: [12] },
+      pipeline: { set: null, in: [12], out: [] },
     };
     // Both branches: the scope is a lens, not preset criteria.
     expect(filtersForPreset(f, false).pipeline).toBeNull();
@@ -808,15 +852,18 @@ describe('filter presets', () => {
     // This is the operator-visible contract: toggling Pipeline (or picking
     // stages inside it) must NOT surface the "Update preset" button.
     expect(
-      filtersEqualForPreset({ ...saved, pipeline: { stage_ids: [] } }, saved),
+      filtersEqualForPreset({ ...saved, pipeline: { set: 'in', in: [], out: [] } }, saved),
     ).toBe(true);
     expect(
-      filtersEqualForPreset({ ...saved, pipeline: { stage_ids: [3, 9] } }, saved),
+      filtersEqualForPreset({ ...saved, pipeline: { set: null, in: [3, 9], out: [] } }, saved),
+    ).toBe(true);
+    expect(
+      filtersEqualForPreset({ ...saved, pipeline: { set: 'out', in: [], out: [] } }, saved),
     ).toBe(true);
     // …and a real criteria change still is dirty, scope on or not.
     expect(
       filtersEqualForPreset(
-        { ...saved, priceMax: 4_000_000, pipeline: { stage_ids: [] } },
+        { ...saved, priceMax: 4_000_000, pipeline: { set: 'in', in: [], out: [] } },
         saved,
       ),
     ).toBe(false);
@@ -844,15 +891,62 @@ describe('filter presets', () => {
     ).toBe(false);
   });
 
-  it('treats the collection scope as a lens too: stripped, never dirtying a preset', () => {
-    const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, collections: [4] };
-    expect(filtersForPreset(f, false).collections).toEqual([]);
-    expect(filtersForPreset(f, true).collections).toEqual([]);
-    const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
-    expect(filtersEqualForPreset({ ...saved, collections: [4, 9] }, saved)).toBe(true);
-    expect(
-      filtersEqualForPreset({ ...saved, priceMax: 4_000_000, collections: [4] }, saved),
-    ).toBe(false);
+  it('treats the collection and tag scopes as lenses too: stripped, never dirtying a preset', () => {
+    const four = { set: null, in: [4], out: [] };
+    for (const key of ['collections', 'tags'] as const) {
+      const f: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 6_000_000, [key]: four };
+      expect(filtersForPreset(f, false)[key]).toBeNull();
+      expect(filtersForPreset(f, true)[key]).toBeNull();
+      const saved: ListingFilters = { ...DEFAULT_FILTERS, priceMax: 5_000_000 };
+      expect(filtersEqualForPreset({ ...saved, [key]: { set: 'out', in: [], out: [] } }, saved))
+        .toBe(true);
+      expect(filtersEqualForPreset({ ...saved, priceMax: 4_000_000, [key]: four }, saved))
+        .toBe(false);
+    }
+  });
+
+  /* 0 of 7 live presets held a tag (2026-10-19), but a blob saved before
+   * lib/setScope must still load its lens losslessly, and a stored preset that
+   * held one must not read as dirty against the same lens. */
+  it('lifts a stored pre-setScope blob losslessly into the scope shape', () => {
+    const { filters } = readPresetSpec({
+      filters: {
+        ...DEFAULT_FILTERS,
+        tags: [1, 2],
+        tagsExcluded: [3],
+        collections: [4],
+        pipeline: { stage_ids: [] },
+      } as unknown as ListingFilters,
+    });
+    expect(filters.tags).toEqual({ set: null, in: [1, 2], out: [3] });
+    expect(filters.collections).toEqual({ set: null, in: [4], out: [] });
+    expect(filters.pipeline).toEqual({ set: 'in', in: [], out: [] });
+    expect('tagsExcluded' in filters).toBe(false);
+    const legacyEmpty = readPresetSpec({
+      filters: { ...DEFAULT_FILTERS, tags: [], tagsExcluded: [], collections: [], pipeline: null },
+    } as unknown as PresetSpec).filters;
+    expect(legacyEmpty.tags).toBeNull();
+    expect(legacyEmpty.collections).toBeNull();
+    expect(readPresetSpec({
+      filters: { ...DEFAULT_FILTERS, pipeline: { stage_ids: [5, 6] } } as unknown as ListingFilters,
+    }).filters.pipeline).toEqual({ set: null, in: [5, 6], out: [] });
+  });
+
+  it('drops a stored curated value of the wrong kind rather than mis-scoping', () => {
+    const { filters } = readPresetSpec({
+      filters: {
+        ...DEFAULT_FILTERS,
+        tags: 'x',
+        collections: [1, 'a'],
+        pipeline: { set: 'sideways', in: [], out: [] },
+      } as unknown as ListingFilters,
+    });
+    expect(filters.tags).toBeNull();
+    expect(filters.collections).toBeNull();
+    expect(filters.pipeline).toBeNull();
+    expect(readPresetSpec({
+      filters: { ...DEFAULT_FILTERS, collections: { set: 'out', in: [1], out: [] } },
+    } as unknown as PresetSpec).filters.collections).toEqual({ set: 'out', in: [], out: [] });
   });
 
   it('matches identical filter sets', () => {

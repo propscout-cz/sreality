@@ -8,8 +8,8 @@
  *
  * Membership is a PROP, not a read: every surface answers it from the one
  * shared member map (curationKeys.propertyTagMembers). Writes are here, and
- * every one revalidates through lib/tagCache, so a tag put on a board card is
- * on the property page, the Browse cohort and the phone without a reload.
+ * every one settles through lib/tagCache, so a tag put on a board card is on
+ * the property page, the Browse cohort and the phone without a reload.
  */
 
 import { useMemo, useState, type RefObject } from 'react';
@@ -20,7 +20,7 @@ import TagColorPicker from '@/components/TagColorPicker';
 import TagEditPopover from '@/components/curation/TagEditPopover';
 import { attachTag, createTag, detachTag, listTags } from '@/lib/api';
 import { curationKeys } from '@/lib/queries';
-import { revalidateTags } from '@/lib/tagCache';
+import { revalidateTags, settleTagWrite } from '@/lib/tagCache';
 import type { TagColor } from '@/lib/types';
 
 /* The trigger's accessible name, and the panel's — one string so a test that
@@ -123,11 +123,11 @@ export function TagAssignList({
 
   const attach = useMutation({
     mutationFn: (tag_id: number) => attachTag(property_id, tag_id),
-    onSuccess: () => revalidateTags(qc),
+    onSuccess: (_, tag_id) => settleTagWrite(qc, property_id, tag_id, true),
   });
   const detach = useMutation({
     mutationFn: (tag_id: number) => detachTag(property_id, tag_id),
-    onSuccess: () => revalidateTags(qc),
+    onSuccess: (_, tag_id) => settleTagWrite(qc, property_id, tag_id, false),
   });
   /* A new tag goes straight onto the property: that is why it was typed here. */
   const create = useMutation({

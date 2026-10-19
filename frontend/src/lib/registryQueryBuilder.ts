@@ -69,10 +69,12 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // predicate the plain `.in` auto-path can't express.
   'furnished',
   'ownership',
-  // Operator tags — a property-id prefilter (queries.ts resolveBrowsePrefilters):
-  // `tags` an allowlist, `tags_excluded` the one denylist (migration 598).
+  // The curated sets (tags, collections, pipeline) are judged by the SOURCE's
+  // own arguments, not a predicate: queries.ts:readSource passes
+  // lib/setScope.scopeArgs to the *_visible() SRF (migration 629).
   'tags',
-  'tags_excluded',
+  'collections',
+  'pipeline',
   // Merged price-history pair (migration 173): the window picks which
   // precomputed count column the threshold reads, and the signed
   // total-change predicate flips direction on sign — both hand-coded in
@@ -83,15 +85,8 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // With-estimates is a property-id allowlist prefilter
   // (property_estimates_public), not a column predicate.
   'with_estimates',
-  // The deal-pipeline scope is likewise a property-id allowlist prefilter
-  // (property_pipeline_public), resolved in queries.ts:resolvePipelinePrefilter
-  // — there is no pipeline column on the browse read model to narrow on.
-  'pipeline',
-  // Collection membership, the same shape again: an allowlist resolved from
-  // collection_properties_public in queries.ts:resolveCollectionPrefilter.
-  'collections',
-  // Dismissed properties are excluded by the SOURCE, not a predicate:
-  // queries.ts:readSource reads the *_visible() twin unless it is set (mig 537).
+  // Dismissed properties are excluded by the SOURCE too: readSource passes
+  // `hide_dismissed` to the same SRF (migrations 537 + 629).
   'show_dismissed',
   // Price bounds are hand-coded (not the plain `.gte`/`.lte` auto-path) so they
   // can branch on `include_no_price`: when that toggle is on AND a bound is set,

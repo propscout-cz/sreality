@@ -68,9 +68,6 @@ interface Props {
   onHover: (ids: ReadonlyArray<number> | null) => void;
   onSort: (field: SortField) => void;
   onClearFilters: () => void;
-  /* The cohort is filtered by deal-pipeline membership (the Pipeline scope), so
-     a funnel write changes which rows match — see usePipelineCard. */
-  pipelineScoped: boolean;
 }
 
 export default function ListingTable({
@@ -87,7 +84,6 @@ export default function ListingTable({
   onHover,
   onSort,
   onClearFilters,
-  pipelineScoped,
 }: Props) {
   const showSkeleton = isLoading && rows == null;
   const isEmpty = !showSkeleton && !isError && rows != null && rows.length === 0;
@@ -119,7 +115,6 @@ export default function ListingTable({
                 row={r}
                 hovered={hoveredIds.has(r.listing_id)}
                 onHover={onHover}
-                pipelineScoped={pipelineScoped}
               />
             ))}
           </tbody>
@@ -210,12 +205,10 @@ function Row({
   row,
   hovered,
   onHover,
-  pipelineScoped,
 }: {
   row: TableRow;
   hovered: boolean;
   onHover: (ids: ReadonlyArray<number> | null) => void;
-  pipelineScoped: boolean;
 }) {
   /* Cross-source hover: own mouseenter sets the shared id; the same
    * highlight also fires when the matching pin is hovered on the map.
@@ -235,11 +228,7 @@ function Row({
     >
       <td className="pl-3 pr-1 py-2.5 align-middle">
         <div className="flex items-center gap-1">
-          <PipelineFunnelButton
-            property_id={row.property_id}
-            cohortScoped={pipelineScoped}
-            variant="inline"
-          />
+          <PipelineFunnelButton property_id={row.property_id} variant="inline" />
           <DismissButton property_id={row.property_id} variant="inline" />
           <NoteMark property_id={row.property_id} variant="inline" />
         </div>
