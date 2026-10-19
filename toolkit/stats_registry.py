@@ -10,7 +10,7 @@ read it and none restates it by hand:
 - api/stats_dashboard.py validates every saved chart through `validate_chart`.
 
 A dimension KEY is the raw value the SQL groups on: the canonical enum value, `ano`/`ne` for a
-boolean, the RÚIAN name for a place, the band's lower bound as an integer string. Labels and
+boolean, the RÚIAN code (as text) for a place, the band's lower bound as an integer string. Labels and
 order live here, not in SQL, so the database never holds a second vocabulary.
 """
 
@@ -29,10 +29,28 @@ MIN_N = 10          # a cell with fewer properties shows n and no statistics
 MAX_ROWS = 6        # nested row levels
 MAX_COLS = 1        # one column dimension (series)
 MAX_CELLS = 2000    # above this the RPC refuses rather than ship a payload nobody can read
+MAX_CHARTS = 50     # charts on one saved board (PUT /stats/dashboard); a size guard, not a ruling
 
 STATS: tuple[str, ...] = ("n", "mean", "median", "p10", "p25", "p75", "p90")
 CHART_STATS: tuple[str, ...] = ("mean", "median", "p10", "p25", "p75", "p90")  # one per line/bar
 VIEWS: tuple[str, ...] = ("table", "line", "bar", "box")
+
+
+@dataclass(frozen=True)
+class ViewLimits:
+    min_rows: int
+    max_rows: int
+    max_cols: int
+
+
+# Ruling 7: table = rows x one column; line / bar = ONE row dimension on x, the column as
+# series; box = rows only. validate_chart enforces it and registry_json ships it to the SPA.
+VIEW_LIMITS: dict[str, ViewLimits] = {
+    "table": ViewLimits(0, MAX_ROWS, MAX_COLS),
+    "line": ViewLimits(1, 1, MAX_COLS),
+    "bar": ViewLimits(1, 1, MAX_COLS),
+    "box": ViewLimits(0, MAX_ROWS, 0),
+}
 
 RENT_BASIS = "rent_monthly_czk_m2"  # migration 425's token; every other basis is a capital sum
 
@@ -89,10 +107,10 @@ DIMENSIONS: tuple[Dimension, ...] = (
               f"case when category_main = 'byt' then {_band('area_m2', '10')} end",
               categories=("byt",), steps={"all": 10}, unit="m2"),
     Dimension("condition", "Stav", "Condition", "enum", "condition", fr.CONDITION_OPTIONS),
-    Dimension("ppm2_band_s", "Kč/m² po 5 tis. (nájem 25)", "Price per m², 5k bands (rent 25)", "band",
+    Dimension("ppm2_band_s", "Cena za m² po 5 tis. (nájem 25)", "Price per m², 5k bands (rent 25)", "band",
               _band("price_per_m2", f"({_basis_step(PPM2_STEPS['ppm2_band_s'])})"),
               steps=PPM2_STEPS["ppm2_band_s"], unit="ppm2"),
-    Dimension("ppm2_band_l", "Kč/m² po 10 tis. (nájem 50)", "Price per m², 10k bands (rent 50)", "band",
+    Dimension("ppm2_band_l", "Cena za m² po 10 tis. (nájem 50)", "Price per m², 10k bands (rent 50)", "band",
               _band("price_per_m2", f"({_basis_step(PPM2_STEPS['ppm2_band_l'])})"),
               steps=PPM2_STEPS["ppm2_band_l"], unit="ppm2"),
     Dimension("price_band_s", "Cena po 250 tis. (nájem 1 tis.)", "Price, 250k bands (rent 1k)", "band",
@@ -104,11 +122,15 @@ DIMENSIONS: tuple[Dimension, ...] = (
     Dimension("price_band_l", "Cena po 1 mil. (nájem 5 tis.)", "Price, 1M bands (rent 5k)", "band",
               _band("price_czk", f"({_basis_step(PRICE_STEPS['price_band_l'])})"),
               steps=PRICE_STEPS["price_band_l"], unit="price"),
-    Dimension("kraj", "Kraj", "Region", "geo", "kraj_name"),
-    Dimension("okres", "Okres", "District", "geo", "okres_name"),
-    Dimension("obec", "Město", "Town", "geo", "obec_name"),
-    Dimension("cast_obce", "Městská čtvrť", "Quarter", "geo", "cast_obce_name"),
-    Dimension("ulice", "Ulice", "Street", "geo", "street_name"),
+    # A place keys on its RUIAN CODE (rule 25: one code predicate), never its name: two towns or
+    # streets that share a name stay two cells. The level is the dimension id, which is also the
+    # `level` of public.ruian_place_names_public (migration 626), where the payload's `places`
+    # list resolves each key to its name.
+    Dimension("kraj", "Kraj", "Region", "geo", "region_id::text"),
+    Dimension("okres", "Okres", "District", "geo", "okres_id::text"),
+    Dimension("obec", "Město", "Town", "geo", "obec_id::text"),
+    Dimension("cast_obce", "Městská čtvrť", "Quarter", "geo", "cast_obce_id::text"),
+    Dimension("ulice", "Ulice", "Street", "geo", "ulice_id::text"),
     Dimension("building_type", "Materiál", "Material", "enum", "building_type", fr.BUILDING_TYPE_OPTIONS),
     Dimension("furnished", "Vybavení", "Furnished", "enum", "furnished", FURNISHED_OPTIONS),
     Dimension("has_balcony", "Balkon", "Balcony", "bool", "case has_balcony when true then 'ano' when false then 'ne' end", BOOL_OPTIONS),
@@ -134,8 +156,8 @@ class Measure:
 
 MEASURES: tuple[Measure, ...] = (
     Measure("tom_days", "Doba na trhu", "Time on market", "days", "l.tom_days::numeric", single_status=True),
-    Measure("area", "Plocha", "Area", "m2",
-            "case when l.category_main = 'pozemek' then l.plot_area_m2 else l.area_m2 end"),
+    # area_m2 is already polymorphic (rule 23: the PLOT area of a pozemek, floor area otherwise).
+    Measure("area", "Plocha", "Area", "m2", "l.area_m2::numeric"),
     Measure("price", "Cena", "Price", "price", "l.price_czk::numeric"),
     Measure("ppm2", "Cena za m²", "Price per m²", "ppm2", "l.price_per_m2"),
 )
@@ -153,8 +175,8 @@ DIM_KEY_ARGS: tuple[tuple[str, str], ...] = (
     ("building_type", "text"), ("furnished", "text"),
     ("has_balcony", "boolean"), ("has_lift", "boolean"), ("has_parking", "boolean"),
     ("terrace", "boolean"), ("cellar", "boolean"), ("garage", "boolean"),
-    ("kraj_name", "text"), ("okres_name", "text"), ("obec_name", "text"),
-    ("cast_obce_name", "text"), ("street_name", "text"),
+    ("region_id", "bigint"), ("okres_id", "bigint"), ("obec_id", "bigint"),
+    ("cast_obce_id", "bigint"), ("ulice_id", "bigint"),
 )
 DIM_KEY_SIGNATURE = ", ".join(t for _, t in DIM_KEY_ARGS)
 
@@ -203,12 +225,14 @@ def validate_spec(spec: Any) -> dict[str, Any]:
     if len(cols) > MAX_COLS:
         raise SpecError(f"at most {MAX_COLS} column dimension")
     dims = [*rows, *cols]
+    if not all(isinstance(d, str) for d in dims):
+        raise SpecError("dimensions must be strings")
     for d in dims:
         if d not in DIMENSION_BY_ID:
             raise SpecError(f"unknown dimension {d!r}")
     if len(set(dims)) != len(dims):
         raise SpecError("a dimension may appear once")
-    if measure not in MEASURE_BY_ID:
+    if not isinstance(measure, str) or measure not in MEASURE_BY_ID:
         raise SpecError(f"unknown measure {measure!r}")
     return {"rows": list(rows), "cols": list(cols), "measure": measure}
 
@@ -228,8 +252,13 @@ def validate_chart(chart: Any) -> dict[str, Any]:
         raise SpecError(f"unknown stat {stat!r}")
     spec = validate_spec({"rows": chart.get("rows", []), "cols": chart.get("cols", []),
                           "measure": chart.get("measure")})
-    if view == "box" and spec["cols"]:
-        raise SpecError("a box chart takes row dimensions only")
+    limits = VIEW_LIMITS[view]
+    if len(spec["cols"]) > limits.max_cols:
+        raise SpecError(f"a {view} chart takes row dimensions only")
+    if not limits.min_rows <= len(spec["rows"]) <= limits.max_rows:
+        span = (f"exactly {limits.min_rows}" if limits.min_rows == limits.max_rows
+                else f"{limits.min_rows} to {limits.max_rows}")
+        raise SpecError(f"a {view} chart takes {span} row dimension{'' if limits.max_rows == 1 else 's'}")
     return {"id": cid, "view": view, "stat": stat, **spec}
 
 
@@ -239,7 +268,12 @@ def registry_json() -> dict[str, Any]:
         return {"value": o.value, "label_cs": o.label_cs, "label_en": o.label_en}
     return {
         "min_n": MIN_N, "max_rows": MAX_ROWS, "max_cols": MAX_COLS, "max_cells": MAX_CELLS,
+        "max_charts": MAX_CHARTS,
         "stats": list(STATS), "chart_stats": list(CHART_STATS), "views": list(VIEWS),
+        "view_limits": {
+            v: {"min_rows": lim.min_rows, "max_rows": lim.max_rows, "max_cols": lim.max_cols}
+            for v, lim in VIEW_LIMITS.items()
+        },
         "rent_basis": RENT_BASIS,
         "dimensions": [
             {

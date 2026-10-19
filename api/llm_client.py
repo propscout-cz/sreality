@@ -63,7 +63,6 @@ CalledFor = Literal[
     "refine_skill",
     "discover_condition_markers",
     "score_listing_condition",
-    "summarize_region_dispositions",
     "enrich_listing_description",
     "screen_exam_image",
     "suggest_exam_answer",

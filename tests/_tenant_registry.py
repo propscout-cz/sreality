@@ -33,4 +33,6 @@ TENANT_TABLES: tuple[str, ...] = (
     "property_artifact_links",
     # Migration 610: owner-stamped by trigger; browser roles SELECT + DELETE, never INSERT.
     "collection_shares",
+    # Migration 626: the Stats board, one row per account; the SPA reads it, the API writes it.
+    "stats_dashboards",
 )

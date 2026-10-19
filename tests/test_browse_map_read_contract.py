@@ -37,6 +37,10 @@ MIGRATIONS = REPO / "migrations"
 
 # The one parameter browse_map_cells has on purpose and browse_stats_properties does not.
 _MAP_ONLY_PARAMS = {"point_budget"}
+# Its twin (migration 626): the chart spec the Stats pivot takes and the map does not. Like
+# point_budget it shapes the ANSWER, never the cohort, and the builder does not send it
+# (`fetchStatsPivot` spreads the builder's object and adds `spec` beside it).
+_STATS_ONLY_PARAMS = {"spec"}
 
 
 def _ts() -> str:
@@ -133,7 +137,7 @@ def test_every_builder_key_is_a_parameter_of_both_rpcs() -> None:
 
 
 def test_the_two_rpcs_take_the_same_cohort_parameters() -> None:
-    """browse_map_cells = browse_stats_properties + point_budget.
+    """browse_map_cells - point_budget = browse_stats_properties - spec.
 
     RED by: adding a cohort parameter to one RPC and not the other. The map and the Stats
     tab would then answer for different cohorts under the same filters, and the only
@@ -144,15 +148,26 @@ def test_the_two_rpcs_take_the_same_cohort_parameters() -> None:
     assert not _MAP_ONLY_PARAMS - cells, (
         f"browse_map_cells lost {sorted(_MAP_ONLY_PARAMS - cells)}, which only the map takes."
     )
+    assert not _STATS_ONLY_PARAMS - stats, (
+        f"browse_stats_properties lost {sorted(_STATS_ONLY_PARAMS - stats)}, which only the "
+        "Stats pivot takes."
+    )
     assert not cells - stats - _MAP_ONLY_PARAMS, (
         f"browse_map_cells takes {sorted(cells - stats - _MAP_ONLY_PARAMS)} and "
         "browse_stats_properties does not — the map cohort can now be narrowed in a way "
         "the Stats cohort cannot."
     )
-    assert not stats - cells, (
-        f"browse_stats_properties takes {sorted(stats - cells)} and browse_map_cells does "
-        "not — the Stats cohort can now be narrowed in a way the map cohort cannot."
+    assert not stats - cells - _STATS_ONLY_PARAMS, (
+        f"browse_stats_properties takes {sorted(stats - cells - _STATS_ONLY_PARAMS)} and "
+        "browse_map_cells does not — the Stats cohort can now be narrowed in a way the map "
+        "cohort cannot."
     )
+
+
+def test_the_builder_sends_no_answer_shaping_parameter() -> None:
+    """`spec` and `point_budget` are each one reader's own; the shared builder carries neither,
+    or the other RPC would answer PGRST202 to every call."""
+    assert not _builder_keys() & (_MAP_ONLY_PARAMS | _STATS_ONLY_PARAMS)
 
 
 def test_the_map_rpc_carries_both_prefilter_id_spaces() -> None:

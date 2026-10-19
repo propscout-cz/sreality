@@ -14,7 +14,7 @@
 --      filter_presets: the tenant role IS `authenticated`).
 --   2. public.stats_dim_key(dim, ...21 scalars): the ONE dimension vocabulary in SQL, rendered from
 --      toolkit/stats_registry.py (tests/test_626_stats_dashboard.py pins the text). SQL-language IMMUTABLE so
---      the seven calls per row inline. A key is the raw canonical value: an enum member, ano/ne, a RUIAN name,
+--      the seven calls per row inline. A key is the raw canonical value: an enum member, ano/ne, a RUIAN code,
 --      a band's lower bound as text. NULL = the property has no value on that dimension.
 --   3. browse_stats_properties re-signed: 625's seventy-four cohort parameters verbatim (the WHERE is 625's,
 --      byte for byte) plus `spec jsonb default null` = {rows: [dim...], cols: [dim], measure}. The body is new:
@@ -24,9 +24,22 @@
 --      the old four-card body took 1.1-5.0 s. A cell with fewer than ten properties ships n and no statistics
 --      (ruling 6); statistics are mean, median, p10, p25, p75, p90, rounded to two places. Refusals, never
 --      guesses: `empty`, `mixed_category` (more than one category_main or category_type in the cohort),
---      `mixed_status` (a turnover measure over live and delisted rows together, ruling 3), `too_many_cells`
---      (above 2,000), `bad_spec`. The signature changes, so the old one is DROPPED and the ACL restated in the
---      same transaction (database skill: re-signing the Browse RPCs). browse_map_cells is not touched.
+--      `mixed_status` (a turnover measure over live and delisted rows together in the SAMPLE, ruling 3;
+--      the cohort's `status` fact may still read mixed), `too_many_cells` (above 2,000), `bad_spec`. The
+--      signature changes, so the old one is DROPPED and the ACL restated in the same transaction (database
+--      skill: re-signing the Browse RPCs). browse_map_cells is not touched.
+--   4. public.ruian_place_names_public(level, code, name): the open RUIAN register's names for the five
+--      levels a place dimension keys on (kraj, okres, obec, cast_obce from ruian_admin_units; ulice from
+--      ruian_streets), one row per (level, code), granted SELECT to authenticated. A place cell keys on the
+--      CODE browse_list already carries (region_id .. ulice_id; rule 25's one code predicate), so two
+--      towns or streets that share a name stay two cells, and the pivot reads no listing location at all;
+--      the payload's `places` list resolves each key to its name through this view on the <= 2,000 result
+--      cells. WHY A VIEW: the pivot is SECURITY INVOKER (the SPA calls it as `authenticated`, and
+--      hide_dismissed reads the caller's own RLS'd dismissals) and the register mirror (381) is revoked from
+--      browser roles, so a direct join would fail with "permission denied". Rule 25 clause: this is a
+--      location read surface added by a PR that deletes none, so the PR body says why (the operator asked
+--      for kraj / okres / mesto / ctvrt / ulice as chart dimensions, 2026-10-19) and it stands on the
+--      operator's ruling. It exposes the public register only -- no listing, no address.
 --
 -- APPLY through apply_migration.yml (--ref the feature branch) IMMEDIATELY BEFORE merging the SPA that
 -- sends `spec`; the old SPA reads a payload without its keys for the 3-5 min of the Railway rollout (dashes,
@@ -52,7 +65,7 @@ begin
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), '')
-     not in ('6b102dd7960cced4ffbbf31127048428', '5b4b0b1889fc0ed767fdf7a3e05a3cb8') then
+     not in ('6b102dd7960cced4ffbbf31127048428', '824683a34456c3497c4367ad28d91b95') then
     raise exception '626 refused: browse_stats_properties is not 625''s body nor this file''s (or has two overloads)';
   end if;
 end
@@ -83,6 +96,26 @@ create policy stats_dashboards_tenant_rw on public.stats_dashboards
 -- ---------------------------------------------------------------------------
 begin;
 
+create or replace view public.ruian_place_names_public as
+  select * from (
+    select distinct on (u.level, u.code) u.level::text as level, u.code, u.name
+      from public.ruian_admin_units u
+     where u.level in ('kraj', 'okres', 'obec', 'cast_obce') and u.retired_at is null
+     order by u.level, u.code, u.last_version_id desc nulls last
+  ) a
+  union all
+  select * from (
+    select distinct on (s.code) 'ulice'::text as level, s.code, s.name
+      from public.ruian_streets s
+     order by s.code, s.last_version_id desc nulls last
+  ) b;
+comment on view public.ruian_place_names_public is
+  'The RUIAN register''s name for a (level, code) a place dimension keys on: kraj, okres, obec, cast_obce, ulice '
+  '(migration 626). Owner rights on purpose: the register mirror (381) is dark to browser roles and the pivot '
+  'runs as its caller. Public register data only.';
+revoke all on public.ruian_place_names_public from public, anon, authenticated;
+grant select on public.ruian_place_names_public to authenticated, service_role;
+
 create or replace function public.stats_dim_key(
   dim text,
   category_main text,
@@ -100,11 +133,11 @@ create or replace function public.stats_dim_key(
   terrace boolean,
   cellar boolean,
   garage boolean,
-  kraj_name text,
-  okres_name text,
-  obec_name text,
-  cast_obce_name text,
-  street_name text
+  region_id bigint,
+  okres_id bigint,
+  obec_id bigint,
+  cast_obce_id bigint,
+  ulice_id bigint
 )
 returns text
 language sql
@@ -121,11 +154,11 @@ as $function$
     when 'price_band_s' then case when price_czk is null then null else (floor(price_czk / (case when basis = 'rent_monthly_czk_m2' then 1000 else 250000 end)) * (case when basis = 'rent_monthly_czk_m2' then 1000 else 250000 end))::text end
     when 'price_band_m' then case when price_czk is null then null else (floor(price_czk / (case when basis = 'rent_monthly_czk_m2' then 2500 else 500000 end)) * (case when basis = 'rent_monthly_czk_m2' then 2500 else 500000 end))::text end
     when 'price_band_l' then case when price_czk is null then null else (floor(price_czk / (case when basis = 'rent_monthly_czk_m2' then 5000 else 1000000 end)) * (case when basis = 'rent_monthly_czk_m2' then 5000 else 1000000 end))::text end
-    when 'kraj' then kraj_name
-    when 'okres' then okres_name
-    when 'obec' then obec_name
-    when 'cast_obce' then cast_obce_name
-    when 'ulice' then street_name
+    when 'kraj' then region_id::text
+    when 'okres' then okres_id::text
+    when 'obec' then obec_id::text
+    when 'cast_obce' then cast_obce_id::text
+    when 'ulice' then ulice_id::text
     when 'building_type' then building_type
     when 'furnished' then furnished
     when 'has_balcony' then case has_balcony when true then 'ano' when false then 'ne' end
@@ -136,8 +169,8 @@ as $function$
     when 'garage' then case garage when true then 'ano' when false then 'ne' end
   end
 $function$;
-revoke all on function public.stats_dim_key(text, text, text, text, text, numeric, integer, numeric, text, text, boolean, boolean, boolean, boolean, boolean, boolean, text, text, text, text, text) from public, anon, authenticated;
-grant execute on function public.stats_dim_key(text, text, text, text, text, numeric, integer, numeric, text, text, boolean, boolean, boolean, boolean, boolean, boolean, text, text, text, text, text) to authenticated, service_role;
+revoke all on function public.stats_dim_key(text, text, text, text, text, numeric, integer, numeric, text, text, boolean, boolean, boolean, boolean, boolean, boolean, bigint, bigint, bigint, bigint, bigint) from public, anon, authenticated;
+grant execute on function public.stats_dim_key(text, text, text, text, text, numeric, integer, numeric, text, text, boolean, boolean, boolean, boolean, boolean, boolean, bigint, bigint, bigint, bigint, bigint) to authenticated, service_role;
 
 drop function if exists public.browse_stats_properties(text[], text[], integer, integer, integer, integer, boolean, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean, boolean, text[], boolean, boolean, boolean, integer, text[], text[], text, double precision, double precision, double precision, double precision, text[], double precision, double precision, double precision, double precision, integer, double precision, double precision, text[], integer, integer, double precision, double precision, text[], double precision, double precision, integer, integer, double precision, double precision, double precision, double precision, double precision, double precision, boolean[], text[], integer, integer, bigint[], text[], bigint[], integer, integer, integer, integer, integer, integer, double precision, boolean, bigint[], boolean, text[], boolean, bigint[], boolean);
 
@@ -237,12 +270,14 @@ declare
                                     with ordinality as t(x, ord)), '{}'::text[]);
   v_measure text := spec->>'measure';
   v_bad text;
-  v_geo boolean;
   v_masks int[];
   r1 text; r2 text; r3 text; r4 text; r5 text; r6 text; c1 text;
 begin
   -- The spec contract (toolkit.stats_registry.validate_spec, the same rules): refuse, never guess.
   if spec is null then v_bad := 'spec missing';
+  elsif jsonb_typeof(spec) <> 'object' then v_bad := 'spec must be an object';
+  elsif (spec ? 'rows' and jsonb_typeof(spec->'rows') <> 'array')
+     or (spec ? 'cols' and jsonb_typeof(spec->'cols') <> 'array') then v_bad := 'rows and cols must be arrays';
   elsif coalesce(array_length(v_rows, 1), 0) > 6 then v_bad := 'at most 6 row dimensions';
   elsif coalesce(array_length(v_cols, 1), 0) > 1 then v_bad := 'at most 1 column dimension';
   elsif v_measure is null or v_measure not in ('tom_days', 'area', 'price', 'ppm2') then v_bad := 'unknown measure';
@@ -253,12 +288,11 @@ begin
     return jsonb_build_object('refused', 'bad_spec', 'reason', v_bad, 'cells', '[]'::jsonb);
   end if;
   r1 := v_rows[1]; r2 := v_rows[2]; r3 := v_rows[3]; r4 := v_rows[4]; r5 := v_rows[5]; r6 := v_rows[6]; c1 := v_cols[1];
-  v_geo := exists (select 1 from unnest(v_rows || v_cols) d where d in ('cast_obce', 'kraj', 'obec', 'okres', 'ulice'));
   -- grouping(k1..k6) of the levels this spec uses: level L keeps k1..kL, so its mask is 2^(6-L) - 1.
   v_masks := (select array_agg((2 ^ (6 - lvl))::int - 1) from generate_series(0, coalesce(array_length(v_rows, 1), 0)) lvl);
   return (
   with filtered as (
-    select l.listing_id, l.is_active, l.category_main, l.category_type, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.plot_area_m2, l.price_czk, l.price_per_m2, l.tom_days, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage
+    select l.listing_id, l.is_active, l.category_main, l.category_type, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.tom_days, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id
     from browse_list l
     where
           public.portal_status_matches(l.is_active, l.all_sources, l.active_sources, portal_filter,
@@ -404,17 +438,15 @@ begin
   ),
   keyed as (
     select l.is_active, l.category_main, l.category_type, l.price_per_m2_basis,
-      public.stats_dim_key(r1, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as k1,
-      public.stats_dim_key(r2, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as k2,
-      public.stats_dim_key(r3, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as k3,
-      public.stats_dim_key(r4, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as k4,
-      public.stats_dim_key(r5, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as k5,
-      public.stats_dim_key(r6, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as k6,
-      public.stats_dim_key(c1, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, ll.kraj_name, ll.okres_name, ll.obec_name, ll.cast_obce_name, ll.street_name) as kc,
-      case v_measure when 'tom_days' then l.tom_days::numeric when 'area' then case when l.category_main = 'pozemek' then l.plot_area_m2 else l.area_m2 end when 'price' then l.price_czk::numeric when 'ppm2' then l.price_per_m2 end as v
+      public.stats_dim_key(r1, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as k1,
+      public.stats_dim_key(r2, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as k2,
+      public.stats_dim_key(r3, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as k3,
+      public.stats_dim_key(r4, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as k4,
+      public.stats_dim_key(r5, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as k5,
+      public.stats_dim_key(r6, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as k6,
+      public.stats_dim_key(c1, l.category_main, l.price_per_m2_basis, l.disposition, l.condition, l.area_m2, l.price_czk, l.price_per_m2, l.building_type, l.furnished, l.has_balcony, l.has_lift, l.has_parking, l.terrace, l.cellar, l.garage, l.region_id, l.okres_id, l.obec_id, l.cast_obce_id, l.ulice_id) as kc,
+      case v_measure when 'tom_days' then l.tom_days::numeric when 'area' then l.area_m2::numeric when 'price' then l.price_czk::numeric when 'ppm2' then l.price_per_m2 end as v
     from filtered l
-    -- The place names ride on listing_location; the join is a no-op (false ON) unless a place dimension is in the spec.
-    left join listing_location ll on v_geo and ll.listing_id = l.listing_id
   ),
   cohort as (
     select count(*)::int as filtered_n,
@@ -443,7 +475,8 @@ begin
            case
              when c.filtered_n = 0 then 'empty'
              when c.cat_lo <> c.cat_hi or c.type_lo <> c.type_hi then 'mixed_category'
-             when v_measure = 'tom_days' and c.any_active and not c.all_active then 'mixed_status'
+             -- ruling 3: ONE status in the SAMPLE (the cohort's `status` fact above may still be mixed).
+             when v_measure = 'tom_days' and (select bool_or(is_active) and not bool_and(is_active) from sample) then 'mixed_status'
              when (select count(*) from used) > v_max_cells then 'too_many_cells'
            end as refused
     from cohort c
@@ -459,6 +492,16 @@ begin
     'basis', case when x.basis_lo = x.basis_hi then x.basis_lo end,
     'min_n', v_min_n,
     'refused', x.refused,
+    -- Every place key among the result cells, resolved to its register name (header, WHAT CHANGES 4).
+    'places', case when x.refused is null then coalesce((
+      select jsonb_agg(jsonb_build_object('dim', p.dim, 'key', p.key, 'name', n.name) order by p.dim, p.key)
+      from (
+        select distinct d.dim, d.key
+          from used u
+          cross join lateral (values (r1, u.k1), (r2, u.k2), (r3, u.k3), (r4, u.k4), (r5, u.k5), (r6, u.k6), (c1, u.kc)) d(dim, key)
+         where d.key is not null and d.dim in ('cast_obce', 'kraj', 'obec', 'okres', 'ulice')
+      ) p
+      left join public.ruian_place_names_public n on n.level = p.dim and n.code = p.key::bigint), '[]'::jsonb) else '[]'::jsonb end,
     'cells', case when x.refused is null then coalesce((
       select jsonb_agg(jsonb_build_object(
         'keys', to_jsonb(array_remove(array[u.k1, u.k2, u.k3, u.k4, u.k5, u.k6], null)),
@@ -499,7 +542,11 @@ begin
   if (select pronargs from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties') <> 75 then
     raise exception '626 did not land: browse_stats_properties does not take 625''s 74 parameters plus spec';
   end if;
-  if not has_function_privilege('authenticated', 'public.stats_dim_key(text, text, text, text, text, numeric, integer, numeric, text, text, boolean, boolean, boolean, boolean, boolean, boolean, text, text, text, text, text)', 'execute') then
+  if not has_table_privilege('authenticated', 'public.ruian_place_names_public', 'select')
+     or has_table_privilege('anon', 'public.ruian_place_names_public', 'select') then
+    raise exception '626 did not land: ruian_place_names_public is not readable by authenticated alone';
+  end if;
+  if not has_function_privilege('authenticated', 'public.stats_dim_key(text, text, text, text, text, numeric, integer, numeric, text, text, boolean, boolean, boolean, boolean, boolean, boolean, bigint, bigint, bigint, bigint, bigint)', 'execute') then
     raise exception '626 did not land: authenticated cannot execute stats_dim_key';
   end if;
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'stats_dashboards'

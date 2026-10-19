@@ -236,14 +236,24 @@ export interface StatsMeasure {
   single_status: boolean;
 }
 
+/** ruling 7: how many row and column dimensions a view takes (line / bar: exactly one row). */
+export interface StatsViewLimits {
+  min_rows: number;
+  max_rows: number;
+  max_cols: number;
+}
+
 export interface StatsRegistryPayload {
   min_n: number;
   max_rows: number;
   max_cols: number;
   max_cells: number;
+  /** charts on one saved board; PUT /stats/dashboard refuses more. */
+  max_charts: number;
   stats: StatId[];
   chart_stats: ChartStat[];
   views: ViewId[];
+  view_limits: Record<ViewId, StatsViewLimits>;
   rent_basis: string;
   dimensions: StatsDimension[];
   measures: StatsMeasure[];

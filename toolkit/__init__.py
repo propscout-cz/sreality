@@ -95,7 +95,6 @@ _LAZY_EXPORTS: dict[str, str] = {
     "get_manual_rental_estimates": "manual_estimates",
     "describe_neighborhood": "neighborhoods",
     "find_distribution_outliers": "outliers",
-    "summarize_region_dispositions": "region_annotations",
     "compare_snapshots": "snapshots",
     "summarize_listing": "summaries",
     "find_comparables_along_axis": "transit_axis",
@@ -138,7 +137,6 @@ if TYPE_CHECKING:  # let type-checkers / IDEs see the lazily re-exported names
     from toolkit.manual_estimates import get_manual_rental_estimates
     from toolkit.neighborhoods import describe_neighborhood
     from toolkit.outliers import find_distribution_outliers
-    from toolkit.region_annotations import summarize_region_dispositions
     from toolkit.snapshots import compare_snapshots
     from toolkit.summaries import summarize_listing
     from toolkit.transit_axis import find_comparables_along_axis
@@ -170,7 +168,6 @@ __all__ = [
     "read_floor_plan",
     "score_listing_condition",
     "summarize_listing",
-    "summarize_region_dispositions",
     "verify_listing_freshness",
 ]
 
