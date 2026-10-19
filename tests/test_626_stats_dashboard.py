@@ -112,7 +112,7 @@ def test_the_generated_typescript_is_fresh() -> None:
 
 
 def test_the_cohort_where_is_625s_byte_for_byte() -> None:
-    assert latest_definition(FN).name == NAME
+    assert latest_definition(FN).name == "629_curated_set_scope.sql"  # 629 restated it verbatim plus the scope
     assert len(_where(SQL)) > 5000
     assert _where(SQL) == _where(S625)
 
