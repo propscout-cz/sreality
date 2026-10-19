@@ -16,8 +16,8 @@ export function portalLabel(source: string | null | undefined): string | null {
   return PORTAL_LABELS[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
 }
 
-/* Short, hand-tuned portal names for compact chrome — e.g. the Health page's
- * per-run "Site" tag. Diacritic
+/* Short, hand-tuned portal names for compact chrome — e.g. the Health matrix's
+ * row heads and the portal tags on listing cards and ad rows. Diacritic
  * spellings (Bazoš) the registry's machine labels don't carry. Falls back to
  * the registry label, then the raw source code. */
 export const PORTAL_SHORT_LABEL: Record<string, string> = {

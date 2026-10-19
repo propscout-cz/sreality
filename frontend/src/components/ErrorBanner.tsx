@@ -2,18 +2,25 @@
  * tag-annotation copies it replaced — a duplicated banner that drifts is how
  * the same failure starts reading differently on two screens. `onRetry` adds
  * the refetch affordance a failed READ deserves (a stuck page must offer a way
- * forward, not just a verdict); writes keep their own retry semantics. */
+ * forward, not just a verdict); writes keep their own retry semantics. The
+ * retry word follows the page's language: Czech by default, `retryLabel` for
+ * an English admin page. role="alert": a failure is announced as it appears. */
 export default function ErrorBanner({
   message,
   title = 'Failed:',
   onRetry,
+  retryLabel = 'Zkusit znovu',
 }: {
   message: string;
   title?: string;
   onRetry?: () => void;
+  retryLabel?: string;
 }) {
   return (
-    <div className="mt-6 p-3 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-sm text-[var(--color-brick)]">
+    <div
+      role="alert"
+      className="mt-6 p-3 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-sm text-[var(--color-brick)]"
+    >
       <strong className="font-medium">{title}</strong> {message}
       {onRetry && (
         <button
@@ -21,7 +28,7 @@ export default function ErrorBanner({
           onClick={onRetry}
           className="ml-3 font-medium underline underline-offset-2 hover:no-underline"
         >
-          Zkusit znovu
+          {retryLabel}
         </button>
       )}
     </div>

@@ -21,7 +21,7 @@ import {
 } from '@/lib/api';
 import { notificationKeys } from '@/lib/queries';
 import { listingPath } from '@/lib/listingUrl';
-import { ROUTES } from '@/lib/routes';
+import { ROUTES, withHash } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
@@ -319,42 +319,48 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
   );
 }
 
-/* system_health alert: no listing subject or deep-link — the payload is the
- * `message` text (change_kind='system_alert'). Rendered as a full-width button:
- * clicking the row marks it read (seen_at); it never acknowledges the incident
- * (only Acknowledge on Health stops reminders). Mirrors how the listing rows mark
- * seen on click-through. Red dot + AlertIcon signal severity. */
+/* system_health alert: no listing subject — the payload is the `message` text
+ * (change_kind='system_alert'). Pressing the text marks it read; "Open Health"
+ * marks it read and opens Health at the check the alert is about (`check_key`;
+ * plain Health when the API names none). Reading never acknowledges the incident:
+ * only Acknowledge on Health stops reminders. Two sibling controls, never a link
+ * inside a button. Red dot + AlertIcon signal severity. */
 function SystemNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
   const unreadId = useId();
 
   return (
-    <button
-      type="button"
-      onClick={markSeen}
-      aria-describedby={unread ? unreadId : undefined}
-      className="w-full text-left flex items-start gap-3 py-3.5"
-    >
+    <div className="flex items-start gap-3 py-3.5">
       <UnreadDot unread={unread} id={unreadId} color="var(--color-brick)" />
-
-      {/* system chip */}
-      <span className="mt-0.5 inline-flex items-center gap-1.5 shrink-0 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-[var(--color-brick)]">
-        <AlertIcon className="h-3 w-3" />
-        System
-      </span>
-
-      <p className="min-w-0 flex-1 text-sm text-[var(--color-ink)] whitespace-pre-line break-words">
-        {d.message ?? 'System alert'}
-      </p>
-
+      <button
+        type="button"
+        onClick={markSeen}
+        aria-describedby={unread ? unreadId : undefined}
+        className="min-w-0 flex-1 text-left flex items-start gap-3"
+      >
+        <span className="mt-0.5 inline-flex items-center gap-1.5 shrink-0 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-[var(--color-brick)]">
+          <AlertIcon className="h-3 w-3" />
+          System
+        </span>
+        <span className="min-w-0 flex-1 text-sm text-[var(--color-ink)] whitespace-pre-line break-words">
+          {d.message ?? 'System alert'}
+        </span>
+      </button>
+      <Link
+        to={withHash(ROUTES.health.build(), d.check_key ? `#${d.check_key}` : '')}
+        onClick={markSeen}
+        className="shrink-0 mt-0.5 text-[0.78rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-ink)] hover:decoration-[var(--color-ink-3)] transition-colors"
+      >
+        Open Health
+      </Link>
       <span
         className="shrink-0 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help mt-0.5"
         title={fmtAbsolute(d.dispatched_at)}
       >
         {fmtRelative(d.dispatched_at)}
       </span>
-    </button>
+    </div>
   );
 }
 

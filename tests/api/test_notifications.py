@@ -903,6 +903,19 @@ def test_dispatch_select_projects_message() -> None:
     assert "d.message" in _DISPATCH_SELECT
 
 
+def test_dispatch_select_names_the_check_a_system_alert_is_about() -> None:
+    """The bell's "Open Health" opens Health at the alert's check, as the outbox's links do. Every system dedupe
+    key opens `sys:<key>:` (emit_system_alert refuses any other), so the key is its second segment; every other
+    producer's key (`wd:…`, `cm:…`) names no check and reads NULL. Checked live on 2026-10-19: all 882 system rows
+    agree with the outbox's `^sys:([a-z0-9_]+):` and no other row carries a key."""
+    from api.notifications import _DISPATCH_SELECT
+
+    assert (
+        "CASE WHEN d.source_kind = 'system_health' "
+        "THEN split_part(d.dedupe_key, ':', 2) END AS check_key"
+    ) in _DISPATCH_SELECT
+
+
 def test_dispatch_feed_reads_listings_through_the_public_view() -> None:
     """Every listing column on the feed comes from `listings_public`, never from
     `listings`.

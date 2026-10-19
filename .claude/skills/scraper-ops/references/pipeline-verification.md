@@ -255,17 +255,23 @@ things and stay.
 
 ## The `scrape_runs` crash contract (`portal_runner.run_phase`, W0.2)
 
-Both scraper health arms read one row, so what that row records on a bad ending is the whole
-question. `run_phase` is the single seam (rule #21): it opens the row (`scrape_run_start`, with
-`source` taken off the portal, not a per-module constant), runs the phase, and records **how it
+The portal checks see a walk only through its row (`scraping`, `coverage` and `delisting` judge index
+runs with `ended_at` set and entries in `by_category`; `scraping` quotes an unfinished walk's start only in
+`<portal>/walks`'s Problem message), so what that row records on a bad ending is the whole question. `run_phase` is the single seam (rule #21): it opens the row (`scrape_run_start`,
+with `source` taken off the portal, not a per-module constant), runs the phase, and records **how it
 ended**.
 
 - **`ended_at` means the phase COMPLETED.** Only the return path calls `scrape_run_finalize`.
 - A phase that raises bumps `scrape_runs.errors` by 1 via `bump_scrape_run_counts` — *additive*,
   on top of whatever the drain already committed per chunk, because a crash is one more error
   event and not a replacement aggregate — and deliberately leaves `ended_at` NULL before
-  re-raising. A crashed run therefore lights up **both** arms of `scraper_health_checks()`:
-  `stuck` (which keys on `ended_at is null`) and `err_pct` (which keys on `errors`).
+  re-raising. A crashed walk is therefore never a finished walk, nor an end-reached one, even once
+  the API's boot sweep stamps its `ended_at` (its `by_category` stays `[]`): its units'
+  `<portal>/walks/<unit>` cells keep aging against G (§ `scraping` below), and `<portal>/walks`
+  is a Problem once no walk has finished in 30 d. No check reads `errors`: the two arms a crash
+  used to light, `stuck` (`ended_at is null`) and `err_pct` (`errors`) of `scraper_health_checks()`,
+  have had no reader since Health wave 8 (wave 9 drops the function), and the delisting check's
+  `<portal>/stuck` cell is another thing (active ads whose gone verdict waits past its limit).
 - It catches `BaseException`, not `Exception`: a SIGINT or `SystemExit` out of a phase leaves the
   run just as unfinished as a `CheckViolation`, and "did not finish" must never read as green.
 - Crash recording is best-effort — a failing bump can never mask the original exception.
@@ -533,15 +539,18 @@ outbox's `compose_message` sends a `system_health` row
 with its message as the body, as subject the text before the first ` — ` (the messages above are
 one line of up to 1,500 characters) or else its first 120 characters ("System alert" when
 empty), and the link `{SPA_BASE_URL}/health#<key>` when the dedupe key starts `sys:<key>:`, else
-`{SPA_BASE_URL}/health`. Health's pipeline-check rows carry `id=<key>`, and because they render
-after their fetch (so the browser's own jump finds nothing), `PipelineChecksSection` scrolls to
-`location.hash` once its rows exist (the `EstimationsBlock` pattern): the link lands on the check.
-It replaced the fixed Czech subject and the `/notifications` link.
+`{SPA_BASE_URL}/health`. Health's check rows carry `id=<key>` and their cells `id=<key>:<subject>`
+(the subject percent-encoded; since wave 8), and because they render after their fetch (so the
+browser's own jump finds nothing), the page scrolls to the decoded `location.hash` once its rows
+exist, opening the row that hides a targeted cell: the link lands on the check. It replaced the
+fixed Czech subject and the `/notifications` link. Since wave 8 the bell links the same way: each
+system row carries an "Open Health" link to `/health#<check_key>`, the feed's `check_key` read off
+the `sys:<key>:` dedupe key; following it marks the row read, as pressing its text does.
 
 **Read is not acknowledged.** Reading a notice in the bell sets
 `notification_dispatches.seen_at`, which platform admins can do on SYSTEM rows since migration
-619; it never acknowledges. The Acknowledge button on Health (wave 1 ships a minimal one on the
-pipeline-checks card; the rebuilt page comes in wave 8) calls
+619; it never acknowledges. The Acknowledge button on Health (on a check's row, shown while one
+of its open incidents is unacknowledged) calls
 `POST /admin/health/acknowledge {"key": …}`, which sets `ops_incidents.acknowledged_at` on that
 key's open cell incidents, and only that stops their reminders; the recovery is still told.
 
@@ -1337,7 +1346,7 @@ VERIFY priority and count in the backlog; "active again" includes probe and refe
 verdict older than the ledger's 7 days is pruned, so stuck can never see it. It replaces
 `false_delist_share` (a mixed 7-day window) and `delist_flip_refused` (7 days of
 `delist_flip_refusals`, a table nothing reads after it); the old page's `delisting_latency` and
-`delisting_spike` matview checks keep rendering until wave 9.
+`delisting_spike` matview checks rendered until wave 8 retired the page (wave 9 drops the matview).
 
 ## `coverage` — do we hold what each portal shows? (wave 4, gauge)
 
@@ -1369,7 +1378,7 @@ unseen 110 d: the ads no walk can nominate, #1853); on 10-19 the cell read 151 o
 (Problem, the oldest last seen 112 d ago) and 96 on ceskereality (Watch), while bazos's ~9 in-flight
 ads stay OK; the outcome definition counts the NULL-category ads without naming a portal. It
 replaces `walk_coverage`'s gap arm; on the old page the SQL `stale_active` check (all of its rows
-were NULL-category ads) and the category-trends panels keep rendering until wave 9.
+were NULL-category ads) and the category-trends panels rendered until wave 8 retired the page.
 
 **Replay rails (wave 4).** Each portal check replays its INPUTS
 (`tests/scripts/test_checks_{scraping,publishing,delisting}_replay.py`, coverage with scraping) from
@@ -1692,7 +1701,7 @@ sreality's old-API rows, which `floor_convention` watched until Q4 deleted it) h
 
 It replaces `field_fill_matrix`, `ppm2_measure_coverage`'s 7-day arm, `ppm2_median_shift` and
 `location_payload_shape_drift` with `SREALITY_SHAPE_CASE_SQL` and `_LOCATION_SHAPE_REMEDY` (portal literals in
-shared code); on the old page, the SQL `snapshot_churn` and `field_null_drift` rungs, until wave 9 drops them.
+shared code); and on the old page, until wave 8 retired it, the SQL `snapshot_churn` and `field_null_drift` rungs (wave 9 drops them).
 
 ## The quality gauges — `data_quality`, `location_town_coverage`, `text_extraction` (Health dashboard sprint wave 6)
 

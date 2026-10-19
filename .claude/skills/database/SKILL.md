@@ -328,8 +328,8 @@ function body (`pg_get_functiondef`), never from an old migration file or a desi
 emergency-rollback snippet. It also self-checks after granting
 (`if has_table_privilege('anon', ..., 'SELECT') then raise exception`) — a regression RAISEs,
 rolling back the whole tick so the last known-good object stays published instead of a
-mis-permissioned one, and the artifact's `derived_artifacts.last_succeeded_at` (surfaced on
-the Health page, migration 440) stops advancing within one cycle. `tests/test_browse_grant_drift.py`
+mis-permissioned one, and the artifact's `derived_artifacts.last_succeeded_at` (migration 440; on
+Health, the `jobs` check's `artifact/<name>` cell, Problem past its `staleness_budget`) stops advancing within one cycle. `tests/test_browse_grant_drift.py`
 is the matching OFFLINE gate — it reaches inside `EXECUTE`-embedded DDL for `browse_list` and the retired
 `properties_map_mv` specifically, unlike `test_migration_rls_grants.py`'s scanner, which treats dollar-quoted
 function bodies as opaque by design.

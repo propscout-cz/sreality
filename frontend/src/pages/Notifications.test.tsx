@@ -6,7 +6,7 @@
  * on the control's DESCRIPTION, which is what these tests pin.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -29,6 +29,7 @@ const baseDispatch: WatchdogDispatch = {
   property_id: 999,
   change_kind: 'new',
   message: null,
+  check_key: null,
   dispatched_at: '2026-05-12T10:00:00+00:00',
   seen_at: null,
   trigger_price_czk: null,
@@ -74,6 +75,7 @@ const feed: WatchdogDispatchesResponse = {
       source_kind: 'system_health',
       change_kind: 'system_alert',
       message: 'Ingest stalled',
+      check_key: 'scraping',
       subscription_id: null,
       subscription_name: null,
     },
@@ -115,14 +117,17 @@ vi.mock('@/lib/api', async (orig) => ({
   listNotifications: vi.fn(),
   getNotificationUnreadCount: vi.fn(),
   markWatchdogDispatchSeen: vi.fn(),
+  // The transport Health's Acknowledge posts through: the bell must never reach it.
+  apiPost: vi.fn(),
 }));
 
-import { listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
+import { apiPost, listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
+import { expectNoNestedInteractive } from '@/test/a11y';
 import Notifications from './Notifications';
 
-function renderPage() {
+function renderPage(page: WatchdogDispatchesResponse = feed) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  qc.setQueryData(notificationKeys.feed({ source: 'all', seen: 'all' }), feed);
+  qc.setQueryData(notificationKeys.feed({ source: 'all', seen: 'all' }), page);
   qc.setQueryData(notificationKeys.unreadCount, counts);
   return render(
     <QueryClientProvider client={qc}>
@@ -179,5 +184,51 @@ describe('<Notifications> collection share row', () => {
       expect(listNotifications).toHaveBeenLastCalledWith(
         expect.objectContaining({ source_kind: 'collection_share' }),
       ));
+  });
+});
+
+/* A system alert opens Health at the check it is about (the API reads the key off
+ * the dedupe key, as the outbox's email and Telegram links do). The link is a
+ * SIBLING of the mark-seen button, never nested in it, and reading the alert —
+ * by either control — marks it read without ever acknowledging the incident:
+ * only Acknowledge on Health stops the reminders. */
+describe('<Notifications> system alert row', () => {
+  beforeEach(() => {
+    vi.mocked(markWatchdogDispatchSeen).mockClear();
+    vi.mocked(apiPost).mockClear();
+  });
+
+  it('opens Health at the check the alert is about', () => {
+    renderPage();
+    expect(screen.getByRole('link', { name: 'Open Health' })).toHaveAttribute(
+      'href',
+      '/health#scraping',
+    );
+  });
+
+  it('opens plain Health when the API names no check', () => {
+    renderPage({
+      ...feed,
+      data: feed.data.map((d) => (d.id === 'd3' ? { ...d, check_key: null } : d)),
+    });
+    expect(screen.getByRole('link', { name: 'Open Health' })).toHaveAttribute('href', '/health');
+  });
+
+  it('marks the alert read from either control and never acknowledges it', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({
+      ...feed.data[2],
+      seen_at: '2026-05-12T12:00:00+00:00',
+    });
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /^System Ingest stalled/ }));
+    fireEvent.click(screen.getByRole('link', { name: 'Open Health' }));
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(markWatchdogDispatchSeen).mock.calls).toEqual([['d3'], ['d3']]);
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it('nests no control inside another', () => {
+    const { container } = renderPage();
+    expectNoNestedInteractive(container);
   });
 });

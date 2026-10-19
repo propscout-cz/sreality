@@ -171,213 +171,12 @@ export interface ImagePublic {
   tag_head_scores?: Record<string, number> | null;
 }
 
-/* Health dashboard payload — shape mirrors migration 013 health_summary RPC. */
+/* Distributional shape — drawn by components/estimation/RangeStrip. */
 
-export interface HealthDayCount {
-  day: string;
-  n: number;
-}
-
-export interface HealthSnapBucket {
-  bucket: '1' | '2' | '3' | '4+' | string;
-  n: number;
-}
-
-export interface HealthFreshnessRow {
-  outcome: string;
-  n: number;
-}
-
-export interface HealthFailureRow {
-  sreality_id: number;
-  attempts: number;
-  first_failure_at: string;
-  last_failure_at: string | null;
-  given_up: boolean;
-}
-
-export interface HealthCategoryBlock {
-  category_main: 'byt' | 'dum' | 'komercni' | string;
-  category_type: 'pronajem' | 'prodej' | string;
-  active_now: number;
-  flipped_inactive_7d: number;
-  new_per_day_14d: HealthDayCount[];
-  flipped_per_day_7d: HealthDayCount[];
-  failures_total: number;
-  failures_given_up: number;
-}
-
-/* One row per derived artifact (matview / rollup table) from
- * `derived_artifacts_public` (migration 437) — who produces it, on what
- * cadence, how stale it is allowed to get, and when it last succeeded.
- *
- * Two shapes to know before consuming it:
- *   · `staleness_budget` is a Postgres interval and PostgREST hands it over as
- *     a STRING ('01:00:00', '45 mins', 'PT1H' depending on IntervalStyle), not
- *     a number — lib/derivedArtifacts parses it, defensively.
- *   · There is deliberately NO error column. The base table keeps `last_error`
- *     (it can carry table and column names) and the view does not publish it,
- *     so the only failure signal here is `last_succeeded_at` falling behind
- *     `staleness_budget`. Don't reference `last_error` or `has_error`. */
-export interface DerivedArtifactRow {
-  name: string;
-  producer: string;
-  host: string;
-  cadence: string;
-  staleness_budget: string | null;
-  complete_through: string | null;
-  last_succeeded_at: string | null;
-  last_duration_ms: number | null;
-  last_rows: number | null;
-  is_serving: boolean;
-}
-
-export interface HealthSummary {
-  // When the pg_cron loop last refreshed the Health matviews (migration 176).
-  // Absent on payloads generated before that migration.
-  generated_at?: string | null;
-  last_scrape_at: string | null;
-  active_now: number;
-  active_7d_ago: number;
-  flipped_inactive_7d: number;
-  new_per_day_14d: HealthDayCount[];
-  flipped_per_day_7d: HealthDayCount[];
-  snapshot_density: HealthSnapBucket[];
-  freshness_24h: HealthFreshnessRow[];
-  failures_given_up: number;
-  failures_total: number;
-  failures_top10: HealthFailureRow[];
-  by_category: HealthCategoryBlock[];
-}
-
-/* Per-category source-scoped health (migrations 118/119): category_trends RPC.
-   One trend point per index run — "portal" = portal-reported total, "db" = our
-   active count. The rest are source-scoped per-category aggregates. */
-
-export interface CategoryTrendPoint {
-  t: string;
-  portal: number | null;
-  db: number | null;
-}
-
-export interface CategoryTrend {
-  category_main: string;
-  category_type: string;
-  total_in_db: number;
-  active_now: number;
-  new_today: number;
-  new_7d: number;
-  flipped_today: number;
-  flipped_7d: number;
-  failures_total: number;
-  failures_given_up: number;
-  portal_total: number | null;
-  collected: number | null;
-  hourly: CategoryTrendPoint[];
-  daily: CategoryTrendPoint[];
-}
-
-/* Per-scrape stats (migration 086): scrape_runs table + recent_scrape_runs RPC. */
-
-export interface ScrapeRunCategory {
-  category_main: string | null;
-  category_type: string | null;
-  listings_found_new: number;
-  listings_scraped_new: number;
-  listings_inactive: number;
-  images_discovered: number;
-  images_stored: number;
-  // Reconciliation (recorded by the region-split scraper; absent on older runs).
-  sreality_result_size?: number | null;
-  collected?: number | null;
-  active_db?: number | null;
-}
-
-export interface ScrapeRun {
-  id: number;
-  started_at: string;
-  ended_at: string | null;
-  // 'full'/'delta' are the legacy monolithic scraper; 'index'/'detail' are the
-  // Phase-2 cadence split (migration 105).
-  run_type: 'full' | 'delta' | 'index' | 'detail';
-  index_pages: number;
-  listings_found_new: number;
-  listings_scraped_new: number;
-  listings_updated: number;
-  listings_inactive: number;
-  images_discovered: number;
-  images_stored: number;
-  errors: number;
-  by_category: ScrapeRunCategory[];
-  // Which portal this run belongs to (migration 100). Defaults to 'sreality'
-  // on rows recorded before the column existed.
-  source: string;
-}
-
-/* Per-portal health (migration 100): the portals registry joined with each
- * source's activity. `kind` decides which metrics are meaningful — scrapers
- * report listing + scrape-run stats, on-demand URL parsers report parse
- * activity. Both metric families are always present (zeroed for the other
- * kind) so the dashboard renders uniformly. */
-
-export type PortalKind = 'scraper' | 'parser';
-
-export interface PortalHealth {
-  source: string;
-  label: string;
-  kind: PortalKind;
-  // Drives the derived posture badge (see lib/portalPosture). Replaced the
-  // hand-set `stage` label in migration 217.
-  supports_complete_walk: boolean;
-  home_url: string | null;
-  listings_total: number;
-  listings_active: number;
-  listings_active_7d: number;
-  // Active-listing data-quality coverage (migration 219; null when no active
-  // listings). The view also carries dedup_eligible_pct — unmodelled, nothing reads it.
-  geo_pct: number | null;
-  street_pct: number | null;
-  parses_total: number;
-  parses_30d: number;
-  last_scrape_at: string | null;
-  runs_7d: number;
-  scraped_new_7d: number;
-  inactive_7d: number;
-  errors_7d: number;
-  last_parsed_at: string | null;
-  last_activity_at: string | null;
-}
-
-export interface ImageStorageCategory {
-  category_main: string | null;
-  category_type: string | null;
-  total: number;
-  stored: number;
-  // Active-listing subset (migration 109): the *closeable* gap — inactive
-  // listings' CDN photos are mostly expired and unrecoverable.
-  total_active: number;
-  stored_active: number;
-}
-
-export interface ImageStorageOverview {
-  total_images: number;
-  stored_images: number;
-  total_active_images: number;
-  stored_active_images: number;
-  by_category: ImageStorageCategory[];
-}
-
-/* Image-download failure rollup (migration 177): one row per
- * (source, bucket, detail). `detail` is the unavailable_reason or coarse
- * last_error class ('HTTP 404', 'other'); '' when not applicable. */
-
-export type ImageFailureBucket = 'stored' | 'unavailable' | 'exhausted' | 'pending';
-
-export interface ImageFailureRow {
-  source: string;
-  bucket: ImageFailureBucket;
-  detail: string;
-  n: number;
+export interface PercentileTriple {
+  p25: number;
+  p50: number;
+  p75: number;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1408,6 +1207,10 @@ export interface WatchdogDispatch {
    * so their `sreality_id` is null at runtime despite the type (widening it
    * touches pages/Watchdog.tsx; owed). */
   message: string | null;
+  /* The check a system_health alert is about, read by the API off its dedupe key
+   * (`sys:<check_key>:…`), so the bell opens Health at that check; null on every
+   * other producer. */
+  check_key: string | null;
   dispatched_at: string;
   seen_at: string | null;
   /* Change provenance — collection-monitor price events carry these so "why was
@@ -1533,23 +1336,6 @@ export interface UpdateManualEstimateIn {
   author?: string;
   source_kind?: ManualEstimateSourceKind;
   notes?: string | null;
-}
-
-// scraper_health_checks() RPC (migration 088)
-export type HealthCheckStatus = 'pass' | 'warn' | 'fail';
-
-export interface ScraperHealthCheck {
-  key: string;
-  label: string;
-  status: HealthCheckStatus;
-  value: string;
-  detail: string;
-}
-
-export interface ScraperHealthChecks {
-  generated_at: string;
-  source?: string;
-  checks: ScraperHealthCheck[];
 }
 
 /* One row of property_sources_public — one advert of a property: a row of the

@@ -407,8 +407,9 @@ _JOB_HEADROOM_S = 180.0
 
 HOSTS = ("realtime-worker", "github-actions", "pg_cron")
 CLASSES = ("alarm", "gauge")
-DOMAINS = ("scraping", "publishing", "delisting", "dedup", "coverage", "portals",
-           "data_quality", "platform")
+# The Health page's sections, in its order (frontend/src/lib/healthChecks.ts SECTIONS): a new
+# domain needs a section there, or the page has nowhere to show its checks.
+DOMAINS = ("portals", "dedup", "data_quality", "platform")
 
 _GITHUB, _WORKER = "github-actions", "realtime-worker"
 _TEN_MINUTES, _HALF_HOURLY = 600, 1_800
@@ -472,19 +473,20 @@ CHECKS: tuple[Check, ...] = (
     # dedup, then parsing and the quality gauges). GitHub keeps what needs it: migration_drift
     # reads a checkout, the outbound probe an address that is not the scrapers'.
     Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
-          unit="cells"),
+          unit="cells", owner_path="/settings"),  # Settings › GitHub Actions
     Check("capacity", check_capacity, "platform", "alarm", _WORKER, _HALF_HOURLY, "Capacity",
           unit="cells"),
     Check("llm", check_llm, "platform", "alarm", _WORKER, _TEN_MINUTES, "LLM providers",
-          unit="cells"),
-    Check("scraping", check_scraping, "scraping", "alarm", _WORKER, _TEN_MINUTES, "Scraping",
-          unit="cells"),
-    Check("publishing", check_publishing, "publishing", "alarm", _WORKER, _TEN_MINUTES,
-          "Publishing", unit="cells"),
-    Check("delisting", check_delisting, "delisting", "alarm", _WORKER, _TEN_MINUTES,
-          "Delisting", unit="cells"),
-    Check("coverage", check_coverage, "coverage", "gauge", _WORKER, _HOURLY, "Coverage",
-          unit="cells"),
+          unit="cells", owner_path="/costs"),
+    # Domain "portals" is the page's portal matrix: one column per check, one row per portal.
+    Check("scraping", check_scraping, "portals", "alarm", _WORKER, _TEN_MINUTES, "Scraping",
+          unit="cells", owner_path="/scrapers"),
+    Check("publishing", check_publishing, "portals", "alarm", _WORKER, _TEN_MINUTES,
+          "Publishing", unit="cells", owner_path="/scrapers"),
+    Check("delisting", check_delisting, "portals", "alarm", _WORKER, _TEN_MINUTES,
+          "Delisting", unit="cells", owner_path="/scrapers"),
+    Check("coverage", check_coverage, "portals", "gauge", _WORKER, _HOURLY, "Coverage",
+          unit="cells", owner_path="/scrapers"),
     Check("dedup", check_dedup, "dedup", "alarm", _WORKER, _TEN_MINUTES, "Engine",
           unit="cells", owner_path="/autodedup/progress"),
     # LAST of the worker's alarms: the expensive reads. data_quality shares its measure read

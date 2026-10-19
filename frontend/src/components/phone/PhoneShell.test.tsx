@@ -2,7 +2,8 @@
  * for the desktop view; the routes inside are unchanged. The header is exactly
  * h-14 (the desktop panes pin to 3.5 rem), the tab bar carries the five areas
  * (W1's four and Odkaz), a page outside the tab roots gets a back affordance,
- * and the account sheet holds the way to the desktop view. */
+ * and the account sheet holds the way to the desktop view and, for an admin,
+ * the phone's one way to Health. */
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -86,6 +87,7 @@ function renderAt(path: string) {
             <Route path="/feed" element={<p>feed body</p>} />
             <Route path="/browse" element={<p>browse body</p>} />
             <Route path="/pipeline" element={<p>pipeline body</p>} />
+            <Route path="/health" element={<p>health body</p>} />
             <Route path="/property/:propertyId" element={<p>property body</p>} />
           </Route>
         </Routes>
@@ -147,6 +149,37 @@ describe('phone frame', () => {
     expect(within(sheet).getByText('operator@example.cz')).toBeInTheDocument();
     expect(within(sheet).getByRole('radio', { name: 'Světlý' })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();
+  });
+
+  /* The phone has no Admin menu and no bell: the sheet's Health row is the one
+   * way to Health, and only an admin sees it (the page is admin-only). */
+  it('gives an admin a Health row that closes the sheet and opens Health', async () => {
+    setNarrow(true);
+    renderAt('/feed');
+    await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Účet' });
+    const health = within(sheet).getByRole('link', { name: 'Health' });
+    expect(health).toHaveAttribute('href', '/health');
+    await userEvent.click(health);
+    expect(await screen.findByText('health body')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Účet' })).toBeNull();
+  });
+
+  it('shows no Health row to a non-admin', async () => {
+    vi.mocked(auth.useAuth).mockReturnValue({
+      isAdmin: false,
+      session: null,
+      user: { email: 'operator@example.cz' },
+      loading: false,
+      agendas: null,
+      signOut: vi.fn(),
+    } as unknown as ReturnType<typeof auth.useAuth>);
+    setNarrow(true);
+    renderAt('/feed');
+    await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Účet' });
+    expect(within(sheet).queryByRole('link', { name: 'Health' })).toBeNull();
     expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();
   });
 

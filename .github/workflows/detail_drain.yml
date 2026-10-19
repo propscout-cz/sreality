@@ -1,6 +1,5 @@
 name: "Scraping: Sreality detail drain (Phase 2)"
 
-# portal: sreality
 # The slow half of the Phase-2 cadence split, now on the shared portal
 # framework: `scraper.sreality_main --drain-only` drives SrealityPortal through
 # the one generic portal_runner. Claims a bounded slice of listing_detail_queue

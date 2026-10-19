@@ -1,6 +1,5 @@
 name: "Scraping: Sreality index walk (Phase 2)"
 
-# portal: sreality
 # The fast half of the Phase-2 cadence split, now on the shared portal
 # framework: `scraper.sreality_main --index-only` drives SrealityPortal through
 # the one generic portal_runner (the same loop every other portal uses). Walks

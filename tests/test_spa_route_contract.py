@@ -20,6 +20,11 @@ boundary — verified by reading both emitters, not assumed:
   /collections                 chrome-extension (the save checklist's "Spravovat kolekce")
 Widening it past what actually crosses the boundary would make it a second full
 route table to maintain, which is the failure mode it exists to prevent.
+
+One emitter is data, not code: the health registry (`scripts/verify_pipeline.py`
+CHECKS, and the watcher's own row in `health_liveness()`) stores each check's
+owner page in `health_checks.owner_path`, which the Health page links. That rail
+matches every non-empty path against the registry, so it pins no route here.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 ROUTES_TS = REPO / "frontend" / "src" / "lib" / "routes.ts"
 EXTENSION_TS = REPO / "chrome-extension" / "src" / "content.ts"
+MIGRATIONS = REPO / "migrations"
 
 # `key: def('/pattern'),` — the one authored form in the registry.
 _DEF = re.compile(r"^\s*(\w+):\s*def\('([^']+)'\),", re.MULTILINE)
@@ -166,6 +172,68 @@ def test_extension_builds_the_collections_route() -> None:
         "${APP_BASE_URL}/collections — if the link moved, check it still matches "
         "the SPA registry."
     )
+
+
+# The watcher upserts its own registry row inside health_liveness(), so its owner
+# page and domain are literals in the newest migration that (re)creates the function.
+_LIVENESS_FN = re.compile(r"create or replace function public\.health_liveness\(", re.I)
+_LIVENESS_ROW = re.compile(
+    r"insert into health_checks\b[^(]*\(([^)]*)\)"
+    r"\s*values\s*\(\s*('liveness',.*)\)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_SQL_VALUE = re.compile(r"'(?:[^']|'')*'|[^,\s][^,]*")
+
+
+def _liveness_row() -> dict[str, str]:
+    """The watcher's registry row: column -> SQL literal."""
+    defining = [
+        p for p in MIGRATIONS.glob("*.sql") if _LIVENESS_FN.search(p.read_text())
+    ]
+    newest = max(defining, key=lambda p: (int(p.name.split("_")[0]), p.name))
+    row = _LIVENESS_ROW.search(newest.read_text())
+    assert row, f"{newest.name} recreates health_liveness() but its row did not parse"
+    columns = [c.strip() for c in row.group(1).split(",")]
+    values = _SQL_VALUE.findall(row.group(2))
+    assert len(columns) == len(values), (columns, values)
+    return dict(zip(columns, values))
+
+
+def _text(literal: str) -> str:
+    assert literal[0] == literal[-1] == "'", literal
+    return literal[1:-1]
+
+
+def test_every_health_owner_path_is_an_spa_route() -> None:
+    """The Health page links each check to the page that owns the fix. A renamed
+    route would leave a dead link with no test failing, so every non-empty
+    owner_path must match a registry pattern ('' means no owner page)."""
+    from scripts.verify_pipeline import CHECKS
+
+    owners = {c.key: c.owner_path for c in CHECKS}
+    owners["liveness"] = _text(_liveness_row()["owner_path"])
+    patterns = [_pattern_to_regex(p) for p in _registry().values()]
+    assert any(owners.values()), "parsed no owner_path: the rail would pass vacuously"
+    stray = {
+        k: p for k, p in owners.items() if p and not any(r.match(p) for r in patterns)
+    }
+    assert not stray, f"owner_path with no route in {ROUTES_TS}: {stray}"
+
+
+_SECTION_KEY = re.compile(r"^\s*\['([a-z_]+)',\s*'[^']*'\],\s*$", re.M)
+
+
+def test_every_registry_domain_has_a_section_on_the_health_page() -> None:
+    """A check whose domain has no section is measured but never shown where it
+    belongs. SECTIONS (lib/healthChecks.ts) and DOMAINS must stay one list, and
+    the watcher's row, registered in SQL, must name one of them."""
+    from scripts.verify_pipeline import DOMAINS
+
+    ts = (REPO / "frontend" / "src" / "lib" / "healthChecks.ts").read_text()
+    block = ts.split("export const SECTIONS = [", 1)[1].split("] as const;", 1)[0]
+    assert tuple(_SECTION_KEY.findall(block)) == tuple(DOMAINS)
+    domain = _text(_liveness_row()["domain"])
+    assert domain in DOMAINS, f"health_liveness() registers domain {domain!r}: no section"
 
 
 def test_the_contract_names_only_what_actually_crosses_a_boundary() -> None:

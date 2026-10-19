@@ -11,8 +11,8 @@ name: Broker resolution (incremental)
 # memberships (one merged statement), and republish the leaderboard matview
 # CONCURRENTLY when its derived_artifacts stamp is older than ~an hour. So this
 # cron matters exactly when the worker is down. O(changes); source-agnostic
-# maintenance job, so it carries NO `# portal:` tag. Shares the broker-resolution
-# concurrency group with the full sweep so the two never mutate at once.
+# maintenance job. Shares the broker-resolution concurrency group with the full
+# sweep so the two never mutate at once.
 #
 # Required secret: SUPABASE_DB_URL.
 
