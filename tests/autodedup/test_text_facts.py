@@ -17,8 +17,8 @@ from autodedup.text_facts import (
     same_form_floor_gap,
     stated_areas,
     subject_floors,
-    subject_floors_by_form,
     unit_designators,
+    upper_storeys,
     widest_directions,
 )
 
@@ -285,25 +285,12 @@ def test_printed_unit_codes_reads_no_range_and_no_room_number(text: str) -> None
     assert printed_unit_codes(text) == frozenset()
 
 
-# --- E967: the NP noun is the explicit one ---------------------------------------------------
+# --- the range reader (E967, kept by E969) and main's bare podlaží -------------------------
 
 
-def test_the_np_noun_is_read_numbered_and_worded() -> None:
-    """náměstí Jiřího z Poděbrad: sreality 14936 in May against idnes 19241736 in October."""
-    may = "nabídli nezařízený byt, který se nachází ve 3 nadzemním podlaží secesního domu"
-    october = "moderní stylový byt 3kk, který se nachází ve čtvrtém nadzemním podlaží secesního domu"
-    assert printed_floors_by_form(may, True)["np"] == {3}
-    assert printed_floors_by_form(october, True)["np"] == {4}
-    # The placement window reaches past the spelled-out noun.
-    assert subject_floors_by_form(may, True)["np"] == {3}
-    assert subject_floors_by_form(october, True)["np"] == {4}
-
-
-def test_a_bare_podlazi_is_a_noun_of_its_own_on_the_np_scale() -> None:
-    """`v prvním podlaží` is written for the ground floor and for the one above it: it is read
-    as a storey, on the NP scale for a gap, and never as the NP noun itself."""
-    situated = printed_floors_by_form("bydlení je situováno v prvním podlaží", True)
-    assert situated["podlazi"] == {1} and situated["np"] == frozenset()
+def test_a_bare_podlazi_is_read_on_the_np_scale() -> None:
+    """A worded bare `podlaží` is the NP noun's storey, as it was before E967."""
+    assert printed_floors_by_form("bydlení je situováno v prvním podlaží", True)["np"] == {1}
     assert printed_floors("byt ve třetím podlaží domu", True) == {3}
     assert subject_floors("Byt se nachází ve třetím podlaží domu.", True) == {3}
     assert same_form_floor_gap(printed_floors_by_form("ve třetím podlaží", True),
@@ -322,8 +309,17 @@ def test_a_bare_podlazi_is_a_noun_of_its_own_on_the_np_scale() -> None:
     ],
 )
 def test_a_maisonette_range_reads_both_storeys(text: str, expected: set[int]) -> None:
-    """E967: the last storey alone would split the range from the advert naming the entry."""
+    """The last storey alone would split the range from the advert naming the entry."""
     assert printed_floors(text, True) == expected
+
+
+def test_upper_storeys_reads_the_number_the_upper_clause_carries() -> None:
+    """E969: on the NP scale, so `v přízemí` (1) against `v 1. patře` (2) is one storey."""
+    assert upper_storeys("Byt se nachází v 1. patře domu.") == {2}
+    assert upper_storeys("Byt se nachází v 1. poschodí domu.") == {2}
+    assert upper_storeys("Byt se nachází ve třetím patře domu.", True) == {4}
+    assert upper_storeys("Byt se nachází ve třetím patře domu.") == frozenset()
+    assert upper_storeys("Byt se nachází v patře domu.") == frozenset()
 
 
 def test_a_maisonette_range_is_placed_whole() -> None:

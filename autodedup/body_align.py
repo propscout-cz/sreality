@@ -122,9 +122,7 @@ def _storey(level: int) -> str:
     READABLE newly split 53 cohort-3 and 73 cohort-4 certain duplicates on nothing but a
     storey — more than the whole heal closed. So the sentinel carries the level (two adverts
     whose storeys differ no longer align as equal) and carries no digit, and the storey the
-    BODY prints is read by `prose_floor`, under the same convention rule as the column — except
-    a placement both bodies write in the NP noun alone, which `subject_floor` reads at any gap
-    (E967)."""
+    BODY prints is read by `prose_floor`, under the same convention rule as the column."""
     return f" [np{chr(ord('a') + min(max(level, 0), 25))}] "
 
 

@@ -744,16 +744,11 @@ def test_w29_replays_every_row_the_room_tag_cannot_move(tmp_path: Path) -> None:
     below = {key for key, slot in tag.items() if slot and slot[1] and slot[0] < 0.90}
     moved = {key for key in then.keys() & now.keys() if now[key] != then[key]} - below
     # E954: a total_floors demotion the bodies' printed storey count answers is lifted (seven
-    # rows on this pack: Jablonec 41 m² x4, Mozartova x2, Kolmá). E966–E968 read a room code, a
-    # storey gap in the NP noun and the facing before the noun: a promotion or a demonstration
-    # those facts now refuse falls back to the model's band (four rows on this pack: Harfa
-    # Living x2, Anenské náměstí, Čerpadlová). Nothing moves toward merge.
-    lifted = {key for key in moved
-              if then[key][0] == "band" and then[key][1].endswith("d43_gate:total_floors")
-              and now[key][0] == "merge"
-              and printed_storeys_prevail(ds.listings[key[0]], ds.listings[key[1]])}
-    refused = moved - lifted
-    assert all(now[key] [:2] == ("band", "model")
-               and then[key][1].startswith(("model:d43_demonstrate", "d43_promote"))
-               for key in refused), refused
-    assert not any(now[key][0] == "merge" and then[key][0] != "merge" for key in refused)
+    # rows on this pack: Jablonec 41 m² x4, Mozartova x2, Kolmá), and nothing else moves. E966
+    # and E968 move no row here, and the four rows E967's one-storey NP fact refused (Harfa
+    # Living x2, Anenské náměstí, Čerpadlová) decide as S14 stored them since E969 withdrew it —
+    # against main with E967 that returns Čerpadlová to merge.
+    assert all(then[key][0] == "band" and then[key][1].endswith("d43_gate:total_floors")
+               and now[key][0] == "merge"
+               and printed_storeys_prevail(ds.listings[key[0]], ds.listings[key[1]])
+               for key in moved)
