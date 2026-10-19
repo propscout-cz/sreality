@@ -1180,13 +1180,6 @@ export interface ConfirmBuildingUnitsIn {
   units: BuildingUnit[];
 }
 
-export interface BuildingListResponse {
-  data: BuildingRun[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
 /* -------------------------------------------------------------------------- */
 /* Watchdog / new-listing notifications (Phase U2.7).                         */
 /*                                                                            */
