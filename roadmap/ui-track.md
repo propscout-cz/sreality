@@ -26,6 +26,9 @@ toolkit work.
   the open register mirror, `ruian_place_names_public(level, code, name)` — the register is dark to
   browser roles and the pivot runs as its caller. A location read surface added by a PR that deletes
   none: the PR body says why (the five place dimensions were asked for on 2026-10-19).
+- **Several statistics per chart (2026-10-19, migration 628):** a line, a bar and a table with a column draw the
+  statistics the user picks (median, p10, p25 ... at once; the first pick leads in copper, the last cannot be
+  unpicked). The saved chart's `stat` became `stats`, a list; 628 rewrites the stored board losslessly.
 - **Next:** (1) the legacy-vocabulary heal as its own PR — 89 condition spellings and 766
   dispositions outside the canonical vocabulary are charted under their raw spellings, sorted after
   the canonical members, until the heal lands (ruling 9);

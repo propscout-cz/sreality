@@ -96,8 +96,10 @@ null when the register has no live name for the code.
 
 One row per account. Read by the SPA through RLS (`current_account_ids()`); written only by
 `PUT /stats/dashboard {charts: [...]}` (tenant connection, `require_account_id`, whole-document upsert). A chart
-is `{id, view, rows, cols, measure, stat}`; `stat` (one of the chart stats, default `median`) is read by line,
-bar and a table with a column dimension (one value per column); the title is derived, never stored. No row ⇒
+is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics, in the order the
+user picked them, the first leading; default `['median']`) is read by line, bar and a table with a column
+dimension; the title is derived, never stored. (Migration 628 rewrote the first shape's single `stat` into
+`stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒
 the SPA shows `DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one
 status, and no byty-only dimension) and the first save persists the whole list. A board holds at most
 `MAX_CHARTS` charts (registry); the SPA offers no "Přidat graf" at the cap. Single-membership assumption: the
@@ -130,7 +132,8 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
   edit mode the card flips in place to `ChartBuilder` (same card, same width), Uložit / Zrušit.
 - `components/stats/ChartBuilder.tsx`: a palette of dimension chips grouped (Vlastnost · Cena · Místo ·
   Vybavení), the shelves Řádky (six slots, sortable) and Sloupce (one), the Hodnota well, the view picker and
-  the stat picker (line / bar, and a table with a column). Drag with dnd-kit (mouse; a long press on touch, so
+  the statistic picker (a multi-select: line, bar and a table with a column; the first pick leads, the last
+  one cannot be unpicked — `lib/stats.toggleStat`). Drag with dnd-kit (mouse; a long press on touch, so
   the palette still scrolls on a phone; the row grip also sorts from the keyboard); every drop also has a click
   path (a chip click appends to Řádky; a slot's × removes) so the keyboard works. Rules enforced in the UI exactly as in the registry: a
   dimension once, six rows, one column, box ⇒ no column, line / bar ⇒ one row; dimensions outside the
@@ -139,10 +142,12 @@ of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the
 - `components/stats/SampleLedger.tsx`: the signature mark. One line — "Ve filtru 73 537 · vzorek 60 123 ·
   vyřazeno 13 414 (chybí údaje)" — over a thin three-segment bar in ink tints, plus the cohort chips (byt ·
   prodej · aktivní). The same component on every chart, before the view.
-- `components/stats/views/PivotTable.tsx` (nested rows with indent, a column dimension ⇒ one value per column
-  showing the chart's `stat` with n beneath; no column dimension ⇒ the seven statistics), `PivotSeries.tsx`
+- `components/stats/views/PivotTable.tsx` (nested rows with indent, a column dimension ⇒ each column value
+  carries the picked statistics side by side, then its n, under a three-level header; no column dimension ⇒ the
+  seven statistics), `PivotSeries.tsx`
   (`kind: 'line' | 'bar'`, one lazy chunk; `StatsChart` builds the series model once and applies the series cap
-  to it; recharts, axes through `lib/chartAxis.valueAxisSpec`, series = column values: copper first,
+  to it; recharts, axes through `lib/chartAxis.valueAxisSpec`, series = one per (column value, picked statistic),
+  a column's statistics together, named `column · statistic` when more than one is picked: copper first,
   ink tints after, at most `MAX_SERIES` (each colour solid, then dashed) or a one-sentence refusal; the SVG is
   hidden from assistive tech and a screen-reader table carries the same numbers), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
   rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers are

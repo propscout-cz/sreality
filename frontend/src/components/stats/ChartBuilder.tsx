@@ -42,6 +42,7 @@ import {
   placeDim,
   removeDim,
   statUsed,
+  toggleStat,
   viewBlock,
   type ChartSpec,
   type DropTarget,
@@ -550,12 +551,12 @@ function ValueWell({ draft, onChange }: { draft: ChartSpec; onChange: (next: Cha
         </p>
       )}
       {statUsed(draft) && (
-        <Picker label="Statistika">
+        <Picker label="Statistika · jedna nebo víc">
           {STATS_REGISTRY.chart_stats.map((s) => (
             <PickButton
               key={s}
-              on={draft.stat === s}
-              onClick={() => onChange({ ...draft, stat: s })}
+              on={draft.stats.includes(s)}
+              onClick={() => onChange({ ...draft, stats: toggleStat(draft.stats, s) })}
               ariaLabel={`Statistika: ${STAT_LABEL[s]}`}
             >
               {STAT_LABEL[s]}

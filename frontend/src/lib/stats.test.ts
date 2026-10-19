@@ -44,6 +44,7 @@ import {
   saveDashboard,
   seriesModel,
   sortKeys,
+  toggleStat,
   statUsed,
   viewBlock,
   type ChartSpec,
@@ -60,7 +61,7 @@ const chart = (over: Partial<ChartSpec>): ChartSpec => ({
   rows: [],
   cols: [],
   measure: 'ppm2',
-  stat: 'median',
+  stats: ['median'],
   ...over,
 });
 
@@ -190,7 +191,7 @@ describe('places — a place key is a RÚIAN code, named by the payload', () => 
       ],
       cells: [cell(['554481'], 20, 70, '51'), cell(['582786'], 20, 110, '116')],
     });
-    const m = seriesModel(p, 'median');
+    const m = seriesModel(p, ['median']);
     expect(m.data.map((d) => [d.x, d.label])).toEqual([['582786', 'Brno'], ['554481', 'Cheb']]);
     expect(m.series.map((s) => [s.key, s.label])).toEqual([
       ['116', 'Jihomoravský kraj'], ['51', 'Karlovarský kraj'],
@@ -451,8 +452,39 @@ describe('the shelf rules (the registry\'s, in the UI)', () => {
   });
 });
 
+describe('toggleStat — the picker\'s one rule', () => {
+  it('appends a new statistic after the ones already picked, so the first pick leads', () => {
+    expect(toggleStat(['median'], 'p10')).toEqual(['median', 'p10']);
+    expect(toggleStat(['p90', 'median'], 'p10')).toEqual(['p90', 'median', 'p10']);
+  });
+  it('removes a picked one, keeping the order of the rest', () => {
+    expect(toggleStat(['median', 'p10', 'p90'], 'p10')).toEqual(['median', 'p90']);
+  });
+  it('never removes the last one — a chart always draws at least one statistic', () => {
+    expect(toggleStat(['p25'], 'p25')).toEqual(['p25']);
+  });
+  it('does not mutate its input', () => {
+    const picked = ['median'] as const;
+    toggleStat(picked, 'p10');
+    expect(picked).toEqual(['median']);
+  });
+});
+
 describe('sanitizeChart', () => {
-  it('keeps a valid chart and defaults its stat', () => {
+  it('keeps the saved statistics in their saved order, once each, known ones only', () => {
+    const raw = { id: 'x', view: 'line', rows: ['disposition'], cols: [], measure: 'ppm2' };
+    expect(sanitizeChart({ ...raw, stats: ['p90', 'median', 'p90', 'max', 7, 'p10'] })?.stats).toEqual([
+      'p90', 'median', 'p10',
+    ]);
+  });
+  it('reads a chart with no usable statistics as the default alone — including the old single `stat`', () => {
+    const raw = { id: 'x', view: 'line', rows: ['disposition'], cols: [], measure: 'ppm2' };
+    expect(sanitizeChart({ ...raw, stats: [] })?.stats).toEqual(['median']);
+    expect(sanitizeChart({ ...raw, stats: ['n'] })?.stats).toEqual(['median']);
+    expect(sanitizeChart({ ...raw, stats: 'p90' })?.stats).toEqual(['median']);
+    expect(sanitizeChart({ ...raw, stat: 'p90' })?.stats).toEqual(['median']);
+  });
+  it('keeps a valid chart and defaults its stats', () => {
     expect(sanitizeChart({ id: 'x', view: 'box', rows: ['disposition'], cols: [], measure: 'ppm2' })).toEqual(
       chart({ id: 'x', view: 'box', rows: ['disposition'] }),
     );
@@ -477,11 +509,39 @@ describe('seriesModel — x is the one row dimension, series the column values',
         cell(['2+kk'], 20, 210, 'ano'),
       ],
     });
-    const m = seriesModel(p, 'median');
+    const m = seriesModel(p, ['median']);
     expect(m.series.map((s) => s.label)).toEqual(['Ano', 'Ne']);
     expect(m.data.map((d) => d.label)).toEqual(['1+kk', '2+kk']);
     expect(m.data[0]).toMatchObject({ s0: 100, s1: null });
     expect(m.gaps).toBe(true);
+  });
+
+  it('draws a series per picked statistic, named by it, in the picked order', () => {
+    const p = pivotOf({
+      spec: { rows: ['disposition'], cols: [], measure: 'ppm2' },
+      cells: [cell(['1+kk'], 20, 100), cell(['2+kk'], 20, 150)],
+    });
+    const m = seriesModel(p, ['p90', 'median']);
+    expect(m.series.map((s) => [s.stat, s.label, s.dataKey])).toEqual([
+      ['p90', 'p90', 's0'],
+      ['median', 'medián', 's1'],
+    ]);
+    expect(m.data[0]).toMatchObject({ s0: 120, s1: 100 });
+    expect(m.data[1]).toMatchObject({ s0: 170, s1: 150 });
+  });
+
+  it('with a column dimension: one series per (column value, statistic), a column\'s statistics together', () => {
+    const p = pivotOf({
+      spec: { rows: ['disposition'], cols: ['has_lift'], measure: 'ppm2' },
+      cells: [
+        cell(['1+kk'], 20, 100, 'ano'),
+        cell(['1+kk'], 20, 80, 'ne'),
+      ],
+    });
+    const m = seriesModel(p, ['median', 'p10']);
+    expect(m.series.map((s) => s.label)).toEqual(['Ano · medián', 'Ano · p10', 'Ne · medián', 'Ne · p10']);
+    expect(new Set(m.series.map((s) => s.dataKey)).size).toBe(4);
+    expect(m.data[0]).toMatchObject({ s0: 100, s1: 80, s2: 80, s3: 60 });
   });
 
   it('draws a series per column value, one without a column', () => {
@@ -489,8 +549,8 @@ describe('seriesModel — x is the one row dimension, series the column values',
       spec: { rows: ['disposition'], cols: ['obec'], measure: 'ppm2' },
       cells: Array.from({ length: MAX_SERIES + 1 }, (_, i) => cell(['1+kk'], 20, 100, String(582786 + i))),
     });
-    expect(seriesModel(many, 'median').series).toHaveLength(MAX_SERIES + 1);
-    const one = seriesModel(pivotOf({ spec: { rows: ['disposition'], cols: [], measure: 'ppm2' } }), 'median');
+    expect(seriesModel(many, ['median']).series).toHaveLength(MAX_SERIES + 1);
+    const one = seriesModel(pivotOf({ spec: { rows: ['disposition'], cols: [], measure: 'ppm2' } }), ['median']);
     expect(one.series.map((s) => s.label)).toEqual(['Cena za m²']);
   });
 });

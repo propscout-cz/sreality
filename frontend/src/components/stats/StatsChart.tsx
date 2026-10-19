@@ -320,23 +320,23 @@ function Body({
   if (pivot.spec.rows.length < minRowsFor(chart.view)) return <Refusal>{LINE_NEEDS_ROW}</Refusal>;
   switch (chart.view) {
     case 'table':
-      return <PivotTable pivot={pivot} stat={chart.stat} />;
+      return <PivotTable pivot={pivot} stats={chart.stats} />;
     case 'box':
       return <BoxTable pivot={pivot} />;
     case 'line':
     case 'bar':
-      return <Series pivot={pivot} stat={chart.stat} kind={chart.view} />;
+      return <Series pivot={pivot} stats={chart.stats} kind={chart.view} />;
   }
 }
 
 /* Line / bar: the series model is built once, here, so the palette's limit is
  * judged on the model the view then draws. */
-function Series({ pivot, stat, kind }: { pivot: StatsPivot; stat: ChartStat; kind: 'line' | 'bar' }) {
-  const model = useMemo(() => seriesModel(pivot, stat), [pivot, stat]);
+function Series({ pivot, stats, kind }: { pivot: StatsPivot; stats: readonly ChartStat[]; kind: 'line' | 'bar' }) {
+  const model = useMemo(() => seriesModel(pivot, stats), [pivot, stats]);
   if (model.series.length > MAX_SERIES) return <Refusal>{tooManySeriesText()}</Refusal>;
   return (
     <Suspense fallback={<Skeleton height={240} />}>
-      <PivotSeries pivot={pivot} model={model} stat={stat} kind={kind} />
+      <PivotSeries pivot={pivot} model={model} stats={stats} kind={kind} />
     </Suspense>
   );
 }

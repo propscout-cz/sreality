@@ -47,12 +47,12 @@ function useSeriesColors() {
 function PivotSeries({
   pivot,
   model,
-  stat,
+  stats,
   kind,
 }: {
   pivot: StatsPivot;
   model: SeriesModel;
-  stat: ChartStat;
+  stats: readonly ChartStat[];
   kind: 'line' | 'bar';
 }) {
   const c = useSeriesColors();
@@ -74,7 +74,7 @@ function PivotSeries({
   return (
     <figure className="m-0">
       <figcaption id={captionId} className="mb-1 text-[0.7rem] text-[var(--color-ink-3)]">
-        {withUnit(STAT_LABEL[stat], measureUnit(pivot.spec.measure, pivot.basis))}
+        {withUnit(stats.map((s) => STAT_LABEL[s]).join(', '), measureUnit(pivot.spec.measure, pivot.basis))}
       </figcaption>
       <div aria-hidden="true">
         <ResponsiveContainer width="100%" height={HEIGHT}>
