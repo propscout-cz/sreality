@@ -1,10 +1,10 @@
 /* A curated set as ONE kind of filter (docs/design/curated-set-scope.md): tags,
  * collections and pipeline stages share one value shape, one URL grammar, one
  * in-memory rule and one RPC argument shape. A scope has a whole-set side ('in' =
- * has any unit of the set, 'out' = has none) and two unit lists (units that must
- * be present — tags EVERY, the others SOME — and units that must be absent).
+ * has any element of the set, 'out' = has none) and two element lists (elements that must
+ * be present — tags EVERY, the others SOME — and elements that must be absent).
  * Membership itself is judged in the database under the caller's RLS (migration
- * 629); only unit ids travel. */
+ * 629); only element ids travel. */
 
 import { czPlural } from './format';
 import type { ListingFilters } from './filters';
@@ -24,10 +24,10 @@ export interface CuratedSetDescriptor {
   notInLabel: string;
   /* The whole-set include chip, offered for the pipeline only. */
   inAnyLabel: string | null;
-  /* The unit's Czech noun for a count: 1 / 2–4 / 5+; after "bez": 1 / 2+. */
-  unitNoun: [string, string, string];
-  unitNounWithout: [string, string];
-  /* The control's frame: the read-failed noun, the no-units-yet line. */
+  /* The element's Czech noun for a count: 1 / 2–4 / 5+; after "bez": 1 / 2+. */
+  elementNoun: [string, string, string];
+  elementNounWithout: [string, string];
+  /* The control's frame: the read-failed noun, the no-elements-yet line. */
   what: string;
   empty: string;
 }
@@ -38,8 +38,8 @@ export const CURATED_SETS: Record<CuratedSet, CuratedSetDescriptor> = {
     words: { in: 'se štítkem', out: 'bez štítků' },
     notInLabel: 'Bez štítků',
     inAnyLabel: null,
-    unitNoun: ['štítek', 'štítky', 'štítků'],
-    unitNounWithout: ['štítku', 'štítků'],
+    elementNoun: ['štítek', 'štítky', 'štítků'],
+    elementNounWithout: ['štítku', 'štítků'],
     what: 'Štítky',
     empty: 'No tags yet. Add one from any property page or pipeline card.',
   },
@@ -48,8 +48,8 @@ export const CURATED_SETS: Record<CuratedSet, CuratedSetDescriptor> = {
     words: { in: 'v kolekci', out: 'v žádné kolekci' },
     notInLabel: 'V žádné kolekci',
     inAnyLabel: null,
-    unitNoun: ['kolekce', 'kolekce', 'kolekcí'],
-    unitNounWithout: ['kolekce', 'kolekcí'],
+    elementNoun: ['kolekce', 'kolekce', 'kolekcí'],
+    elementNounWithout: ['kolekce', 'kolekcí'],
     what: 'Kolekce',
     empty: 'No collections yet. Create one from the Collections page.',
   },
@@ -58,8 +58,8 @@ export const CURATED_SETS: Record<CuratedSet, CuratedSetDescriptor> = {
     words: { in: 'v pipeline', out: 'mimo pipeline' },
     notInLabel: 'Mimo pipeline',
     inAnyLabel: 'V pipeline',
-    unitNoun: ['fáze', 'fáze', 'fází'],
-    unitNounWithout: ['fáze', 'fází'],
+    elementNoun: ['fáze', 'fáze', 'fází'],
+    elementNounWithout: ['fáze', 'fází'],
     what: 'Pipeline',
     empty: 'No pipeline stages yet.',
   },
@@ -72,8 +72,8 @@ const NO_SCOPE: SetScope = { set: null, in: [], out: [] };
 const dedupe = (xs: ReadonlyArray<number>): number[] => [...new Set(xs)];
 
 /* The normal form every scope is held in, so a contradiction cannot be stored:
- * the 'out' side empties both lists; a unit on the in side supersedes the
- * 'in' side; a unit sits on at most one list (the out side wins — the later
+ * the 'out' side empties both lists; an element on the in side supersedes the
+ * 'in' side; an element sits on at most one list (the out side wins — the later
  * step of the chip cycle); lists are deduplicated; all-empty is null (off). */
 export function normalizeScope(s: SetScope | null | undefined): SetScope | null {
   if (!s) return null;
@@ -86,7 +86,7 @@ export function normalizeScope(s: SetScope | null | undefined): SetScope | null 
   return { set, in: inc, out };
 }
 
-/* THE tri-state chip transition (portals, curated-set units): one tap moves x
+/* THE tri-state chip transition (portals, curated-set elements): one tap moves x
  * off → included → excluded → off; every other value keeps its place. */
 export function cycle<T>(
   inc: ReadonlyArray<T>,
@@ -99,9 +99,9 @@ export function cycle<T>(
   return { inc: [...inc, x], exc: [...exc] };
 }
 
-/* A unit chip. Unit chips are disabled while the whole set is excluded; a tap
- * that still arrives lifts the exclusion so the unit choice is not swallowed. */
-export function cycleUnit(scope: SetScope | null, id: number): SetScope | null {
+/* An element chip. Element chips are disabled while the whole set is excluded; a tap
+ * that still arrives lifts the exclusion so the element choice is not swallowed. */
+export function cycleElement(scope: SetScope | null, id: number): SetScope | null {
   const s = scope ?? NO_SCOPE;
   const { inc, exc } = cycle(s.in, s.out, id);
   return normalizeScope({ set: s.set === 'out' ? null : s.set, in: inc, out: exc });
@@ -109,7 +109,7 @@ export function cycleUnit(scope: SetScope | null, id: number): SetScope | null {
 
 /* A whole-set chip: the dedicated "not in" chip (side 'out') or, where offered,
  * the whole-set include chip (side 'in'): off ↔ on. Turning 'in' on supersedes
- * the unit includes (the chip means "any unit"); the unit excludes stay. */
+ * the element includes (the chip means "any element"); the element excludes stay. */
 export function cycleSet(scope: SetScope | null, side: 'in' | 'out' = 'out'): SetScope | null {
   const s = scope ?? NO_SCOPE;
   if (s.set === side) return normalizeScope({ ...s, set: null });
@@ -118,7 +118,7 @@ export function cycleSet(scope: SetScope | null, side: 'in' | 'out' = 'out'): Se
 }
 
 /* The rule per property, in memory (the pipeline board, the phone roll):
- * `undefined` memberIds = in no unit of the set. */
+ * `undefined` memberIds = in no element of the set. */
 export function matchesScope(
   memberIds: readonly number[] | undefined,
   scope: SetScope | null,
@@ -152,12 +152,12 @@ export function scopeWords(name: CuratedSet, scope: SetScope | null | undefined)
   if (!s) return null;
   const d = CURATED_SETS[name];
   if (s.set === 'out') return d.words.out;
-  const count = (n: number) => `${n} ${czPlural(n, ...d.unitNoun)}`;
+  const count = (n: number) => `${n} ${czPlural(n, ...d.elementNoun)}`;
   const parts: string[] = [];
   if (s.set === 'in') parts.push(d.words.in);
   else if (s.in.length) parts.push(`${d.words.in} (${count(s.in.length)})`);
   const n = s.out.length;
-  if (n) parts.push(`bez ${n} ${d.unitNounWithout[n === 1 ? 0 : 1]}`);
+  if (n) parts.push(`bez ${n} ${d.elementNounWithout[n === 1 ? 0 : 1]}`);
   return parts.join(', ');
 }
 
@@ -172,7 +172,7 @@ export const parseIntList = (s: string | null): number[] => {
   return out;
 };
 
-/* One side of the wire: `any` = the whole set, a CSV = units, junk = off. */
+/* One side of the wire: `any` = the whole set, a CSV = elements, junk = off. */
 const parseSide = (s: string | null): { any: boolean; ids: number[] } =>
   s === 'any' ? { any: true, ids: [] } : { any: false, ids: parseIntList(s) };
 

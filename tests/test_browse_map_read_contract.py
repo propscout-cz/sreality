@@ -151,12 +151,10 @@ def test_every_builder_key_is_a_parameter_of_both_rpcs() -> None:
 
 def test_the_scope_arguments_reach_every_cohort_function() -> None:
     """The nine curated-set arguments are the same names on the wire and in all four
-    cohort functions; the list/pin sources also take `hide_dismissed`.
-
-    RED by: renaming a set or a side in lib/setScope.ts without a migration (a PGRST202 on
-    every Browse read), or dropping the spread from readSource (the list ignores a scope
-    the map and Stats honour).
-    """
+    cohort functions; the list/pin sources also take `hide_dismissed`."""
+    # RED by: renaming a set or a side in lib/setScope.ts without a migration (a PGRST202 on
+    # every Browse read), or dropping the spread from readSource (the list ignores a scope
+    # the map and Stats honour).
     ts = SETSCOPE_TS.read_text(encoding="utf-8")
     for side in ("set", "in", "out"):
         assert f"`${{name}}_{side}`" in ts, f"scopeArgs no longer builds `<set>_{side}`"

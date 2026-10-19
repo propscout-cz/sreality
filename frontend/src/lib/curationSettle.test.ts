@@ -249,7 +249,7 @@ describe('the optimistic halves', () => {
 });
 
 describe('the member map', () => {
-  it('a landed write adds or removes one unit, and leaves an unloaded map unloaded', async () => {
+  it('a landed write adds or removes one element, and leaves an unloaded map unloaded', async () => {
     const qc = new QueryClient();
     await settleMemberWrite(qc, 'tags', P, 1, true);
     expect(qc.getQueryData(curationKeys.propertyTagMembers)).toBeUndefined();

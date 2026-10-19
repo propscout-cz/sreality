@@ -1,14 +1,11 @@
-"""Migration 629's rails: curated membership is judged in the database, offline.
+"""Migration 629's rails: curated membership is judged in the database, offline."""
 
-What only the text can show: the two aggregate RPCs are 626's / 625's bodies plus exactly one
-clause block, placed right after the property_ids_excluded conjunct, and their parameter lists
-are the sources' plus the nine scope parameters; the two inlinable sources keep 537's shape
-rails while taking the same nine plus `hide_dismissed`; the clause block is ONE text in all four
-bodies (but for the schema prefix); the old signatures are dropped by their exact types and the
-new ones created inside ONE transaction, gated on the live bodies before and checked after;
-every re-created function restates its ACL; nothing cascades. The live behaviour (RLS, plans)
-is the DB lane's: tests/test_curated_set_scope_live.py.
-"""
+# What only the text can show: the two aggregate RPCs are 626's / 625's bodies plus exactly one
+# clause block (right after the property_ids_excluded conjunct) and the nine scope parameters; the
+# two inlinable sources keep 537's shape rails while taking the same nine plus `hide_dismissed`;
+# the clause block is ONE text in all four bodies (but for the schema prefix); the old signatures
+# drop by exact types and the new ones are created in ONE gated transaction; every re-created
+# function restates its ACL; nothing cascades. Live behaviour: tests/test_curated_set_scope_live.py.
 
 from __future__ import annotations
 

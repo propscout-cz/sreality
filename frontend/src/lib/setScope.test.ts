@@ -4,7 +4,7 @@ import {
   CURATED_SETS,
   cycle,
   cycleSet,
-  cycleUnit,
+  cycleElement,
   matchesScope,
   normalizeScope,
   parseSetScope,
@@ -31,37 +31,37 @@ describe('cycle', () => {
   });
 });
 
-describe('cycleUnit', () => {
-  it('moves a unit off → in → out → off', () => {
-    const on = cycleUnit(null, 10);
+describe('cycleElement', () => {
+  it('moves an element off → in → out → off', () => {
+    const on = cycleElement(null, 10);
     expect(on).toEqual(S(null, [10]));
-    const not = cycleUnit(on, 10);
+    const not = cycleElement(on, 10);
     expect(not).toEqual(S(null, [], [10]));
-    expect(cycleUnit(not, 10)).toBeNull();
+    expect(cycleElement(not, 10)).toBeNull();
   });
 
-  it('leaves the other units where they are', () => {
-    expect(cycleUnit(S(null, [10], [11]), 12)).toEqual(S(null, [10, 12], [11]));
+  it('leaves the other elements where they are', () => {
+    expect(cycleElement(S(null, [10], [11]), 12)).toEqual(S(null, [10, 12], [11]));
   });
 
-  it('a unit moved in supersedes the whole-set include; an excluded unit keeps it', () => {
-    expect(cycleUnit(S('in'), 5)).toEqual(S(null, [5]));
-    expect(cycleUnit(cycleUnit(S('in'), 5), 5)).toEqual(S(null, [], [5]));
+  it('an element moved in supersedes the whole-set include; an excluded element keeps it', () => {
+    expect(cycleElement(S('in'), 5)).toEqual(S(null, [5]));
+    expect(cycleElement(cycleElement(S('in'), 5), 5)).toEqual(S(null, [], [5]));
   });
 
   it('lifts the whole-set exclusion rather than swallowing the tap', () => {
-    expect(cycleUnit(S('out'), 5)).toEqual(S(null, [5]));
+    expect(cycleElement(S('out'), 5)).toEqual(S(null, [5]));
   });
 });
 
 describe('cycleSet', () => {
-  it('toggles the dedicated "not in" chip off ↔ out, clearing the units', () => {
+  it('toggles the dedicated "not in" chip off ↔ out, clearing the elements', () => {
     const out = cycleSet(S(null, [1], [2]));
     expect(out).toEqual(S('out'));
     expect(cycleSet(out)).toBeNull();
   });
 
-  it('toggles the whole-set include off ↔ in, superseding unit includes, keeping excludes', () => {
+  it('toggles the whole-set include off ↔ in, superseding element includes, keeping excludes', () => {
     const on = cycleSet(S(null, [1], [2]), 'in');
     expect(on).toEqual(S('in', [], [2]));
     expect(cycleSet(on, 'in')).toEqual(S(null, [], [2]));
@@ -80,16 +80,16 @@ describe('normalizeScope — contradictions are unrepresentable', () => {
     expect(normalizeScope(null)).toBeNull();
   });
 
-  it("'out' empties both unit lists", () => {
+  it("'out' empties both element lists", () => {
     expect(normalizeScope(S('out', [1], [2]))).toEqual(S('out'));
   });
 
-  it("a unit on the in side supersedes 'in'", () => {
+  it("an element on the in side supersedes 'in'", () => {
     expect(normalizeScope(S('in', [1], [2]))).toEqual(S(null, [1], [2]));
     expect(normalizeScope(S('in', [], [2]))).toEqual(S('in', [], [2]));
   });
 
-  it('a unit sits on one list only (out wins), lists are deduplicated', () => {
+  it('an element sits on one list only (out wins), lists are deduplicated', () => {
     expect(normalizeScope(S(null, [1, 1, 2], [2, 3, 3]))).toEqual(S(null, [1], [2, 3]));
     expect(normalizeScope(S(null, [4], [4]))).toEqual(S(null, [], [4]));
   });
@@ -102,7 +102,7 @@ describe('matchesScope', () => {
     expect(matchesScope(undefined, null, 'every')).toBe(true);
   });
 
-  it("'in' needs any unit, 'out' none", () => {
+  it("'in' needs any element, 'out' none", () => {
     expect(matchesScope(tagged, S('in'), 'some')).toBe(true);
     expect(matchesScope(undefined, S('in'), 'some')).toBe(false);
     expect(matchesScope([], S('in'), 'some')).toBe(false);
@@ -110,18 +110,18 @@ describe('matchesScope', () => {
     expect(matchesScope(undefined, S('out'), 'some')).toBe(true);
   });
 
-  it('every: needs EVERY included unit (tags, AND)', () => {
+  it('every: needs EVERY included element (tags, AND)', () => {
     expect(matchesScope(tagged, S(null, [10, 11]), 'every')).toBe(true);
     expect(matchesScope([10], S(null, [10, 11]), 'every')).toBe(false);
     expect(matchesScope(undefined, S(null, [10]), 'every')).toBe(false);
   });
 
-  it('some: needs ANY included unit (collections, stages, OR)', () => {
+  it('some: needs ANY included element (collections, stages, OR)', () => {
     expect(matchesScope([10], S(null, [10, 11]), 'some')).toBe(true);
     expect(matchesScope([12], S(null, [10, 11]), 'some')).toBe(false);
   });
 
-  it('refuses ANY excluded unit, and a property in no unit passes', () => {
+  it('refuses ANY excluded element, and a property in no element passes', () => {
     expect(matchesScope(tagged, S(null, [], [11, 12]), 'every')).toBe(false);
     expect(matchesScope([10], S(null, [], [11, 12]), 'every')).toBe(true);
     expect(matchesScope(undefined, S(null, [], [11]), 'every')).toBe(true);
@@ -194,7 +194,7 @@ describe('URL codec', () => {
     }
   });
 
-  it('normalises a contradicting URL and dedupes unit ids', () => {
+  it('normalises a contradicting URL and dedupes element ids', () => {
     expect(parseSetScope(params('pipeline=any&pipeline_excluded=any'), 'pipeline')).toEqual(S('out'));
     expect(parseSetScope(params('tags=1,1,2&tags_excluded=2'), 'tags')).toEqual(S(null, [1], [2]));
   });

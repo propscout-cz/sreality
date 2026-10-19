@@ -2418,7 +2418,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Deal-pipeline scope (rule #22) as a curated-set scope; units are stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage (the 'V pipeline' chip); `set` 'out' = no card at any stage, terminal stages included (the 'Mimo pipeline' chip); `in` = a card at ANY listed stage; `out` = no card at a listed stage. Stage ids are account-scoped, so only the `set` side is portable.",
+      "description": "Deal-pipeline scope (rule #22) as a curated-set scope; elements are stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage (the 'V pipeline' chip); `set` 'out' = no pipeline card at any stage, terminal stages included (the 'Mimo pipeline' chip); `in` = a card at ANY listed stage; `out` = no card at a listed stage. Stage ids are account-scoped, so only the `set` side is portable.",
       "category": "Curation",
       "ui_control": "set_scope",
       "agendas": [
