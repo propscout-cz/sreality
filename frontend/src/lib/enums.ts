@@ -63,9 +63,9 @@ export function categoryMainLabel(cm: string | null | undefined): string {
 /* Plural Czech label for category_main aggregate headings ("Byty", "Domy") and
  * the deal-type word ("prodej", "pronájem") — both derived from the filter
  * registry (the registry's category_main labels are plural, its category_type
- * labels are the canonical Czech words), so Health + region rollups share one
- * source with the Browse filters instead of a private hardcoded copy. Distinct
- * from categoryMainLabel's singular title noun. */
+ * labels are the canonical Czech words), so the stats and location-audit
+ * rollups share one source with the Browse filters instead of a private
+ * hardcoded copy. Distinct from categoryMainLabel's singular title noun. */
 export function categoryMainLabelPlural(cm: string | null | undefined): string {
   return enumLabel('category_main', cm) ?? cm ?? '—';
 }

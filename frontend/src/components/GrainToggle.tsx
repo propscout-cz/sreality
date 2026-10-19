@@ -1,6 +1,6 @@
 export type Grain = 'hour' | 'day';
 
-/* The Hour/Day granularity switch used by the Health reconciliation trends (and any
+/* The Hour/Day granularity switch used by the Costs spend chart (and any
  * future time-series panel, so they read identically). Civic-archive: a small segmented
  * control, active segment in copper. */
 export default function GrainToggle({

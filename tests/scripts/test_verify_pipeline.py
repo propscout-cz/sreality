@@ -435,6 +435,9 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     # scrapers' (the outbound probe).
     assert _hosted("realtime-worker") == _WORKER_KEYS
     assert _hosted("github-actions") == _GITHUB_KEYS and not _hosted("pg_cron")
+    # Wave 8: the page's four sections, in its order, and none without a check.
+    assert vp.DOMAINS == ("portals", "dedup", "data_quality", "platform")
+    assert {c.domain for c in CHECKS} == set(vp.DOMAINS)
     for c in CHECKS:
         assert c.label.strip(), c.key
         assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
@@ -445,6 +448,28 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
         assert c.owner_path == "" or c.owner_path.startswith("/"), c.key
         # a body wired under the wrong key would store its rows under another check's name
         assert c.fn.__name__ == f"check_{c.key}", c.key
+
+
+def test_every_check_carries_its_page_section_and_owner_page() -> None:
+    """Wave 8 (D1): the page groups rows by domain (the portal matrix: the four portal checks and
+    parsing; the engine; data quality; the platform) and links each to the page that owns the
+    fix, '' for none. tests/test_spa_route_contract.py holds every path to an SPA route."""
+    assert {c.key: (c.domain, c.owner_path) for c in CHECKS} == {
+        "location_town_coverage": ("data_quality", "/location-quality"),
+        "jobs": ("platform", "/settings"),
+        "capacity": ("platform", ""),
+        "llm": ("platform", "/costs"),
+        "scraping": ("portals", "/scrapers"),
+        "publishing": ("portals", "/scrapers"),
+        "delisting": ("portals", "/scrapers"),
+        "coverage": ("portals", "/scrapers"),
+        "dedup": ("dedup", "/autodedup/progress"),
+        "parsing": ("portals", "/scrapers"),
+        "data_quality": ("data_quality", "/scrapers"),
+        "text_extraction": ("data_quality", "/costs"),
+        "migration_drift": ("platform", ""),
+        "outbound_url_conformance": ("data_quality", ""),
+    }
 
 
 def test_the_dedup_check_keeps_the_contracts_metadata() -> None:
@@ -877,6 +902,9 @@ def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> No
         # wave 6 moved location_town_coverage from GitHub to the worker
         "location_town_coverage": {"host": "github-actions", "cadence_s": 21_600,
                                    "declared_at": then},
+        # wave 8 moved the portal checks' page section to the matrix and gave them an owner page
+        "scraping": {"host": "realtime-worker", "cadence_s": 600, "domain": "scraping",
+                     "owner_path": "", "declared_at": then},
     })
     project_registry(conn, "github-actions", _NOW)
     assert conn.table["outbound_url_conformance"]["declared_at"] == then  # unchanged: kept
@@ -885,6 +913,9 @@ def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> No
     project_registry(conn, "realtime-worker", _NOW)
     assert conn.table["location_town_coverage"]["declared_at"] == _NOW    # host moved
     assert conn.table["location_town_coverage"]["host"] == "realtime-worker"
+    scraping = conn.table["scraping"]
+    assert (scraping["domain"], scraping["owner_path"], scraping["declared_at"]) == (
+        "portals", "/scrapers", then)                                     # section moved: kept
     project_registry(conn, "github-actions", _NOW + _dt.timedelta(hours=1))
     assert conn.table["migration_drift"]["declared_at"] == _NOW, "a re-projection is a no-op"
 

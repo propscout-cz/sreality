@@ -104,7 +104,7 @@ describe('listingKind — disposition / subtype are complementary faces of one d
   });
 });
 
-describe('categoryMainLabelPlural + categoryTypeLabel (registry-derived, shared by Health)', () => {
+describe('categoryMainLabelPlural + categoryTypeLabel (registry-derived, shared by the stats and location-audit rollups)', () => {
   it('plural category headings', () => {
     expect(categoryMainLabelPlural('byt')).toBe('Byty');
     expect(categoryMainLabelPlural('dum')).toBe('Domy');

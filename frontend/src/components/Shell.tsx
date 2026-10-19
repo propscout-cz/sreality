@@ -59,7 +59,6 @@ type MenuGroup = { label: string; items: ReadonlyArray<MenuItem> };
 // Grouped under the "Settings" section of that menu — all admin-only, so the
 // whole group renders (or not) with the trigger.
 const settingsItems: ReadonlyArray<MenuItem> = [
-  { to: ROUTES.health.build(),   label: 'Health' },
   { to: ROUTES.costs.build(),    label: 'LLM Costs' },
   { to: ROUTES.locationQuality.build(), label: 'Location Quality' },
   { to: ROUTES.scrapers.build(), label: 'Scrapers' },
@@ -108,6 +107,9 @@ const autodedupItems: ReadonlyArray<MenuItem> = [
 // than vanishing — a surface that exists and is switched off is a different
 // fact from one that was removed.
 const adminItems: ReadonlyArray<MenuItem> = [
+  // First: where the operator starts when something is wrong, and where the
+  // bell's system alerts open.
+  { to: ROUTES.health.build(), label: 'Health' },
   // The merge-review queue is a real admin surface (routes.tsx wraps it in
   // AdminPage) that was only reachable from a conditional chip on /brokers —
   // invisible whenever the queue happened to be empty.

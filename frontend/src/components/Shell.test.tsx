@@ -177,6 +177,18 @@ describe('<Shell> admin menu', () => {
     }
   });
 
+  /* Health leads the menu: it is where the operator starts when something is
+   * wrong, and where the bell's system alerts open. */
+  it('opens with Health as its first entry', async () => {
+    const user = userEvent.setup();
+    renderShellWith(<p>page content</p>);
+    const nav = screen.getByRole('navigation');
+    await user.click(within(nav).getByRole('button', { name: /^Admin/ }));
+    const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
+    expect(first).toHaveAccessibleName('Health');
+    expect(first).toHaveAttribute('href', '/health');
+  });
+
   it('keeps the daily surfaces in the row itself', () => {
     renderShellWith(<p>page content</p>);
     const nav = screen.getByRole('navigation');

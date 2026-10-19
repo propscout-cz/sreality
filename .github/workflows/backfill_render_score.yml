@@ -7,7 +7,7 @@ name: Backfill image render_score (one-shot, from stored embeddings)
 # download, no image re-inference — so it is fast (vector dot products). Horizontally
 # sharded into 4 jobs (image_id %% 4). Resumable + idempotent (a scored row drops out of
 # the render_score-IS-NULL partial index, migration 240). Dispatch-only. Secret:
-# SUPABASE_DB_URL (no R2 needed). NOT a portal ingest (portal: null).
+# SUPABASE_DB_URL (no R2 needed).
 
 on:
   workflow_dispatch:

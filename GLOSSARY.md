@@ -290,9 +290,9 @@ It appears among the app's notifications; a watchdog's notice about properties i
 _Avoid_: alarm (that is the check), alert (alone), health notification
 
 **Acknowledge**:
-An admin's deliberate act, on the Health page (wave 1 ships a minimal Acknowledge button on the
-pipeline-checks card; the rebuilt page comes in wave 8), of marking an incident as known, which
-stops its reminders. Reading its system alert among the notifications does not acknowledge it.
+An admin's deliberate act, on the Health page, of marking a check's open incidents as known, which
+stops their reminders; each still closes only on a measured recovery. Reading a system alert among
+the notifications does not acknowledge it.
 _Avoid_: dismiss, mute, snooze, resolve, mark read
 
 **Not measured**:

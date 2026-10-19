@@ -672,5 +672,54 @@ way: it is the path that needs neither Supabase's scheduler nor Railway.
 To check after the merge: nothing changes in production; `system_health_channels` still reads `[]`
 and the bell rings as before.
 
-**Next:** wave 8 — the Health page: one screen, at 1,280 px and on the phone, shows what is wrong,
-where and why, and links to the page that owns the fix.
+~~**Next:** wave 8 — the Health page: one screen, at 1,280 px and on the phone, shows what is wrong,
+where and why, and links to the page that owns the fix.~~ Done 2026-10-19 (Health dashboard sprint
+wave 8, below).
+
+## 2026-10-19 — Health dashboard sprint, wave 8 (shipped with this PR)
+
+The Health page, rebuilt on one read: what is wrong first, the portals as one matrix, and a link to
+the page that owns each fix. Plan: [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md)
+§ 5 and § 6, wave 8, and its "As built" note.
+
+What Health dashboard sprint wave 8 changed:
+- **One read** of `pipeline_checks_public`, every 5 minutes while the tab is visible and on focus, in
+  place of 17 requests a minute; the browser holds no threshold.
+- **The page**: a header from the watchers; five counts (open alarm incidents, Problems, Watch, Not
+  measured, gauges worse than last week); four sections in a fixed order (Portals, Engine, Data
+  quality, Platform), rows worst first; Portals opens with the matrix, portals × the five portal
+  checks, each cell that check's worst measured verdict for that portal; each check row has its status
+  word and dot, value, message, worst cells, trend, owner page link and Acknowledge. Not measured and
+  stale never read OK; an empty or failed read is an error with Retry, never "all clear".
+- **Ways in**: Health is the first Admin entry and an admin-only row in the phone's account sheet; each
+  system alert in Notifications gains an "Open Health" link to its check (the feed now carries the
+  check's key).
+- **The registry, normalised in code (no migration)**: the five portal checks share the domain
+  `portals`, and owner pages are filled (LLM providers and Description reading → LLM costs, the portal
+  checks and Data quality → Scrapers, Jobs → Settings).
+- **Deleted**: the old page (2,431 lines) with every panel the plan's Removed list names, its two helper
+  libraries and their tests, 11 health fetchers, 29 health types and the ten 60-second polls; the 14
+  `# portal:` workflow tags with the generator code that read them (Settings › GitHub Actions stays the
+  workflow catalogue).
+
+Owed and stated (also in the design's "As built" note):
+- "Alerts reach" and the delivery facts wait for delivery's enabling migration (wave 7's three steps):
+  the watcher writes no delivery facts, so the strip has five tiles, not six.
+- The legacy `outbound_url_conformance` row has no cells until its next weekly run (~10-25).
+- The phone reflow is pinned by class strings only (jsdom cannot evaluate a media query); the browser
+  check after the deploy proves it.
+- A row that goes stale can read measured for up to one poll (5 min): the view judges staleness when
+  it is read.
+- ink-3 small text (Stat labels and hints, Panel titles) measures 3.9:1 light and 4.3:1 dark, under
+  AA's 4.5:1 for small text: a design-token ruling for the operator, not changed here.
+- The ONE PIN plan's W2 SPA step (`docs/design/one-pin/PROGRAM.md:346`) points at what this wave
+  deleted: `derivedArtifacts.ts` and its test, and the old `Health.tsx`'s comment at :89-93 (those
+  lines are other code now). Told to its session 2026-10-19 (it adds the note in its own PR #1896); not edited here.
+
+To check after the merge: Railway's vite status reads success; the worker re-projects the registry on
+its first health pass after its deploy (the four portal checks then read domain `portals`); then, read
+only, the page in both explicit themes at 1,280 px and on the phone, and a system alert's "Open Health"
+link landing on its check.
+
+**Next:** wave 9 — drop the old health layer: its 8 matviews, 11 functions and 12 views stop costing
+database time, after a backup and 48 h with no reads of them (destructive, Q5).

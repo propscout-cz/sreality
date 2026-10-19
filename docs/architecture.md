@@ -322,8 +322,7 @@ one config (the `portals` row, migrations 110/111) walks many categories (byty +
 prodej + pronájem today). Image-URL rows are recorded by the drain; the shared `images.yml`
 job downloads the bytes to R2 (source-agnostic). NOTE: iDNES also has an on-demand URL parser
 (`scraper/source_parsers/idnes_reality.py`, LLM, `source_kind='idnes_reality'`) used by the
-estimation preview — a separate entry point unchanged by the scheduled scraper, which is why
-the Health dashboard's iDNES card shows BOTH a scraper and an on-demand-parser badge.
+estimation preview — a separate entry point unchanged by the scheduled scraper.
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
 `mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
@@ -653,7 +652,9 @@ rules. Identify which one a task belongs to before you start.
   exceptions are `SECURITY DEFINER` — the Health/ops RPCs (`health_summary`,
   `scraper_health_checks`, `recent_scrape_runs`, …; migrations 318/332/340), which embed
   `is_platform_admin()` and hand anyone else NULL (the jsonb RPCs) or no rows (the
-  set-returning ones, e.g. `recent_scrape_runs`), and `sold_coverage` (migration 545),
+  set-returning ones, e.g. `recent_scrape_runs`) and have had no SPA reader since Health
+  wave 8 (the page reads the view `pipeline_checks_public`, gated inside its own WHERE by
+  `is_platform_admin()`; wave 9 drops them), and `sold_coverage` (migration 545),
   ungated on purpose but narrow by construction (a point in, four facts about one
   municipality out). A new RPC is INVOKER by default; a DEFINER one that reads admin-only
   data embeds the admin gate or carries a `-- ci-allow-ungated:` reason
@@ -734,8 +735,9 @@ rules. Identify which one a task belongs to before you start.
   browser's offline page), and every storage access wrapped so a throwing
   `sessionStorage` degrades to "allow the reload" rather than to "no recovery".
 - **Generated data the SPA only displays is FETCHED, not bundled.**
-  `scripts/generate_workflow_docs.py` emits `frontend/public/workflow-docs.json` (~180 KB)
-  and the two admin pages that render it read it through `frontend/src/lib/workflowDocs.ts`.
+  `scripts/generate_workflow_docs.py` emits `frontend/public/workflow-docs.json` (~190 KB)
+  and the one admin page that renders it, Settings › GitHub Actions, reads it through
+  `frontend/src/lib/workflowDocs.ts`.
   It used to be a `.ts` module under `src/lib/`, which put every workflow-YAML edit — a
   pure-backend concern — inside the SPA's module graph, rotating every chunk hash and
   breaking every open tab. Measured after the move: a workflow-docs change rotates 0 of 35
@@ -1223,7 +1225,7 @@ renumber.** Navigate by area:
    (`listing_write`), and also when a gone flip lands (`db.mark_listing_inactive`). That clear
    joins through `listings`, so a sreality id that errored before it was ever written and then
    reads gone keeps its row (accepted: nothing re-enqueues it, since the walk retries only
-   failures still in the index, though Health counts it under sreality). A given-up
+   failures still in the index). A given-up
    queue row is not dropped either: `enqueue_presence_checks` re-arms up to
    `PRESENCE_REARM_PER_WALK` = 50 given-up rows per nominating scope, source-wide, at VERIFY
    priority. Inspect with `SELECT * FROM listing_fetch_failures ORDER BY attempts DESC`.
@@ -2096,7 +2098,24 @@ renumber.** Navigate by area:
     with its newest result, its `effective_status` (`unknown` when there is no row, the newest row is
     `unknown`, or it is older than the key's `staleness_budget` by `public.health_stale`; a result
     past its staleness budget is Not measured for the ladder as well as the page) and its
-    incidents. **Every watcher is watched by another (wave 2, migration 620).** The watcher,
+    incidents. **The Health page (`/health`, Health wave 8) is that one read** (`lib/healthChecks.ts`):
+    all 18 columns, every 5 min while the tab is visible and on focus (an explicit opt-in: the SPA
+    turns focus refetches off globally), and no threshold in the browser (a source census pins it):
+    the page orders and groups what the view judged. Not measured and stale never render as OK; a
+    failed refetch keeps the rows and says when it failed; a failed first read, and an EMPTY one (0
+    rows: not a platform admin, or no host has projected the registry), are errors with Retry, never
+    "all clear". The registry lays it out: sections by `domain` in a fixed order (`portals`, `dedup`,
+    `data_quality`, `platform`, titled Portals, Engine, Data quality, Platform), rows worst first (Problem, Watch,
+    Not measured, OK; then alarm before gauge, an unacknowledged open incident first, then `sort`),
+    and an owner link per `owner_path`, each a route in `frontend/src/lib/routes.ts`
+    (`tests/test_spa_route_contract.py`). Portals opens with the matrix, portals × the portal
+    checks: a matrix cell is that check's worst MEASURED cell for that portal (the cells' `portal`,
+    never a parsed subject), Not measured only when none was measured (the harness's own
+    `common.result` rule), and portal-less cells (`fleet/*`, `census`) stay out of it. Check rows
+    carry `id=<key>` and cells `id=<key>:<subject>` (percent-encoded), where the outbox's
+    `/health#<key>` link and the bell's "Open Health" link (the feed's `check_key`, read off the
+    `sys:<key>:` dedupe key) land.
+    **Every watcher is watched by another (wave 2, migration 620).** The watcher,
     `public.health_liveness()` (SECURITY DEFINER, execute revoked from the browser roles; pg_cron
     job `health-liveness`, every 5 min, under a 60 s statement timeout), runs outside the worker
     and the API and writes ONE `liveness` result per call (host `pg_cron`; no incident, no notice —
@@ -2536,7 +2555,8 @@ renumber.** Navigate by area:
     there is no spatial matcher; grouping is out-of-band). The combined `scrape.yml` /
     `_run_full` revert fallback was deleted in C2-2 (2026-10). The queue is the needs-detail
     signal; `listing_fetch_failures` stays
-    the Health-visible give-up ledger. As of Phase 4 both phases run through the **shared
+    sreality's own give-up ledger (Health reads the source-generic `detail_queue_completions`
+    instead, as the `scraping` check's `<portal>/fetch_errors` cells). As of Phase 4 both phases run through the **shared
     `portal_runner`** (rule #21) and the queue is **source-generic** (`(source, native_id)`,
     migration 108), so this same split is how every portal scrapes — sreality is just one
     `Portal`. **This split does NOT preserve portal-native listing order** — priority-bucketed

@@ -485,11 +485,16 @@ _LISTING_PROJECTION = (
 # so the two never diverge. LEFT JOINs (not INNER): a collection_monitor row has
 # subscription_id NULL, so an INNER join to subscriptions would silently drop it.
 # Exposes the source discriminator + provenance the watchdog feed never needed.
+# `check_key` names the check a system alert is about, so the bell's "Open Health"
+# opens Health at it as the outbox's links do: every system dedupe key opens
+# `sys:<key>:` (toolkit.system_alerts.emit_system_alert); null on every other producer.
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
     "d.sreality_id, d.listing_id, d.property_id, d.change_kind, d.message, "
+    "CASE WHEN d.source_kind = 'system_health' "
+    "THEN split_part(d.dedupe_key, ':', 2) END AS check_key, "
     "d.dispatched_at, d.seen_at, "
     "d.trigger_price_czk, d.prev_price_czk, d.trigger_snapshot_id, "
     "d.target_channels, "

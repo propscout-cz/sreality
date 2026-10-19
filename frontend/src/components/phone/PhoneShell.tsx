@@ -231,7 +231,7 @@ const THEMES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
 ];
 
 function AccountSheet({ onClose }: { onClose: () => void }) {
-  const { user, signOut } = useAuth();
+  const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
   return (
     <BottomSheet
@@ -269,6 +269,17 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
+        {/* The phone has no Admin menu and no bell, so this row is its one way to
+          * Health; admin-only, as the page is. */}
+        {isAdmin && (
+          <Link
+            to={ROUTES.health.build()}
+            onClick={onClose}
+            className="flex h-12 w-full items-center border-b border-[var(--color-rule-soft)] px-4 text-[15px] text-[var(--color-ink-2)] active:bg-[var(--color-paper-2)]"
+          >
+            Health
+          </Link>
+        )}
         <button
           type="button"
           onClick={() => switchDesktopView(true)}

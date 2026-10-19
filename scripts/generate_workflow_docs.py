@@ -6,15 +6,16 @@ at runtime to render the "GitHub Actions" documentation section — so the
 docs can never drift from the real workflows.
 
 Why a fetched asset in `public/` and not an imported `.ts` module (which
-is what this emitted until 2026-08-21): the file is ~180 KB and changes
+is what this emitted until 2026-08-21): the file is ~190 KB and changes
 whenever any workflow YAML changes, including pure-backend cron edits.
 Inside the SPA's module graph that made every such commit a frontend
 deploy, and every frontend deploy rotates EVERY hashed chunk name
 (measured: 30 of 30 on a one-character change), which 404s the chunks
 that already-open tabs still reference. Out of the graph it is a plain
-static file: it changes without renaming anything else, and the two
-admin pages that read it (Settings, Health) fetch it on demand. The
-hand-written TypeScript types live in `frontend/src/lib/workflowDocs.ts`.
+static file: it changes without renaming anything else, and the one
+admin page that reads it (Settings › GitHub Actions) fetches it on
+demand. The hand-written TypeScript types live in
+`frontend/src/lib/workflowDocs.ts`.
 
 Per-workflow description is the FIRST PARAGRAPH of the leading `#`
 comment block at the top of the file. Edit a workflow, edit its comment
@@ -71,20 +72,6 @@ def _repo_slug() -> str:
     return f"{m.group(1)}/{m.group(2)}" if m else DEFAULT_SLUG
 
 
-# A scrape workflow declares which portal it drives with a `# portal: <source>`
-# comment tag (source = the `portals.source` key). It powers the Health page's
-# per-portal "Pipeline schedule" panel; untagged (shared / non-portal) workflows
-# return None and appear in no single portal's schedule. `_PORTAL_LINE` strips the
-# tag from the rendered description so it never leaks into the docs prose.
-_PORTAL_TAG = re.compile(r"(?m)^\s*#\s*portal:\s*([a-z0-9_]+)\s*$")
-_PORTAL_LINE = re.compile(r"^portal:\s*[a-z0-9_]+$")
-
-
-def _portal(text: str) -> str | None:
-    m = _PORTAL_TAG.search(text)
-    return m.group(1) if m else None
-
-
 def _leading_description(text: str) -> str:
     """First paragraph of the leading `#` comment block (before `on:`)."""
     block: list[str] = []
@@ -105,8 +92,6 @@ def _leading_description(text: str) -> str:
         if line == "":
             if para:
                 break
-            continue
-        if _PORTAL_LINE.match(line):
             continue
         para.append(line)
     return " ".join(para)
@@ -252,7 +237,6 @@ def _parse_workflow(path: Path, slug: str) -> dict[str, Any]:
         "filename": path.name,
         "name": str(data.get("name", path.name)),
         "description": _leading_description(text),
-        "portal": _portal(text),
         "manual": "workflow_dispatch" in on,
         "schedules": schedules,
         "onPush": "push" in on,

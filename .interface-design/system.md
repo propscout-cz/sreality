@@ -1,7 +1,7 @@
 # Interface design system — Limen Reality SPA
 
 Saved 2026-10-19 after the Browse › Stats dashboard build (`docs/design/stats-dashboard.md`). The tokens are
-`frontend/src/globals.css` `@theme`; nothing here adds one (operator OK is needed for a new token, CLAUDE.md).
+`frontend/src/styles/globals.css` `@theme`; nothing here adds one (operator OK is needed for a new token, CLAUDE.md).
 
 ## Direction and feel
 A civic-archive ledger for a property analyst: dense, quiet, numbers first. Paper surfaces, ink text,
@@ -36,3 +36,20 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
 - **Charts**: every axis through `lib/chartAxis.valueAxisSpec`; series copper first, ink tints after,
   dashed beyond the solid set; a series cap with a refusal sentence instead of a legend of dozens.
 - **Refusals** read as one Czech sentence in the body; the surrounding chrome (title, ledger) stays.
+
+## Health page (2026-10-19)
+Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger
+above for status and adds no token.
+- **The matrix is the page's spine** (`components/health/PortalMatrix.tsx`): portals as rows, worst first, the
+  portal checks as columns; a cell shows that check's worst measured verdict on that portal. Every other
+  check is a row in the same register, worst first. Below 768 px OK cells hide, and a section with nothing
+  open says "Nothing open".
+- **The status word always rides with its dot** (`components/StatusDot.tsx`): OK sage, Watch ochre, Problem
+  brick, each a filled dot; the word sits beside it (sr-only where the layout shows it elsewhere). Colour
+  lives only in the dot: numbers, words and messages stay ink, because ochre text fails contrast and the
+  status hues are too close for colour-blind readers (sage and brick for deuteranopia).
+- **Hollow ring = Not measured**: a 1.5 px `--color-ink-3` ring with no fill, never a green or a filled
+  `ink-4` dot, so a check nobody measured can never look healthy. Stale reads the same.
+- **Shared admin primitives**: `Panel` (Costs' card: paper-2, rule border, small-caps title), `Stat` (label,
+  mono value, ink-3 hint, an optional dot; never a coloured number) and `StatusDot`. Acknowledge is an
+  outlined copper button: the operator's own act. Wave 10 moves the other admin pages onto them.
