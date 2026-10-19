@@ -31,6 +31,7 @@ import { useNavigate } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Dialog, { DialogClose } from '@/components/Dialog';
+import Spinner from '@/components/Spinner';
 import { useCloseOnNavigation } from '@/lib/useCloseOnNavigation';
 import {
   ApiError,
@@ -404,7 +405,11 @@ function NewEstimationModal({
                 : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
-            {pending ? <Spinner label={submitLabel} /> : submitLabel}
+            {pending ? (
+              <span className="inline-flex items-center gap-2">
+                <Spinner size={12} /><span>{submitLabel}</span>
+              </span>
+            ) : submitLabel}
           </button>
         </div>
 
@@ -788,32 +793,6 @@ function buildEstimationPayload(
     special_instructions: specialInstructions.trim() || null,
     contextual_text: contextualText.trim() || null,
   };
-}
-
-function Spinner({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center gap-2">
-      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
-        <circle
-          cx="6" cy="6" r="4.5"
-          stroke="currentColor" strokeWidth="1.5"
-          strokeOpacity="0.25" fill="none"
-        />
-        <path
-          d="M6 1.5 a 4.5 4.5 0 0 1 4.5 4.5"
-          stroke="currentColor" strokeWidth="1.5" fill="none"
-          strokeLinecap="round"
-        >
-          <animateTransform
-            attributeName="transform" type="rotate"
-            from="0 6 6" to="360 6 6" dur="0.9s"
-            repeatCount="indefinite"
-          />
-        </path>
-      </svg>
-      <span>{label}</span>
-    </span>
-  );
 }
 
 function ErrorBlock({ error, kind }: { error: ApiError; kind: Kind }) {
