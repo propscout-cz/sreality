@@ -3,10 +3,11 @@
 What only the text can show: the signature is 598's verbatim (the SPA builds ONE argument object
 for both aggregate RPCs, tests/test_browse_map_read_contract.py); the cohort predicate is 598's
 byte for byte, in the map body AND the stats body (rule 16: one definition of "matches"); the `g`
-CTE still reads properties_map_mv and projects nothing but l.lat and l.lng (the index-only scan a
-plan rail pinned until 630 re-pointed the map at browse_list); the one transaction is gated on 598's live body before and
-checked after; nothing is dropped, granted or cascaded; the answer is four keys and bounded by
-construction. The executed half lives in tests/test_browse_map_cells_live.py.
+CTE still reads properties_map_mv and projects nothing but l.lat and l.lng (the index-only scan;
+since 630 the map reads browse_list through browse_list_map_idx, tests/test_browse_map_cells_plan.py);
+the one transaction is gated on 598's live body before and checked after; nothing is dropped,
+granted or cascaded; the answer is four keys and bounded by construction. The executed half lives
+in tests/test_browse_map_cells_live.py.
 """
 
 from __future__ import annotations

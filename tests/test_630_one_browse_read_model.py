@@ -1,4 +1,4 @@
-"""Migration 630's rails (ONE PIN W1): the map reads browse_list, the swap re-patches identity changes and builds no map index."""
+"""Migration 630's rails (ONE PIN W1): the map reads browse_list in its map index's order; the swap re-patches identity."""
 
 from __future__ import annotations
 
@@ -17,9 +17,16 @@ LIVE = {"rebuild_browse_list": "be7b0ec2297d269f495a42fdcc474517",
         "browse_map_cells": "7406f8566504c33efc7fe4273b4f76cc"}
 SOURCE_OF = {"rebuild_browse_list": "605_street_chip_level.sql",
              "browse_map_cells": "629_curated_set_scope.sql"}
-# The map cover index W1 built, measured and dropped (2026-10-19: (b) 399 ms and (c) 1.93 s with it,
-# 219 / 904 ms without; the planner took it for heap-ordered and paid one heap page per row).
-MAP_INDEX_NAMES = ("browse_list_next_map_idx", "browse_list_map_idx")
+# The map index is only cheap on a heap in its own order (2026-10-19: on the first_seen heap it cost
+# (b) 399 ms and (c) 1.93 s; with no index (a) lost its bbox path; the matview's layout met every target).
+HEAP_ORDER = "order by category_main, category_type, lat, lng"
+OLD_HEAP_ORDER = "order by category_main, category_type, first_seen_at"
+MAP_INDEX = ("create index browse_list_next_map_idx on browse_list_next "
+             "(category_main, category_type, lat, lng) include (property_id, is_active, price_czk, "
+             "disposition, subtype, area_m2, last_seen_at, first_seen_at) "
+             "where lat is not null and lng is not null")
+MAP_RENAME = "alter index browse_list_next_map_idx rename to browse_list_map_idx"
+MAP_DROP = "drop index if exists public.browse_list_map_idx"
 _DROP = re.compile(r"drop table if exists (?:public\.)?browse_list\b")
 _RENAME = re.compile(r"alter table (?:public\.)?browse_list_next rename to browse_list\b")
 
@@ -70,18 +77,38 @@ def test_the_repatch_runs_after_the_drop_and_before_the_rename() -> None:
         "the window must name merges (created_at) and their undos/splits (undone_at)")
 
 
-def test_the_rebuild_builds_no_map_index_and_the_file_drops_the_first_applys() -> None:
-    """RED by: the rebuild building or renaming the dropped map index, or losing the leftover's DROP."""
+def test_the_rebuild_lays_the_heap_out_in_the_map_indexs_order() -> None:
+    """RED by: any other CTAS order (on the first_seen heap the map index cost (c) 1.93 s, 2026-10-19)."""
     rebuild = _code(_body(SQL, "rebuild_browse_list"))
-    for name in MAP_INDEX_NAMES:
-        assert name not in rebuild, f"the rebuild names {name}, the map index W1 dropped"
-    assert "drop index if exists public.browse_list_map_idx" in SQL
+    assert rebuild.count("create unlogged table browse_list_next as") == 1
+    assert f"select * from browse_projection {HEAP_ORDER} $q$" in rebuild
+
+
+def test_the_map_index_is_built_before_the_drop_and_renamed_after_it() -> None:
+    """RED by: a key, INCLUDE or partial WHERE other than the matview cover's, or a rename before the table's."""
+    rebuild = _code(_body(SQL, "rebuild_browse_list"))
+    assert rebuild.count(MAP_INDEX) == 1 and rebuild.count(MAP_RENAME) == 1
+    assert rebuild.count("browse_list_next_map_idx") == 2, "a second build or rename of the map index"
+    order = [rebuild.index(MAP_INDEX), rebuild.index("analyze browse_list_next"),
+             _DROP.search(rebuild).start(), _RENAME.search(rebuild).start(),
+             rebuild.index(MAP_RENAME)]
+    assert order == sorted(order)
+
+
+def test_only_the_revert_drops_the_map_index() -> None:
+    """The rebuild owns browse_list_map_idx; the revert drops it because 605's rebuild never builds it."""
+    assert MAP_DROP not in " ".join(SQL.lower().split())
+    reverts = sorted((MIGRATIONS / "reverts").glob("630_*.sql"))
+    assert reverts and MAP_DROP in _code(reverts[0].read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("fn", sorted(LIVE))
 def test_each_restatement_only_adds_to_its_source(fn: str) -> None:
-    """RED by: a restated body that loses or reorders any of its source's code, the map's one FROM aside."""
+    """RED by: losing or reordering source code; only the map's FROM and 605's ORDER BY column (first_seen_at) may go."""
     old = _code(_body(_source(fn), fn)).replace("from properties_map_mv l", "from browse_list l")
+    if fn == "rebuild_browse_list":
+        assert old.count(OLD_HEAP_ORDER) == 1, "605's heap order moved; re-read the source"
+        old = old.replace(OLD_HEAP_ORDER, HEAP_ORDER)
     assert _missing_tokens(old, _code(_body(SQL, fn))) == []
 
 
@@ -105,6 +132,13 @@ def test_the_preconditions_name_the_live_bodies_and_its_own() -> None:
 
 
 @pytest.mark.parametrize("fn", sorted(LIVE))
+def test_the_postcondition_asserts_this_files_bodies(fn: str) -> None:
+    """RED by: a body edit without its new md5 in $post$ (the apply would roll back)."""
+    post = SQL[SQL.index("do $post$"): SQL.index("$post$;")]
+    assert _md5(_body(SQL, fn)) in post, f"{fn}: $post$ does not assert this file's body"
+
+
+@pytest.mark.parametrize("fn", sorted(LIVE))
 def test_the_gated_md5_is_the_source_files_body(fn: str) -> None:
     """The LIVE pins are the bodies of the files 630 restates, not a transcription."""
     assert _md5(_body(_source(fn), fn)) == LIVE[fn]
@@ -120,7 +154,7 @@ def test_a_revert_restores_605s_rebuild_and_629s_map_rpc() -> None:
 
 
 def test_the_file_forces_no_rebuild() -> None:
-    """The next */15 tick runs the new body; a forced rebuild would hold browse_list for ~62 s at apply."""
+    """The next */15 tick lays the table out and builds the index; a forced rebuild would hold browse_list ~62 s."""
     assert not re.search(r"(select|perform)\s+(public\.)?rebuild_browse_list\(\)", _code(SQL))
 
 

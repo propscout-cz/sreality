@@ -8,20 +8,33 @@
 -- swap writes the table the swap then drops: 61.6-62.5 s of every 900 s (6.9 %); 1 of the last 5
 -- operator merges (2026-10-19) lost its patch until the next swap.
 --
--- WHAT CHANGES. Two functions and one ledger index; no table, view, column or row. ADDITIVE but for
--- one index the first apply left behind (4.); the matview retires in 631.
+-- WHAT CHANGES. Two functions and one ledger index; no table, view, column or row. ADDITIVE: nothing
+-- is dropped (the matview retires in 631). rebuild_browse_list() is 605's body (605:650-722) with 2.-4.
+-- and nothing else: every other index, the grants, the anon refusal and the derived_artifacts stamp
+-- are unchanged.
 --   1. browse_map_cells: 629's body (migration 629 is on feature/curated-set-scope, PR #1882, applied
 --      in production 2026-10-19; CI's replay reaches this file only after it merges) with exactly two
 --      edits: it reads `from browse_list l` instead of the matview, and its WHERE gains
 --      `and l.lat is not null and l.lng is not null` (the matview's own filter; without it browse_list's
 --      ~53k rows with no map point would count as a NULL tile). The stale "ONE index-only pass" comment
---      becomes two lines: browse_list's own indexes serve the read. Same signature, so CREATE OR
---      REPLACE keeps 629's ACL; still SECURITY INVOKER with 629's one SET clause.
---   2. rebuild_browse_list(): 605's body (605:650-722) plus the identity re-patch and nothing else; heap
---      order, every index, the grants, the anon refusal and the derived_artifacts stamp are unchanged.
---      (A map cover index, browse_list_map_idx, was built here, measured in production and removed in
---      W1: it cost (b) byt/prodej 399 ms and (c) the whole country 1.93 s against 219 / 904 ms without
---      it, 2026-10-19.) v_since = the previous run's complete_through (its start) less 15 minutes
+--      becomes two lines naming the index that bounds the read (3.) and the heap order it needs (2.).
+--      Same signature, so CREATE OR REPLACE keeps 629's ACL; still SECURITY INVOKER with 629's one SET
+--      clause.
+--   2. The heap order: the rebuild lays browse_list out by (category_main, category_type, lat, lng),
+--      the retired matview's layout, instead of 605's first_seen_at, because three states measured
+--      through the function on 2026-10-19 ((a) Praha bbox, (b) byt/prodej nationwide, (c) the whole
+--      country; targets 150 / 400 / 1,200 ms) were: the map index on the first_seen heap (a) 71 /
+--      (b) 399 / (c) 1,932 ms, no map index (a) 225 / (b) 285 / (c) 1,229 ms, and the matview, which has
+--      this layout and this index, (a) ~30 / (b) 204 / (c) 874 ms -- the chosen one. Rows with no point
+--      (NULL lat/lng) sort last.
+--   3. The map index browse_list_next_map_idx, built and renamed (browse_list_map_idx) with its
+--      siblings: the matview cover's key and width, property_id in place of sreality_id (the default
+--      call's dismissal check reads property_id), partial on a point. On a heap in its own order, rows
+--      in index order sit on consecutive heap pages, so the planner's correlation assumption (0.9999 on
+--      category_main) is true; on the first_seen heap it paid one heap page per row. Accepted cost: a
+--      filtered newest-first list page touches ~10x the heap pages (1,188 against 113, measured
+--      2026-10-19; a few ms hot).
+--   4. The identity re-patch. v_since = the previous run's complete_through (its start) less 15 minutes
 --      (created_at/undone_at are each transaction's start, so an identity transaction must commit
 --      within the margin). Once the DROP holds browse_list's ACCESS EXCLUSIVE lock, every
 --      change that patched the old table has committed and every later one queues for the new
@@ -29,24 +42,23 @@
 --      since v_since names (its survivor, retired and previous property, and the moved ad's current
 --      property), and each is deleted from browse_list_next and re-inserted from browse_projection
 --      before the rename (a retired property returns no row, which is the point). last_rows follows
---      the patch. The read goes by recency through property_merge_events_recent_idx (3.): a plain
+--      the patch. The read goes by recency through property_merge_events_recent_idx (5.): a plain
 --      detach only stamps undone_at on old rows and ids are not commit-ordered, so no id watermark is
 --      complete, and greatest(created_at, undone_at) is the one bounded key (28 ms warm as a seq scan
 --      on 2026-10-19; the index keeps it bounded by the window as the ledger grows ~12 %/week). The
 --      window spans ~30-45 min, so an autodedup burst re-patches up to ~2k ids under the lock (p95
 --      1,281, max 2,031 over 14 days); projecting 1,156 ids from browse_projection measured 155 ms.
---   3. property_merge_events_recent_idx on greatest(created_at, undone_at): the re-patch's one key.
+--   5. property_merge_events_recent_idx on greatest(created_at, undone_at): the re-patch's one key.
 --      GREATEST ignores NULLs, so an undone row sorts by its undone_at, every other row by created_at.
---   4. drop index if exists browse_list_map_idx: the first apply's rebuilds (17:45Z, 18:00Z ticks)
---      built it; a fresh apply finds nothing, and no rebuild of this body builds it again.
 --
 -- APPLY through apply_migration.yml (--ref the W1 branch) once the PR is green, IMMEDIATELY BEFORE it
 -- merges: from this file's commit until the SPA deploys, the tile counts read browse_list while the
 -- pins still read the matview. Not in the minute a list swap lands (:01-:02, :16-:17, :31-:32,
 -- :46-:47): the post-condition reads browse_list under the 5 s lock limit. No forced rebuild: the next
--- */15 tick runs the new body, which builds nothing new. The receipt and migration_drift probe a
--- function by NAME and both names exist, so they cannot tell whether this file ran; its proof is the
--- $post$ block.
+-- */15 tick lays the table out in the map index's order and builds the index (until then the live
+-- table, built by the previous body, has neither), so the receipts are taken after that tick. The
+-- receipt and migration_drift probe a function by NAME and both names exist, so they cannot tell
+-- whether this file ran; its proof is the $post$ block.
 -- ROLLBACK: migrations/reverts/630_revert_one_browse_read_model.sql (605's and 629's bodies). A re-run
 -- is a no-op: the preconditions accept this file's own bodies.
 
@@ -60,20 +72,23 @@ begin;
 --    prosrc, read live 2026-10-19: 605's and 629's) or this file's own (a re-run), with one overload;
 --    and the ledger carries every column the re-patch reads.
 -- ---------------------------------------------------------------------------
--- The gates also accept the FIRST apply of this file (2026-10-19 17:44Z, rebuild b422be1a…, map 81b08b6a…):
--- it built the map index that the receipts then rejected, and the scripted revert cannot run through
--- apply_migration.yml, so this corrected file applies straight over that state and drops the index below.
+-- Three applies on 2026-10-19: the gates also accept the two earlier ones, 17:44Z (rebuild b422be1a…,
+-- map 81b08b6a…: the map index on the first_seen heap) and 18:22Z (rebuild 9a49f72a…, map 9fee948a…:
+-- no map index). The receipts rejected both, and the scripted revert cannot run through
+-- apply_migration.yml, so this file applies straight over either state.
 do $pre$
 begin
   if coalesce((select md5(prosrc) from pg_proc
                  where oid = to_regprocedure('public.rebuild_browse_list()')), '')
-     not in ('be7b0ec2297d269f495a42fdcc474517', '9a49f72a8719ff801c854a7a81ba575b', 'b422be1accf77776408c63adfc8a69a5') then
-    raise exception '630 refused: rebuild_browse_list() is not 605''s body nor this file''s';
+     not in ('be7b0ec2297d269f495a42fdcc474517', 'b422be1accf77776408c63adfc8a69a5',
+             '9a49f72a8719ff801c854a7a81ba575b', '606aa0ed24602b63e362f71e134f2198') then
+    raise exception '630 refused: rebuild_browse_list() is not 605''s body nor one of this file''s';
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells'), '')
-     not in ('7406f8566504c33efc7fe4273b4f76cc', '9fee948a7993edf62d0a3467d3fb928b', '81b08b6aeb070b697155aba9d38fedd0') then
-    raise exception '630 refused: browse_map_cells is not 629''s body nor this file''s (or has two overloads)';
+     not in ('7406f8566504c33efc7fe4273b4f76cc', '81b08b6aeb070b697155aba9d38fedd0',
+             '9fee948a7993edf62d0a3467d3fb928b', 'daf29a7a3ba7a1f76768d7b0203ec461') then
+    raise exception '630 refused: browse_map_cells is not 629''s body nor one of this file''s (or has two overloads)';
   end if;
   if (select count(*) from pg_attribute
        where attrelid = 'public.property_merge_events'::regclass and not attisdropped
@@ -90,9 +105,6 @@ $pre$;
 -- The re-patch reads the identity ledger by recency; this keeps that read bounded by the window.
 create index if not exists property_merge_events_recent_idx
   on public.property_merge_events (greatest(created_at, undone_at));
-
--- The first apply's rebuild built it at 17:45Z/18:00Z (header, 4.); a fresh apply finds nothing.
-drop index if exists public.browse_list_map_idx;
 
 create or replace function public.browse_map_cells(
   districts_filter text[] default null::text[],
@@ -206,8 +218,8 @@ declare
   v_level integer := 18;
   v_cells jsonb;
 begin
-  -- browse_list's own indexes serve this read (the map cover index was tried and dropped in W1: it
-  -- cost (b) 399 ms and (c) 1.93 s against 219 / 904 ms without it, 2026-10-19).
+  -- browse_list_map_idx bounds this read: browse_list is laid out in the index's own order (category,
+  -- lat, lng), as the retired map matview was; on the first_seen heap the index cost 2x (2026-10-19).
   -- Level-18 world tiles, ~100 m at lat 50.
   with g as (
     select
@@ -435,8 +447,8 @@ end
 $function$;
 
 -- ---------------------------------------------------------------------------
--- 2. rebuild_browse_list(): 605's body plus the identity re-patch. CREATE OR REPLACE keeps its ACL
---    (service_role only).
+-- 2. rebuild_browse_list(): 605's body laid out in the map index's order, plus that index and the
+--    identity re-patch. CREATE OR REPLACE keeps its ACL (service_role only).
 -- ---------------------------------------------------------------------------
 -- ci-allow-ungated: rebuild_browse_list it reads property_merge_events only to re-patch browse_list_next; execute revoked from public, anon and authenticated (605's grants, asserted in $post$)
 create or replace function public.rebuild_browse_list()
@@ -464,10 +476,11 @@ begin
     from derived_artifacts where name = 'browse_list';
 
   execute 'drop table if exists browse_list_next';
+  -- The map index is cheap only on a heap in its own order (2026-10-19); NULL lat/lng sort last.
   execute $q$
     create unlogged table browse_list_next as
     select * from browse_projection
-    order by category_main, category_type, first_seen_at
+    order by category_main, category_type, lat, lng
   $q$;
   execute 'create unique index browse_list_next_pk on browse_list_next (property_id)';
   execute 'create index browse_list_next_cat_first_seen_idx on browse_list_next (category_main, category_type, first_seen_at desc, property_id desc)';
@@ -484,6 +497,7 @@ begin
   execute 'create index browse_list_next_newest_ad_at_mmreality_idx on browse_list_next (category_main, category_type, newest_ad_at_mmreality desc, property_id desc) where newest_ad_at_mmreality is not null';
   execute 'create index browse_list_next_newest_ad_at_remax_idx on browse_list_next (category_main, category_type, newest_ad_at_remax desc, property_id desc) where newest_ad_at_remax is not null';
   execute 'create index browse_list_next_newest_ad_at_realitymix_idx on browse_list_next (category_main, category_type, newest_ad_at_realitymix desc, property_id desc) where newest_ad_at_realitymix is not null';
+  execute 'create index browse_list_next_map_idx on browse_list_next (category_main, category_type, lat, lng) include (property_id, is_active, price_czk, disposition, subtype, area_m2, last_seen_at, first_seen_at) where lat is not null and lng is not null';
   execute 'analyze browse_list_next';
   execute 'select count(*) from browse_list_next' into n;
 
@@ -519,6 +533,7 @@ begin
   execute 'alter index browse_list_next_newest_ad_at_mmreality_idx rename to browse_list_newest_ad_at_mmreality_idx';
   execute 'alter index browse_list_next_newest_ad_at_remax_idx rename to browse_list_newest_ad_at_remax_idx';
   execute 'alter index browse_list_next_newest_ad_at_realitymix_idx rename to browse_list_newest_ad_at_realitymix_idx';
+  execute 'alter index browse_list_next_map_idx rename to browse_list_map_idx';
   execute 'grant select on browse_list to authenticated';
   execute 'revoke insert, update, delete, truncate on browse_list from anon, authenticated';
 
@@ -546,12 +561,12 @@ declare
                  where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells');
   v_rebuild oid := to_regprocedure('public.rebuild_browse_list()');
 begin
-  if (select md5(prosrc) from pg_proc where oid = v_rebuild) is distinct from '9a49f72a8719ff801c854a7a81ba575b' then
+  if (select md5(prosrc) from pg_proc where oid = v_rebuild) is distinct from '606aa0ed24602b63e362f71e134f2198' then
     raise exception '630 did not land: rebuild_browse_list() is not this file''s body';
   end if;
   if (select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells')
-     is distinct from '9fee948a7993edf62d0a3467d3fb928b' then
+     is distinct from 'daf29a7a3ba7a1f76768d7b0203ec461' then
     raise exception '630 did not land: browse_map_cells is not this file''s body';
   end if;
   if (select prosecdef from pg_proc where oid = v_map)

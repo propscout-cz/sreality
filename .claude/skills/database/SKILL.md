@@ -259,7 +259,7 @@ allowlisted with a reason) + `tests/api/test_account_scope_census.py` (no nullab
 defined once) into `browse_list` — an **UNLOGGED
 table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
-*before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630, once its DROP holds the lock, it re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
+*before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
 `properties_map_mv` stays a real `MATERIALIZED VIEW` (30-min cadence) fed from the same
 projection. (The publication-gate predicate is **gone** from the projection as of migration
 475 — flipped inert in August, then removed with the rest of the legacy dedup engine, rule

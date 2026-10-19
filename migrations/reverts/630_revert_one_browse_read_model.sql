@@ -11,7 +11,9 @@
 -- It restores, verbatim, the two bodies 630 replaced:
 --   browse_map_cells        629's body (reads properties_map_mv)   md5(prosrc) 7406f8566504c33efc7fe4273b4f76cc
 --   rebuild_browse_list()   605's body (605:650-722)               md5(prosrc) be7b0ec2297d269f495a42fdcc474517
--- Same signatures, so CREATE OR REPLACE keeps both ACLs. The post-condition re-hashes both.
+-- Same signatures, so CREATE OR REPLACE keeps both ACLs. The post-condition re-hashes both. It also
+-- drops the two indexes 630 brought: property_merge_events_recent_idx and browse_list_map_idx (605's
+-- rebuild does not build the map index, and its next tick lays browse_list out by first_seen_at again).
 --
 -- WHAT APPLYING THIS COSTS, stated plainly so it is never done casually:
 --   * the tile counts go back to properties_map_mv, stale for up to 31 minutes after every merge;
@@ -33,12 +35,14 @@ begin
   end if;
   if coalesce((select md5(prosrc) from pg_proc
                  where oid = to_regprocedure('public.rebuild_browse_list()')), '')
-     not in ('9a49f72a8719ff801c854a7a81ba575b', 'be7b0ec2297d269f495a42fdcc474517', 'b422be1accf77776408c63adfc8a69a5') then
+     not in ('606aa0ed24602b63e362f71e134f2198', '9a49f72a8719ff801c854a7a81ba575b',
+             'b422be1accf77776408c63adfc8a69a5', 'be7b0ec2297d269f495a42fdcc474517') then
     raise exception '630 revert refused: rebuild_browse_list() is not 630''s body (a later migration replaced it)';
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells'), '')
-     not in ('9fee948a7993edf62d0a3467d3fb928b', '7406f8566504c33efc7fe4273b4f76cc', '81b08b6aeb070b697155aba9d38fedd0') then
+     not in ('daf29a7a3ba7a1f76768d7b0203ec461', '9fee948a7993edf62d0a3467d3fb928b',
+             '81b08b6aeb070b697155aba9d38fedd0', '7406f8566504c33efc7fe4273b4f76cc') then
     raise exception '630 revert refused: browse_map_cells is not 630''s body (a later migration replaced it, or two overloads)';
   end if;
 end
@@ -46,6 +50,8 @@ $pre$;
 
 -- 1. browse_map_cells back to 629's body.
 drop index if exists public.property_merge_events_recent_idx;
+-- 630's rebuild builds it and 605's does not, so it would outlive the revert until the next swap.
+drop index if exists public.browse_list_map_idx;
 
 create or replace function public.browse_map_cells(
   districts_filter text[] default null::text[],

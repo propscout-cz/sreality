@@ -679,7 +679,8 @@ rules. Identify which one a task belongs to before you start.
   (Corollary F). The fix was not a bigger cap but a fourth shape, an *aggregate* read
   (`browse_map_cells`): the server answers with a result whose SIZE IS BOUNDED BY
   CONSTRUCTION — since migration 602 the finest world-tile level with at most 1 024
-  occupied tiles, counted over `browse_list` (migration 630), no `LIMIT` anywhere; the
+  occupied tiles, counted over `browse_list` through its map index `browse_list_map_idx`
+  (migration 630; `browse_list` is laid out in that index's order), no `LIMIT` anywhere; the
   SPA regroups the tiles at its own zoom by the same formula (`frontend/src/lib/mapCounts.ts`,
   `docs/design/map-counts.md`) — and reports the cohort's exact total alongside it. Reach for that shape
   whenever a surface renders a summary of many rows rather than the rows themselves;
