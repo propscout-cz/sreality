@@ -428,8 +428,9 @@ export function NumberCell({
  * "-", so "-10" stored +10. Only text that parses emits (a comma is the decimal
  * point, an empty box is null, `integer` truncates); a blur or an outside
  * change of `value` shows the value again, with a decimal comma. `cell` draws
- * it as the filter forms' NumberCell box. `label` is the input's accessible
- * name; the visible caption is the caller's. */
+ * it as the filter forms' NumberCell box and keeps their display as it was
+ * (the value as String(v), no reset on blur). `label` is the input's
+ * accessible name; the visible caption is the caller's. */
 const decimalText = (v: number | null) => (v == null ? '' : String(v).replace('.', ','));
 
 export function DecimalField({
@@ -455,9 +456,10 @@ export function DecimalField({
   cell?: boolean;
   className?: string;
 }) {
-  const [buf, setBuf] = useState({ text: decimalText(value), value });
+  const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
+  const [buf, setBuf] = useState({ text: shown(value), value });
   // Adjust-state-during-render (the documented derived-state pattern): adopt an outside value.
-  if (buf.value !== value) setBuf({ text: decimalText(value), value });
+  if (buf.value !== value) setBuf({ text: shown(value), value });
   const onType = (e: ChangeEvent<HTMLInputElement>) => {
     if (readOnly) return;
     const text = e.target.value;
@@ -468,16 +470,9 @@ export function DecimalField({
     setBuf({ text, value: v });
     onChange(v);
   };
-  const onBlur = () => setBuf({ text: decimalText(value), value });
   if (cell) {
     return (
-      <NumberCell
-        value={buf.text}
-        placeholder={placeholder ?? ''}
-        onChange={onType}
-        onBlur={onBlur}
-        ariaLabel={label}
-      />
+      <NumberCell value={buf.text} placeholder={placeholder ?? ''} onChange={onType} ariaLabel={label} />
     );
   }
   return (
@@ -491,7 +486,7 @@ export function DecimalField({
         placeholder={placeholder}
         step={step}
         onChange={onType}
-        onBlur={onBlur}
+        onBlur={() => setBuf({ text: decimalText(value), value })}
         className={[
           'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
           readOnly

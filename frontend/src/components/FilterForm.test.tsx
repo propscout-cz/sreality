@@ -253,7 +253,7 @@ describe('<FilterForm>', () => {
     expect(seen).toEqual([7, 7.5, null]);
   });
 
-  it('truncates an integer filter, a comma like a point, and shows the value on blur', () => {
+  it('truncates an integer filter, a comma like a point, and keeps the typed text on blur', () => {
     const seen: unknown[] = [];
     render(<StatefulNumberHarness id="price_change_count_min" seen={seen} />);
     const input = screen.getByRole('textbox', { name: 'signed' });
@@ -261,6 +261,6 @@ describe('<FilterForm>', () => {
     expect(seen).toEqual([2]);
     expect(input).toHaveValue('2,7');
     fireEvent.blur(input);
-    expect(input).toHaveValue('2');
+    expect(input).toHaveValue('2,7');
   });
 });

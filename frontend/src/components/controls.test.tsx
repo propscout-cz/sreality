@@ -120,4 +120,16 @@ describe('<DecimalField>', () => {
     expect(box).toHaveAttribute('placeholder', 'Kč');
     expect(box).toHaveClass('w-full', 'px-2', 'py-1.5');
   });
+
+  /* A filter box shows a value as it always did ("7.5"); only typed text gains the comma. */
+  it('shows a `cell` value as String(v), and a blur leaves the typed text alone', () => {
+    const { rerender } = render(<DecimalField cell label="Sleva" value={7.5} onChange={() => {}} />);
+    const box = screen.getByRole('textbox', { name: 'Sleva' });
+    expect(box).toHaveValue('7.5');
+    fireEvent.change(box, { target: { value: '-' } });
+    fireEvent.blur(box);
+    expect(box).toHaveValue('-');
+    rerender(<DecimalField cell label="Sleva" value={2.25} onChange={() => {}} />);
+    expect(box).toHaveValue('2.25');
+  });
 });
