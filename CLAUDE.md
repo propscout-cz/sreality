@@ -80,7 +80,7 @@ from `main`, so a merged PR *is* the deploy; PR + branch protection + CI is the 
 Default to **full autopilot**: create the branch, push early, open a **draft PR** so the
 operator can watch, and work to completion.
 - **Stop and surface** — don't paper over — a merge conflict, a failing test, or genuine ambiguity.
-- The safety net: CI (`.github/workflows/test.yml`) runs on every push + branch protection guards
+- The safety net: CI (`.github/workflows/test.yml`) runs on every PR + push to `main`; branch protection guards
   `main`, so broken code can't reach production. Lean on it; keep tests green.
 - **Database changes** have their own gate (the `database` skill: additive migrations are
   autonomous; destructive ones pause for confirmation + a backup).
@@ -262,7 +262,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 
 - **Locally:** one-time `pip install -e ".[dev,api,geo]"`, then `pytest -q` (or `pytest tests/path -q`).
   Interpreter is `python3`. `scripts/test-summary.sh` runs quiet pytest + prints only failures. Mirrors CI.
-- **CI:** every push runs `.github/workflows/test.yml` (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]` for pre-filtered logs).
+- **CI:** every PR (and push to `main`) runs `.github/workflows/test.yml` — open the draft PR early so it runs (`gh run watch`, or `scripts/logs.sh <run-id> [pattern]`).
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
