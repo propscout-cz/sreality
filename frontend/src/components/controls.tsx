@@ -187,12 +187,15 @@ export function ControlGroup({
 export function Field({
   label,
   help,
+  aside,
   as = 'group',
   className = '',
   children,
 }: {
   label: string;
   help?: string;
+  /* A tag after the caption (the group form only): beside it, never part of the name. */
+  aside?: ReactNode;
   as?: 'group' | 'control';
   className?: string;
   children: ReactNode;
@@ -227,7 +230,7 @@ export function Field({
       aria-describedby={help ? helpId : undefined}
       className={className}
     >
-      {caption}
+      {aside ? <div className="flex flex-wrap items-center gap-x-2">{caption}{aside}</div> : caption}
       {helpEl}
       <div className="mt-2">{children}</div>
     </div>
@@ -480,7 +483,7 @@ export function DecimalField({
       <input
         type="text"
         aria-label={label}
-        inputMode="decimal"
+        inputMode={integer ? 'numeric' : 'decimal'}
         readOnly={readOnly}
         value={buf.text}
         placeholder={placeholder}

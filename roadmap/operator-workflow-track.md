@@ -29,9 +29,18 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `VALUO_SANDBOX_API_TOKEN`), `api/http_json.py` folding the two `_http_get_json` copies (the Mapy key no longer reaches
   logs), the admin-claim copies folded into `deps.is_admin`, the server label dicts into `filter_registry.label_cs`,
   and the phone Poloha no longer calls a district point a town. Rationale: `docs/architecture.md` § rule 12.
-- **Next:** W3, the section (desktop editor + phone read-only card); the sandbox probe through the live API after the
-  deploy (flat sale and lease, a house with `lot_area`, land, a negative floor) decides the lease basis and whether a
-  house's plot is sent; a per-plan monthly quota counted from the rows before the production token.
+- **Done (W3, the section):** `<section id="valuo">` after Odhady on the property page for every signed-in user
+  (`components/listing-detail/ValuoSection.tsx` over `lib/valuo.ts`): the editor flips in place and is drawn from the
+  API's `fields` alone, each value tagged with its provenance (`z inzerátu` / `odvozeno` / `předpoklad` / `chybí` /
+  `upraveno` / `Valuo ignorovalo`), the paid call waits on a missing required value and sends only the user's changes;
+  the result card reads Valuo's min · průměr · max on the ruler against the asking price, our latest run and MF; the
+  history is the estimations' `RunHistory`, generalised; the phone shows the latest answer only (lazy, no editor). The
+  estimate card frame is one `EstimateCard` (five inline copies folded). Patterns: `.interface-design/system.md`.
+- **Next:** the sandbox probe through the live API after the deploy (flat sale and lease, a house with `lot_area`,
+  land, a negative floor) decides the lease basis (`lib/valuo.ts` `LEASE_PERIOD` is the one SPA line) and whether a
+  house's plot is sent; expose Valuo's `form_errors` in `present()` so the editor can attach them under their fields
+  (the stored response holds them; the API does not return them yet); a per-plan monthly quota counted from the rows
+  before the production token.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:

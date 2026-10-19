@@ -53,6 +53,7 @@ import {
 } from './PropertySections';
 
 const EstimationsBlock = lazyChunk(() => import('@/components/listing-detail/EstimationsBlock'));
+const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
 const PhoneTagsAndNotes = lazyChunk(() =>
   import('@/components/listing-detail/CurationBlock').then((m) => ({ default: m.PhoneTagsAndNotes })),
 );
@@ -229,6 +230,12 @@ export default function PhoneProperty({
         <div className={BLOCK}>
           <Suspense fallback={<Skeleton height={140} />}>
             <EstimationsBlock listing={property} listingIds={advertIds} readOnly bare label="Odhady" />
+          </Suspense>
+        </div>
+        <div className={BLOCK}>
+          {/* No placeholder: most properties hold no Valuo answer, so the block takes no room. */}
+          <Suspense fallback={null}>
+            <ValuoSection property={property} listingIds={advertIds} readOnly bare />
           </Suspense>
         </div>
         {property.sreality_id != null && (
