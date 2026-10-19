@@ -1,8 +1,8 @@
-"""Hermetic tests for scripts.verify_pipeline — the registry, the harness, the checks.
+"""Hermetic tests for scripts.verify_pipeline — the registry and the harness that measures it.
 
-No DB: the check functions' SQL is exercised in production (and PREPAREd in CI's schema
-sweep); here we test the registry metadata, due selection, the registry projection, the
-unmeasured paths, persistence, and the pure status-derivation helpers.
+No DB: here we test the registry metadata, due selection, the registry projection, the pass's
+budget (deferral) and memo, the unmeasured paths, persistence, and migration_drift's cells. Each
+check's own rules are tested beside its module (tests/scripts/test_checks_*.py).
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any
 
 from pathlib import Path
 
+from scripts.checks import clock
 from scripts.checks import platform as platform_checks
 from scripts.checks.platform import check_migration_drift
 from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, load_migrations
@@ -49,15 +50,24 @@ def _hosted(host: str) -> list[str]:
     return [c.key for c in CHECKS if c.host == host]
 
 
-# The keys the worker's health lane measures (waves 3-5); every other key runs on GitHub.
-_WORKER_KEYS = ["jobs", "capacity", "llm", "scraping", "publishing", "delisting", "coverage",
-                "dedup"]
+# The keys the worker's health lane measures (waves 3-6), in registry order; GitHub keeps two.
+_WORKER_KEYS = ["location_town_coverage", "jobs", "capacity", "llm", "scraping", "publishing",
+                "delisting", "coverage", "dedup", "parsing", "data_quality", "text_extraction"]
+_GITHUB_KEYS = ["migration_drift", "outbound_url_conformance"]
 
 
 def _stub(key: str, fn: Any, *, budget_s: float = 45.0, cls: str = "alarm",
           host: str = "github-actions", cadence_s: int = 3600) -> Check:
     """An unregistered check for exercising the harness itself."""
     return Check(key, fn, "platform", cls, host, cadence_s, key, budget_s=budget_s)
+
+
+def _verdict(key: str, status: str = "ok", value: Any = 0, **extra: Any) -> dict[str, Any]:
+    """A measured result as every check returns one: its status rides on a judged cell."""
+    cell = {"subject": key, "portal": None, "status": status, "value": value, "unit": "",
+            "message": f"{key} {status}", "facts": {}}
+    return {"check_key": key, "status": status, "value": value, "details": {"cells": [cell]},
+            **extra}
 
 
 # --- run_checks isolation --------------------------------------------------
@@ -68,7 +78,7 @@ def test_one_erroring_check_is_unknown_and_does_not_abort_the_run() -> None:
     that reads as a measured Problem, and the lane goes on to the next check."""
 
     def ok_check(conn: Any, thresholds: Any) -> dict[str, Any]:
-        return {"check_key": "ok_one", "status": "ok", "value": 1, "details": {}}
+        return _verdict("ok_one", value=1)
 
     def boom_check(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("kaboom")
@@ -79,14 +89,14 @@ def test_one_erroring_check_is_unknown_and_does_not_abort_the_run() -> None:
     assert by_key["ok_one"]["status"] == "ok"
     assert by_key["boom"]["status"] == "unknown"
     assert by_key["boom"]["details"]["errored"] is True
+    assert by_key["boom"]["details"]["cells"] == [], "an unmeasured result carries no cell"
     assert "kaboom" in by_key["boom"]["details"]["error"]
     assert "boom" in by_key["boom"]["message"] and "kaboom" in by_key["boom"]["message"]
 
 
 def test_run_checks_runs_exactly_the_checks_it_is_handed_in_order() -> None:
     def _one(key: str) -> Check:
-        return _stub(key, lambda c, t: {"check_key": key, "status": "ok", "value": 0,
-                                        "details": {}})
+        return _stub(key, lambda c, t: _verdict(key))
 
     assert run_checks(None, {}, checks=[]) == []
     out = run_checks(None, {}, checks=[_one("b"), _one("a")])
@@ -98,7 +108,7 @@ def test_every_result_carries_the_time_its_check_took() -> None:
 
     def _slow(conn: Any, thresholds: Any) -> dict[str, Any]:
         time.sleep(0.02)
-        return {"check_key": "slow", "status": "ok", "value": 0}
+        return _verdict("slow")
 
     def _boom(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("x")
@@ -122,10 +132,8 @@ def test_results_are_persisted_as_each_check_completes() -> None:
         raise RuntimeError("the lane died here")
 
     checks = [
-        _stub("first", lambda c, t: {"check_key": "first", "status": "ok", "value": 1,
-                                     "details": {}}),
-        _stub("second", lambda c, t: {"check_key": "second", "status": "ok", "value": 2,
-                                      "details": {}}),
+        _stub("first", lambda c, t: _verdict("first", value=1)),
+        _stub("second", lambda c, t: _verdict("second", value=2)),
         _stub("third", slow_then_boom),
     ]
     results = run_checks(None, {}, checks=checks,
@@ -137,8 +145,8 @@ def test_results_are_persisted_as_each_check_completes() -> None:
 
 def test_a_failing_sink_does_not_end_the_lane() -> None:
     checks = [
-        _stub("a", lambda c, t: {"check_key": "a", "status": "ok", "value": 1, "details": {}}),
-        _stub("b", lambda c, t: {"check_key": "b", "status": "ok", "value": 1, "details": {}}),
+        _stub("a", lambda c, t: _verdict("a", value=1)),
+        _stub("b", lambda c, t: _verdict("b", value=1)),
     ]
 
     def _explode(_r: dict[str, Any]) -> None:
@@ -159,28 +167,33 @@ def test_a_timed_out_check_is_unknown_rather_than_failing() -> None:
     (result,) = run_checks(None, {}, checks=[_stub("slow", _cancelled)])
     assert result["status"] == "unknown"
     assert result["details"]["timed_out"] is True
+    assert result["details"]["cells"] == []
     assert result["details"]["budget_seconds"] == 45.0
     assert result["details"]["elapsed_seconds"] >= 0
     assert "Not measured" in result["message"]
 
 
 class _Clock:
-    """A monotonic clock the test moves by hand."""
+    """A monotonic clock the test moves by hand, and every read moves on by `step`, as a real
+    clock moves between two reads: on a frozen one a lone due check fit a lane of its own budget
+    while the worker deferred it on every tick (wave 6). `step=0.0` only for pins to the ms."""
 
-    def __init__(self) -> None:
+    def __init__(self, step: float = 1e-6) -> None:
         self.now = 1_000.0
+        self.step = step
 
     def monotonic(self) -> float:
+        self.now += self.step
         return self.now
 
 
-def _on_the_clock(monkeypatch: Any) -> _Clock:
+def _on_the_clock(monkeypatch: Any, *, step: float = 1e-6) -> _Clock:
     """Point the harness's wall clock at a fake one."""
     import types
 
     import scripts.verify_pipeline as vp
 
-    clock = _Clock()
+    clock = _Clock(step)
     from scripts.checks import clock as lane_clock
 
     fake = types.SimpleNamespace(monotonic=clock.monotonic)
@@ -229,16 +242,15 @@ class _TimedConn:
         return []
 
 
-def _statements(key: str, n: int, *, budget_s: float = 45.0) -> Check:
-    """A check that sends `n` statements through the harness's bounded helper."""
-    import scripts.verify_pipeline as vp
+def _statements(key: str, n: int, *, budget_s: float = 45.0, cls: str = "alarm") -> Check:
+    """A check that sends `n` statements through the clock's bounded helper."""
 
     def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
         for i in range(n):
-            vp._fetchall(conn, f"select {i} -- {key}")
-        return {"check_key": key, "status": "ok", "value": n, "details": {}}
+            clock.fetchall(conn, f"select {i} -- {key}")
+        return _verdict(key, value=n)
 
-    return _stub(key, _fn, budget_s=budget_s)
+    return _stub(key, _fn, budget_s=budget_s, cls=cls)
 
 
 def test_a_check_spends_its_budget_once_across_all_its_statements(monkeypatch: Any) -> None:
@@ -249,7 +261,7 @@ def test_a_check_spends_its_budget_once_across_all_its_statements(monkeypatch: A
     check stops 0.5 s past its budget instead of running on to the third."""
     import scripts.verify_pipeline as vp
 
-    conn = _TimedConn(_on_the_clock(monkeypatch), [1.5, 1.5, 0.1])
+    conn = _TimedConn(_on_the_clock(monkeypatch, step=0.0), [1.5, 1.5, 0.1])
     checks = [_statements("three", 3, budget_s=2.0)]
     stored: list[dict[str, Any]] = []
     (result,) = run_checks(conn, {}, checks=checks, on_result=stored.append,
@@ -262,14 +274,51 @@ def test_a_check_spends_its_budget_once_across_all_its_statements(monkeypatch: A
     assert stored == [result], "a timed-out check is stored: it ran and measured nothing"
 
 
-def test_the_lane_remainder_still_caps_a_checks_deadline(monkeypatch: Any) -> None:
-    """A check is owed its own budget only while the lane still has it: the second check
-    below is declared 45 s but starts with 2 s of the lane left."""
-    conn = _TimedConn(_on_the_clock(monkeypatch), [2.0, 0.5])
+def test_an_uncapped_lane_still_caps_a_late_checks_deadline_at_its_remainder(
+    monkeypatch: Any,
+) -> None:
+    """The canary's lane (no pass cap) keeps wave 2's rule: a check is owed its own budget only
+    while the lane still has it, so the second check below, declared 45 s, starts with 2 s."""
+    conn = _TimedConn(_on_the_clock(monkeypatch, step=0.0), [2.0, 0.5])
     out = run_checks(conn, {}, checks=[_statements("first", 1), _statements("second", 1)],
                      lane_budget_s=4.0)
     assert conn.timeouts_ms == [4000, 2000]
     assert [r["status"] for r in out] == ["ok", "ok"]
+
+
+def test_a_capped_pass_defers_a_check_whose_budget_no_longer_fits(
+    monkeypatch: Any, caplog: Any,
+) -> None:
+    """Wave 6: on the worker's capped pass a check started short timed out into an unknown row
+    that held a 6-hourly gauge Not measured for a whole cadence. It is not started at all: no
+    row, so it stays due for the next pass, and a later check that still fits runs."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="verify_pipeline")
+    conn = _TimedConn(_on_the_clock(monkeypatch), [1.9, 0.5])
+    checks = [_statements("first", 1, budget_s=2.0), _statements("second", 1, budget_s=4.0),
+              _statements("third", 1, budget_s=1.0)]
+    stored: list[str] = []
+    out = run_checks(conn, {}, checks=checks, lane_budget_s=4.0, defer_unfit=True,
+                     on_result=lambda r: stored.append(r["check_key"]))
+    assert [r["check_key"] for r in out] == stored == ["first", "third"]
+    assert [r["status"] for r in out] == ["ok", "ok"]
+    assert conn.timeouts_ms == pytest.approx([2000, 1000], abs=1), (
+        "the check that runs gets its whole budget")
+    assert "DEFER second: its 4s budget does not fit the 2s the pass has left" in caplog.text
+
+
+@pytest.mark.parametrize("budget_s, runs", [(45.0, True), (45.5, True), (46.5, False)])
+def test_a_check_fits_while_its_budget_is_within_a_second_of_what_the_pass_has_left(
+    monkeypatch: Any, budget_s: float, runs: bool,
+) -> None:
+    """The fit is weighed before the check starts, with 1 s of slack: a check whose budget is
+    its whole lane fits though the lane's clock has moved, and 1.5 s over what is left does not."""
+    _on_the_clock(monkeypatch)
+    out = run_checks(None, {}, checks=[_stub("one", lambda c, t: _verdict("one"),
+                                             budget_s=budget_s)],
+                     lane_budget_s=45.0, defer_unfit=True)
+    assert [r["check_key"] for r in out] == (["one"] if runs else [])
 
 
 def test_a_budget_exhausted_lane_writes_no_row_for_the_checks_it_did_not_reach(
@@ -285,7 +334,7 @@ def test_a_budget_exhausted_lane_writes_no_row_for_the_checks_it_did_not_reach(
     def _spends(key: str, seconds: float) -> Check:
         def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
             clock.now += seconds  # Python-side time no statement_timeout can cut short
-            return {"check_key": key, "status": "ok", "value": 1, "details": {}}
+            return _verdict(key, value=1)
         return _stub(key, _fn, budget_s=2.0)
 
     caplog.set_level(logging.WARNING, logger="verify_pipeline")
@@ -304,13 +353,51 @@ def test_a_budget_exhausted_lane_writes_no_row_for_the_checks_it_did_not_reach(
 def test_lane_budget_is_reset_after_a_run() -> None:
     """State leaking between runs would silently shrink a later lane's statement
     timeout to whatever the previous run had left."""
-    import scripts.verify_pipeline as vp
+    run_checks(None, {}, checks=[_stub("a", lambda c, t: _verdict("a"))], lane_budget_s=5.0)
+    assert clock.LANE.deadline is None and clock.LANE.check_deadline is None
+    assert clock.LANE.statement_timeout_ms() == clock.DEFAULT_STATEMENT_TIMEOUT_MS
 
-    run_checks(None, {}, checks=[_stub("a", lambda c, t: {"check_key": "a", "status": "ok",
-                                                          "value": 0, "details": {}})],
-               lane_budget_s=5.0)
-    assert vp._LANE.deadline is None and vp._LANE.check_deadline is None
-    assert vp._LANE.statement_timeout_ms() == vp._DEFAULT_STATEMENT_TIMEOUT_MS
+
+def _sharing(key: str, reads: list[str], *, fails: bool = False) -> Check:
+    """A check that takes the shared measure read through the pass memo, as parsing and
+    data_quality do."""
+
+    def _read() -> list[tuple[str, int]]:
+        reads.append(key)
+        if fails:
+            raise RuntimeError("relation measure_plausibility_by_source does not exist")
+        return [("sreality", 7)]
+
+    def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+        rows = clock.PASS.memo("measure_plausibility", _read)
+        return _verdict(key, value=len(rows))
+
+    return _stub(key, _fn)
+
+
+def test_one_pass_shares_its_memoised_read_and_the_next_pass_reads_again() -> None:
+    """Design § 6 (wave 6): the ~12 s measure read parsing and data_quality both need is made
+    once per pass, never kept across passes, and only inside one (a direct call reads)."""
+    reads: list[str] = []
+    checks = [_sharing("parsing", reads), _sharing("data_quality", reads)]
+    first = run_checks(None, {}, checks=checks)
+    assert [r["status"] for r in first] == ["ok", "ok"] and reads == ["parsing"]
+    run_checks(None, {}, checks=checks)
+    assert reads == ["parsing", "parsing"], "two passes rebuild the memo"
+    checks[1].fn(None, {})
+    checks[1].fn(None, {})
+    assert reads == ["parsing", "parsing", "data_quality", "data_quality"]
+
+
+def test_a_memoised_read_that_failed_fails_every_reader_of_the_pass_once() -> None:
+    """The error is the read's result for the pass: the second check gets the same error
+    instead of paying the read again, and both read Not measured with the reason."""
+    reads: list[str] = []
+    out = run_checks(None, {}, checks=[_sharing("parsing", reads, fails=True),
+                                       _sharing("data_quality", reads, fails=True)])
+    assert reads == ["parsing"]
+    assert [r["status"] for r in out] == ["unknown", "unknown"]
+    assert all("measure_plausibility_by_source" in r["details"]["error"] for r in out)
 
 
 def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
@@ -318,20 +405,21 @@ def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     check runs under is ITS budget, not one lane-wide number."""
     import scripts.verify_pipeline as vp
 
-    _on_the_clock(monkeypatch)
+    _on_the_clock(monkeypatch, step=0.0)
     seen: dict[str, str] = {}
 
     def _peek(key: str) -> Any:
         def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
-            seen[key] = vp._statement_timeout_clause()
-            return {"check_key": key, "status": "ok", "value": 0}
+            seen[key] = clock.statement_timeout_clause()
+            return _verdict(key)
         return _fn
 
     checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
     assert seen == {"db": "45000ms", "probe": "120000ms"}
-    assert _by_key("outbound_url_conformance").budget_s == 120.0
-    assert {c.budget_s for c in CHECKS[:-1]} == {vp._CHECK_BUDGET_S}
+    # Wave 6: parsing reads the active stock several ways on four default budgets.
+    assert {c.key: c.budget_s for c in CHECKS if c.budget_s != clock.CHECK_BUDGET_S} == {
+        "parsing": 180.0, "outbound_url_conformance": 120.0}
 
 
 # --- the registry ------------------------------------------------------------
@@ -341,12 +429,12 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     from scripts import verify_pipeline as vp
 
     keys = _keys()
-    assert len(keys) == len(set(keys)) == 20
-    # Waves 3-5: the worker hosts the platform, portal and dedup checks; GitHub keeps the legacy
-    # data-quality keys until wave 6, and for good what needs a checkout (migration_drift) or an
-    # address that is not the scrapers' (the outbound probe).
+    assert len(keys) == len(set(keys)) == 14
+    # Waves 3-6: the worker hosts the platform, portal, dedup, parsing and quality checks; GitHub
+    # keeps for good what needs a checkout (migration_drift) or an address that is not the
+    # scrapers' (the outbound probe).
     assert _hosted("realtime-worker") == _WORKER_KEYS
-    assert len(_hosted("github-actions")) == 12 and not _hosted("pg_cron")
+    assert _hosted("github-actions") == _GITHUB_KEYS and not _hosted("pg_cron")
     for c in CHECKS:
         assert c.label.strip(), c.key
         assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
@@ -359,12 +447,10 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
         assert c.fn.__name__ == f"check_{c.key}", c.key
 
 
-def test_the_dedup_check_is_the_workers_eighth_with_the_contracts_metadata() -> None:
+def test_the_dedup_check_keeps_the_contracts_metadata() -> None:
     """Wave 5 (D1): an alarm every 10 min on the worker, labelled Engine, after coverage on the
     page, on the 45 s database budget; stale after 30 min, due after 540 s, a recovery hold of
-    1,800 s. Eight worker budgets now fill the health lane's 360 s pass exactly
-    (scraper/realtime_worker.HEALTH_PASS_BUDGET_SECONDS): a ninth worker check raises that cap."""
-    from scripts import verify_pipeline as vp
+    1,800 s."""
     from scripts.checks.dedup import check_dedup
     from toolkit.system_alerts import _hold
 
@@ -372,12 +458,115 @@ def test_the_dedup_check_is_the_workers_eighth_with_the_contracts_metadata() -> 
     assert (c.fn, c.domain, c.cls, c.host, c.cadence_s, c.label, c.unit, c.owner_path) == (
         check_dedup, "dedup", "alarm", "realtime-worker", 600, "Engine", "cells",
         "/autodedup/progress")
-    assert c.budget_s == vp._CHECK_BUDGET_S == 45.0
+    assert c.budget_s == clock.CHECK_BUDGET_S == 45.0
     assert _keys().index("dedup") == _keys().index("coverage") + 1
     assert (c.staleness_budget, c.due_after_s) == (_dt.timedelta(minutes=30), 540)
     assert _hold(c.cadence_s) == _dt.timedelta(seconds=1_800)
-    worker = [k for k in CHECKS if k.host == "realtime-worker"]
-    assert len(worker) == 8 and vp.lane_budget_for(worker) == 360.0
+
+
+def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
+    """Wave 6 (D1): parsing is a portal alarm and the three quality checks gauges, all on the
+    worker (location_town_coverage moved there from GitHub); the URL probe's page section is
+    data quality now. Every one emits cells."""
+    from scripts.checks import quality
+    from scripts.verify_outbound_urls import PROBE_BUDGET_S, check_outbound_url_conformance
+
+    def meta(key: str) -> tuple[Any, ...]:
+        c = _by_key(key)
+        return (c.fn, c.domain, c.cls, c.host, c.cadence_s, c.budget_s, c.label, c.unit,
+                c.owner_path)
+
+    worker, github = "realtime-worker", "github-actions"
+    assert meta("parsing") == (quality.check_parsing, "portals", "alarm", worker, 21_600, 180.0,
+                               "Parsing", "cells", "/scrapers")
+    # data_quality's owner is the per-portal page: no page renders value quality yet.
+    assert meta("data_quality") == (quality.check_data_quality, "data_quality", "gauge", worker,
+                                    21_600, 45.0, "Data quality", "cells", "/scrapers")
+    assert meta("location_town_coverage") == (
+        quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 45.0,
+        "Location coverage", "cells", "/location-quality")
+    assert meta("text_extraction") == (quality.check_text_extraction, "data_quality", "gauge",
+                                       worker, 3_600, 45.0, "Description reading", "cells",
+                                       "/costs")
+    assert meta("migration_drift") == (check_migration_drift, "platform", "alarm", github,
+                                       3_600, 45.0, "Migration drift", "files", "")
+    assert meta("outbound_url_conformance") == (
+        check_outbound_url_conformance, "data_quality", "alarm", github, 604_800,
+        PROBE_BUDGET_S, "Portal links open the right page", "cells", "")
+    # parsing (6-hourly): stale after 18 h, due after 5 h 45 min, recovered after 11.5 h of OK.
+    from toolkit.system_alerts import _hold
+
+    parsing, text = _by_key("parsing"), _by_key("text_extraction")
+    assert (parsing.staleness_budget, parsing.due_after_s) == (_dt.timedelta(hours=18), 20_700)
+    assert _hold(parsing.cadence_s) == _dt.timedelta(hours=11, minutes=30)
+    assert (text.staleness_budget, text.due_after_s) == (_dt.timedelta(hours=3), 3_240)
+
+
+def test_every_worker_alarm_due_at_once_fits_the_pass_and_gauges_defer() -> None:
+    """Wave 6 (D2): the twelve worker budgets sum 675 s, past what one pass may take inside the
+    watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker pins the
+    constant): every ALARM due at once fits (7 x 45 s + parsing's 180 s = 495 s, alarms run
+    first) and a gauge that no longer fits is deferred to the next 60 s tick. GitHub's two
+    checks owe 165 s."""
+    from scripts import verify_pipeline as vp
+
+    worker = [c for c in CHECKS if c.host == "realtime-worker"]
+    alarms = [c for c in worker if c.cls == "alarm"]
+    assert (vp.lane_budget_for(alarms), vp.lane_budget_for(worker)) == (495.0, 675.0)
+    assert vp.lane_budget_for(alarms) <= 500.0 < vp.lane_budget_for(worker)
+    assert vp.lane_budget_for([c for c in CHECKS if c.host == "github-actions"]) == 165.0
+
+
+def test_the_first_projection_from_main_retires_the_nine_quality_keys() -> None:
+    """Wave 6 (D15): parsing and the data_quality and text_extraction gauges replace eight legacy
+    keys, and floor_convention goes with no successor (Q4). Their GitHub rows go at the canary's
+    first projection from main, the ladder closes their open incidents as retired with no notice,
+    and the worker projects the new keys on its first health pass. location_town_coverage keeps
+    its key: the canary's projection leaves its GitHub row be (its retire spares every key still
+    registered), and the worker's re-hosts it and restarts its declared_at."""
+    from scripts import verify_pipeline as vp
+
+    legacy = ("ppm2_median_shift", "ppm2_basis_floor_share", "ppm2_measure_coverage",
+              "area_vs_usable_divergence", "field_fill_matrix", "outbound_url_coverage",
+              "location_payload_shape_drift", "text_extraction_lag", "floor_convention")
+    assert not set(legacy) & set(_keys())
+    then = _NOW - _dt.timedelta(days=30)
+    conn = _HealthChecksConn({key: {"host": "github-actions", "cadence_s": 21_600,
+                                    "declared_at": then}
+                              for key in (*legacy, "location_town_coverage")})
+    assert vp.project_registry(conn, "github-actions", _NOW)["deleted"] == 9
+    assert not set(legacy) & set(conn.table)
+    assert conn.table["location_town_coverage"]["host"] == "github-actions"
+    assert vp.project_registry(conn, "realtime-worker", _NOW) == {
+        "upserted": len(_WORKER_KEYS), "deleted": 0}
+    moved = conn.table["location_town_coverage"]
+    assert (moved["host"], moved["declared_at"]) == ("realtime-worker", _NOW)
+    assert {"parsing", "data_quality", "text_extraction"} <= set(conn.table)
+
+
+def test_wave6_deleted_the_legacy_bodies_their_thresholds_and_shared_state() -> None:
+    """What the nine retired keys took with them (D15): their bodies, the SQL mirror of a
+    portal's payload reader and its remedies (rule 21: portal names in shared code), the
+    plausibility cache (the pass memo replaces it), the registry constants (THRESHOLDS keys now)
+    and every threshold only they read."""
+    from scraper import field_census
+    from scripts import verify_pipeline as vp
+
+    for name in ("check_ppm2_median_shift", "check_ppm2_basis_floor_share",
+                 "check_ppm2_measure_coverage", "check_area_vs_usable_divergence",
+                 "check_field_fill_matrix", "check_outbound_url_coverage",
+                 "check_location_payload_shape_drift", "check_text_extraction_lag",
+                 "check_floor_convention", "SREALITY_SHAPE_CASE_SQL", "_LOCATION_SHAPE_REMEDY",
+                 "_PLAUSIBILITY_CACHE", "REGISTRY_MAX_AGE_DAYS", "REGISTRY_MAX_STAGED_HOURS",
+                 "_FLOOR_CONVENTION_SQL", "_LOCATION_TOWN_COVERAGE_SQL"):
+        assert not hasattr(vp, name), name
+    for name in ("FILL_DROP_WARN_PP", "FILL_DROP_FAIL_PP", "FILL_DROP_MIN_BASELINE",
+                 "FILL_COLLAPSE_RATIO", "FILL_COLLAPSE_MIN_ROWS", "OFF_CANON_RISE_WARN_PP",
+                 "OFF_CANON_RISE_FAIL_PP", "CENSUS_STALE_DAYS"):
+        assert not hasattr(field_census, name), f"{name} is a THRESHOLDS key now"
+    retired = ("text_extraction_lag_", "outbound_url_null_", "ppm2_", "area_divergence_",
+               "estate_sum_", "location_payload_shape_drift_", "floor_convention_")
+    assert not [k for k in THRESHOLDS if k.startswith(retired)]
 
 
 def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
@@ -426,28 +615,22 @@ def test_the_capacity_reference_is_blessed_at_most_90_days_back() -> None:
 
 def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() -> None:
     """Q2 (2026-10-18): these are standing conditions, read as gauges (wave 4's coverage in
-    walk_coverage's place, delist_flip_refused's deferrals now an arm of the delisting alarm);
-    every other key — the quiet regression detectors included — stays an alarm."""
+    walk_coverage's place; wave 6's data_quality, location and description-reading gauges);
+    every other key — parsing, the regression detector, included — stays an alarm."""
     assert {c.key for c in CHECKS if c.cls == "gauge"} == {
-        "location_town_coverage", "coverage", "ppm2_basis_floor_share",
-        "area_vs_usable_divergence", "outbound_url_coverage", "text_extraction_lag",
-        "floor_convention",
-    }
+        "location_town_coverage", "coverage", "data_quality", "text_extraction"}
 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
-    """The worker's checks run every 10 minutes, capacity every 30 and the coverage gauge
-    hourly; on GitHub migration_drift runs hourly, the URL probe weekly, everything else
-    6-hourly."""
+    """The worker's alarms run every 10 minutes, capacity every 30, the coverage and description
+    reading gauges hourly, parsing and the location and data-quality gauges 6-hourly; on GitHub
+    migration_drift runs hourly and the URL probe weekly."""
     assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
-        "jobs": 600, "capacity": 1_800, "llm": 600, "scraping": 600, "publishing": 600,
-        "delisting": 600, "coverage": 3_600, "dedup": 600}
-    github = set(_hosted("github-actions"))
-    hourly = {k for k in github if _by_key(k).cadence_s == 3_600}
-    assert hourly == {"migration_drift"}
-    assert _by_key("outbound_url_conformance").cadence_s == 604_800
-    rest = github - hourly - {"outbound_url_conformance"}
-    assert {_by_key(k).cadence_s for k in rest} == {21_600}
+        "location_town_coverage": 21_600, "jobs": 600, "capacity": 1_800, "llm": 600,
+        "scraping": 600, "publishing": 600, "delisting": 600, "coverage": 3_600, "dedup": 600,
+        "parsing": 21_600, "data_quality": 21_600, "text_extraction": 3_600}
+    assert {k: _by_key(k).cadence_s for k in _GITHUB_KEYS} == {
+        "migration_drift": 3_600, "outbound_url_conformance": 604_800}
 
 
 def test_staleness_budget_is_three_cadences_or_the_cadence_plus_githubs_delay() -> None:
@@ -518,15 +701,9 @@ def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
 
     conn = _DueConn({
         "migration_drift": ago(minutes=61),   # hourly, over a cadence old: due
-        "field_fill_matrix": ago(hours=5),    # 6-hourly: not due
-        "floor_convention": ago(hours=7),     # 6-hourly: due
         "outbound_url_conformance": ago(days=6),  # weekly: not due
     })
-    due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
-    assert "field_fill_matrix" not in due and "outbound_url_conformance" not in due
-    assert "migration_drift" in due and "floor_convention" in due
-    assert due == [k for k in _keys() if k in due], "registry order is the run order"
-    assert len(due) == len(_hosted("github-actions")) - 2
+    assert [c.key for c in due_checks(conn, "github-actions", _NOW)] == ["migration_drift"]
     (sql, params), = conn.executed  # one round trip for the whole host
     assert "max(r.run_at)" in sql and "unnest(%(keys)s::text[])" in sql
     assert params["keys"] == _hosted("github-actions")
@@ -534,10 +711,14 @@ def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
         "capacity": ago(minutes=20),  # 30-minute: not due
         "scraping": ago(minutes=11),  # 10-minute: due
         "coverage": ago(minutes=30),  # hourly, half a cadence old: not due
+        "parsing": ago(hours=5),      # 6-hourly: not due
+        "data_quality": ago(hours=7),  # 6-hourly: due
     })
     due = [c.key for c in due_checks(worker, "realtime-worker", _NOW)]
-    assert "capacity" not in due and "coverage" not in due and "scraping" in due
-    assert len(due) == len(_hosted("realtime-worker")) - 2
+    assert not {"capacity", "coverage", "parsing"} & set(due)
+    assert {"scraping", "data_quality"} <= set(due)
+    assert due == [k for k in _keys() if k in due], "registry order is the run order"
+    assert len(due) == len(_hosted("realtime-worker")) - 3
 
 
 def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measures_it() -> None:
@@ -548,21 +729,22 @@ def test_a_check_is_due_a_slack_before_its_cadence_so_an_early_run_still_measure
 
     def due(key: str, **age: float) -> bool:
         conn = _DueConn({key: _NOW - _dt.timedelta(**age)})
-        return key in [c.key for c in due_checks(conn, "github-actions", _NOW)]
+        host = _by_key(key).host
+        return key in [c.key for c in due_checks(conn, host, _NOW)]
 
     assert due("migration_drift", minutes=59)
     assert due("migration_drift", minutes=54)   # 60 min less the 6-min slack, inclusive
     assert not due("migration_drift", minutes=50)
-    assert due("field_fill_matrix", hours=5, minutes=45)
-    assert not due("field_fill_matrix", hours=5, minutes=44)
+    assert due("parsing", hours=5, minutes=45)
+    assert not due("parsing", hours=5, minutes=44)
     assert due("outbound_url_conformance", days=7, minutes=-10)
     assert not due("outbound_url_conformance", days=7, minutes=-16)
     assert {c.cadence_s - c.due_after_s for c in CHECKS if c.host == "github-actions"} \
         == {360, 900}
     # The worker's 60 s tick: a 10-minute check is due after 9 minutes, a 30-minute one 27,
-    # the hourly gauge 54.
+    # the hourly gauges 54, the 6-hourly checks 5 h 45 min.
     assert {c.cadence_s - c.due_after_s for c in CHECKS if c.host == "realtime-worker"} \
-        == {60, 180, 360}
+        == {60, 180, 360, 900}
 
 
 def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
@@ -573,14 +755,17 @@ def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
 
     registered = _NOW - _dt.timedelta(minutes=1)  # project_registry runs first in main()
     conn = _DueConn({"outbound_url_conformance": _NOW - _dt.timedelta(days=2),
-                     "field_fill_matrix": _NOW - _dt.timedelta(hours=3),
                      "migration_drift": _NOW - _dt.timedelta(seconds=30)},
-                    declared=dict.fromkeys(
-                        ("outbound_url_conformance", "field_fill_matrix", "migration_drift"),
-                        registered))
+                    declared=dict.fromkeys(("outbound_url_conformance", "migration_drift"),
+                                           registered))
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
-    assert "outbound_url_conformance" in due and "field_fill_matrix" in due
+    assert "outbound_url_conformance" in due
     assert "migration_drift" not in due, "a row written since the registration still counts"
+    # Wave 6's host move restarts location_town_coverage's declared_at: the worker measures it
+    # in the pass that re-hosts it, its GitHub rows notwithstanding.
+    moved = _DueConn({"location_town_coverage": _NOW - _dt.timedelta(hours=1)},
+                     declared={"location_town_coverage": registered})
+    assert "location_town_coverage" in [c.key for c in due_checks(moved, "realtime-worker", _NOW)]
     (sql, _params), = conn.executed
     assert "left join health_checks h on h.key = k.key" in " ".join(sql.split())
 
@@ -684,18 +869,22 @@ def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> No
 
     then = _NOW - _dt.timedelta(days=3)
     conn = _HealthChecksConn({
-        "outbound_url_coverage": {"host": "github-actions", "cadence_s": 21_600,
-                                  "declared_at": then},
+        # wave 6 moved the URL probe's page section (its domain), not its host or cadence
+        "outbound_url_conformance": {"host": "github-actions", "cadence_s": 604_800,
+                                     "declared_at": then},
         # wave 3 moved migration_drift from 6-hourly to hourly
         "migration_drift": {"host": "github-actions", "cadence_s": 21_600, "declared_at": then},
-        "floor_convention": {"host": "realtime-worker", "cadence_s": 21_600,
-                             "declared_at": then},
+        # wave 6 moved location_town_coverage from GitHub to the worker
+        "location_town_coverage": {"host": "github-actions", "cadence_s": 21_600,
+                                   "declared_at": then},
     })
     project_registry(conn, "github-actions", _NOW)
-    assert conn.table["outbound_url_coverage"]["declared_at"] == then     # unchanged: kept
+    assert conn.table["outbound_url_conformance"]["declared_at"] == then  # unchanged: kept
+    assert conn.table["outbound_url_conformance"]["domain"] == "data_quality"
     assert conn.table["migration_drift"]["declared_at"] == _NOW           # cadence moved
-    assert conn.table["floor_convention"]["declared_at"] == _NOW          # host moved
-    assert conn.table["floor_convention"]["host"] == "github-actions"
+    project_registry(conn, "realtime-worker", _NOW)
+    assert conn.table["location_town_coverage"]["declared_at"] == _NOW    # host moved
+    assert conn.table["location_town_coverage"]["host"] == "realtime-worker"
     project_registry(conn, "github-actions", _NOW + _dt.timedelta(hours=1))
     assert conn.table["migration_drift"]["declared_at"] == _NOW, "a re-projection is a no-op"
 
@@ -854,7 +1043,7 @@ def _logging_check(key: str, log: list[str], *, cls: str = "alarm",
     """A stub check that notes when it runs."""
     def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
         log.append(f"run:{key}")
-        return {"check_key": key, "status": "ok", "value": 0, "details": {}}
+        return _verdict(key)
 
     return _stub(key, _fn, cls=cls, host=host)
 
@@ -864,7 +1053,7 @@ def test_the_harness_projects_only_hosts_that_declare_a_check(monkeypatch: Any) 
     retire it, and the ladder would silently close every open liveness incident as retired."""
     from scripts import verify_pipeline as vp
 
-    assert vp._HARNESS_HOSTS == ("github-actions", "realtime-worker")
+    assert sorted(vp._HARNESS_HOSTS) == ["github-actions", "realtime-worker"]
     with pytest.raises(ValueError, match="pg_cron"):
         vp.project_registry(object(), "pg_cron", _NOW)
     # main() is GitHub's runner only: the worker's health lane calls run_due itself.
@@ -905,22 +1094,124 @@ def test_run_due_hands_each_result_on_the_moment_it_completes(monkeypatch: Any) 
 
 
 def test_run_due_caps_the_pass_at_the_lane_budget_it_is_given(monkeypatch: Any) -> None:
-    """The worker's health lane runs it under a 360 s pass (300 s in wave 3); by default the due budgets sum."""
+    """The worker's health lane runs it under a 500 s pass (360 s in waves 4-5, 300 s in wave 3),
+    deferring what no longer fits; by default (the canary) the due budgets sum, deferring none."""
     import scripts.verify_pipeline as vp
 
     log: list[str] = []
     monkeypatch.setattr(vp, "CHECKS", (_logging_check("a", log), _logging_check("b", log)))
-    seen: list[float] = []
+    seen: list[tuple[float, bool]] = []
     real = vp.run_checks
 
     def _spy(conn: Any, thresholds: Any, **kw: Any) -> Any:
-        seen.append(kw["lane_budget_s"])
+        seen.append((kw["lane_budget_s"], kw["defer_unfit"]))
         return real(conn, thresholds, **kw)
 
     monkeypatch.setattr(vp, "run_checks", _spy)
     vp.run_due(_ResultsConn(), {}, "github-actions", now=_NOW)
     vp.run_due(_ResultsConn(), {}, "github-actions", now=_NOW, lane_budget_s=10.0)
-    assert seen == [2 * vp._CHECK_BUDGET_S, 10.0]
+    assert seen == [(2 * clock.CHECK_BUDGET_S, False), (10.0, True)]
+
+
+def test_a_capped_pass_runs_every_alarm_then_defers_the_gauge_that_no_longer_fits(
+    monkeypatch: Any,
+) -> None:
+    """Alarms first, so the pass's cap is spent on what a red means; the gauge the rest cannot
+    hold writes nothing, stays due and runs on the next pass instead of reading Not measured
+    for a whole cadence."""
+    import scripts.verify_pipeline as vp
+
+    clock_ = _on_the_clock(monkeypatch)
+    log: list[str] = []
+
+    def _takes(key: str, cls: str) -> Check:
+        def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+            log.append(f"run:{key}")
+            clock_.now += 1.5
+            return _verdict(key)
+        return _stub(key, _fn, budget_s=2.0, cls=cls, host="realtime-worker", cadence_s=21_600)
+
+    monkeypatch.setattr(vp, "CHECKS", (_takes("gauge_a", "gauge"), _takes("alarm_a", "alarm"),
+                                       _takes("gauge_b", "gauge"), _takes("alarm_b", "alarm")))
+    conn = _ResultsConn()
+    first = vp.run_due(conn, {}, "realtime-worker", now=_NOW, lane_budget_s=5.0)
+    assert [r["check_key"] for r in first] == ["alarm_a", "alarm_b", "gauge_a"]
+    later = _NOW + _dt.timedelta(minutes=1)
+    assert [c.key for c in vp.due_checks(conn, "realtime-worker", later)] == ["gauge_b"]
+    second = vp.run_due(conn, {}, "realtime-worker", now=later, lane_budget_s=5.0)
+    assert [r["check_key"] for r in second] == ["gauge_b"]
+    assert log == ["run:alarm_a", "run:alarm_b", "run:gauge_a", "run:gauge_b"]
+
+
+# The worker lane's pass: scraper.realtime_worker.HEALTH_PASS_BUDGET_SECONDS, pinned in its test.
+_WORKER_PASS_S = 500.0
+
+
+@pytest.mark.parametrize("key", ["capacity", "coverage", "text_extraction", "parsing"])
+def test_a_check_due_alone_runs_on_the_workers_capped_pass(monkeypatch: Any, caplog: Any,
+                                                           key: str) -> None:
+    """The capped pass sizes its lane to the due budgets, so a check due alone gets a lane of its
+    own budget (45 s for the capacity alarm and the two hourly gauges, 180 s for parsing). The
+    lane's clock has moved by the time the check is weighed, and wave 6's first build deferred
+    it on every tick until another check fell due with it. It runs, and nothing is deferred."""
+    import dataclasses
+    import logging
+
+    import scripts.verify_pipeline as vp
+
+    _on_the_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="verify_pipeline")
+    registered = _by_key(key)
+    monkeypatch.setattr(vp, "CHECKS", (
+        dataclasses.replace(registered, fn=lambda c, t: _verdict(key)),))
+    lanes: list[float] = []
+    real = vp.run_checks
+
+    def _spy(conn: Any, thresholds: Any, **kw: Any) -> Any:
+        lanes.append(kw["lane_budget_s"])
+        return real(conn, thresholds, **kw)
+
+    monkeypatch.setattr(vp, "run_checks", _spy)
+    conn = _ResultsConn()
+    out = vp.run_due(conn, {}, "realtime-worker", now=_NOW, lane_budget_s=_WORKER_PASS_S)
+    assert lanes == [registered.budget_s], "the lane is the lone check's own budget"
+    assert [r["check_key"] for r in out] == [k for k, _ in conn.rows] == [key]
+    assert "DEFER" not in caplog.text
+
+
+def test_a_check_the_pass_cannot_fit_is_deferred_then_measured_alone_on_the_next_pass(
+    monkeypatch: Any, caplog: Any,
+) -> None:
+    """Two 45 s alarms due on a 60 s pass: the first spends 30 s, so the second's 45 s does not
+    fit the 30 s left, slack included. It is deferred with its log line and stores nothing, so
+    it stays due; alone on the next pass a minute later its lane is its own 45 s, and it runs."""
+    import logging
+
+    import scripts.verify_pipeline as vp
+
+    clock_ = _on_the_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="verify_pipeline")
+    log: list[str] = []
+
+    def _takes(key: str, seconds: float) -> Check:
+        def _fn(conn: Any, thresholds: Any) -> dict[str, Any]:
+            log.append(f"run:{key}")
+            clock_.now += seconds
+            return _verdict(key)
+        return _stub(key, _fn, host="realtime-worker", cadence_s=600)
+
+    monkeypatch.setattr(vp, "CHECKS", (_takes("first", 30.0), _takes("second", 1.0)))
+    conn = _ResultsConn()
+    first = vp.run_due(conn, {}, "realtime-worker", now=_NOW, lane_budget_s=60.0)
+    assert [r["check_key"] for r in first] == [k for k, _ in conn.rows] == ["first"]
+    assert ("DEFER second: its 45s budget does not fit the 30s the pass has left; due next pass"
+            in caplog.text)
+    later = _NOW + _dt.timedelta(minutes=1)
+    assert [c.key for c in vp.due_checks(conn, "realtime-worker", later)] == ["second"]
+    second = vp.run_due(conn, {}, "realtime-worker", now=later, lane_budget_s=60.0)
+    assert [r["check_key"] for r in second] == ["second"]
+    assert [k for k, _ in conn.rows] == ["first", "second"]
+    assert log == ["run:first", "run:second"]
 
 
 def test_a_restarted_lane_measures_nothing_twice(monkeypatch: Any) -> None:
@@ -947,7 +1238,7 @@ def test_a_check_the_budget_did_not_reach_is_due_on_the_next_run(monkeypatch: An
 
     def _overruns(conn: Any, thresholds: Any) -> dict[str, Any]:
         clock.now += 100.0  # past the whole pass budget, outside any statement
-        return {"check_key": "slow", "status": "ok", "value": 0, "details": {}}
+        return _verdict("slow")
 
     monkeypatch.setattr(vp, "CHECKS", (_stub("slow", _overruns), _logging_check("late", log)))
     conn = _ResultsConn()
@@ -1002,8 +1293,11 @@ def _run_main(monkeypatch: Any, argv: list[str], due: list[Check], *,
 
 
 def _returning(key: str, status: str, *, cls: str = "alarm") -> Check:
-    return _stub(key, lambda c, t: {"check_key": key, "status": status, "value": 1,
-                                    "details": {}, "message": f"{key} {status}"}, cls=cls)
+    if status == "unknown":
+        return _stub(key, lambda c, t: {"check_key": key, "status": status, "value": None,
+                                        "details": {"cells": [], "skipped": "nothing"},
+                                        "message": f"{key} {status}"}, cls=cls)
+    return _stub(key, lambda c, t: _verdict(key, status, 1, message=f"{key} {status}"), cls=cls)
 
 
 def test_main_projects_the_registry_then_measures_and_stores_the_due_checks(
@@ -1018,7 +1312,7 @@ def test_main_projects_the_registry_then_measures_and_stores_the_due_checks(
 
     def _reads(conn: Any, thresholds: Any) -> dict[str, Any]:
         handed.append(thresholds)
-        return {"check_key": "t", "status": "ok", "value": 1, "details": {}}
+        return _verdict("t", value=1)
 
     code, seen = _run_main(monkeypatch, [], [_returning("a", "ok"), _returning("b", "warn"),
                                              _stub("t", _reads)])
@@ -1062,619 +1356,6 @@ def test_no_measured_status_reds_the_run(monkeypatch: Any) -> None:
         _run_main(monkeypatch, ["--exit-nonzero-on-fail"], [_returning("a", "fail")])
 
 
-# --- per-m2 measure plausibility (W9) --------------------------------------
-#
-# Every cell below is a LIVE measurement of production taken 2026-08-25, before the
-# W2 backfill healed either defect. The point of the wave is that the existing health
-# surfaces are structurally blind to both — data_quality_by_source tests 29 fields for
-# IS NOT NULL and both defects produce 100% non-NULL values — so these tests pin that
-# the new checks see what the null-checks cannot, and equally that they stay quiet on
-# the eight portals that were fine all along.
-
-
-_MEASURE_CHECK_KEYS = {
-    "ppm2_median_shift", "ppm2_basis_floor_share", "area_vs_usable_divergence",
-    "ppm2_measure_coverage",
-}
-
-
-def _cell(
-    source: str, cat: str | None, typ: str | None, **kw: Any
-) -> dict[str, Any]:
-    base: dict[str, Any] = {
-        "source": source, "category_main": cat, "category_type": typ,
-        "price_per_m2_basis": None, "n_active": 1000.0,
-        "median_area_m2": None, "median_usable_area": None, "median_price_per_m2": None,
-        "n_floor_eligible": None, "floor_null_share": None,
-        "n_floor_eligible_7d": None, "floor_null_share_7d": None,
-        "n_area_pairs": None, "area_divergence_share": None,
-        "n_area_pairs_7d": None, "area_divergence_share_7d": None,
-        # Coverage + median SUPPORT. The defaults describe a cell whose measure
-        # resolves everywhere, so a test that says nothing about coverage keeps
-        # scoring the axis it is actually about.
-        "n_area_valued": 1000.0, "n_ppm2_valued": 1000.0, "n_active_7d": 200.0,
-        "measure_input_gap_share": 0.0, "measure_input_gap_share_7d": 0.0,
-        # W21's derived-sum arm. The default is a cell with no three-area rows, so a
-        # test that says nothing about it leaves that arm unscored rather than clean.
-        "n_estate_triples": 0.0, "estate_sum_share": None,
-    }
-    base.update(kw)
-    return base
-
-
-class _PlausibilityConn:
-    """Serves measure_plausibility_by_source rows + the week-old baseline row."""
-
-    def __init__(
-        self, cells: list[dict[str, Any]],
-        baseline: dict[str, Any] | None = None,
-        history_days: float | None = None,
-    ) -> None:
-        self._cells, self._baseline, self._history = cells, baseline, history_days
-        self.executed: list[str] = []
-        self._rows: list[tuple[Any, ...]] = []
-        self._one: tuple[Any, ...] | None = None
-
-    def cursor(self) -> "_PlausibilityConn":
-        return self
-
-    def transaction(self) -> "_PlausibilityConn":
-        return self
-
-    def __enter__(self) -> "_PlausibilityConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        if sql.startswith("SET LOCAL"):
-            return
-        self.executed.append(sql)
-        if "measure_plausibility_by_source" in sql:
-            from scripts.verify_pipeline import _PLAUSIBILITY_COLS
-
-            self._rows = [tuple(c[k] for k in _PLAUSIBILITY_COLS) for c in self._cells]
-        elif "baseline_cells" in sql:
-            self._one = (self._baseline, self._history)
-
-    def fetchall(self) -> Any:
-        return self._rows
-
-    def fetchone(self) -> Any:
-        return self._one
-
-
-def _fresh(conn: "_PlausibilityConn") -> "_PlausibilityConn":
-    """The per-run cache is cleared by run_checks; a direct check call must clear it too."""
-    import scripts.verify_pipeline as vp
-
-    vp._PLAUSIBILITY_CACHE.clear()
-    return conn
-
-
-# Live 2026-08-25, dum/prodej, every portal that populates both area fields. mmreality
-# wrote the PLOT into the floor-area column: median area_m2 905.0 against median
-# usable_area 130.0 on the same 3 588 rows.
-_LIVE_DUM_CELLS = [
-    _cell("mmreality", "dum", "prodej", n_active=3601.0, median_area_m2=905.0,
-          median_usable_area=130.0, median_price_per_m2=5701.0,
-          n_area_pairs=3588.0, area_divergence_share=0.9967,
-          n_area_pairs_7d=113.0, area_divergence_share_7d=1.0),
-    _cell("sreality", "dum", "prodej", n_active=20152.0, median_area_m2=150.0,
-          median_usable_area=150.0, median_price_per_m2=45990.0,
-          n_area_pairs=19082.0, area_divergence_share=0.0,
-          n_area_pairs_7d=420.0, area_divergence_share_7d=0.0),
-    _cell("idnes", "dum", "prodej", n_active=28757.0, median_area_m2=163.0,
-          median_usable_area=163.0, n_area_pairs=28757.0, area_divergence_share=0.0,
-          n_area_pairs_7d=610.0, area_divergence_share_7d=0.0),
-    # bazos populates usable_area on 0 of 10 409 rows — nothing to compare, so it must
-    # be SILENT, not 100% divergent. `area_m2 IS DISTINCT FROM usable_area` taken
-    # literally (the charter's wording) would have scored it 100% and fired on it.
-    _cell("bazos", "dum", "prodej", n_active=10409.0, median_area_m2=165.0,
-          median_usable_area=None, n_area_pairs=0.0, area_divergence_share=None,
-          n_area_pairs_7d=0.0, area_divergence_share_7d=None),
-]
-
-
-# A cell that IS scored and IS clean, on every axis. Several tests below assert that
-# some other cell is skipped; without a scored companion in the corpus the check would
-# (correctly) report that it verified nothing, and the assertion would pass for the
-# wrong reason.
-def _clean_scored(source: str = "sreality") -> dict[str, Any]:
-    return _cell(source, "byt", "prodej", n_active=40000.0, median_area_m2=68.0,
-                 median_usable_area=68.0, median_price_per_m2=95000.0,
-                 n_floor_eligible=38000.0, floor_null_share=0.0,
-                 n_floor_eligible_7d=900.0, floor_null_share_7d=0.0,
-                 n_area_pairs=38000.0, area_divergence_share=0.0,
-                 n_area_pairs_7d=900.0, area_divergence_share_7d=0.0,
-                 n_area_valued=39000.0, n_ppm2_valued=38000.0, n_active_7d=900.0)
-
-
-def _divergence(cells: list[dict[str, Any]]) -> dict[str, Any]:
-    from scripts.verify_pipeline import check_area_vs_usable_divergence
-
-    return check_area_vs_usable_divergence(_fresh(_PlausibilityConn(cells)), T)
-
-
-def test_area_divergence_catches_the_mmreality_plot_area_defect() -> None:
-    res = _divergence(_LIVE_DUM_CELLS)
-    assert res["status"] == "fail"
-    assert res["value"] == 100.0  # the 7d arm: 113 of 113 pairs
-    # Arm 1 decided the status, so arm 1's number is the headline.
-    assert res["details"]["value_arm"] == "area_vs_usable"
-    named = " ".join(res["details"]["offenders"])
-    assert "mmreality/dum/prodej" in named
-    for clean in ("sreality", "idnes", "bazos"):
-        assert clean not in named
-
-
-def test_the_derived_sum_arm_catches_a_side_column_that_is_not_a_measurement() -> None:
-    """W21. mmreality's parser read the page's `totalArea` as the parcel for years, and
-    `totalArea` is `parcelArea + usableArea` — a SUM the page computes. The headline was
-    already the interior, so arm 1 saw nothing; the column was populated, so the
-    null-check saw nothing; and the plot came out 44-50% too large. This arm states the
-    invariant instead of the portal."""
-    cells = [
-        _cell("mmreality", "dum", "prodej", n_active=2693.0,
-              n_area_pairs=2638.0, area_divergence_share=0.0,
-              n_area_pairs_7d=150.0, area_divergence_share_7d=0.0,
-              n_estate_triples=1123.0, estate_sum_share=0.62),
-        _clean_scored(),
-    ]
-    res = _divergence(cells)
-    assert res["status"] == "fail"
-    named = " ".join(res["details"]["estate_sum_offenders"])
-    assert "mmreality/dum/prodej" in named and "sreality" not in named
-    # The tile reports THE FAILING ARM. Arm 1 is clean here, so a `value` of 0.0
-    # beside a `fail` status would be a check contradicting itself — and the two
-    # numbers are not the same scale of evidence, so they are never merged either.
-    assert res["message"].startswith("1 portal/category cell(s) carry a DERIVED SUM")
-    assert res["value"] == 62.0
-    assert res["details"]["value_arm"] == "estate_sum"
-    assert res["details"]["estate_sum_worst_share"] == 0.62
-    assert res["details"]["worst_share"] == 0.0        # arm 1, still published
-
-
-def test_the_derived_sum_arm_tolerates_the_live_coincidence_rate() -> None:
-    """Live 2026-09-17 the relation is a WEAK fingerprint: mmreality dum/prodej is the
-    worst SCORED cell at 2.6% of 1 123 triples and no other cell exceeds 1.4%, because
-    the sum only coincides where a parcel happens to equal its interior. Amber must not
-    fire on that, or the operator learns to dismiss the tile."""
-    res = _divergence([
-        _cell("mmreality", "dum", "prodej", n_estate_triples=1123.0,
-              estate_sum_share=0.0258,
-              n_area_pairs=2638.0, area_divergence_share=0.0,
-              n_area_pairs_7d=150.0, area_divergence_share_7d=0.0),
-        _clean_scored(),
-    ])
-    assert res["status"] == "ok" and res["details"]["estate_sum_offenders"] == []
-
-
-def test_the_derived_sum_arm_skips_a_cell_below_the_row_floor() -> None:
-    """mmreality dum/pronajem reads 5.5% live — over the warn tier, on 55 rows. A
-    55-row share is noise; scoring it would amber a healthy portal for ever."""
-    res = _divergence([
-        _cell("mmreality", "dum", "pronajem", n_estate_triples=55.0,
-              estate_sum_share=0.0545),
-        _clean_scored(),
-    ])
-    assert res["status"] == "ok"
-    assert res["details"]["estate_sum_arms_scored"] == 0
-
-
-def test_area_divergence_is_silent_on_a_portal_publishing_only_one_area() -> None:
-    """bazos: no pairs at all must never read 'divergent on 100%'. It is skipped, and
-    the check still certifies the cells it CAN score."""
-    res = _divergence(
-        [c for c in _LIVE_DUM_CELLS if c["source"] == "bazos"] + [_clean_scored()])
-    assert res["status"] == "ok" and res["details"]["offenders"] == []
-    assert res["details"]["arms_scored"] == 2  # the companion's two arms, not bazos
-
-
-def test_area_divergence_tolerates_the_realitymix_field_convention() -> None:
-    """Live: realitymix byt diverges on 10.5% of pairs (16.5% over the trailing week)
-    at a MEDIAN relative difference of 9.6% — a balcony/rounding convention, not a
-    different physical quantity, and decaying legacy stock post-W1. Amber it and the
-    operator learns to dismiss the axis that has to catch the next mmreality."""
-    res = _divergence([
-        _cell("realitymix", "byt", "prodej", n_active=11000.0,
-              n_area_pairs=8708.0, area_divergence_share=0.105,
-              n_area_pairs_7d=237.0, area_divergence_share_7d=0.165),
-    ])
-    assert res["status"] == "ok"
-
-
-def test_area_divergence_skips_land_where_the_areas_are_meant_to_differ() -> None:
-    """Option A: area_m2 IS the plot for pozemek, so divergence from usable_area is
-    the correct answer there. Scoring it would red the check on healthy data forever."""
-    res = _divergence([
-        _cell("sreality", "pozemek", "prodej", n_active=9000.0,
-              n_area_pairs=4000.0, area_divergence_share=1.0,
-              n_area_pairs_7d=300.0, area_divergence_share_7d=1.0),
-        _clean_scored("idnes"),
-    ])
-    assert res["status"] == "ok" and res["details"]["offenders"] == []
-
-
-def test_area_divergence_ignores_cells_below_the_row_floor() -> None:
-    res = _divergence([
-        _cell("maxima", "dum", "prodej", n_active=83.0,
-              n_area_pairs=40.0, area_divergence_share=1.0),
-        _clean_scored(),
-    ])
-    assert res["status"] == "ok" and res["details"]["offenders"] == []
-
-
-# Live 2026-08-25: the unit-price masquerade. A per-m2 UNIT price written into
-# price_czk (136 Kc for a commercial rental) is 100% non-NULL and correctly typed —
-# only the per-basis floor inside measure_price_per_m2 rejects it.
-_LIVE_FLOOR_CELLS = [
-    _cell("ceskereality", "komercni", "pronajem", n_active=8852.0,
-          n_floor_eligible=5656.0, floor_null_share=0.2003,
-          n_floor_eligible_7d=169.0, floor_null_share_7d=0.112),
-    _cell("realitymix", "komercni", "pronajem", n_active=6838.0,
-          n_floor_eligible=4500.0, floor_null_share=0.1896,
-          n_floor_eligible_7d=85.0, floor_null_share_7d=0.094),
-    _cell("realitymix", "pozemek", "pronajem", n_active=246.0,
-          n_floor_eligible=115.0, floor_null_share=0.1565),
-    _cell("remax", "komercni", "pronajem", n_active=593.0,
-          n_floor_eligible=275.0, floor_null_share=0.1127),
-    _cell("bazos", "komercni", "pronajem", n_active=3912.0,
-          n_floor_eligible=2689.0, floor_null_share=0.0666,
-          n_floor_eligible_7d=436.0, floor_null_share_7d=0.067),
-    # The two portals that already carry a per-area price guard, same cell.
-    _cell("idnes", "komercni", "pronajem", n_active=11041.0,
-          n_floor_eligible=8444.0, floor_null_share=0.0054),
-    _cell("sreality", "komercni", "pronajem", n_active=13984.0,
-          n_floor_eligible=9529.0, floor_null_share=0.0049),
-]
-
-
-def _floor(cells: list[dict[str, Any]]) -> dict[str, Any]:
-    from scripts.verify_pipeline import check_ppm2_basis_floor_share
-
-    return check_ppm2_basis_floor_share(_fresh(_PlausibilityConn(cells)), T)
-
-
-def test_basis_floor_share_catches_the_unit_price_masquerade() -> None:
-    res = _floor(_LIVE_FLOOR_CELLS)
-    assert res["status"] == "fail"
-    assert res["value"] == 20.03
-    named = " ".join(res["details"]["offenders"])
-    for guilty in ("ceskereality/komercni/pronajem", "realitymix/komercni/pronajem",
-                   "realitymix/pozemek/pronajem", "remax/komercni/pronajem",
-                   "bazos/komercni/pronajem"):
-        assert guilty in named
-    # ...and the two portals with a working guard are not accused, in the same cell.
-    assert "idnes" not in named and "sreality" not in named
-
-
-def test_basis_floor_share_pozemek_is_scored_unlike_the_divergence_check() -> None:
-    """Land is exempt from the AREA check (area_m2 is the plot by design) but not from
-    the PRICE floor — realitymix pozemek/pronajem loses 15.7% of its prices and that is
-    a defect on any basis."""
-    res = _floor([c for c in _LIVE_FLOOR_CELLS if c["category_main"] == "pozemek"])
-    assert res["status"] == "fail"
-
-
-def test_basis_floor_share_fresh_arm_fires_before_the_stock_arm_can() -> None:
-    """A regression shipped this week is ~100% of what arrived since, but only churn-
-    fraction of the stock. Without the 7d arm, detection latency is weeks."""
-    res = _floor([
-        _cell("maxima", "komercni", "pronajem", n_active=5000.0,
-              n_floor_eligible=4000.0, floor_null_share=0.004,
-              n_floor_eligible_7d=300.0, floor_null_share_7d=0.98),
-    ])
-    assert res["status"] == "fail"
-    assert "first seen in 7d" in " ".join(res["details"]["offenders"])
-
-
-def _shift(
-    cells: list[dict[str, Any]], baseline: dict[str, Any] | None,
-    history_days: float | None = 30.0,
-) -> dict[str, Any]:
-    from scripts.verify_pipeline import check_ppm2_median_shift
-
-    return check_ppm2_median_shift(
-        _fresh(_PlausibilityConn(cells, baseline, history_days)), T)
-
-
-def test_median_shift_fires_when_the_w2_backfill_heals_mmreality() -> None:
-    """The mmreality defect predates any baseline, so this axis cannot indict it —
-    area_vs_usable_divergence does that. What it MUST do is notice the correction:
-    905.0 -> 130.0 is 6.96x and 5 701 -> 42 500 is 7.45x, both far above the 3.0x fail
-    ratio. A heal this size passing silently would prove the axis inert."""
-    res = _shift(
-        [_cell("mmreality", "dum", "prodej", n_active=3601.0,
-               median_area_m2=130.0, median_price_per_m2=42500.0)],
-        {"mmreality/dum/prodej": {"n": 3588, "area": 905.0, "ppm2": 5701.0,
-                                  "n_area": 3588, "n_ppm2": 3400}},
-    )
-    assert res["status"] == "fail"
-    assert res["value"] == 7.455
-    named = " ".join(res["details"]["offenders"])
-    assert "median area_m2" in named and "median Kc/m2" in named
-
-
-def test_median_shift_tolerates_the_noisiest_real_weekly_move() -> None:
-    """Measured live across 21 cells with >= 200 new listings in both of two
-    consecutive weeks — the new-arrival cohort, which swings far harder than the stock
-    medians this check actually compares: worst 1.47x on area, 1.90x on Kc/m2."""
-    res = _shift(
-        [_cell("sreality", "byt", "prodej", n_active=40000.0,
-               median_area_m2=147.0, median_price_per_m2=95000.0)],
-        {"sreality/byt/prodej": {"n": 39000, "area": 100.0, "ppm2": 50000.0,
-                                 "n_area": 39000, "n_ppm2": 38000}},
-    )
-    assert res["status"] == "ok"
-
-
-def test_median_shift_no_baseline_is_ok_while_young_and_warn_once_stale() -> None:
-    """A missing baseline in the first week after deploy is the expected state and the
-    operator can do nothing about it. Two weeks of history with still no baseline means
-    the check has been erroring or not running — that must not read as green."""
-    cells = [_cell("sreality", "byt", "prodej", n_active=40000.0,
-                   median_area_m2=100.0, median_price_per_m2=50000.0)]
-    assert _shift(cells, None, history_days=3.0)["status"] == "ok"
-    assert _shift(cells, None, history_days=None)["status"] == "ok"
-    assert _shift(cells, None, history_days=20.0)["status"] == "warn"
-
-
-def test_median_shift_skips_a_median_without_enough_support_in_either_week() -> None:
-    """The gate is the number of rows CARRYING the median, in both weeks."""
-    small_now = _shift(
-        [_cell("maxima", "dum", "prodej", n_active=4000.0, n_area_valued=83.0,
-               n_ppm2_valued=83.0, median_area_m2=900.0, median_price_per_m2=5000.0)],
-        {"maxima/dum/prodej": {"n": 4000, "area": 150.0, "ppm2": 45000.0,
-                               "n_area": 4000, "n_ppm2": 4000}},
-    )
-    small_then = _shift(
-        [_cell("maxima", "dum", "prodej", n_active=4000.0, n_area_valued=4000.0,
-               n_ppm2_valued=4000.0, median_area_m2=900.0, median_price_per_m2=5000.0)],
-        {"maxima/dum/prodej": {"n": 4000, "area": 150.0, "ppm2": 45000.0,
-                               "n_area": 83, "n_ppm2": 83}},
-    )
-    for res in (small_now, small_then):
-        assert res["details"]["medians_compared"] == 0
-        assert res["details"]["offenders"] == []
-
-
-def test_median_shift_gates_on_median_support_not_on_cell_size() -> None:
-    """Live: bezrealitky pozemek/prodej is 1 643 active rows of which NINE carry an
-    area_m2, so both medians rest on 9 values whose Kc/m2 spread is 17.6x. Gating on
-    n_active passes it and two ordinary delistings then move the median past the 3.0x
-    fail — a red tile plus a bell ring, on no defect at all, over and over as it
-    oscillates. The comparison must not happen."""
-    cell = _cell("bezrealitky", "pozemek", "prodej", n_active=1643.0,
-                 n_area_valued=9.0, n_ppm2_valued=9.0,
-                 median_area_m2=6471.0, median_price_per_m2=17573.27)
-    res = _shift(
-        [cell],
-        {"bezrealitky/pozemek/prodej": {"n": 1648, "area": 370.0, "ppm2": 3224.52,
-                                        "n_area": 9, "n_ppm2": 9}},
-    )
-    assert res["details"]["medians_compared"] == 0
-    assert res["status"] == "warn" and res["value"] is None
-    assert "compared NOTHING" in res["message"]
-    # ...and the same cell WITH real support is compared and indicted.
-    supported = dict(cell, n_area_valued=900.0, n_ppm2_valued=900.0)
-    res2 = _shift(
-        [supported],
-        {"bezrealitky/pozemek/prodej": {"n": 1648, "area": 370.0, "ppm2": 3224.52,
-                                        "n_area": 900, "n_ppm2": 900}},
-    )
-    assert res2["status"] == "fail" and res2["details"]["medians_compared"] == 2
-
-
-def test_median_shift_baseline_round_trips_through_its_own_details() -> None:
-    """The baseline is this check's own result row from a week ago — no new table. If
-    the snapshot's keys and the reader's cell keys ever disagree the axis silently
-    never compares anything, so pin the round trip."""
-    cells = [_cell("mmreality", "dum", "prodej", n_active=3601.0,
-                   median_area_m2=905.0, median_price_per_m2=5701.0)]
-    written = _shift(cells, None, history_days=1.0)["details"]["cells"]
-    assert written == {"mmreality/dum/prodej": {
-        "n": 3601, "area": 905.0, "ppm2": 5701.0, "n_area": 1000, "n_ppm2": 1000}}
-    healed = [_cell("mmreality", "dum", "prodej", n_active=3601.0,
-                    median_area_m2=130.0, median_price_per_m2=42500.0)]
-    assert _shift(healed, written)["status"] == "fail"
-
-
-def test_measure_checks_share_one_read_of_the_plausibility_view() -> None:
-    """The view is a ~12 s sequential scan of the active corpus. Three checks, one read."""
-    import scripts.verify_pipeline as vp
-
-    conn = _PlausibilityConn(_LIVE_DUM_CELLS + _LIVE_FLOOR_CELLS, None, 1.0)
-    results = run_checks(conn, T, checks=_registered(*_MEASURE_CHECK_KEYS))
-    assert len(results) == 4
-    assert sum("measure_plausibility_by_source" in s for s in conn.executed) == 1
-    assert not vp._PLAUSIBILITY_CACHE or "cells" in vp._PLAUSIBILITY_CACHE
-
-
-def test_run_checks_clears_the_plausibility_cache_between_runs() -> None:
-    """A stale corpus would make every measure check certify last run's data."""
-    first = _PlausibilityConn(_LIVE_DUM_CELLS, None, 1.0)
-    run_checks(first, T, checks=_registered("area_vs_usable_divergence"))
-    healed = [dict(c, area_divergence_share=0.0, area_divergence_share_7d=0.0)
-              for c in _LIVE_DUM_CELLS]
-    second = _PlausibilityConn(healed, None, 1.0)
-    out = run_checks(second, T, checks=_registered("area_vs_usable_divergence"))
-    assert out[0]["status"] == "ok"
-
-
-def test_empty_plausibility_view_is_unknown_never_ok() -> None:
-    """The view is gated on is_platform_admin(); read it from a role that fails the
-    gate and it returns zero rows. That is an INERT check, not a clean bill of health."""
-    from scripts.verify_pipeline import (
-        check_area_vs_usable_divergence, check_ppm2_basis_floor_share,
-        check_ppm2_measure_coverage, check_ppm2_median_shift,
-    )
-
-    for fn in (check_area_vs_usable_divergence, check_ppm2_basis_floor_share,
-               check_ppm2_median_shift, check_ppm2_measure_coverage):
-        res = fn(_fresh(_PlausibilityConn([])), T)
-        assert res["status"] == "unknown" and "INERT" in res["message"]
-        assert res["details"]["skipped"]
-
-
-class _BrokenViewConn(_PlausibilityConn):
-    """migration 427 not applied yet — the relation simply is not there."""
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        if "measure_plausibility_by_source" in sql:
-            raise RuntimeError('relation "measure_plausibility_by_source" does not exist')
-        super().execute(sql, params)
-
-
-def test_missing_view_is_unknown_and_names_the_migration_not_three_red_tiles() -> None:
-    """Between merging this PR and applying migration 427 the view does not exist. Three
-    checks red with `relation does not exist` are indistinguishable from three real
-    defects, so the read is reported, never raised."""
-    results = run_checks(_BrokenViewConn([]), T, checks=_registered(*_MEASURE_CHECK_KEYS))
-    assert [r["status"] for r in results] == ["unknown"] * 4
-    for r in results:
-        assert "INERT" in r["message"] and "427" in r["message"]
-        assert "does not exist" in r["details"]["skipped"]
-
-
-# Live 2026-08-25: the coverage hole every OTHER axis is blind to. sreality publishes
-# 27 174 active `pozemek` rows with area_m2 NULL on 27 174 of them — the plot size sits
-# in estate_area — so these four cells carry no floor-eligible rows, no area pairs and
-# no medians. Before the coverage arm all three axes called them healthy while the per-m2
-# measure did not exist for ~7% of the active corpus.
-_LIVE_DARK_LAND_CELLS = [
-    _cell("sreality", "pozemek", "prodej", n_active=20484.0, n_area_valued=0.0,
-          n_ppm2_valued=0.0, n_active_7d=10.0, measure_input_gap_share=1.0,
-          measure_input_gap_share_7d=1.0, n_floor_eligible=0.0, floor_null_share=None,
-          n_area_pairs=0.0, area_divergence_share=None),
-    _cell("sreality", "pozemek", "podil", n_active=5825.0, n_area_valued=0.0,
-          n_ppm2_valued=0.0, n_active_7d=16.0, measure_input_gap_share=1.0,
-          measure_input_gap_share_7d=1.0, n_floor_eligible=0.0, floor_null_share=None,
-          n_area_pairs=0.0, area_divergence_share=None),
-    _cell("bezrealitky", "pozemek", "prodej", n_active=1643.0, n_area_valued=9.0,
-          n_ppm2_valued=9.0, n_active_7d=64.0, measure_input_gap_share=0.9945,
-          measure_input_gap_share_7d=1.0, n_floor_eligible=9.0, floor_null_share=0.0,
-          n_area_pairs=9.0, area_divergence_share=0.0),
-]
-
-
-def _coverage(cells: list[dict[str, Any]]) -> dict[str, Any]:
-    from scripts.verify_pipeline import check_ppm2_measure_coverage
-
-    return check_ppm2_measure_coverage(_fresh(_PlausibilityConn(cells)), T)
-
-
-def test_coverage_sees_the_land_cells_every_other_axis_skips() -> None:
-    """The whole point of the arm: these cells are invisible to the other three because
-    every one of those is a ratio over rows that HAVE the inputs."""
-    res = _coverage(_LIVE_DARK_LAND_CELLS + [_clean_scored()])
-    assert res["status"] == "warn"
-    named = " ".join(res["details"]["offenders"])
-    for dark in ("sreality/pozemek/prodej", "sreality/pozemek/podil",
-                 "bezrealitky/pozemek/prodej"):
-        assert dark in named
-    assert "sreality/byt/prodej" not in named
-    # ...and the axes that cannot see them still report clean, which is why the arm
-    # had to exist rather than the other three being "fixed".
-    assert _divergence(_LIVE_DARK_LAND_CELLS + [_clean_scored()])["status"] == "ok"
-    assert _floor(_LIVE_DARK_LAND_CELLS + [_clean_scored()])["status"] == "ok"
-
-
-def test_coverage_stock_gap_ambers_but_a_fresh_gap_fails() -> None:
-    """Severity is a property of the ARM. A standing gap nobody can clear today is
-    amber; the same share among the rows that arrived this week is a parser regression
-    in flight and must be red — that is the case where the divergence and floor axes go
-    QUIET (a portal writing NULL area produces no pairs and no eligible rows)."""
-    standing = _coverage([
-        _cell("sreality", "pozemek", "prodej", n_active=20484.0, n_active_7d=10.0,
-              measure_input_gap_share=1.0, measure_input_gap_share_7d=1.0),
-        _clean_scored(),
-    ])
-    assert standing["status"] == "warn"  # the 7d arm has 10 rows: below the gate
-    shipping = _coverage([
-        _cell("mmreality", "pozemek", "prodej", n_active=4190.0, n_active_7d=400.0,
-              measure_input_gap_share=0.30, measure_input_gap_share_7d=1.0),
-        _clean_scored(),
-    ])
-    assert shipping["status"] == "fail"
-    assert "first seen in 7d" in " ".join(shipping["details"]["offenders"])
-
-
-def test_coverage_tolerates_ordinary_portal_incompleteness() -> None:
-    """Live worst non-dark cells: realitymix ostatni/pronajem 89.4% of stock and 35.8%
-    on the worst scored 7d arm (bazos komercni/prodej). Amber those and the operator
-    learns to dismiss the one axis that sees a portal going dark."""
-    res = _coverage([
-        _cell("realitymix", "ostatni", "pronajem", n_active=292.0, n_active_7d=24.0,
-              measure_input_gap_share=0.894),
-        _cell("bazos", "komercni", "prodej", n_active=1472.0, n_active_7d=229.0,
-              measure_input_gap_share=0.358, measure_input_gap_share_7d=0.358),
-    ])
-    assert res["status"] == "ok" and res["details"]["offenders"] == []
-
-
-def test_coverage_is_silent_where_the_basis_is_undecidable() -> None:
-    """No basis means no measure BY SPECIFICATION (a visible gap, never a guess) — the
-    view publishes NULL there, and a permanent amber on it would be noise."""
-    res = _coverage([
-        _cell("bazos", "ostatni", None, n_active=274.0, n_active_7d=40.0,
-              measure_input_gap_share=None, measure_input_gap_share_7d=None),
-        _clean_scored(),
-    ])
-    assert res["status"] == "ok" and res["details"]["arms_scored"] == 2
-
-
-def test_every_measure_axis_refuses_to_certify_a_corpus_it_cannot_measure() -> None:
-    """THE fail-open regression. Take the real production cells and blank their
-    measurable content — the per-m2 measure 100% dead platform-wide, exactly what a
-    later vocabulary or category migration would cause. Before this, _status_for_share
-    started `worst` at 0.0 and _status_for_median_shift at 1.0 and every arm was
-    silently skipped, so all three reported `ok` with a reassuring message ('Per-m2
-    medians stable week-over-week (worst move 1.00x across 64 cells)') while nothing
-    whatsoever had been verified. `_inert_measure_check` did not catch it: it only fires
-    on ZERO ROWS, and there are 100 rows here."""
-    dead = [
-        dict(c, n_floor_eligible=0.0, floor_null_share=None, n_floor_eligible_7d=0.0,
-             floor_null_share_7d=None, n_area_pairs=0.0, area_divergence_share=None,
-             n_area_pairs_7d=0.0, area_divergence_share_7d=None,
-             n_area_valued=0.0, n_ppm2_valued=0.0, median_area_m2=None,
-             median_usable_area=None, median_price_per_m2=None,
-             price_per_m2_basis=None, measure_input_gap_share=1.0,
-             measure_input_gap_share_7d=1.0)
-        for c in _LIVE_DUM_CELLS + _LIVE_FLOOR_CELLS
-    ]
-    baseline = {
-        f"{c['source']}/{c['category_main']}/{c['category_type']}":
-            {"n": 5000, "area": 100.0, "ppm2": 50000.0, "n_area": 5000, "n_ppm2": 5000}
-        for c in dead
-    }
-    results = run_checks(
-        _PlausibilityConn(dead, baseline, 30.0), T, checks=_registered(*_MEASURE_CHECK_KEYS))
-    assert {r["status"] for r in results} == {"unknown", "warn", "fail"}
-    by_key = {r["check_key"]: r for r in results}
-    for key in ("ppm2_basis_floor_share", "area_vs_usable_divergence",
-                "ppm2_median_shift"):
-        assert by_key[key]["value"] is None, key
-        assert "NOTHING" in by_key[key]["message"], key
-    # scored nothing = not measured; the median shift's own "compared nothing" stays a
-    # warn until wave 6 rewrites it
-    assert by_key["ppm2_basis_floor_share"]["status"] == "unknown"
-    assert by_key["area_vs_usable_divergence"]["status"] == "unknown"
-    assert by_key["ppm2_median_shift"]["status"] == "warn"
-    # the corpus went dark THIS WEEK: coverage is the axis that says so out loud
-    assert by_key["ppm2_measure_coverage"]["status"] == "fail"
-
-
-def test_a_measured_and_clean_corpus_still_reports_ok() -> None:
-    """The other side of the same rule — refusing to certify an unmeasurable corpus
-    must not make a measurable one amber."""
-    results = run_checks(
-        _PlausibilityConn(_LIVE_DUM_CELLS + [_clean_scored("remax")], None, 1.0), T,
-        checks=_registered("ppm2_basis_floor_share", "ppm2_measure_coverage"))
-    assert [r["status"] for r in results] == ["ok", "ok"]
-
-
 # --- migration_drift (scripts/checks/platform.py): merged is not applied ---------
 
 
@@ -1707,11 +1388,29 @@ class _DriftConn:
         return [(k, i, self._present.get((k, i), self._default)) for k, i in self.probed]
 
 
+def _window() -> list[Any]:
+    return load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
+
+
+def _file_cells(out: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {c["subject"]: c for c in out["details"]["cells"]}
+
+
+def _probeable(mig: Any) -> bool:
+    return any(SAFE_IDENT.match(o.ident) for o in mig.objects)
+
+
 def test_migration_drift_ok_when_everything_is_present() -> None:
-    out = check_migration_drift(_DriftConn({}, default=True), T)
-    assert out["status"] == "ok"
-    assert out["value"] == 0
-    assert out["details"]["objects_probed"] > 0
+    """Wave 6 (D5): one cell per file of the window, OK ones included, so a file applied late
+    recovers on a measured OK and the all-applied state reads OK, never Not measured."""
+    conn = _DriftConn({}, default=True)
+    out = check_migration_drift(conn, T)
+    cells = _file_cells(out)
+    assert out["status"] == "ok" and out["value"] == 0
+    assert list(cells) == [m.filename for m in _window()]
+    assert conn.probed, "objects were probed"
+    probed = [m.filename for m in _window() if _probeable(m)]
+    assert probed and all(cells[f]["status"] == "ok" for f in probed)
 
 
 def test_migration_drift_fails_when_a_migration_is_wholly_absent() -> None:
@@ -1739,9 +1438,11 @@ def test_migration_drift_fails_when_a_migration_is_wholly_absent() -> None:
             for other in migs if other is not m and other.objects))
     conn = _DriftConn({(o.kind, o.ident): False for o in target.objects}, default=True)
     out = check_migration_drift(conn, T)
+    cells = _file_cells(out)
     assert out["status"] == "fail"
     assert out["value"] == 1
-    assert any(target.filename in m for m in out["details"]["missing_entirely"])
+    assert cells[target.filename]["status"] == "fail"
+    assert [f for f, c in cells.items() if c["status"] == "fail"] == [target.filename]
 
 
 def test_migration_drift_only_warns_when_a_migration_is_half_present() -> None:
@@ -1751,18 +1452,29 @@ def test_migration_drift_only_warns_when_a_migration_is_half_present() -> None:
     multi = next(m for m in migs if len(m.objects) >= 2)
     conn = _DriftConn({(multi.objects[0].kind, multi.objects[0].ident): False}, default=True)
     out = check_migration_drift(conn, T)
+    cells = _file_cells(out)
     assert out["status"] == "warn"
-    assert any(multi.filename in p for p in out["details"]["partially_missing"])
-    assert out["details"]["missing_entirely"] == []
+    assert cells[multi.filename]["status"] == "warn"
+    assert not [f for f, c in cells.items() if c["status"] == "fail"]
 
 
-def test_migration_drift_reports_its_own_blind_spot() -> None:
-    """Migrations that only drop, grant, or update data declare nothing to
-    probe. They must be COUNTED and named, not silently treated as passing —
-    the failure mode this sprint already hit with a test that never ran."""
-    out = check_migration_drift(_DriftConn({}, default=True), T)
-    assert isinstance(out["details"]["unverifiable"], list)
-    assert all(f.endswith(".sql") for f in out["details"]["unverifiable"])
+def test_migration_drift_reports_its_own_blind_spot(monkeypatch: Any) -> None:
+    """Migrations that only drop, grant, or update data declare nothing to probe. They must be
+    COUNTED and named, not silently treated as passing — the failure mode this sprint already
+    hit with a test that never ran: each is a Not measured cell saying so."""
+    from scripts.migration_objects import Migration, MigrationObject
+
+    window = [Migration(700, "700_grants_only.sql", []),
+              Migration(701, "701_a_table.sql", [MigrationObject("relation", "public.t")]),
+              Migration(702, "702_odd_ident.sql", [MigrationObject("relation", "no such ident!")])]
+    monkeypatch.setattr(platform_checks, "load_migrations", lambda *a, **k: window)
+    conn = _DriftConn({}, default=True)
+    out = check_migration_drift(conn, T)
+    cells = _file_cells(out)
+    assert {f: c["status"] for f, c in cells.items()} == {
+        "700_grants_only.sql": "unknown", "701_a_table.sql": "ok", "702_odd_ident.sql": "unknown"}
+    assert "Unverifiable" in cells["700_grants_only.sql"]["message"]
+    assert out["status"] == "ok" and conn.probed == [("relation", "public.t")]
 
 
 @pytest.mark.parametrize("folder", ["missing", "empty"])
@@ -1790,484 +1502,6 @@ def test_migration_drift_probes_only_safe_identifiers() -> None:
     check_migration_drift(conn, T)
     for _kind, ident in conn.probed:
         assert SAFE_IDENT.match(ident), ident
-
-
-# --- location_town_coverage (rule 25's invariant; every listing since W15) --------
-
-
-def test_location_town_coverage_is_registered_and_runs_first_of_the_gauges() -> None:
-    """Registration is not enough, and 2026-09-11 21:02 is why: the lane ran `CHECKS` in
-    order under a 120 s budget and left the last seven unmeasured, this one among them.
-    The invariant the location programme is measured by cannot be the measurement that gets
-    starved — it is one indexed join, so it goes first of the gauges (`run_due` runs the
-    due alarms before them) and first on the page."""
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    assert CHECKS[0].key == "location_town_coverage"
-    assert CHECKS[0].fn is check_location_town_coverage
-    assert [c.key for c in CHECKS if c.cls == "gauge"][0] == "location_town_coverage"
-    assert _keys().count("location_town_coverage") == 1
-
-
-def test_location_town_coverage_is_red_while_any_czech_listing_lacks_a_town() -> None:
-    """Absolute counts, no threshold: the invariant is zero. The message names the portal,
-    because a non-zero number is a contract that has to change, not a trend to watch."""
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    conn = _TownCoverageConn([
-        ("bazos", 40_000, 0, 120, 39_500, 120, 0),
-        ("idnes", 30_000, 900, 11_000, 18_000, 11_900, 0),
-        ("sreality", 200_000, 0, 0, 199_000, 0, 0),
-    ])
-    out = check_location_town_coverage(conn, T)
-    assert out["status"] == "fail"
-    assert out["value"] == 12_020
-    assert out["details"]["no_row"] == 900 and out["details"]["cz_no_town"] == 11_120
-    assert "idnes: 900 without a row, 11,000 Czech without a town" in out["message"]
-    assert "sreality" not in out["message"]
-    assert any("statement_timeout" in s for s in conn.executed)
-    # W5: the consumer rule's workload number rides the same read, never the status.
-    assert out["details"]["hidden"] == 12_020
-    assert "Consumers currently hide 12,020 unresolved listings (idnes 11,900; bazos 120)" \
-        in out["message"]
-
-
-def test_location_town_coverage_measures_every_listing_not_only_the_live_ones() -> None:
-    """W15 (operator ruling 2026-09-14). The read was scoped to the served set and its four
-    counts additionally filtered on `l.is_active`; both are gone. A DELISTED listing with no
-    answer row is now red exactly like a live one, and the denominator is the portal's whole
-    corpus — which is why the per-portal series is not comparable across that date."""
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    out = check_location_town_coverage(_TownCoverageConn([
-        ("bazos", 40_000, 0, 0, 40_000, 0, 0),
-        ("remax", 30_000, 4_200, 0, 25_800, 4_200, 0),
-    ]), T)
-    assert out["status"] == "fail"
-    assert out["value"] == 4_200
-    assert out["details"]["cz_no_town"] == 0
-    assert out["details"]["listings"] == 70_000
-    assert out["details"]["per_source"][1]["listings"] == 30_000
-    assert out["details"]["per_source"][1]["town_share"] == 25_800 / 30_000
-    assert "cells" not in out["details"]  # the ladder's key: a legacy check emits none
-    assert "remax: 4,200 without a row, 0 Czech without a town (of 30,000)" in out["message"]
-    assert "bazos" not in out["message"]
-
-
-def test_location_town_coverage_is_ok_only_at_zero() -> None:
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    out = check_location_town_coverage(_TownCoverageConn([
-        ("bazos", 40_000, 0, 0, 39_000, 0, 0), ("idnes", 30_000, 0, 0, 10_000, 0, 0)]), T)
-    assert out["status"] == "ok" and out["value"] == 0
-    assert out["details"]["hidden"] == 0
-    assert "Consumers currently hide" not in out["message"]
-    assert out["details"]["per_source"][1]["town_share"] == 10_000 / 30_000
-    assert "Every one of 70,000 listings" in out["message"]
-
-
-def test_location_town_coverage_ku_arm_is_red_while_an_address_row_lacks_a_ku() -> None:
-    """MF PR-B. An address point lies in exactly one KÚ, so a Czech address-grain row the
-    CURRENT resolver wrote without one means KÚ geometry is missing at the registry version —
-    the 2026-09-13 failure class, caught on the row instead of on a dead MF job."""
-    from location_data.resolver.version import RESOLVER_VERSION
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    conn = _TownCoverageConn([
-        ("bezrealitky", 20_000, 0, 0, 20_000, 0, 37),
-        ("sreality", 200_000, 0, 0, 200_000, 0, 0),
-    ])
-    out = check_location_town_coverage(conn, T)
-    assert out["status"] == "fail"
-    assert out["value"] == 0, "the Health series stays the town count; the arm is a detail"
-    assert out["details"]["address_no_ku"] == 37
-    assert out["details"]["registry"]["current"] == "ruian:2026-08-31"
-    assert out["details"]["cz_no_town"] == 0
-    assert f"37 Czech address-grain rows at {RESOLVER_VERSION} have no KÚ: bezrealitky 37." \
-        in out["message"]
-
-
-def test_location_town_coverage_ku_arm_reads_the_rank_table_and_the_current_version() -> None:
-    """Address grain is `is_address_grain` (never the enum's order — 380 and 535 disagree),
-    the version is the constant (older rows are the re-resolve's backlog), and the one excuse
-    is a degenerate KÚ in the row's obec at the CURRENT registry version."""
-    from scripts.verify_pipeline import _LOCATION_TOWN_COVERAGE_SQL
-
-    flat = " ".join(_LOCATION_TOWN_COVERAGE_SQL.split()).lower()
-    assert "gr.is_address_grain and ll.resolver_version = %s and ll.katastr_kod is null" in flat
-    assert "d.discrepancy = 'degenerate_boundary_geometry'" in flat
-    assert "(select id from registry_versions where is_current)" in flat
-    assert "boundary_load_failed" not in flat
-    assert _LOCATION_TOWN_COVERAGE_SQL.count("%s") == 1
-
-
-def test_location_town_coverage_counts_undetermined_as_czech() -> None:
-    """Foreign is a determination the resolver makes; a listing with no Czech town and no
-    foreign signal is missing, never quietly foreign. The SQL states that directly."""
-    from scripts.verify_pipeline import _LOCATION_TOWN_COVERAGE_SQL
-
-    flat = " ".join(_LOCATION_TOWN_COVERAGE_SQL.split()).lower()
-    assert "ll.country_status <> 'foreign' and ll.obec_kod is null" in flat
-    assert "from listings l left join listing_location ll on ll.listing_id = l.id" in flat
-    # W2-a repointed it: the frozen projection is not the coverage denominator any more.
-    assert "listing_location_current" not in flat
-
-
-def test_location_town_coverage_covers_every_listing() -> None:
-    """W15. The guard and the producer must not disagree about who is in scope, and since
-    the operator's 2026-09-14 ruling that is EVERY listing: the served set is retired, so
-    the read carries no WHERE and no per-count `l.is_active` filter, exactly like
-    `drain._SWEEP_SQL`. RED by: a cohort creeping back into either one."""
-    from location_data.resolver import drain
-    from scripts.verify_pipeline import _LOCATION_TOWN_COVERAGE_SQL
-
-    flat = " ".join(_LOCATION_TOWN_COVERAGE_SQL.split()).lower()
-    for text in ("repr_listing_ref_id", "properties", "l.is_active"):
-        assert text not in flat, text
-    # No cohort WHERE at all: the join goes straight into the GROUP BY. (The only
-    # `where` left in the statement is the consumer rule's own EXISTS.)
-    # W16: the listing_location alias is `ll` and the granularity-rank lookup rides
-    # along, because `town_n` is now the SHARED town flag (the obec RANK floor included)
-    # rendered from location_data/location_steps.py instead of a fourth local spelling.
-    assert "listing_location ll on ll.listing_id = l.id" in flat
-    assert "location_granularity_rank gr on gr.granularity = ll.granularity group by l.source" in flat
-    assert "l.is_active" not in " ".join(drain._SWEEP_SQL.split()).lower()
-    # The cells the operator reads, and nothing the old scope needed.
-    for kept in ("as listings_n", "as no_row_n", "as cz_no_town_n", "as town_n",
-                 "as hidden_n", "as address_no_ku_n"):
-        assert kept in flat, kept
-    assert "display_no_row" not in flat and "active_n" not in flat
-    assert "filter (where l.is_active" not in flat
-
-
-def test_registry_liveness_is_red_for_a_stale_current_version() -> None:
-    """The towns are codes of the CURRENT registry version; a registry that stopped moving
-    ages every one of them without a single listing going red."""
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    out = check_location_town_coverage(_TownCoverageConn(
-        [("bazos", 40_000, 0, 0, 40_000, 0, 0)], registry=("ruian:2026-08-31", 41, None, None),
-    ), T)
-    assert out["status"] == "fail" and out["value"] == 0
-    assert out["details"]["registry"]["age_days"] == 41
-    assert "Registry stalled: current ruian:2026-08-31 is 41 days old (> 40)" in out["message"]
-
-
-def test_registry_liveness_is_red_for_a_newer_version_staged_over_a_day() -> None:
-    """A monthly run a pending `location-batch` run superseded is CANCELLED, not failed, and
-    a load killed mid-pack leaves an inert staged version — Actions reports neither."""
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    out = check_location_town_coverage(_TownCoverageConn(
-        [("bazos", 40_000, 0, 0, 40_000, 0, 0)],
-        registry=("ruian:2026-08-31", 12, "ruian:2026-09-30", 30.4),
-    ), T)
-    assert out["status"] == "fail"
-    assert "ruian:2026-09-30 has sat staged 30 h (> 24 h)" in out["message"]
-
-    fresh = check_location_town_coverage(_TownCoverageConn(
-        [("bazos", 40_000, 0, 0, 40_000, 0, 0)],
-        registry=("ruian:2026-08-31", 12, "ruian:2026-09-30", 5.0),
-    ), T)
-    assert fresh["status"] == "ok" and "Registry stalled" not in fresh["message"]
-
-
-def test_registry_liveness_is_red_when_nothing_is_current() -> None:
-    from scripts.verify_pipeline import check_location_town_coverage
-
-    out = check_location_town_coverage(_TownCoverageConn(
-        [("bazos", 40_000, 0, 0, 40_000, 0, 0)], registry=None,
-    ), T)
-    assert out["status"] == "fail"
-    assert "no current registry version" in out["message"]
-
-
-def test_registry_liveness_reads_only_newer_staged_versions() -> None:
-    """A staged version a later vintage overtook is history, not a stall; the age is the
-    vintage's, not the load's."""
-    from scripts.verify_pipeline import _REGISTRY_LIVENESS_SQL
-
-    flat = " ".join(_REGISTRY_LIVENESS_SQL.split()).lower()
-    assert "current_date - c.source_date as age_days" in flat
-    assert "where not n.is_current and n.source_date > c.source_date" in flat
-    assert "where c.is_current" in flat
-
-
-# --- location_payload_shape_drift (W4's standing P6 check) ---------------------
-
-class _ShapeDriftConn:
-    def __init__(self, rows: list[tuple[str, int, int]]) -> None:
-        self._rows = rows
-        self.executed: list[str] = []
-
-    def cursor(self) -> "_ShapeDriftConn":
-        return self
-
-    def transaction(self) -> "_ShapeDriftConn":
-        return self
-
-    def __enter__(self) -> "_ShapeDriftConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self.executed.append(sql)
-
-    def fetchall(self) -> Any:
-        return self._rows
-
-
-class _TownCoverageConn(_ShapeDriftConn):
-    """The coverage rows plus the registry-liveness row, green unless a test says not."""
-
-    def __init__(self, rows: list[tuple], *,
-                 registry: tuple | None = ("ruian:2026-08-31", 10, None, None)) -> None:
-        super().__init__(rows)
-        self._registry = registry
-
-    def fetchone(self) -> Any:
-        return self._registry
-
-
-def test_location_payload_shape_drift_is_registered() -> None:
-    """An unregistered check is dead code that never writes a row."""
-    from scripts.verify_pipeline import check_location_payload_shape_drift
-
-    assert _by_key("location_payload_shape_drift").fn is check_location_payload_shape_drift
-
-
-def test_location_payload_shape_drift_reds_on_a_source_side_shape_change() -> None:
-    """The W4 gate's fourth arm: the next cutover must force re-extraction instead of
-    silently degrading. A shape change is ~100% of the rows first seen since it landed."""
-    from scripts.verify_pipeline import check_location_payload_shape_drift
-
-    conn = _ShapeDriftConn([("sreality", 1200, 1150), ("bezrealitky", 80, 0)])
-    out = check_location_payload_shape_drift(conn, T)
-    assert out["status"] == "fail"
-    assert out["value"] == 95.83
-    assert "sreality" in out["message"] and "sreality_payload_shape" in out["message"]
-    assert "bezrealitky" not in out["details"]["offenders"][0]
-    assert out["details"]["window_hours"] == 48
-    assert [c["source"] for c in out["details"]["per_source"]] == ["sreality", "bezrealitky"]
-    assert "cells" not in out["details"]  # the ladder's key: a legacy check emits none
-    assert any("statement_timeout" in s for s in conn.executed)
-
-
-def test_location_payload_shape_drift_rings_on_the_first_tick_after_a_cutover() -> None:
-    """The window is the detection latency: after a total cutover the share is
-    elapsed/window, so one 6-hourly tick into a 48 h window reads 12.5% — above fail.
-    A 7-day window would sit below the same line for ~1.4 days."""
-    from scripts.verify_pipeline import THRESHOLDS, check_location_payload_shape_drift
-
-    window = THRESHOLDS["location_payload_shape_drift_window_hours"]
-    fail = THRESHOLDS["location_payload_shape_drift_fail"]
-    assert 6 / window >= fail, "one lane tick after a cutover must already read fail"
-    out = check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 800, 100)]), T)
-    assert out["status"] == "fail"
-
-
-def test_location_payload_shape_drift_names_bezrealitkys_own_remedy() -> None:
-    from scripts.verify_pipeline import check_location_payload_shape_drift
-
-    out = check_location_payload_shape_drift(
-        _ShapeDriftConn([("sreality", 1200, 0), ("bezrealitky", 90, 60)]), T)
-    assert out["status"] == "fail"
-    assert "_DETAIL_QUERY" in out["message"]
-
-
-def test_location_payload_shape_drift_is_ok_when_fresh_rows_are_clean() -> None:
-    from scripts.verify_pipeline import check_location_payload_shape_drift
-
-    out = check_location_payload_shape_drift(
-        _ShapeDriftConn([("sreality", 1200, 3), ("bezrealitky", 80, 1)]), T)
-    assert out["status"] == "ok"
-    assert out["value"] == 1.25
-    assert out["details"]["arms_scored"] == 2
-
-
-def test_location_payload_shape_drift_refuses_ok_when_nothing_reached_min_rows() -> None:
-    """A check that scored nothing has certified nothing."""
-    from scripts.verify_pipeline import check_location_payload_shape_drift
-
-    out = check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 10, 10)]), T)
-    assert out["status"] == "unknown"
-    assert out["value"] is None
-    assert out["details"]["arms_scored"] == 0
-    assert "nothing was verified" in out["details"]["skipped"]
-
-
-def test_location_payload_shape_drift_sql_shares_the_gate_classifier_and_reads_the_fresh_arm() -> None:
-    from scripts.verify_pipeline import SREALITY_SHAPE_CASE_SQL
-    from scripts.verify_pipeline import _LOCATION_PAYLOAD_SHAPE_DRIFT_SQL as sql
-
-    assert SREALITY_SHAPE_CASE_SQL.strip() in sql
-    assert "first_seen_at > now() - make_interval(hours => %(window_hours)s)" in sql
-    assert "NOT (raw_json ? 'ruianId')" in sql
-    assert "IS DISTINCT FROM 'object'" in sql
-
-
-# --- outbound_url_coverage (portal-URL contract) ----------------------------
-
-
-class _UrlCoverageConn:
-    """A cursor that answers one SELECT with scripted rows."""
-
-    def __init__(self, rows):
-        self._rows = rows
-
-    def transaction(self):
-        return contextlib.nullcontext()
-
-    def cursor(self):
-        conn = self
-
-        class _Cur:
-            def __enter__(self_inner):
-                return self_inner
-
-            def __exit__(self_inner, *a):
-                return False
-
-            def execute(self_inner, sql, params=None):
-                if sql.startswith("SET LOCAL statement_timeout"):
-                    return
-                assert "source_url IS NULL" in sql
-
-            def fetchall(self_inner):
-                return conn._rows
-
-        return _Cur()
-
-
-def test_outbound_url_coverage_is_an_absolute_count_per_source() -> None:
-    from scripts.verify_pipeline import check_outbound_url_coverage
-    r = check_outbound_url_coverage(_UrlCoverageConn([
-        ("bazos", 60000, 0, 0), ("sreality", 110000, 120, 120),
-    ]), T)
-    assert r["check_key"] == "outbound_url_coverage"
-    assert r["status"] == "warn" and r["value"] == 120       # 50 <= 120 < 500
-    assert "sreality 120 active rows without a URL (120 first seen in 7d)" in r["message"]
-    assert "scraper/sreality_url.py" in r["message"]
-
-
-def test_outbound_url_coverage_fails_past_the_absolute_fail_count() -> None:
-    from scripts.verify_pipeline import check_outbound_url_coverage
-    r = check_outbound_url_coverage(_UrlCoverageConn([("sreality", 110000, 5000, 4)]), T)
-    assert r["status"] == "fail" and r["value"] == 5000
-
-
-def test_outbound_url_coverage_clean_is_ok() -> None:
-    from scripts.verify_pipeline import check_outbound_url_coverage
-    r = check_outbound_url_coverage(_UrlCoverageConn([("bazos", 1, 0, 0), ("sreality", 1, 3, 0)]), T)
-    assert r["status"] == "ok" and r["value"] == 3
-    assert r["message"].startswith("Every active listing")
-
-
-# --- field_fill_matrix (field capture W1) ----------------------------------
-
-
-class _MatrixConn(_ShapeDriftConn):
-    """`_fetchall` wants transaction() + cursor(); _ShapeDriftConn already has both."""
-
-
-def _live_matrix_rows(**moved: int) -> list[tuple[Any, ...]]:
-    """One row per BLESSED cell, mirroring the baseline unless `moved` says otherwise.
-
-    Every test here builds the whole matrix, because a blessed cell missing from the live
-    read is now an offender in its own right — a partial matrix is a finding, not a
-    fixture shortcut."""
-    from scraper import field_census
-
-    rows: list[tuple[Any, ...]] = []
-    for key, cell in field_census.load_baseline()["cells"].items():
-        source, field = key.split("/", 1)
-        rows.append((source, cell["n"], field, moved.get(key.replace("/", "__"),
-                                                         cell["filled"]),
-                     None, None, 0, 0, None, None))
-    return rows
-
-
-def test_field_fill_matrix_is_registered() -> None:
-    from scripts.verify_pipeline import check_field_fill_matrix
-
-    assert _by_key("field_fill_matrix").fn is check_field_fill_matrix
-
-
-def test_field_fill_matrix_reproduces_the_known_zero_cells() -> None:
-    """The gate this wave is measured by: a cell whose parser reads a key its portal
-    has never emitted is named in the report.
-
-    The baseline was re-blessed after the W4 heal (2026-09-22), so replaying it as the
-    live matrix is today's production: the cells W4 wired are filled, the cells left
-    declared are the ones the portal genuinely never states, and a zero on a `text` cell
-    whose gate is closed is INERT (nothing can write it yet), not a producer failing."""
-    from scripts.verify_pipeline import check_field_fill_matrix
-
-    out = check_field_fill_matrix(_MatrixConn(_live_matrix_rows()), T)
-    details = out["details"]
-    assert {
-        "remax/has_balcony", "ceskereality/parking_lots", "ceskereality/total_floors",
-        "ceskereality/has_lift", "ceskereality/cellar", "remax/terrace",
-    } <= set(details["zero_fill_known_gaps"])
-    # The only cells allowed to read "should be filling" are the ones a gate just opened:
-    # a zero there is the lane's to-do list between its deploy and its first passes.
-    from scraper import attribute_contract
-    open_cells = {f"{p}/{f}" for p, fs in attribute_contract.extracted_cells().items() for f in fs}
-    assert set(details["zero_fill_undeclared"]) <= open_cells
-    assert not {"ceskereality/has_parking", "mmreality/has_balcony", "realitymix/has_lift"} & set(details["zero_fill_known_gaps"])
-    assert out["status"] in ("ok", "warn")
-    assert out["details"]["cells_measured"] == out["details"]["cells_blessed"]
-
-
-def test_field_fill_matrix_fails_when_a_whole_source_stops_being_measured() -> None:
-    """The denominator arm: a portal disabled in `portals`, or one whose stock has gone
-    inactive, drops out of the matrix spine — and a check that walked only live cells
-    would report `ok` over a shrinking denominator."""
-    from scripts.verify_pipeline import check_field_fill_matrix
-
-    rows = [r for r in _live_matrix_rows() if r[0] != "remax"]
-    out = check_field_fill_matrix(_MatrixConn(rows), T)
-    assert out["status"] == "fail"
-    assert "remax: 26 blessed cell(s) absent" in out["details"]["offenders"][0]
-    assert out["details"]["cells_measured"] < out["details"]["cells_blessed"]
-
-
-def test_field_fill_matrix_runs_under_the_per_check_statement_timeout() -> None:
-    from scripts.verify_pipeline import check_field_fill_matrix
-
-    conn = _MatrixConn(_live_matrix_rows())
-    check_field_fill_matrix(conn, T)
-    assert any("statement_timeout" in s for s in conn.executed)
-    # The cohort is the whole active stock, not a newest-N slice of it.
-    assert any("where l.is_active" in s and "first_seen_at" not in s
-               for s in conn.executed)
-
-
-def test_field_fill_matrix_fails_when_a_blessed_cell_collapses() -> None:
-    from scripts.verify_pipeline import check_field_fill_matrix
-
-    # idnes `condition` is blessed at 65.4% fill; a parser that stopped writing it.
-    out = check_field_fill_matrix(
-        _MatrixConn(_live_matrix_rows(idnes__condition=0)), T)
-    assert out["status"] == "fail"
-    assert out["value"] == 1
-    assert "idnes/condition" in out["details"]["offenders"][0]
-
-
-def test_field_fill_matrix_warns_on_a_stale_census(monkeypatch: Any) -> None:
-    """Stale census = a portal could have renamed a key and every gate built on the
-    census would still agree with itself. A warn here, never a calendar-keyed CI red."""
-    import scripts.verify_pipeline as vp
-    from scripts.verify_pipeline import check_field_fill_matrix
-
-    monkeypatch.setattr(
-        vp.field_census, "load_censuses",
-        lambda: [{"portal": "remax", "generated_at": "2020-01-01T00:00:00+00:00"}])
-    out = check_field_fill_matrix(_MatrixConn(_live_matrix_rows()), T)
-    assert out["status"] == "warn"
-    assert out["details"]["stale_census"] and "remax" in out["message"]
 
 
 def test_a_lane_owes_every_check_it_runs_its_own_budget() -> None:
@@ -2330,230 +1564,6 @@ def test_the_canary_keeps_the_monitoring_concurrency_group() -> None:
     assert workflow["concurrency"]["group"] == "pipeline-verification"
 
 
-# --- floor_convention (field capture W8) -----------------------------------
-
-
-class _FloorConn(_ShapeDriftConn):
-    """`_fetchall` wants transaction() + cursor(); _ShapeDriftConn already has both."""
-
-
-def _live_floor_rows() -> list[tuple[Any, ...]]:
-    """(source, pairs, mean_delta) as the live cluster read them 2026-09-22, before
-    the heal: the six ground=1 portals a storey high, the two canonical ones at their
-    own noise floor."""
-    return [
-        ("remax", 1248, 1.050), ("mmreality", 1574, 0.988), ("sreality", 13575, 0.973),
-        ("realitymix", 7416, 0.962), ("bezrealitky", 900, 0.869), ("maxima", 49, 0.816),
-        ("ceskereality", 7453, 0.201), ("bazos", 2586, 0.098),
-    ]
-
-
-def test_floor_convention_is_registered() -> None:
-    from scripts.verify_pipeline import check_floor_convention
-
-    assert _by_key("floor_convention").fn is check_floor_convention
-
-
-def test_floor_convention_fails_on_todays_pre_heal_corpus() -> None:
-    """The gate W8 is measured by: six portals a whole storey off idnes is a fail, and
-    the two portals that were already canonical are NOT named as offenders."""
-    from scripts.verify_pipeline import check_floor_convention
-
-    out = check_floor_convention(_FloorConn(_live_floor_rows()), T)
-    assert out["status"] == "fail"
-    assert out["value"] == 1.05
-    assert out["details"]["scored"] == 8
-    assert sorted(s.split()[0] for s in out["details"]["offenders"]) == [
-        "bezrealitky", "maxima", "mmreality", "realitymix", "remax", "sreality"]
-    assert "--write --allow-snapshot-deferral" in out["message"]
-
-
-def test_floor_convention_never_tells_the_operator_to_heal_a_canonical_portal() -> None:
-    """ceskereality's cell declares `ground0`: re-deriving it would shift 34,350 CORRECT
-    rows down one storey, so the reparse runbook must never name it."""
-    from scripts.verify_pipeline import check_floor_convention
-
-    out = check_floor_convention(_FloorConn([("ceskereality", 7453, 0.62)]), T)
-    assert out["status"] == "fail"
-    assert "scripts.reparse" not in out["message"]
-    assert "re-deriving is NOT the remedy" in out["message"]
-
-
-def test_floor_convention_is_ok_once_every_portal_reads_the_same_scale() -> None:
-    """What the heal buys: the residual is each portal's own sibling noise, not 0."""
-    from scripts.verify_pipeline import check_floor_convention
-
-    out = check_floor_convention(_FloorConn(
-        [(s, n, d - 1.0) for s, n, d in _live_floor_rows() if d > 0.5]
-        + [("ceskereality", 7453, 0.201), ("bazos", 2586, 0.098)]), T)
-    assert out["status"] == "ok"
-    assert out["details"]["offenders"] == []
-
-
-def test_floor_convention_is_unknown_rather_than_passing_when_nothing_scored() -> None:
-    """A thin sample certifies nothing; `value` stays None so the tile reads em-dash,
-    never a 0 that looks like agreement."""
-    from scripts.verify_pipeline import check_floor_convention
-
-    out = check_floor_convention(_FloorConn([("maxima", 12, 0.9)]), T)
-    assert out["status"] == "unknown"
-    assert "sibling pairs" in out["details"]["skipped"]
-    assert out["value"] is None
-    assert "verified NOTHING" in out["message"]
-
-
-def test_floor_convention_runs_under_the_per_check_statement_timeout() -> None:
-    """The lane's most expensive query (27-35 s measured) is exactly the one that must
-    be cancellable server-side: a raw cursor would run it under the 10-minute default."""
-    from scripts.verify_pipeline import check_floor_convention
-
-    conn = _FloorConn(_live_floor_rows())
-    check_floor_convention(conn, T)
-    assert any("statement_timeout" in s for s in conn.executed)
-
-
-# --- text_extraction_lag (field-capture W7) --------------------------------
-#
-# The R8 instrument. Its wedge arm is the one that rings when nothing else can —
-# a lane that SELECTS nothing looks healthy to every other check — so it has to
-# be right about what "claiming none" means.
-
-
-class _ScriptedConn:
-    """A conn that answers each statement from a script keyed on a SQL fragment."""
-
-    def __init__(self, answers: dict[str, Any]) -> None:
-        self._answers = answers
-        self._last: Any = None
-
-    def transaction(self) -> "_ScriptedConn":
-        return self
-
-    def cursor(self) -> "_ScriptedConn":
-        return self
-
-    def __enter__(self) -> "_ScriptedConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self._last = next(
-            (v for k, v in self._answers.items() if k in sql), [])
-
-    def fetchall(self) -> list[Any]:
-        return list(self._last)
-
-    def fetchone(self) -> Any:
-        rows = list(self._last)
-        return rows[0] if rows else None
-
-
-def _text_lane_conn(*, waiting: int, oldest_hours: float, claimed: int | None,
-                    **last: Any) -> Any:
-    lane = None if claimed is None else {"last": {"claimed": claimed, **last}}
-    return _ScriptedConn({
-        "FROM app_settings": [("gpt-5-mini",)],
-        "GROUP BY l.source": ([("bazos", waiting, oldest_hours, oldest_hours / 2)]
-                              if waiting else []),
-        "percentile_cont(0.99)": [(10, 6.0)],
-        "worker_heartbeats": [(lane, 2.0)],
-    })
-
-
-def _open_one_gate(monkeypatch: Any) -> None:
-    from scraper import attribute_contract
-
-    monkeypatch.setattr(attribute_contract, "extracted_cells",
-                        lambda: {"bazos": ("has_lift",)})
-
-
-def test_text_extraction_lag_does_not_ring_on_one_quiet_pass(
-        monkeypatch: Any) -> None:
-    """bazos arrives in bursts — 1,940 rows a day over ~147 distinct minutes — so a great
-    many healthy 5-minute passes legitimately claim nothing. Reading that as a wedge is
-    the false-red generator this harness exists to replace."""
-    from scripts.verify_pipeline import check_text_extraction_lag
-
-    _open_one_gate(monkeypatch)
-    out = check_text_extraction_lag(
-        _text_lane_conn(waiting=40, oldest_hours=0.05, claimed=0), T)
-    assert out["status"] == "ok"
-
-
-def test_text_extraction_lag_rings_when_the_oldest_row_outlives_the_lane(
-        monkeypatch: Any) -> None:
-    from scripts.verify_pipeline import check_text_extraction_lag
-
-    _open_one_gate(monkeypatch)
-    out = check_text_extraction_lag(
-        _text_lane_conn(waiting=50205, oldest_hours=9.0, claimed=0), T)
-    assert out["status"] == "fail"
-    assert "claimed" in " ".join(out["details"]["offenders"])
-
-
-def test_text_extraction_lag_rings_when_the_lane_is_not_in_the_heartbeat(
-        monkeypatch: Any) -> None:
-    """The estimation lane's failure: never registered, therefore invisible to every
-    other monitor. That one needs no staleness at all."""
-    from scripts.verify_pipeline import check_text_extraction_lag
-
-    _open_one_gate(monkeypatch)
-    out = check_text_extraction_lag(
-        _text_lane_conn(waiting=3, oldest_hours=0.01, claimed=None), T)
-    assert out["status"] == "fail"
-    assert "not in the heartbeat" in " ".join(out["details"]["offenders"])
-
-
-def test_text_extraction_lag_names_the_open_scope() -> None:
-    """The check's scope is the contract's open gates — the same declaration the lane
-    reads — so a report and the selector can never disagree about who is waiting."""
-    from scripts.verify_pipeline import check_text_extraction_lag
-
-    out = check_text_extraction_lag(
-        _text_lane_conn(waiting=0, oldest_hours=0.0, claimed=0), T)
-    assert out["status"] == "ok"
-    assert out["details"]["scope"] == {"bazos": ["floor", "has_lift"]}
-
-
-def test_text_extraction_lag_fails_on_a_pass_the_provider_stopped(
-        monkeypatch: Any) -> None:
-    """2026-10-02..10: OpenAI out of credit, and the lane claimed 500 a pass and wrote
-    nothing. The wedge arm needs `claimed == 0`, so it never fired, and the check blamed
-    backlog age, never the provider. The provider's own words are the alarm, at any age."""
-    from scripts.verify_pipeline import check_text_extraction_lag
-
-    _open_one_gate(monkeypatch)
-    # The heartbeat's `fatal`, as it read on 2026-10-10.
-    fatal = ('openai call failed: HTTP 429 {\n    "error": {\n        "message": "You have '
-             'no credits remaining. Add credits to continue using the API at '
-             'https://platform.openai.com/settings/organization/billing/.",\n')
-    out = check_text_extraction_lag(
-        _text_lane_conn(waiting=500, oldest_hours=0.05, claimed=500, written=0,
-                        aborted=True, fatal=fatal, model="gpt-5.6-luna"), T)
-    assert out["status"] == "fail"
-    assert '"message": "You have no credits remaining.' in out["message"]
-    assert "\n" not in out["message"]
-    # The model the provider refused (not today's setting), and both remedies: four of
-    # vision_batch.FATAL_MARKERS are key errors, fixed on the worker's Railway service.
-    assert "refused gpt-5.6-luna" in out["message"]
-    assert "credit or quota" in out["message"] and "OPENAI_API_KEY" in out["message"]
-
-
-def test_text_extraction_lag_reads_a_pass_at_its_ceiling_as_bounded(
-        monkeypatch: Any) -> None:
-    """`aborted` with no `fatal` is the pass's own $/time ceiling: it wrote, and a backlog
-    it leaves behind is what the age arms are for."""
-    from scripts.verify_pipeline import check_text_extraction_lag
-
-    _open_one_gate(monkeypatch)
-    out = check_text_extraction_lag(
-        _text_lane_conn(waiting=500, oldest_hours=0.05, claimed=500, written=410,
-                        aborted=True, fatal=None), T)
-    assert out["status"] == "ok"
-
-
 # --- the unmeasured rail (health wave 1) ----------------------------------------
 #
 # A measurement that did not happen is Not measured: never ok, and never a warn that the
@@ -2564,10 +1574,11 @@ _UNMEASURED_MARKERS = {"timed_out", "errored", "skipped"}
 
 def _unmeasured_results() -> list[dict[str, Any]]:
     """One result from every path that measures nothing (a check the lane budget does not
-    reach writes no result at all, so it has none here)."""
+    reach, or a capped pass defers, writes no result at all, so it has none here). Each
+    check module's own tests hold its unmeasured paths; these are the harness's and the two
+    GitHub checks'."""
     from unittest import mock
 
-    import scripts.verify_pipeline as vp
     from scripts.verify_outbound_urls import check_outbound_url_conformance
 
     def _boom(conn: Any, thresholds: Any) -> dict[str, Any]:
@@ -2576,27 +1587,26 @@ def _unmeasured_results() -> list[dict[str, Any]]:
     def _cancelled(conn: Any, thresholds: Any) -> dict[str, Any]:
         raise RuntimeError("canceling statement due to statement timeout")
 
-    sampled = _ShapeDriftConn([(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")])
+    def _uncelled(conn: Any, thresholds: Any) -> dict[str, Any]:
+        return {"check_key": "uncelled", "status": "fail", "value": 3, "details": {},
+                "message": "a Problem no cell carries"}
+
+    sampled = _BoundConn({"": [(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")]})
     with mock.patch.object(platform_checks, "_MIGRATIONS_DIR",
                            Path("/no-such-checkout/migrations")):
         no_migration_files = check_migration_drift(_DriftConn({}), T)
     return [
-        *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled)]),
+        *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled),
+                                      _stub("uncelled", _uncelled)]),
         no_migration_files,
-        vp._inert_measure_check("ppm2_basis_floor_share", None),
-        vp._inert_measure_check("ppm2_basis_floor_share", "relation does not exist"),
-        vp._unmeasured_check("area_vs_usable_divergence", 3, "100+ rows with both areas"),
-        vp.check_floor_convention(_FloorConn([("maxima", 12, 0.9)]), T),
-        vp.check_location_payload_shape_drift(_ShapeDriftConn([("sreality", 10, 10)]), T),
-        check_outbound_url_conformance(_ShapeDriftConn([]), T),
+        check_outbound_url_conformance(_BoundConn(), T),
         check_outbound_url_conformance(sampled, T, budget_s=0.0),
-        vp.check_location_town_coverage(_TownCoverageConn([]), T),
     ]
 
 
 def test_every_unmeasured_path_is_unknown_and_says_why() -> None:
     results = _unmeasured_results()
-    assert len(results) == 11
+    assert len(results) == 6
     errored, timed_out = results[:2]
     assert errored["details"]["errored"] is True and "kaboom" in errored["details"]["error"]
     assert timed_out["details"]["timed_out"] is True
@@ -2618,12 +1628,36 @@ def test_no_unmeasured_result_reads_as_a_measured_watch() -> None:
         assert not (r["status"] == "warn" and _UNMEASURED_MARKERS & set(r["details"])), r
 
 
-def test_a_stalled_registry_is_a_problem_even_when_no_listing_was_read() -> None:
-    from scripts.verify_pipeline import check_location_town_coverage
+def test_no_result_reaches_the_ladder_without_cells(caplog: Any) -> None:
+    """Wave 6 (D4) deleted the ladder's implicit cell, the one a result with no cells used to be
+    read as. A measured verdict now needs a judged cell: without one it would show on the page
+    and reach no incident, so the harness stores it Not measured and logs the check's defect;
+    every unmeasured result carries an empty cell list."""
+    import logging
 
-    out = check_location_town_coverage(
-        _TownCoverageConn([], registry=("ruian:2026-07-01", 80, None, None)), T)
-    assert out["status"] == "fail" and "Registry stalled" in out["message"]
+    caplog.set_level(logging.ERROR, logger="verify_pipeline")
+
+    def _returns(status: str, cells: Any) -> Check:
+        details = {} if cells is None else {"cells": cells}
+        value = None if status == "unknown" else 1
+        return _stub(f"{status}-{cells is None}", lambda c, t: {
+            "check_key": "k", "status": status, "value": value, "details": dict(details)})
+
+    unjudged = [{"subject": "a", "portal": None, "status": "unknown", "value": None, "unit": "",
+                 "message": "", "facts": {}}]
+    out = run_checks(None, {}, checks=[_returns("fail", None), _returns("warn", unjudged),
+                                       _returns("ok", "a table"), _returns("unknown", None)])
+    for r in out:
+        assert r["status"] == "unknown" and r["value"] is None, r
+        assert r["details"]["cells"] == [], r
+    assert [r["details"].get("skipped") for r in out[:3]] == [
+        "the check returned fail without a judged cell",
+        "the check returned warn without a judged cell",
+        "the check returned ok without a judged cell"]
+    assert out[3]["details"]["cells"] == []
+    assert caplog.text.count("without a judged cell; stored Not measured") == 3
+    (kept,) = run_checks(None, {}, checks=[_stub("k", lambda c, t: _verdict("k", "fail"))])
+    assert kept["status"] == "fail" and kept["details"]["cells"][0]["status"] == "fail"
 
 
 # --- the checks that read on a raw cursor now spend their own wall clock (health wave 2) ---
@@ -2672,33 +1706,12 @@ class _BoundConn:
         return self._rows[0] if self._rows else None
 
 
-def _own_sql(key: str) -> list[str]:
-    """The statements each formerly raw-cursor check sends, as the code spells them."""
-    import scripts.verify_pipeline as vp
-    from toolkit import description_extraction as text_lane
-
-    return {
-        "text_extraction_lag": ["SELECT value FROM app_settings WHERE key = %s",  # resolve_model
-                                text_lane.LLM_TEXT_SOURCES_SQL,  # lane_scope
-                                text_lane.ELIGIBLE_LAG_SQL, text_lane.EXTRACTION_LATENCY_SQL,
-                                vp._TEXT_EXTRACT_LANE_SQL],
-        "migration_drift": [MIGRATION_OBJECT_PROBE_SQL],
-        "outbound_url_coverage": [vp._OUTBOUND_URL_COVERAGE_SQL],
-    }[key]
-
-
-@pytest.mark.parametrize("key", ["text_extraction_lag", "migration_drift", "outbound_url_coverage"])
-def test_each_formerly_raw_cursor_check_sends_its_sql_on_its_own_wall_clock(
-    key: str, monkeypatch: Any,
-) -> None:
-    """These three read on a raw cursor, under the connection's default timeout and past any
-    budget. Each now sends the same SQL through _fetchone/_fetchall, every statement armed
-    with what its check has left."""
-    answers: dict[str, list[Any]] = {}
-    if key == "text_extraction_lag":
-        _open_one_gate(monkeypatch)
-        answers = {"FROM app_settings": [("gpt-5-mini",)]}
-    conn = _BoundConn(answers)
-    _by_key(key).fn(conn, T)
-    assert [sql for sql, armed in conn.sent if armed] == _own_sql(key)
-    assert all(armed for _, armed in conn.sent), key
+def test_migration_drift_sends_its_probe_on_its_own_wall_clock() -> None:
+    """Wave 2: three checks read on a raw cursor, under the connection's default timeout and past
+    any budget; migration_drift is the one wave 6 kept (the other two went with their keys, and
+    their successors pin their own statements beside quality.py). Its probe goes through the
+    clock's fetchall, armed with what the check has left."""
+    conn = _BoundConn()
+    _by_key("migration_drift").fn(conn, T)
+    assert [sql for sql, armed in conn.sent if armed] == [MIGRATION_OBJECT_PROBE_SQL]
+    assert all(armed for _, armed in conn.sent)

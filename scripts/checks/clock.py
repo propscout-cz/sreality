@@ -11,18 +11,21 @@ check of several statements spend its budget once per statement (dual_write_pari
 
 `LANE` is the one running lane; `run_checks` starts it and arms it for each check, and every
 statement a check sends goes through `fetchone` / `fetchall` (or re-arms `SET LOCAL` itself
-with `statement_timeout_clause()`), so a check module never imports the harness.
+with `statement_timeout_clause()`), so a check module never imports the harness. `PASS` is the
+running pass's memo: a read two checks of one pass share is made once (wave 6).
 """
 
 from __future__ import annotations
 
 import time as _time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
-# The default per-check budget. The slowest DB check is floor_convention's cross-portal
-# self-join, 11-35s over four measured runs (the shared measure_plausibility read is ~12s),
-# so at its worst 45s is only 1.3x the known worst case — a new check above ~20s needs its
-# query reworked, not a wider budget.
+_T = TypeVar("_T")
+
+# The default per-check budget. The slowest single read a check sends is the shared
+# measure_plausibility read: ~12 s cold (3.45 s warm on 2026-10-19), so 45 s is ~3.75x it — a
+# new check above ~20 s needs its query reworked, not a wider budget.
 CHECK_BUDGET_S = 45.0
 # Outside run_checks (ad-hoc use, tests) keep the historical 10-minute ceiling.
 DEFAULT_STATEMENT_TIMEOUT_MS = 600_000
@@ -66,6 +69,40 @@ class LaneBudget:
 
 
 LANE = LaneBudget()
+
+
+class PassMemo:
+    """Reads the checks of ONE pass share, started and reset by every run_checks (beside LANE)."""
+
+    def __init__(self) -> None:
+        self._active = False
+        self._kept: dict[str, tuple[bool, Any]] = {}
+
+    def start(self) -> None:
+        self._active = True
+        self._kept.clear()
+
+    def reset(self) -> None:
+        self._active = False
+        self._kept.clear()
+
+    def memo(self, key: str, compute: Callable[[], _T]) -> _T:
+        """`compute()` once per pass under `key`: its result, or its error re-raised to every later
+        caller of the pass. Outside a pass (a direct call, a test) every call computes."""
+        if not self._active:
+            return compute()
+        if key not in self._kept:
+            try:
+                self._kept[key] = (True, compute())
+            except Exception as exc:  # noqa: BLE001 - the error is the read's result this pass
+                self._kept[key] = (False, exc)
+        ok, kept = self._kept[key]
+        if not ok:
+            raise kept
+        return kept
+
+
+PASS = PassMemo()
 
 
 def statement_timeout_clause() -> str:

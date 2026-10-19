@@ -171,15 +171,15 @@ crash killed the batch before its counters were written. Order the two so the sc
 never behind the code: apply, verify with a SELECT, then merge.
 
 `verify_pipeline`'s **`migration_drift`** check (2026-08-27) now catches the gap within one
-6-hourly tick and pushes an alarm. It probes the LIVE CATALOG for the objects the newest 25
+hourly canary tick, one cell per migration file since Health wave 6, and pushes an alarm. It probes the LIVE CATALOG for the objects the newest 25
 migrations declare — tables, views, indexes, functions, added columns, added constraints,
 policies — parsed by `scripts/migration_objects.py`. It deliberately does NOT read
 `supabase_migrations.schema_migrations`: that ledger's `name` is whatever the applier passed,
 so it matches the repo filename sometimes (`444_listings_discovered_at`) and not others
 (441 is recorded as `stamp_derived_artifact`, unnumbered), and it carries ad-hoc migrations
 with no repo file at all. The catalog cannot lie; the ledger can. Migrations that only drop,
-grant or update data declare nothing probeable and are reported in an explicit
-`unverifiable` list rather than counted as passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
+grant or update data declare nothing probeable and read Not measured ("unverifiable") rather than
+passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
 re-signed or rewritten function (590, 597), like a dropped-and-recreated policy (613), reads present before it is applied: prove those with
 their own `$post$` block and a call with the new arguments.
 

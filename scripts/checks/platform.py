@@ -891,11 +891,40 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 # the whole time. CI proves a migration REPLAYS against an empty database; it says nothing
 # about production. This asks the live catalog directly: for each of the newest migrations, do
 # the objects it declares actually exist? The ledger (supabase_migrations.schema_migrations) is
-# deliberately NOT the oracle; scripts/migration_objects.py says why.
+# deliberately NOT the oracle; scripts/migration_objects.py says why. One cell per file, OK ones
+# included, so a file applied late recovers on a measured OK. Unverifiable keeps its old meaning
+# (no object the probe can look up); a file that only redefines objects an earlier file already
+# made reads OK, not unverifiable as the design's § 4 asks: owed with the apply ledger (#1855).
+
+_UNVERIFIABLE = ("Unverifiable: it declares no object the catalog probe can look up (only "
+                 "grants, drops, data updates or cron changes, or objects a later migration "
+                 "retires), so this check cannot see whether it was applied.")
+
+
+def _migration_cell(filename: str, objects: list[Any],
+                    present: dict[tuple[str, str], bool]) -> dict[str, Any]:
+    """One migration file: applied, not applied, partly applied, or unverifiable."""
+    if not objects:
+        return _cell(filename, "unknown", _UNVERIFIABLE, facts={"objects": 0})
+    absent = [o for o in objects if not present.get((o.kind, o.ident), False)]
+    facts: dict[str, Any] = {"objects": len(objects), "absent": len(absent)}
+    if not absent:
+        return _cell(filename, "ok", f"Applied: all {len(objects)} of its objects exist.",
+                     value=0, unit="objects absent", facts=facts)
+    facts["first_absent"] = str(absent[0])
+    if len(absent) == len(objects):
+        return _cell(filename, "fail", (
+            f"Not applied: none of its {len(objects)} objects exist ({absent[0]} absent), so "
+            "code that assumes this schema fails on every write. Apply it."),
+            value=len(absent), unit="objects absent", facts=facts)
+    return _cell(filename, "warn", (
+        f"Partly applied: {len(absent)} of its {len(objects)} objects are absent ({absent[0]}): "
+        "a half-applied migration, or the object parser misread the file."),
+        value=len(absent), unit="objects absent", facts=facts)
 
 
 def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
-    """Are the newest merged migrations actually present in this database?"""
+    """Are the newest merged migrations present in this database? One cell per file."""
     newest = int(thresholds["migration_drift_window"])
     migrations = load_migrations(_MIGRATIONS_DIR, newest=newest)
     if not migrations:
@@ -907,64 +936,15 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
                         "was probed (the probe reads a repository checkout's migrations/)."),
         }
 
-    probes: list[tuple[str, str]] = []
-    for mig in migrations:
-        for obj in mig.objects:
-            if SAFE_IDENT.match(obj.ident):
-                probes.append((obj.kind, obj.ident))
+    checkable = {mig.filename: [o for o in mig.objects if SAFE_IDENT.match(o.ident)]
+                 for mig in migrations}
+    probes = [(o.kind, o.ident) for objects in checkable.values() for o in objects]
     present: dict[tuple[str, str], bool] = {}
     if probes:
         for kind, ident, is_present in fetchall(conn, MIGRATION_OBJECT_PROBE_SQL, {
             "kinds": [k for k, _ in probes], "idents": [i for _, i in probes],
         }):
             present[(kind, ident)] = bool(is_present)
-
-    missing_all: list[str] = []   # merged and demonstrably not applied
-    partial: list[str] = []       # some objects landed, some did not
-    unverifiable: list[str] = []  # declares nothing this parser can probe
-    for mig in migrations:
-        checkable = [o for o in mig.objects if SAFE_IDENT.match(o.ident)]
-        if not checkable:
-            unverifiable.append(mig.filename)
-            continue
-        absent = [o for o in checkable if not present.get((o.kind, o.ident), False)]
-        if len(absent) == len(checkable):
-            missing_all.append(f"{mig.filename} ({checkable[0]} absent)")
-        elif absent:
-            partial.append(f"{mig.filename} ({len(absent)}/{len(checkable)} absent: {absent[0]})")
-
-    if missing_all:
-        status = "fail"
-        message = (
-            "Merged migrations are NOT applied to this database: "
-            + "; ".join(missing_all)
-            + " -- code that assumes this schema will fail on every write. Apply them."
-        )
-    elif partial:
-        status = "warn"
-        message = (
-            "Migrations only partly present: " + "; ".join(partial)
-            + " -- either a half-applied migration, or the object parser mis-read the file."
-        )
-    else:
-        status = "ok"
-        message = (
-            f"All {len(migrations) - len(unverifiable)} checkable of the newest "
-            f"{len(migrations)} migrations are present."
-        )
-    return {
-        "check_key": "migration_drift",
-        "status": status,
-        "value": len(missing_all),
-        "details": {
-            "window": newest,
-            "missing_entirely": missing_all,
-            "partially_missing": partial,
-            # Surfaced, not swallowed: these declare only grants, drops, data updates or cron
-            # changes, which this probe cannot see. A guard whose blind spot is invisible is
-            # worse than no guard.
-            "unverifiable": unverifiable,
-            "objects_probed": len(probes),
-        },
-        "message": message,
-    }
+    return _result("migration_drift",
+                   [_migration_cell(mig.filename, checkable[mig.filename], present)
+                    for mig in migrations], {})

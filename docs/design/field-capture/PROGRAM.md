@@ -559,7 +559,8 @@ so the merge-before-apply window is harmless here, which is NOT the usual case i
 parallel against the same slot.
 
 **W8 — SHIPPED in code; the GATE and the heal are post-merge by nature.** Sibling-pair gate (one SQL, no
-labels), now registered as `verify_pipeline`'s `floor_convention` check — the first floor check of any kind:
+labels), registered as `verify_pipeline`'s `floor_convention` check — the first floor check of any kind
+(2026-10-19: Health dashboard sprint wave 6 deleted the check, operator ruling Q4; its SQL is in git history):
 mean(portal_floor − idnes_floor) over unique (price_czk, area_m2, disposition) active byt keys, within ± 0.35 of 0
 for every portal, fail at ± 0.50, min 40 pairs. The warn tier is 0.35, not the planned 0.25, and the reason in the
 plan was WRONG: ceskereality's +0.20 is not sample conditioning. It does never state the ground storey (0 of its

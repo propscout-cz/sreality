@@ -19,7 +19,8 @@ transaction that always rolls back. The rules:
 - unnominated: active ads last seen before their unit's newest end-reached walk started (the portal's
   every-unit walk for a category none dates), with no queue row and no completion newer than the sighting;
   the deferrals the cell sets aside are that walk's (the subtraction is Python, pinned hermetically);
-- trend: each point's newest result with cells in the day before it.
+- trend (common, wave 6): the newest MEASURED result with a cells array is every series' source, and a
+  subject it lacks is read from the newest measured result in the window whose cell carries a series.
 Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
 """
 
@@ -36,6 +37,7 @@ import pytest
 
 from scraper.db import QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_NEW, QUEUE_PRIORITY_VERIFY
 from scraper.portal_runner import DECLARED_TOTAL_KEY
+from scripts.checks import common
 from scripts.checks import scraping as sc
 from scripts.verify_pipeline import THRESHOLDS
 
@@ -355,15 +357,27 @@ def test_unnominated_ads_are_active_unseen_since_their_walk_started_and_neither_
     assert rows == [(s, 5, 2, seed.ago(40))]
 
 
-def test_each_trend_point_reads_the_newest_result_with_cells_in_the_day_before_it(seed: _Seed) -> None:
-    """At 7 d: of the results 7 d 3 h and 7 d 20 h ago, the newer; one with no cells array and one inside
-    the 7 d never; the 30 d point has none."""
-    key = seed.portal("coverage")  # the statement's own key parameter; a fresh one keeps other rows out
-    for hours, value in ((7 * 24 + 20, 1), (7 * 24 + 3, 10), (7 * 24 + 2, None), (6 * 24 + 20, 99)):
-        cells = None if value is None else [{"subject": "x", "value": value}]
+def test_the_trend_rolls_from_the_newest_measured_result_and_looks_back_for_a_missing_one(
+        seed: _Seed) -> None:
+    """common.TREND_SQL: the newest result that measured something (an unknown run, or one with no cells
+    array, never resets a series). common.TREND_LOOKBACK_SQL: for a subject that result lacks, the newest
+    measured result since `since` whose cell carries a series; known subjects and older rows never."""
+    key = seed.portal("coverage")  # the statements' own key parameter; a fresh one keeps other rows out
+    newest = [{"subject": "x", "facts": {"trend": [["2026-10-18", 5, "ok"]]}}]
+    for hours, status, cells in (
+            (40 * 24, "ok", [{"subject": "old", "facts": {"trend": [["2026-09-01", 1, "ok"]]}}]),
+            (50, "ok", [{"subject": "gone", "facts": {"trend": [["2026-10-16", 2, "ok"]]}},
+                        {"subject": "x", "facts": {"trend": [["2026-10-16", 3, "ok"]]}}]),
+            (30, "warn", [{"subject": "gone", "facts": {"trend": [["2026-10-17", 4, "warn"]]}},
+                          {"subject": "bare", "facts": {}}]),
+            (20, "ok", newest),
+            (10, "unknown", [{"subject": "x", "facts": {"trend": []}}]),
+            (5, "ok", None)):
         seed.conn.execute("insert into pipeline_check_results (run_at, check_key, status, details) "
-                          "values (%s, %s, 'ok', %s::jsonb)",
-                          (seed.ago(hours), key, json.dumps({"cells": cells})))
+                          "values (%s, %s, %s, %s::jsonb)",
+                          (seed.ago(hours), key, status, json.dumps({"cells": cells})))
 
-    rows = seed.conn.execute(sc._TREND_SQL, {"key": key, "days": list(sc._TREND_DAYS)}).fetchall()
-    assert dict(rows) == {7: [{"subject": "x", "value": 10}], 30: None}
+    assert seed.conn.execute(common.TREND_SQL, {"key": key}).fetchall() == [(newest,)]
+    rows = seed.conn.execute(common.TREND_LOOKBACK_SQL, {  # as common._Series sends it
+        "key": key, "since": seed.ago(30 * 24), "known": ["x"]}).fetchall()
+    assert rows == [("gone", [["2026-10-17", 4, "warn"]])]

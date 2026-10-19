@@ -534,16 +534,10 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
     # seam (`scripts/reparse.py`) replaced the heal family. The seam re-derives the
     # denominator by CALLING the portal's own parser over the stored page, so it
     # spells no per-m² literal of its own and is not a site.
-    RegisteredSite(
-        path="scripts/verify_pipeline.py",
-        arm="unit",
-        hits=7,
-        measure="ppm2",
-        kind=KIND_GUARDS,
-        why="W9's plausibility checks (migration 427) — the median-shift, "
-        "basis-floor-share and coverage detectors, plus their operator-facing "
-        "labels. They watch the measure; they never recompute it.",
-    ),
+    # `scripts/verify_pipeline.py` was registered here (x7, W9's plausibility checks and their
+    # labels) until wave 6 of the Health sprint moved those detectors into
+    # `scripts/checks/quality.py` (parsing's median shift, data_quality's basis floor), which
+    # names every unit through `unit_label(basis)` and spells none: it is not a site either.
     RegisteredSite(
         path="api/agent.py",
         arm="unit",

@@ -24,7 +24,7 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
    `_PRESERVE_IF_NULL_COLUMNS` is the GLOBAL identity pair (`published_at`, `source_url`) and must not grow.
 4. Backfill old rows from NARROW typed columns via a `scripts/backfill_*.py` dispatch job (never a
    `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
-   `field_fill_matrix` only once the OPERATOR re-blesses (`--bless` needs the prod DB).
+   the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
 
 ## Refreshing per-source HTML fixtures
 
@@ -206,7 +206,7 @@ which the worker's `jobs` check judges as one `gh/<stem>` cell each, since GitHu
 (a never-started supersession cancel is not a failure; cursor + timeout-kill captured);
 step 2 measures the `github-actions` checks DUE by registry cadence; step 3, `scripts/health_canary.py`, is the step
 meant to red the run and so email (a failing check never does; a crash of the poller or the harness, or the harness step
-overrunning its 21 minutes, reds it too; see Pipeline verification below).
+overrunning its 6 minutes, reds it too; see Pipeline verification below).
 The worker's `llm` check alarms PER PROVIDER (each its own account: a credit error newer than that provider's own newest success in 72 h is its `<provider>/credit` Problem, so one provider's success never clears another's; the cell quotes the error, where 2026-10-02..10 the old alert named every paid job and no provider), INDEPENDENT of pending work (a quiet-queue blind spot
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
 provider exception, so the check needs no key of its own. Its `fleet/spend` cell judges 24 h spend (Watch > $130,
@@ -391,7 +391,7 @@ Per-lane notes:
   declaring `llm_text`. W4: then `claims_intake.mine_readings` mines that pass's readings (30 s, batch lane
   `location_readings_fast`, log `INTAKE readings fast ids=…`, heartbeat `last.readings_fast`, off:
   `LOCATION_READINGS_FAST_ENABLED=0`; the hourly claim run is the backstop).
-  Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = `text_extraction_lag` and the `jobs` check's `lane/text_extract` cell. Sizing, cache key, write gate: `llm-pipelines`.
+  Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
 - **Autodedup re-cut** (E944) — pHash coverage < 0.85 marks `rt_recut:<gen>` due; the NEXT tick re-cuts instead of passing (same lease, 1,050 s, reads stop 120 s early); never in a build or while the scope (max of the last cut's count and the store's `rt_fp`) holds > `RECUT_MAX_LISTINGS` 50k ads (row says `bootstrap`/`unfit`: Prague keeps its seed's cut); ≤ 1 attempt / 6 h, stamped before the cut, so a death mid-cut waits and does not halve the claim cap (2 deaths under one cut = `died` until a seed); failed = `errors: 1` + `recut_failed`; shutdown = taken back while its stamp holds.
   Heartbeat `last.recut` + the lane's own `recut` (lost on restart; durable: `rt_recut:<gen>.last`), `calibration_built_age_days`. The parsed calibration (~16 MB at 39.5k) outlives its pass, read once a digest — E949's one deliberate exception.
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer
@@ -402,14 +402,13 @@ Per-lane notes:
 
 **Health check harness** (`scripts/verify_pipeline.py`; plan: `docs/design/health-dashboard.md`) — ONE registry, `CHECKS`:
 each `Check` declares key, class (`alarm`/`gauge`), host (`realtime-worker` for `jobs`, `capacity` and `llm` since wave 3,
-`scraping`, `publishing`, `delisting` and `coverage` since wave 4, `dedup` since Health dashboard sprint wave 5, `github-actions` for the rest until wave 6 moves the gauges (migration_drift and the URL probe stay there)), `cadence_s`, budget, label, unit and owner page; `project_registry` mirrors the host's keys into `health_checks`
+`scraping`, `publishing`, `delisting` and `coverage` since wave 4, `dedup` since Health dashboard sprint wave 5, `parsing`, `data_quality`, `location_town_coverage` and `text_extraction` since wave 6, `github-actions` only for `migration_drift` and the URL probe), `cadence_s`, budget, label, unit and owner page; `project_registry` mirrors the host's keys into `health_checks`
 (migration 619). FOUR statuses, `ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, an error or a
-check's own could-not-measure path is `unknown`, reason in `details` (`timed_out`/`errored`/`skipped`), never `ok` (one
-holdout until wave 6: `ppm2_median_shift`'s "compared NOTHING" still reads `warn`). `run_due` (the canary for GitHub's keys; the
-worker's `health` lane, every 60 s under a 360 s pass budget, for its own) measures a host's DUE checks (newest row since `declared_at` older than `cadence_s` less
+check's own could-not-measure path is `unknown`, reason in `details` (`timed_out`/`errored`/`skipped`), never `ok`. `run_due` (the canary for GitHub's keys; the
+worker's `health` lane, every 60 s under a 500 s pass budget that defers a gauge whose budget no longer fits, for its own) measures a host's DUE checks (newest row since `declared_at` older than `cadence_s` less
 min(cadence / 10, 15 min)), alarms before gauges, each under a real wall clock: every statement's `SET LOCAL statement_timeout` is the
 check's time left, so an overrun is `unknown` (`timed_out`, `budget_seconds`, `elapsed_seconds`), and a check the run
-never reached writes no row and stays due; the weekly outbound-URL probe is a cadence, not a workflow. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per portal/job/lane).
+never reached writes no row and stays due; the weekly outbound-URL probe is a cadence, not a workflow. A row keeps `details.message`, `elapsed_ms` and its `cells` (one verdict per portal/job/lane/file; every measured result has them since wave 6).
 Measuring writes no system alert and reds no run: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
 one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per check, reminders until
 acknowledged on Health (a minimal Acknowledge button on the pipeline-checks card; the rebuilt page in wave 8) — alarm
@@ -427,6 +426,8 @@ missing), `publishing` (queue age, Browse visibility of new ads and of the stock
 **Engine check (Health dashboard sprint wave 5, `scripts/checks/dedup.py`, on the worker; key `dedup`, label "Engine"):** the engine's state
 (off/building/merging/idle: the `state` cell, always OK, and a fact on every cell); `stream`, `build`, `merge_pause`, `decision_lag`, `lease`,
 `rulings/ads`, `rulings/brokers` (the former `broker_merge_suppression`) and `splits`, from the live engine's stores and `autodedup`/`operator` merges only (rule 15).
+**Quality checks (Health dashboard sprint wave 6, `scripts/checks/quality.py`, on the worker):** the `parsing` alarm (fill and vocabulary against the blessed baseline, new ads' per-m² measures, stock
+medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re-snapshot churn) and the gauges `data_quality` (basis floor, area vs usable, no portal link), `location_town_coverage` (active ads only) and `text_extraction` (flow, backlog ETA), each gauge cell with a 30-day `trend` and `worse_7d`.
 **Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
 (host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget), `api` (the watchdog matcher's lease lapsed) and `unalerted` (a
 measured Problem with no incident); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.

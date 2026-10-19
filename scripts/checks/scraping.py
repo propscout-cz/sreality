@@ -8,10 +8,10 @@ detail ids that failed, judged on their Wilson lower bound) and missing (the sha
 declared total its newest end-reached walk did not collect). `check_coverage` asks whether we
 hold what each portal shows: per unit the residual of active ads, in-dwell ads set aside,
 against the declared total, and per portal the active ads no walk can nominate, each with its
-own 7- and 30-day trend. Only GitHub walks write scrape_runs, so the arms that must see the
-worker's work read the queue, the completions ledger and listings instead. Every portal in
-SOURCES gets its cells whether or not it walked. No portal is named here (rule 21): what differs
-per portal is a seam its walks record in every by_category entry.
+rolling 30-day trend (common.trend). Only GitHub walks write scrape_runs, so the arms that must
+see the worker's work read the queue, the completions ledger and listings instead. Every portal
+in SOURCES gets its cells whether or not it walked. No portal is named here (rule 21): what
+differs per portal is a seam its walks record in every by_category entry.
 """
 
 from __future__ import annotations
@@ -35,14 +35,13 @@ from scripts.checks.common import (
     num,
     result,
     wilson_lower,
+    with_trends,
 )
 
 # The four baselines: the same window 7, 14, 21 and 28 days earlier (the weekday cycle).
 _BASELINE_WEEKS = 4
 # An id given up this often in 7 d is re-armed and failing on a loop: named, never excluded.
 _POISON_GIVE_UPS = 3
-# The gauge's trend: its own cell values this many days ago.
-_TREND_DAYS = (7, 30)
 
 # Index walks of the recent window, one row per (portal, unit) a finished walk recorded, each
 # carrying its portal's facts (a portal whose runs never finished keeps one row with no unit; one
@@ -233,21 +232,6 @@ select s.source, count(*), count(*) filter (where s.unwalked), min(s.last_seen_a
                     where c.source = s.source and c.native_id = s.source_id_native
                       and c.completed_at > coalesce(s.last_seen_at, '-infinity'::timestamptz))
  group by s.source
-"""
-
-# This check's own cells at each trend point: its newest result in the day before that point.
-_TREND_SQL = """
-select d.days, r.cells
-  from unnest(%(days)s::int[]) as d(days)
-  left join lateral (
-        select details -> 'cells' as cells
-          from pipeline_check_results
-         where check_key = %(key)s
-           and run_at <= now() - make_interval(days => d.days)
-           and run_at > now() - make_interval(days => d.days + 1)
-           and jsonb_typeof(details -> 'cells') = 'array'
-         order by run_at desc
-         limit 1) r on true
 """
 
 
@@ -579,20 +563,6 @@ def _unnominated_cells(conn: Any, portals: dict[str, _Portal], units: list[_Unit
     return cells
 
 
-def _with_trend(conn: Any, cells: list[dict[str, Any]]) -> None:
-    """Each cell's value 7 and 30 days ago from this check's own results, and if it grew."""
-    past: dict[int, dict[str, Any]] = {}
-    for days, held in fetchall(conn, _TREND_SQL, {"key": "coverage", "days": list(_TREND_DAYS)}):
-        past[int(days)] = {c.get("subject"): c.get("value") for c in held or []
-                           if isinstance(c, dict)}
-    for c in cells:
-        trend = {f"{d}d": past.get(d, {}).get(c["subject"]) for d in _TREND_DAYS}
-        week = trend[f"{_TREND_DAYS[0]}d"]
-        c["facts"]["trend_30d"] = trend
-        c["facts"]["worse_than_7d"] = (None if week is None or c["value"] is None
-                                       else abs(float(c["value"])) > abs(float(week)))
-
-
 def check_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Do we hold what each portal shows? Residual per unit, unnominated ads per portal."""
     at = now(conn)
@@ -602,5 +572,5 @@ def check_coverage(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     cells = [_residual_cell(u, held.get((u.source, u.category_main, u.category_type), (0, 0)),
                             thresholds) for u in units]
     cells += _unnominated_cells(conn, portals, units, thresholds, at)
-    _with_trend(conn, cells)
+    with_trends(conn, "coverage", cells, at)
     return result("coverage", cells, {})

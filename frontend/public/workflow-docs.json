@@ -4921,7 +4921,7 @@
       ],
       "concurrencyGroup": "pipeline-verification",
       "cancelInProgress": false,
-      "timeoutMinutes": 35,
+      "timeoutMinutes": 19,
       "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/verify_pipeline.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/verify_pipeline.yml"

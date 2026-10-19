@@ -83,8 +83,8 @@ def failing_cells_have_incidents(rows: Sequence[tuple[datetime, str, Any]],
                                  incidents: Collection[str], now: datetime) -> list[str]:
     """Every cell failing in each liveness row since TELLER_GRACE_MIN ago has an open incident."""
     # Each row's failing subjects, cut by the teller's own cell rule (the worst cell per subject).
-    failing = [(run_at, {s for s, c in _cells("liveness", status, None, {"cells": cells}, "")
-                         .items() if c["status"] == "fail"}) for run_at, status, cells in rows]
+    failing = [(run_at, {s for s, c in _cells(cells).items() if c["status"] == "fail"})
+               for run_at, _status, cells in rows]
     reasons = []
     for subject in sorted(failing[0][1] if failing else ()):
         since = failing[0][0]

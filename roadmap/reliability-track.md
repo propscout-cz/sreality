@@ -559,6 +559,75 @@ To check after the merge: `health_checks` holds the eight `realtime-worker` keys
 check; the cells are in `pipeline_checks_public.details` and render in wave 8), and the engine's
 progress page carries the new sentence with its link landing on the row.
 
-**Next:** wave 6 — the parsing alarm and the quality gauges (`scripts/checks/quality.py`): parser
+~~**Next:** wave 6 — the parsing alarm and the quality gauges (`scripts/checks/quality.py`): parser
 regressions ring as one per-portal alarm, standing data-quality conditions become gauges with a
-30-day trend, and no legacy key remains.
+30-day trend, and no legacy key remains.~~ Done 2026-10-19 (Health dashboard sprint wave 6, below).
+
+## 2026-10-19 — Health dashboard sprint, wave 6 (shipped with this PR)
+
+The parsing alarm and the quality gauges: parser regressions ring as one per-portal alarm, standing
+data-quality conditions are gauges with a 30-day trend, rule 25 is judged over active ads, every
+check emits its own cells and no legacy key remains. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 6, and its "As
+built" note; reference: the scraper-ops skill's `references/pipeline-verification.md`.
+
+What Health dashboard sprint wave 6 changed:
+- **`parsing`** (label "Parsing", an alarm every 6 h on the worker): per portal, a field's fill or
+  vocabulary drifting from the blessed baseline (re-blessed in this wave), new ads losing their per-m²
+  measure against the same portal's stock, a jump in a stock median (Not measured for its first 6
+  days), a location payload the contract cannot read (sreality, bezrealitky and, new, mmreality, through
+  predicates `location_data` exports), and a re-snapshot storm against the portal's own 28-day median.
+- **`data_quality`** (label "Data quality", a gauge every 6 h): the share of prices the per-m² floor
+  NULLs, area against usable area, ads with no portal link and each portal's standing per-m² gaps. It
+  reads Problem on day one (realitymix komerční/pronájem: 11.4 % of 4,140 priced ads, lower bound
+  10.5 %), a real condition told once and then daily until acknowledged.
+- **`location_town_coverage`** (a gauge, now on the worker): rule 25 over ACTIVE ads first written more
+  than 24 h ago, 43 on 10-19 against 13,246 over the whole corpus (operator ruling Q2); a stalled RÚIAN
+  registry load stays a Problem.
+- **`text_extraction`** (label "Description reading", an hourly gauge): new ads' descriptions read
+  within a day, and the archive re-read's ETA (4.3 d on 10-19), replacing a check that read FAIL on
+  every run.
+- **Every check emits its own cells.** The implicit cell is gone from the ladder and, through migration
+  633, from the watcher; `migration_drift` has a cell per migration file and the portal-link probe a
+  cell per portal, and the probe no longer reads a relative redirect or a bot wall as a broken link.
+- **Gauge trends**: each gauge cell carries 30 days of daily points and whether it is worse than a week
+  ago; `coverage` moved onto the same facts (`trend`, `worse_7d`).
+- **The health lane's pass** is 500 s, and a gauge it cannot fit waits for the next pass; the canary's
+  job is 19 min and its harness step 6 min.
+- **The registry**: 14 keys, 12 on the worker and 2 on GitHub (165 s of budgets). Nine keys retire: the
+  eight legacy checks and `floor_convention` (Q4). Migration 633 also unschedules `capture-data-quality`
+  (24 failures in 30 d), and `data_quality_snapshots` stays frozen for wave 9 (Q5).
+
+Owed items this closes, and one correction:
+- The design's "every check emits explicit cells" and "no legacy key remains".
+- The payload-shape parity test the location program claimed, lost in location W1-a (5d3fc621), is
+  restored as a live CI rail.
+- The wave-3 note above that a provider's credit outage is told twice "until wave 6" was never right:
+  the alarms still tell it twice (the `llm` credit cell and the text lane's `jobs` cell), and wave 6
+  adds the `text_extraction` gauge as a third, first through its flow cells' unread new ads and then
+  through its stock cell's 0 readings, stated and accepted.
+
+Owed and stated (also in the design's "As built" note):
+- The stock arms are slow: a field NULLed on every new write needs 1.8-23 d to read Watch. The median
+  arm is blind for its first 6 days and reads a heal or a re-bless as a shift (no heal ledger yet).
+- No parsing-family check has ever caught a parser regression in flight; the thresholds rest on heals,
+  standing defects and the measured series.
+- Media (photos per new ad) and value anomalies (placeholders, sentinels and, with `floor_convention`
+  gone, a storey-scale flip) stay unwatched: filed, not built.
+- A text-lane stall shows twice for bazos (publishing and the location gauge), and the location gauge
+  cannot announce a resolver regression while it already reads Problem (publishing does).
+- The 35-day prune bounds every replay; where no durable input exists the replay is synthetic.
+- The text gauge dates a retried reading at its first attempt, so its p95 understates and its
+  readings in 24 h can miss a late success.
+- Coverage's trend facts are renamed (`trend`, `worse_7d`); wave 8 reads the new names.
+- At merge the nine retired keys leave at the canary's first run from `main`, and the old
+  whole-corpus location incident closes silently within 7 days.
+
+To check after the merge: `health_checks` holds twelve `realtime-worker` keys and two `github-actions`
+keys; Health shows the three new rows and the re-hosted location row within minutes of the deploy
+(their cells render in wave 8); after migration 633's apply `cron.job` holds no
+`capture-data-quality`; `data_quality` reads Problem on realitymix's komerční/pronájem floor cell, as
+expected.
+
+**Next:** wave 7 — delivery readiness: with the bell the only channel (Q1), the docs and click-by-click
+steps that switch email or Telegram on later; no channel is switched on.

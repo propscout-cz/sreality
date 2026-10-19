@@ -11,6 +11,7 @@ import contextlib
 import datetime as _dt
 import inspect
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +20,7 @@ from psycopg import errors as pg_errors
 from autodedup.incremental_lane import LEASE_LOST, STOPPING
 from scripts.checks import platform as plat
 from scripts.checks.common import PREVIOUS_CELLS_SQL
+from scripts.migration_objects import SAFE_IDENT, load_migrations
 
 _UTC = _dt.timezone.utc
 _NOW = _dt.datetime(2026, 10, 18, 12, 0, tzinfo=_UTC)
@@ -958,12 +960,116 @@ def test_migration_drift_reads_the_repository_checkout() -> None:
     assert (plat._MIGRATIONS_DIR / "620_health_liveness.sql").is_file()
 
 
-def test_migration_drift_probes_through_the_shared_probe_on_its_own_clock() -> None:
+def test_migration_drift_gives_every_file_of_the_checkouts_window_one_cell_on_its_own_clock() -> None:
     conn = _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
         (k, i, True) for k, i in zip(p["kinds"], p["idents"])]})
-    out = plat.check_migration_drift(conn, {"migration_drift_window": 3})
-    assert out["check_key"] == "migration_drift" and out["status"] == "ok"
-    assert conn.sent and all(armed for _, _, armed in conn.sent)
+    out = plat.check_migration_drift(conn, T)
+    window = load_migrations(plat._MIGRATIONS_DIR, newest=T["migration_drift_window"])
+    assert out["check_key"] == "migration_drift" and out["status"] == "ok" and out["value"] == 0
+    assert [c["subject"] for c in out["details"]["cells"]] == [m.filename for m in window]
+    assert {c["status"] for c in out["details"]["cells"]} <= {"ok", "unknown"}
+    assert len(conn.sent) == 1 and all(armed for _, _, armed in conn.sent)
+
+
+# A migrations folder of its own: what a file declares decides its cell, never which real files the window holds.
+_DRIFT_FILES = {
+    "700_w6_table.sql": ("create table if not exists public.w6_drift_a (id int);\n"
+                         "create index if not exists w6_drift_a_idx on public.w6_drift_a (id);\n"),
+    "701_w6_columns.sql": ("alter table public.w6_drift_a add column if not exists b int;\n"
+                           "alter table public.w6_drift_a add column if not exists c int;\n"),
+    "702_w6_grant.sql": "grant select on public.w6_drift_a to authenticated;\n",
+    "703_w6_function.sql": ("create or replace function public.w6_drift_fn() returns int "
+                            "language sql as $$ select 1 $$;\n"),
+    "704_w6_quoted.sql": 'create table if not exists "W6 Drift" (id int);\n',
+}
+
+
+@pytest.fixture()
+def drift_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    folder = tmp_path / "migrations"
+    folder.mkdir()
+    for name, sql in _DRIFT_FILES.items():
+        (folder / name).write_text(sql, encoding="utf-8")
+    monkeypatch.setattr(plat, "_MIGRATIONS_DIR", folder)
+    return folder
+
+
+def _drift(absent: frozenset[str] = frozenset(), window: int = 25) -> tuple[dict[str, Any], _Conn]:
+    """check_migration_drift over the folder: every probed object present but the named idents."""
+    conn = _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
+        (k, i, i not in absent) for k, i in zip(p["kinds"], p["idents"])]})
+    return plat.check_migration_drift(conn, {"migration_drift_window": window}), conn
+
+
+def test_every_file_in_the_window_is_a_cell_named_by_its_filename_ok_ones_included(
+        drift_dir: Path) -> None:
+    """A file applied late recovers on a measured OK only if every file is a cell in every state."""
+    out, _ = _drift()
+    cells = _cells(out)
+    assert list(cells) == sorted(_DRIFT_FILES)
+    assert {s: c["status"] for s, c in cells.items()} == {
+        "700_w6_table.sql": "ok", "701_w6_columns.sql": "ok", "702_w6_grant.sql": "unknown",
+        "703_w6_function.sql": "ok", "704_w6_quoted.sql": "unknown"}
+    assert cells["700_w6_table.sql"]["facts"] == {"objects": 2, "absent": 0}
+    assert cells["700_w6_table.sql"]["value"] == 0 and cells["700_w6_table.sql"]["portal"] is None
+    assert out["status"] == "ok" and out["value"] == 0
+    assert set(out["details"]) == {"cells"}, "the cells are the one home of each file's verdict"
+    assert "3 OK" in out["message"] and "2 Not measured" in out["message"]
+
+
+def test_a_wholly_absent_file_is_a_problem_and_names_what_is_missing(drift_dir: Path) -> None:
+    """The 2026-08-25 signature: merged, never applied, so none of its objects exist."""
+    out, _ = _drift(frozenset({"public.w6_drift_fn"}))
+    cell = _cells(out)["703_w6_function.sql"]
+    assert cell["status"] == "fail" and cell["value"] == 1 and cell["unit"] == "objects absent"
+    assert "Not applied" in cell["message"] and "function:public.w6_drift_fn" in cell["message"]
+    assert cell["facts"] == {"objects": 1, "absent": 1, "first_absent": "function:public.w6_drift_fn"}
+    assert out["status"] == "fail" and out["value"] == 1
+    assert "703_w6_function.sql" in out["message"]
+    assert {c["status"] for s, c in _cells(out).items() if s != "703_w6_function.sql"} == {"ok", "unknown"}
+
+
+def test_a_partly_present_file_is_watch_never_a_problem(drift_dir: Path) -> None:
+    """Half-applied is ambiguous: a partial apply, or the parser misread the file."""
+    out, _ = _drift(frozenset({"w6_drift_a.c"}))
+    cell = _cells(out)["701_w6_columns.sql"]
+    assert cell["status"] == "warn" and cell["value"] == 1
+    assert "1 of its 2 objects" in cell["message"]
+    assert out["status"] == "warn" and not any(c["status"] == "fail" for c in out["details"]["cells"])
+
+
+def test_a_file_with_nothing_to_probe_is_unverifiable_and_never_judged(drift_dir: Path) -> None:
+    """A grant, or a name the probe cannot look up, is named as a blind spot, never an OK."""
+    out, conn = _drift()
+    for subject in ("702_w6_grant.sql", "704_w6_quoted.sql"):
+        cell = _cells(out)[subject]
+        assert cell["status"] == "unknown" and cell["value"] is None
+        assert cell["message"].startswith("Unverifiable") and cell["facts"] == {"objects": 0}
+    ((_, params, _),) = conn.sent
+    assert all(SAFE_IDENT.match(ident) for ident in params["idents"])
+    assert "W6 Drift" not in params["idents"], "to_regclass raises on a malformed name"
+
+
+def test_a_file_applied_late_recovers_to_ok_under_its_own_subject(drift_dir: Path) -> None:
+    before, _ = _drift(frozenset({"public.w6_drift_a", "w6_drift_a_idx"}))
+    after, _ = _drift()
+    assert _cells(before)["700_w6_table.sql"]["status"] == "fail"
+    assert _cells(after)["700_w6_table.sql"]["status"] == "ok"
+
+
+def test_the_window_holds_the_newest_files_only(drift_dir: Path) -> None:
+    out, _ = _drift(window=2)
+    assert list(_cells(out)) == ["703_w6_function.sql", "704_w6_quoted.sql"]
+
+
+def test_with_no_migration_files_the_check_is_not_measured_and_sends_nothing(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker image ships no migrations/ folder: zero files probed is zero verified."""
+    monkeypatch.setattr(plat, "_MIGRATIONS_DIR", tmp_path / "migrations")
+    out, conn = _drift()
+    assert out["status"] == "unknown" and out["value"] is None
+    assert out["details"]["skipped"] == "no migration files on this host"
+    assert "Not measured" in out["message"] and conn.sent == []
 
 
 def test_the_module_never_imports_the_harness_or_the_worker() -> None:

@@ -79,7 +79,7 @@ class _FakeCursor:
                           if i["signature"].startswith(prefix)]
         elif "FROM pipeline_check_results" in norm:
             guarded = _MEASURED_CUTOVER in norm  # again only where the statement states it
-            self._rows = [(key, at, status, details.get("cells"))
+            self._rows = [(key, at, details.get("cells"))
                           for key in params["keys"]
                           for at, status, _value, details in c.results.get(key, [])
                           if status != "unknown" and at >= params["since"]
@@ -135,17 +135,23 @@ class _FakeConn:
         return _FakeTx(self)
 
     def register(self, key: str, *, cls: str = "alarm", cadence_s: int = 3600,
-                 label: str = "", unit: str = "", budget_s: float | None = None,
+                 label: str = "", budget_s: float | None = None,
                  declared_at: _dt.datetime = _DECLARED) -> None:
         """A health_checks row; the budget defaults to the github-actions rule."""
         budget = cadence_s + _GITHUB_SLACK_S if budget_s is None else budget_s
         self.registry[key] = {"class": cls, "cadence_s": cadence_s, "label": label or key,
-                              "unit": unit, "budget_s": float(budget), "declared_at": declared_at}
+                              "budget_s": float(budget), "declared_at": declared_at}
 
     def result(self, key: str, at: _dt.datetime, status: str, *, message: str = "",
-               cells: list[dict[str, Any]] | None = None, value: Any = None) -> None:
+               cells: Any = None, value: Any = None) -> None:
+        """A stored result. Given no cells it stands for a legacy single-subject row and carries
+        the one cell its key names, written here, test-side: the ladder itself has invented no
+        cell since wave 6. `cells=_MISSING` stores a result with no cell list at all."""
         details: dict[str, Any] = {"message": message} if message else {}
-        if cells is not None:
+        if cells is None:
+            cells = [{"subject": key, "portal": None, "status": status, "value": value,
+                      "unit": "", "message": message, "facts": {}}]
+        if cells is not _MISSING:
             details["cells"] = cells
         row = (at, status, value, details)
         self.results.setdefault(key, []).append(row)
@@ -158,10 +164,9 @@ class _FakeConn:
             newest = self.newest.get(key)
             if cutover and newest is not None and newest[0] < reg["declared_at"]:
                 newest = None  # the newest row predates the registration, so every row does
-            at, status, value, details = newest or (None, None, None, {})
-            rows.append((key, reg["class"], reg["cadence_s"], reg["label"], reg["unit"],
-                         reg["budget_s"], status, at, value, details.get("cells"),
-                         details.get("message")))
+            at, status, _value, details = newest or (None, None, None, {})
+            rows.append((key, reg["class"], reg["cadence_s"], reg["label"], reg["budget_s"],
+                         status, at, details.get("cells")))
         return rows
 
     def newest_status(self, key: str) -> str | None:
@@ -178,7 +183,8 @@ class _FakeConn:
              last: _dt.datetime | None = None, alerted: _dt.datetime | None = None,
              ok_since: _dt.datetime | None = None,
              acked: _dt.datetime | None = None) -> dict[str, Any]:
-        """An open cell incident as an earlier pass left it (told at onset unless `alerted`)."""
+        """An open cell incident as an earlier pass left it (told at onset unless `alerted`);
+        with no subject it is the key's own cell, the one `result` writes when given none."""
         inc = self.insert_incident(f"cell:{key}:{subject or key}", first)
         inc.update(last_seen_at=last or first, alert_count=1, alerted_at=alerted or first,
                    ok_since=ok_since, acknowledged_at=acked)
@@ -238,29 +244,36 @@ def test_a_fail_opens_one_incident_per_cell_and_tells_them_in_one_onset() -> Non
         assert (inc["alert_count"], inc["alerted_at"]) == (1, now)
 
 
-def test_a_result_without_cells_is_one_implicit_cell_named_by_its_key() -> None:
+def test_a_measured_result_without_a_verdict_cell_opens_keeps_and_tells_nothing() -> None:
+    """Wave 6 deleted the implicit cell named by the key: no cell list, an empty one or rows with
+    no verdict hold no cell, so even a fail opens nothing, and an open `cell:<key>:<key>` incident
+    of the old fallback is neither kept nor reminded; it closes silently once a week unmeasured."""
     conn = _FakeConn()
-    conn.register("llm_errors", label="LLM errors")
-    conn.result("llm_errors", _T0, "fail", message="openai: 41 credit errors in the last hour")
-    reconcile(conn, now=_T0)
-    assert [i["signature"] for i in conn.open_incidents()] == ["cell:llm_errors:llm_errors"]
-    # The implicit cell is the check itself, so the notice does not repeat the key.
-    assert conn.dispatches[0][0] == (
-        "LLM errors: Problem — openai: 41 credit errors in the last hour")
+    for key in ("llm_errors", "worker_lane_stall", "location_town_coverage"):
+        conn.register(key, cadence_s=21600)
+    conn.result("llm_errors", _T0, "fail", message="openai: 41 credit errors", cells=_MISSING)
+    conn.result("worker_lane_stall", _T0, "fail", cells=[])
+    implicit = conn.seed("location_town_coverage", first=_T0 - _h(30))  # its 24 h rung is due
+    conn.result("location_town_coverage", _T0, "fail", value=13239,
+                cells=[{"source": "bazos", "hidden": 7294}])
+    assert reconcile(conn, now=_T0) == _ZERO
+    assert conn.open_incidents() == [implicit] and conn.writes() == []
+    assert reconcile(conn, now=_T0 + _h(139)) == {**_ZERO, "closed_silently": 1}
+    assert implicit["resolve_reason"] == "unmeasured 7d" and conn.dispatches == []
 
 
 def test_warn_never_opens_an_incident() -> None:
     conn = _FakeConn()
-    conn.register("field_fill_matrix", cadence_s=21600)
-    conn.result("field_fill_matrix", _T0, "warn", cells=[_cell("bazos", "warn", "floor 61 %")])
+    conn.register("parsing", cadence_s=21600)
+    conn.result("parsing", _T0, "warn", cells=[_cell("bazos", "warn", "floor 61 %")])
     assert reconcile(conn, now=_T0) == _ZERO
     assert conn.incidents == [] and conn.dispatches == []
 
 
 def test_a_long_notice_is_clipped_to_the_message_cap() -> None:
     conn = _FakeConn()
-    conn.register("field_fill_matrix", cadence_s=21600)
-    conn.result("field_fill_matrix", _T0, "fail", message="x" * 5000)
+    conn.register("parsing", cadence_s=21600)
+    conn.result("parsing", _T0, "fail", message="x" * 5000)
     reconcile(conn, now=_T0)
     assert len(conn.dispatches[0][0]) == MESSAGE_MAX_CHARS
     assert conn.dispatches[0][0].endswith("…")
@@ -324,13 +337,15 @@ def test_the_staleness_boundary_is_health_stale(age: _dt.timedelta, counts: bool
 
 
 def test_rows_from_before_the_keys_registration_are_not_measured() -> None:
-    """The cutover: the old harness stored a check's own error as fail, with no message."""
+    """The cutover: a fail stored before the key's registration (the old harness stored a check's
+    own error as fail) is Not measured."""
     conn = _FakeConn()
     conn.register("llm_errors", label="LLM errors", declared_at=_T0)
     conn.result("llm_errors", _T0 - _s(1), "fail")
     assert reconcile(conn, now=_T0 + _h(0.5)) == _ZERO
     assert conn.incidents == []
-    conn.result("llm_errors", _T0, "fail", message="openai: 41 credit errors")  # the new harness
+    conn.result("llm_errors", _T0, "fail",  # the new harness
+                cells=[_cell("openai", "fail", "41 credit errors")])
     assert reconcile(conn, now=_T0 + _h(0.5)) == {**_ZERO, "opened": 1, "notices": 1}
     assert conn.dispatches[0][0] == "LLM errors: Problem — openai: 41 credit errors"
 
@@ -412,7 +427,7 @@ def test_warn_keeps_an_incident_open_resets_its_hold_and_never_recovers_it() -> 
     conn.result("false_delist_share", _T0 + _h(39), "warn", message="29 % came back")
     assert reconcile(conn, now=_T0 + _h(40)) == {**_ZERO, "reminded": 1, "notices": 1}
     assert conn.dispatches == [(
-        "False delist share: still Watch for 80 h",
+        "False delist share: still Watch for 80 h — false_delist_share",
         f"sys:false_delist_share:reminder:72h:{_iso(first)}:{inc['id']}x1", [])]
     assert inc["resolved_at"] is None
 
@@ -431,7 +446,7 @@ def test_a_measured_ok_recovers_only_after_the_hold() -> None:
     conn.result("llm_errors", _T0 + _HOURLY_HOLD, "ok")
     assert reconcile(conn, now=_T0 + _HOURLY_HOLD) == {**_ZERO, "recovered": 1, "notices": 1}
     assert (inc["resolved_at"], inc["resolve_reason"]) == (_T0 + _HOURLY_HOLD, "measured ok")
-    assert conn.dispatches == [("✓ LLM errors: recovered after 30 h",
+    assert conn.dispatches == [("✓ LLM errors: llm_errors recovered after 30 h",
                                 f"sys:llm_errors:recovery:{_iso(first)}:{inc['id']}x1", [])]
 
 
@@ -517,7 +532,7 @@ def test_alarm_reminders_climb_6h_24h_72h_then_weekly_and_only_the_highest_fires
         return
     assert counts == {**_ZERO, "reminded": 1, "notices": 1}
     assert conn.dispatches == [(
-        f"Property maintenance: still Problem for {elapsed_h:.0f} h",
+        f"Property maintenance: still Problem for {elapsed_h:.0f} h — property_maintenance",
         f"sys:property_maintenance:reminder:{rung}:{_iso(first)}:1x1", [])]
     assert reconcile(conn, now=_T0 + _dt.timedelta(seconds=60)) == _ZERO  # told once per rung
 
@@ -527,13 +542,14 @@ def test_gauge_reminders_come_once_a_day() -> None:
     conn.register("location_town_coverage", cls="gauge", cadence_s=21600,
                   label="Location coverage")
     first = _T0 - _h(23)
-    conn.seed("location_town_coverage", first=first)
+    conn.seed("location_town_coverage", "ceskereality/town", first=first)
     for at in (_T0, first + _h(24), first + _h(30), first + _h(49), first + _h(121)):
-        conn.result("location_town_coverage", at, "fail")
+        conn.result("location_town_coverage", at, "fail",
+                    cells=[_cell("ceskereality/town", "fail", "39 ads with no town")])
         reconcile(conn, now=at)
     assert [d[1] for d in conn.dispatches] == [
         f"sys:location_town_coverage:reminder:{r}:{_iso(first)}:1x1" for r in ("d1", "d2", "d5")]
-    assert conn.dispatches[0][0] == "Location coverage: still Problem for 24 h"
+    assert conn.dispatches[0][0] == "Location coverage: still Problem for 24 h — ceskereality/town"
 
 
 def test_an_acknowledged_incident_gets_no_reminder_but_its_recovery_is_still_told() -> None:
@@ -546,7 +562,7 @@ def test_an_acknowledged_incident_gets_no_reminder_but_its_recovery_is_still_tol
     reconcile(conn, now=_T0 + _h(1))
     conn.result("llm_burn_rate", _T0 + _h(3), "ok")
     assert reconcile(conn, now=_T0 + _h(3)) == {**_ZERO, "recovered": 1, "notices": 1}
-    assert conn.dispatches[0][0] == "✓ LLM spend: recovered after 31 h"
+    assert conn.dispatches[0][0] == "✓ LLM spend: llm_burn_rate recovered after 31 h"
 
 
 def test_reminders_and_recoveries_group_a_checks_cells_into_one_notice() -> None:
@@ -706,16 +722,15 @@ def test_emit_stamps_the_system_health_channels(stored: Any, channels: list[str]
     assert conn.dispatches[0][2] == channels
 
 
-def test_a_cells_list_without_verdicts_is_not_a_cell_list() -> None:
-    """A legacy per-portal table stored under `cells` (rows with no status) must not mute the
-    check: the check measured, so its own status is the one implicit cell."""
+def test_only_verdict_cells_are_cells() -> None:
+    """A legacy per-portal table under `cells` (rows with no status), an object or no list at all
+    holds no cell: the check's own status never stands in for one (wave 6 deleted that fallback)."""
     from toolkit.system_alerts import _cells
 
-    legacy = {"cells": [{"source": "bazos", "hidden": 7294}], "message": "13,239 ads lack a town"}
-    cells = _cells("location_town_coverage", "fail", 13239, legacy, "ads")
-    assert list(cells) == ["location_town_coverage"]
-    assert cells["location_town_coverage"]["status"] == "fail"
-    assert cells["location_town_coverage"]["message"] == "13,239 ads lack a town"
-
-    real = {"cells": [{"subject": "bazos", "status": "warn"}, {"subject": "idnes", "status": "fail"}]}
-    assert sorted(_cells("k", "fail", None, real, "")) == ["bazos", "idnes"]
+    assert _cells([{"source": "bazos", "hidden": 7294}]) == {}
+    assert _cells({"sreality/byt/prodej": {"n": 812}}) == {} and _cells(None) == {}
+    real = [{"subject": "bazos", "status": "warn"}, {"subject": "idnes", "status": "ok"},
+            {"subject": "idnes", "status": "fail"}, {"subject": "", "status": "fail"},
+            {"subject": "remax", "status": "unknown"}, "sreality"]
+    cells = _cells(real)
+    assert sorted(cells) == ["bazos", "idnes"] and cells["idnes"]["status"] == "fail"

@@ -890,7 +890,9 @@ component is slimmed twice — each wave rewrites one component and slims its st
   so the lane must walk every listing in the database and anything it cannot place must be VISIBLE on
   the audit page. `SERVED_LISTING_PREDICATE` is deleted: the intake full walk, the bodies pass, the
   resolver sweep, the W11 retire rail and `check_location_town_coverage` all drive off `listings`
-  unfiltered. The retire rail now measures exactly what its delete would destroy (per portal: the
+  unfiltered (the check's population, not the lane's, narrowed again 2026-10-19: Health dashboard
+  sprint wave 6's `location_town_coverage` gauge counts ACTIVE ads first written more than 24 h ago,
+  ruling Q2). The retire rail now measures exactly what its delete would destroy (per portal: the
   listings carrying a doomed claim, and how many of those would be left with no active-contract
   claim) instead of a cohort. Migration 524 re-creates `location_pin_audit_mv` on ONE arm — every
   listing that fails the consumer rule, ~44 k → ~80 k rows — and rewrites the waterfall to 9 rows:
@@ -2890,7 +2892,10 @@ during the drain is this cohort, not a regression.
   the message. The window IS the detection latency — after a cutover the share is elapsed/window, so
   the first 6-hourly tick reads 12.5 % and rings; the 7-day window first drafted would have sat under
   fail for ~1.4 days (adversarial review, #1351). It shares ONE SQL `CASE` with the gate report (`SREALITY_SHAPE_CASE_SQL`, parity-tested
-  against the Python classifier). ~~In-app bell only for now — the hourly emailing lane's `--only` list is
+  against the Python classifier). Superseded 2026-10-19 (Health W6): the parity test went with the
+  gate report in W1-a (5d3fc621); the check is the `parsing` alarm's payload arm, over the predicates
+  `location_data/claims_common.PAYLOAD_SHAPE_PREDICATES` exports (mmreality's new), with a live
+  parity rail. ~~In-app bell only for now — the hourly emailing lane's `--only` list is
   a deliberate promotion after a soak, the same ladder the ppm2 checks climbed.~~ Superseded 2026-10-18
   (Health W1: the lanes run due checks; any failing alarm on either lane emails). The contracts' declarative
   `payload_schema_detector` blocks stay as they are: nothing consumes them today and a bezrealitky block

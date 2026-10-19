@@ -17,12 +17,13 @@ from typing import Any
 from location_data.claims_common import SOURCES, served_location_predicate
 from scraper.db import QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PRIORITY_NEW
 from scripts.checks.clock import fetchall, fetchone
-from scripts.checks.common import ago, as_utc, cell, graded as _graded, iso, judged, now, result, wilson_lower
+from scripts.checks.common import (NEW_AD_H, ago, as_utc, cell, graded as _graded, iso, judged,
+                                   now, result, wilson_lower)
 
 # A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its
 # Browse row at the next */15 rebuild, so one first written under 30 min ago is still on its way.
 _VISIBLE_GRACE_MIN = 30
-_WINDOW_H = 24
+_WINDOW_H = NEW_AD_H
 _WIDE_WINDOW_H = 72
 # The images lane fetches a new ad's photos within minutes of its first write.
 _PHOTOS_GRACE_H = 1

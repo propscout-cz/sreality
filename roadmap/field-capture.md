@@ -132,7 +132,8 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       The R12 hand-over shipped first: `docs/design/field-capture/handover-autodedup-floor.md`.
       **The 183,801-row heal (63,431 active) is the operator's to run** — six
       `scripts/reparse.py --fields floor` passes, runbook in the hand-over §7; the new
-      check reads RED until they have run.
+      check reads RED until they have run. (2026-10-19: Health dashboard sprint wave 6
+      deleted the `floor_convention` check, operator ruling Q4; its SQL is in git history.)
 - [~] **W9 — patchwork sweep (non-autodedup).** Done alongside W0: the browse_list cadence
       comments (`*/15` since migration 413, two said 5 min); `location_data/payloads.py`'s
       "NOT WIRED" docstring (826,948 rows, nine portals); Browse Stats/Map now send the
