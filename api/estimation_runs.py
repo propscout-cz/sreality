@@ -468,6 +468,13 @@ _EMPTY_RESOLUTION = _Resolution(
 JOB_LANE_SETTING = "estimation_job_lane_enabled"
 
 
+def _setting_bool(value: Any) -> bool:
+    """An app_settings flag's value: a JSON bool as is, a string by its spelling, else truthiness."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
+
+
 def _job_lane_enabled(conn: "psycopg.Connection") -> bool:
     """True when POST /estimations should hand execution to the realtime
     worker's estimation lane (Amendment A10) instead of running the heavy work
@@ -484,14 +491,7 @@ def _job_lane_enabled(conn: "psycopg.Connection") -> bool:
     except Exception:  # noqa: BLE001 - a settings read must never fail a submit
         LOG.warning("job-lane flag read failed; treating as disabled")
         return False
-    if row is None:
-        return False
-    value = row[0]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes", "on")
-    return bool(value)
+    return row is not None and _setting_bool(row[0])
 
 
 def _job_payload(
@@ -598,12 +598,7 @@ def _is_privileged(claims: dict[str, Any] | None) -> bool:
 
 
 def _budget_enabled(conn: "psycopg.Connection") -> bool:
-    val = _load_app_setting(conn, BUDGET_ENABLED_SETTING, True)
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.strip().lower() in ("true", "1", "yes", "on")
-    return bool(val)
+    return _setting_bool(_load_app_setting(conn, BUDGET_ENABLED_SETTING, True))
 
 
 def _canonical_url(url: str) -> str:
