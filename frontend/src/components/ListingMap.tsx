@@ -1428,7 +1428,7 @@ export default function ListingMap({
                 ? '—'
                 : cohortTotal != null && cohortTotal > total
                   ? `${total.toLocaleString('cs-CZ')} of ${cohortTotal.toLocaleString('cs-CZ')} mapped`
-                  : `${total.toLocaleString('cs-CZ')} ${total === 1 ? 'listing' : 'listings'}`}
+                  : `${total.toLocaleString('cs-CZ')} ${total === 1 ? 'property' : 'properties'}`}
             {counts != null && (
               /* Corollary F (a surface says what it shows in the cohort's own
                * terms): nothing is missing here, and the operator must not read

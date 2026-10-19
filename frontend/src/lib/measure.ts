@@ -10,7 +10,7 @@
  * `measure_price_per_m2_basis(category_main, category_type)` is published as
  * `price_per_m2_basis` on ALL FIVE read relations — listings_public,
  * properties_public, pipeline_board_public AND the two derived Browse read
- * models, `browse_list` + `properties_map_mv`. Migration
+ * models, `browse_list` (the list and the map read it) + `properties_map_mv`. Migration
  * 425 § 9 refuses to commit unless the last two carry it (both rebuilds run
  * inside the migration, and a skipped rebuild raises), and the column was
  * re-verified present on production on 2026-08-25. So every render surface

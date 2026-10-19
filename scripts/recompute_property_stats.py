@@ -421,8 +421,10 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     broker mirror selects adverts by their property AFTER the writer moved them. The Browse patch
     is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
     without it a recompute waited a measured mean 11.7 min (worst 36.6) for the */15 wholesale
-    rebuild, and a patch committed while a rebuild is in flight (~26% of wall-clock) lands on the
-    doomed table and is superseded silently. A full drain slice (2000 ids, only after a backlog;
+    rebuild, and a patch committed while a rebuild is in flight (61.9 s of every 900 s, measured
+    2026-10-19) lands on the doomed table: since migration 630 the rebuild re-patches identity
+    changes before its swap, and any other patch is superseded until the next rebuild. A full
+    drain slice (2000 ids, only after a backlog;
     the live depth is a couple of dozen) costs ~100-270 ms of ROW EXCLUSIVE on `browse_list`, the
     lock the rebuild's drop waits behind. That is the uncontended cost. The rebuild's drop runs
     with lock_timeout 0, so it queues behind any in-flight `browse_list` reader (up to 120 s on

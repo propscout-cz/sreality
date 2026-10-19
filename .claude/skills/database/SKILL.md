@@ -259,7 +259,7 @@ allowlisted with a reason) + `tests/api/test_account_scope_census.py` (no nullab
 defined once) into `browse_list` — an **UNLOGGED
 table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
-*before* the swap is mandatory or the planner uses stale stats on the fresh table).
+*before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it also builds `browse_list_map_idx` and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
 `properties_map_mv` stays a real `MATERIALIZED VIEW` (30-min cadence) fed from the same
 projection. (The publication-gate predicate is **gone** from the projection as of migration
 475 — flipped inert in August, then removed with the rest of the legacy dedup engine, rule
@@ -289,8 +289,9 @@ portal lists) and the nine `newest_ad_at_<portal>` dates (MS19), projected since
 **Re-signing `browse_stats_properties` / `browse_map_cells`** (one SPA builder, named arguments): a new DEFAULTED parameter may be applied before the SPA ships; REMOVING one the deployed SPA still sends is PGRST202 (Stats + map cells dead) until the next deploy, so the SPA stops sending it, deploys, THEN the migration drops it (597's order). DROP the exact signature + CREATE + restate the ACL in ONE transaction, md5-gated on the live body (pg_proc.prosrc: the whole dollar-quoted string, its first and last newline included). Stats = 625's 74 cohort parameters + `spec` (626, the dashboard pivot) + 629's nine curated-set scope parameters (both functions; `spec` and the map's `point_budget` shape the answer, never the cohort).
 
 **Two functions depend on `browse_projection`'s row type** (537; since 629 ten defaulted parameters: `hide_dismissed`
-+ the nine `<set>_set/_in/_out`): `browse_list_visible(...)`, `properties_map_visible(...)` — the SPA's ONE Browse
-source, judging dismissals + curated membership under the caller's RLS (a zero-arg call = 537's answer). A non-CASCADE `drop view browse_projection` now fails; drop and recreate them in the
++ the nine `<set>_set/_in/_out`): `browse_list_visible(...)` — the SPA's ONE Browse source since 630 (list, count and
+map pins), judging dismissals + curated membership under the caller's RLS (a zero-arg call = 537's answer) — and
+`properties_map_visible(...)`, with no SPA caller since 630 (W2 drops it). A non-CASCADE `drop view browse_projection` now fails; drop and recreate them in the
 same migration. Keep them `language sql stable`, invoker, no `SET`: that is what lets the planner
 inline them, so PostgREST's filters/ORDER BY/LIMIT still reach `browse_list`'s index.
 

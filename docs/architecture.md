@@ -641,8 +641,9 @@ rules. Identify which one a task belongs to before you start.
   migrations 299/331), functions are born private since migration 612, and a CI census
   (`tests/test_tenant_isolation_live.py`) keeps every `SECURITY DEFINER` function in `public`
   out of `anon`'s reach. The SPA reads the `*_public` views; the Browse/map read models
-  `browse_list` (an UNLOGGED table rebuilt blue-green) and `properties_map_mv` — plain
-  SELECT grants to `authenticated`, no RLS, read directly when "show dismissed" is on and
+  `browse_list` (an UNLOGGED table rebuilt blue-green; the list, its counts, the map pins and
+  the tile counts all read it since migration 630) and `properties_map_mv` (no SPA reader
+  since 630; dropped in W2) — plain SELECT grants to `authenticated`, no RLS, read directly when "show dismissed" is on and
   otherwise through their `*_visible` INVOKER twins (migration 537); the location-audit
   relations `location_pin_audit_mv` (a matview, no RLS) and `location_audit_waterfall` (RLS,
   read-all policy); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
@@ -678,7 +679,8 @@ rules. Identify which one a task belongs to before you start.
   (Corollary F). The fix was not a bigger cap but a fourth shape, an *aggregate* read
   (`browse_map_cells`): the server answers with a result whose SIZE IS BOUNDED BY
   CONSTRUCTION — since migration 602 the finest world-tile level with at most 1 024
-  occupied tiles, counted index-only over `properties_map_mv`, no `LIMIT` anywhere; the
+  occupied tiles, counted over `browse_list` through its map index `browse_list_map_idx`
+  (migration 630), no `LIMIT` anywhere; the
   SPA regroups the tiles at its own zoom by the same formula (`frontend/src/lib/mapCounts.ts`,
   `docs/design/map-counts.md`) — and reports the cohort's exact total alongside it. Reach for that shape
   whenever a surface renders a summary of many rows rather than the rows themselves;

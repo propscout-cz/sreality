@@ -1,9 +1,9 @@
 /* The single source of truth for "which Browse read surfaces must refresh after
  * a property-identity-changing mutation (merge / unmerge)".
  *
- * Every Browse surface reads the browse_list read model (cards, table, the
- * header/tab count, the no-price count, stats) or the map matview, so a merge
- * done anywhere must invalidate all of them. Before this helper the key list
+ * Every Browse surface reads the browse_list read model (cards, table, the map
+ * pins and tile counts, the header/tab count, the no-price count, stats), so a
+ * merge done anywhere must invalidate all of them. Before this helper the key list
  * was hand-typed per call site and drifted: the header count key
  * ('browse-count') was missing from every list, and the (since-removed) dedup
  * review page invalidated only its own keys, so a merge approved there left

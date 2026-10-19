@@ -617,8 +617,7 @@ export default function BrowseExperience({
   /* The listings PANEL's error drives the page banner. On the map tab that's the
    * cards list (cards.error) — a MAP-query failure is surfaced locally over the
    * map (mapError below), never blanking the listings: the two are independent
-   * surfaces, and the robust map source (properties_map_mv) makes a map failure
-   * rare anyway. */
+   * surfaces. */
   const activeError =
     tab === 'map' ? cards.error :
     tab === 'table' ? table.error :
@@ -1208,8 +1207,7 @@ export function MergeModeBar({
 
 /* Map-local failure notice. The map is its own surface — a map error shows here,
  * floating over the map, and never blanks the listings list (which loads fine on
- * its own keyset query). With the robust map source (properties_map_mv) this is
- * rare; the timeout copy stays as a graceful guide for an exceptionally broad area. */
+ * its own keyset query). The timeout copy is a guide for an exceptionally broad area. */
 function MapErrorOverlay({ error }: { error: Error }) {
   const isTimeout = /statement timeout|57014/i.test(error.message);
   return (
