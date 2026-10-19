@@ -238,6 +238,8 @@ describe('<ValuoSection> states', () => {
     expect(screen.getByText(t(`Nabídka je o ${fmtPct(above)} nad průměrem Valuo.`))).toBeInTheDocument();
     expect(screen.getByText(t(`± ${fmtMeasuredPricePerM2(7_200, 'sale')}`))).toBeInTheDocument();
     expect(screen.getAllByText('—')).toHaveLength(1); // no flags: the one dashed gap
+    expect(within(screen.getByText('Valuo ignorovalo').parentElement!).getByText('Podlaží')).toBeInTheDocument();
+    expect(screen.queryByText('Poloha')).not.toBeInTheDocument(); // a street-level point needs no note
     expect(fetchEstimationsForListings).not.toHaveBeenCalled();
   });
 
@@ -246,6 +248,7 @@ describe('<ValuoSection> states', () => {
       ...SALE,
       request: { ...SALE.request, kind: 'lease' },
       ppm2_basis: 'rent_monthly_czk_m2',
+      provenance: { ...PROVENANCE, place: { class: 'inferred', note: 'Poloha jen na úrovni obce' } },
       result: { ...SALE.result!, avg_price: 21_000, min_price: 18_000, max_price: 24_000, avg_price_m2: 385 },
     };
     renderSection(page({ history: [lease] }));
@@ -254,6 +257,8 @@ describe('<ValuoSection> states', () => {
     expect(screen.getByText(t(fmtMeasuredPricePerM2(385, 'rent')))).toBeInTheDocument();
     expect(screen.getByText('MF')).toBeInTheDocument();
     expect(screen.queryByText('nabídka')).not.toBeInTheDocument();
+    // The card says the point sent was only a town's (it was valued over the town, not blocked).
+    expect(within(screen.getByText('Poloha').parentElement!).getByText('Poloha jen na úrovni obce')).toBeInTheDocument();
   });
 
   it('shows a failed row as its stored sentence, and a picked history row as its card', async () => {

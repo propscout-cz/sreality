@@ -56,7 +56,7 @@ describe('<Segmented>', () => {
 
 /* The one decimal input (RunPanel's estimate inputs; the Valuo editor). */
 describe('<DecimalField>', () => {
-  const type = (text: string, props: { readOnly?: boolean } = {}) => {
+  const type = (text: string, props: { readOnly?: boolean; integer?: boolean } = {}) => {
     const onChange = vi.fn();
     const { unmount } = render(
       <DecimalField label="Plocha" value={40} onChange={onChange} suffix="m²" {...props} />,
@@ -74,6 +74,11 @@ describe('<DecimalField>', () => {
   it('ignores text that is not a number, and every edit when read-only', () => {
     expect(type('52 m')).toEqual([]);
     expect(type('52', { readOnly: true })).toEqual([]);
+  });
+
+  it('in integer mode emits whole numbers only, a fraction staying typed text', () => {
+    expect(type('-2', { integer: true })).toEqual([[-2]]);
+    expect(type('2,5', { integer: true })).toEqual([]);
   });
 
   /* Typed key by key into a host that keeps the value: the box once showed

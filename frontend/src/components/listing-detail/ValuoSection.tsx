@@ -158,6 +158,9 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
     ['Ke dni', typeof v.request.as_of === 'string' ? fmtDateSlash(v.request.as_of) : null],
     ['Příznaky', flags],
   ];
+  // Said only when there is something to say: a point coarser than a street, a parameter the answer did not use.
+  const ignored = v.ignored_ids.map((n) => page?.fields.find((f) => f.name === n)?.label ?? n).join(', ');
+  const notes = [['Poloha', v.provenance.place?.note], ['Valuo ignorovalo', ignored]].filter((n): n is [string, string] => !!n[1]);
   return (
     <EstimateCard eyebrow={eyebrow} aside={aside}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
@@ -181,6 +184,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
             {value ?? <span className={`px-1.5 border border-dashed border-[var(--color-rule-strong)] rounded-[var(--radius-xs)] ${INK3}`}>—</span>}
           </CardRow>
         ))}
+        {notes.map(([label, text]) => <CardRow key={label} label={label}>{text}</CardRow>)}
       </dl>
       <p className="mt-1.5 text-[0.58rem] text-[var(--color-ink-4)]">Valuo API · počet srovnání Valuo neuvádí</p>
     </EstimateCard>
