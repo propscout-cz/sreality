@@ -526,10 +526,10 @@ characters), reminder `<label>: still Problem|Watch for N h — <subjects>`, rec
 `✓ <label>: <subjects> recovered after N h`. An onset sets `alert_count = 1, alerted_at = now()`;
 a reminder adds one to `alert_count` and moves `alerted_at`.
 
-**Delivery.** `system_health_channels` is `[]` (Q1), so notices ring the in-app bell only; the flip
-is two `app_settings` rows plus a transport secret on the API service (the `toolkit-api` skill:
-`RESEND_API_KEY` / `TELEGRAM_BOT_TOKEN`; `api/main.py` starts `outbox_loop` only when a transport
-`is_configured()`). Ready since wave 3: the outbox's `compose_message` sends a `system_health` row
+**Delivery.** `system_health_channels` is `[]` by ruling Q1 (2026-10-18), so notices ring the in-app
+bell only; switching on is three steps (a transport key on the API service and a deploy, the
+recipient, a migration with a test system alert: § Delivery readiness, below). Ready since wave 3: the
+outbox's `compose_message` sends a `system_health` row
 with its message as the body, as subject the text before the first ` — ` (the messages above are
 one line of up to 1,500 characters) or else its first 120 characters ("System alert" when
 empty), and the link `{SPA_BASE_URL}/health#<key>` when the dedupe key starts `sys:<key>:`, else
@@ -734,6 +734,128 @@ check measured elsewhere — the watcher's, or the worker's.
 that is every deploy's normal state until the new process's first pass claims the lease. An API
 that stops cleanly and never comes back is therefore no liveness Problem by itself; it shows only
 once a liveness cell fails and finds no incident, which the canary's third assertion then emails.
+
+## Delivery readiness — the bell only, ready for Telegram and email (Health dashboard sprint wave 7, 2026-10-19)
+
+**Today: the bell only, by ruling Q1 (2026-10-18).** Every system alert (a Health notice: onset,
+reminder or recovery) rings the in-app bell and goes nowhere else: `system_health_channels` is
+`[]`, the API service holds no transport key (the secret that lets it send through Telegram, or
+email through Resend), both recipients are empty, and `channel_sends`, the ledger of every message
+sent out of the app, has never held a row (10-19). The one way out is GitHub's failure email: the
+canary reds its run while an alarm's onset or reminder sits unread and unsent, its incident open and
+unacknowledged, 15 min to 12 h after it was written (`alarm_notices_handled`, above), so an alarm
+nobody read reaches you at the next canary run (median gap ~4.9 h). That email needs neither Supabase's
+scheduler nor Railway, so it stays once delivery is on: it is the path left when the database or the
+API is down.
+
+**Ready, and switched off:**
+- Two transports: `api/transports/telegram.py` (`TELEGRAM_BOT_TOKEN`) and
+  `api/transports/email_resend.py` (`RESEND_API_KEY` and `EMAIL_FROM`, both needed), registered in
+  `api/dependencies._build_transports`.
+- The outbox, `api/notification_outbox.py`. `api/main.py` starts it when the API boots, and only
+  when a transport `is_configured()` and `OUTBOX_DRAIN_DISABLED` is unset, so a new key works from
+  the next deploy, never before. Every `notifications_outbox_interval_seconds` (120 s) it sends each
+  notice of the last 7 days that is addressed to a configured channel with a recipient, once
+  (`channel_sends` keyed `notif:<dispatch id>:<channel>`), and retries a failed send until 5
+  attempts. A system alert's message is its text, its head the email subject, with a link to the
+  check's row on Health (the ladder's **Delivery** paragraph, above); with `SPA_BASE_URL` unset it
+  carries no link.
+- Addressed when written: the ladder's `emit_system_alert` copies `system_health_channels` into
+  each system alert's `target_channels` as it writes it, so switching on reaches system alerts
+  written from then on and never sends the bell's old ones. Watchdogs and collections choose their
+  own channels; on 10-19 none had chosen email or Telegram and no notice of the last 7 days was
+  addressed to either, so the first deploy with a key sends nothing old.
+- Recipients: `app_settings.notification_email_to` and `notification_telegram_chat_id`, edited in
+  the app (step 2) and shared with the watchdogs and collections that choose email or Telegram.
+- The canary: since wave 2 `alarm_notices_handled` counts an alarm's notice as handled when a
+  `channel_sends` row for it reads `sent` (or `delivered`, the Resend webhook's later state), as it
+  counts one read in the bell (`tests/scripts/test_health_canary.py`). Once delivery is on, GitHub
+  emails about an alarm only when its system alert's send failed or never happened, so a broken
+  transport still reaches you.
+
+**What Q1 holds back:** the channel list, and with it the key and the recipient that make it work.
+No code is missing.
+
+**Switching it on: three steps, when you decide** (the design recommends Telegram). Before step 3,
+acknowledge on Health what you already know about: a gauge left unacknowledged reminds once a day
+(Q2), and from step 3 its reminders reach your phone or inbox too.
+
+1. **The key, on the Railway API service.**
+   - *Telegram:* in the Telegram app search `@BotFather` (the one with the blue check mark), open it
+     and tap **Start**. Send `/newbot`, then a display name (e.g. "Health alerts"), then a username
+     ending in `bot` (e.g. `my_health_alerts_bot`). BotFather answers with a token like
+     `123456789:AAH…`: copy it and keep it like a password. Open the new bot (the `t.me/…` link in
+     that answer) and send it any message: a bot can write only to someone who wrote to it first.
+   - *Email:* on resend.com, **Domains** → **Add Domain**; add the DNS records it lists at your
+     domain's registrar and wait until the domain reads Verified. Then **API Keys** → **Create API
+     Key** with Sending access, and copy the key (it starts `re_`). The sender is an address on that
+     domain, e.g. `Health alerts <alerts@your-domain>`.
+   - On railway.com, in the `sreality_scraper` workspace, open the **API** project (not `vite`, not
+     `realtime-worker`) → its one service, `sreality` → the **Variables** tab → **New Variable**: name
+     `TELEGRAM_BOT_TOKEN`, value
+     the token → **Add**. For email, two variables: `RESEND_API_KEY` (the `re_` key) and
+     `EMAIL_FROM` (the sender).
+   - In the same list, `SPA_BASE_URL` must hold the app's address: what your browser shows while the
+     app is open, starting `https://` (the address bar hides it) and ending `.up.railway.app`, with no
+     `/` at the end. Add it if it is
+     missing, or system alerts arrive without their link to Health. If `OUTBOX_DRAIN_DISABLED` is
+     listed, delete it: it keeps the outbox off whatever else is set. Email only, optional:
+     `NOTIFICATION_UNSUB_SECRET` plus `API_PUBLIC_URL` (the API's address) add a one-click
+     unsubscribe link; without them the email still sends.
+   - A banner at the top counts the staged changes: click **Deploy**, a plain click (holding Alt
+     saves without a restart, and the outbox starts only when the API restarts), and wait until the
+     new deployment is Active. Its log line `notification outbox started (a transport is configured)`
+     never shows: the API's root logger drops INFO lines (API root logging, named in
+     `docs/design/health-dashboard.md` § 10, no issue yet), so step 3's test system alert is the check.
+2. **The recipient, in the app.** The top bar's **Admin** menu → under Settings, **General
+   Settings** → section 3, **Delivery** (click its heading if it is folded).
+   - *Telegram:* open `https://api.telegram.org/bot<token>/getUpdates` in your browser, with your
+     token in place of `<token>` (the address holds the secret: never share it). The number after
+     `"chat":{"id":` is your chat ID, e.g. `123456789`; if the page shows `"result":[]`, send the
+     bot another message and reload. Paste it into **Telegram chat ID**.
+   - *Email:* your address in **Email recipient**.
+   - Click **Save** beside the field; "Saved." appears.
+3. **The channel list and a test system alert, by migration.** On your word, an agent writes a migration
+   (a numbered SQL file that changes the database once) with the next free number that day
+   (`ls migrations/ | tail -5`; the database skill), applies it through `apply_migration.yml` before
+   its PR merges and verifies it with a SELECT. For Telegram it holds (`'["email"]'` and
+   `array['email']` for email, both names for both):
+
+   ```sql
+   update app_settings set value = '["telegram"]'::jsonb where key = 'system_health_channels';
+   insert into notification_dispatches
+     (source_kind, change_kind, channel, status, message, dedupe_key, target_channels)
+   values ('system_health', 'system_alert', 'in_app', 'sent',
+           'Delivery test: Health alerts now reach you here',
+           'sys:delivery_test:<YYYY-MM-DD>', array['telegram'])
+   on conflict (dedupe_key) do nothing;
+   ```
+
+   Within about two minutes (the outbox's 120 s) the test system alert reaches your phone or inbox,
+   as well as the bell; its link opens Health at the top (no check is named `delivery_test`, and the
+   canary never asserts it). Confirm it arrived. Its send should read `sent`:
+
+   ```sql
+   select cs.status, cs.error_message
+     from channel_sends cs join notification_dispatches d on d.id = cs.notification_id
+    where d.dedupe_key = 'sys:delivery_test:<YYYY-MM-DD>';
+   ```
+
+   A `failed` row's `error_message` names the cause (a wrong token, a chat ID the bot never heard from, an
+   unverified sender); no row means the outbox is not running (step 1's deploy) or the recipient is
+   empty (step 2). It is a migration, not an edit of the key in Settings › App settings, because it
+   also writes the test system alert, in the same step.
+
+From then on every system alert reaches the bell and your channel; the bell stays the log (reading
+there marks a notice read, and only Acknowledge on Health stops reminders). To switch off:
+`system_health_channels` back to `[]` (a migration again), or delete the key on Railway and click
+**Deploy**.
+
+**No migration in wave 7.** The design's `623_health_delivery.sql` is written at enabling time, not
+now: merged under Q1 it would sit on main unapplied, against apply-before-merge, and its two
+statements, data only, declare nothing `migration_drift` can probe, so that check would read it
+"unverifiable" and nothing would show it was never applied. The number 623 is moot too: main
+reached 634 while the sprint ran.
 
 ## The health lane — the worker measures its own checks (wave 3, 2026-10-19)
 

@@ -438,7 +438,7 @@ rule #16; all OPTIONAL, dark until set):
   forbids cold outreach — outreach gets a separate EU vendor). Railway API env.
 - `TELEGRAM_BOT_TOKEN` — the Telegram Bot API transport (`api/transports/telegram.py`). Railway
   API env. The recipient `chat_id` lives in `app_settings.notification_telegram_chat_id`.
-- `SPA_BASE_URL` — SPA origin for notification deep links (`{SPA_BASE_URL}/listing/{id}`; a `system_health` send links `/health#<key>`, the key read off its `sys:<key>:` dedupe key, else `/health`).
+- `SPA_BASE_URL` — SPA origin for notification deep links (`{SPA_BASE_URL}/listing/{id}`; a `system_health` send links `/health#<key>`, the key read off its `sys:<key>:` dedupe key, else `/health`, and carries no link while it is unset).
 - `RESEND_WEBHOOK_SECRET` (Wave 3, migration 367) — Svix signing secret for `POST /webhooks/resend`.
   Railway API env. Unset = the webhook 503s (fail closed); the handler verifies the Svix HMAC over
   the raw body with the stdlib (no dependency, same auth class as the Stripe webhook), dedups by
@@ -456,7 +456,7 @@ rule #16; all OPTIONAL, dark until set):
   handler verifies the `Stripe-Signature` HMAC with the stdlib (no stripe SDK).
 - `OUTBOX_DRAIN_DISABLED` (flag) — force-off the delivery outbox loop. The loop ALSO only starts
   when ≥1 transport `is_configured()`, so it's a true no-op until a key above is set + redeploy.
-- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting); its `system_health` dispatches carry `system_health_channels` (`[]` = bell only) and reach the outbox like any other, which sends each with the message as body and as subject its text before the first ` — ` (else its first 120 characters; "System alert" when empty).
+- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting); its `system_health` dispatches carry `system_health_channels` and reach the outbox like any other, which sends each with the message as body and as subject its text before the first ` — ` (else its first 120 characters; "System alert" when empty). As of Health wave 7 (2026-10-19) the list is `[]`, bell only by ruling Q1 (2026-10-18), and both transports are ready: switching on is three steps (a key on the API service and a deploy, the recipient in Settings › Delivery, a migration with a test system alert), click by click in the scraper-ops skill's `references/pipeline-verification.md` § Delivery readiness.
 - Operator destinations are `app_settings` rows (operator-editable, history-tracked):
   `notification_email_to`, `notification_telegram_chat_id` (empty = that channel skipped);
   `notifications_outbox_interval_seconds` paces the loop. A watchdog opts in via

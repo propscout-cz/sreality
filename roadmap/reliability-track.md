@@ -51,7 +51,7 @@ truth enforced only in production, and N identical emails for one cause.
 | W0.5 the second week's fires | (a) ceskereality contract v4 + contract-immutability lockfile rail in `test.yml` — un-wedges the intake lane, closes the merged≠enforced gap for portal contracts; (b) `llm_liveness` recalibrated 4h → 13h to the real (post-dedup) producer cadence | 🟡 in progress (2026-08-31, shipped as hotfix PRs ahead of wave order — the lane was down) |
 | W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks, rebuilt in the Health dashboard sprint's wave 4 as the `scraping` and `publishing` checks and the `coverage` gauge) | ⚪ proposed — needs operator sign-off |
 | W2 migration file as contract | `-- apply:` / `-- assert:` header tokens above a watermark (≥ 444), asserts executed inside `migrations.yml`'s existing per-file apply loop and *validated as able to fail*, plus schema-vocabulary parity and the hot-DDL doctrine rails. **W2.3's live-catalog drift check shipped in parallel as PR #1204 (`check_migration_drift`)** — remaining W2.3 scope is hardening it, not building it | ⚪ proposed — needs operator sign-off (part shipped in parallel) |
-| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) awaits the operator — until flipped, incidents ring the in-app bell only. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
+| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) stays off — bell only by ruling Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7; enabling = the three steps. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
 | W4 apply becomes a job | Hot-table DDL applied out-of-band by a tested, extracted lock primitive (`attempts=1`, fail fast, escalate to a window — the retry-loop pattern is retired, not tuned); the existing PK-swap applier generalised into a dispatchable maintenance window | ⚪ proposed — needs operator sign-off + one human step (`REALTIME_WORKER_ENABLED`) |
 | W5 constraint-only catalog diff | Named successor: diff CI's replayed schema against the live catalog. Catches 438 exactly, plus the ~241 migrations with no ledger row and no assert, plus the reverse drift direction W2 structurally cannot see — with zero per-migration convention | ⚪ named only, not built (open question 8) |
 
@@ -124,7 +124,9 @@ onset was **2026-08-24 23:09 UTC**, ~45 h earlier than the doc states. Migration
 `pipeline_check_results`, so W3.4's ladder cannot consume them.
 
 **Not flipped, on purpose:** `system_health_channels` is still `[]`. Incidents ring the
-in-app bell only until the operator chooses routing.
+in-app bell only, by ruling Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7;
+enabling = the three steps (the scraper-ops skill's `references/pipeline-verification.md` §
+Delivery readiness).
 
 ## Open questions blocking W1–W4
 
@@ -197,7 +199,7 @@ Next:
 - ~~`verify_pipeline`: a timed-out warn counts as "not failing", closes the incident and sends a false "Recovered" (`text_extraction_lag` did it 6 times since 10-02); a timeout must keep the incident open.~~ Done 2026-10-18 (Health dashboard sprint wave 1: a timeout is `unknown`).
 - ~~`llm_errors` rate arm: `currently_failing` still reads the newest call of ANY provider; for ~24 h after a top-up a stray error can turn the check red again. → Health dashboard sprint wave 3 (the llm check).~~ Done 2026-10-19 (wave 3: the `llm` check judges the error share per provider).
 - ~~`worker_lane_stall` reports `failed_passes` but never alarms on it. → wave 3 (the jobs check's lane cells).~~ Done 2026-10-19 (wave 3: a lane cell judges failing spells and flapping).
-- Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; wave 7 keeps email and Telegram ready.
+- Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; readiness documented in Health dashboard sprint wave 7 (2026-10-19); enabling = the three steps, at the operator's word.
 
 ## 2026-10-18 — Health dashboard sprint, wave 1 (shipped with this PR)
 
@@ -256,7 +258,8 @@ Owed items this absorbs:
 - **From the 2026-10-10 Next list:** the timed-out warn that closed an incident with a false
   "Recovered" is fixed (a timeout is `unknown`), and the ladder no longer re-derives incidents from
   30 days of results. The `llm_errors` any-provider rate arm and `worker_lane_stall`'s unalarmed
-  `failed_passes` move to wave 3 (the llm and jobs checks); delivery follows Q1 (bell only for now).
+  `failed_passes` move to wave 3 (the llm and jobs checks); delivery follows Q1 (bell only by ruling
+  Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7; enabling = the three steps).
 
 ~~**Next:** wave 2 — `health_liveness()` on pg_cron every 5 minutes and one hourly GitHub canary
 (migration 620).~~ Done 2026-10-18 (wave 2, below).
@@ -629,5 +632,45 @@ keys; Health shows the three new rows and the re-hosted location row within minu
 `capture-data-quality`; `data_quality` reads Problem on realitymix's komerční/pronájem floor cell, as
 expected.
 
-**Next:** wave 7 — delivery readiness: with the bell the only channel (Q1), the docs and click-by-click
-steps that switch email or Telegram on later; no channel is switched on.
+~~**Next:** wave 7 — delivery readiness: with the bell the only channel (Q1), the docs and click-by-click
+steps that switch email or Telegram on later; no channel is switched on.~~ Done 2026-10-19 (Health
+dashboard sprint wave 7, below).
+
+## 2026-10-19 — Health dashboard sprint, wave 7 (shipped with this PR)
+
+Delivery readiness, docs only: by ruling Q1 (2026-10-18) the bell stays the one channel for now, and
+the system is kept ready for Telegram and email. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 7, and its "As
+built" note; reference: the scraper-ops skill's `references/pipeline-verification.md` § Delivery
+readiness.
+
+What Health dashboard sprint wave 7 changed:
+- **The enabling path, written down** for later, click by click, in three steps: (1) on Railway, the
+  API service's Variables: `TELEGRAM_BOT_TOKEN`, or `RESEND_API_KEY` and `EMAIL_FROM`, with
+  `SPA_BASE_URL` checked for the link to Health, then Deploy; (2) the recipient in Settings ›
+  Delivery (Telegram chat ID or Email recipient); (3) a migration written that day with the next free
+  number: the channel list and one test system alert, "Delivery test: Health alerts now reach you here",
+  confirmed when it arrives.
+- **No migration.** The design's 623 is not written: merged under Q1 it would sit on main unapplied,
+  and its data-only statements are invisible to `migration_drift` (it reads such a file
+  "unverifiable"). The enabling migration takes the next free number on the day you give the word
+  (main reached 634 during the sprint), and wave 9's destructive one likewise when it comes.
+- **Verified, not changed:** since wave 2 the canary has counted an alarm's notice as handled when it
+  was sent or delivered, as it counts one read in the bell, and its tests pin it; nothing has ever
+  been sent (`channel_sends` held 0 rows on 10-19), and no watchdog or collection is opted into email
+  or Telegram, so switching on sends nothing old.
+- **The bell-only statements** here, in the toolkit-api skill and in the media-integrity design now
+  name the ruling and point to the steps; that design's 2026-08-04 ruling is re-affirmed (2026-10-18),
+  not superseded.
+- The flaky wave-4 rail `test_the_producers_stamp_lands_on_the_row` (a 1 µs miss on CI) is fixed, and the
+  canary's channel-status pins are added (sent and delivered count as handled; queued, failed, bounced
+  and suppressed do not).
+
+Owed: the enabling migration, at your word (the three steps). GitHub's failure email stays either
+way: it is the path that needs neither Supabase's scheduler nor Railway.
+
+To check after the merge: nothing changes in production; `system_health_channels` still reads `[]`
+and the bell rings as before.
+
+**Next:** wave 8 — the Health page: one screen, at 1,280 px and on the phone, shows what is wrong,
+where and why, and links to the page that owns the fix.

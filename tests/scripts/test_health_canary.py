@@ -7,6 +7,7 @@ CI's database job; here the fake answers each read with the rows that SQL would 
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,13 @@ def _notice(minutes: float, *, kind: str = "onset", key: str = "llm_errors",
     """One system alert as _NOTICES_SQL returns it."""
     return (f"sys:{key}:{kind}:2026-10-18T10:00:00Z", _ago(minutes), seen, delivered, cls,
             open_unacked)
+
+
+def _counted(status: str) -> bool:
+    """Whether _NOTICES_SQL counts a channel_sends row in this status as the notice delivered."""
+    statuses = re.search(r"s\.status in \(([^)]*)\)", hc._NOTICES_SQL)
+    assert statuses, "_NOTICES_SQL no longer reads `s.status in (...)`: re-pin the delivery tests"
+    return status in {s.strip(" '") for s in statuses[1].split(",")}
 
 
 class _Conn:
@@ -196,11 +204,19 @@ def test_an_unseen_reminder_is_asserted_like_an_onset(monkeypatch: Any) -> None:
     assert _main(monkeypatch, _conn(notices=[_notice(20, kind="reminder")])) == 1
 
 
-@pytest.mark.parametrize("handled", [{"seen": True}, {"delivered": True},
-                                     {"open_unacked": False}],
-                         ids=["seen", "delivered", "acknowledged"])
+@pytest.mark.parametrize("handled", [{"seen": True}, {"open_unacked": False}],
+                         ids=["seen", "acknowledged"])
 def test_a_handled_alarm_notice_exits_0(monkeypatch: Any, handled: dict[str, bool]) -> None:
     assert _main(monkeypatch, _conn(notices=[_notice(20, **handled)])) == 0
+
+
+@pytest.mark.parametrize("status, code", [("delivered", 0), ("sent", 0), ("queued", 1),
+                                          ("failed", 1), ("bounced", 1), ("suppressed", 1)])
+def test_a_channel_send_handles_the_notice_once_sent(monkeypatch: Any, status: str,
+                                                     code: int) -> None:
+    """Resend's webhook turns `sent` into `delivered` later; Telegram has no webhook, so a
+    sent-only row must count. A send queued, failed, bounced or suppressed reached no one."""
+    assert _main(monkeypatch, _conn(notices=[_notice(20, delivered=_counted(status))])) == code
 
 
 def test_a_notice_inside_its_grace_is_not_asserted_yet(monkeypatch: Any) -> None:

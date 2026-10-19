@@ -544,6 +544,9 @@ isolation, same `pipeline_check_results` row, same transition alerting.
 row → the SPA nav bell, plus per-source detail on `/health`. **Note:**
 `app_settings.system_health_channels` is currently `[]`, so today every system alert is
 in-app-bell-only — no email, no Telegram. That is an operator decision (§6 Q3), not a gap.
+Re-affirmed 2026-10-18 by the Health dashboard sprint's ruling Q1 (bell only for now), with email and
+Telegram made ready to switch on in its wave 7 (2026-10-19; the steps: the scraper-ops skill's
+`references/pipeline-verification.md` § Delivery readiness).
 
 ### 3.3 Repair — one generic re-extraction path, not an image script
 
@@ -795,6 +798,10 @@ It is now load-bearing repair substrate, so this must be written down as policy 
 Consequence for PR 4: the badge is the *only* signal, so the two zero-false-positive checks
 (`media`, `media_unknown`) ship straight at `severity='fail'` rather than warming up on `warn`.
 The FP-prone ones (`media_complete`, `media_photoless`) still start at `warn`.
+*Re-affirmed 2026-10-18, not superseded: the Health dashboard sprint's ruling Q1 keeps the bell only
+for now (`docs/design/health-dashboard.md` § 11), and its wave 7 (2026-10-19) made email and Telegram
+ready to switch on in three steps (the scraper-ops skill's `references/pipeline-verification.md` §
+Delivery readiness).*
 
 **Q4 — foreign inventory** → **segment metrics AND flag in the UI.** Split every media/quality
 metric by `obec_id IS NULL`, and surface a visible marker + Browse filter so foreign stock can be
