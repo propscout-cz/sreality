@@ -30,11 +30,14 @@
 --         since v_since names (its survivor, retired and previous property, and the moved ad's current
 --         property), and each is deleted from browse_list_next and re-inserted from browse_projection
 --         before the rename (a retired property returns no row, which is the point). last_rows follows
---         the patch. The read is a sequential scan: neither created_at nor undone_at is indexed, a plain
---         detach only stamps undone_at on old rows, and ids are not commit-ordered, so no id watermark is
---         complete. 28 ms warm (98 MB heap, 2026-10-19). The window spans ~30-45 min, so an autodedup
---         burst re-patches up to ~2k ids under the lock (p95 1,281, max 2,031 over 14 days); projecting
---         1,156 ids from browse_projection measured 155 ms.
+--         the patch. The read goes by recency through property_merge_events_recent_idx (3.): a plain
+--         detach only stamps undone_at on old rows and ids are not commit-ordered, so no id watermark is
+--         complete, and greatest(created_at, undone_at) is the one bounded key (28 ms warm as a seq scan
+--         on 2026-10-19; the index keeps it bounded by the window as the ledger grows ~12 %/week). The
+--         window spans ~30-45 min, so an autodedup burst re-patches up to ~2k ids under the lock (p95
+--         1,281, max 2,031 over 14 days); projecting 1,156 ids from browse_projection measured 155 ms.
+--   3. property_merge_events_recent_idx on greatest(created_at, undone_at): the re-patch's one key.
+--      GREATEST ignores NULLs, so an undone row sorts by its undone_at, every other row by created_at.
 --
 -- APPLY through apply_migration.yml (--ref the W1 branch) once the PR is green, IMMEDIATELY BEFORE it
 -- merges: from this file's commit until the SPA deploys, the tile counts read browse_list while the
@@ -59,7 +62,7 @@ do $pre$
 begin
   if coalesce((select md5(prosrc) from pg_proc
                  where oid = to_regprocedure('public.rebuild_browse_list()')), '')
-     not in ('be7b0ec2297d269f495a42fdcc474517', 'f34e93e30cedf284e75fd5b47ea232f7') then
+     not in ('be7b0ec2297d269f495a42fdcc474517', 'b422be1accf77776408c63adfc8a69a5') then
     raise exception '630 refused: rebuild_browse_list() is not 605''s body nor this file''s';
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
@@ -79,6 +82,10 @@ $pre$;
 -- ---------------------------------------------------------------------------
 -- 1. browse_map_cells: 629's body, read from browse_list (the two edits the header lists).
 -- ---------------------------------------------------------------------------
+-- The re-patch reads the identity ledger by recency; this keeps that read bounded by the window.
+create index if not exists property_merge_events_recent_idx
+  on public.property_merge_events (greatest(created_at, undone_at));
+
 create or replace function public.browse_map_cells(
   districts_filter text[] default null::text[],
   dispositions_filter text[] default null::text[],
@@ -479,7 +486,7 @@ begin
     from property_merge_events e
     cross join lateral (values (e.survivor_property_id), (e.retired_property_id), (e.prev_property_id),
                                ((select a.property_id from listings a where a.id = e.listing_ref_id))) as x(pid)
-   where (e.created_at >= v_since or e.undone_at >= v_since) and x.pid is not null;
+   where greatest(e.created_at, e.undone_at) >= v_since and x.pid is not null;
   if cardinality(v_ids) > 0 then
     execute 'delete from browse_list_next where property_id = any($1)' using v_ids;
     get diagnostics v_gone = row_count;
@@ -531,7 +538,7 @@ declare
                  where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_map_cells');
   v_rebuild oid := to_regprocedure('public.rebuild_browse_list()');
 begin
-  if (select md5(prosrc) from pg_proc where oid = v_rebuild) is distinct from 'f34e93e30cedf284e75fd5b47ea232f7' then
+  if (select md5(prosrc) from pg_proc where oid = v_rebuild) is distinct from 'b422be1accf77776408c63adfc8a69a5' then
     raise exception '630 did not land: rebuild_browse_list() is not this file''s body';
   end if;
   if (select string_agg(md5(p.prosrc), ',') from pg_proc p

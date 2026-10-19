@@ -126,3 +126,11 @@ def test_a_revert_restores_605s_rebuild_and_629s_map_rpc() -> None:
 def test_the_file_forces_no_rebuild() -> None:
     """The next */15 tick builds the index; a forced rebuild would hold browse_list for ~62 s at apply."""
     assert not re.search(r"(select|perform)\s+(public\.)?rebuild_browse_list\(\)", _code(SQL))
+
+
+def test_the_ledger_read_is_bounded_by_its_recency_index() -> None:
+    assert "create index if not exists property_merge_events_recent_idx" in SQL
+    assert "greatest(e.created_at, e.undone_at) >= v_since" in SQL
+    assert "e.created_at >= v_since or" not in SQL
+    reverts = sorted(PATH.parent.glob("reverts/630_*.sql"))
+    assert reverts and "drop index if exists public.property_merge_events_recent_idx" in reverts[0].read_text()

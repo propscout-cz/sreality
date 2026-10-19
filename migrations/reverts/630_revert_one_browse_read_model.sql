@@ -35,7 +35,7 @@ begin
   end if;
   if coalesce((select md5(prosrc) from pg_proc
                  where oid = to_regprocedure('public.rebuild_browse_list()')), '')
-     not in ('f34e93e30cedf284e75fd5b47ea232f7', 'be7b0ec2297d269f495a42fdcc474517') then
+     not in ('b422be1accf77776408c63adfc8a69a5', 'be7b0ec2297d269f495a42fdcc474517') then
     raise exception '630 revert refused: rebuild_browse_list() is not 630''s body (a later migration replaced it)';
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
@@ -47,6 +47,8 @@ end
 $pre$;
 
 -- 1. browse_map_cells back to 629's body.
+drop index if exists public.property_merge_events_recent_idx;
+
 create or replace function public.browse_map_cells(
   districts_filter text[] default null::text[],
   dispositions_filter text[] default null::text[],
