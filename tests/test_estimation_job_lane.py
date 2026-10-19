@@ -246,3 +246,41 @@ def test_sweep_stuck_runs_keys_off_claimed_at() -> None:
     low = sql.lower()
     assert "coalesce(claimed_at, created_at)" in low
     assert params == (15,)
+
+
+class _SettingConn:
+    """One app_settings row (None = no row); `boom` makes the read raise."""
+
+    def __init__(self, row: tuple[Any] | None, boom: bool = False) -> None:
+        self.row, self.boom = row, boom
+
+    def cursor(self) -> "_SettingConn":
+        return self
+
+    def __enter__(self) -> "_SettingConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    def execute(self, *args: Any) -> None:
+        if self.boom:
+            raise RuntimeError("settings down")
+
+    def fetchone(self) -> tuple[Any] | None:
+        return self.row
+
+
+@pytest.mark.parametrize(("value", "on"), [
+    (True, True), (False, False), (" Yes ", True), ("on", True), ("1", True), ("off", False),
+    ("", False), (1, True), (0, False), (None, None),
+])
+def test_both_estimation_flags_read_a_setting_the_same_way_but_default_apart(value, on):
+    """One parser for the job-lane flag and the budget flag; an absent value, a missing row or a
+    failed read is OFF for the lane (it ships dark) and ON for the budget (fail-closed)."""
+    assert er._job_lane_enabled(_SettingConn((value,))) is (on is True)
+    assert er._budget_enabled(_SettingConn((value,))) is (on is not False)
+    assert er._job_lane_enabled(_SettingConn(None)) is False
+    assert er._budget_enabled(_SettingConn(None)) is True
+    assert er._job_lane_enabled(_SettingConn(None, boom=True)) is False
+    assert er._budget_enabled(_SettingConn(None, boom=True)) is True

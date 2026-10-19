@@ -110,7 +110,7 @@ it (`api/`). They do not apply to the scraper.
    `/skill-refinements/*`, `/location/*`, dataset-write/dispatch routes on price-stats, and the manual-estimate writes (shared
    reference data, mig 290; stamp the admin into `updated_by`, + `account_id` on insert) use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
    `/pipeline/*`, `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE gates, then the service role writes the share + its notification), `/tags`, `/filter-presets` (per account, mig 595), `PUT /stats/dashboard` (per account, mig 626: the Browse › Stats board, a whole-document upsert validated by `toolkit/stats_registry.py`; the SPA reads it through RLS), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
-   `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), and `/brokers/*` use `verify_jwt`/`tenant_conn` for per-account
+   `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (account resolved by hand: no tenant transaction across the paid call) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
    the manual-estimate read, estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
@@ -410,12 +410,15 @@ LLM + maps (FastAPI service + scoring jobs):
   (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
 - `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. `scraper.geocoding`, the `/maps/suggest` proxy and the
-  static map fail over to it **only** when the primary is rejected (401/403) or rate-limited (429), never on a 5xx.
-  Set it as the GitHub Actions secret (`seed_curated_cities.yml`) and the **Railway API env var**. Unset → no-op.
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding, `/maps/suggest` and the static map fail over
+  to it in ONE loop (`scraper.geocoding.with_mapy_key_failover`) **only** on a rejected (401/403) or rate-limited (429)
+  primary, never on a 5xx. GitHub Actions secret (`seed_curated_cities.yml`) + the **Railway API env var**. Unset → no-op.
 - `MAPY_STATIC_MAPS_ENABLED` (Railway API, default on; `0` → 404 `disabled`, read per request) — the phone's Poloha:
   `GET /properties/{id}/static-map.png?w=1080` streams Mapy's static map (540×405 @2x, **4 credits** a fetch, one
   `STATIC_MAP` line each to count them) on EVERY view, `private, max-age=3600`; Mapy's terms forbid storing it — never R2/disk.
+- `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API only, never local, never `VITE_*`) — Valuo's paid calculation API
+  (`api/valuo_client.py`); the NAME is the environment: production wins, neither = `GET /properties/{id}/valuo` says "Valuo zatím
+  není nastaveno." and the POST 503s. Each row stamps `environment` + `token_sha`; tests delete both (`tests/conftest.py`).
 - `LLM_DAILY_COST_WARN_USD` (optional, default `5.0`) — soft cross-provider warning
   threshold; `LLMClient` logs one WARNING per day when the `llm_calls.cost_usd` sum first
   crosses it. Each provider's own console spend cap is the hard guard.
@@ -427,9 +430,6 @@ API service:
 - `STUCK_ROW_SWEEP_DISABLED`, `NOTIFICATIONS_MATCHER_DISABLED` (optional flags) — disable the
   startup sweep of stuck estimation/building runs, and the background watchdog matcher loop (with
   the system-alerts loop beside it), respectively. Default: both enabled.
-- `STRIPE_WEBHOOK_SECRET` (Railway API) — HMAC secret verifying `Stripe-Signature` on
-  `POST /billing/webhook`. Unset → the webhook fails closed (rejects every request), not a
-  silent no-op — billing writes never happen without explicit signature verification.
 
 Notification delivery (Sprint N — `channel_sends` ledger + `api/transports/` + the outbox loop,
 rule #16; all OPTIONAL, dark until set):

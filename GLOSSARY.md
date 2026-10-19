@@ -71,6 +71,12 @@ _Avoid_: backfill day, horizon, go-live day
 An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
 
+**Valuo valuation**:
+A price for one property bought from Valuo, an outside valuation service: what was sent, where each
+value came from, which Valuo environment answered, and Valuo's answer in its own words. Shown beside
+our own estimates, never counted as one of them.
+_Avoid_: Valuo estimate, Valuo run, external estimate
+
 ### Changing what belongs together
 
 **Merge**:

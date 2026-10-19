@@ -383,3 +383,31 @@ def test_explicit_api_key_disables_failover(monkeypatch):
         geocoding.geocode("Praha", api_key="explicit", session=sess)
     assert len(sess.calls) == 1
     assert sess.calls[0]["params"]["apikey"] == "explicit"
+
+
+def test_the_one_key_failover_logs_on_the_callers_logger_and_the_last_key_is_final(caplog):
+    """geocode, the /maps suggest proxy and the static map share this loop: a refusal moves
+    on and logs the caller's own line; the last key is called with last=True and its error
+    (a refusal included) is the caller's to see."""
+    import logging
+
+    seen: list[tuple[str, bool]] = []
+
+    def call(key: str, last: bool) -> str:
+        seen.append((key, last))
+        if not last:
+            raise geocoding.MapyKeyRefused(429)
+        return f"ok:{key}"
+
+    log = logging.getLogger("api.maps")
+    with caplog.at_level(logging.WARNING, logger=log.name):
+        out = geocoding.with_mapy_key_failover(
+            call, ["a", "b"], log=log, refused="k %d/%d refused (status=%s)")
+    assert out == "ok:b" and seen == [("a", False), ("b", True)]
+    assert [(r.name, r.getMessage()) for r in caplog.records] == [("api.maps", "k 1/2 refused (status=429)")]
+
+    def refuse(key: str, last: bool) -> str:
+        raise geocoding.MapyKeyRefused(401)
+
+    with pytest.raises(geocoding.MapyKeyRefused):
+        geocoding.with_mapy_key_failover(refuse, ["only"], log=log, refused="unused %d %d %s")

@@ -1940,3 +1940,21 @@ def test_post_ungeocodable_url_rejected_before_spend(client, monkeypatch):
     resp = client.post("/estimations", json={"url": "https://www.bezrealitky.cz/x/123"})
     assert resp.status_code == 422
     assert "geocoding" in resp.json()["detail"].lower()
+
+
+def test_a_scraped_subject_resolves_alike_by_id_and_by_url():
+    """One builder for both scraped-row paths: the body's overrides over a COPY of the row's spec,
+    no parse fields, the row's price / category / listing id."""
+    from types import SimpleNamespace
+
+    matched = {
+        "sreality_id": None, "listing_id": 9, "spec": {"lat": 50.0, "area_m2": 40.0},
+        "price_czk": 3_000_000, "category_type": "prodej",
+    }
+    r = er._resolution_from_listing(matched, SimpleNamespace(spec_overrides={"area_m2": 41.0}), "https://x/1")
+    assert r.target_spec == {"lat": 50.0, "area_m2": 41.0} and matched["spec"]["area_m2"] == 40.0
+    assert (r.input_url, r.input_sreality_id, r.input_listing_id) == ("https://x/1", None, 9)
+    assert (r.subject_listing_price_czk, r.subject_listing_category_type) == (3_000_000, "prodej")
+    assert (r.source_kind, r.parse_confidence, r.parse_warnings, r.subject_attributes) == (None, None, [], None)
+    plain = er._resolution_from_listing(matched, SimpleNamespace(spec_overrides=None), None)
+    assert plain.target_spec == matched["spec"] and plain.target_spec is not matched["spec"]

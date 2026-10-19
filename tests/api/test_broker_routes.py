@@ -3,7 +3,7 @@
 Both fixtures override `verify_jwt` only: `require_admin` depends on it, so one
 override drives both gates and the 403 below is the real dependency's decision.
 The admin fixture is parametrized over BOTH claim shapes `require_admin` honours,
-so dropping either arm of `_is_admin` fails here instead of quietly serving one
+so dropping either arm of `deps.is_admin` fails here instead of quietly serving one
 admin a masked envelope while `/contacts` still answers them in full.
 """
 

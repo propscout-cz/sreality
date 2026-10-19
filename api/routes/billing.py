@@ -302,12 +302,7 @@ def _agent_estimation_quota(conn: Any, claims: dict, account_id: Any) -> dict[st
     `metered` mirrors create_estimation_run's bypass set (admin never metered),
     so the panel hides the counter for the operator (unlimited).
     Lazy import breaks the estimation_runs <-> billing cycle."""
-    meta = claims.get("app_metadata") or {}
-    if (
-        account_id is None
-        or claims.get("is_admin") is True
-        or meta.get("is_admin") is True
-    ):
+    if account_id is None or deps.is_admin(claims):
         return {"quota": 0, "used": 0, "remaining": 0, "is_trial": False, "metered": False}
 
     from api.estimation_runs import (
@@ -350,11 +345,7 @@ def require_entitlement(agenda: str) -> Callable[..., dict]:
         claims: dict = Depends(deps.verify_jwt),
         conn: Any = Depends(deps.get_db_conn),
     ) -> dict:
-        meta = claims.get("app_metadata") or {}
-        if (
-            claims.get("is_admin") is True
-            or meta.get("is_admin") is True
-        ):
+        if deps.is_admin(claims):
             return claims
         account_id = tenant_pool.resolve_account_id(conn, claims)
         ent = _entitlement_view(conn, account_id)

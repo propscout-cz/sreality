@@ -31,8 +31,9 @@ import re
 import time
 from typing import Any
 
-import requests
 from fastapi import HTTPException
+
+from api import http_json
 
 LOG = logging.getLogger(__name__)
 
@@ -64,12 +65,6 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-def _http_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
-    resp = requests.get(url, params=params, headers=_HEADERS, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
 def _distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = p2 - p1, math.radians(lng2 - lng1)
@@ -88,13 +83,12 @@ def split_label(label: str) -> tuple[str | None, str | None]:
 
 def _suggest(phrase: str, categories: str) -> list[dict[str, Any]]:
     try:
-        raw = _http_get_json(
-            SUGGEST_URL,
-            {"phrase": phrase, "category": categories, "lang": "cs", "limit": 10},
+        raw = http_json.fetch_json(
+            "GET", SUGGEST_URL, timeout=10, headers=_HEADERS,
+            params={"phrase": phrase, "category": categories, "lang": "cs", "limit": 10},
         )
-    except (requests.RequestException, ValueError) as exc:
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        LOG.warning("sreality suggest upstream failure status=%s: %s", status, exc)
+    except http_json.HttpJsonError as exc:
+        LOG.warning("sreality suggest upstream failure: %s", exc)
         raise HTTPException(
             status_code=503, detail="sreality suggest temporarily unavailable",
         ) from exc

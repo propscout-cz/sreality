@@ -51,7 +51,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from fastapi import HTTPException
 
 from api.cursor import decode_cursor, encode_cursor
-from api.dependencies import SYSTEM_ACCOUNT_ID
+from api.dependencies import SYSTEM_ACCOUNT_ID, is_admin
 
 from psycopg.types.json import Jsonb
 
@@ -468,6 +468,13 @@ _EMPTY_RESOLUTION = _Resolution(
 JOB_LANE_SETTING = "estimation_job_lane_enabled"
 
 
+def _setting_bool(value: Any) -> bool:
+    """An app_settings flag's value: a JSON bool as is, a string by its spelling, else truthiness."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
+
+
 def _job_lane_enabled(conn: "psycopg.Connection") -> bool:
     """True when POST /estimations should hand execution to the realtime
     worker's estimation lane (Amendment A10) instead of running the heavy work
@@ -484,14 +491,7 @@ def _job_lane_enabled(conn: "psycopg.Connection") -> bool:
     except Exception:  # noqa: BLE001 - a settings read must never fail a submit
         LOG.warning("job-lane flag read failed; treating as disabled")
         return False
-    if row is None:
-        return False
-    value = row[0]
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes", "on")
-    return bool(value)
+    return row is not None and _setting_bool(row[0])
 
 
 def _job_payload(
@@ -594,19 +594,11 @@ def _is_privileged(claims: dict[str, Any] | None) -> bool:
     mirroring require_entitlement's bypass."""
     if claims is None:
         return True   # internal caller (ClickUp / agent / test) — never metered
-    if claims.get("is_admin") is True:
-        return True
-    meta = claims.get("app_metadata") or {}
-    return meta.get("is_admin") is True
+    return is_admin(claims)
 
 
 def _budget_enabled(conn: "psycopg.Connection") -> bool:
-    val = _load_app_setting(conn, BUDGET_ENABLED_SETTING, True)
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.strip().lower() in ("true", "1", "yes", "on")
-    return bool(val)
+    return _setting_bool(_load_app_setting(conn, BUDGET_ENABLED_SETTING, True))
 
 
 def _canonical_url(url: str) -> str:
@@ -1708,6 +1700,22 @@ def _subject_attributes_from_result(
     return attrs
 
 
+def _resolution_from_listing(
+    matched: dict[str, Any], body: s.CreateEstimationIn, input_url: str | None,
+) -> _Resolution:
+    """The subject is an already-scraped listings row (by id or by URL): its spec under the
+    body's overrides, no parse."""
+    return _Resolution(
+        input_url=input_url,
+        input_sreality_id=matched["sreality_id"],
+        target_spec={**matched["spec"], **(body.spec_overrides or {})},
+        source_kind=None, parse_confidence=None, parse_confidence_per_field=None, source_html=None,
+        subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
+        subject_listing_category_type=matched.get("category_type"),
+        input_listing_id=matched.get("listing_id"),
+    )
+
+
 def _resolve_input(
     conn: "psycopg.Connection",
     sreality_client: "SrealityClient",
@@ -1730,23 +1738,7 @@ def _resolve_input(
             raise ValueError(
                 f"listing {body.sreality_id} not found or missing coordinates"
             )
-        spec = dict(matched["spec"])
-        if body.spec_overrides:
-            spec = {**spec, **body.spec_overrides}
-        return _Resolution(
-            input_url=None,
-            input_sreality_id=matched["sreality_id"],
-            target_spec=spec,
-            source_kind=None,
-            parse_confidence=None,
-            parse_confidence_per_field=None,
-            source_html=None,
-            parse_warnings=[],
-            subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
-            subject_listing_category_type=matched.get("category_type"),
-            subject_attributes=None,
-            input_listing_id=matched.get("listing_id"),
-        )
+        return _resolution_from_listing(matched, body, None)
     if body.url is not None:
         # Non-sreality portals don't resolve to a listings row through the
         # dispatcher, but we scrape them — so try the already-scraped row first.
@@ -1754,23 +1746,7 @@ def _resolve_input(
         if source_dispatcher.classify_url(body.url) != "sreality":
             matched = _match_listing_by_url(conn, body.url)
             if matched is not None:
-                spec = dict(matched["spec"])
-                if body.spec_overrides:
-                    spec = {**spec, **body.spec_overrides}
-                return _Resolution(
-                    input_url=body.url,
-                    input_sreality_id=matched["sreality_id"],
-                    target_spec=spec,
-                    source_kind=None,
-                    parse_confidence=None,
-                    parse_confidence_per_field=None,
-                    source_html=None,
-                    parse_warnings=[],
-                    subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
-                    subject_listing_category_type=matched.get("category_type"),
-                    subject_attributes=None,
-                    input_listing_id=matched["listing_id"],
-                )
+                return _resolution_from_listing(matched, body, body.url)
 
         result = source_dispatcher.parse_listing_url(
             body.url,

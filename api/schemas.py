@@ -653,6 +653,11 @@ class GetManualRentalEstimatesIn(BaseModel):
     sreality_id: int
 
 
+class ValuoRunIn(BaseModel):
+    """A Valuo valuation (api/valuo.py): parameter -> the user's value, or null to send none."""
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
 # --- buildings ------------------------------------------------------------
 # Phase B0 of the building-decomposition track. See ROADMAP.md
 # "Building decomposition track" and CLAUDE.md architectural rule #13.

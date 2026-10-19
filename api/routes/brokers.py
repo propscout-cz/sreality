@@ -34,13 +34,8 @@ class ListingIdsIn(BaseModel):
     listing_ids: list[int] = Field(default_factory=list, max_length=brokers.MAX_BATCH)
 
 
-def _is_admin(claims: dict[str, Any]) -> bool:
-    meta = claims.get("app_metadata") or {}
-    return claims.get("is_admin") is True or meta.get("is_admin") is True
-
-
 def _policy(envelope: dict[str, Any], claims: dict[str, Any]) -> dict[str, Any]:
-    return brokers.apply_pii_policy(envelope, include_pii=_is_admin(claims))
+    return brokers.apply_pii_policy(envelope, include_pii=deps.is_admin(claims))
 
 
 @router.get("")
@@ -118,7 +113,7 @@ def get_search(
     # The only read whose PREDICATE is caller-supplied, so the policy has to reach
     # the query itself: masking the projection alone left the ILIKE matching text
     # the response redacted, i.e. a guess-confirming oracle over it.
-    admin = _is_admin(claims)
+    admin = deps.is_admin(claims)
     return _policy(brokers.search(conn, q, limit=limit, include_pii=admin), claims)
 
 

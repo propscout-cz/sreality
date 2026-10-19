@@ -39,9 +39,9 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-import requests
 from fastapi import HTTPException
 
+from api import http_json
 from api.location_filter import ChipLevel
 from location_data.resolver.composite import match_streets
 from location_data.resolver.geo import haversine_m
@@ -57,7 +57,7 @@ from location_data.resolver.resolve_db import (
     SqlRegistryView,
 )
 from location_data.resolver.types import RegistryView, Street
-from scraper.geocoding import KEY_LEVEL_STATUS, mapy_api_keys
+from scraper.geocoding import KEY_LEVEL_STATUS, MapyKeyRefused, mapy_api_keys, with_mapy_key_failover
 
 LOG = logging.getLogger(__name__)
 
@@ -94,12 +94,6 @@ def _api_keys() -> list[str]:
     return keys
 
 
-def _http_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
-    resp = requests.get(url, params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
 def _cache_evict_expired(now: float) -> None:
     for k, (exp, _) in list(_suggest_cache.items()):
         if exp <= now:
@@ -130,36 +124,29 @@ def suggest(query: str, *, limit: int = 10, lang: str = "cs") -> dict[str, Any]:
 def _fetch_suggest(
     query: str, *, limit: int, lang: str, keys: list[str]
 ) -> dict[str, Any]:
-    last_exc: Exception | None = None
-    for i, key in enumerate(keys):
+    def attempt(key: str, last: bool) -> dict[str, Any]:
         try:
-            return _http_get_json(
-                MAPY_SUGGEST_URL,
-                {
+            return http_json.fetch_json(
+                "GET", MAPY_SUGGEST_URL, timeout=10,
+                params={
                     "query": query, "limit": limit, "lang": lang,
                     "type": "regional", "apikey": key,
                 },
             )
-        except (requests.RequestException, ValueError) as exc:
-            last_exc = exc
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status in KEY_LEVEL_STATUS and i < len(keys) - 1:
-                LOG.warning(
-                    "Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
-                    i + 1, len(keys), status,
-                )
-                continue
+        except http_json.HttpJsonError as exc:
+            if exc.status in KEY_LEVEL_STATUS and not last:
+                raise MapyKeyRefused(exc.status) from exc
             # A rejected key / throttle / outage from Mapy must NOT surface as a raw
             # 500: the typeahead says "Place search is unavailable" only on a 503, and
             # a 500 leaves a silent empty dropdown. Log the real upstream status.
-            LOG.warning("Mapy suggest upstream failure status=%s: %s", status, exc)
+            LOG.warning("Mapy suggest upstream failure: %s", exc)
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
             ) from exc
-    # Unreachable: the last key never `continue`s.
-    raise HTTPException(
-        status_code=503, detail="geocoding temporarily unavailable",
-    ) from last_exc
+
+    return with_mapy_key_failover(
+        attempt, keys, log=LOG, refused="Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
+    )
 
 
 _CURRENT_VERSION_SQL = "SELECT id FROM registry_versions WHERE is_current LIMIT 1"
