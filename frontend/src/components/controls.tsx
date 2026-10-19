@@ -400,8 +400,8 @@ export function NumberCell({
   onBlur,
   ariaLabel,
 }: {
-  /* A string value lets callers that buffer raw text (FilterForm's
-   * BufferedNumberInput) keep mid-typing intermediates like '-' alive. */
+  /* A string value lets a caller that buffers raw text (DecimalField's
+   * `cell`) keep mid-typing intermediates like '-' alive. */
   value: number | string | null;
   placeholder: string;
   onChange: (e: ChangeEvent<HTMLInputElement>) => void;
@@ -419,6 +419,87 @@ export function NumberCell({
       aria-label={ariaLabel}
       className="w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
     />
+  );
+}
+
+/* DecimalField — the one typed-number input, with an optional unit after it.
+ * The typed text is buffered: rebuilding it from the parsed number dropped a
+ * trailing "52," on every key, so 52,5 could not be typed, and wiped a lone
+ * "-", so "-10" stored +10. Only text that parses emits (a comma is the decimal
+ * point, an empty box is null, `integer` truncates); a blur or an outside
+ * change of `value` shows the value again, with a decimal comma. `cell` draws
+ * it as the filter forms' NumberCell box and keeps their display as it was
+ * (the value as String(v), no reset on blur). `label` is the input's
+ * accessible name; the visible caption is the caller's. */
+const decimalText = (v: number | null) => (v == null ? '' : String(v).replace('.', ','));
+
+export function DecimalField({
+  label,
+  value,
+  onChange,
+  step,
+  placeholder,
+  suffix,
+  readOnly,
+  integer,
+  cell,
+  className = '',
+}: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  step?: string;
+  placeholder?: string;
+  suffix?: string;
+  readOnly?: boolean;
+  integer?: boolean;
+  cell?: boolean;
+  className?: string;
+}) {
+  const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
+  const [buf, setBuf] = useState({ text: shown(value), value });
+  // Adjust-state-during-render (the documented derived-state pattern): adopt an outside value.
+  if (buf.value !== value) setBuf({ text: shown(value), value });
+  const onType = (e: ChangeEvent<HTMLInputElement>) => {
+    if (readOnly) return;
+    const text = e.target.value;
+    const raw = text.trim().replace(',', '.');
+    const n = raw === '' ? null : Number(raw);
+    if (n !== null && !Number.isFinite(n)) return setBuf({ text, value });
+    const v = integer && n !== null ? Math.trunc(n) : n;
+    setBuf({ text, value: v });
+    onChange(v);
+  };
+  if (cell) {
+    return (
+      <NumberCell value={buf.text} placeholder={placeholder ?? ''} onChange={onType} ariaLabel={label} />
+    );
+  }
+  return (
+    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ')}>
+      <input
+        type="text"
+        aria-label={label}
+        inputMode="decimal"
+        readOnly={readOnly}
+        value={buf.text}
+        placeholder={placeholder}
+        step={step}
+        onChange={onType}
+        onBlur={() => setBuf({ text: decimalText(value), value })}
+        className={[
+          'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
+          readOnly
+            ? 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] cursor-default'
+            : 'bg-[var(--color-inset)]',
+        ].join(' ')}
+      />
+      {suffix && (
+        <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
+          {suffix}
+        </span>
+      )}
+    </div>
   );
 }
 

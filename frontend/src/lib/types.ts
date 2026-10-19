@@ -171,14 +171,6 @@ export interface ImagePublic {
   tag_head_scores?: Record<string, number> | null;
 }
 
-/* Distributional shape — drawn by components/estimation/RangeStrip. */
-
-export interface PercentileTriple {
-  p25: number;
-  p50: number;
-  p75: number;
-}
-
 /* Health dashboard payload — shape mirrors migration 013 health_summary RPC. */
 
 export interface HealthDayCount {
@@ -1178,13 +1170,6 @@ export interface UpdateBuildingInputsIn {
 
 export interface ConfirmBuildingUnitsIn {
   units: BuildingUnit[];
-}
-
-export interface BuildingListResponse {
-  data: BuildingRun[];
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 /* -------------------------------------------------------------------------- */

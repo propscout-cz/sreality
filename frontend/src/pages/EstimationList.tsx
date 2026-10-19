@@ -13,6 +13,7 @@ import {
   fmtCount,
   fmtCzk,
   fmtDateSlash,
+  fmtPct,
   fmtRelative,
   fmtTime24,
 } from '@/lib/format';
@@ -26,6 +27,7 @@ import { ApiError } from '@/lib/api';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { buildRerunPayload, canRerun } from '@/lib/rerun';
 import { ControlGroup } from '@/components/controls';
+import { RunStatusChip } from '@/components/estimation/RunPanel';
 import { useNewEstimationModal } from '@/components/NewEstimationModal';
 import { listingPath } from '@/lib/listingUrl';
 import { Th } from '@/components/table';
@@ -375,7 +377,7 @@ function YieldCell({ run }: { run: EstimationRun }) {
   }
   return (
     <span className="text-[var(--color-ink-2)]">
-      {run.gross_yield_pct.toFixed(2)}&nbsp;%
+      {fmtPct(run.gross_yield_pct, { digits: 2 })}
     </span>
   );
 }
@@ -484,11 +486,11 @@ function estimateTone(confidence: Confidence | null): string {
 
 function StatusCell({ run }: { run: EstimationRun }) {
   if (run.status !== 'failed' || !canRerun(run)) {
-    return <StatusPill status={run.status} />;
+    return <RunStatusChip status={run.status} />;
   }
   return (
     <div className="flex flex-col items-start gap-1">
-      <StatusPill status={run.status} />
+      <RunStatusChip status={run.status} />
       <RerunInlineButton run={run} />
     </div>
   );
@@ -517,21 +519,6 @@ function RerunInlineButton({ run }: { run: EstimationRun }) {
       )}
     </>
   );
-}
-
-function StatusPill({ status }: { status: EstimationStatus }) {
-  const tone = statusTone(status);
-  return (
-    <span className={['inline-block px-2 py-0.5 text-[0.65rem] tracking-wide uppercase rounded-[var(--radius-xs)] font-medium', tone].join(' ')}>
-      {status}
-    </span>
-  );
-}
-
-function statusTone(status: EstimationStatus): string {
-  if (status === 'success') return 'bg-[var(--color-sage-soft)] text-[var(--color-sage)]';
-  if (status === 'failed') return 'bg-[var(--color-brick-soft)] text-[var(--color-brick)]';
-  return 'bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]';
 }
 
 /* -------------------------------------------------------------------------- */

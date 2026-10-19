@@ -59,9 +59,6 @@ const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
 // the feed's chunk after its first launch (`/assets/*` cache-first).
 const LinkPage = lazyChunk(() => import('./pages/Link'));
 const Feed = lazyChunk(() => import('./pages/Feed'));
-// TODO(estimation-5 Part C1): remove DevConfidencePreview + its route
-// once design is approved and the indicator is in real use.
-const DevConfidencePreview = lazyChunk(() => import('./pages/DevConfidencePreview'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -162,7 +159,6 @@ export const routes: RouteObject[] = [
       { path: ROUTES.autodedupRulings.childPath, element: <AdminPage><AutodedupRulings /></AdminPage>, handle: { title: 'AUTODEDUP · Rozhodnutí' } },
       { path: ROUTES.autodedupJudge.childPath, element: <AdminPage><AutodedupJudge /></AdminPage>, handle: { title: 'AUTODEDUP · Soudce' } },
       { path: ROUTES.scrapers.childPath, element: <AdminPage><Scrapers /></AdminPage>, handle: { title: 'Scrapers' } },
-      { path: ROUTES.devConfidenceIndicator.childPath, element: <AdminPage><DevConfidencePreview /></AdminPage>, handle: { title: 'Confidence indicator (dev)' } },
       { path: '*', element: <NotFound />, handle: { title: 'Not found' } },
     ],
   },

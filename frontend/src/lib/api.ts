@@ -16,7 +16,6 @@
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   BuildingAttachment,
-  BuildingListResponse,
   BuildingRun,
   Collection,
   CollectionWithProperties,
@@ -39,7 +38,6 @@ import type {
   ParseResult,
   PipelineStage,
   SkillRefinement,
-  SourceKind,
   Tag,
   TagColor,
   NotificationSourceKind,
@@ -54,47 +52,6 @@ import type {
 import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
 import { supabase } from './supabase';
-
-/* Sources the backend allowlists for high-confidence parsing.
- * Anything else falls through to a best-effort parse. The order is
- * the order shown in the UI's "Supported:" tip line. Keep in sync
- * with scraper/source_dispatcher._KIND_SUFFIXES on the backend. */
-export const SUPPORTED_SOURCES: ReadonlyArray<{
-  kind: SourceKind;
-  label: string;
-  hostHint: string;
-}> = [
-  { kind: 'sreality',      label: 'sreality',      hostHint: 'sreality.cz' },
-  { kind: 'bezrealitky',   label: 'bezrealitky',   hostHint: 'bezrealitky.cz' },
-  { kind: 'idnes_reality', label: 'idnes-reality', hostHint: 'reality.idnes.cz' },
-  { kind: 'remax',         label: 'remax',         hostHint: 'remax-czech.cz' },
-];
-
-/* Display label for a source kind. Falls back to the raw kind so
- * unknown future kinds surface visibly rather than silently. */
-export const sourceKindLabel = (kind: SourceKind | null): string => {
-  if (kind == null) return '—';
-  if (kind === 'unsupported') return 'unsupported';
-  const found = SUPPORTED_SOURCES.find((s) => s.kind === kind);
-  return found ? found.label : kind;
-};
-
-/* Quick host-based classification — used by the URL input to choose
- * the right loading copy ("Fetching listing…" vs "Reading listing
- * with Claude…") before the request goes out. The backend re-classifies
- * authoritatively; this is a UX optimisation, not a security boundary. */
-export const classifyUrlHost = (url: string): SourceKind => {
-  let host: string;
-  try {
-    host = new URL(url.trim()).hostname.toLowerCase();
-  } catch {
-    return 'unsupported';
-  }
-  for (const { kind, hostHint } of SUPPORTED_SOURCES) {
-    if (host === hostHint || host.endsWith('.' + hostHint)) return kind;
-  }
-  return 'unsupported';
-};
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '');
 
@@ -549,13 +506,6 @@ export const createBuildingFromUrl = (
 export const getBuilding = (id: number): Promise<BuildingRun> =>
   request<BuildingRun>(`/buildings/${id}`);
 
-export const listBuildings = (
-  params: { source?: string; status?: string; limit?: number; offset?: number } = {},
-): Promise<BuildingListResponse> =>
-  request<BuildingListResponse>('/buildings', {
-    query: params as Record<string, QueryValue>,
-  });
-
 export const confirmBuildingUnits = (
   id: number,
   input: ConfirmBuildingUnitsIn,
@@ -593,13 +543,6 @@ export const uploadBuildingAttachment = (
   });
 };
 
-export const listBuildingAttachments = (
-  buildingId: number,
-): Promise<{ data: BuildingAttachment[] }> =>
-  request<{ data: BuildingAttachment[] }>(
-    `/buildings/${buildingId}/attachments`,
-  );
-
 export const deleteBuildingAttachment = (
   buildingId: number,
   attachmentId: number,
@@ -608,19 +551,6 @@ export const deleteBuildingAttachment = (
     `/buildings/${buildingId}/attachments/${attachmentId}`,
     { method: 'DELETE' },
   );
-
-/* Build a fetch URL for one attachment's raw bytes. The route is
- * bearer-gated, so callers that want to render the image in <img> tags
- * must either fetch via this helper and convert to a blob URL, or
- * include the token in a query param (we use the fetch + blob path,
- * which keeps the token out of the URL). */
-export const buildingAttachmentRawUrl = (
-  buildingId: number,
-  attachmentId: number,
-): string => {
-  if (!BASE_URL) return '';
-  return `${BASE_URL}/buildings/${buildingId}/attachments/${attachmentId}/raw`;
-};
 
 export const fetchBuildingAttachmentBlob = (
   buildingId: number,
@@ -979,13 +909,6 @@ export const getNewDedupCandidateListings = (q: {
       limit: q.limit ?? null,
     },
   });
-
-export const listNewDedupCandidateGenerations = (): Promise<{
-  data: NewDedupCandidateRecentGeneration[];
-}> =>
-  request<{ data: NewDedupCandidateRecentGeneration[] }>(
-    '/new-dedup/candidates/generations'
-  );
 
 // Tag annotation matrix (docs/design/tag-annotation-matrix.md) — the
 // operator-curated tag taxonomy, the relabel sample, and the tri-state
@@ -1430,9 +1353,6 @@ export const listTagLabelNotes = (
   request<{ data: TagLabelNote[] }>(`/new-dedup/labeling/tags/${tagId}/notes`, {
     query: params,
   });
-
-export const getOpenNoteCounts = (): Promise<{ data: Record<string, number> }> =>
-  request<{ data: Record<string, number> }>('/new-dedup/labeling/notes/open-counts');
 
 export const absorbTagLabelNotes = (
   tagId: number, body: { definition_id: number; note_ids: number[] },

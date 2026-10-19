@@ -1799,26 +1799,6 @@ export const fetchDerivedArtifacts = async (
   }));
 };
 
-/* Migration 178 — failed GitHub Actions runs recorded by the hourly health
- * canary's poller step (verify_pipeline.yml). */
-export interface WorkflowFailureRow {
-  workflow_name: string;
-  conclusion: string;
-  run_started_at: string | null;
-  html_url: string | null;
-}
-
-export const fetchRecentWorkflowFailures = async (
-  hours: number = 48,
-  { signal }: PgReadOptions = {},
-): Promise<WorkflowFailureRow[]> => {
-  const { data } = await pgRead<WorkflowFailureRow[] | null>(
-    supabase.rpc('recent_workflow_failures', { p_hours: hours }),
-    { signal },
-  );
-  return data ?? [];
-};
-
 /* Migration 220 — streak-aware per-workflow failure summary. One row per
  * workflow with the consecutive-failure streak + is_chronic flag, so the Health
  * card can separate a chronic break (failing every run for days) from a 1%
@@ -1982,25 +1962,18 @@ export const fetchCuratedCityPolygons = async (
 /* convention used by Supabase fetchers above.                                */
 /* -------------------------------------------------------------------------- */
 
-import {
-  useMutation,
-  useQuery,
-  type UseMutationResult,
-  type UseQueryResult,
-} from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import {
   ApiError,
   createEstimation,
   getEstimation,
   getTracePayload,
   listEstimations,
-  previewListingUrl,
   type TracePayload,
 } from './api';
 import type {
   CreateEstimationIn,
   EstimationListParams,
-  ParseResult,
   PipelineBoardCard,
   PipelineStage,
   TagColor,
@@ -2044,25 +2017,6 @@ export const fetchEstimationsForListings = (ids: ReadonlyArray<number>) =>
   listEstimations({ listing_ids: ids.join(','), limit: 100 });
 export const submitEstimation = (input: CreateEstimationIn) =>
   createEstimation(input);
-
-export interface UrlPreviewVars {
-  url: string;
-  force_refresh?: boolean;
-}
-
-/* Mutation wrapper around POST /estimations/preview. Pages call
- * `mutate({ url })` for a normal preview and `mutate({ url, force_refresh: true })`
- * for the bypass-cache path. The mutation isn't keyed (TanStack
- * Query mutations aren't), so re-running the same URL never reads
- * a stale React-Query cache — the cache decision lives entirely on
- * the backend's parsed_url_cache table. */
-export const useUrlPreview = (): UseMutationResult<
-  ParseResult, ApiError, UrlPreviewVars
-> =>
-  useMutation<ParseResult, ApiError, UrlPreviewVars>({
-    mutationFn: ({ url, force_refresh }) =>
-      previewListingUrl(url, { force_refresh }),
-  });
 
 /* -------------------------------------------------------------------------- */
 /* Curation (U2.6) — read paths.                                              */

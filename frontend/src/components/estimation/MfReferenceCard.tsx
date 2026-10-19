@@ -6,7 +6,7 @@
  * note behind an (i), or the note alone — and nothing when there is no result.
  * It holds no reason text of its own; the notes come from the SQL. */
 import { InfoHint } from '@/components/settings/SectionChrome';
-import { fmtCount, fmtCzk, fmtMeasuredPricePerM2 } from '@/lib/format';
+import { fmtCount, fmtCzk, fmtMeasuredPricePerM2, fmtPct } from '@/lib/format';
 import {
   mfShape,
   type ReferenceRent,
@@ -25,9 +25,6 @@ const MF_ADJ_LABELS: Record<string, string> = {
 /* Every per-m² figure in this card is a MONTHLY rent per m² — it is a rent
  * map — so it goes through the shared formatter on the rent basis. */
 const perM2 = (n: number) => fmtMeasuredPricePerM2(n, 'rent');
-
-const pct2 = (n: number) =>
-  n.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export function MfReferenceCard({
   refRent,
@@ -67,7 +64,7 @@ export function MfReferenceCard({
           </span>
           {yieldMin != null && yieldMax != null && (
             <YieldFigure>
-              {pct2(yieldMin)}–{pct2(yieldMax)}
+              {fmtPct(yieldMin, { digits: 2, unit: false })}–{fmtPct(yieldMax, { digits: 2 })}
             </YieldFigure>
           )}
         </div>
@@ -95,7 +92,7 @@ export function MfReferenceCard({
           {fmtCzk(ref.monthly_rent_czk)}
           <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>
         </span>
-        {yieldPct != null && <YieldFigure>{pct2(yieldPct)}</YieldFigure>}
+        {yieldPct != null && <YieldFigure>{fmtPct(yieldPct, { digits: 2 })}</YieldFigure>}
       </div>
       <dl className="mt-2 space-y-0.5 text-[0.72rem] tabular-nums">
         <Row label={`Nájemné referenčního bytu${ref.is_novostavba ? ' (novostavba)' : ''}`}>
@@ -120,11 +117,13 @@ function Eyebrow() {
   );
 }
 
-function YieldFigure({ children }: { children: React.ReactNode }) {
+/* "hrubý výnos 4,60 %" beside a card's headline figure — the MF card's and
+ * our estimate's. */
+export function YieldFigure({ children }: { children: React.ReactNode }) {
   return (
     <span className="text-[0.72rem] text-[var(--color-ink-3)] tabular-nums">
       hrubý výnos{' '}
-      <span className="text-[var(--color-ink)] font-medium">{children} %</span>
+      <span className="text-[var(--color-ink)] font-medium">{children}</span>
     </span>
   );
 }

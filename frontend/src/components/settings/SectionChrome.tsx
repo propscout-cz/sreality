@@ -49,7 +49,7 @@ export function Chevron({ open, className = '' }: { open: boolean; className?: s
 /* -------------------------------------------------------------------- */
 /* Info hint — the compact form of a description: an (i) glyph that shows */
 /* its text natively on hover/focus, the same "cursor-help" idiom already  */
-/* used across the app (Pipeline's board-card Hint, ConfidenceIndicator).  */
+/* used across the app (Pipeline's board-card Hint).                      */
 /* -------------------------------------------------------------------- */
 
 export function InfoHint({ text, className = '' }: { text: string; className?: string }) {

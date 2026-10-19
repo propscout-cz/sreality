@@ -124,16 +124,17 @@ export const fmtDistanceM = (n: number | null | undefined): string => {
  * are visually symmetric. Bare magnitudes (a yield, a share) stay unsigned. */
 export const fmtPct = (
   n: number | null | undefined,
-  opts: { signed?: boolean; digits?: number } = {},
+  /* unit: false drops the "%" — the low end of a range ("3,60–4,10 %"). */
+  opts: { signed?: boolean; digits?: number; unit?: boolean } = {},
 ): string => {
   if (n == null || !Number.isFinite(n)) return '—';
-  const { signed = false, digits = 1 } = opts;
+  const { signed = false, digits = 1, unit = true } = opts;
   const body = n.toLocaleString('cs-CZ', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
   const sign = signed && n > 0 ? '+' : '';
-  return `${sign}${body}${NBSP}%`;
+  return unit ? `${sign}${body}${NBSP}%` : `${sign}${body}`;
 };
 
 /* Percentage POINTS — a difference between two percentages (a yield moving
@@ -205,33 +206,19 @@ export const fmtDurationSecs = (secs: number | null | undefined): string => {
   return h > 0 ? `${d}${THIN_SPACE}d ${h}${THIN_SPACE}h` : `${d}${THIN_SPACE}d`;
 };
 
-/* Migration 022 fields. The slug→Czech-label mapping lives in
- * lib/enums.ts; these formatters are the friendly wrappers that fall
- * back to '—' for nulls. */
+/* Migration 022 fields: the registry's Czech label, '—' for nulls. */
 
-import {
-  CATEGORY_SUB_LABELS,
-  FURNISHED_LABELS,
-  OWNERSHIP_LABELS,
-  categorySubLabel,
-} from './enums';
+import { enumLabel } from './enums';
 import type { Furnished, Ownership } from './types';
 
 export const fmtFurnished = (f: Furnished | null | undefined): string =>
-  f == null ? '—' : FURNISHED_LABELS[f];
+  enumLabel('furnished', f) ?? '—';
 
 export const fmtOwnership = (o: Ownership | null | undefined): string =>
-  o == null ? '—' : OWNERSHIP_LABELS[o];
+  enumLabel('ownership', o) ?? '—';
 
 export const fmtParkingLots = (n: number | null | undefined): string =>
   n == null ? '—' : `${czNumber.format(n)}${NBSP}${n === 1 ? 'místo' : 'místa'}`;
-
-export const fmtCategorySub = (cb: number | null | undefined): string =>
-  cb == null ? '—' : (categorySubLabel(cb) ?? '—');
-
-/* Re-export the label dict so dropdowns can iterate values without
- * a second import. */
-export { CATEGORY_SUB_LABELS, FURNISHED_LABELS, OWNERSHIP_LABELS };
 
 export const fmtAbsolute = (iso: string | null | undefined): string => {
   if (!iso) return '—';

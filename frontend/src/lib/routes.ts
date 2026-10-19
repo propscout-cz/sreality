@@ -152,7 +152,6 @@ export const ROUTES = {
   // Every pair the LLM judge read, for the operator to check; blind by default.
   autodedupJudge: def('/autodedup/judge'),
   scrapers: def('/scrapers'),
-  devConfidenceIndicator: def('/dev/confidence-indicator'),
 } as const;
 
 export type RouteKey = keyof typeof ROUTES;
