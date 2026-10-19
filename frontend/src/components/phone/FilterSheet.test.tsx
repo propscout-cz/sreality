@@ -127,6 +127,17 @@ describe('the registry walk', () => {
     expect(within(sheet()).getByRole('button', { name: /^Listing for/ })).toBeInTheDocument();
   });
 
+  it("draws 'Newly listed only' directly under the status buttons, not parked among the rarely-touched filters", () => {
+    const groups = sheetBands(HOUSES_FOR_SALE).flatMap((b) => b.groups.map((g) => [b.title, g] as const));
+    const status = groups.find(([, g]) => g.title === 'Status');
+    expect(status?.[0]).toBe('Essentials');
+    expect(status?.[1].rows.map((r) => r.key)).toEqual([
+      'status', 'tom_observed_only', 'recently_added_days', 'recently_changed_days',
+    ]);
+    const velocity = groups.find(([, g]) => g.title === 'Velocity');
+    expect(velocity?.[1].rows.map((r) => r.key)).not.toContain('tom_observed_only');
+  });
+
   it('shows Subtype and Yield only for the cohorts the sidebar shows them for', () => {
     const titles = (f: ListingFilters) => sheetBands(f)[0].groups.map((g) => g.title);
     expect(titles(DEFAULT_FILTERS)).not.toContain('Subtype');
