@@ -22,6 +22,9 @@
 --      listing_id -> listings key that scripts/apply_r2_constraints.py added outside migrations).
 --   4. function public.manual_rental_estimates_record_history(), dropped after the table that triggered it.
 -- No CASCADE: anything else that still depends on these must fail the apply, not vanish with it.
+-- After this file the unapplied 431 revert (migrations/reverts/431_revert_*.sql) no longer runs as written: its two
+-- `alter policy manual_rental_estimates_admin_*` statements name this dropped table and abort its transaction, so
+-- leave those two statements out if that revert is ever needed.
 --
 -- LOCKS. Dropping a table drops its foreign keys, which takes a brief lock on the referenced `listings` and
 -- `accounts`. The 5 s lock_timeout makes the drop give up instead of queueing at the head of listings' lock queue;

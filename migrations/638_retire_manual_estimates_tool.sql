@@ -21,6 +21,9 @@
 -- rental_estimator_full_v1 is removed, and only where it is present verbatim (live 2026-10-19: v8, length 12426,
 -- md5 51d01b8f3297cd31f35e70a696b8c9bc, carries it). A hand-edited variant is left alone and reported by a WARNING.
 -- rental_estimator_v1's live prompt never carried the step (047 left it to the operator).
+-- A refinement still `proposed` holds a full copy of the old prompt, and Apply (`api/refiner.apply_refinement`)
+-- writes it back as-is, so the same bullet goes from its `proposed_prompt` and `original_prompt` too (the pair the
+-- review diff compares); applied and dismissed refinements are history and stay as they are.
 -- Rollback: the prior version is the newest `skills_history` row for that name.
 
 do $m$
@@ -57,6 +60,21 @@ begin
     from public.skills where strpos(system_prompt, tool) > 0;
   if residual is not null then
     raise warning '638: prompt(s) of % still mention % (not the verbatim bullet) -- edit them in Settings',
+      residual, tool;
+  end if;
+
+  update public.skill_refinements
+     set proposed_prompt = replace(proposed_prompt, bullet, ''),
+         original_prompt = replace(original_prompt, bullet, '')
+   where status = 'proposed'
+     and (strpos(proposed_prompt, bullet) > 0 or strpos(original_prompt, bullet) > 0);
+  get diagnostics changed = row_count;
+  raise notice '638: % proposed refinement(s) updated', changed;
+
+  select string_agg(id::text, ', ' order by id) into residual
+    from public.skill_refinements where status = 'proposed' and strpos(proposed_prompt, tool) > 0;
+  if residual is not null then
+    raise warning '638: proposed refinement(s) % still mention % -- dismiss them or edit the skill after applying',
       residual, tool;
   end if;
 end
