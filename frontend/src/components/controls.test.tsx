@@ -108,4 +108,16 @@ describe('<DecimalField>', () => {
     rerender(<DecimalField label="Plocha" value={60} onChange={() => {}} />);
     expect(box).toHaveValue('60');
   });
+
+  /* The filter forms' box (Browse, Brokers): NumberCell's look, whole numbers. */
+  it('truncates when `integer`, and draws the NumberCell box when `cell`', () => {
+    const onChange = vi.fn();
+    render(<DecimalField cell integer label="Cena" value={null} onChange={onChange} placeholder="Kč" />);
+    const box = screen.getByRole('textbox', { name: 'Cena' });
+    fireEvent.change(box, { target: { value: '1500,9' } });
+    expect(onChange.mock.calls).toEqual([[1500]]);
+    expect(box).toHaveAttribute('inputmode', 'numeric');
+    expect(box).toHaveAttribute('placeholder', 'Kč');
+    expect(box).toHaveClass('w-full', 'px-2', 'py-1.5');
+  });
 });

@@ -24,7 +24,6 @@
  * lands in a follow-up commit once the map mode toggle is built.
  */
 
-import { useState } from 'react';
 import {
   FILTER_REGISTRY,
   type Agenda,
@@ -32,8 +31,8 @@ import {
 } from '@/lib/filterRegistry.generated';
 import {
   ControlGroup,
+  DecimalField,
   PickButton,
-  NumberCell,
   Section,
   TriRow,
   type TriValue,
@@ -369,6 +368,9 @@ function FilterRow({
   // ranges below build a 2-element update array directly so both
   // sides apply atomically against the parent's filter state.
   const onChange = (v: unknown) => emit([{ id: def.id, value: v }]);
+  // A number box emits only a changed value (DecimalField emits every parse).
+  const num = (value as number | null) ?? null;
+  const onNumber = (v: number | null) => v !== num && onChange(v);
 
   // When paired with a max-side, render the pair as either:
   //   - a dual-thumb RangeSlider when the registry declares a complete
@@ -485,12 +487,13 @@ function FilterRow({
       // min-only field. Paired ranges are caught above.
       return (
         <Caption label={label} bare={bare}>
-          <BufferedNumberInput
-            value={(value as number | null) ?? null}
-            coerce={def.type === 'int' ? 'int' : 'float'}
+          <DecimalField
+            cell
+            label={label}
+            value={num}
+            integer={def.type === 'int'}
             placeholder={unit ? `value ${unit}` : 'value'}
-            onChange={onChange}
-            ariaLabel={label}
+            onChange={onNumber}
           />
         </Caption>
       );
@@ -498,12 +501,13 @@ function FilterRow({
     case 'number_input':
       return (
         <Caption label={label} bare={bare}>
-          <BufferedNumberInput
-            value={(value as number | null) ?? null}
-            coerce={def.type === 'int' ? 'int' : 'float'}
+          <DecimalField
+            cell
+            label={label}
+            value={num}
+            integer={def.type === 'int'}
             placeholder="—"
-            onChange={onChange}
-            ariaLabel={label}
+            onChange={onNumber}
           />
           {unit ? <UnitHint unit={unit} /> : null}
         </Caption>
@@ -530,72 +534,6 @@ function FilterRow({
     default:
       return null;
   }
-}
-
-/* -------------------------------------------------------------------------- */
-/* BufferedNumberInput                                                        */
-/*                                                                            */
-/* Single-number widget with a local text buffer. The old handler parsed     */
-/* every keystroke and silently dropped unparseable intermediates — with a   */
-/* controlled input that WIPED the character, so typing "-10" into the       */
-/* signed total-price-change filter stored +10 (the opposite cohort) and     */
-/* "7.5" became 75. The buffer keeps the raw text; only complete parses      */
-/* emit. `buf.value` tracks the last emitted/adopted value so an external    */
-/* change (preset load, URL navigation, Reset) resyncs the text, while       */
-/* mid-typing intermediates (which emit nothing) keep it.                    */
-/* -------------------------------------------------------------------------- */
-
-// Exported for reuse outside the generic filter-registry form — Brokers.tsx's value
-// filter (migration 448) wants the same safe-buffering numeric input, driven by its
-// own local state instead of a FilterDef, and duplicating this logic would risk the
-// exact bug this component's own header comment documents.
-export function BufferedNumberInput({
-  value,
-  coerce,
-  placeholder,
-  onChange,
-  ariaLabel,
-}: {
-  value: number | null;
-  coerce: 'int' | 'float';
-  placeholder: string;
-  onChange: (v: number | null) => void;
-  ariaLabel?: string;
-}) {
-  const [buf, setBuf] = useState<{ text: string; value: number | null }>({
-    text: value == null ? '' : String(value),
-    value,
-  });
-  if (buf.value !== value) {
-    // Adjust-state-during-render (the documented derived-state pattern):
-    // the parent changed the value out from under us — adopt it.
-    setBuf({ text: value == null ? '' : String(value), value });
-  }
-  return (
-    <NumberCell
-      value={buf.text}
-      placeholder={placeholder}
-      ariaLabel={ariaLabel}
-      onChange={(e) => {
-        const raw = e.target.value;
-        const trimmed = raw.trim();
-        if (trimmed === '') {
-          setBuf({ text: raw, value: null });
-          if (value !== null) onChange(null);
-          return;
-        }
-        const n = Number(trimmed);
-        if (!Number.isFinite(n)) {
-          // Intermediate ('-', '.', '1e') — keep the text, emit nothing.
-          setBuf({ text: raw, value });
-          return;
-        }
-        const v = coerce === 'int' ? Math.trunc(n) : n;
-        setBuf({ text: raw, value: v });
-        if (v !== value) onChange(v);
-      }}
-    />
-  );
 }
 
 /* -------------------------------------------------------------------------- */

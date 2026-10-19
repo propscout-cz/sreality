@@ -198,13 +198,14 @@ describe('<FilterForm>', () => {
 
   /* Stateful harness mirroring how Browse / WatchdogEdit feed updates
    * back into `state` — required to expose controlled-input round trips. */
-  function StatefulNumberHarness({ id }: { id: string }) {
+  function StatefulNumberHarness({ id, seen = [] }: { id: string; seen?: unknown[] }) {
     const [state, setState] = useState<Record<string, unknown>>({ [id]: null });
     return (
       <FilterForm
         scope="browse"
         state={state}
         onChange={(updates) => {
+          seen.push(...updates.map((u) => u.value));
           setState((prev) => {
             const next = { ...prev };
             for (const u of updates) next[u.id] = u.value;
@@ -239,5 +240,27 @@ describe('<FilterForm>', () => {
     expect(input).toHaveValue('7.');
     fireEvent.change(input, { target: { value: '7.5' } });
     expect(input).toHaveValue('7.5');
+  });
+
+  it('reads a decimal comma, and emits only a value the filter does not hold yet', () => {
+    const seen: unknown[] = [];
+    render(<StatefulNumberHarness id="total_price_change_pct" seen={seen} />);
+    const input = screen.getByRole('textbox', { name: 'signed' });
+    for (const text of ['7', '7,', '7,5', '7,50', '']) {
+      fireEvent.change(input, { target: { value: text } });
+      expect(input).toHaveValue(text);
+    }
+    expect(seen).toEqual([7, 7.5, null]);
+  });
+
+  it('truncates an integer filter, a comma like a point, and shows the value on blur', () => {
+    const seen: unknown[] = [];
+    render(<StatefulNumberHarness id="price_change_count_min" seen={seen} />);
+    const input = screen.getByRole('textbox', { name: 'signed' });
+    fireEvent.change(input, { target: { value: '2,7' } });
+    expect(seen).toEqual([2]);
+    expect(input).toHaveValue('2,7');
+    fireEvent.blur(input);
+    expect(input).toHaveValue('2');
   });
 });
