@@ -242,7 +242,7 @@ describe('<Feed>', () => {
   });
 
   it('keeps the preset unmarked under a lens that rides outside it (rule 22)', async () => {
-    renderFeed(feedPath({ ...PRESET_FILTERS, pipeline: { stage_ids: [] } }));
+    renderFeed(feedPath({ ...PRESET_FILTERS, pipeline: { set: 'in', in: [], out: [] } }));
     expect(await screen.findByRole('button', { name: 'Vysočany byty' })).toHaveAttribute('aria-pressed', 'true');
     /* …but it is still a filter beyond the scope. */
     expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();

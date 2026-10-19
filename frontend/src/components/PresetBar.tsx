@@ -59,6 +59,7 @@ import {
   type ListingFilters,
   type PresetSpec,
 } from '@/lib/filters';
+import { scopeIncludes } from '@/lib/setScope';
 import type { FilterPreset, TagColor } from '@/lib/types';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import PresetSaveModal from '@/components/PresetSaveModal';
@@ -379,8 +380,8 @@ function PipelineScopeChip({
   onLoadView: () => void;
 }) {
   const scope = filters.pipeline;
-  const on = scope != null;
-  const stageCount = scope?.stage_ids.length ?? 0;
+  const on = scopeIncludes(scope);
+  const stageCount = scope?.in.length ?? 0;
 
   return (
     <button

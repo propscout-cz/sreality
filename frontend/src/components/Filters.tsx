@@ -40,6 +40,7 @@ import {
   PipelineScopePicker,
 } from '@/components/filter-controls';
 import { AccountTagFilter } from '@/components/filter-controls/TagFilterControl';
+import { normalizeScope, type SetScope } from '@/lib/setScope';
 /* Lazy: this is the only control here that draws a map, it renders only in
  * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
  * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
@@ -154,18 +155,17 @@ export function IncludeNoPriceToggle({
   );
 }
 
-/* Collection scope (rule #18). The registry's `int_list` fallback is a box you
- * type ids into, so the sidebar picks from the ONE collections list instead. A
- * failed read is a retry, never "No collections yet" (MS16). Collections shared
- * with the caller sit in their own group over the SAME value array (one
- * `collections` URL parameter); a picked id the list no longer holds (revoked,
+/* Collection scope (rule #18, lib/setScope): the sidebar picks from the ONE
+ * collections list. A failed read is a retry, never "No collections yet" (MS16).
+ * Collections shared with the caller sit in their own group over the SAME scope
+ * (one `collections` URL parameter); a picked id the list no longer holds (revoked,
  * deleted) stays as a clearable `#id` chip rather than filtering invisibly. */
 export function CollectionsPicker({
   value,
   onChange,
 }: {
-  value: ReadonlyArray<number> | null;
-  onChange: (next: number[] | null) => void;
+  value: SetScope | null;
+  onChange: (next: SetScope | null) => void;
 }) {
   const { collections, mine, shared, byId, query: q } = useCollections();
 
@@ -179,7 +179,7 @@ export function CollectionsPicker({
     return <ReadFailedMark what="Kolekce" variant="header" onRetry={() => void q.refetch()} />;
   }
 
-  const picked = value ?? [];
+  const picked = value?.in ?? [];
   const missing = picked.filter((id) => !byId.has(id));
 
   if (collections.length === 0 && missing.length === 0) {
@@ -190,7 +190,8 @@ export function CollectionsPicker({
     );
   }
 
-  const set = (next: number[]) => onChange(next.length === 0 ? null : next);
+  const set = (next: number[]) =>
+    onChange(normalizeScope({ set: null, out: [], ...value, in: next }));
   const chips = (items: typeof collections) =>
     items.map((c) => ({ value: c.id, label: collectionLabel(c) }));
   const grouped = shared.length > 0;
@@ -421,7 +422,7 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         return <IncludeNoPriceToggle filters={filters} onChange={onChange} />;
       case 'tags':
         return (
-          <AccountTagFilter value={filters} onChange={(next) => onChange({ ...filters, ...next })} />
+          <AccountTagFilter value={filters.tags} onChange={(tags) => onChange({ ...filters, tags })} />
         );
       case 'show_dismissed':
         return <ShowDismissedToggle filters={filters} onChange={onChange} />;

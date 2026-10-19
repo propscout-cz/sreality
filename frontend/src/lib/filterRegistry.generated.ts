@@ -29,7 +29,7 @@ export type UiControl =
   | "boolean"
   | "location"
   | "city_index_rules"
-  | "pipeline_scope";
+  | "set_scope";
 
 export type FilterType =
   | "bool"
@@ -37,9 +37,8 @@ export type FilterType =
   | "district_chip_list"
   | "float"
   | "int"
-  | "int_list"
   | "location"
-  | "pipeline_scope"
+  | "set_scope"
   | "string"
   | "string_list";
 
@@ -117,7 +116,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     "boolean",
     "location",
     "city_index_rules",
-    "pipeline_scope"
+    "set_scope"
   ],
   "filters": [
     {
@@ -2380,31 +2379,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     },
     {
       "id": "tags",
-      "type": "int_list",
+      "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Operator-curated tag ids. AND-semantics — a property matches only if it carries every tag in the list. Tag ids are stable across renames.",
+      "description": "Operator tags as a curated-set scope. NULL = no constraint. `set` 'out' = the property carries no tag at all (the 'Bez štítků' chip); `in` = it carries EVERY listed tag (AND); `out` = it carries none of the listed tags. Tag ids are stable across renames.",
       "category": "Curation",
-      "ui_control": "multiselect",
-      "agendas": [
-        "browse"
-      ],
-      "constraints": null,
-      "unit": null,
-      "basis": null,
-      "enum_values": null,
-      "aliases": [],
-      "nullable": false,
-      "sql_kind": null
-    },
-    {
-      "id": "tags_excluded",
-      "type": "int_list",
-      "pg_column": null,
-      "default": null,
-      "description": "The other side of `tags`: drop every property that carries ANY listed tag. Combines with `tags` ('tagged k prohlídce, not tagged odmítnuto'). Empty list / null = no exclusion. BROWSE-only, like `tags`.",
-      "category": "Curation",
-      "ui_control": "multiselect",
+      "ui_control": "set_scope",
       "agendas": [
         "browse"
       ],
@@ -2418,12 +2398,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     },
     {
       "id": "collections",
-      "type": "int_list",
+      "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Collection ids the caller can read — own or shared with them (migration 610). OR-semantics — a property matches if it is in ANY collection in the list. Deliberately the opposite of `tags` (AND): collections read as folders, so two of them mean 'either folder'. Collection ids are stable across renames. BROWSE-only, for the same reasons as `pipeline`: watching a collection would fire on the operator's own clicks, and their groupings must never feed back into a valuation.",
+      "description": "Collections the caller can read — own or shared with them (migration 610) — as a curated-set scope. NULL = no constraint. `set` 'out' = the property is in no collection (the 'V žádné kolekci' chip); `in` = it is in ANY listed collection (OR: collections read as folders); `out` = it is in none of the listed collections. Collection ids are stable across renames.",
       "category": "Curation",
-      "ui_control": "multiselect",
+      "ui_control": "set_scope",
       "agendas": [
         "browse"
       ],
@@ -2437,12 +2417,12 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     },
     {
       "id": "pipeline",
-      "type": "pipeline_scope",
+      "type": "set_scope",
       "pg_column": null,
       "default": null,
-      "description": "Deal-pipeline scope (rule #22). NULL = no constraint. `{stage_ids: []}` = the property has a pipeline card at ANY stage; `{stage_ids: [12, 13]}` narrows to those stages. Stage ids are account-scoped, so a scope carrying ids is meaningful only inside the account that wrote it — the empty-list form is the portable one. BROWSE-only: the pipeline is the operator's own state, so watching for it would fire on their own clicks, and it is deliberately invisible to the estimation agent (an operator's interest must never feed back into a valuation).",
+      "description": "Deal-pipeline scope (rule #22) as a curated-set scope; units are stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage (the 'V pipeline' chip); `set` 'out' = no card at any stage, terminal stages included (the 'Mimo pipeline' chip); `in` = a card at ANY listed stage; `out` = no card at a listed stage. Stage ids are account-scoped, so only the `set` side is portable.",
       "category": "Curation",
-      "ui_control": "pipeline_scope",
+      "ui_control": "set_scope",
       "agendas": [
         "browse"
       ],

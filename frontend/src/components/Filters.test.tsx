@@ -70,7 +70,7 @@ describe('Browse sidebar curation pickers', () => {
       total: 2,
     });
     const onChange = vi.fn();
-    renderPicker(<CollectionsPicker value={[9, 404]} onChange={onChange} />);
+    renderPicker(<CollectionsPicker value={{ set: null, in: [9, 404], out: [] }} onChange={onChange} />);
 
     const mine = await screen.findByRole('group', { name: 'Mine' });
     const shared = screen.getByRole('group', { name: 'Shared with me' });
@@ -82,11 +82,11 @@ describe('Browse sidebar curation pickers', () => {
     const gone = within(screen.getByRole('group', { name: 'No longer available' }))
       .getByRole('button', { name: '#404' });
     fireEvent.click(gone);
-    expect(onChange).toHaveBeenLastCalledWith([9]);
+    expect(onChange).toHaveBeenLastCalledWith({ set: null, in: [9], out: [] });
 
-    // Both groups write the ONE value array.
+    // Both groups write the ONE scope.
     fireEvent.click(within(mine).getByRole('button', { name: 'Šortlist' }));
-    expect(onChange).toHaveBeenLastCalledWith([9, 404, 7]);
+    expect(onChange).toHaveBeenLastCalledWith({ set: null, in: [9, 404, 7], out: [] });
   });
 
   it('draws no group headings while nothing is shared with me', async () => {
@@ -103,7 +103,7 @@ describe('Browse sidebar curation pickers', () => {
     vi.mocked(api.listTags)
       .mockRejectedValueOnce(new Error('HTTP 500'))
       .mockResolvedValue({ data: [{ id: 3, name: 'k prohlídce', color: 'copper' }] } as never);
-    renderPicker(<AccountTagFilter value={{ tags: [], tagsExcluded: [] }} onChange={() => {}} />);
+    renderPicker(<AccountTagFilter value={null} onChange={() => {}} />);
     const retry = await screen.findByRole('button', { name: /Štítky se nepodařilo načíst/ });
     expect(screen.queryByText(/No tags yet/)).toBeNull();
     fireEvent.click(retry);

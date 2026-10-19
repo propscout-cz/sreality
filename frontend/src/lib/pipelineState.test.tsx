@@ -14,8 +14,8 @@ function Harness({ onReady }: { onReady: (s: PipelineViewState) => void }) {
       <span data-testid="search">{loc.search}</span>
       <span data-testid="status">{state.status}</span>
       <span data-testid="types">{[...state.types].join(',')}</span>
-      <span data-testid="collections">{state.collectionIds.join(',')}</span>
-      <span data-testid="tags">{`${state.tagChoice.tags.join(',')}|${state.tagChoice.tagsExcluded.join(',')}`}</span>
+      <span data-testid="collections">{JSON.stringify(state.scopes.collections)}</span>
+      <span data-testid="tags">{JSON.stringify(state.scopes.tags)}</span>
       <span data-testid="sort">{`${state.sort.field}:${state.sort.direction}`}</span>
       <span data-testid="districts">{state.districts.map((d) => d.name).join('|')}</span>
     </div>
@@ -83,39 +83,41 @@ describe('usePipelineViewState', () => {
     expect(h.search()).toBe('');
   });
 
-  /* `collections` is Browse's own spelling and encoding (a CSV of ids read
-   * through its parseIntList), not a second one for the board. */
-  it('round-trips the collection ids and omits the param when empty', () => {
+  /* `collections` / `collections_excluded` are Browse's own spelling and
+   * encoding (lib/setScope, ONE codec), not a second one for the board. */
+  it('round-trips the collection scope and omits the params when off', () => {
     const h = mount();
-    act(() => h.state.setCollections([7, 9]));
+    act(() => h.state.setScope('collections', { set: null, in: [7, 9], out: [] }));
     expect(h.search()).toBe('?collections=7%2C9');
-    expect(h.read('collections')).toBe('7,9');
-    act(() => h.state.setCollections([]));
+    expect(h.read('collections')).toBe('{"set":null,"in":[7,9],"out":[]}');
+    act(() => h.state.setScope('collections', { set: 'out', in: [], out: [] }));
+    expect(h.search()).toBe('?collections_excluded=any');
+    act(() => h.state.setScope('collections', null));
     expect(h.search()).toBe('');
   });
 
-  /* `tags` / `tags_excluded` are Browse's two sides of the tag rule (lib/tagScope). */
-  it('round-trips both sides of the tag choice and omits each param when empty', () => {
+  /* `tags` / `tags_excluded` are Browse's two sides of the tag rule. */
+  it('round-trips both sides of the tag scope and omits each param when empty', () => {
     const h = mount();
-    act(() => h.state.setTagChoice({ tags: [5], tagsExcluded: [7, 9] }));
+    act(() => h.state.setScope('tags', { set: null, in: [5], out: [7, 9] }));
     expect(h.search()).toBe('?tags=5&tags_excluded=7%2C9');
-    expect(h.read('tags')).toBe('5|7,9');
-    act(() => h.state.setTagChoice({ tags: [], tagsExcluded: [9] }));
+    expect(h.read('tags')).toBe('{"set":null,"in":[5],"out":[7,9]}');
+    act(() => h.state.setScope('tags', { set: null, in: [], out: [9] }));
     expect(h.search()).toBe('?tags_excluded=9');
-    act(() => h.state.setTagChoice({ tags: [], tagsExcluded: [] }));
+    act(() => h.state.setScope('tags', null));
     expect(h.search()).toBe('');
   });
 
   it('clears every cohort param in one write, keeping the sort', () => {
     const h = mount(
-      '/pipeline?status=active&cat=byt&collections=7&tags=5&tags_excluded=9&districts=Beroun&districts_lvl=obec&districts_id=531057&sort=-added_at',
+      '/pipeline?status=active&cat=byt&collections=7&collections_excluded=8&tags=5&tags_excluded=9&districts=Beroun&districts_lvl=obec&districts_id=531057&sort=-added_at',
     );
     act(() => h.state.reset());
     expect(h.search()).toBe('?sort=-added_at');
     expect(h.read('status')).toBe('any');
     expect(h.read('types')).toBe('');
-    expect(h.read('collections')).toBe('');
-    expect(h.read('tags')).toBe('|');
+    expect(h.read('collections')).toBe('null');
+    expect(h.read('tags')).toBe('null');
     expect(h.read('districts')).toBe('');
   });
 

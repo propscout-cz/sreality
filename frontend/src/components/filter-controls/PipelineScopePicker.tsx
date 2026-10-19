@@ -13,14 +13,14 @@ import { useQuery } from '@tanstack/react-query';
 import PipelineMark from '@/components/PipelineMark';
 import { fetchPipelineStages, pipelineKeys } from '@/lib/queries';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
-import type { PipelineScope } from '@/lib/filters';
+import { normalizeScope, scopeIncludes, type SetScope } from '@/lib/setScope';
 
 export function PipelineScopePicker({
   value,
   onChange,
 }: {
-  value: PipelineScope | null;
-  onChange: (next: PipelineScope | null) => void;
+  value: SetScope | null;
+  onChange: (next: SetScope | null) => void;
 }) {
   const stagesQ = useQuery({
     queryKey: pipelineKeys.stages,
@@ -28,14 +28,15 @@ export function PipelineScopePicker({
     staleTime: 60_000,
   });
   const stages = stagesQ.data ?? [];
-  const on = value != null;
-  const selected = new Set(value?.stage_ids ?? []);
+  const on = scopeIncludes(value);
+  const selected = new Set(value?.in ?? []);
 
+  /* No stage picked = every stage (the whole-set side). */
   const toggleStage = (id: number) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    onChange({ stage_ids: [...next] });
+    onChange(normalizeScope({ set: next.size ? null : 'in', in: [...next], out: value?.out ?? [] }));
   };
 
   return (
@@ -44,7 +45,7 @@ export function PipelineScopePicker({
         <input
           type="checkbox"
           checked={on}
-          onChange={(e) => onChange(e.target.checked ? { stage_ids: [] } : null)}
+          onChange={(e) => onChange(e.target.checked ? { set: 'in', in: [], out: [] } : null)}
         />
         Jen nemovitosti v pipeline
       </label>

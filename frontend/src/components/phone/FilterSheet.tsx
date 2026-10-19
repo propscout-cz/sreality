@@ -158,7 +158,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
           />
         );
       case 'tags':
-        return <AccountTagFilter value={draft} onChange={merge} />;
+        return <AccountTagFilter value={draft.tags} onChange={(tags) => merge({ tags })} />;
       case 'show_dismissed':
         /* Its hint counts the cohort twice; it reads the settled draft, so a
          * typed bound does not fire two counts per keystroke. */

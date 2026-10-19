@@ -191,11 +191,10 @@ const FILLED: ListingFilters = {
   cellar: 'yes',
   garage: 'no',
   parkingLotsMin: 2,
-  pipeline: { stage_ids: [3, 5] },
-  collections: [4, 9],
+  pipeline: { set: null, in: [3, 5], out: [] },
+  collections: { set: null, in: [4, 9], out: [] },
   withEstimates: true,
-  tags: [11],
-  tagsExcluded: [12],
+  tags: { set: null, in: [11], out: [12] },
   showDismissed: true,
   minCityPopulation: 20_000,
   maxCityPopulation: 400_000,
@@ -293,7 +292,7 @@ describe('the footer', () => {
 
 describe('presets from the phone', () => {
   const presetBase = filtersForPreset({ ...DEFAULT_FILTERS, categoryType: 'prodej', dispositions: ['2+kk'] }, true);
-  const draft: ListingFilters = { ...presetBase, priceMax: 6_000_000, pipeline: { stage_ids: [] } };
+  const draft: ListingFilters = { ...presetBase, priceMax: 6_000_000, pipeline: { set: 'in', in: [], out: [] } };
 
   it('saves the draft as a new preset — filters (lenses dropped) and the order — and selects it', async () => {
     const user = userEvent.setup();

@@ -25,7 +25,7 @@ import {
   matchesDistricts,
   pipelineKeys,
 } from '@/lib/queries';
-import { matchesTags, tagChoiceActive } from '@/lib/tagScope';
+import { CURATED_SETS, matchesScope, normalizeScope } from '@/lib/setScope';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
 import { TagFilterControl, tagOptionsFor } from '@/components/filter-controls/TagFilterControl';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
@@ -38,7 +38,6 @@ import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahea
 import { MultiselectChips } from '@/components/filter-controls/MultiselectChips';
 import { type EnumOptionLite } from '@/components/filter-controls/types';
 import { Field, Segmented } from '@/components/controls';
-import { matchesCollections } from '@/lib/collectionScope';
 import { type ListingStatus } from '@/lib/filters';
 import { filterById } from '@/lib/filterRegistry.generated';
 import TagColorPicker from '@/components/TagColorPicker';
@@ -118,14 +117,12 @@ function PipelineBoardPage() {
     status,
     types,
     districts,
-    collectionIds,
-    tagChoice,
+    scopes,
     sort,
     setStatus,
     setTypes,
     setDistricts,
-    setCollections,
-    setTagChoice,
+    setScope,
     setSort,
     reset,
   } = usePipelineViewState();
@@ -167,14 +164,18 @@ function PipelineBoardPage() {
     }
     if (districts.length > 0) out.push((c) => matchesDistricts(c, districts));
     if (status !== 'any') out.push((c) => c.is_active === (status === 'active'));
-    if (members && collectionIds.length > 0) {
-      out.push((c) => matchesCollections(members.get(c.property_id), collectionIds));
-    }
-    if (tagMembers && tagChoiceActive(tagChoice)) {
-      out.push((c) => matchesTags(tagMembers.get(c.property_id), tagChoice));
+    const sets = [
+      ['collections', members],
+      ['tags', tagMembers],
+    ] as const;
+    for (const [name, map] of sets) {
+      const scope = scopes[name];
+      if (map && scope) {
+        out.push((c) => matchesScope(map.get(c.property_id), scope, CURATED_SETS[name].inRule));
+      }
     }
     return out;
-  }, [types, districts, status, members, collectionIds, tagMembers, tagChoice]);
+  }, [types, districts, status, members, tagMembers, scopes]);
 
   const filtersActive = predicates.length > 0;
   const filteredCards = useMemo(
@@ -192,11 +193,8 @@ function PipelineBoardPage() {
       if (c.category_main) present.add(c.category_main);
       if (!c.is_active) inactive += 1;
     }
-    const offered = offerCuratedSet(cards, members, collections, collectionIds);
-    const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], [
-      ...tagChoice.tags,
-      ...tagChoice.tagsExcluded,
-    ]);
+    const offered = offerCuratedSet(cards, members, collections, scopes.collections);
+    const tags = offerCuratedSet(cards, tagMembers, tagsQ.data?.data ?? [], scopes.tags);
     return {
       types: CATEGORY_MAIN_OPTIONS.filter((o) => present.has(o.value)),
       hasInactive: inactive > 0,
@@ -205,10 +203,10 @@ function PipelineBoardPage() {
         ...offered.missing.map((id) => ({ value: id, label: `#${id}` })),
       ],
       showCollections: offered.show,
-      tags: tagOptionsFor(tags.options, tagChoice),
+      tags: tagOptionsFor(tags.options, scopes.tags),
       showTags: tags.show,
     };
-  }, [cards, members, collections, collectionIds, tagMembers, tagsQ.data, tagChoice]);
+  }, [cards, members, collections, tagMembers, tagsQ.data, scopes]);
 
   /* The decoration cohort: the representative listing of every card ON the
    * board (not just the filtered view — filtering is client-side and instant,
@@ -316,9 +314,14 @@ function PipelineBoardPage() {
           {bar.showCollections && (
             <Field label="Kolekce">
               <MultiselectChips
-                value={collectionIds}
+                value={scopes.collections?.in ?? []}
                 options={bar.collections}
-                onChange={setCollections}
+                onChange={(ids) =>
+                  setScope(
+                    'collections',
+                    normalizeScope({ set: null, out: [], ...scopes.collections, in: ids }),
+                  )
+                }
               />
             </Field>
           )}
@@ -327,7 +330,11 @@ function PipelineBoardPage() {
           )}
           {bar.showTags && (
             <Field label="Štítky">
-              <TagFilterControl tags={bar.tags} value={tagChoice} onChange={setTagChoice} />
+              <TagFilterControl
+                tags={bar.tags}
+                value={scopes.tags}
+                onChange={(next) => setScope('tags', next)}
+              />
             </Field>
           )}
           <Field label="Lokalita" className="min-w-[16rem] max-w-xl flex-1">

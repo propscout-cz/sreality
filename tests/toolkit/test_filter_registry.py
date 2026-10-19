@@ -187,6 +187,16 @@ def test_comparable_filters_fields_equal_the_cohort_agendas() -> None:
     )
 
 
+def test_curation_filters_are_browse_only() -> None:
+    """The operator's own state (tags, collections, pipeline, …) never reaches a
+    watchdog or a cohort: an alert would fire on their own clicks, and their interest
+    must never feed back into a valuation."""
+    curation = [f for f in fr.all_filters() if f.category == fr.CATEGORY_CURATION]
+    assert curation
+    for f in curation:
+        assert f.agendas == frozenset({fr.Agenda.BROWSE}), f.id
+
+
 def test_watchdog_filter_spec_fields_equal_the_watchdog_agenda() -> None:
     """WatchdogFilterSpec carries exactly the WATCHDOG agenda, both ways.
 
@@ -487,7 +497,7 @@ def test_sql_kind_snapshot() -> None:
     from collections import Counter
 
     counts = Counter(fr.sql_kind(f) for f in fr.all_filters())
-    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 33}
+    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 32}
     numeric_eq = {
         f.id for f in fr.all_filters()
         if f.type in (fr.FilterType.INT, fr.FilterType.FLOAT) and fr.sql_kind(f) == "eq"

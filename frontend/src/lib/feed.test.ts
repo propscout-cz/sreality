@@ -45,8 +45,9 @@ describe('scope → filters', () => {
       dispositions: ['2+kk'],
       priceMax: 8_000_000,
       showDismissed: true,
-      pipeline: { stage_ids: [] },
-      collections: [4],
+      pipeline: { set: 'in', in: [], out: [] },
+      collections: { set: null, in: [4], out: [] },
+      tags: { set: 'out', in: [], out: [] },
     };
     const f = feedFiltersForPreset(preset({ filters: saved, sort: '-price_czk' }));
     expect(f.categoryType).toBe('prodej');
@@ -54,7 +55,8 @@ describe('scope → filters', () => {
     expect(f.priceMax).toBe(8_000_000);
     expect(f.showDismissed).toBe(false);
     expect(f.pipeline).toBeNull();
-    expect(f.collections).toEqual([]);
+    expect(f.collections).toBeNull();
+    expect(f.tags).toBeNull();
   });
 
   it('keeps a map area the operator saved with the preset', () => {

@@ -76,7 +76,7 @@ class UiControl(StrEnum):
     BOOLEAN = "boolean"                # plain checkbox
     LOCATION = "location"              # composite: districts + map + dot/radius
     CITY_INDEX_RULES = "city_index_rules"  # repeatable {index, op, threshold} rows
-    PIPELINE_SCOPE = "pipeline_scope"  # in-pipeline toggle + optional stage checkboxes
+    SET_SCOPE = "set_scope"            # curated set: unit chips off/in/out + a "not in" chip
 
 
 class FilterType(StrEnum):
@@ -86,11 +86,10 @@ class FilterType(StrEnum):
     BOOL = "bool"
     STRING = "string"
     STRING_LIST = "string_list"
-    INT_LIST = "int_list"
     LOCATION = "location"            # composite — only used with UiControl.LOCATION
     DISTRICT_CHIP_LIST = "district_chip_list"  # location chips (api/location_filter.DistrictChip) — Browse/Watchdog
     CITY_INDEX_RULE_LIST = "city_index_rule_list"  # list of {index_name, op, value} — Browse/Watchdog city quality
-    PIPELINE_SCOPE = "pipeline_scope"             # composite {stage_ids} — deal-pipeline membership
+    SET_SCOPE = "set_scope"                       # composite {set, in, out} — curated-set membership
 
 
 # --- value containers -----------------------------------------------------
@@ -1653,75 +1652,58 @@ def _build_registry() -> dict[str, FilterDef]:
         # obec / okres level already says it, for every portal.
 
         # --- curation -----------------------------------------------------
+        # The three curated sets (docs/design/curated-set-scope.md) share one
+        # value, {set: 'in'|'out'|null, in: ids, out: ids}, judged in the database
+        # under the caller's RLS (migration 629). BROWSE-only: they are the
+        # operator's own state, so watching one would fire on their own clicks,
+        # and an operator's interest must never feed back into a valuation.
         FilterDef(
             id="tags",
-            type=FilterType.INT_LIST,
-            pg_column=None,  # resolved via property_tags (property grain)
+            type=FilterType.SET_SCOPE,
+            pg_column=None,  # judged via property_tags_public (migration 629)
             default=None,
             description=(
-                "Operator-curated tag ids. AND-semantics — a property "
-                "matches only if it carries every tag in the list. "
-                "Tag ids are stable across renames."
+                "Operator tags as a curated-set scope. NULL = no constraint. "
+                "`set` 'out' = the property carries no tag at all (the 'Bez štítků' "
+                "chip); `in` = it carries EVERY listed tag (AND); `out` = it carries "
+                "none of the listed tags. Tag ids are stable across renames."
             ),
             category=CATEGORY_CURATION,
-            ui_control=UiControl.MULTISELECT,
-            # BROWSE-only: the watchdog matcher has no tag clause (WatchdogFilterSpec has no tag field).
-            agendas=frozenset({Agenda.BROWSE}),
-        ),
-        FilterDef(
-            id="tags_excluded",
-            type=FilterType.INT_LIST,
-            pg_column=None,  # the tag rule's second side: a property-id DENYLIST (migration 598)
-            default=None,
-            description=(
-                "The other side of `tags`: drop every property that carries ANY "
-                "listed tag. Combines with `tags` ('tagged k prohlídce, not "
-                "tagged odmítnuto'). Empty list / null = no exclusion. BROWSE-only, "
-                "like `tags`."
-            ),
-            category=CATEGORY_CURATION,
-            ui_control=UiControl.MULTISELECT,
+            ui_control=UiControl.SET_SCOPE,
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(
             id="collections",
-            type=FilterType.INT_LIST,
-            pg_column=None,  # prefilter via collection_properties_public (mig 202)
+            type=FilterType.SET_SCOPE,
+            pg_column=None,  # judged via collection_properties_public (migration 629)
             default=None,
             description=(
-                "Collection ids the caller can read — own or shared with them "
-                "(migration 610). OR-semantics — a property "
-                "matches if it is in ANY collection in the list. Deliberately "
-                "the opposite of `tags` (AND): collections read as folders, so "
-                "two of them mean 'either folder'. Collection ids are "
-                "stable across renames. BROWSE-only, for "
-                "the same reasons as `pipeline`: watching a collection would "
-                "fire on the operator's own clicks, and their groupings must "
-                "never feed back into a valuation."
+                "Collections the caller can read — own or shared with them "
+                "(migration 610) — as a curated-set scope. NULL = no constraint. "
+                "`set` 'out' = the property is in no collection (the 'V žádné "
+                "kolekci' chip); `in` = it is in ANY listed collection (OR: "
+                "collections read as folders); `out` = it is in none of the listed "
+                "collections. Collection ids are stable across renames."
             ),
             category=CATEGORY_CURATION,
-            ui_control=UiControl.MULTISELECT,
+            ui_control=UiControl.SET_SCOPE,
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(
             id="pipeline",
-            type=FilterType.PIPELINE_SCOPE,
-            pg_column=None,  # prefilter via property_pipeline_public (mig 205/377)
+            type=FilterType.SET_SCOPE,
+            pg_column=None,  # judged via property_pipeline_public (migration 629)
             default=None,
             description=(
-                "Deal-pipeline scope (rule #22). NULL = no constraint. "
-                "`{stage_ids: []}` = the property has a pipeline card at ANY "
-                "stage; `{stage_ids: [12, 13]}` narrows to those stages. "
-                "Stage ids are account-scoped, so a scope carrying ids is "
-                "meaningful only inside the account that wrote it — the "
-                "empty-list form is the portable one. BROWSE-only: the "
-                "pipeline is the operator's own state, so watching for it "
-                "would fire on their own clicks, and it is deliberately "
-                "invisible to the estimation agent (an operator's interest "
-                "must never feed back into a valuation)."
+                "Deal-pipeline scope (rule #22) as a curated-set scope; units are "
+                "stage ids. NULL = no constraint. `set` 'in' = a card at ANY stage "
+                "(the 'V pipeline' chip); `set` 'out' = no card at any stage, "
+                "terminal stages included (the 'Mimo pipeline' chip); `in` = a card "
+                "at ANY listed stage; `out` = no card at a listed stage. Stage ids "
+                "are account-scoped, so only the `set` side is portable."
             ),
             category=CATEGORY_CURATION,
-            ui_control=UiControl.PIPELINE_SCOPE,
+            ui_control=UiControl.SET_SCOPE,
             agendas=frozenset({Agenda.BROWSE}),
         ),
         FilterDef(

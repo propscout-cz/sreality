@@ -1,5 +1,5 @@
-/* The tag filter, both sides (lib/tagScope): one chip per tag that cycles
- * off → on it → not on it (`cycleTag`) — the portal control's shape, so a
+/* The tag filter, both sides (lib/setScope): one chip per tag that cycles
+ * off → on it → not on it (`cycleUnit`) — the portal control's shape, so a
  * negative filter reads the same everywhere. Browse's sidebar and the pipeline
  * board's bar render this one control; the chip's dot is the tag's colour, its
  * fill the choice (copper = must carry, brick = must not). Editing a tag is
@@ -11,7 +11,7 @@ import { PickButton } from '@/components/controls';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { listTags } from '@/lib/api';
 import { curationKeys } from '@/lib/queries';
-import { cycleTag, type TagChoice } from '@/lib/tagScope';
+import { cycleUnit, type SetScope } from '@/lib/setScope';
 import type { Tag } from '@/lib/types';
 
 export type TagOption = Pick<Tag, 'id' | 'name' | 'color'>;
@@ -22,20 +22,20 @@ export function TagFilterControl({
   onChange,
 }: {
   tags: ReadonlyArray<TagOption>;
-  value: TagChoice;
-  onChange: (next: TagChoice) => void;
+  value: SetScope | null;
+  onChange: (next: SetScope | null) => void;
 }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1">
         {tags.map((t) => {
-          const out = value.tagsExcluded.includes(t.id);
+          const out = value?.out.includes(t.id) ?? false;
           return (
             <PickButton
               key={t.id}
-              on={out || value.tags.includes(t.id)}
+              on={out || (value?.in.includes(t.id) ?? false)}
               negative={out}
-              onClick={() => onChange(cycleTag(value, t.id))}
+              onClick={() => onChange(cycleUnit(value, t.id))}
               variant="solid"
               className="min-w-16"
               ariaLabel={out ? `${t.name} (excluded)` : undefined}
@@ -50,7 +50,7 @@ export function TagFilterControl({
           );
         })}
       </div>
-      {value.tags.length > 1 && (
+      {(value?.in.length ?? 0) > 1 && (
         <p className="text-[0.65rem] text-[var(--color-ink-4)]">
           Nemovitost musí mít všechny vybrané štítky.
         </p>
@@ -63,10 +63,10 @@ export function TagFilterControl({
  * no longer exists (deleted elsewhere) so the constraint stays deselectable. */
 export const tagOptionsFor = (
   known: ReadonlyArray<TagOption>,
-  value: TagChoice,
+  value: SetScope | null,
 ): TagOption[] => {
   const out = [...known];
-  for (const id of [...value.tags, ...value.tagsExcluded]) {
+  for (const id of [...(value?.in ?? []), ...(value?.out ?? [])]) {
     if (!out.some((t) => t.id === id)) out.push({ id, name: `#${id}`, color: 'slate' });
   }
   return out;
@@ -77,8 +77,8 @@ export function AccountTagFilter({
   value,
   onChange,
 }: {
-  value: TagChoice;
-  onChange: (next: TagChoice) => void;
+  value: SetScope | null;
+  onChange: (next: SetScope | null) => void;
 }) {
   const tagsQ = useQuery({
     queryKey: curationKeys.tags,

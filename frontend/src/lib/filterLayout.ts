@@ -211,7 +211,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Curation & quality',
     keys: [
-      'pipeline', 'tags', 'tagsExcluded', 'collections', 'withEstimates', 'showDismissed',
+      'pipeline', 'tags', 'collections', 'withEstimates', 'showDismissed',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
@@ -222,7 +222,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
         title: 'Curation',
         blocks: [
           form({ pipeline: 'Pipeline', collections: 'Kolekce', with_estimates: 'With estimates' }),
-          /* Two registry ids, one two-sided control (the portal control's shape). */
+          /* One registry id, one two-sided control (lib/setScope). */
           { kind: 'custom', key: 'tags', label: 'Tags', caption: true },
           { kind: 'custom', key: 'show_dismissed', label: 'Show dismissed properties' },
         ],
