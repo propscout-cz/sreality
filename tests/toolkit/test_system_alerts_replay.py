@@ -2,11 +2,13 @@
 
 # The fixture is pipeline_check_results run-length encoded (check_key,status,from_run_at,to_run_at,
 # runs; UTC to the second), the unmeasured warns of the time read as unknown, with no ids and no
-# URLs. Refresh it read-only, never by hand, from:
+# URLs, for the keys CHECKS declares (`:keys`; exported 2026-10-19 05:09Z). Refresh it read-only,
+# never by hand, from:
 #   with r as (select check_key, run_at,
 #                     case when status = 'warn' and (details ? 'timed_out' or details ? 'not_run')
 #                          then 'unknown' else status end as s
-#                from pipeline_check_results where run_at > now() - interval '14 days'),
+#                from pipeline_check_results where run_at > now() - interval '14 days'
+#                 and check_key = any(:keys)),
 #        g as (select *, row_number() over (partition by check_key order by run_at)
 #                      - row_number() over (partition by check_key, s order by run_at) as grp
 #                from r)
@@ -28,30 +30,25 @@ _FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "health_replay_14d
 # Production reconciles every 60 s; every row's arrival plus a 10-minute tick resolves holds of
 # 108 minutes and more, and keeps the replay well under a second.
 _TICK = _dt.timedelta(minutes=10)
-# Check.staleness_budget: cadence plus this slack on github-actions, where every key of the
-# window ran; three cadences on the worker, whose keys (wave 3) have no rows in the window.
+# Check.staleness_budget: cadence plus this slack on github-actions; three cadences on the worker,
+# whose wave-3 keys have rows from 2026-10-19 00:39Z and whose wave-4 keys have none yet.
 _GITHUB_SLACK = _dt.timedelta(hours=18)
 _GH, _RW = "github-actions", "realtime-worker"
 
-# The registry (scripts/verify_pipeline.py CHECKS) as (class, cadence, host). The window also
-# measured `worker_liveness`, deleted in wave 2 for the watcher's `worker` cell, and the eight
-# platform keys wave 3 replaced with jobs, capacity and llm; the loader drops a retired key's
-# rows, as the ladder reads none of them.
+# The registry (scripts/verify_pipeline.py CHECKS) as (class, cadence, host). The loader drops the
+# rows of a key retired since the export, as the ladder reads none of them.
 _REGISTRY: dict[str, tuple[str, int, str]] = {
     "location_town_coverage": ("gauge", 21600, _GH), "jobs": ("alarm", 600, _RW),
     "capacity": ("alarm", 1800, _RW), "llm": ("alarm", 600, _RW),
-    "property_maintenance": ("alarm", 3600, _GH),
+    "scraping": ("alarm", 600, _RW), "publishing": ("alarm", 600, _RW),
+    "delisting": ("alarm", 600, _RW), "coverage": ("gauge", 3600, _RW),
     "broker_merge_suppression": ("alarm", 3600, _GH),
     "ppm2_median_shift": ("alarm", 21600, _GH), "ppm2_basis_floor_share": ("gauge", 21600, _GH),
     "area_vs_usable_divergence": ("gauge", 21600, _GH),
-    "ppm2_measure_coverage": ("alarm", 21600, _GH), "acquisition_lag": ("alarm", 21600, _GH),
-    "walk_coverage": ("gauge", 21600, _GH), "walk_end_streak": ("alarm", 21600, _GH),
-    "migration_drift": ("alarm", 3600, _GH), "delist_flip_refused": ("gauge", 21600, _GH),
-    "false_delist_share": ("alarm", 21600, _GH),
+    "ppm2_measure_coverage": ("alarm", 21600, _GH), "migration_drift": ("alarm", 3600, _GH),
     "location_payload_shape_drift": ("alarm", 21600, _GH),
     "outbound_url_coverage": ("gauge", 21600, _GH), "field_fill_matrix": ("alarm", 21600, _GH),
     "text_extraction_lag": ("gauge", 21600, _GH), "floor_convention": ("gauge", 21600, _GH),
-    "sreality_image_template": ("alarm", 86400, _GH),
     "outbound_url_conformance": ("alarm", 604800, _GH),
 }
 
@@ -154,10 +151,6 @@ def _rung(cls: str, hours: float) -> str | None:
     return next((f"{h}h" for h in (72, 24, 6) if hours >= h), None)
 
 
-def _utc(stamp: str) -> _dt.datetime:
-    return _dt.datetime.fromisoformat(stamp)
-
-
 def test_the_replay_registry_is_the_harness_registry() -> None:
     """A class, cadence, host or budget change in CHECKS must reach this rail, not drift past it."""
     from scripts.verify_pipeline import CHECKS
@@ -205,20 +198,6 @@ def test_each_maximal_fail_streak_opens_exactly_one_incident_and_one_onset() -> 
     assert total > 0
     # Nothing in this window went a week unmeasured, so every close was a measured recovery.
     assert {i["resolve_reason"] for i in conn.incidents} <= {None, "measured ok"}
-
-
-def test_a_lone_ok_inside_a_fail_streak_does_not_split_its_incident() -> None:
-    """walk_coverage 2026-10-08/09: a fail at 23:25, one OK at 06:17, a fail again at 13:27 —
-    inside the gauge's 11.5 h hold, so one incident spans all three."""
-    _history, _passes, conn, told = _replay()
-    lone_ok, refail = _utc("2026-10-09T06:17:43Z"), _utc("2026-10-09T13:27:47Z")
-    walk = [i for i in conn.incidents if i["signature"] == "cell:walk_coverage:walk_coverage"]
-    spanning = [i for i in walk if i["first_seen_at"] < lone_ok
-                and (i["resolved_at"] is None or i["resolved_at"] > refail)]
-    assert len(spanning) == 1
-    assert not [i for i in walk if lone_ok <= i["first_seen_at"] <= refail]
-    assert not [t for t in told if t.key == "walk_coverage" and t.kind == "recovery"
-                and lone_ok <= t.at <= refail]
 
 
 def test_a_key_failing_all_window_tells_one_onset_then_only_its_rungs() -> None:

@@ -384,6 +384,27 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_platform_cron_sql_live.py -q
 
+      # 622 registers the daily property sweep as a derived artifact and seeds it from the app_settings stamp it
+      # replaces. Its 38 h budget plus the GitHub delivery slack the jobs check adds is the retired alarm's 56 h
+      # fail line. The tests run the file's own seed and post-condition, the producer's stamp and the jobs check's
+      # artifact read on the replayed row, in a transaction that always rolls back.
+      - name: The property sweep is a derived artifact judged at 56 h (migration 622)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_property_sweep_artifact_live.py -q
+
+      # Wave 4's checks judge in SQL that the fakes, replays and PREPARE never run: seeded rows, each check's own
+      # statements and parameters, rolled back. Walks, end-reached units, inflow, fetch errors, unnominated ads;
+      # Browse stages on the canonical ad, stock, photos, queues; outflow, stuck ads, verify backlog, precision.
+      - name: The portal checks' statements count what they claim (wave 4)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: |
+          pytest tests/test_checks_scraping_sql_live.py tests/test_checks_publishing_sql_live.py \
+                 tests/test_checks_delisting_sql_live.py -q
+
       # 06 W2a gate (b) — "a deliberately changed page appends a second body; an
       # unchanged refetch appends none" — is a property of one ON CONFLICT clause
       # and two retention statements. PREPARE proves they compile; only executing

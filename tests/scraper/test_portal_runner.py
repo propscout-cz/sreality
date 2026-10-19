@@ -6,6 +6,7 @@ are monkeypatched.
 
 from __future__ import annotations
 
+import importlib
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +15,7 @@ import psycopg
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from scraper import delist_policy, portal_runner
+from scraper import delist_policy, portal_factory, portal_runner
 from scraper.portal_runner import DrainItem
 
 
@@ -421,6 +422,47 @@ def test_index_walk_all_categories_failed_returns_nonzero_rc(monkeypatch):
     assert agg["errors"] == 2
     assert cap["queued"] == []
     assert agg["index_pages"] == 0
+
+
+def test_every_by_category_entry_says_how_its_declared_total_reads(monkeypatch):
+    """The health checks read a unit's declared total from these keys and never from a portal's
+    name: the total under DECLARED_TOTAL_KEY, beside total_is_count (the total is what the walk
+    saw) and declared_is_upper_bound. A portal that declares neither, as these fakes, says False."""
+    _nominations(monkeypatch)
+    _rc, agg = portal_runner.run_index_walk(_FakePortal(result_size=87), dry_run=False)
+    assert portal_runner.DECLARED_TOTAL_KEY == "sreality_result_size"  # read by matviews 233/354
+    assert [(c[portal_runner.DECLARED_TOTAL_KEY], c["total_is_count"],
+             c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
+        (87, False, False), (87, False, False)]
+    counted = _FakePortal(walk_fails={"B"})
+    counted.total_is_count = True
+    counted.coverage_denominator_is_upper_bound = True
+    _rc, agg = portal_runner.run_index_walk(counted, dry_run=False)
+    # the failed category's entry carries them too
+    assert [(c["total_is_count"], c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
+        (True, True), (True, True)]
+
+
+def test_an_upper_bound_denominator_logs_its_coverage_gap_at_info(monkeypatch, caplog):
+    """A national total its slices cannot reach would warn on every walk: noise, not an alarm."""
+    _nominations(monkeypatch)
+    p = _FakePortal(categories=["A"], reached_end=True, result_size=87)
+    p.coverage_denominator_is_upper_bound = True
+    with caplog.at_level("INFO"):
+        portal_runner.run_index_walk(p, dry_run=False)
+    (line,) = [r for r in caplog.records if r.getMessage().startswith("COVERAGE cm=A")]
+    assert line.levelname == "INFO"
+
+
+def test_only_the_portals_whose_total_is_what_they_saw_declare_it() -> None:
+    """remax and maxima state only per-agenda totals, so their walk returns what it saw as each
+    category's total. Data cannot tell (56 of 110 units had declared = collected on every walk in
+    14 d), so each adapter declares it and every other portal keeps PortalDefaults' False."""
+    declared = {
+        source for source, (module, cls) in portal_factory.PORTAL_CLASSES.items()
+        if getattr(getattr(importlib.import_module(module), cls), "total_is_count", False)}
+    assert declared == {"maxima", "remax"}
+    assert portal_runner.PortalDefaults.total_is_count is False
 
 
 # --- run_detail_drain -------------------------------------------------------

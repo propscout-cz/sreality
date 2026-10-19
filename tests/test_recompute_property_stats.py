@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from scraper.db import STAMP_DERIVED_ARTIFACT_SQL
 from scripts.recompute_property_stats import (
     _attach_stragglers,
     _batch_ranges,
@@ -577,6 +578,11 @@ def _run_sweep(monkeypatch: Any, conn: _SweepConn, argv: list[str],
     return rps.main()
 
 
+def _stamps(conn: _FakeConn) -> list[Any]:
+    """The (name, rows, duration_ms) of each derived_artifacts stamp the run sent, in order."""
+    return [p for s, p in conn.executed if s == STAMP_DERIVED_ARTIFACT_SQL]
+
+
 def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
     conn = _SweepConn(max_id=4000)  # 2 batches at the default size
     assert _run_sweep(monkeypatch, conn, []) == 0
@@ -586,9 +592,10 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
     assert len(grants) == 1 + 2
     # complete walk → the swept-range clear over its whole range
     assert _dirty_clears(conn) == [{"cutoff": "CUTOFF", "lo": 1, "hi": 4001}]
-    # ...and the completion stamp the health check reads (O(1) liveness signal)
-    stamp = _find(conn, "property_sweep_last_complete")
-    assert stamp and stamp[1]["max_id"] == 4000 and stamp[1]["batches"] == 2
+    # ...and the property_sweep artifact stamp the jobs check reads (O(1) liveness signal),
+    # never the retired app_settings row
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
+    assert not _find(conn, "property_sweep_last_complete")
     # every recompute statement runs under the raised per-statement ceiling
     # (the pooler's ~2-min default killed the first post-#971 batch at 3.5min)
     ceilings = [s for s, _ in conn.executed if "SET LOCAL statement_timeout" in s]
@@ -647,7 +654,7 @@ def test_a_fresh_cycle_stopped_by_the_budget_saves_its_cursor_and_exits_green(
     saved = _find(conn, _CURSOR_SAVE)
     assert saved and saved[1] == {"next_lo": 2001, "cycle_started_at": "CUTOFF", "runs": 1}
     assert not _find(conn, "NOT EXISTS (SELECT 1 FROM listings")
-    assert not _find(conn, "property_sweep_last_complete")
+    assert _stamps(conn) == []
     assert _find(conn, "SET holder = NULL")
 
 
@@ -657,20 +664,21 @@ class _TxnSweepConn(_SweepConn):
 
 def test_a_resumed_run_finishes_the_cycle_from_its_cursor(monkeypatch: Any) -> None:
     """Run 2 walks [next_lo, max_id] only and clears only that range's dirt (ids below it were
-    recomputed by run 1 and may be dirty again), reconciles, stamps the cycle (runs=2, run 1's
-    start) and deletes the cursor in the stamp's own transaction."""
+    recomputed by run 1 and may be dirty again), reconciles, stamps the property_sweep artifact
+    with what THIS run recomputed and how long it ran, and deletes the cursor in the stamp's
+    own transaction."""
     conn = _TxnSweepConn(max_id=6000, cursor=(2001, 1, "CYCLE", True))
-    assert _run_sweep(monkeypatch, conn, []) == 0
+    conn.script.append((lambda s: "WITH batch AS" in s, [(None,)] * 7))  # 7 written a batch
+    # monotonic: started_at, then 5 s for every later read, so the run's elapsed is 5 s
+    assert _run_sweep(monkeypatch, conn, [], clock=[0.0] + [5.0] * 63) == 0
     assert _swept(conn) == [(2001, 4001), (4001, 6001)]
     assert _dirty_clears(conn) == [{"cutoff": "CUTOFF", "lo": 2001, "hi": 6001}]
     assert _find(conn, "NOT EXISTS (SELECT 1 FROM listings")
-    stamp = _find(conn, "property_sweep_last_complete")
-    assert stamp and stamp[1]["runs"] == 2 and stamp[1]["cycle_started_at"] == "CYCLE"
-    assert stamp[1]["max_id"] == 6000 and stamp[1]["batches"] == 2
+    assert _stamps(conn) == [("property_sweep", 2 * 7, 5000)]
     assert not _find(conn, _CURSOR_SAVE)
     order = _sqls(conn)
     clear = next(i for i, s in enumerate(order) if s.startswith("DELETE FROM dirty_properties"))
-    stamped = next(i for i, s in enumerate(order) if "property_sweep_last_complete" in s)
+    stamped = order.index(STAMP_DERIVED_ARTIFACT_SQL)
     dropped = order.index(_CURSOR_DROP)
     begin = max(i for i in range(clear) if order[i] == "BEGIN")
     assert begin < clear < stamped < dropped < order.index("COMMIT", begin)
@@ -691,7 +699,7 @@ def test_a_resumed_run_stopped_by_the_budget_again_is_red_and_advances_the_curso
     saved = _find(conn, _CURSOR_SAVE)
     assert saved and saved[1] == {"next_lo": 4001, "cycle_started_at": "CYCLE", "runs": 2}
     assert not _find(conn, "NOT EXISTS (SELECT 1 FROM listings")
-    assert not _find(conn, "property_sweep_last_complete")
+    assert _stamps(conn) == []
     assert _find(conn, "SET holder = NULL")
 
 
@@ -713,8 +721,7 @@ def test_a_cursor_that_cannot_continue_its_cycle_is_ignored(
     assert read and read[1] == {"max_age": rps._CURSOR_MAX_AGE}
     assert "ignoring the saved cursor" in caplog.text
     assert _swept(conn) == [(1, 2001), (2001, 4001), (4001, 6001)]
-    stamp = _find(conn, "property_sweep_last_complete")
-    assert stamp and stamp[1]["runs"] == 1 and stamp[1]["cycle_started_at"] == "CUTOFF"
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
     assert _find(conn, _CURSOR_DROP)
 
 
@@ -732,9 +739,19 @@ def test_a_fresh_complete_walk_clears_its_whole_range_and_leaves_no_cursor(
     assert not hasattr(rps, "_CLEAR_DIRTY_SQL")
     assert _dirty_clears(conn) == [{"cutoff": "CUTOFF", "lo": 1, "hi": 4001}]
     assert _find(conn, "NOT EXISTS (SELECT 1 FROM listings")
-    stamp = _find(conn, "property_sweep_last_complete")
-    assert stamp and stamp[1]["runs"] == 1 and stamp[1]["cycle_started_at"] == "CUTOFF"
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
     assert _find(conn, _CURSOR_DROP) and not _find(conn, _CURSOR_SAVE)
+
+
+def test_the_stamp_is_visible_to_the_stamping_rail() -> None:
+    """tests/test_derived_artifacts_stamping.py (the advisory migrations lane) reads only a call whose first
+    argument is spelled `conn` and whose name is a literal: renaming `_finalize`'s parameter would hide this
+    producer from it, and property_sweep would read as stamped by nothing."""
+    from tests.test_derived_artifacts_stamping import _PY_CALL
+
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "recompute_property_stats.py").read_text(
+        encoding="utf-8")
+    assert [m["arg"].strip() for m in _PY_CALL.finditer(src)] == ['"property_sweep"']
 
 
 def test_the_cursor_survives_one_daily_gap_but_not_two() -> None:
@@ -771,7 +788,7 @@ def test_a_fresh_run_stopped_before_its_first_batch_is_red_and_saves_nothing(
     assert rc == 1
     assert "before the first batch" in caplog.text and "resumes" not in caplog.text
     assert _swept(conn) == [] and _dirty_clears(conn) == []
-    assert not _find(conn, _CURSOR_SAVE) and not _find(conn, "property_sweep_last_complete")
+    assert not _find(conn, _CURSOR_SAVE) and _stamps(conn) == []
     assert _find(conn, "SET holder = NULL")
 
 
@@ -780,8 +797,7 @@ def test_a_cursor_at_the_last_id_still_resumes(monkeypatch: Any) -> None:
     conn = _SweepConn(max_id=6001, cursor=(6001, 1, "CYCLE", True))
     assert _run_sweep(monkeypatch, conn, []) == 0
     assert _swept(conn) == [(6001, 8001)]
-    stamp = _find(conn, "property_sweep_last_complete")
-    assert stamp and stamp[1]["runs"] == 2
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
 
 
 def test_an_unreadable_cursor_costs_one_fresh_cycle_not_every_run(
@@ -813,8 +829,8 @@ def test_an_unreadable_cursor_costs_one_fresh_cycle_not_every_run(
 def test_the_cursor_sql_reads_back_what_it_saves() -> None:
     """The fakes serve canned rows, not SQL, so pin the SQL's own half of the contract: the read
     names the keys the save writes, in `_resume_point`'s order; a cursor is young while its
-    cycle began after now() - max_age; both rows are upserts (a resumed run that stops again
-    saves over the cursor); and the stamp carries the cycle's facts."""
+    cycle began after now() - max_age; and the save is an upsert (a resumed run that stops
+    again saves over the cursor)."""
     import re
 
     import scripts.recompute_property_stats as rps
@@ -828,10 +844,7 @@ def test_the_cursor_sql_reads_back_what_it_saves() -> None:
     assert "(value->>'cycle_started_at')::timestamptz > now() - %(max_age)s::interval" in read
     assert built(rps._SAVE_SWEEP_CURSOR_SQL) == {
         "next_lo": "next_lo", "cycle_started_at": "cycle_started_at", "runs": "runs"}
-    stamp = built(rps._STAMP_SWEEP_COMPLETE_SQL)
-    assert stamp["runs"] == "runs" and stamp["cycle_started_at"] == "cycle_started_at"
-    for sql in (rps._SAVE_SWEEP_CURSOR_SQL, rps._STAMP_SWEEP_COMPLETE_SQL):
-        assert "ON CONFLICT (key) DO UPDATE" in sql
+    assert "ON CONFLICT (key) DO UPDATE" in rps._SAVE_SWEEP_CURSOR_SQL
 
 
 class _SettingsCur(_Cur):
@@ -872,8 +885,8 @@ def test_the_next_run_continues_from_exactly_what_the_last_one_saved(
     monkeypatch: Any, gap_hours: int, resumed: bool,
 ) -> None:
     """Run 1 stops on budget; run 2 reads back the row run 1 wrote and finishes the cycle, or
-    starts over at id 1 once the cycle is past _CURSOR_MAX_AGE. Either way the stamp carries
-    the cycle it completed and the cursor is gone."""
+    starts over at id 1 once the cycle is past _CURSOR_MAX_AGE. Either way the run stamps the
+    property_sweep artifact and the cursor is gone."""
     from datetime import UTC, datetime, timedelta
 
     settings: dict[str, Any] = {}
@@ -887,10 +900,9 @@ def test_the_next_run_continues_from_exactly_what_the_last_one_saved(
     later = start + timedelta(hours=gap_hours)
     second = _SettingsSweepConn(6000, settings, now=later)
     assert _run_sweep(monkeypatch, second, [], clock=[0.0] * 32) == 0
-    stamp = settings.pop("property_sweep_last_complete")
     assert settings == {}
     assert _swept(second)[0] == ((2001, 4001) if resumed else (1, 2001))
-    assert (stamp["runs"], stamp["cycle_started_at"]) == ((2, start) if resumed else (1, later))
+    assert [s[0] for s in _stamps(second)] == ["property_sweep"]
 
 
 class _DropAfterCur(_Cur):
@@ -922,8 +934,9 @@ def test_a_dropped_cursor_statement_replays_with_identical_values(
     monkeypatch: Any, drop_after: str, budget_stop: bool,
 ) -> None:
     """Every cursor read and write runs through step(), so a drop replays the whole op. Its
-    values (next_lo, runs + 1, the cycle's start) are fixed before the op, so a replay after a
-    COMMIT the client never saw writes the same row again: never runs + 2."""
+    values (next_lo, runs + 1, the cycle's start; the stamp's rows and duration) are fixed
+    before the op, so a replay after a COMMIT the client never saw writes the same row again:
+    never runs + 2."""
     import scripts.recompute_property_stats as rps
 
     monkeypatch.setattr(rps.db.time, "sleep", lambda s: None)
@@ -937,8 +950,8 @@ def test_a_dropped_cursor_statement_replays_with_identical_values(
         assert [p for s, p in conn.executed if _CURSOR_SAVE in s] == [
             {"next_lo": 4001, "cycle_started_at": "CYCLE", "runs": 2}] * replays
     else:
-        assert [(p["runs"], p["cycle_started_at"]) for s, p in conn.executed
-                if "property_sweep_last_complete" in s] == [(2, "CYCLE")] * replays
+        stamps = _stamps(conn)
+        assert stamps == [stamps[0]] * replays and stamps[0][0] == "property_sweep"
 
 
 class _FlakyCur(_Cur):
@@ -985,7 +998,7 @@ def test_batch_retry_renews_the_lease_on_every_attempt(monkeypatch: Any) -> None
     assert len(recomputes) == 1
     assert grants[-1] < recomputes[-1]
     # the sweep still completed normally on the replay
-    assert _find(conn, "property_sweep_last_complete")
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
 
 
 class _DroppingCur(_Cur):
@@ -1036,14 +1049,14 @@ def test_full_sweep_finishes_on_the_fresh_conn_after_a_pooler_drop(
 
     # the dead original is closed by run_resilient and never written to again
     assert first.broken and first.closed
-    assert not _find(first, "property_sweep_last_complete")
+    assert _stamps(first) == []
     assert not _find(first, "SET holder = NULL")
     # ...and the whole remaining sweep ran on the replacement: the replayed batch,
     # the SECOND batch (proving the rebind outlived one step()), the completion
     # stamp, and — load-bearing — the lease release from main()'s `finally:`.
     recomputes = [p for s, p in fresh.executed if "WITH batch AS" in s]
     assert [(p["lo"], p["hi"]) for p in recomputes] == [(1, 2001), (2001, 4001)]
-    assert _find(fresh, "property_sweep_last_complete")
+    assert [s[0] for s in _stamps(fresh)] == ["property_sweep"]
     assert _find(fresh, "SET holder = NULL")
 
 

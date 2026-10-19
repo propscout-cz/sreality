@@ -117,10 +117,11 @@ def _ticks(start: _dt.datetime, end: _dt.datetime, step: _dt.timedelta) -> list[
     return [start + step * i for i in range(int((end - start) / step) + 1)]
 
 
-def _told(key: str, cadence_s: int, results: list[tuple[_dt.datetime, dict[str, Any]]]) -> _Ladder:
+def _told(key: str, cadence_s: int, results: list[tuple[_dt.datetime, dict[str, Any]]],
+          cls: str = "alarm") -> _Ladder:
     """The ladder after each result, in time order: a worker key's budget is three cadences."""
     ladder = _Ladder()
-    ladder.register(key, cls="alarm", cadence_s=cadence_s, budget_s=3 * cadence_s)
+    ladder.register(key, cls=cls, cadence_s=cadence_s, budget_s=3 * cadence_s)
     for at, result in results:
         ladder.result(key, at, result["status"], message=result["message"],
                       cells=result["details"]["cells"], value=result["value"])

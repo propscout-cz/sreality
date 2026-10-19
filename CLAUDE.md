@@ -132,10 +132,10 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
    `detail_queue_completions` and **since 2026-10-09 flips that one listing only when the ledger already holds an
    earlier gone verdict ≥ `delist_policy.GONE_DWELL` (12 h) old with no sighting since** (`db.gone_evidence`;
    portals blink — sreality took 35–70% of its "gone" ads back within hours), a live page refreshes it, an error
-   waits. `walk_coverage` is a logged `COVERAGE` alarm, NEVER a gate. No staleness rail, no absence sweep, no
+   waits. `walk_coverage` is a logged `COVERAGE` warning, NEVER a gate. No staleness rail, no absence sweep, no
    `supports_complete_walk` gate. `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
-   `.overrides` lift it). Budget + gone-rate breaker + dwell: `scraper/delist_policy.py`; every flip goes through
-   `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
+   `.overrides` lift it). Budget + gone-rate breaker + effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h:
+   `scraper/delist_policy.py`; every flip goes through `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
 4. **`last_seen_at` is driven by index sightings + successful detail fetches only; failed fetches never
    touch it** (else repeated failures would falsely delist a live listing). The `unchanged` freshness
    path also doesn't bump it — its signal is `listing_freshness_checks.checked_at`.

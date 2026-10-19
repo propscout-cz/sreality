@@ -61,6 +61,10 @@ DRAIN_CLAIM_CHUNK = 500
 # would hold ~20 slots a probe never uses, starving the concurrent walk lane.
 PROBE_LEASE_N = 5
 
+# The by_category key of a walk's declared total, for every portal: the first portal's name for
+# it, kept because the live health matviews (migrations 233, 354) read it until wave 9.
+DECLARED_TOTAL_KEY = "sreality_result_size"
+
 
 @dataclass
 class DrainItem:
@@ -102,6 +106,12 @@ class Portal(Protocol):
     # the cross-runtime portal_rate_state ledger instead of a process-local
     # limiter. Resolved from PortalLimits.shared_rate_limiter by each portal.
     shared_rate_limiter: bool
+    # Optional (read via getattr; PortalDefaults says False): the declared total
+    # walk_category returns is what the walk saw (remax, maxima: the portal states
+    # only per-agenda totals), so declared − collected is 0 by construction. The
+    # runner writes it into every by_category entry, and the health checks read
+    # that unit's declared total as Not measured rather than as 0 % missing.
+    total_is_count: bool
 
     # --- index-walk seams ---
     # The runner calls connect_index() BEFORE categories() (idnes relies on it).
@@ -152,7 +162,7 @@ class Portal(Protocol):
     # note_empty_slice(category): ceskereality + realitymix keep the sibling-slice
     #   counter honest when the runner refuses an empty seen set.
     # coverage_denominator_is_upper_bound: ceskereality; picks the COVERAGE log
-    #   level only.
+    #   level and is written into every by_category entry as declared_is_upper_bound.
 
     # --- probe seams (optional; duck-typed by run_index_probe) ---
     # set_index_page_cap(pages: int | None): re-cap the walk's index page budget
@@ -178,6 +188,7 @@ class PortalDefaults:
     """Seam bodies the adapters used to copy; override one only where the portal differs."""
 
     source: str
+    total_is_count: bool = False
 
     def connect_index(self) -> Any:
         return db.connect()
@@ -363,7 +374,7 @@ def _queue_presence_checks(
 
 
 def _record_category_drift(portal: Portal, conn: Any, limiter: Any) -> None:
-    """Coverage alarm: compare the portal's live category vocabulary with the
+    """Category drift record: compare the portal's live category vocabulary with the
     configured one and record any difference (migration 482). Optional seam,
     best-effort, never blocks the walk -- with page-verified closures a missing
     category cannot cause a wrong deletion, only a coverage gap, and a coverage
@@ -430,6 +441,8 @@ def run_index_walk(
     category_aggregates: list[dict[str, Any]] = []
     limiter = build_rate_limiter(
         portal.source, portal.index_rate, getattr(portal, "shared_rate_limiter", False))
+    total_is_count = bool(getattr(portal, "total_is_count", False))
+    upper_bound = bool(getattr(portal, "coverage_denominator_is_upper_bound", False))
     conn = None if dry_run else portal.connect_index()
 
     try:
@@ -477,11 +490,7 @@ def run_index_walk(
                     # trip this on every category of every walk, and an alarm that is
                     # on by construction is not an alarm. Those portals emit their own
                     # scoped one; the number is recorded in by_category either way.
-                    emit = (
-                        LOG.info
-                        if getattr(portal, "coverage_denominator_is_upper_bound", False)
-                        else LOG.warning
-                    )
+                    emit = LOG.info if upper_bound else LOG.warning
                     emit(
                         "COVERAGE cm=%s ct=%s: the walk reached the portal's end but "
                         "collected %d of %s (coverage=%s) -- the gap is nominated, "
@@ -534,11 +543,13 @@ def run_index_walk(
                 "listings_enqueued":    cat_counts.get("enqueued", 0),
                 "images_discovered":    0,
                 "images_stored":        0,
-                "sreality_result_size": cat_result_size,
+                DECLARED_TOTAL_KEY:     cat_result_size,
                 "collected":            len(seen_ids),
                 "active_db":            active_db,
                 "walk_reached_end":     bool(reached_end),
                 "walk_coverage":        coverage,
+                "total_is_count":       total_is_count,
+                "declared_is_upper_bound": upper_bound,
             })
 
         LOG.info(

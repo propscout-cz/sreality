@@ -804,7 +804,12 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     lane = inspect.getsource(rw._amain).split('("health"', 1)[1].split(")),", 1)[0]
     assert "lambda: HEALTH_TICK_SECONDS" in lane
     assert "default_interval=HEALTH_TICK_SECONDS" in lane
-    assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 300.0)
+    assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 360.0)
+    from scripts import verify_pipeline
+
+    hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
+    assert verify_pipeline.lane_budget_for(hosted) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
+        "a pass must hold every worker check due at once")
     at = rw.LANES.index("health")
     assert rw.LANES[at - 1:at + 2] == ("text_extract", "health", "autodedup")
     for forbidden in ("app_settings", "os.environ"):

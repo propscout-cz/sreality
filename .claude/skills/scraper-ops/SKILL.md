@@ -159,8 +159,8 @@ phases in one job via `remax_main`, bounded by `--max-detail` + a `--max-seconds
 hourly `30 * * * *`, bounded by `--max-seconds`; `SCRAPE_CHAIN_TOKEN` re-dispatches it while the
 queue has work). idnes's `supports_complete_walk` was parked (migration 453) — posture only since
 2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad, each slice's outcome
-in `portal_index_slices` (454); `coverage_gate.yml` (cron `15 3,9,15,21`) re-earns the flag from it.
-**Parked flags, the slice ledger and the gate: `references/coverage-and-delisting.md`.**
+in `portal_index_slices` (454), read back to walk the stalest slice first (the gate that re-earned the flag retired in wave 4).
+**Parked flags, the slice ledger and the retired gate: `references/coverage-and-delisting.md`.**
 There is no combined fallback workflow for a split portal anymore (sreality's `scrape.yml`
 went in C2-2); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main`
 with neither `--index-only` nor `--drain-only`, run locally. The properties track adds
@@ -169,7 +169,7 @@ singletons + recomputes only changed properties; rule #20) and
 `recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
-a resumed run that stops again exits RED; only a whole cycle stamps completion). The visual-signal producers run alongside:
+a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
 `compute_image_phash.yml` (hourly pHash BACKSTOP only — the image drain hashes the bytes in hand and writes `phash` in the
 `storage_path` UPDATE, so this job takes just `phash IS NULL` rows: `IMAGES done phash_missed` + re-master re-arms), `clip_tag.yml`
 (`scripts/clip_tag_backfill.py` — zero-shot CLIP room/plot tags into `image_clip_tags` + a 512-d vector into `image_clip_embeddings`),
@@ -263,7 +263,7 @@ walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked
 on a portal terminator, no stop of ours) nominates every active row it did not see (`VERIFY cm=…
 candidates=… queued=… deferred=…`); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
 "no longer active" text → `ListingGoneError`) is recorded (`detail_queue_completions` `gone`) and flips it (`flipped`) only when
-an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health `false_delist_share`); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
+an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health: the `delisting` check) — effectively 24 h, as a walk re-nominates no ad checked within `RECHECK_THROTTLE` (24 h); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
 nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip_cap` throttles per
 walk ONLY above its 2,000-active-row floor (`VERIFY DEFERRED`, in `delist_flip_refusals`); the page must be the row's OWN (a `detail_ref`
 naming another id is dropped). Stop-reason vocabulary: `references/coverage-and-delisting.md`.
@@ -402,15 +402,14 @@ Per-lane notes:
 
 **Health check harness** (`scripts/verify_pipeline.py`; plan: `docs/design/health-dashboard.md`) — ONE registry, `CHECKS`:
 each `Check` declares key, class (`alarm`/`gauge`), host (`realtime-worker` for `jobs`, `capacity` and `llm` since wave 3,
-`github-actions` for the rest until waves 4-6 move them), `cadence_s`, budget, label, unit and owner page; `project_registry` mirrors the host's keys into `health_checks`
+`scraping`, `publishing`, `delisting` and `coverage` since wave 4, `github-actions` for the rest until waves 5-6 move them), `cadence_s`, budget, label, unit and owner page; `project_registry` mirrors the host's keys into `health_checks`
 (migration 619). FOUR statuses, `ok`/`warn`/`fail`/`unknown` = OK/Watch/Problem/Not measured: a timeout, an error or a
 check's own could-not-measure path is `unknown`, reason in `details` (`timed_out`/`errored`/`skipped`), never `ok` (one
 holdout until wave 6: `ppm2_median_shift`'s "compared NOTHING" still reads `warn`). `run_due` (the canary for GitHub's keys; the
-worker's `health` lane, every 60 s under a 300 s pass budget, for its own) measures a host's DUE checks (newest row since `declared_at` older than `cadence_s` less
+worker's `health` lane, every 60 s under a 360 s pass budget, for its own) measures a host's DUE checks (newest row since `declared_at` older than `cadence_s` less
 min(cadence / 10, 15 min)), alarms before gauges, each under a real wall clock: every statement's `SET LOCAL statement_timeout` is the
 check's time left, so an overrun is `unknown` (`timed_out`, `budget_seconds`, `elapsed_seconds`), and a check the run
-never reached writes no row and stays due; the daily sreality image probe and the weekly outbound-URL probe are
-cadences, not workflows. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per portal/job/lane).
+never reached writes no row and stays due; the weekly outbound-URL probe is a cadence, not a workflow. A row keeps `details.message`, `elapsed_ms` and any `cells` (one verdict per portal/job/lane).
 Measuring writes no system alert and reds no run: the ONE ladder, `toolkit/system_alerts.reconcile`, runs in the API every 60 s —
 one `ops_incidents` row per failing cell (`cell:<key>:<subject>`), one grouped onset per check, reminders until
 acknowledged on Health (a minimal Acknowledge button on the pipeline-checks card; the rebuilt page in wave 8) — alarm
@@ -421,6 +420,10 @@ workflow (`gh/<stem>`, with its reason line), the poller (`gh/poller`), pg_cron 
 (`lane/<lane>`, `lane/<lane>/<portal>`) and derived artifact (`artifact/<name>`); `capacity`, pg_cron durations against a
 sticky reference, check timeouts per host, the oldest open transaction, connections and the worker's memory; `llm`, credit per
 provider, error share and starvation per (provider, `called_for`), 24 h spend. Thresholds: `THRESHOLDS`, no override.
+**Portal checks (wave 4, `scripts/checks/{scraping,publishing,delisting}.py`, on the worker; cells `<portal>/<arm>`):**
+`scraping` (walks: hours since a unit's newest end-reached walk against the portal's own walk gap; inflow; fetch errors;
+missing), `publishing` (queue age, Browse visibility of new ads and of the stock, photos, `fleet/dirty`), `delisting`
+(outflow, stuck verdicts, verify backlog, deferrals, precision), the `coverage` gauge (residual, unnominated ads).
 **Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
 (host `pg_cron`) whose cells judge what must not judge itself: `worker` (heartbeat over 10 min old), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget), `api` (the watchdog matcher's lease lapsed) and `unalerted` (a
 measured Problem with no incident); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.

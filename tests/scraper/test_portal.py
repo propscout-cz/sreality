@@ -95,8 +95,8 @@ def test_default_config_idnes():
 
 def test_default_config_mmreality():
     cfg = default_config("mmreality")
-    # The flag lives on the live registry row; the coverage gate flips it from
-    # slice-ledger evidence (migration 455), so the baked-in default stays down.
+    # The flag lives on the live registry row; nothing flips it since the coverage
+    # gate retired (Health wave 4), so the baked-in default stays down.
     assert cfg.supports_complete_walk is False
     assert cfg.split_threshold is None
     assert cfg.splits is False

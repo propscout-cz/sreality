@@ -49,7 +49,7 @@ truth enforced only in production, and N identical emails for one cause.
 | --- | --- | --- |
 | W0 stop the silent losses | Four one-file fixes, each currently *discarding* information: poller cursor loss + a poller-liveness check (W0.1), honest crash accounting at the shared `portal_runner` seam (W0.2), LLM check keyed on state not recency + a per-`called_for` starvation arm (W0.3), graceful degradation of the acute health lane under its 120s budget (W0.4) | 🟢 shipped 2026-08/09; its open follow-ups superseded by the Health dashboard sprint (2026-10-18) |
 | W0.5 the second week's fires | (a) ceskereality contract v4 + contract-immutability lockfile rail in `test.yml` — un-wedges the intake lane, closes the merged≠enforced gap for portal contracts; (b) `llm_liveness` recalibrated 4h → 13h to the real (post-dedup) producer cadence | 🟡 in progress (2026-08-31, shipped as hotfix PRs ahead of wave order — the lane was down) |
-| W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks) | ⚪ proposed — needs operator sign-off |
+| W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks, rebuilt in the Health dashboard sprint's wave 4 as the `scraping` and `publishing` checks and the `coverage` gauge) | ⚪ proposed — needs operator sign-off |
 | W2 migration file as contract | `-- apply:` / `-- assert:` header tokens above a watermark (≥ 444), asserts executed inside `migrations.yml`'s existing per-file apply loop and *validated as able to fail*, plus schema-vocabulary parity and the hot-DDL doctrine rails. **W2.3's live-catalog drift check shipped in parallel as PR #1204 (`check_migration_drift`)** — remaining W2.3 scope is hardening it, not building it | ⚪ proposed — needs operator sign-off (part shipped in parallel) |
 | W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) awaits the operator — until flipped, incidents ring the in-app bell only. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
 | W4 apply becomes a job | Hot-table DDL applied out-of-band by a tested, extracted lock primitive (`attempts=1`, fail fast, escalate to a window — the retry-loop pattern is retired, not tuned); the existing PK-swap applier generalised into a dispatchable maintenance window | ⚪ proposed — needs operator sign-off + one human step (`REALTIME_WORKER_ENABLED`) |
@@ -386,5 +386,97 @@ Owed and stated (also in the design's "As built" note):
 To check after the merge: the worker's `health` lane passes in the heartbeat, `health_checks` holds
 the three `realtime-worker` keys, and Health shows their cells within 10 minutes of the deploy.
 
-**Next:** wave 4 — the portal checks (scraping, publishing, delisting and the coverage gauge),
-built on ledgers that see the worker's work (migration 622).
+~~**Next:** wave 4 — the portal checks (scraping, publishing, delisting and the coverage gauge),
+built on ledgers that see the worker's work (migration 622).~~ Done 2026-10-19 (wave 4, below).
+
+## 2026-10-19 — Health dashboard sprint, wave 4 (shipped with this PR)
+
+Portal checks: each portal's discovery, publishing, delisting and holdings are judged by four
+checks the worker measures every 10 minutes (the holdings gauge hourly), built on ledgers that see
+the worker's work, with limits taken from the delisting policy's constants and each portal's own
+walk rhythm; Browse's whole stock is watched, not only its newest ads. Plan:
+[`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 4, and its "As
+built" note; reference: the scraper-ops skill's `references/pipeline-verification.md`.
+
+What wave 4 changed:
+- **`scraping`** (every 10 min): per portal and unit (a property type and deal, such as flats for
+  sale), the hours since the newest walk that reached the portal's end, against 3 and 6 times the
+  portal's own median walk gap; new ads found in the last 24 h against the same 24 h one to four
+  weeks earlier; the share of detail fetches that failed; and, per unit, the share of the portal's
+  declared ads the walk did not collect. It replaces `walk_coverage` and `walk_end_streak`.
+- **`publishing`** (every 10 min): how long new and changed ads wait in the queue; the share of
+  new ads, and of the whole active stock, missing from Browse, split by the stage that blocks them
+  (no property yet, property not active, location not served, not yet in Browse); new photos not
+  stored or stored too small; the oldest property waiting for its recompute. It replaces
+  `acquisition_lag`, `property_maintenance`'s dirty-queue arm and the sreality image-template
+  probe.
+- **`delisting`** (every 10 min): ads made inactive in the last 24 h against each of the four weeks back, read at
+  every 24 h window within ±3 h of this hour (a drop against each week's quietest window, a spike
+  against its busiest; the 10-10 day on which the whole fleet made none inactive now fails); gone
+  verdicts that should have closed their ad by now; the oldest presence check waiting; walks whose
+  checks the flip cap deferred; and the share of ads made inactive 2-3 days ago that are active
+  again. It replaces `false_delist_share` and `delist_flip_refused`.
+- **`coverage`** (hourly, a gauge): per unit, the ads we hold against the ads the portal declares,
+  less those waiting out their dwell; per portal, the active ads no walk can nominate. With it the
+  `coverage_gate` workflow retires (it had evaluated nothing since 2026-09-13), and so do the
+  ceskereality and mmreality slice writes only it read.
+- **The seams the checks read.** remax and maxima now declare that their "total" is the count of
+  what they saw (`total_is_count`), so their missing and residual arms read Not measured instead
+  of a 0 % gap by construction; the declared-total key is spelled once
+  (`portal_runner.DECLARED_TOTAL_KEY`); `delist_policy.RECHECK_THROTTLE` names the 24 h re-check
+  exclusion that makes the effective dwell 24 h, with nothing changed (the one-rule fix is #1858).
+  No check module names a portal (a CI rail).
+- **The daily full sweep** stamps the `property_sweep` derived artifact (migration 622), judged by
+  the `jobs` check, instead of an `app_settings` row: still Problem at 56 h (a 38 h budget plus
+  GitHub's 18 h delivery slack); the old 52 h Watch is gone, because an artifact cell has none.
+- **The health lane's pass** is capped at 360 s (8 × 45 s: the worker's seven checks now, wave 5's
+  dedup the eighth); the canary measures 13 GitHub keys (660 s of budgets).
+
+Owed items this closes:
+- **`docs/design/realtime-scrapers.md`'s deferred W5b**, its wave-4 share: each portal's limits
+  now come from its own behaviour (its walk gap, same-window baselines, the effective dwell), not
+  a hand-set cadence.
+- **From the investigation:** the 10-10 zero-flip day (no alarm then, the outflow arm now); a
+  portal whose walks stop no longer drops out: every portal gets its cells, and one with no
+  finished walk in 30 d reads a `<portal>/walks` Problem and keeps its inflow, fetch-error and
+  unnominated cells; sreality's "25 % errors" (one poison id, #1851) reads 0.02 %; remax and maxima
+  no longer read 100 % coverage by construction; and the W1 row's `ingest_freshness` (above) is the
+  inflow and ingest arms.
+
+Owed and stated (also in the design's "As built" note):
+- The missing and residual arms are Not measured for every unit until its first walk after the
+  deploy writes `total_is_count`, and for remax and maxima for good (their total is what they
+  saw).
+- The fetch-error share approximates "attempted in 24 h" (the queue keeps no per-attempt time);
+  the stuck limit uses the portal-level walk gap, which understates portals whose units rotate;
+  deferrals are judged per portal; the photos arm cannot judge ads with no photo rows (a fact
+  counts them).
+- At ship the `coverage` gauge opens a Problem on realitymix's unnominated ads (151 NULL-category
+  ads, the oldest last seen 112 d ago, #1853) and reads Watch on ceskereality's (96); from the
+  first walk after the deploy that records `total_is_count` for ceskereality's `dum`/`prodej`, that
+  unit's residual reads Problem too (about −14 %: 13.7 k declared against 11.8 k held, the
+  chaty-chalupy double count, #1854). `delisting` read Watch on idnes's outflow on 10-19 (a 423 %
+  spike against the same hour one to four weeks back; against the busiest 24 h within ±3 h
+  of that hour it is about 210-240 %, under the 300 % line), and sreality's precision cell may read
+  Problem on 10-20/21 (its 10-18 flip cohort, ~17.5 % active again): the blink tail #1858
+  addresses, told, not suppressed.
+- On a day the full property sweep holds the maintenance lease longer than about 40 min,
+  `publishing`'s visible cell reads Problem for its duration (new ads wait for their property,
+  because the sweep attaches only at its start) and recovers when it lets go; attaching while the
+  sweep runs is owed to the scraper track.
+- Left for wave 9: the 150 ceskereality and mmreality rows of `portal_index_slices` and
+  `portal_coverage_gate` (read by nothing), `portals.supports_complete_walk` (no writer now; the
+  old Health page's portal posture still reads it) and `delist_flip_refusals` (still written, read
+  by nothing); only `portal_coverage_gate` is on wave 9's list so far.
+- The old page's matview checks (`delisting_latency`, `delisting_spike` and the rest) keep
+  rendering until wave 9.
+- At merge the seven retired keys' open incidents close silently at the canary's first run from
+  `main` (`false_delist_share`'s included), and the new checks open fresh onsets where they
+  measure Problem.
+
+To check after the merge: `health_checks` holds the seven `realtime-worker` keys, Health shows the
+portal checks' cells within 10 minutes of the deploy (coverage's within the hour), and
+`derived_artifacts` holds `property_sweep`, stamped by the next completed sweep.
+
+**Next:** wave 5 — the dedup check (`scripts/checks/dedup.py`), judged from durable stores, and
+the AutodedupProgress copy that still says "shadow".

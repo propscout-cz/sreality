@@ -34,9 +34,9 @@ of id 1 (2026-10-03: four daily runs in a row stopped near id 540k of 927k,
 each restarting at 1, so the tail went days without a reconcile). The first
 stop of a cycle exits 0 with a warning; a resumed run that stops again, or a
 run that stops before its first batch (nothing to resume), exits RED (GH
-reports a timeout kill as `cancelled`, which alerts nobody). The
-`property_maintenance` check in scripts/verify_pipeline.py watches the
-completion stamp independently.
+reports a timeout kill as `cancelled`, which alerts nobody). The jobs
+check's `artifact/property_sweep` cell (scripts/checks/platform.py) watches
+the completion stamp (derived_artifacts, migration 622) independently.
 
 Two run modes (Phase 3 -- real-time properties):
 
@@ -351,39 +351,14 @@ _RECONCILE_CHILDLESS_SQL = f"""
       AND ({', '.join(f'p.{c}' for c in _NO_ADS)}) IS DISTINCT FROM ({', '.join(_NO_ADS.values())})
 """
 
-# Written ONLY when a cycle covered every id (in one run, or across runs through the cursor
-# below) — the O(1) liveness signal the
-# `property_maintenance` health check reads. Per-row stats_computed_at cannot
-# serve that role: min() over 620k properties with a listings semi-join
-# measured ~3.5 min live, and a check that heavy would blow the hourly acute
-# lane's own 5-min job timeout — recreating the silent-`cancelled` failure
-# mode it exists to catch. A dead, killed, or chronically-incomplete sweep
-# shows up here as a stale stamp within hours, however the process died.
-# `batches` and `elapsed_s` are the finishing run's; `runs` and `cycle_started_at` the cycle's.
-_STAMP_SWEEP_COMPLETE_SQL = """
-    INSERT INTO app_settings (key, value, updated_by)
-    VALUES ('property_sweep_last_complete',
-            jsonb_build_object(
-                'completed_at', now(),
-                'max_property_id', %(max_id)s::bigint,
-                'batches', %(batches)s::int,
-                'elapsed_s', %(elapsed_s)s::numeric,
-                'runs', %(runs)s::int,
-                'cycle_started_at', %(cycle_started_at)s::timestamptz),
-            'recompute_property_stats')
-    ON CONFLICT (key) DO UPDATE
-      SET value = excluded.value, updated_at = now(),
-          updated_by = excluded.updated_by
-"""
-
 # The resume cursor (2026-10-03: four daily runs in a row stopped on budget near id 540k of
 # 927k and each restarted at id 1, so the id tail went days without a reconcile). A budget stop
 # saves where the next run continues the cycle; the run that completes it deletes the row in
 # the stamp's transaction. A cycle that began more than _CURSOR_MAX_AGE ago starts over at id 1
 # instead, or the stamp would vouch for a reconcile whose lower half is days old. The age is
 # judged when a run resumes, not when it stamps, so a stamp's oldest recompute can be
-# _CURSOR_MAX_AGE plus that run's own length (~2h: budget + one in-flight batch) old; the
-# stamp's `cycle_started_at` records it.
+# _CURSOR_MAX_AGE plus that run's own length (~2h: budget + one in-flight batch) older than
+# the stamp: the artifact's complete_through is the stamp time, not the cycle's start.
 _CURSOR_MAX_AGE = "36 hours"
 
 _READ_SWEEP_CURSOR_SQL = """
@@ -474,11 +449,12 @@ def _bounded(conn: Any) -> Iterator[None]:
         yield
 
 
-def _run_recompute_statement(conn: Any, sql: str, params: dict[str, Any]) -> None:
+def _run_recompute_statement(conn: Any, sql: str, params: dict[str, Any]) -> int:
     """One recompute statement in its own `_bounded` transaction, so each batch still commits
-    independently (a killed sweep keeps every finished batch)."""
+    independently (a killed sweep keeps every finished batch); returns the properties it wrote."""
     with _bounded(conn), conn.cursor() as cur:
         cur.execute(sql, params)
+        return cur.rowcount or 0
 
 
 def _reconcile_childless(conn: Any) -> int:
@@ -1035,7 +1011,7 @@ def main() -> int:
                 start_lo, runs, cycle_started_at = 1, 0, cutoff
             ranges = list(_batch_ranges(max_id, args.batch_size, start_lo))
             total_batches = len(ranges)
-            batches = 0
+            batches = recomputed = 0
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
                 # stop batching with enough headroom left to finalize + release,
@@ -1055,14 +1031,14 @@ def main() -> int:
                 # connection after a pooler drop. Idempotent (sticky-holder CAS);
                 # a genuinely lost lease raises RuntimeError, which run_resilient
                 # re-raises immediately (not an OperationalError -> not transient).
-                def _renew_and_recompute(c: Any, lo: int = lo, hi: int = hi) -> None:
+                def _renew_and_recompute(c: Any, lo: int = lo, hi: int = hi) -> int:
                     _renew_lease(c, holder)
-                    _run_recompute_statement(
+                    return _run_recompute_statement(
                         c, _RECOMPUTE_BATCH_SQL, {"lo": lo, "hi": hi})
 
                 try:
-                    step(_renew_and_recompute, "sweep.batch",
-                         attempts=_BATCH_RESILIENT_ATTEMPTS)
+                    recomputed += step(_renew_and_recompute, "sweep.batch",
+                                       attempts=_BATCH_RESILIENT_ATTEMPTS)
                 except Exception:
                     # Name the poisoned range before dying — the 10:09Z run's
                     # log showed only a bare QueryCanceled with no way to tell
@@ -1092,19 +1068,20 @@ def main() -> int:
                         reconciled,
                     )
 
-                def _finalize(c: Any) -> None:
+                # Fixed before the op, so a replay after an unseen COMMIT stamps the same facts.
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+
+                def _finalize(conn: Any) -> None:
                     # This run recomputed [start_lo, max_id]: clear that range's dirt,
-                    # stamp the completed cycle (complete cycles only — an incomplete one
-                    # leaving the stamp stale IS the alarm condition), and delete the
-                    # cursor in the same transaction, so a stamp never coexists with it.
-                    with c.transaction(), c.cursor() as cur:
+                    # stamp the completed cycle (the jobs check's O(1) liveness read;
+                    # complete cycles only — an incomplete one leaving the stamp stale IS
+                    # the alarm condition), and delete the cursor in the same
+                    # transaction, so a stamp never coexists with it.
+                    with conn.transaction(), conn.cursor() as cur:
                         cur.execute(_CLEAR_DIRTY_SWEPT_SQL, {
                             "cutoff": cutoff, "lo": start_lo, "hi": max_id + 1})
-                        cur.execute(_STAMP_SWEEP_COMPLETE_SQL, {
-                            "max_id": max_id, "batches": batches,
-                            "elapsed_s": round(time.monotonic() - started_at, 1),
-                            "runs": runs + 1, "cycle_started_at": cycle_started_at,
-                        })
+                        db.stamp_derived_artifact(conn, "property_sweep", rows=recomputed,
+                                                  duration_ms=duration_ms)
                         cur.execute(_DELETE_SWEEP_CURSOR_SQL)
 
                 step(_finalize, "sweep.finalize")
@@ -1158,8 +1135,8 @@ def main() -> int:
         # more runs — genuinely too slow, not a partial success. GH only emails on
         # scheduled-run FAILURES (a timeout kill lands as `cancelled` and alerts nobody,
         # which is how 5 dead sweeps went unnoticed for 4 days). The id tail above
-        # `incomplete_at` keeps its pre-sweep stats until a cycle completes; the
-        # `property_maintenance` health check tracks that staleness.
+        # `incomplete_at` keeps its pre-sweep stats until a cycle completes; the jobs
+        # check's `artifact/property_sweep` cell tracks that staleness.
         LOG.error(
             "RECOMPUTE budget exhausted after %.0fs: swept ids %d to %d of %d (%d/%d batches) "
             "in run %d of the cycle started %s, so the cycle needs three or more runs; "

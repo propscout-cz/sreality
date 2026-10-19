@@ -118,7 +118,8 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 - **Next:** a chained detach restores one card (PR 5, draft #1681 — needs an operator decision:
   best-effort card identity inferred from the ledgers, or a stable card id via an additive migration).
   After PR 2 deploys, `dirty_broker_listings` depth steps up after merges (the fix
-  working); `property_sweep_last_complete` should stay fresh.
+  working); the `property_sweep` artifact (the `jobs` check's `artifact/property_sweep` cell since
+  Health wave 4, which retired `property_sweep_last_complete`) should stay fresh.
 
 ### Rule #22: converge the kanban + extension pipeline copies (partly done, 2026-10-01)
 - **Done (2026-10-01):** the kanban's move/remove no longer re-implement the hook —

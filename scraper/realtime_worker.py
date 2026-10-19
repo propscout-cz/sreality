@@ -523,7 +523,9 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 # by THE harness (scripts.verify_pipeline.run_due) on a CONSTANT tick, the text_extract
 # lane's shape: no app_settings row, so no read that can fail; the brake is a deploy.
 HEALTH_TICK_SECONDS = 60.0
-HEALTH_PASS_BUDGET_SECONDS = 300.0
+# Every hosted check due at once still fits: 8 × the 45 s check budget (seven checks since wave
+# 4, wave 5's dedup the eighth), inside the watcher's 10-minute health_lane in-flight rule.
+HEALTH_PASS_BUDGET_SECONDS = 360.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
 HEALTH_PRUNE_INTERVAL_SECONDS = 86400.0
@@ -630,9 +632,9 @@ REALTIME_SOURCES: tuple[str, ...] = (
     "maxima", "mmreality", "realitymix", "remax", "sreality",
 )
 
-# The class MAPPING lives in scraper.portal_factory, because the coverage gate
-# needs the same table to ask a portal what its declared categories canonicalise
-# to. The SCOPE stays here and stays narrower: the factory knows every portal,
+# The class MAPPING lives in scraper.portal_factory, shared with the sreality
+# entrypoint (the retired coverage gate was its other reader until Health wave 4).
+# The SCOPE stays here and stays narrower: the factory knows every portal,
 # while this worker deliberately drains only REALTIME_SOURCES (every walked
 # portal since 2026-09-07; bazos predates the uniform constructor).
 # Shared mapping, local scope, so neither caller can silently widen the other.
@@ -938,9 +940,8 @@ def _load_config(source: str) -> PortalConfig:
 
 
 def _build_portal(source: str, config: PortalConfig) -> Any:
-    # Delegated: the coverage gate builds portals from the same table for the same
-    # reason (to read a portal's own category canonicalisation), so the two
-    # constructor exceptions live in one place.
+    # Delegated: the factory builds portals from the same table for every caller, so
+    # the two constructor exceptions live in one place.
     return portal_factory.build_portal(source, config)
 
 
