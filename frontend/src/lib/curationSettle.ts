@@ -1,30 +1,21 @@
-/* What a curation write does to the Browse reads (operator ruling 9,
- * docs/design/curated-set-scope.md) — one module for every write that moves a
- * property in or out of a lens: a pipeline add / move / remove, a collection add
- * / remove, a tag attach / detach, a dismissal.
- *
- * The write names the property and the LENS it moved. Every cached Browse read
- * whose filters (slot 1 of its key, lib/browseKeys) engage that lens is judged
- * again for that one property, in memory, from the member maps the write has
- * already patched — the same rule the server applies (setScope.matchesScope,
- * migration 629) — so a card funnelled, saved, tagged or hidden while its lens
- * excludes it leaves the list at once:
+/* What a curation write (pipeline add / move / remove, collection add / remove,
+ * tag attach / detach, a dismissal) does to the cached Browse reads — operator
+ * ruling 9, docs/design/curated-set-scope.md. Every cohort that engages the lens
+ * the write moved is judged again for that one property, in memory, from the
+ * member maps — setScope.matchesScope, the rule migration 629 applies:
  *
  *   still matches, on screen     → nothing (the glyph repaints from the map)
- *   no longer matches, on screen → the row drops IN PLACE from every loaded
- *                                  page (no page is re-read: a triage run of
- *                                  twenty clicks must not refetch the list
- *                                  twenty times) and the exact count drops one
+ *   no longer matches, on screen → the row drops IN PLACE (no page re-read: a
+ *                                  triage run of twenty clicks must not refetch
+ *                                  the list twenty times), the count drops one
  *   no longer matches            → map, stats and both counts re-read
  *   matches, not loaded          → may be a newcomer: that cohort re-reads
- *   cannot judge (a member map not in cache) → that cohort re-reads
+ *   cannot judge, or the map said "no" BEFORE the write while the server shows
+ *   the row (a stale map)        → that cohort re-reads, nothing drops
  *
- * Two halves, because an optimistic write paints before the server has it and
- * must re-read only after: `settlePatches` (CachePatches for useOptimisticWrite,
- * held and rolled back with the rest; judged when APPLIED, so they go after the
- * member-map patches) and `settleRereads` (the keys to re-read once the write
- * has landed). `settleCurationWrite` runs both for a write that has already
- * landed, after `markMember` put it in the member map. */
+ * `settlePatches` are CachePatches built BEFORE the member maps move (that is
+ * when the before-verdict is taken) and judged when applied, after them;
+ * `settleRereads` names what to re-read once the write has landed. */
 
 import { hashKey, type InfiniteData, type Query, type QueryClient, type QueryKey } from '@tanstack/react-query';
 
@@ -33,11 +24,12 @@ import type { ListingFilters } from '@/lib/filters';
 import { curationKeys, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
 import { CURATED_SETS, CURATED_SET_NAMES, matchesScope, scopeActive, type CuratedSet } from '@/lib/setScope';
 import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
+import type { InfiniteListPage } from '@/lib/useInfiniteList';
 
 /** What a write moved: one curated set, or the dismissal. */
 export type CurationLens = CuratedSet | 'dismissed';
 
-type ListPage = { rows: ReadonlyArray<{ property_id: number }> };
+type ListPage = InfiniteListPage<{ property_id: number }>;
 
 const LIST_ROOTS = browseKeys.lists.map(([root]) => root);
 const ALL_ROOTS = browseKeys.all.map(([root]) => root);
@@ -62,16 +54,23 @@ function cohorts(qc: QueryClient, lens: CurationLens) {
   return [...out.values()];
 }
 
+/* Each set's member map: its key, and a property's unit ids in it. */
+const unitIds = (map: Map<number, number[]>, propertyId: number) => map.get(propertyId) ?? [];
+const MEMBERS: Record<CuratedSet, { key: QueryKey; ids: (map: never, propertyId: number) => number[] }> = {
+  tags: { key: curationKeys.propertyTagMembers, ids: unitIds },
+  collections: { key: curationKeys.propertyCollectionMembers, ids: unitIds },
+  pipeline: {
+    key: pipelineKeys.members,
+    ids: (map: PipelineMembers, propertyId) => {
+      const card = map.get(propertyId);
+      return card ? [card.stage_id] : [];
+    },
+  },
+};
+
 const memberIds = (qc: QueryClient, set: CuratedSet, propertyId: number): number[] | null => {
-  if (set === 'pipeline') {
-    const map = qc.getQueryData<PipelineMembers>(pipelineKeys.members);
-    if (!map) return null;
-    const m = map.get(propertyId);
-    return m ? [m.stage_id] : [];
-  }
-  const key = set === 'tags' ? curationKeys.propertyTagMembers : curationKeys.propertyCollectionMembers;
-  const map = qc.getQueryData<Map<number, number[]>>(key);
-  return map ? (map.get(propertyId) ?? []) : null;
+  const map = qc.getQueryData(MEMBERS[set].key);
+  return map ? MEMBERS[set].ids(map as never, propertyId) : null;
 };
 
 /* Does the property belong to this cohort's lenses now? null = a member map it
@@ -95,10 +94,16 @@ const holds = (data: unknown, propertyId: number): boolean =>
 
 const isList = (q: Query) => (LIST_ROOTS as readonly unknown[]).includes(q.queryKey[0]);
 
+/* The page keeps the length it was read with, so a full page that lost a row
+ * still pages on (useInfiniteList ends the list at a short page). */
 const dropRow = (propertyId: number) => (data: InfiniteData<ListPage> | undefined) =>
   data && {
     ...data,
-    pages: data.pages.map((p) => ({ ...p, rows: p.rows.filter((r) => r.property_id !== propertyId) })),
+    pages: data.pages.map((p) => ({
+      ...p,
+      fetched: p.fetched ?? p.rows.length,
+      rows: p.rows.filter((r) => r.property_id !== propertyId),
+    })),
   };
 
 /** The in-place half: drop the property from every loaded page of a cohort it no
@@ -107,7 +112,7 @@ export function settlePatches(qc: QueryClient, propertyId: number, lens: Curatio
   const patches: CachePatch[] = [];
   for (const { f, queries } of cohorts(qc, lens)) {
     const lists = queries.filter((q) => isList(q) && holds(q.state.data, propertyId));
-    if (lists.length === 0) continue;
+    if (lists.length === 0 || verdict(qc, propertyId, f) === false) continue;
     let judged: boolean | null | undefined;
     const leaves = () => (judged === undefined ? (judged = verdict(qc, propertyId, f)) : judged) === false;
     for (const q of lists) {
@@ -138,35 +143,24 @@ export function settleRereads(
   const keys: QueryKey[] = [];
   for (const { f, queries } of cohorts(qc, lens)) {
     const v = verdict(qc, propertyId, f);
-    if (v === true && queries.some((q) => isList(q) && holds(q.state.data, propertyId))) continue;
-    for (const root of v === false ? AGGREGATE_ROOTS : ALL_ROOTS) keys.push([root, f]);
+    const shown = queries.some((q) => isList(q) && holds(q.state.data, propertyId));
+    if (v === true && shown) continue;
+    for (const root of v === false && !shown ? AGGREGATE_ROOTS : ALL_ROOTS) keys.push([root, f]);
   }
   return keys;
 }
 
-/** Settle a write that has already landed (its member map patched by the caller). */
-export async function settleCurationWrite(
-  qc: QueryClient,
-  propertyId: number,
-  lens: CurationLens,
-): Promise<void> {
-  const patches = settlePatches(qc, propertyId, lens);
-  await Promise.all(patches.map((p) => qc.cancelQueries(p.filters)));
-  for (const p of patches) qc.setQueriesData(p.filters, p.update);
-  for (const queryKey of settleRereads(qc, propertyId, lens)) void qc.invalidateQueries({ queryKey });
-}
-
-/** Put a landed tag / collection write into its member map, so the settle judges
- * the new membership before the map's own re-read lands. */
-export function markMember(
+/** Settle a landed tag / collection write: judged before, put into its member
+ * map (so the settle sees it before the map's own re-read lands), judged after. */
+export async function settleMemberWrite(
   qc: QueryClient,
   set: 'tags' | 'collections',
   propertyId: number,
   unitId: number,
   member: boolean,
-): void {
-  const key = set === 'tags' ? curationKeys.propertyTagMembers : curationKeys.propertyCollectionMembers;
-  qc.setQueryData<Map<number, number[]>>(key, (prev) => {
+): Promise<void> {
+  const patches = settlePatches(qc, propertyId, set);
+  qc.setQueryData<Map<number, number[]>>(MEMBERS[set].key, (prev) => {
     if (!prev) return prev;
     const next = new Map(prev);
     const ids = (prev.get(propertyId) ?? []).filter((id) => id !== unitId);
@@ -175,4 +169,7 @@ export function markMember(
     else next.delete(propertyId);
     return next;
   });
+  await Promise.all(patches.map((p) => qc.cancelQueries(p.filters)));
+  for (const p of patches) qc.setQueriesData(p.filters, p.update);
+  for (const queryKey of settleRereads(qc, propertyId, set)) void qc.invalidateQueries({ queryKey });
 }

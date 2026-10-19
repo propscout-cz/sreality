@@ -10,9 +10,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
-import type { SetScope } from '@/lib/setScope';
+import { parseSetScope, type SetScope } from '@/lib/setScope';
 
-import { AccountCuratedSetFilter, CuratedSetFilter, type SetUnit } from './CuratedSetFilter';
+import { AccountCuratedSetFilter, CuratedSetFilter, joinReads, type SetUnit } from './CuratedSetFilter';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -139,6 +139,29 @@ describe('<CuratedSetFilter> the whole-set chips', () => {
       expect(screen.queryByRole('button', { name: 'V pipeline' })).toBeNull();
       expect(screen.getAllByRole('button')).toHaveLength(TAGS.length + 1);
     }
+  });
+  it('draws a whole-set include a link carries (?tags=any) for a set that does not offer it, and clears it', () => {
+    const onChange = vi.fn();
+    const value = parseSetScope(new URLSearchParams('tags=any'), 'tags');
+    render(<CuratedSetFilter set="tags" units={TAGS} value={value} onChange={onChange} query={READ} />);
+    const chip = screen.getByRole('button', { name: 'Se štítkem' });
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(chip);
+    expect(onChange).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('joinReads', () => {
+  it('fails while any read has nothing to show, so the frame retries both', () => {
+    const units = { isLoading: false, isError: true, data: undefined, refetch: vi.fn() };
+    const map = { ...READ, data: new Map(), refetch: vi.fn() };
+    const joined = joinReads(map, units);
+    expect(joined.isError).toBe(true);
+    expect(joined.data).toBeUndefined();
+    joined.refetch();
+    expect(units.refetch).toHaveBeenCalled();
+    expect(map.refetch).toHaveBeenCalled();
+    expect(joinReads(map, READ).isError).toBe(false);
   });
 });
 

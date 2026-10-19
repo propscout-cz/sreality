@@ -18,7 +18,7 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { listCollections } from '@/lib/api';
 import { curationKeys, fetchPropertyCollectionMemberSet } from '@/lib/queries';
-import { markMember, settleCurationWrite } from '@/lib/curationSettle';
+import { settleMemberWrite } from '@/lib/curationSettle';
 import type { Collection } from '@/lib/types';
 
 const NO_COLLECTIONS: Collection[] = [];
@@ -160,16 +160,9 @@ export function revalidateCollections(
   }
 }
 
-/** One property added to / removed from one collection, landed: the member map
- * shows it at once, a Browse read it no longer belongs to drops the row in
- * place (lib/curationSettle, ruling 9), then the collection reads re-read. */
-export async function settleCollectionWrite(
-  qc: QueryClient,
-  property_id: number,
-  collection_id: number,
-  member: boolean,
-): Promise<void> {
-  markMember(qc, 'collections', property_id, collection_id, member);
-  await settleCurationWrite(qc, property_id, 'collections');
-  revalidateCollections(qc, { collection_id });
-}
+/** One property added to / removed from one collection, landed: settled in the
+ * Browse reads (lib/curationSettle, ruling 9), then the collection reads re-read. */
+export const settleCollectionWrite = (qc: QueryClient, property_id: number, collection_id: number, member: boolean) =>
+  settleMemberWrite(qc, 'collections', property_id, collection_id, member).then(() =>
+    revalidateCollections(qc, { collection_id }),
+  );

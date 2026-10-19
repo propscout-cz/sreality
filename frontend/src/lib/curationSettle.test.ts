@@ -3,21 +3,19 @@
  * that property — a row it no longer belongs to drops IN PLACE (no page is
  * re-read), the exact count drops one, map and stats re-read. */
 
-import { QueryClient, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type InfiniteData, type QueryKey } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { createElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { browseKeys } from './browseKeys';
-import {
-  markMember,
-  settleCurationWrite,
-  settlePatches,
-  settleRereads,
-} from './curationSettle';
+import { settleMemberWrite, settlePatches, settleRereads, type CurationLens } from './curationSettle';
 import { DEFAULT_FILTERS, type ListingFilters } from './filters';
 import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, type PipelineMembers } from './queries';
 import type { SetScope } from './setScope';
+import { useInfiniteList } from './useInfiniteList';
 
-type Page = { rows: { property_id: number }[] };
+type Page = { rows: { property_id: number }[]; fetched?: number };
 const P = 42;
 
 const scope = (s: Partial<SetScope>): SetScope => ({ set: null, in: [], out: [], ...s });
@@ -44,18 +42,27 @@ function seed(qc: QueryClient, f: ListingFilters, cards: number[][], count = 50)
   qc.setQueryData(browseKeys.stats(f, { rows: [], cols: [], measure: 'ppm2' }), { cells: [] });
 }
 
+/* An optimistic write as useOptimisticWrite runs the halves: patches built,
+ * the write painted, the patches applied, then the re-reads. */
+function settle(qc: QueryClient, lens: CurationLens, paint: () => void) {
+  const patches = settlePatches(qc, P, lens);
+  paint();
+  for (const p of patches) qc.setQueriesData(p.filters, p.update);
+  for (const queryKey of settleRereads(qc, P, lens)) void qc.invalidateQueries({ queryKey });
+}
+
 const invalidated = (spy: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }) =>
   spy.mock.calls.map(([arg]) => (arg as { queryKey: QueryKey }).queryKey);
 
-describe('settleCurationWrite', () => {
-  it('drops a funnelled property from every loaded page of a "Mimo pipeline" cohort, in place', async () => {
+describe('the settle', () => {
+  it('drops a funnelled property from every loaded page of a "Mimo pipeline" cohort, in place', () => {
     const qc = new QueryClient();
     const f = filters({ pipeline: scope({ set: 'out' }) });
     seed(qc, f, [[1, 2], [P, 3], [4]]);
-    qc.setQueryData(pipelineKeys.members, members([[P, 5]])); // the add, already painted
+    qc.setQueryData(pipelineKeys.members, members([]));
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    await settleCurationWrite(qc, P, 'pipeline');
+    settle(qc, 'pipeline', () => qc.setQueryData(pipelineKeys.members, members([[P, 5]])));
 
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[1, 2], [3], [4]]);
     expect(rowsOf(qc, browseKeys.table(f, DEFAULT_SORT))).toEqual([[1, 2, 3, 4]]);
@@ -68,44 +75,43 @@ describe('settleCurationWrite', () => {
     expect(keys.some((k) => k[0] === 'cards' || k[0] === 'table')).toBe(false);
   });
 
-  it('leaves a cohort the property still belongs to untouched', async () => {
+  it('leaves a cohort the property still belongs to untouched', () => {
     const qc = new QueryClient();
     const f = filters({ pipeline: scope({ set: 'in' }) });
     seed(qc, f, [[1, P]]);
-    qc.setQueryData(pipelineKeys.members, members([[P, 6]])); // a move between stages
+    qc.setQueryData(pipelineKeys.members, members([[P, 5]]));
     const before = qc.getQueryData(browseKeys.cards(f, DEFAULT_SORT));
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    await settleCurationWrite(qc, P, 'pipeline');
+    settle(qc, 'pipeline', () => qc.setQueryData(pipelineKeys.members, members([[P, 6]]))); // a move
 
     expect(qc.getQueryData(browseKeys.cards(f, DEFAULT_SORT))).toBe(before);
     expect(qc.getQueryData(browseKeys.count(f))).toBe(50);
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it('judges only the cohorts that engage the lens the write moved', async () => {
+  it('judges only the cohorts that engage the lens the write moved', () => {
     const qc = new QueryClient();
     const unscoped = filters();
     const byTag = filters({ tags: scope({ in: [9] }) });
     seed(qc, unscoped, [[P]]);
     seed(qc, byTag, [[P]]);
-    qc.setQueryData(pipelineKeys.members, members([[P, 5]]));
     qc.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>()); // P carries no tag 9 (stale page)
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    await settleCurationWrite(qc, P, 'pipeline');
+    settle(qc, 'pipeline', () => qc.setQueryData(pipelineKeys.members, members([[P, 5]])));
 
     expect(rowsOf(qc, browseKeys.cards(unscoped, DEFAULT_SORT))).toEqual([[P]]);
     expect(rowsOf(qc, browseKeys.cards(byTag, DEFAULT_SORT))).toEqual([[P]]);
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it('a stage exclusion drops the card moved into that stage', async () => {
+  it('a stage exclusion drops the card moved into that stage', () => {
     const qc = new QueryClient();
     const f = filters({ pipeline: scope({ out: [7] }) });
     seed(qc, f, [[P, 1]]);
-    qc.setQueryData(pipelineKeys.members, members([[P, 7]]));
-    await settleCurationWrite(qc, P, 'pipeline');
+    qc.setQueryData(pipelineKeys.members, members([[P, 2]]));
+    settle(qc, 'pipeline', () => qc.setQueryData(pipelineKeys.members, members([[P, 7]])));
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[1]]);
   });
 
@@ -115,8 +121,7 @@ describe('settleCurationWrite', () => {
     seed(qc, f, [[P, 3]]);
     qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1, 2]]]));
 
-    markMember(qc, 'tags', P, 2, false);
-    await settleCurationWrite(qc, P, 'tags');
+    await settleMemberWrite(qc, 'tags', P, 2, false);
 
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[3]]);
     expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
@@ -128,8 +133,7 @@ describe('settleCurationWrite', () => {
     seed(qc, f, [[P, 3]]);
     qc.setQueryData(curationKeys.propertyCollectionMembers, new Map<number, number[]>());
 
-    markMember(qc, 'collections', P, 4, true);
-    await settleCurationWrite(qc, P, 'collections');
+    await settleMemberWrite(qc, 'collections', P, 4, true);
 
     expect(qc.getQueryData(curationKeys.propertyCollectionMembers)).toEqual(new Map([[P, [4]]]));
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[3]]);
@@ -141,7 +145,7 @@ describe('settleCurationWrite', () => {
     seed(qc, f, [[P]]);
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    await settleCurationWrite(qc, P, 'collections');
+    await settleMemberWrite(qc, 'collections', P, 4, true);
 
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[P]]);
     expect(invalidated(invalidate)).toEqual(browseKeys.all.map(([root]) => [root, f]));
@@ -154,23 +158,60 @@ describe('settleCurationWrite', () => {
     qc.setQueryData(curationKeys.propertyCollectionMembers, new Map<number, number[]>());
     const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
-    markMember(qc, 'collections', P, 4, true);
-    await settleCurationWrite(qc, P, 'collections');
+    await settleMemberWrite(qc, 'collections', P, 4, true);
 
     expect(invalidated(invalidate)).toEqual(browseKeys.all.map(([root]) => [root, f]));
+  });
+
+  it('a stale member map never drops a row the server shows: that cohort re-reads whole', async () => {
+    const qc = new QueryClient();
+    const f = filters({ tags: scope({ in: [1, 2] }) });
+    seed(qc, f, [[P, 3]]);
+    // The server shows P (tags 1 AND 2); this map missed tag 2, attached elsewhere.
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]));
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    await settleMemberWrite(qc, 'tags', P, 3, true);
+
+    expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[P, 3]]);
+    expect(qc.getQueryData(browseKeys.count(f))).toBe(50);
+    expect(invalidated(invalidate)).toEqual(browseKeys.all.map(([root]) => [root, f]));
+  });
+
+  it('a page that lost a row keeps the length it was read with, so the list pages on', async () => {
+    const qc = new QueryClient();
+    const f = filters({ pipeline: scope({ set: 'out' }) });
+    qc.setQueryData(pipelineKeys.members, members([]));
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+    const { result } = renderHook(
+      () =>
+        useInfiniteList<{ property_id: number }>({
+          queryKey: browseKeys.cards(f, DEFAULT_SORT),
+          queryFn: async () => ({ rows: [{ property_id: P }, { property_id: 1 }], nextCursor: 'next' }),
+          pageSize: 2,
+          getRowId: (r) => r.property_id,
+        }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.rows).toHaveLength(2));
+    expect(result.current.hasNextPage).toBe(true);
+
+    act(() => settle(qc, 'pipeline', () => qc.setQueryData(pipelineKeys.members, members([[P, 5]]))));
+
+    await waitFor(() => expect(result.current.rows).toEqual([{ property_id: 1 }]));
+    expect(result.current.hasNextPage).toBe(true);
   });
 });
 
 describe('the dismissal lens', () => {
-  it('drops a hidden property from the lists that hide dismissed ones only', async () => {
+  it('drops a hidden property from the lists that hide dismissed ones only', () => {
     const qc = new QueryClient();
     const hiding = filters();
     const showing = filters({ showDismissed: true });
     seed(qc, hiding, [[P, 1]]);
     seed(qc, showing, [[P, 1]]);
-    qc.setQueryData(dismissalKeys.state(P), true);
-
-    await settleCurationWrite(qc, P, 'dismissed');
+    settle(qc, 'dismissed', () => qc.setQueryData(dismissalKeys.state(P), true));
 
     expect(rowsOf(qc, browseKeys.cards(hiding, DEFAULT_SORT))).toEqual([[1]]);
     expect(qc.getQueryData(browseKeys.count(hiding))).toBe(49);
@@ -207,18 +248,18 @@ describe('the optimistic halves', () => {
   });
 });
 
-describe('markMember', () => {
-  it('adds and removes one unit, and leaves an unloaded map unloaded', () => {
+describe('the member map', () => {
+  it('a landed write adds or removes one unit, and leaves an unloaded map unloaded', async () => {
     const qc = new QueryClient();
-    markMember(qc, 'tags', P, 1, true);
+    await settleMemberWrite(qc, 'tags', P, 1, true);
     expect(qc.getQueryData(curationKeys.propertyTagMembers)).toBeUndefined();
 
     qc.setQueryData(curationKeys.propertyTagMembers, new Map([[P, [1]]]));
-    markMember(qc, 'tags', P, 2, true);
-    markMember(qc, 'tags', P, 2, true);
+    await settleMemberWrite(qc, 'tags', P, 2, true);
+    await settleMemberWrite(qc, 'tags', P, 2, true);
     expect(qc.getQueryData(curationKeys.propertyTagMembers)).toEqual(new Map([[P, [1, 2]]]));
-    markMember(qc, 'tags', P, 1, false);
-    markMember(qc, 'tags', P, 2, false);
+    await settleMemberWrite(qc, 'tags', P, 1, false);
+    await settleMemberWrite(qc, 'tags', P, 2, false);
     expect(qc.getQueryData(curationKeys.propertyTagMembers)).toEqual(new Map());
   });
 });

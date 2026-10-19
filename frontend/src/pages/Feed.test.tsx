@@ -248,6 +248,16 @@ describe('<Feed>', () => {
     expect(screen.getByRole('button', { name: 'Filtry (1 navíc)' })).toBeInTheDocument();
   });
 
+  it('a scope chip keeps the active curated sets (ruling 6), and only them', async () => {
+    const lens = { set: 'out' as const, in: [], out: [] };
+    renderFeed(feedPath({ ...DEFAULT_FILTERS, collections: lens, priceMax: 6_000_000 }, {}, null));
+    await waitFor(() => expect(lastFilters().priceMax).toBe(6_000_000));
+    await userEvent.click(await screen.findByRole('button', { name: 'Vysočany byty' }));
+    await waitFor(() => expect(lastFilters().dispositions).toEqual(['2+kk']));
+    expect(lastFilters().collections).toEqual(lens);
+    expect(lastFilters().priceMax).toBeNull();
+  });
+
   it('reads an unmodified scope with no marks and remembers only the scope', async () => {
     renderFeed(feedPath(PRESET_FILTERS));
     await screen.findByText('Místo 1', { exact: false });

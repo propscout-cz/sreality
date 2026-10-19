@@ -30,6 +30,7 @@ import { offerCuratedSet } from '@/lib/curatedSetOffer';
 import {
   CuratedSetFilter,
   collectionUnit,
+  joinReads,
   tagUnit,
 } from '@/components/filter-controls/CuratedSetFilter';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
@@ -139,7 +140,7 @@ function PipelineBoardPage() {
 
   /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
-  const { collections } = useCollections();
+  const { collections, query: collectionsQ } = useCollections();
   const membersQ = useCollectionMembers();
   const tagsQ = useQuery({
     queryKey: curationKeys.tags,
@@ -155,6 +156,8 @@ function PipelineBoardPage() {
    * contract, docs/architecture.md rule #22). */
   const members = membersQ.data;
   const tagMembers = tagMembersQ.data;
+  const collectionsRead = joinReads(membersQ, collectionsQ);
+  const tagsRead = joinReads(tagMembersQ, tagsQ);
 
   const stages = stagesQ.data ?? [];
   const cards = boardQ.data ?? NO_CARDS;
@@ -309,26 +312,27 @@ function PipelineBoardPage() {
             </Field>
           )}
           {/* The curation lenses fail open (rule #22) and say so (MS16): the
-              control's read is the member map the offer stands on. */}
-          {(bar.showCollections || readFailed(membersQ)) && (
+              control's read is the member map the offer stands on AND the
+              units it names, so a failed list is a retry, not "#id" chips. */}
+          {(bar.showCollections || readFailed(collectionsRead)) && (
             <Field label="Kolekce">
               <CuratedSetFilter
                 set="collections"
                 units={bar.collections}
                 value={scopes.collections}
                 onChange={(next) => setScope('collections', next)}
-                query={membersQ}
+                query={collectionsRead}
               />
             </Field>
           )}
-          {(bar.showTags || readFailed(tagMembersQ)) && (
+          {(bar.showTags || readFailed(tagsRead)) && (
             <Field label="Štítky">
               <CuratedSetFilter
                 set="tags"
                 units={bar.tags}
                 value={scopes.tags}
                 onChange={(next) => setScope('tags', next)}
-                query={tagMembersQ}
+                query={tagsRead}
               />
             </Field>
           )}

@@ -571,9 +571,21 @@ describe('<Pipeline> board', () => {
     );
   });
 
-  /* The row reads the member map, NOT the collections list: a selection is a
-     live constraint, so its chip renders (pressed, under a placeholder name)
-     before the list arrives — otherwise the only way out is Reset. */
+  /* A failed collections LIST is a retry too — never "#7" chips filed under
+     "No longer available", which would read as a deleted collection. */
+  it('offers a retry, not placeholder chips, when the collections list fails', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    vi.mocked(api.listCollections).mockRejectedValue(new Error('HTTP 500'));
+    renderBoard('/pipeline?collections=7');
+    expect(await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '#7' })).not.toBeInTheDocument();
+  });
+
+  /* While the collections list is still on its way the row stands on the member
+     map: a selection is a live constraint, so its chip renders (pressed, under
+     a placeholder name) before the list arrives — otherwise the only way out is
+     Reset. */
   it('offers the selected collection before the collections list resolves', async () => {
     vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
     vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(

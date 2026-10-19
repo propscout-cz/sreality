@@ -231,8 +231,10 @@ describe('scopeWords', () => {
     expect(scopeWords('tags', S('out'))).toBe('bez štítků');
     expect(scopeWords('collections', S(null, [1, 2]))).toBe('v kolekci (2 kolekce)');
     expect(scopeWords('pipeline', S(null, [1, 2, 3, 4, 5]))).toBe('v pipeline (5 fází)');
-    expect(scopeWords('tags', S(null, [1], [2, 3]))).toBe('se štítkem (1 štítek), −2 štítky');
-    expect(scopeWords('pipeline', S('in', [], [9]))).toBe('v pipeline, −1 fáze');
+    expect(scopeWords('tags', S(null, [1], [2, 3]))).toBe('se štítkem (1 štítek), bez 2 štítků');
+    expect(scopeWords('pipeline', S('in', [], [9]))).toBe('v pipeline, bez 1 fáze');
+    expect(scopeWords('tags', S(null, [], [4]))).toBe('bez 1 štítku');
+    expect(scopeWords('collections', S(null, [], [4, 5]))).toBe('bez 2 kolekcí');
     expect(scopeWords('tags', null)).toBeNull();
   });
 

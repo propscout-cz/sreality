@@ -1091,17 +1091,17 @@ const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
   return out;
 };
 
-/* A preset click keeps the active lenses (operator ruling 6, 2026-10-19): the
- * preset sets the market criteria, the lenses ride along unchanged — including
- * a lens a pre-ruling blob still stores, which never overrides the live one. */
+/* A preset click keeps the active curated-set lenses (operator ruling 6,
+ * 2026-10-19): the preset sets the market criteria, the sets ride along
+ * unchanged — including a set a pre-ruling blob still stores, which never
+ * overrides the live one. The ruling names the three sets only: the broker
+ * scope and the dismissed reveal still end on a preset click, as before. */
 export const withPresetLenses = (
   preset: ListingFilters,
   current: ListingFilters,
 ): ListingFilters => {
   const out = { ...preset };
-  for (const k of PRESET_EXCLUDED_KEYS) {
-    (out as Record<string, unknown>)[k] = current[k];
-  }
+  for (const name of CURATED_SET_NAMES) out[name] = current[name];
   return out;
 };
 
@@ -1437,17 +1437,15 @@ const UNSUPPORTED_LABELS: ReadonlyArray<{
   },
   { test: (f) => f.tomDaysMin != null || f.tomDaysMax != null, label: 'time on market' },
   { test: (f) => f.tomObservedOnly, label: 'newly listed only' },
-  { test: (f) => scopeActive(f.tags), label: 'tags' },
   { test: (f) => f.priceGrowthRules.length > 0, label: 'market growth (datasets)' },
   { test: (f) => f.withEstimates, label: 'with estimates' },
   /* A watchdog never surfaces a dismissed property, whatever the spec says. */
   { test: (f) => f.showDismissed, label: 'dismissed properties' },
-  /* The pipeline and collections are the operator's own state: a watchdog
-   * scoped to either would only ever fire on properties they already put
-   * there — and "new listing" events can't match a card, or a membership,
-   * that doesn't exist yet. */
-  { test: (f) => scopeActive(f.pipeline), label: 'pipeline' },
-  { test: (f) => scopeActive(f.collections), label: 'collections' },
+  /* The curated sets are the operator's own state: a watchdog scoped to one
+   * would only ever fire on properties they already put there — and "new
+   * listing" events can't match a card, or a membership, that doesn't exist
+   * yet. */
+  ...CURATED_SET_NAMES.map((name) => ({ test: (f: ListingFilters) => scopeActive(f[name]), label: name })),
   /* "Alert me when broker X lists something new" is a real, separable feature
    * idea, not built yet — the matcher has no broker join today. */
   { test: (f) => f.brokerId != null, label: 'broker' },

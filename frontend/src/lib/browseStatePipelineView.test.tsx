@@ -90,9 +90,10 @@ describe('loadPipelineView (URL adapter)', () => {
   });
 });
 
-/* Operator ruling 6 (2026-10-19): the curated sets, the broker and the
- * dismissed reveal are lenses OUTSIDE preset identity — a preset click sets the
- * market criteria and keeps every active lens (it used to clear them). */
+/* Operator ruling 6 (2026-10-19): the curated sets are lenses OUTSIDE preset
+ * identity — a preset click sets the market criteria and keeps every active set
+ * (it used to clear them). The ruling names the three sets: the broker scope and
+ * the dismissed reveal stay outside identity but still end on a preset click. */
 describe('loadPreset keeps the active lenses', () => {
   const preset = (filters: Record<string, unknown>) => ({
     id: 'vys',
@@ -115,7 +116,7 @@ describe('loadPreset keeps the active lenses', () => {
     expect(after.pipeline).toEqual(before.pipeline);
     expect(after.collections).toEqual({ set: null, in: [4], out: [9] });
     expect(after.tags).toEqual({ set: null, in: [1, 2], out: [3] });
-    expect(after.showDismissed).toBe(true);
+    expect(after.showDismissed).toBe(false);
     expect(h.state.activePresetId).toBe('vys');
   });
 

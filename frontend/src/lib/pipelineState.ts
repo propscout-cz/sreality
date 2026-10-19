@@ -30,7 +30,7 @@ import {
   PIPELINE_SORT_OPTIONS,
   type PipelineSort,
 } from './pipelineSort';
-import { CURATED_SETS, parseSetScope, setScopeToParams, type SetScope } from './setScope';
+import { parseSetScope, setScopeToParams, type SetScope } from './setScope';
 
 /* The curated sets the board filters on: the pipeline is the board itself. */
 export type BoardSet = 'collections' | 'tags';
@@ -44,10 +44,7 @@ const DISTRICT_PARAMS = [
   'districts_id',
 ] as const;
 
-const SCOPE_PARAMS = BOARD_SETS.flatMap((n) => [
-  CURATED_SETS[n].param,
-  `${CURATED_SETS[n].param}_excluded`,
-]);
+const SCOPE_PARAMS = BOARD_SETS.flatMap((n) => [n, `${n}_excluded`]);
 
 export interface PipelineViewState {
   status: ListingStatus;
@@ -77,10 +74,11 @@ export function usePipelineViewState(): PipelineViewState {
 
   const scopeKey = SCOPE_PARAMS.map((p) => searchParams.get(p) ?? '').join('|');
   const scopes = useMemo(
-    () => ({
-      collections: parseSetScope(searchParams, 'collections'),
-      tags: parseSetScope(searchParams, 'tags'),
-    }),
+    () =>
+      Object.fromEntries(BOARD_SETS.map((n) => [n, parseSetScope(searchParams, n)])) as Record<
+        BoardSet,
+        SetScope | null
+      >,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [scopeKey],
   );

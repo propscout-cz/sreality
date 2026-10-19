@@ -19,42 +19,49 @@ export type CuratedSet = 'tags' | 'collections' | 'pipeline';
 
 export interface CuratedSetDescriptor {
   inRule: 'every' | 'some';
-  /* The URL param of the in side; the out side is `<param>_excluded`, the RPC
-   * arguments `<param>_set` / `_in` / `_out`. */
-  param: CuratedSet;
   words: { in: string; out: string };
   /* The dedicated "not in" chip (operator ruling 2, 2026-10-19). */
   notInLabel: string;
   /* The whole-set include chip, offered for the pipeline only. */
   inAnyLabel: string | null;
-  /* The unit's Czech noun for a count: 1 / 2–4 / 5+. */
+  /* The unit's Czech noun for a count: 1 / 2–4 / 5+; after "bez": 1 / 2+. */
   unitNoun: [string, string, string];
+  unitNounWithout: [string, string];
+  /* The control's frame: the read-failed noun, the no-units-yet line. */
+  what: string;
+  empty: string;
 }
 
 export const CURATED_SETS: Record<CuratedSet, CuratedSetDescriptor> = {
   tags: {
     inRule: 'every',
-    param: 'tags',
     words: { in: 'se štítkem', out: 'bez štítků' },
     notInLabel: 'Bez štítků',
     inAnyLabel: null,
     unitNoun: ['štítek', 'štítky', 'štítků'],
+    unitNounWithout: ['štítku', 'štítků'],
+    what: 'Štítky',
+    empty: 'No tags yet. Add one from any property page or pipeline card.',
   },
   collections: {
     inRule: 'some',
-    param: 'collections',
     words: { in: 'v kolekci', out: 'v žádné kolekci' },
     notInLabel: 'V žádné kolekci',
     inAnyLabel: null,
     unitNoun: ['kolekce', 'kolekce', 'kolekcí'],
+    unitNounWithout: ['kolekce', 'kolekcí'],
+    what: 'Kolekce',
+    empty: 'No collections yet. Create one from the Collections page.',
   },
   pipeline: {
     inRule: 'some',
-    param: 'pipeline',
     words: { in: 'v pipeline', out: 'mimo pipeline' },
     notInLabel: 'Mimo pipeline',
     inAnyLabel: 'V pipeline',
     unitNoun: ['fáze', 'fáze', 'fází'],
+    unitNounWithout: ['fáze', 'fází'],
+    what: 'Pipeline',
+    empty: 'No pipeline stages yet.',
   },
 };
 
@@ -138,7 +145,7 @@ export const scopeIncludes = (s: SetScope | null | undefined): boolean =>
   s != null && s.set !== 'out' && (s.set === 'in' || s.in.length > 0);
 
 /* The scope in Czech words for summaries and phone rows; null when off.
- * "v pipeline", "v kolekci (2 kolekce)", "se štítkem (1 štítek), −2 štítky",
+ * "v pipeline", "v kolekci (2 kolekce)", "se štítkem (1 štítek), bez 2 štítků",
  * "mimo pipeline". */
 export function scopeWords(name: CuratedSet, scope: SetScope | null | undefined): string | null {
   const s = normalizeScope(scope);
@@ -149,7 +156,8 @@ export function scopeWords(name: CuratedSet, scope: SetScope | null | undefined)
   const parts: string[] = [];
   if (s.set === 'in') parts.push(d.words.in);
   else if (s.in.length) parts.push(`${d.words.in} (${count(s.in.length)})`);
-  if (s.out.length) parts.push(`−${count(s.out.length)}`);
+  const n = s.out.length;
+  if (n) parts.push(`bez ${n} ${d.unitNounWithout[n === 1 ? 0 : 1]}`);
   return parts.join(', ');
 }
 
@@ -169,12 +177,12 @@ const parseSide = (s: string | null): { any: boolean; ids: number[] } =>
   s === 'any' ? { any: true, ids: [] } : { any: false, ids: parseIntList(s) };
 
 /* The URL grammar, one codec for Browse and the pipeline board:
- * `<param>=any|<csv>` is the in side, `<param>_excluded=any|<csv>` the out
- * side. Junk on any side degrades to off. */
+ * `<set>=any|<csv>` is the in side, `<set>_excluded=any|<csv>` the out side —
+ * the set's name, as the RPC arguments are `<set>_set` / `_in` / `_out`. Junk
+ * on any side degrades to off. */
 export function parseSetScope(sp: URLSearchParams, name: CuratedSet): SetScope | null {
-  const { param } = CURATED_SETS[name];
-  const inc = parseSide(sp.get(param));
-  const exc = parseSide(sp.get(`${param}_excluded`));
+  const inc = parseSide(sp.get(name));
+  const exc = parseSide(sp.get(`${name}_excluded`));
   return normalizeScope({
     set: exc.any ? 'out' : inc.any ? 'in' : null,
     in: inc.ids,
@@ -189,14 +197,13 @@ export function setScopeToParams(
   name: CuratedSet,
   scope: SetScope | null,
 ): void {
-  const { param } = CURATED_SETS[name];
   const s = normalizeScope(scope);
   const inSide = s?.set === 'in' ? 'any' : s?.in.length ? s.in.join(',') : null;
   const outSide = s?.set === 'out' ? 'any' : s?.out.length ? s.out.join(',') : null;
-  if (inSide) sp.set(param, inSide);
-  else sp.delete(param);
-  if (outSide) sp.set(`${param}_excluded`, outSide);
-  else sp.delete(`${param}_excluded`);
+  if (inSide) sp.set(name, inSide);
+  else sp.delete(name);
+  if (outSide) sp.set(`${name}_excluded`, outSide);
+  else sp.delete(`${name}_excluded`);
 }
 
 export type ScopeArgs = Partial<

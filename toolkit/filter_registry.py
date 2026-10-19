@@ -72,7 +72,6 @@ class UiControl(StrEnum):
     TRISTATE = "tristate"              # any / yes / no
     SINGLE_SELECT = "single_select"    # dropdown
     NUMBER_INPUT = "number_input"      # single number
-    CSV_INPUT = "csv_input"            # comma-separated string list
     BOOLEAN = "boolean"                # plain checkbox
     LOCATION = "location"              # composite: districts + map + dot/radius
     CITY_INDEX_RULES = "city_index_rules"  # repeatable {index, op, threshold} rows

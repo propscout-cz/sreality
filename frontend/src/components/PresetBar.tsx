@@ -59,7 +59,7 @@ import {
   type ListingFilters,
   type PresetSpec,
 } from '@/lib/filters';
-import { scopeIncludes } from '@/lib/setScope';
+import { normalizeScope, scopeIncludes } from '@/lib/setScope';
 import type { FilterPreset, TagColor } from '@/lib/types';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import PresetSaveModal from '@/components/PresetSaveModal';
@@ -386,7 +386,12 @@ function PipelineScopeChip({
   return (
     <button
       type="button"
-      onClick={() => (on ? onFiltersChange({ ...filters, pipeline: null }) : onLoadView())}
+      onClick={() =>
+        on
+          ? // Off clears the in side the chip shows; an excluded stage stays.
+            onFiltersChange({ ...filters, pipeline: normalizeScope({ set: null, in: [], out: scope?.out ?? [] }) })
+          : onLoadView()
+      }
       aria-pressed={on}
       title={
         on

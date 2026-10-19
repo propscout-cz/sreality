@@ -23,6 +23,7 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import { addPipelineCard, movePipelineCard, removePipelineCard } from '@/lib/api';
 import { settlePatches, settleRereads } from '@/lib/curationSettle';
+import { dismissalKeys } from '@/lib/queries';
 import {
   cachedStage,
   dropCard,
@@ -47,6 +48,11 @@ const reread = (qc: QueryClient, propertyId: number, failed: boolean) => [
   ...PIPELINE_REVALIDATE,
   ...settleRereads(qc, propertyId, 'pipeline', failed),
 ];
+/* A card at a live stage lifts the caller's dismissal (api/dismissals.py), so
+ * a property this device knows as dismissed may re-enter any list that hides
+ * dismissals: everything re-reads, as on a restore. */
+const lifts = (qc: QueryClient, propertyId: number, stage: PipelineStage | null) =>
+  stage != null && !stage.is_terminal && qc.getQueryData<boolean>(dismissalKeys.state(propertyId)) === true;
 
 export function usePipelineCard() {
   const add = useOptimisticWrite({
@@ -56,8 +62,10 @@ export function usePipelineCard() {
     // has loaded — then nothing is painted and the funnel fills when the
     // revalidation lands.
     patch: (property_id, qc) => land(qc, property_id, cachedStage(qc, 'entry')),
-    revalidate: (property_id, failed, qc) =>
-      reread(qc, property_id, failed || cachedStage(qc, 'entry') == null),
+    revalidate: (property_id, failed, qc) => {
+      const stage = cachedStage(qc, 'entry');
+      return reread(qc, property_id, failed || stage == null || lifts(qc, property_id, stage));
+    },
     pendingKey: (property_id) => property_id,
   });
 
@@ -73,8 +81,10 @@ export function usePipelineCard() {
     mutationKey: ['write', 'pipeline', 'move'],
     mutationFn: ({ propertyId, stageId }: PipelineMove) => movePipelineCard(propertyId, stageId),
     patch: ({ propertyId, stageId }, qc) => land(qc, propertyId, cachedStage(qc, stageId)),
-    revalidate: ({ propertyId, stageId }, failed, qc) =>
-      reread(qc, propertyId, failed || cachedStage(qc, stageId) == null),
+    revalidate: ({ propertyId, stageId }, failed, qc) => {
+      const stage = cachedStage(qc, stageId);
+      return reread(qc, propertyId, failed || stage == null || lifts(qc, propertyId, stage));
+    },
     pendingKey: ({ propertyId }) => propertyId,
   });
 

@@ -33,8 +33,11 @@ import type { Collection, PipelineStage, Tag } from '@/lib/types';
 export interface SetUnit {
   id: number;
   label: string;
-  /* Drawn before the label: a tag's colour dot, a stage's badge. */
+  /* Drawn before the label: a tag's colour dot, a stage's badge — in `accent`
+   * while the chip is off; a picked chip's fill is the accent's ground, so the
+   * adornment takes the chip's own text colour there (ruling 7: badge kept). */
   adorn?: ReactNode;
+  accent?: string;
   group?: 'mine' | 'shared';
 }
 
@@ -46,11 +49,19 @@ export interface UnitsRead {
   refetch: () => unknown;
 }
 
-const FRAME: Record<CuratedSet, { what: string; empty: string }> = {
-  tags: { what: 'Štítky', empty: 'No tags yet. Add one from any property page or pipeline card.' },
-  collections: { what: 'Kolekce', empty: 'No collections yet. Create one from the Collections page.' },
-  pipeline: { what: 'Pipeline', empty: 'No pipeline stages yet.' },
-};
+/* Several reads as one frame (the board: the member map AND the units list):
+ * failed while any failed with nothing to show — a retry, never "#id" chips
+ * that read as deleted units; loading only while every one is, so a pick stays
+ * visible and clearable while the names are still on their way. */
+export function joinReads(...reads: UnitsRead[]): UnitsRead {
+  const failed = reads.some(readFailed);
+  return {
+    isLoading: !failed && reads.every((r) => r.isLoading),
+    isError: failed,
+    data: failed ? undefined : reads.map((r) => r.data),
+    refetch: () => reads.forEach((r) => void r.refetch()),
+  };
+}
 
 const hint = 'text-[0.65rem] text-[var(--color-ink-4)]';
 
@@ -70,13 +81,13 @@ export function CuratedSetFilter({
   if (query.isLoading) {
     return <p className="text-[0.75rem] text-[var(--color-ink-4)]">Loading…</p>;
   }
-  if (readFailed(query)) {
-    return <ReadFailedMark what={FRAME[set].what} variant="header" onRetry={() => void query.refetch()} />;
-  }
   const d = CURATED_SETS[set];
+  if (readFailed(query)) {
+    return <ReadFailedMark what={d.what} variant="header" onRetry={() => void query.refetch()} />;
+  }
   const scope = normalizeScope(value);
   if (units.length === 0 && !scope) {
-    return <p className="text-[0.75rem] text-[var(--color-ink-4)]">{FRAME[set].empty}</p>;
+    return <p className="text-[0.75rem] text-[var(--color-ink-4)]">{d.empty}</p>;
   }
   const known = new Set(units.map((u) => u.id));
   const vanished = [...(scope?.in ?? []), ...(scope?.out ?? [])].filter((id) => !known.has(id));
@@ -84,6 +95,7 @@ export function CuratedSetFilter({
 
   const unitChip = (u: SetUnit, gone: boolean) => {
     const out = scope?.out.includes(u.id) ?? false;
+    const on = out || (scope?.in.includes(u.id) ?? false);
     const clear = () =>
       normalizeScope(scope && {
         ...scope,
@@ -93,7 +105,7 @@ export function CuratedSetFilter({
     return (
       <PickButton
         key={u.id}
-        on={out || (scope?.in.includes(u.id) ?? false)}
+        on={on}
         negative={out}
         disabled={wholeOut}
         onClick={() => onChange(gone ? clear() : cycleUnit(scope, u.id))}
@@ -102,7 +114,7 @@ export function CuratedSetFilter({
         ariaLabel={out ? `${u.label} (excluded)` : undefined}
       >
         {u.adorn ? (
-          <span aria-hidden className="mr-1.5 inline-flex align-middle">
+          <span aria-hidden className="mr-1.5 inline-flex align-middle" style={on ? undefined : { color: u.accent }}>
             {u.adorn}
           </span>
         ) : null}
@@ -121,7 +133,11 @@ export function CuratedSetFilter({
       {label}
     </PickButton>
   );
-  const head = d.inAnyLabel ? setChip('in', d.inAnyLabel) : null;
+  /* The whole-set include chip: offered for the pipeline; for a set that does
+   * not offer it, drawn while a link still carries it (`?tags=any`), so a live
+   * constraint can always be switched off. */
+  const capital = d.words.in[0].toUpperCase() + d.words.in.slice(1);
+  const head = d.inAnyLabel || scope?.set === 'in' ? setChip('in', d.inAnyLabel ?? capital) : null;
   const tail = setChip('out', d.notInLabel);
 
   const mine = units.filter((u) => u.group !== 'shared');
@@ -157,7 +173,7 @@ export function CuratedSetFilter({
         </>
       )}
       {d.inRule === 'every' && (scope?.in.length ?? 0) > 1 && (
-        <p className={hint}>Nemovitost musí mít všechny vybrané štítky.</p>
+        <p className={hint}>Nemovitost musí mít všechny vybrané {d.unitNoun[1]}.</p>
       )}
     </div>
   );
@@ -168,7 +184,10 @@ export const tagUnit = (t: Pick<Tag, 'id' | 'name' | 'color'>): SetUnit => ({
   id: t.id,
   label: t.name,
   adorn: (
-    <span className="inline-block h-2 w-2 rounded-full" style={{ background: `var(--color-tag-${t.color})` }} />
+    <span
+      className="inline-block h-2 w-2 rounded-full ring-1 ring-[var(--color-paper-2)]"
+      style={{ background: `var(--color-tag-${t.color})` }}
+    />
   ),
 });
 
@@ -181,11 +200,8 @@ export const collectionUnit = (c: Collection): SetUnit => ({
 export const stageUnit = (s: PipelineStage, stages: ReadonlyArray<PipelineStage>): SetUnit => ({
   id: s.id,
   label: s.label,
-  adorn: (
-    <span style={{ color: stageAccent(s).fg }}>
-      <PipelineMark badge={stageBadge(s, stages)} />
-    </span>
-  ),
+  adorn: <PipelineMark badge={stageBadge(s, stages)} />,
+  accent: stageAccent(s).fg,
 });
 
 interface AccountProps {

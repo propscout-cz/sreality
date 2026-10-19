@@ -624,8 +624,8 @@ async function resolvePriceGrowthPrefilter(
 /* With-estimates prefilter (migration 173). property_estimates_public is the
  * anon-readable property-grain projection of successful estimation runs —
  * tiny (one row per estimated property), so fetching the full id list and
- * AND'ing it via `.in('property_id', ids)` is the same composition pattern
- * as the tags prefilter. Returns null when the filter is off. */
+ * AND'ing it via `.in('property_id', ids)` is cheap. Returns null when the
+ * filter is off. */
 async function resolveEstimatesPrefilter(
   f: ListingFilters,
   signal?: AbortSignal,
@@ -2278,7 +2278,8 @@ export const fetchDismissedCount = async (
 
 /* Every pipeline card the caller's account holds, keyed by property_id — one
  * cheap read shared (React Query dedupes the key) by every funnel on every
- * surface: Browse cards, the Table rows, and the pipeline scope's prefilter.
+ * surface (Browse cards, the Table rows), the board and lib/curationSettle.
+ * It narrows no cohort: the pipeline scope is judged by migration 629.
  *
  * It carries the stage, not just membership, because the funnel renders the
  * stage badge (migration 377) — the earlier "set of ids" shape forced each
@@ -2286,9 +2287,8 @@ export const fetchDismissedCount = async (
  * read. `property_pipeline_public` is RLS-scoped + security_invoker (migration
  * 316), so this returns the caller's own board and nothing else.
  *
- * Exhaustive via fetchAllRows for the same reason the tag prefilter is: a
- * silently truncated membership map would both blank funnels and, once the
- * pipeline scope is on, drop properties the operator explicitly asked to see. */
+ * Exhaustive via fetchAllRows: a silently truncated membership map would blank
+ * funnels and misjudge the in-place settle of a pipeline-scoped list. */
 export interface PipelineMembership {
   property_id: number;
   stage_id: number;

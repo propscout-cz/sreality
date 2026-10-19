@@ -57,7 +57,7 @@ import {
   type FeedView,
 } from '@/lib/feed';
 import { filterById } from '@/lib/filterRegistry.generated';
-import { filtersEqualForPreset } from '@/lib/filters';
+import { filtersEqualForPreset, withPresetLenses } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
 import { CardHydrationProvider } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
@@ -253,10 +253,12 @@ export default function Feed() {
     setHidden(false);
     window.scrollTo(0, 0);
   };
-  /* A scope chip loads that scope as it stands, newest first (Q17). */
+  /* A scope chip loads that scope as it stands, newest first (Q17), and keeps
+   * the active curated sets (ruling 6, as Browse's preset click does). */
   const chooseScope = (next: string) => {
     const p = next === FEED_ALL_SCOPE ? null : (presets.find((x) => x.id === next) ?? null);
-    show({ filters: feedFiltersForPreset(p), sort: DEFAULT_SORT, presetId: p?.id ?? null });
+    const scoped = withPresetLenses(feedFiltersForPreset(p), filters);
+    show({ filters: scoped, sort: DEFAULT_SORT, presetId: p?.id ?? null });
   };
   const choosePortals = (next: PortalChoice) => show({ ...view, filters: { ...filters, ...next } });
   const clearBeyond = () => show({ filters: base, sort: DEFAULT_SORT, presetId: view.presetId });

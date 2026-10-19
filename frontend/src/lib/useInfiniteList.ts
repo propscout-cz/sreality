@@ -20,6 +20,9 @@ export interface InfiniteListPage<TRow> {
   /* Cursor for the page AFTER this one. When omitted the pageSize
    * heuristic governs the stop (a short page ends the list). */
   nextCursor?: unknown;
+  /* The row count the read returned, kept when a row is dropped from the page
+   * in place (lib/curationSettle) so the page still counts as full. */
+  fetched?: number;
 }
 
 /* Caller-facing poll decider: receives the flattened loaded rows so a feed
@@ -102,7 +105,7 @@ export function useInfiniteList<
     queryFn: ({ pageParam, signal }) => queryFn((pageParam as unknown) ?? null, signal),
     initialPageParam: null as unknown,
     getNextPageParam: (lastPage: TPage) =>
-      lastPage.rows.length < pageSize
+      (lastPage.fetched ?? lastPage.rows.length) < pageSize
         ? undefined
         : (lastPage.nextCursor ?? undefined),
     enabled,

@@ -10,7 +10,7 @@ import type { ReactNode } from 'react';
 import * as api from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { DEFAULT_FILTERS } from '@/lib/filters';
-import { DEFAULT_SORT, pipelineKeys, type PipelineMembers } from '@/lib/queries';
+import { DEFAULT_SORT, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
 import type { PipelineStage } from '@/lib/types';
 import { usePipelineCard } from './usePipelineCard';
 
@@ -74,5 +74,16 @@ describe('usePipelineCard settles Browse', () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['cards'] }));
     expect(rows()).toEqual([42, 43]);
     expect(qc.getQueryData(browseKeys.count(OUT))).toBe(2);
+  });
+
+  it('an add that lifts a dismissal re-reads every Browse read: the row may come back anywhere', async () => {
+    vi.mocked(api.addPipelineCard).mockResolvedValue({} as never);
+    const { qc, result } = setup();
+    qc.setQueryData(dismissalKeys.state(99), true);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    act(() => result.current.add.mutate(99));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['cards'] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['table'] });
   });
 });

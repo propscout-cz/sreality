@@ -25,7 +25,6 @@ export type UiControl =
   | "tristate"
   | "single_select"
   | "number_input"
-  | "csv_input"
   | "boolean"
   | "location"
   | "city_index_rules"
@@ -112,7 +111,6 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
     "tristate",
     "single_select",
     "number_input",
-    "csv_input",
     "boolean",
     "location",
     "city_index_rules",

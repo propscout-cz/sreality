@@ -190,7 +190,10 @@ migration 629 + its two tests.
 **Deviations from this brief** (each reported by the layer that made it):
 
 - The descriptor has a sixth field, `unitNoun: [one, few, many]`, so `scopeWords` prints counts
-  ("v kolekci (2 kolekce)", "−1 fáze") from data rather than a per-set branch.
+  ("v kolekci (2 kolekce)", "bez 1 fáze") from data rather than a per-set branch, and
+  `unitNounWithout` for the exclusion side; `param` was dropped (the URL param IS the set's
+  name, as the RPC arguments are), and the control's frame words (`what`, `empty`) live in the
+  descriptor too.
 - `cycleSet(scope, side)` is a two-state toggle (off ↔ out, off ↔ in), not `cycle<T>`; only
   `cycleUnit` and `cyclePortal` go through the generic `cycle<T>`.
 - Normal form for a unit on both sides, or `=any` on both sides: **out wins** (the later step of
@@ -199,21 +202,30 @@ migration 629 + its two tests.
   `int_list` branch) — pure dead-path subtraction, outside the ledger.
 - Grouped units (Mine / Shared with me / No longer available): the whole-set chips get a trailing
   row of their own, so the not-in chip is still the control's last chip. Vanished `#id` chips
-  CLEAR on click (tags used to cycle them). Per-set frame wording (read-failed noun, empty text)
-  lives in a small `FRAME` table inside `CuratedSetFilter.tsx`, not in `CURATED_SETS`.
-- On the board the control's `query` is the member-map read (the board's offer and fail-open
-  retry depend on it), not the units read.
+  CLEAR on click (tags used to cycle them). A whole-set include a link carries for a set that
+  does not offer the chip (`?tags=any`, `?collections=any`) is drawn as a pressed "Se štítkem" /
+  "V kolekci" chip so it can be switched off.
+- On the board the control's `query` joins the member-map read and the units read
+  (`joinReads`): a failure of either is the retry; loading only while both are.
 - `settleCurationWrite(qc, propertyId, lens)` takes the lens that moved — without it the
   newcomer / not-loaded re-reads would fire on every cohort hiding dismissals. It has two halves:
   `settlePatches` (inside `useOptimisticWrite`, rolled back on failure; pipeline + dismiss settle
   at the click) and `settleRereads` (after the write lands); `useOptimisticWrite`'s revalidate
-  gained a third argument, `qc`. Collection and tag writes stay non-optimistic: `markMember`
-  patches the landed delta, so their drop follows the ack (~one round trip), not the click.
+  gained a third argument, `qc`. Collection and tag writes stay non-optimistic:
+  `settleMemberWrite` patches the landed delta, so their drop follows the ack (~one round
+  trip), not the click. A row the member map judged OUT before the write while the list shows
+  it means the map is stale: nothing drops, that cohort re-reads. A dropped row's page keeps
+  the length it was read with (`fetched`), so infinite scroll pages on.
+- Ruling 6 carries the three curated sets only: the broker scope and the dismissed reveal stay
+  outside preset identity but end on a preset click, as before (the ruling names the sets; the
+  operator may widen it). The phone Feed's scope chips carry the sets too.
 - Restore (un-dismiss) does not go through the settle: it re-reads every Browse surface, since
   the phone Feed's hidden roll is not a `ListingFilters` cohort. Only the browse-count is
   decremented in place; `no-price-count` is re-read.
 
-**Still open:** the contract migration (ruling 12, operator's word after the rollout); the phone
-Feed scope chip still strips the lenses (`feedFiltersForPreset`); whole-collection / tag DELETEs
-and merges revalidate broadly; a pipeline add that lifts a dismissal does not bring the row back
-into a hiding list; W5 (merge window, Railway status, read-only production walk).
+**Still open:** the contract migration (ruling 12, operator's word after the rollout);
+whole-collection / tag DELETEs and merges revalidate broadly (a pipeline add that lifts a
+dismissal this device knows of re-reads every Browse read); the live rail
+(`tests/test_curated_set_scope_live.py`) first runs in CI's migrations lane and does not call
+`properties_map_visible` / `browse_map_cells`; W5 (merge window, Railway status, read-only
+production walk).
