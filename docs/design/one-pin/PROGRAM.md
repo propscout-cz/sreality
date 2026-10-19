@@ -1,6 +1,6 @@
-<!-- STATUS: DRAFT for the operator's approval (2026-10-19). Rulings open: R1, R2, R3, R4, R5, R7, R8, R9, R10. Investigation artifacts: ~/one-pin-artifacts (operator machine). -->
+<!-- STATUS: APPROVED 2026-10-19. Rulings: R1 most precise even if inactive; R2+R10 retire the matview, no backup; R3 pointer; R4 "properties"; R5/R7/R8/R9 defaults; R11 drop the dead MF functions (verified off every live path); R12 no temp index. Execution: W0 running; W1 waits for PR #1882 (migration 629). Investigation artifacts: ~/one-pin-artifacts on the operator machine. -->
 
-# ONE PROPERTY, ONE LOCATION, ONE MAP: revised plan for approval (round 2, 2026-10-19)
+# ONE PROPERTY, ONE LOCATION, ONE MAP: the approved plan (rulings taken 2026-10-19)
 
 Every figure below was measured read-only on production on 2026-10-19, or is a round-one figure that survived the refuters. Estimates are labelled as estimates. Dedup merges run in parallel, so expect drift of a few units in every count.
 
@@ -46,11 +46,10 @@ The location of the property's **location ad**, which is a new term. Everything 
 - the city figures;
 - the served rule.
 
-The order that picks the location ad:
+The order that picks the location ad (your ruling R1: the most precise ad, even if it is inactive):
 1. an ad with a map point, then an ad determined foreign;
-2. an active ad before an inactive one;
-3. the finest RÚIAN rung;
-4. ties broken by the canonical order.
+2. the finest RÚIAN rung;
+3. ties broken by the canonical order, which puts active ads first.
 
 For 15100 that means one solid dot at Pod Sychrovem II 850/43, ±10 m, labelled "Pod Sychrovem II 850/43, Praha". Price, category and photos stay with 40102: komerční / ubytování, 25 990 000 Kč.
 
@@ -135,9 +134,8 @@ For 13,784 of these properties the most precise ad is not the canonical ad (all 
 `properties.location_listing_ref_id` points to the ad that ranks first by:
 
 1. **Served tier**, best first: has a map point (2) > determined foreign (1) > anything else (0). This puts rule 25's served test first. The property is served exactly when any of its ads is (measured: 0 newly unserved in every slice).
-2. **Active before inactive.** An active ad's point beats an inactive ad's finer point (ruling R1).
-3. **Granularity rung**, finest first (`location_granularity_rank.rank desc nulls last`, migrations/380:254-265). This is the same rank the map's dot rule uses.
-4. **The canonical order** (588:66-72), as the only tie-break.
+2. **Granularity rung**, finest first (`location_granularity_rank.rank desc nulls last`, migrations/380:254-265), whatever the ad's status (ruling R1). This is the same rank the map's dot rule uses.
+3. **The canonical order** (588:66-72), as the only tie-break. It puts active ads first, so among equally precise ads the active one wins.
 
 **It is never NULL while the property has an ad, and the database enforces it:**
 - **Both writers set it in the same statement as the canonical ad:**
@@ -175,11 +173,10 @@ A surface about ONE AD keeps that ad's own location:
 
 No single response mixes the two.
 
-**Why active first (R1), in data terms.** An inactive ad is frozen evidence about an advert that no longer exists. A live property's location should be the best one among what is advertised now. A dead ad fills in only where no live ad is located, and that never happens on live properties today (0 cases).
-- Ranking precision above activity would add 1,036 more dots on live properties.
-- The price: 1,376 live properties would take their location from an ad that has been gone a median of 73 days (p90 129 days).
-- In a sample of 830 of those 1,376, the dead ad's point sits inside the live ad's own circle in 62 % (within 1 m in 28 %), so it usually adds nothing.
-- In 24 % it lies more than max(1 km, 2× radius) away, where nobody can check it.
+**Why the most precise ad, even if inactive (R1, your ruling).** The location is a fact about the building, not about the advert: an exact address point stays exact after its ad closes. So the finest evidence wins whatever the ad's status, and the canonical order (active first) only breaks ties.
+- Against active-first this adds 1,036 more dots on live properties (exact pins 47.1 % → 51.8 %).
+- The accepted cost: 1,376 live properties take their location from an ad that has been gone a median of 73 days (p90 129 days).
+- In a sample of 830 of those 1,376, the dead ad's point sits inside the live ad's own circle in 62 % (within 1 m in 28 %); in 24 % it lies more than max(1 km, 2× radius) away. Both orders leave the far-apart count unchanged, so this is not a merge-quality risk either way.
 
 **Why the finest rung and not a consensus or centroid.** The ads are independent, noisy measurements of one building, and each carries its own noise as rung and radius.
 - Where every ad is exact, they agree: p90 0 m, p99 34 to 82 m depending on the population (one-pin-verdicts.md:113, :134).
@@ -211,8 +208,8 @@ No single response mixes the two.
 | Comparables location | each property's canonical ad's own point | the property's location ad (R8) |
 | Extension panel | the viewed ad's label beside the property's MF | the property's label beside the property's MF (R9) |
 | Notification address | the ad that was canonical at dispatch time | the property's location ad (R5) |
-| Map pill noun | "listing(s)" (it counts properties) | per R4 (a UX consult) |
-| Dead MF functions in the database | 2, unlisted | 2, allow-listed as "dead, PR-F" (R11); PR-F drops them |
+| Map pill noun | "listing(s)" (it counts properties) | "property / properties" (R4) |
+| Dead MF functions in the database | 2 | 0 (R11, verified dead: no cron job, no workflow, no code or database caller) |
 
 ---
 
@@ -266,7 +263,7 @@ No single response mixes the two.
 - `fetchMapPoints` reads `listSource`, i.e. `browse_list` / `browse_list_visible`. Delete `MAP_RELATION`, its `HIDING_DISMISSED` entry and `mapSource` (queries.ts:299, :306, :335 on main; :303 on the local branch).
 - `MAP_COLS` (queries.ts:125) drops the four columns ListingMap never reads: `sreality_id`, `source`, `source_id_native`, `category_type`. The matching `MapRow` fields go too; the type check proves nothing reads them. (A subtraction rider: outside the scope test, kept because it is pure deletion in a file W1 already edits.)
 - A new `queries.test.ts` case: for one filter, the pin read and the list read hit the same relation with identical filter parameters (only select, order and limit differ). This rules out a status or portal-rule mismatch between list and map.
-- Pill noun per R4, only if you choose a change.
+- Pill noun per R4: "property / properties".
 - Comments the move makes false: queries.ts:93, :104, :837-845; BrowseExperience.tsx:620, :1214; districtCodes.ts:26; measure.ts:13.
 
 **Tests and CI (retargets, from inventory B):**
@@ -315,6 +312,7 @@ No single response mixes the two.
   - `cron.unschedule('browse-map-rebuild')`.
   - Drop `properties_map_visible(<629 signature>)`, `rebuild_properties_map_mv()`, and the matview `properties_map_mv` with its two indexes.
   - Delete its `derived_artifacts` row.
+  - Per R11, drop the dead `recompute_mf_gross_yields()` and `recompute_property_mf(...)` (latest bodies 507:380, :524), verified off every live path.
   - `notify pgrst`.
   - Backup per R10.
 - **SPA:**
@@ -353,7 +351,7 @@ No single response mixes the two.
   - A "superseded" note on docs/design/browse-read-model.md.
   - docs/design/location-serving-contract.md:68.
   - docs/design/health-dashboard.md:1266.
-  - The roadmap track's done-bullet.
+  - The roadmap track's done-bullet, and the PR-F bullet (roadmap/measure-track.md:589-590) loses the function drop.
   - Dated design and roadmap logs stay.
 - **Verify:**
   - `to_regclass('public.properties_map_mv')` is NULL;
@@ -372,7 +370,7 @@ No single response mixes the two.
     - no foreign key, because ads are never deleted (rule 3) and validating one would scan two hot tables.
   - `property_canonical_listings` is dropped and re-created (md5-gated on 588), returning `(listing_id, canonical_rank, location_rank)`.
     - The canonical window is byte-identical to 588:60-76, and a test pins that.
-    - `location_rank` = `row_number() over (order by served tier desc, is_active desc, rung desc nulls last, canonical_rank)`, adding one join to `location_granularity_rank`.
+    - `location_rank` = `row_number() over (order by served tier desc, rung desc nulls last, canonical_rank)`, adding one join to `location_granularity_rank`.
     - A window cannot order by a sibling window, so `location_rank` is computed in an outer select over the canonical window; the byte-identical test allows that wrapping. The output columns change, so the function is DROP + CREATE with 588's grants restated (service_role only). The rollup's `CROSS JOIN LATERAL … o` (recompute_property_stats.py:107) selects named columns, so it survives the new signature.
     - Execute rights are restated as service_role only. The rollup is its only caller (588:81-84).
 - **Writers, in the same statement as the canonical ad:**
@@ -381,8 +379,8 @@ No single response mixes the two.
   - `_NO_ADS` (:339-345) nulls it.
   - The new column does NOT join `toolkit/listing_identity.py:54` `R2_CARRIERS`, the legacy-to-surrogate registry. It has no legacy twin, and adding it would break tests/scripts/test_backfill_child_listing_ids.py:27,37.
 - **Tests:**
-  - an active located ad beats an inactive finer one;
-  - an inactive finer ad wins when no active ad is located;
+  - an inactive finer ad beats an active coarser one;
+  - among equally precise ads the canonical order decides, so the active one wins;
   - point > foreign > none;
   - equal rungs fall back to the canonical order;
   - a single-ad property picks its ad;
@@ -395,7 +393,7 @@ No single response mixes the two.
 - **Verify:**
   - 0 rows of any status where `(repr_listing_ref_id IS NULL) <> (location_listing_ref_id IS NULL)`;
   - 15100 → 13193960;
-  - location ≠ canonical on about 12,428 multi-ad properties (2,953 live + 9,475 dormant, measured 10-19);
+  - location ≠ canonical on about 13,784 multi-ad properties (4,309 live + 9,475 dormant, measured 10-19);
   - singletons: location = canonical on 100 %;
   - the canonical ad still equals rank 1 of the inline 588 order on 100 %. This is the round-two check, `repr_ne_inline_canon = 0`, re-run.
 - **The far-apart-ads hand-off, as a deliverable.** The W3 PR body carries the census:
@@ -414,7 +412,7 @@ No single response mixes the two.
 - **`recompute_city_proximity`**, restated from 508:971-1051:
   - the join at 508:1028 changes key;
   - its outer UPDATE gains `and p.location_listing_ref_id = s.location_listing_ref_id`, so a run that races a location change writes nothing stale.
-- **One-time proximity reset.** `city_proximity_computed_at = NULL` where location ≠ canonical (about 12.4k rows); the hourly job (`.github/workflows/recompute_city_proximity.yml:17`) recomputes them.
+- **One-time proximity reset.** `city_proximity_computed_at = NULL` where location ≠ canonical (about 13.8k rows); the hourly job (`.github/workflows/recompute_city_proximity.yml:17`) recomputes them.
 - **No forced rebuild.** The next */15 tick carries the change into Browse.
 
 **Code, one key each from `repr_listing_ref_id` to `location_listing_ref_id`:**
@@ -468,7 +466,7 @@ No single response mixes the two.
      - comparables.py (Decision 13's identity gate).
    - This arm catches shapes assembled across functions, such as comparables' gate plus join.
 
-   The definers (db.py, recompute_property_stats.py) do not name `listing_location`, so no allow-list entry is needed. The two dead MF functions (R11) are the only allow-list entries, "dead, PR-F".
+   The definers (db.py, recompute_property_stats.py) do not name `listing_location`, so no allow-list entry is needed. The two dead MF functions are dropped in W2 (R11), so the rail starts with an empty allow-list.
 
 **Tests changing with W4:**
 - tests/api/test_property_location.py:141;
@@ -492,10 +490,10 @@ No single response mixes the two.
 **GLOSSARY entry**, under "Around a property", after Canonical ad (GLOSSARY.md:27-30, which gains "its location is the location ad's"):
 
 > **Location ad**:
-> The ad whose resolved location a property shows: its map pin and precision, its address label, its town, quarter, street and KÚ codes, and everything computed from them (MF reference rent, city proximity, whether it is served). Chosen by a fixed order, never by hand: an ad with a map point first (then one determined foreign), an active ad before an inactive one, then the finest RÚIAN rung, ties by the canonical order. Often the canonical ad, not always. Stored as `properties.location_listing_ref_id`.
+> The ad whose resolved location a property shows: its map pin and precision, its address label, its town, quarter, street and KÚ codes, and everything computed from them (MF reference rent, city proximity, whether it is served). Chosen by a fixed order, never by hand: an ad with a map point first (then one determined foreign), then the finest RÚIAN rung whatever the ad's status, ties by the canonical order (active ads first). Often the canonical ad, not always. Stored as `properties.location_listing_ref_id`.
 > _Avoid_: place, pin ad, anchor ad, located ad, representative location
 
-**Pre-check, in the PR body.** Dry-run the watchdog matcher over properties whose location codes change, and count the once-ever ":new:" alerts the swap would fire. Town changes are measured at 83 (34 with both codes known). Street and KÚ gains are measured here, not predicted. If the count is above zero, the merge waits for your word.
+**Pre-check, in the PR body.** Dry-run the watchdog matcher over properties whose location codes change, and count the once-ever ":new:" alerts the swap would fire. Town changes are measured at 84 (35 with both codes known). Street and KÚ gains are measured here, not predicted. If the count is above zero, the merge waits for your word.
 
 **Verify, live after apply:**
 - **15100.** `browse_list` (after the next tick), `properties_public` and `GET /properties/15100/location` all return 50.05995, 14.46709, rank 100, radius 10, "Pod Sychrovem II 850/43, Praha". Category is still komercni/ubytovani, and the price is unchanged.
@@ -505,9 +503,10 @@ No single response mixes the two.
   |---|---|
   | newly unserved | 0 |
   | newly served | 1 (a foreign-only dormant property) |
-  | town changes | about 83 |
-  | location ≠ canonical | about 12,428 |
-  | rings that become dots | about 9,761 |
+  | town changes | about 84 |
+  | location ≠ canonical | about 13,784 |
+  | rings that become dots | about 10,797 |
+  | live properties placed from an inactive ad (R1, accepted) | about 1,376 |
 
 - **Order holds, bounded.** The count of served properties whose stored location ad is outranked by another of their ads is measured, not asserted at 0. The resolver never dirties a property (resolve_db.py:518-555; about 27.5k canonical-ad re-resolves a day), so a rung change on a non-location ad waits for that property's next rollup, up to one sweep cycle. It must read 0 on properties recomputed after their ads' last `resolved_at`.
 - **Constraint and rails.** The CHECK is validated; the rail and the location census are green.
@@ -542,7 +541,7 @@ Not safe today:
 |---|---|---|
 | Relations | 0 | **1** matview (`properties_map_mv`, 824,675 rows, 464 MB with indexes) |
 | Indexes | 1 (`browse_list_map_idx`, ≈92 MB est.) | 2 (`properties_map_mv` pk + cover 92.4 MB) → **net −1** |
-| Functions | 0 | **2** (`rebuild_properties_map_mv`, `properties_map_visible`) |
+| Functions | 0 | **2** (`rebuild_properties_map_mv`, `properties_map_visible`) + **2** dead MF functions (R11) |
 | Cron jobs / registry rows / Health cells | 0 | **1 / 1 / 1** |
 | Table columns | **1** (`properties.location_listing_ref_id`) | 0 |
 | Constraints | 1 CHECK (the column's enforcement) | 0 |
@@ -568,10 +567,10 @@ W4's consolidations then shrink the location spellings. **W3 on its own only add
 
 ---
 
-## Rulings (recommendation first)
+## Rulings (taken 2026-10-19)
 
 **R1. Which ad supplies a property's location?**
-→ **Recommended: active first** (served tier → active → finest rung → canonical order).
+→ **Ruled: the most precise ad, even if inactive** (served tier → finest rung → canonical order). The recommendation was active-first; the operator chose precision, accepting the 1,376 live properties placed from an inactive ad.
 
 | measured 10-19 | Live (22,152): active-first | Live: all-ads | Dormant (45,733): both orders |
 |---|---|---|---|
@@ -594,13 +593,13 @@ W4's consolidations then shrink the location spellings. **W3 on its own only add
   - **Far-apart ads:** the far-apart-ads count does not depend on the order (live: 2,646 status quo / 2,655 / 2,662), so it is not an argument either way.
 
 **R2. Retire `properties_map_mv` so pins and counts read `browse_list` (W2's drop is destructive)?**
-→ **Recommended: yes, and accept the UNLOGGED bound.** After a crash, list, map and counts read empty for up to about 16 min, until the next */15 tick. The list carries that risk today.
+→ **Ruled: yes, and accept the UNLOGGED bound.** After a crash, list, map and counts read empty for up to about 16 min, until the next */15 tick. The list carries that risk today.
 - *Yes, and make `browse_list` LOGGED now:* about 64 GB of WAL a day at */15 against the 22 GB a day the matview writes today, net about +42 GB a day. That is better paid in F1, at a daily cadence (about 0.66 GB a day).
 - *Keep the matview:* up to 31 min of ghost pins and stale counts after every merge.
 - *Make the matview its own patched table:* two copies of one projection, two lock orders, two rebuilds.
 
 **R3. Store the location ad as a pointer, or fold the location order into the canonical order?**
-→ **Recommended: the pointer.** No card's price, photos or link changes, and a geocoding change can never move the price voice.
+→ **Ruled: the pointer.** No card's price, photos or link changes, and a geocoding change can never move the price voice.
 - *Fold it into the canonical order:* no new column, rail or term, but:
   - the canonical ad changes on 12,428 properties: price voice, photos, link and portal (how many prices differ was not measured);
   - each of those restamps `repr_since`, which restarts its price-alert window (recompute_property_stats.py:232; notifications.py:1372);
@@ -609,16 +608,16 @@ W4's consolidations then shrink the location spellings. **W3 on its own only add
 - This ruling is also rule 25's ruling for W3, a location PR that adds more than it deletes.
 
 **R4 (UX consult). The map pill counts properties but says "listing(s)". What should it say?**
-→ **Suggested: "property / properties"** (English, like the rest of the pill).
+→ **Ruled: "property / properties"** (English, like the rest of the pill).
 - *Czech "nemovitost / nemovitosti / nemovitostí":* matches the pin-limit tooltip.
 - *Keep "listings":* the word that made your stale pair read as two ads.
 
 **R5. Notification text (in-app feed, email/Telegram): which address?**
-→ **Recommended: the property's location ad**, via `properties_public.display_label`. Dispatches are property-grain (rule 16), and this deletes the outbox's two private label compositions.
+→ **Ruled (default accepted): the property's location ad**, via `properties_public.display_label`. Dispatches are property-grain (rule 16), and this deletes the outbox's two private label compositions.
 - *Keep the ad that was canonical at dispatch time:* it can name a different address than the property page.
 
 **R7. Where does an estimation subject stand?**
-→ **Recommended: one shared join.** The subject stands at its property's location ad, or at its own row when the ad is unattached. It is used by:
+→ **Ruled (default accepted): one shared join.** The subject stands at its property's location ad, or at its own row when the ad is unattached. It is used by:
 - by-id;
 - by-URL;
 - the watchdog kickoff (notifications.py:741);
@@ -631,18 +630,18 @@ Past runs stay immutable.
 - **Note:** R7 unifies LOCATION only. The by-URL and kickoff resolvers also read the ad's own area and price, while by-id reads the property's, so a by-URL estimate will stand at the property's location ad while keeping the ad's own area and price. That divergence is in FACTS, not location; it is reported, not fixed here.
 
 **R8. Where do comparables stand?**
-→ **Recommended: at their property's location ad.** The canonical ad stays the comparable (price, area, `snapshot_id`), so subject and comparables use one definition in every estimate. Velocity and the transit axis inherit it.
+→ **Ruled (default accepted): at their property's location ad.** The canonical ad stays the comparable (price, area, `snapshot_id`), so subject and comparables use one definition in every estimate. Velocity and the transit axis inherit it.
 - *Keep the canonical ads' own points:* each estimate then states that its subject and comparables are placed two ways.
 
 **R9. The extension panel prints the viewed ad's label next to the property's MF. Which label?**
-→ **Recommended: the property's label (`pp.display_label`).** The ad's own label is used only for an ad not yet attached to a property, which has no MF. This matches the panel's own stated contract, "the same [label] Browse, the map and the notifications print" (portal_lookup.py:83-86).
+→ **Ruled (default accepted): the property's label (`pp.display_label`).** The ad's own label is used only for an ad not yet attached to a property, which has no MF. This matches the panel's own stated contract, "the same [label] Browse, the map and the notifications print" (portal_lookup.py:83-86).
 - *Keep the ad's label and name the property's location next to the MF:* a second label line.
 - *Price the MF at the viewed ad's own codes:* reverses ruling Q8 b (567:21-24) and the panel's "MF is PROPERTY-grain" contract (portal_lookup.py:100-106).
 
 **R10. Back up before W2's drop?** Rule 1 says destructive = your OK + pg_dump.
-→ **Recommended: waive the backup for this drop.** Everything dropped can be rebuilt from migration history:
+→ **Ruled: waive the backup for this drop.** Everything dropped can be rebuilt from migration history:
 - the matview is a derived copy of `browse_projection`, defined in 522 and 629;
-- the two functions are defined in 522 and 629;
+- the two map functions are defined in 522 and 629, the two dead MF functions in 507;
 - no stored data is lost.
 
 The stored `properties.mf_*` columns are NOT dropped here; they stay with PR-F and its own backup.
@@ -654,8 +653,8 @@ The stored `properties.mf_*` columns are NOT dropped here; they stay with PR-F a
 - no Python caller;
 - no database caller (live check).
 
-→ **Decided, not asked: keep them and allow-list them as "dead, PR-F".** Dropping them here would fold part of the measure track's PR-F (roadmap/measure-track.md:589-590) into a Browse read-model PR, against "one PR = one purpose". PR-F drops them with the stored `properties.mf_*` columns and its own backup.
-- *Drop both in W2's migration under the same OK:* one allow-list entry fewer, one purpose more in W2.
+→ **Ruled: drop both in W2's migration, under the same OK.** The operator's condition: they must not be part of the MF estimation or publishing path. Verified on origin/main and live: no `cron.schedule` names them; the hourly workflow that called them (`recompute_mf_yields.yml`) was deleted in 8b0327b2 on 2026-09-26; no Python module, script, check or workflow calls them; no database object depends on them. Browse's MF reference rent and gross yield come from `browse_projection`'s `mf` lateral (625:239-240, :291-294), computed from the location ad's codes at rebuild time, and the on-demand reference-rent path is untouched. The stored `properties.mf_*` columns stay with PR-F (roadmap/measure-track.md:589-590), which loses only the function drop.
+- *Keep them and allow-list them as "dead, PR-F":* one purpose fewer in W2, two allow-list entries in the rail.
 
 **R12. Measure the map index on live `browse_list` before W1?**
 → **Decided, not asked: no.** It would be out-of-band DDL on production. W1 already meets every target without the index (129 ms for (a)), and its own receipt has a named fallback.
@@ -676,8 +675,9 @@ The stored `properties.mf_*` columns are NOT dropped here; they stay with PR-F a
 - **Map index effect is estimated.** The index's effect on (a) is estimated at 40 to 80 ms, not measured. Without the index, (a) already runs at 129 ms against a 150 ms target, and the fallback's list cost is known.
 - **Counts and pins briefly disagree.** Between applying 630 and Railway deploying W1's SPA, the tile counts read `browse_list` while the pins still read the matview. That is why 630 is applied only right before the merge: the split lasts minutes.
 - **Visible changes in W4.**
-  - About 12,428 locations change and about 9,761 rings become dots.
-  - About 83 properties change town.
+  - About 13,784 locations change and about 10,797 rings become dots.
+  - About 84 properties change town.
+  - About 1,376 live properties take their location from an inactive ad (R1, ruled and accepted).
   - Street-chip and KÚ cohorts, MF yields and `browse_stats` shift, mostly as refinements; the street and KÚ gains are measured in W4.
   - New estimates use finer subject and comparable points.
   - Watchdog ":new:" alerts are counted before merging.
@@ -719,7 +719,7 @@ The stored `properties.mf_*` columns are NOT dropped here; they stay with PR-F a
   - the docstrings of property_location.py and estimation_runs.py.
 - **Round-one figures withdrawn from this plan:**
   - "8,456 given up" (7,418 of them are dormant properties that both orders fix; the true cost of active-first is 1,036);
-  - "≈84 town changes" as the active-first figure (83 overall: 8 live + 75 dormant);
+  - "≈84 town changes" as an active-first figure (it is the all-ads figure, 84: 9 live + 75 dormant; active-first gives 83);
   - "p90 118 m" (p90 0 m);
   - "91.6 %" as one aggregate (it varies by rung);
   - "6,368 > 2 km" (a different metric; replaced by the census);
