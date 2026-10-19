@@ -1,4 +1,4 @@
--- 633_stats_status_lens.sql -- the Stats pivot judges a row's status by the cohort's own rule.
+-- 634_stats_status_lens.sql -- the Stats pivot judges a row's status by the cohort's own rule.
 --
 -- WHY. Operator report 2026-10-19 (screenshot): Browse filtered to Neaktivní on sreality, yet every chart's
 -- ledger read "aktivní i neaktivní" and the turnover chart refused with mixed_status. The cohort is right:
@@ -34,13 +34,13 @@ begin
   select count(*) = 100000 into populated
     from (select 1 from public.properties limit 100000) probe;
   if not populated then
-    raise notice '633: replay container (corpus < 100k properties), precondition skipped';
+    raise notice '634: replay container (corpus < 100k properties), precondition skipped';
     return;
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), '')
      not in ('2740668e7151535fd730db17ca7410c1', 'd7873469c739117c31b5ced61589dc52') then
-    raise exception '633 refused: browse_stats_properties is not 632''s body nor this file''s (or has two overloads)';
+    raise exception '634 refused: browse_stats_properties is not 632''s body nor this file''s (or has two overloads)';
   end if;
 end
 $pre$;
@@ -455,11 +455,11 @@ begin
    where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties';
   if n <> 1 or position('portal_status_matches(l.is_active, l.all_sources, l.active_sources, portal_filter, ''active'', null, false) as is_active' in src) = 0
      or position('or is_active = property_active)' in src) = 0 or position('v_min_n     constant int := 5;' in src) = 0 then
-    raise exception '633 did not land: browse_stats_properties (% overloads) does not judge status by the cohort''s rule', n;
+    raise exception '634 did not land: browse_stats_properties (% overloads) does not judge status by the cohort''s rule', n;
   end if;
   if not has_function_privilege('authenticated', (select p.oid from pg_proc p
        where p.pronamespace = 'public'::regnamespace and p.proname = 'browse_stats_properties'), 'execute') then
-    raise exception '633 did not land: authenticated lost execute on browse_stats_properties';
+    raise exception '634 did not land: authenticated lost execute on browse_stats_properties';
   end if;
 end
 $post$;

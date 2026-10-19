@@ -229,7 +229,7 @@ def test_the_place_names_reach_the_invoker_pivot_through_an_owner_rights_view() 
     tail = ", ".join(f"l.{n}" for n in places)
     for slot in [*(f"k{i}" for i in range(1, 7)), "kc"]:
         assert f"{tail}) as {slot}," in stmt, slot
-    # 633 appended the two source arrays (the status lens reads them) after the five codes.
+    # 634 appended the two source arrays (the status lens reads them) after the five codes.
     assert f"l.garage, {tail}, l.all_sources, l.active_sources\n    from browse_list l\n" in stmt
     for gone in ("listing_location", "listing_place_names_public", "v_geo", "ruian_admin_units",
                  "ruian_streets", "kraj_name", "okres_name", "obec_name", "cast_obce_name", "street_name"):

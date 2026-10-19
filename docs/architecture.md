@@ -2158,7 +2158,7 @@ renumber.** Navigate by area:
     status judged by the cohort's own portal rule (597), so "inactive on sreality" stays one status
     even where the property is live elsewhere; such a row leaves a turnover sample as excluded, its run on
     that portal being unmeasured at property grain; under a broker scope the status fact stays the
-    property's, a known gap (migration 633),
+    property's, a known gap (migration 634),
     `too_many_cells`, `bad_spec`). A place dimension keys on the RÚIAN code `browse_list` carries
     (`region_id` … `ulice_id`, rule 25's one code predicate), so two towns or streets of one name stay
     two cells and the pivot reads no listing location; the payload's `places` names each key through

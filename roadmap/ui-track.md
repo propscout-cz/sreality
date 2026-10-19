@@ -31,7 +31,7 @@ toolkit work.
   unpicked). The saved chart's `stat` became `stats`, a list; 628 rewrites the stored board losslessly.
 - **Floor lowered to five (2026-10-19, migration 632):** a Stats cell shows its statistics from 5 properties
   (operator ruling; it was 10). One constant in the pivot (`v_min_n`), mirrored by `MIN_N`, shipped as `min_n`.
-- **Status judged by the cohort's rule (2026-10-19, migration 633):** with a portal filter the pivot's
+- **Status judged by the cohort's rule (2026-10-19, migration 634):** with a portal filter the pivot's
   `status` fact and the turnover gate read the portal rule (597), not the property's is_active — a property
   delisted on the chosen portal but live elsewhere no longer flips a Neaktivní cohort to "aktivní i neaktivní"
   (it leaves a turnover sample as excluded instead). Known gap: under a BROKER scope the SPA sends no portal

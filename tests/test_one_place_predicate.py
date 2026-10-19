@@ -85,11 +85,11 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # tom_observed_only to both; 626 replaced the Stats body with the dashboard pivot
 # over 625's WHERE verbatim (tests/test_626_stats_dashboard.py); 629 (curated-set scope) added
 # nine trailing parameters and one clause block to both RPCs; 632 restated the Stats pivot with the
-# floor at five and nothing else changed (tests/test_stats_min_n_migration.py); 633 made its
+# floor at five and nothing else changed (tests/test_stats_min_n_migration.py); 634 made its
 # status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py). Re-read the chip
 # arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "633_stats_status_lens.sql",
+    "browse_stats_properties": "634_stats_status_lens.sql",
     "browse_map_cells": "629_curated_set_scope.sql",
 }
 
