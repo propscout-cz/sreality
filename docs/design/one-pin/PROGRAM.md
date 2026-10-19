@@ -259,7 +259,7 @@ No single response mixes the two.
        - the current property of its moved ad.
      - At that point every identity change that wrote the old table has committed, and later ones queue and land in the new table.
      - Measured size per 15-minute window: average 13 ids, p95 44, max 474. Readers wait tens of ms typically and about 1 s at worst (estimate).
-     - The ids are collected with one query BEFORE the DROP (`property_merge_events` has 145k rows and no index on `created_at`/`undone_at`) and a second, cheap delta query after it, so the time under the ACCESS EXCLUSIVE lock stays at the patch size. If the previous run was skipped by the advisory lock, `v_since` reaches back one more window, which is safe.
+     - Built: ONE read after the DROP (a pre-DROP read cannot patch anything, and a cheap id-watermark delta is not complete: a plain detach only stamps `undone_at` on old rows and ids are not commit-ordered). 630 therefore also creates `property_merge_events_recent_idx` on `greatest(created_at, undone_at)` and reads `greatest(e.created_at, e.undone_at) >= v_since`, so the time under the ACCESS EXCLUSIVE lock is bounded by the window, not by the ledger (98 MB, +12 %/week). Measured: the window is ~30-45 min; an autodedup burst re-patches up to ~2k ids (p95 1,281, max 2,031 over 14 days); projecting 1,156 ids took 155 ms. If the previous run was skipped by the advisory lock, `v_since` reaches back one more window, which is safe.
      - This closes the ghost for every merge, detach and split. Splits and undos stamp `undone_at` (property_identity.py:148-151, :198-206).
 - **`browse_map_cells`**, restated from 629, reads `from browse_list l` and gains `and l.lat is not null and l.lng is not null`.
   - Without that line it would count browse_list's 53,146 unmappable rows as a NULL tile: byt/prodej + sreality reads 54,101 rows instead of 51,904.
@@ -303,6 +303,7 @@ No single response mixes the two.
 - One run of each lands in the first minute after the swap (cold pages). Heap fetches are reported, never asserted.
 - The `browse_map_cells` total for (b) on `browse_list` equals the matview's, within the drift between their last rebuilds.
 - `derived_artifacts.last_duration_ms` before and after. The extra index is estimated at +1 to 2 s (sort proxy 1.24 s), a window of about 63 s.
+- The post-DROP section timed once, ideally during an autodedup burst (the re-patch's cost under the lock).
 
 **Verify after merge, with Railway status green:**
 - **Identity invariant:** `select count(*) from browse_list b join properties p on p.id = b.property_id where p.status <> 'active'` = 0 on at least 10 reads over 48 h, at least 3 of them in the minute after a swap.
@@ -549,7 +550,7 @@ Not safe today:
 | | Added | Deleted |
 |---|---|---|
 | Relations | 0 | **1** matview (`properties_map_mv`, 824,675 rows, 464 MB with indexes) |
-| Indexes | 2 (`browse_list_map_idx`, ≈92 MB est.; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3) | 2 (`properties_map_mv` pk + cover 92.4 MB) → **net 0** |
+| Indexes | 3 (`browse_list_map_idx`, ≈92 MB est.; `property_merge_events_recent_idx`, a few MB, W1; `properties_location_listing_ref_active_idx`, the twin of the repr index, W3) | 2 (`properties_map_mv` pk + cover 92.4 MB) → **net +1** (the ledger index bounds a read under an exclusive lock) |
 | Functions | 0 | **2** (`rebuild_properties_map_mv`, `properties_map_visible`) + **2** dead MF functions (R11) |
 | Cron jobs / registry rows / Health cells | 0 | **1 / 1 / 1** |
 | Table columns | **1** (`properties.location_listing_ref_id`) | 0 |
