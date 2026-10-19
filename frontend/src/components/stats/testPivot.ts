@@ -32,7 +32,7 @@ export const pivotOf = (over: Partial<PivotPayload> = {}): StatsPivot => {
       category_type: 'prodej',
       status: 'active',
       basis: 'sale_capital_czk_m2',
-      min_n: 10,
+      min_n: 5,
       refused: null,
       places: [],
       cells: [],

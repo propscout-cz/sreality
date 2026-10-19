@@ -67,7 +67,7 @@ export interface StatsRegistryPayload {
 }
 
 export const STATS_REGISTRY: StatsRegistryPayload = {
-  "min_n": 10,
+  "min_n": 5,
   "max_cells": 2000,
   "max_charts": 50,
   "chart_stats": [

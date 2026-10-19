@@ -25,6 +25,9 @@ SQL = (MIGRATIONS / NAME).read_text(encoding="utf-8")
 CODE = re.sub(r"--[^\n]*", "", SQL)
 S625 = (MIGRATIONS / "625_tom_observed.sql").read_text(encoding="utf-8")
 FN = "browse_stats_properties"
+# The pivot is restated whole by every migration that touches it (629 moved the floor), so the pins
+# about its BODY read the effective definition; the ones about what 626 itself creates read 626.
+EFFECTIVE = latest_definition(FN).read_text(encoding="utf-8")
 LIVE_625 = "6b102dd7960cced4ffbbf31127048428"  # pg_proc md5(prosrc), read live 2026-10-19
 
 
@@ -62,11 +65,11 @@ def test_the_effective_dim_key_is_the_registrys() -> None:
 
 
 def test_the_pivot_carries_the_registrys_measure_and_limits() -> None:
-    body = _body(SQL, FN)
+    body = _body(EFFECTIVE, FN)
     assert f"{sr.measure_value_sql()} as v" in body
     assert f"v_min_n     constant int := {sr.MIN_N};" in body
     assert f"v_max_cells constant int := {sr.MAX_CELLS};" in body
-    assert sr.MIN_N == 10 and sr.MAX_CELLS == 2000
+    assert sr.MIN_N == 5 and sr.MAX_CELLS == 2000
     # six fixed row slots and one column slot: the rollup is the registry's MAX_ROWS deep
     slots = ", ".join(f"k{i}" for i in range(1, sr.MAX_ROWS + 1))
     assert f"group by kc, rollup({slots})" in body
@@ -74,7 +77,7 @@ def test_the_pivot_carries_the_registrys_measure_and_limits() -> None:
 
 def test_the_pivot_guards_the_spec_with_the_registrys_rules() -> None:
     """validate_spec's limits, measures and dimensions, rendered once (`spec_guard_sql`)."""
-    body = _body(SQL, FN)
+    body = _body(EFFECTIVE, FN)
     at = body.index("  if spec is null then")
     assert body[at: body.index("  end if;", at) + len("  end if;")] == sr.spec_guard_sql()
 
@@ -83,7 +86,7 @@ def test_the_turnover_refusal_names_the_registrys_single_status_measures() -> No
     """Ruling 3: ONE status in the SAMPLE; the cohort's `status` fact is not the gate."""
     single = [m.id for m in sr.MEASURES if m.single_status]
     assert single == ["tom_days"]
-    body = _body(SQL, FN)
+    body = _body(EFFECTIVE, FN)
     arm = re.search(r"when v_measure in \(([^)]*)\) and \(select bool_or\(is_active\) and not "
                     r"bool_and\(is_active\) from sample\) then 'mixed_status'", body)
     assert arm and arm.group(1) == sr.single_status_measures_sql()
@@ -91,7 +94,7 @@ def test_the_turnover_refusal_names_the_registrys_single_status_measures() -> No
 
 
 def test_every_slot_is_keyed_by_stats_dim_key_over_its_argument_list() -> None:
-    body = _body(SQL, FN)
+    body = _body(EFFECTIVE, FN)
     args = ", ".join(
         f"ll.{n}" if n.endswith("_name") else f"l.{'price_per_m2_basis' if n == 'basis' else n}"
         for n, _ in sr.DIM_KEY_ARGS[1:]
@@ -112,9 +115,21 @@ def test_the_generated_typescript_is_fresh() -> None:
 
 
 def test_the_cohort_where_is_625s_byte_for_byte() -> None:
-    assert latest_definition(FN).name == "629_curated_set_scope.sql"  # 629 restated it verbatim plus the scope
     assert len(_where(SQL)) > 5000
     assert _where(SQL) == _where(S625)
+    # Every later restatement keeps 625's WHERE and may only ADD a block: 629 (curated-set scope) put its
+    # `tags_` / `collections_` / `pipeline_` clauses after the id denylist. Nothing of 625's may go.
+    base, later = _where(S625).split("\n"), _where(EFFECTIVE).split("\n")
+    rest, at = [], 0
+    for line in later:
+        if at < len(base) and line == base[at]:
+            at += 1
+        else:
+            rest.append(line)
+    assert at == len(base), f"a line of 625's WHERE is gone from the effective definition: {base[at]!r}"
+    assert all(re.search(r"tags_|collections_|pipeline_|^\s*--|^\s*$|^\s*(and|or)?\s*[()]*\s*$", ln) or "exists" in ln.lower()
+               or "select" in ln.lower() or "from " in ln.lower() or "where" in ln.lower() or "=" in ln or ")" in ln
+               for ln in rest), rest
 
 
 def test_the_signature_is_625s_plus_spec() -> None:
@@ -213,7 +228,7 @@ def test_the_place_names_reach_the_invoker_pivot_through_an_owner_rights_view() 
     assert {d.id: d.sql for d in sr.DIMENSIONS if d.kind == "geo"} == {
         "kraj": "region_id::text", "okres": "okres_id::text", "obec": "obec_id::text",
         "cast_obce": "cast_obce_id::text", "ulice": "ulice_id::text"}
-    stmt = re.sub(r"--[^\n]*", "", _statement(SQL, FN))
+    stmt = re.sub(r"--[^\n]*", "", _statement(EFFECTIVE, FN))
     tail = ", ".join(f"l.{n}" for n in places)
     for slot in [*(f"k{i}" for i in range(1, 7)), "kc"]:
         assert f"{tail}) as {slot}," in stmt, slot
@@ -233,7 +248,7 @@ def test_the_place_names_reach_the_invoker_pivot_through_an_owner_rights_view() 
             "left join public.ruian_place_names_public n on n.level = p.dim and n.code = p.key::bigint), "
             "'[]'::jsonb) else '[]'::jsonb end,") in flat
     assert flat.count("ruian_place_names_public") == 1
-    assert "security definer" not in _statement(SQL, FN).lower()
+    assert "security definer" not in _statement(EFFECTIVE, FN).lower()
 
 
 def test_the_receipt_probes_what_the_file_creates() -> None:

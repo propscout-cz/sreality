@@ -212,7 +212,7 @@ def test_measure_value_has_one_arm_per_measure() -> None:
 
 
 def test_the_limits_are_the_rulings() -> None:
-    assert (sr.MIN_N, sr.MAX_ROWS, sr.MAX_COLS, sr.MAX_CELLS) == (10, 6, 1, 2000)
+    assert (sr.MIN_N, sr.MAX_ROWS, sr.MAX_COLS, sr.MAX_CELLS) == (5, 6, 1, 2000)
     assert sr.STATS == ("n", "mean", "median", "p10", "p25", "p75", "p90")
     assert sr.CHART_STATS == sr.STATS[1:] and sr.DEFAULT_STAT in sr.CHART_STATS
 
@@ -279,7 +279,7 @@ def test_registry_json_round_trips_and_names_everything() -> None:
                         "refusals", "statuses", "view_limits", "dimensions", "measures"}
     assert [d["id"] for d in doc["dimensions"]] == [d.id for d in sr.DIMENSIONS]
     assert [m["id"] for m in doc["measures"]] == [m.id for m in sr.MEASURES]
-    assert (doc["min_n"], doc["max_cells"], doc["max_charts"]) == (10, 2000, sr.MAX_CHARTS)
+    assert (doc["min_n"], doc["max_cells"], doc["max_charts"]) == (5, 2000, sr.MAX_CHARTS)
     assert doc["chart_stats"] == list(sr.CHART_STATS) and doc["default_stat"] in doc["chart_stats"]
     assert doc["refusals"] == list(sr.REFUSALS) and doc["statuses"] == list(sr.STATUSES)
     assert doc["view_limits"] == {

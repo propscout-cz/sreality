@@ -249,7 +249,7 @@ def test_every_relation_publishes_the_identical_per_m2(cur, price, area, expecte
         )
 
     # The Stats pivot publishes the same measure through percentile_cont, rounded to
-    # 2dp, and only for a cell of at least MIN_N (10) properties: nine more copies make
+    # 2dp, and only for a cell of at least MIN_N (5) properties: nine more copies make
     # the cell, and with identical rows every statistic IS that row's figure.
     pids = [pid] + [_seed(cur, price=price, area=area)[0] for _ in range(9)]
     stats = _browse_stats(cur, pids)

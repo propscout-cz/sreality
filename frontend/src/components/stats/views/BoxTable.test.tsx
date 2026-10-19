@@ -13,7 +13,7 @@ const pivot = pivotOf({
     cell([], 90, 200, null, 50),
     cell(['1+kk'], 40, 160, null, 20),
     cell(['2+kk'], 45, 260, null, 20),
-    cell(['3+kk'], 5, null),
+    cell(['3+kk'], 4, null),
   ],
 });
 
@@ -55,7 +55,7 @@ describe('<BoxTable> — THE box primitive', () => {
     const row = screen.getByRole('rowheader', { name: '3+kk' }).closest('tr')!;
     expect(row.querySelector('[data-box]')).toBeNull();
     expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
-      '5', 'pod 10méně než 10 nemovitostí, bez statistik',
+      '4', 'pod 5méně než 5 nemovitostí, bez statistik',
     ]);
   });
 

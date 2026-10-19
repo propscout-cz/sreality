@@ -28,7 +28,7 @@ DimKind = Literal["enum", "band", "geo", "bool"]
 MeasureUnit = Literal["days", "m2", "price", "ppm2"]
 
 # Limits — the only numbers a chart cannot exceed (operator rulings 6, 7 of 2026-10-19).
-MIN_N = 10          # a cell with fewer properties shows n and no statistics
+MIN_N = 5           # a cell with fewer properties shows n and no statistics (operator ruling 2026-10-19: 5, was 10)
 MAX_ROWS = 6        # nested row levels
 MAX_COLS = 1        # one column dimension (series)
 MAX_CELLS = 2000    # above this the RPC refuses rather than ship a payload nobody can read

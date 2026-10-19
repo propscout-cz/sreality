@@ -23,7 +23,9 @@ The operator chose to replace them with charts the user builds, which deletes th
 4. "Mixed" = more than one `category_main` OR more than one `category_type` in the cohort.
 5. Bands: price per m² sale 5 000 / 10 000, rent 25 / 50; total price sale 250 000 / 500 000 / 1 000 000, rent
    1 000 / 2 500 / 5 000; floor area 5 / 10 m², byty only. Defined once (`toolkit/stats_registry.py`).
-6. Statistics n, mean, median, p10, p25, p75, p90; a cell under **10** properties shows n and no statistics
+6. Statistics n, mean, median, p10, p25, p75, p90; a cell under **5** properties shows n and no statistics
+   (amended 2026-10-19 by the operator, migration 629: it was 10; at n = 5 a box rests on the 2nd–4th order
+   statistics, so the n stays beside every figure)
    (server-enforced); a box draws p10–p90 whiskers, the p25–p75 box and the median.
 7. Table = rows × columns; line / bar = one row dimension on x, the column dimension as series; box = rows only.
    Nesting up to **six** row levels (table, box).
@@ -46,7 +48,7 @@ chart on stav excludes every bazos property — visibly, in the ledger. The esti
 `DIMENSIONS` (id, labels, kind `enum | band | geo | bool`, the SQL over `stats_dim_key`'s arguments, the ordered
 options, category availability, band steps and the measure a band bands, the palette group), `MEASURES`
 (`tom_days`, `area`, `price`, `ppm2`; `single_status` on turnover), `STATS`, `DEFAULT_STAT`, `REFUSALS`,
-`STATUSES`, `MIN_N = 10`, `MAX_ROWS = 6`, `MAX_COLS = 1`, `MAX_CELLS = 2000`, `MAX_CHARTS`, `VIEWS`. A band or
+`STATUSES`, `MIN_N = 5`, `MAX_ROWS = 6`, `MAX_COLS = 1`, `MAX_CELLS = 2000`, `MAX_CHARTS`, `VIEWS`. A band or
 yes/no dimension is built by `_band_dim` / `_bool_dim`, which render its SQL (the basis step, the category
 guard) from its column, steps and categories, so each step is stated once, on its dimension.
 Three faces, none hand-restated: `dim_key_function_sql()`, `measure_value_sql()`, `spec_guard_sql()` (the
@@ -78,7 +80,7 @@ fragment still holds; `tests/test_browse_map_read_contract.py` learns that `spec
   category_main, category_type,                -- the cohort's single values, null when mixed
   status: 'active' | 'inactive' | 'mixed' | null,
   basis: <migration-425 token> | null,         -- rent_monthly_czk_m2 ⇒ rent steps and "Kč / měs"
-  min_n: 10,
+  min_n: 5,
   refused: null | 'empty' | 'mixed_category' | 'mixed_status' | 'too_many_cells' | 'bad_spec', reason?,
   places: [ { dim, key, name | null } ],       -- every place key among the cells, named by the register
   cells: [ { keys: [k1 … kL], col: kc | null, n, mean, median, p10, p25, p75, p90 } ] }
@@ -170,7 +172,7 @@ deleted files are replaced by rows for the files that now carry the unit strings
 ### Rails
 
 - `tests/test_626_stats_dashboard.py` (offline): the effective `stats_dim_key` text equals
-  `dim_key_function_sql()`; the stats statement contains `measure_value_sql()`, `v_min_n constant int := 10`
+  `dim_key_function_sql()`; the stats statement contains `measure_value_sql()`, `v_min_n constant int := 5` (the effective definition is 629's, which restates 626's body with that one line changed)
   and `v_max_cells constant int := 2000`; its `bad_spec` chain equals `spec_guard_sql()`, its `mixed_status`
   arm names `single_status_measures_sql()` and its `places` block `geo_ids_sql()`; 626's cohort WHERE equals 625's; the signature is 625's 74 parameters
   plus `spec jsonb default null`; the seven `stats_dim_key` calls end on the five place codes and the pivot

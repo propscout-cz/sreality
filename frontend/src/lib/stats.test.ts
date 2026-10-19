@@ -155,7 +155,7 @@ describe('places — a place key is a RÚIAN code, named by the payload', () => 
       cell(['990500002'], 20, 90),
       cell(['582786'], 20, 120),
       cell(['990500001'], 15, 80),
-      cell(['990500003'], 5, null),
+      cell(['990500003'], 4, null),
     ],
   });
   const names = lhota.places;
@@ -260,7 +260,7 @@ describe('pivotRows — children by key prefix, parent above children', () => {
       cell([], 60, 100),
       cell(['2+kk'], 30, 110),
       cell(['1+kk'], 30, 90),
-      cell(['2+kk', 'spatny'], 5, null),
+      cell(['2+kk', 'spatny'], 4, null),
       cell(['2+kk', 'novostavba'], 25, 120),
       cell(['1+kk', 'dobry'], 30, 90),
     ],
@@ -295,10 +295,10 @@ describe('the ledger', () => {
   it('splits the sample by its leaf cells: behind a number vs under the minimum', () => {
     const p = pivotOf({
       spec: { rows: ['disposition'], cols: [], measure: 'ppm2' },
-      cells: [cell([], 80, 100), cell(['1+kk'], 74, 90), cell(['2+kk'], 6, null)],
+      cells: [cell([], 80, 100), cell(['1+kk'], 76, 90), cell(['2+kk'], 4, null)],
     });
     expect(ledgerCounts(p)).toEqual({
-      filtered: 100, sample: 80, excluded: 20, split: { withStats: 74, underMin: 6 },
+      filtered: 100, sample: 80, excluded: 20, split: { withStats: 76, underMin: 4 },
     });
   });
 

@@ -15,12 +15,12 @@ describe('<SampleLedger> — the mark on every chart', () => {
           filtered: 73_537,
           sample: 60_123,
           excluded: 13_414,
-          cells: [cell([], 60_123, 50), cell(['1+kk'], 60_118, 40), cell(['2+kk'], 5, null)],
+          cells: [cell([], 60_123, 50), cell(['1+kk'], 60_119, 40), cell(['2+kk'], 4, null)],
         })}
       />,
     );
     expect(text(container.querySelector('p'))).toBe(
-      'Ve filtru 73 537 · vzorek 60 123 · vyřazeno 13 414 (chybí údaje) · 5 v buňkách pod 10',
+      'Ve filtru 73 537 · vzorek 60 123 · vyřazeno 13 414 (chybí údaje) · 4 v buňkách pod 5',
     );
   });
 
@@ -29,14 +29,14 @@ describe('<SampleLedger> — the mark on every chart', () => {
       <SampleLedger
         pivot={pivotOf({
           spec: { rows: ['disposition'], cols: [], measure: 'area' },
-          cells: [cell([], 80, 50), cell(['1+kk'], 74, 40), cell(['2+kk'], 6, null)],
+          cells: [cell([], 80, 50), cell(['1+kk'], 76, 40), cell(['2+kk'], 4, null)],
         })}
       />,
     );
     const segs = [...container.querySelectorAll('[data-segment]')] as HTMLElement[];
     expect(segs.map((s) => [s.dataset.segment, s.style.flexGrow])).toEqual([
-      ['stats', '74'],
-      ['under', '6'],
+      ['stats', '76'],
+      ['under', '4'],
       ['excluded', '20'],
     ]);
     expect(segs.map((s) => s.style.background)).toEqual([
@@ -45,7 +45,7 @@ describe('<SampleLedger> — the mark on every chart', () => {
       'var(--color-rule-strong)',
     ]);
     expect(screen.getByRole('img').getAttribute('aria-label')).toBe(
-      've statistikách 74, 6 v buňkách pod 10, vyřazeno 20',
+      've statistikách 76, 4 v buňkách pod 5, vyřazeno 20',
     );
   });
 
@@ -78,8 +78,8 @@ describe('<SampleLedger> — the mark on every chart', () => {
 
 describe('<TooFew>', () => {
   it('shows the minimum and says there are no statistics, never a number', () => {
-    render(<TooFew minN={10} />);
-    expect(screen.getByText('pod 10')).toBeInTheDocument();
-    expect(screen.getByText('méně než 10 nemovitostí, bez statistik')).toBeInTheDocument();
+    render(<TooFew minN={5} />);
+    expect(screen.getByText('pod 5')).toBeInTheDocument();
+    expect(screen.getByText('méně než 5 nemovitostí, bez statistik')).toBeInTheDocument();
   });
 });

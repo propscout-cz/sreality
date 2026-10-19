@@ -29,6 +29,8 @@ toolkit work.
 - **Several statistics per chart (2026-10-19, migration 628):** a line, a bar and a table with a column draw the
   statistics the user picks (median, p10, p25 ... at once; the first pick leads in copper, the last cannot be
   unpicked). The saved chart's `stat` became `stats`, a list; 628 rewrites the stored board losslessly.
+- **Floor lowered to five (2026-10-19, migration 629):** a Stats cell shows its statistics from 5 properties
+  (operator ruling; it was 10). One constant in the pivot (`v_min_n`), mirrored by `MIN_N`, shipped as `min_n`.
 - **Next:** (1) the legacy-vocabulary heal as its own PR — 89 condition spellings and 766
   dispositions outside the canonical vocabulary are charted under their raw spellings, sorted after
   the canonical members, until the heal lands (ruling 9);
