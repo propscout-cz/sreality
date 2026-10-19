@@ -578,7 +578,7 @@ it — and named stations, in service and planned; CC BY), the VÚV TGM / MŽP n
 of Prague's 289 university sites (`universities` section: teaching and service sites in one toggle, dorms in
 another; a site is PRIMARY and labelled when MŠMT's F21 table counts 2 000+ present-form students at it,
 through the ingest's curated faculty → site table `UNIVERSITY_SEATS`; the F21 workbook is read live each
-run). Two facts the ingest enforces: the VÚV
+run). Railway stations and stops nationwide come from ČÚZK's ZABAGED® (CC BY 4.0, 2,797 points, 2026-10-19). Two facts the ingest enforces: the VÚV
 service is fetched in its NATIVE S-JTSK (its own WGS84 output applies a 3-parameter datum shift about
 10 m off; a PID stop with both coordinate systems is the control point, > 1 m fails the run), and a
 layer is replaced only when every requested id came back and the count holds (≥ 90 % of the previous

@@ -85,3 +85,6 @@ of the analytical and UI phases; runs alongside them.
 - **Named follow-ups:** town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one
   tile (a location-precision concern); `DatasetMap.tsx` interpolates `obec_name` into popup HTML
   unescaped; four `MAP_COLS` columns are never read and commercial popups show "—" for `subtype`.
+- **Railway stations (2026-10-19):** `railway` section from ČÚZK ZABAGED® — 2,797 stations and stops for
+  the whole country (stanice / zastávka), one registry entry + one ingest run, no frontend change.
+
