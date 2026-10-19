@@ -6,6 +6,7 @@ Mapy call is a mocked `requests.get`, so no credit is spent."""
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -30,6 +31,9 @@ def _row(granularity: str | None = "address_point", **over: Any) -> dict[str, An
         "granularity_rank": RANKS.get(granularity) if granularity else None,
         "street_rank": 60,
         "quarter_rank": 50,
+        "obec_rank": 40,
+        "country_status": "cz",
+        "uncertainty_radius_m": Decimal("12.5"),
         "label": "Freyova 534/2, Praha",
     }
     row.update(over)
@@ -110,16 +114,17 @@ def mapy(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("granularity", "zoom", "note"),
+    ("granularity", "level", "zoom", "note"),
     [
-        ("address_point", 16, None),
-        ("street", 16, None),
-        ("cast_obce_or_quarter", 14, "Poloha jen na úrovni části obce"),
-        ("obec", 12, "Poloha jen na úrovni obce"),
-        ("okres", 12, "Poloha jen na úrovni obce"),
+        ("address_point", "street", 16, None),
+        ("street", "street", 16, None),
+        ("cast_obce_or_quarter", "quarter", 14, "Poloha jen na úrovni části obce"),
+        ("obec", "town", 12, "Poloha jen na úrovni obce"),
+        # A district point is not a town: it used to read "Poloha jen na úrovni obce".
+        ("okres", "coarse", 10, "Poloha jen přibližná, hrubší než obec"),
     ],
 )
-def test_location_answers_point_label_and_zoom_by_granularity(client, conn, granularity, zoom, note):
+def test_location_answers_point_label_and_zoom_by_granularity(client, conn, granularity, level, zoom, note):
     conn.row = _row(granularity)
     res = client.get("/properties/7/location", headers=AUTH)
     assert res.status_code == 200
@@ -128,6 +133,9 @@ def test_location_answers_point_label_and_zoom_by_granularity(client, conn, gran
         "lon": 14.5,
         "granularity": granularity,
         "granularity_rank": RANKS[granularity],
+        "precision": level,
+        "country_status": "cz",
+        "uncertainty_radius_m": 12.5,
         "label": "Freyova 534/2, Praha",
         "zoom": zoom,
         "note": note,
@@ -143,10 +151,13 @@ def test_location_reads_the_canonical_ad_and_compares_by_rank(client, conn):
     assert "location_granularity_rank" in sql
 
 
-def test_zoom_steps_follow_the_rank_table_not_fixed_numbers():
-    assert pl.zoom_and_note(70, street_rank=70, quarter_rank=55) == (16, None)
-    assert pl.zoom_and_note(60, street_rank=70, quarter_rank=55)[0] == 14
-    assert pl.zoom_and_note(None, street_rank=60, quarter_rank=50) == (12, pl.NOTE_OBEC)
+def test_precision_steps_follow_the_rank_table_not_fixed_numbers():
+    ranks = {"street_rank": 70, "quarter_rank": 55, "obec_rank": 45}
+    assert pl.precision(70, **ranks) == "street"
+    assert pl.precision(60, **ranks) == "quarter"
+    assert pl.precision(45, **ranks) == "town"
+    assert pl.precision(44, **ranks) == "coarse"
+    assert pl.precision(None, **ranks) == "coarse"
 
 
 def test_location_without_coordinates_is_404_no_location(client, conn):

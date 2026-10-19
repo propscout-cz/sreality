@@ -61,9 +61,19 @@ _FETCH_SLOTS = threading.BoundedSemaphore(4)
 
 NOTE_OBEC = "Poloha jen na úrovni obce"
 NOTE_QUARTER = "Poloha jen na úrovni části obce"
+NOTE_COARSE = "Poloha jen přibližná, hrubší než obec"
+
+# How finely a point is known, finest first, and the zoom + note each opens with. A point coarser
+# than a town (okres, kraj, country) is never labelled as one.
+PRECISIONS: dict[str, tuple[int, str | None]] = {
+    "street": (16, None),
+    "quarter": (14, NOTE_QUARTER),
+    "town": (12, NOTE_OBEC),
+    "coarse": (10, NOTE_COARSE),
+}
 
 # Granularity is compared through location_granularity_rank.rank, never enum order: the row
-# carries its own rank and the ranks of the two thresholds the zoom steps at.
+# carries its own rank and the ranks of the three thresholds the precision steps at.
 _LOCATION_SQL = """
 select st_y(ll.geom) as lat,
        st_x(ll.geom) as lon,
@@ -73,6 +83,10 @@ select st_y(ll.geom) as lat,
          where t.granularity = 'street') as street_rank,
        (select t.rank from location_granularity_rank t
          where t.granularity = 'cast_obce_or_quarter') as quarter_rank,
+       (select t.rank from location_granularity_rank t
+         where t.granularity = 'obec') as obec_rank,
+       ll.country_status::text as country_status,
+       ll.uncertainty_radius_m,
        location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
                               ll.obec_name, ll.cast_obce_name, ll.country_code,
                               ll.country_status) as label
@@ -87,14 +101,14 @@ def _refuse(status: int, reason: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"reason": reason, "message": message})
 
 
-def zoom_and_note(rank: int | None, street_rank: int, quarter_rank: int) -> tuple[int, str | None]:
-    """Street or finer opens close; a quarter or a town opens wider and says so."""
+def precision(rank: int | None, street_rank: int, quarter_rank: int, obec_rank: int) -> str:
+    """The PRECISIONS key a point's granularity rank falls in."""
     r = rank if rank is not None else 0
     if r >= street_rank:
-        return 16, None
+        return "street"
     if r >= quarter_rank:
-        return 14, NOTE_QUARTER
-    return 12, NOTE_OBEC
+        return "quarter"
+    return "town" if r >= obec_rank else "coarse"
 
 
 def load_location(conn: Any, property_id: int) -> dict[str, Any]:
@@ -105,12 +119,17 @@ def load_location(conn: Any, property_id: int) -> dict[str, Any]:
         raise _refuse(404, "not_found", "Nemovitost nenalezena")
     if row["lat"] is None or row["lon"] is None:
         raise _refuse(404, "no_location", "Bez polohy")
-    zoom, note = zoom_and_note(row["granularity_rank"], row["street_rank"], row["quarter_rank"])
+    level = precision(row["granularity_rank"], row["street_rank"], row["quarter_rank"], row["obec_rank"])
+    zoom, note = PRECISIONS[level]
+    radius = row["uncertainty_radius_m"]
     return {
         "lat": float(row["lat"]),
         "lon": float(row["lon"]),
         "granularity": row["granularity"],
         "granularity_rank": row["granularity_rank"],
+        "precision": level,
+        "country_status": row["country_status"],
+        "uncertainty_radius_m": None if radius is None else float(radius),
         "label": row["label"],
         "zoom": zoom,
         "note": note,
