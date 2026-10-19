@@ -394,16 +394,18 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_property_sweep_artifact_live.py -q
 
-      # Wave 4's checks judge in SQL that the fakes, replays and PREPARE never run: seeded rows, each check's own
-      # statements and parameters, rolled back. Walks, end-reached units, inflow, fetch errors, unnominated ads;
-      # Browse stages on the canonical ad, stock, photos, queues; outflow, stuck ads, verify backlog, precision.
-      - name: The portal checks' statements count what they claim (wave 4)
+      # Waves 4 and 5's checks judge in SQL that the fakes, replays and PREPARE never run: seeded rows, each check's
+      # own statements and parameters, rolled back. Walks, end-reached units, inflow, fetch errors, unnominated ads;
+      # Browse stages on the canonical ad, stock, photos, queues; outflow, stuck ads, verify backlog, precision; the
+      # engine's state, build backlog, decision lag, lease, rulings breaches and splits, where a seeded merge of the
+      # removed engine moves no number (rule 15, executed).
+      - name: The portal and engine checks' statements count what they claim (waves 4-5)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: |
           pytest tests/test_checks_scraping_sql_live.py tests/test_checks_publishing_sql_live.py \
-                 tests/test_checks_delisting_sql_live.py -q
+                 tests/test_checks_delisting_sql_live.py tests/test_checks_dedup_sql_live.py -q
 
       # 06 W2a gate (b) — "a deliberately changed page appends a second body; an
       # unchanged refetch appends none" — is a property of one ON CONFLICT clause

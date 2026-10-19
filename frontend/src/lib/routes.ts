@@ -138,7 +138,7 @@ export const ROUTES = {
   autodedupProgress: def('/autodedup/progress'),
   // The W5 validation views. `groups` is the proposed-cluster review queue,
   // `residual` the pairs the engine did NOT join, and `pair` the full-evidence
-  // page both of them drill into. Nothing here applies a merge (ruling D4).
+  // page both of them drill into. Nothing here applies a merge.
   autodedupGroups: def('/autodedup/groups'),
   autodedupResidual: def('/autodedup/residual'),
   autodedupPair: def('/autodedup/pair/:lo/:hi'),

@@ -458,7 +458,7 @@ nothing else.
   `unfit` the pass recorded; also kept as the lane's own `recut` field, which the boot seed
   carries across a restart, `rt_recut:<gen>.last` being the durable copy),
   calibration_built_age_days (E944),
-  deadline_exceeded, seconds, held, retired, latency_p50_s, latency_p95_s, bound_by, claim_cap
+  deadline_exceeded, seconds, held, retired, bound_by, claim_cap
   ({cap, reason, limit_mb}) + predecessor_released (E948; a skip carries it only when set, or
   instead predecessor_kept, the lease the cap's floor left to its TTL), peak_rss_mb (E941) +
   rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b; on every
@@ -474,8 +474,10 @@ nothing else.
   (E943: what the pair budget counts, the last claim's and each claim's), ledger_skipped +
   ledger_written (the wanted below-floor rejects the reject ledger answered instead of a re-score,
   and the rejects the pass ledgered), dirty + reads (E960: the probe-key neighbourhood the last
-  attempt re-retrieved from the store's keys and guard rows, and the adverts whose facts the pass
-  read, by why — claim, order, digest, decided, cluster, rail — summed over its attempts)}`; an
+  attempt re-retrieved from the store's keys and guard rows, a neighbourhood and never a backlog:
+  the build's backlog, rate and decision lag are the Health `dedup` check's, read from the stores;
+  and the adverts whose facts the pass read, by why — claim, order, digest, decided, cluster,
+  rail — summed over its attempts)}`; an
   absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
@@ -488,7 +490,8 @@ nothing else.
 
 **Health lane (Health dashboard wave 3, ships LIVE):** the checks the registry hosts on
 `realtime-worker` (`jobs`, `capacity`, `llm` since wave 3; `scraping`, `publishing`, `delisting` and
-the `coverage` gauge since wave 4; `docs/design/health-dashboard.md` § 4) are measured
+the `coverage` gauge since wave 4; `dedup` since Health dashboard sprint wave 5;
+`docs/design/health-dashboard.md` § 4) are measured
 here, every `HEALTH_TICK_SECONDS` (60 s), by THE harness:
 `scripts.verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=…,
 lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)`, never a copy.
@@ -496,8 +499,8 @@ lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)`, never a copy.
   that can fail and no fail-safe-0; the brake is a deploy. Due-ness is read from the stored
   results, so a pass with nothing due is one indexed read and a restarted worker re-measures
   nothing; alarms run before gauges, each check on its own clock (`CHECK_BUDGET_S`) inside the
-  360 s pass (8 × 45 s since wave 4: its seven checks and wave 5's dedup), and every result is
-  stored as it lands, with `run_at` = the pass's start.
+  360 s pass (8 × 45 s: its eight checks since Health dashboard sprint wave 5, seven in wave 4),
+  and every result is stored as it lands, with `run_at` = the pass's start.
 - **One pass at a time.** `_HEALTH_PASS_LOCK`: the harness keeps per-run module state
   (`scripts.checks.clock.LANE`, its plausibility cache), so a pass abandoned at
   `LANE_PASS_TIMEOUT_SECONDS` must not overlap the next; a skipped pass is

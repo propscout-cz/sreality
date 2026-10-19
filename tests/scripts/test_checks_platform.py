@@ -16,7 +16,9 @@ from typing import Any
 import pytest
 from psycopg import errors as pg_errors
 
+from autodedup.incremental_lane import LEASE_LOST, STOPPING
 from scripts.checks import platform as plat
+from scripts.checks.common import PREVIOUS_CELLS_SQL
 
 _UTC = _dt.timezone.utc
 _NOW = _dt.datetime(2026, 10, 18, 12, 0, tzinfo=_UTC)
@@ -161,8 +163,8 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
         plat._CRON_JOBS_SQL: cron if cron is not None else [_cron()],
         plat._HEARTBEAT_SQL: [(beat_at or _ago(seconds=20), booted or _ago(days=2),
                                lanes if lanes is not None else {"probe": _lane()})],
-        plat._PREVIOUS_CELLS_SQL: ([(previous_at or _ago(minutes=9), previous)]
-                                   if previous is not None else []),
+        PREVIOUS_CELLS_SQL: ([(previous_at or _ago(minutes=9), previous)]
+                             if previous is not None else []),
         plat._ARTIFACTS_SQL: artifacts or [],
     })
     return plat.check_jobs(conn, T), conn
@@ -510,7 +512,8 @@ def test_counters_survive_a_restart_through_the_seeded_heartbeat() -> None:
 
 
 def test_a_portal_failing_inside_a_lane_is_its_own_cell() -> None:
-    lanes = {"probe": _lane(portal_errors={
+    # The worker counts each raised portal in the pass's `last.errors` as well.
+    lanes = {"probe": _lane(last={"portals": 9, "errors": 2}, portal_errors={
         "idnes": {"failing_since": _iso(minutes=20), "last_error": "every category failed"},
         "remax": {"failing_since": _iso(minutes=4), "last_error": "HTTPError: 503"}})}
     cells = _cells(_jobs(lanes=lanes)[0])
@@ -981,3 +984,114 @@ def test_the_harness_declares_every_threshold_these_checks_read_with_the_contrac
     from scripts.verify_pipeline import THRESHOLDS
 
     assert {key: THRESHOLDS.get(key) for key in T} == T
+
+
+def _engine(passes: int = 40, **last: Any) -> dict[str, Any]:
+    """The autodedup lane's heartbeat entry at its 60 s interval, `last` as one tick wrote it."""
+    return {"autodedup": _lane(interval_s=60.0, passes=passes,
+                               last={"ran": True, "claimed": 37, "errors": 0, **last})}
+
+
+def test_an_aborted_pass_is_watch_and_a_problem_once_a_later_pass_aborted_too() -> None:
+    """The autodedup lane livelocked on 2026-10-19: every pass aborted on pair_budget and nothing
+    committed for hours, while failed_passes stayed 0 (an abort raises nothing). The heartbeat
+    replaces `last` when a pass completes or is refused, so the same abort read twice stays
+    Watch."""
+    aborted = _engine(errors=1, aborted="pair_budget")
+    once = _cells(_jobs(lanes=aborted)[0])["lane/autodedup"]
+    assert (once["status"], once["message"]) == ("warn", "its last pass aborted: pair_budget")
+    assert once["facts"]["last_aborted"] == "pair_budget" and "last_errors" not in once["facts"]
+    before = [{"subject": "lane/autodedup",
+               "facts": {"last_aborted": "pair_budget", "passes": 40, "failed_passes": 0}}]
+    twice = _cells(_jobs(lanes=aborted, previous=before)[0])["lane/autodedup"]
+    assert (twice["status"], twice["message"]) == ("warn", "its last pass aborted: pair_budget")
+    later = _engine(passes=41, errors=1, aborted="deadline")
+    again = _cells(_jobs(lanes=later, previous=before)[0])["lane/autodedup"]
+    assert (again["status"], again["message"]) == (
+        "fail", "its last pass aborted: deadline, as had an earlier pass read at the previous "
+                "measurement")
+    clean = _cells(_jobs(lanes=_engine(passes=42, aborted=None), previous=before)[0])
+    assert clean["lane/autodedup"]["status"] == "ok"
+    assert clean["lane/autodedup"]["facts"]["last_aborted"] is None
+
+
+def test_a_refusal_is_read_once_as_the_failed_pass_the_worker_books_it() -> None:
+    """The worker books a refusal as a pass that raised (failed_passes, failing_since,
+    last_error), with its text in `last` too: the failing rule reads it, and nothing else does."""
+    lanes = _engine(ran=False, claimed=0, errors=1, refused="scope closed")
+    lanes["autodedup"].update(failed_passes=1, failing_since=_iso(minutes=2),
+                              last_error="scope closed")
+    cell = _cells(_jobs(lanes=lanes)[0])["lane/autodedup"]
+    assert (cell["status"], cell["message"]) == ("warn", "its newest pass failed: scope closed")
+    assert cell["facts"]["conditions"] == ["warn: its newest pass failed: scope closed"]
+
+
+def test_other_lanes_errors_and_a_ceiling_bounded_text_pass_are_never_an_abort() -> None:
+    """probe, drain and count_probe count failed categories or fetches in `last.errors`, and
+    text_extract failed calls; text_extract's `aborted` is True for a pass its own $/time ceiling
+    bounded ("bounded, not failed"). Each is a completed pass: OK, at once and read twice."""
+    lanes = {"probe": _lane(last={"portals": 9, "new": 12, "errors": 3}),
+             "drain": _lane(interval_s=30.0, last={"new": 40, "errors": 3}),
+             "count_probe": _lane(interval_s=600.0, last={"errors": 2}),
+             "text_extract": _lane(interval_s=300.0,
+                                   last={"claimed": 50, "errors": 4, "aborted": True})}
+    before = [{"subject": f"lane/{lane}", "facts": {"last_aborted": True, "passes": 39,
+                                                     "failed_passes": 0}} for lane in lanes]
+    for previous in (None, before):
+        cells = _cells(_jobs(lanes=lanes, previous=previous)[0])
+        assert {s: (c["status"], c["facts"]["last_aborted"]) for s, c in cells.items()
+                if s.startswith("lane/")} == {f"lane/{lane}": ("ok", None) for lane in lanes}
+
+
+def _held_abort(status: str, *conditions: str) -> list[dict[str, Any]]:
+    """The previous measurement's lane/autodedup cell: one pair_budget abort read at 42 passes."""
+    return [{"subject": "lane/autodedup", "status": status,
+             "facts": {"last_aborted": "pair_budget", "passes": 42, "failed_passes": 0,
+                       "conditions": list(conditions)}}]
+
+
+def test_a_re_read_of_the_same_aborted_pass_keeps_a_problem_its_abort_condition_read() -> None:
+    """Once two aborted passes read Problem, every measurement that still sees the second pass
+    (passes unchanged: the next pass runs long) keeps Problem; a clean pass recovers it. A held
+    Watch abort stays Watch."""
+    stuck = {"autodedup": _lane(passes=42, last={"errors": 1, "aborted": "pair_budget"})}
+    before = _held_abort("fail", "fail: its last pass aborted: pair_budget, as had an earlier "
+                                 "pass read at the previous measurement")
+    held = _cells(_jobs(lanes=stuck, previous=before)[0])["lane/autodedup"]
+    assert (held["status"], held["message"]) == (
+        "fail", "its last pass aborted: pair_budget, after an earlier aborted pass")
+    again = _cells(_jobs(lanes=stuck, previous=[held])[0])["lane/autodedup"]
+    assert (again["status"], again["message"]) == (held["status"], held["message"])
+    first = _held_abort("warn", "warn: its last pass aborted: pair_budget")
+    assert _cells(_jobs(lanes=stuck, previous=first)[0])["lane/autodedup"]["status"] == "warn"
+    clean = {"autodedup": _lane(passes=43, last={"errors": 0, "aborted": None})}
+    assert _cells(_jobs(lanes=clean, previous=before)[0])["lane/autodedup"]["status"] == "ok"
+
+
+def test_an_unrelated_problem_beside_one_abort_never_makes_it_an_abort_problem() -> None:
+    """A raised pass leaves `last` alone, so a lane failing for 16 min after one aborted pass
+    reads Problem for the failing; the cell's fail is not the abort condition's, so at the next
+    measurement (passes unchanged) the abort is still one aborted pass: a Watch condition."""
+    lanes = _engine(errors=1, aborted="pair_budget")
+    lanes["autodedup"].update(last_pass_at=_iso(minutes=17), failed_passes=16,
+                              failing_since=_iso(minutes=16), last_error="OperationalError")
+    first = _cells(_jobs(lanes=lanes)[0])["lane/autodedup"]
+    assert first["status"] == "fail" and "failing for 16 min: OperationalError" in first["message"]
+    assert "warn: its last pass aborted: pair_budget" in first["facts"]["conditions"]
+    lanes["autodedup"].update(last_pass_at=_iso(minutes=27), failed_passes=26,
+                              failing_since=_iso(minutes=26))
+    later = _cells(_jobs(lanes=lanes, previous=[first])[0])["lane/autodedup"]
+    assert later["status"] == "fail" and "earlier" not in later["message"]
+    assert [c for c in later["facts"]["conditions"] if "aborted" in c] == [
+        "warn: its last pass aborted: pair_budget"]
+
+
+@pytest.mark.parametrize("reason", [STOPPING, LEASE_LOST])
+def test_the_engines_shutdown_aborts_are_no_livelock_and_never_read(reason: str) -> None:
+    """The engine rolls a pass back when the worker stops or the lease is released under it: an
+    abort the next process recovers from, never a livelock. Not read, at once or after another."""
+    assert plat._abort_reason(reason) is None and plat._abort_reason("deadline") == "deadline"
+    lanes = _engine(passes=43, errors=1, aborted=reason)
+    for previous in (None, _held_abort("warn", "warn: its last pass aborted: pair_budget")):
+        cell = _cells(_jobs(lanes=lanes, previous=previous)[0])["lane/autodedup"]
+        assert (cell["status"], cell["facts"]["last_aborted"]) == ("ok", None)

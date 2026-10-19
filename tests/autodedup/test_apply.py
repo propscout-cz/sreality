@@ -2234,7 +2234,20 @@ def test_nothing_but_the_lane_reaches_the_apply_path() -> None:
         for path in (root / top).rglob("*.py")
         if importer.search(path.read_text(encoding="utf-8"))
     )
-    assert callers == ["autodedup/lane.py", "autodedup/reconcile.py"]
+    # The Health `dedup` check (wave 5) reads the apply module's constants and its scope parser
+    # to judge the engine; it may import nothing that merges, so its imports are listed by name.
+    readers = {"scripts/checks/dedup.py": {"LANE_INTERVAL_SETTING", "MERGE_SOURCE", "SCOPE_SETTING",
+                                           "UNAPPLY_BY_PREFIX", "Scope", "scope_fields"}}
+    assert sorted(set(callers) - set(readers)) == ["autodedup/lane.py", "autodedup/reconcile.py"]
+    import ast
+
+    for rel, allowed in readers.items():
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        imported = {alias.name for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+                    and node.module == "autodedup.apply" for alias in node.names}
+        assert imported and imported <= allowed, imported - allowed
+        assert not [node for node in ast.walk(tree) if isinstance(node, ast.Import)
+                    and any(alias.name.startswith("autodedup.apply") for alias in node.names)]
     workflow = (root / ".github" / "workflows" / "autodedup.yml").read_text(encoding="utf-8")
     trigger = workflow.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
     assert "schedule" not in trigger and "workflow_dispatch" in trigger

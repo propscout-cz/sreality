@@ -384,7 +384,9 @@ Owed and stated (also in the design's "As built" note):
   unchanged.
 
 To check after the merge: the worker's `health` lane passes in the heartbeat, `health_checks` holds
-the three `realtime-worker` keys, and Health shows their cells within 10 minutes of the deploy.
+the three `realtime-worker` keys, and Health shows their rows within 10 minutes of the deploy (the
+page renders one row per check; their cells render in wave 8: corrected in Health dashboard sprint
+wave 5).
 
 ~~**Next:** wave 4 — the portal checks (scraping, publishing, delisting and the coverage gauge),
 built on ledgers that see the worker's work (migration 622).~~ Done 2026-10-19 (wave 4, below).
@@ -475,8 +477,88 @@ Owed and stated (also in the design's "As built" note):
   measure Problem.
 
 To check after the merge: `health_checks` holds the seven `realtime-worker` keys, Health shows the
-portal checks' cells within 10 minutes of the deploy (coverage's within the hour), and
-`derived_artifacts` holds `property_sweep`, stamped by the next completed sweep.
+portal checks' rows within 10 minutes of the deploy (coverage's within the hour; their cells render
+in wave 8: corrected in Health dashboard sprint wave 5), and `derived_artifacts` holds
+`property_sweep`, stamped by the next completed sweep.
 
-**Next:** wave 5 — the dedup check (`scripts/checks/dedup.py`), judged from durable stores, and
-the AutodedupProgress copy that still says "shadow".
+~~**Next:** wave 5 — the dedup check (`scripts/checks/dedup.py`), judged from durable stores, and
+the AutodedupProgress copy that still says "shadow".~~ Done 2026-10-19 (Health dashboard sprint wave
+5, below).
+
+## 2026-10-19 — Health dashboard sprint, wave 5 (shipped with this PR)
+
+The engine check: the engine's state, its progress, how quickly it decides new ads and whether
+production honours your no-merge rulings are judged every 10 minutes from the worker, from the
+engine's own durable stores and its merges alone. The engine's progress page stops saying
+"shadow". Plan: [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave
+5, and its "As built" note; reference: the scraper-ops skill's
+`references/pipeline-verification.md`.
+
+What Health dashboard sprint wave 5 changed:
+- **`dedup`** (label "Engine", every 10 min): the engine's state, off (its interval is 0), building
+  (deciding a newly seeded area for the first time, merges paused), merging (the apply scope admits
+  a merge) or idle, is a fact on every cell, never a verdict. Its cells: whether the live stream is
+  live (an out-of-date seed version stops production merges with no other signal); a build's
+  decisions per hour and its time to finish, a lower bound; how long merges have paused in a build
+  (Watch past 48 h, never a ring, Q3); the share of new ads in the engine's area still undecided
+  1-24 h after they arrived; a lease held by anything but the live worker, or one no pass takes any
+  more; pairs you ruled different that an engine merge joined after your ruling, and active broker
+  suppressions whose identities share a broker; and the share of the engine's merges 7-14 days old
+  that an operator split (Watch only).
+- **Rule 15 holds by construction.** The check reads only the live engine's stores and merges by
+  the engine or an operator, by a positive filter; a CI rail fails if it names the removed engine's
+  source, and a live CI test proves a removed-engine merge is no breach.
+- **`broker_merge_suppression` retires** into the rulings cell for brokers (its SQL moved verbatim,
+  its threshold and tests with it).
+- **The heartbeat's `latency_p50_s` / `latency_p95_s` go**, with their log fields: they measured
+  seed age, not latency; arrival to decision is now read from the stores.
+- **The engine's progress page** says "The engine merges in production inside the apply scope; live
+  lane health is on Health." (Q4), "Health" linking to the check, in place of its `SHADOW` chip and
+  the "four small blocks … merges nothing" lede; the groups page loses the same false claim.
+- **The registry**: 20 keys, 8 on the worker (8 × 45 s fill the 360 s pass exactly) and 12 on
+  GitHub (615 s of budgets).
+
+Owed items this closes:
+- **AUTODEDUP E939 / E941** (`roadmap/autodedup.md`): the `verify_pipeline` judgement of the lane,
+  delivered as this check, from the stores rather than the heartbeat.
+- **The design's § 2.6** "Dedup: no check at all", and the progress page's false "merges nothing".
+
+Owed and stated (also in the design's "As built" note):
+- Builds before 10-16, the 10-02 stall and every lease strand left no durable trace, so none is
+  replayed but the 10-10 strand, as a synthetic replay; the hermetic tests hold their Problem
+  shapes. The 28-day replay opens one incident, the decision lag of 10-19 09:00Z; its lease and
+  rulings cells there see empty or constant inputs.
+- The build backlog cannot see blocks not yet walked (the facts name them), so the time to finish
+  is a lower bound; the backlog's split into active and inactive ads is dropped (0.35 s a read).
+- Set-level negative rulings that name no ads (3 today) cannot be judged.
+- A pass that aborts is a completed pass to the heartbeat; since Health dashboard sprint wave 5
+  `jobs` reads a last pass that aborted (`last.aborted`, the engine lane's reason) as Watch, and as
+  Problem when a second pass aborts; a refusal was a failed pass already. The engine check sees the
+  stall as `last_commit_age_s` at once and as decision lag after an hour without a commit. A failed
+  re-cut, and E939's reconcile waits and daily-cap skips, have no cell.
+- The decision-lag cell is Not measured most hours at today's tempo of sittings: 96 of the 169
+  hours to 10-19 09:00Z fell within 24 h of a brake lift (7 lifts in 7 days).
+- Under the held E964 building and merging overlap, and the merge-pause cell needs that PR's
+  per-block rail; the engine's own `PassResult.latency_s` is left to the E961-E964 stack.
+- `app_settings.updated_at` is not stamped by its writers, so every age comes from
+  `app_settings_history` or the engine's own stamps.
+- The first real incident: from 07:55Z on 10-19 the lane committed nothing (passes aborting on their
+  pair budget, `failed_passes` 0). The engine's fix (E970) is its own program's. The decision-lag
+  cell read it as Problem at 09:00Z (55 of 421, lower bound 10.2 %): a brake lift, a build's end, a
+  seed or an engine change inside its 24 h stops excusing the lag once no pass has committed a new
+  ad for an hour (the stall rule). While a Problem it read is open (`open_reading`, `opened_at`), a
+  clean reading under those excuses reads OK and any other Not measured, so the incident can close
+  and an excuse's own backlog never rings; the reading closes once a stored OK lies 2,400 s of
+  measured time after its first OK (`recovering_since`), 7 days after the Problem, or at a seed or
+  a build start after it.
+- At merge the `broker_merge_suppression` row leaves at the canary's first run from `main`; until
+  then both rows show, and the new row's unit reads "Ncells" until wave 8.
+
+To check after the merge: `health_checks` holds the eight `realtime-worker` keys with `dedup`
+(label "Engine"), Health shows its row within 10 minutes of the deploy (the page renders one row per
+check; the cells are in `pipeline_checks_public.details` and render in wave 8), and the engine's
+progress page carries the new sentence with its link landing on the row.
+
+**Next:** wave 6 — the parsing alarm and the quality gauges (`scripts/checks/quality.py`): parser
+regressions ring as one per-portal alarm, standing data-quality conditions become gauges with a
+30-day trend, and no legacy key remains.

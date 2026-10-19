@@ -523,8 +523,8 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 # by THE harness (scripts.verify_pipeline.run_due) on a CONSTANT tick, the text_extract
 # lane's shape: no app_settings row, so no read that can fail; the brake is a deploy.
 HEALTH_TICK_SECONDS = 60.0
-# Every hosted check due at once still fits: 8 × the 45 s check budget (seven checks since wave
-# 4, wave 5's dedup the eighth), inside the watcher's 10-minute health_lane in-flight rule.
+# Every hosted check due at once still fits: 8 × the 45 s check budget (eight checks since wave
+# 5; a ninth raises this cap), inside the watcher's 10-minute health_lane in-flight rule.
 HEALTH_PASS_BUDGET_SECONDS = 360.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
@@ -2285,7 +2285,6 @@ def _autodedup_outcome(
                 last[key] = str(summary[key])
     elif summary is not None:
         counts = summary.get("counts") or {}
-        latency = summary.get("latency_s") or {}
         aborted = str(summary.get("aborted") or "")
         reconciled = summary.get("reconcile") or {}
         merged = (reconciled.get("counts") or {})
@@ -2333,8 +2332,6 @@ def _autodedup_outcome(
             # even a one-listing claim: nothing written, and the next pass claims half.
             errors=1 if aborted else 0,
             deadline_exceeded=aborted == "deadline",
-            latency_p50_s=latency.get("p50"),
-            latency_p95_s=latency.get("p95"),
             bound_by=(summary.get("claim_bound") or {}).get("bound_by"),
             # E951: the clock's budget the claim was cut from (a build's 787.5 s, else 525 s),
             # and whether the pass had room and doubled the rate instead of blending it.
@@ -2587,10 +2584,9 @@ async def _autodedup_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> N
     if last.get("claimed") or last.get("merged"):
         LOG.info(
             "AUTODEDUP lane claimed=%d scored=%d grouped=%d merged=%d held=%d retired=%d "
-            "p50=%ss p95=%ss bound_by=%s %.1fs",
+            "bound_by=%s %.1fs",
             last["claimed"], last["scored"], last["grouped"], last.get("merged", 0),
-            last.get("held", 0), last.get("retired", 0), last.get("latency_p50_s"),
-            last.get("latency_p95_s"), last.get("bound_by"), last["seconds"],
+            last.get("held", 0), last.get("retired", 0), last.get("bound_by"), last["seconds"],
         )
     if last.get("refused"):
         # A refusal is a pass that RAISED; the lane caught it only so a SystemExit could not

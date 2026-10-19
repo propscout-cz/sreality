@@ -49,85 +49,15 @@ def _hosted(host: str) -> list[str]:
     return [c.key for c in CHECKS if c.host == host]
 
 
-# The keys the worker's health lane measures (waves 3 and 4); every other key runs on GitHub.
-_WORKER_KEYS = ["jobs", "capacity", "llm", "scraping", "publishing", "delisting", "coverage"]
+# The keys the worker's health lane measures (waves 3-5); every other key runs on GitHub.
+_WORKER_KEYS = ["jobs", "capacity", "llm", "scraping", "publishing", "delisting", "coverage",
+                "dedup"]
 
 
 def _stub(key: str, fn: Any, *, budget_s: float = 45.0, cls: str = "alarm",
           host: str = "github-actions", cadence_s: int = 3600) -> Check:
     """An unregistered check for exercising the harness itself."""
     return Check(key, fn, "platform", cls, host, cadence_s, key, budget_s=budget_s)
-
-
-# --- broker_merge_suppression ------------------------------------------------
-
-
-class _OneRow:
-    """Minimal single-row connection, for the checks that are one O(1) scalar query."""
-
-    def __init__(self, row: tuple[Any, ...]) -> None:
-        self.row, self.executed = row, []
-
-    def cursor(self) -> "_OneRow":
-        return self
-
-    def transaction(self) -> "_OneRow":
-        return self
-
-    def __enter__(self) -> "_OneRow":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        self.executed.append(sql)
-
-    def fetchone(self) -> Any:
-        return self.row
-
-
-def test_broker_merge_suppression_is_ok_on_an_empty_rail() -> None:
-    """The table starts empty and only grows by operator action, so "no rows" is the
-    healthy steady state, not a missing signal."""
-    from scripts.verify_pipeline import check_broker_merge_suppression
-
-    out = check_broker_merge_suppression(_OneRow((0, 0, 0)), THRESHOLDS)
-    assert out["status"] == "ok"
-    assert out["details"] == {"active_suppressions": 0, "lifted": 0, "violations": 0}
-
-
-def test_a_single_bypassed_suppression_fails_the_check() -> None:
-    """THE invariant of the rail: an active suppression whose two identities sit
-    under one broker means an operator NO was bypassed. There is no warn tier — the
-    pair is either separated or it is not."""
-    from scripts.verify_pipeline import check_broker_merge_suppression
-
-    out = check_broker_merge_suppression(_OneRow((4, 2, 1)), THRESHOLDS)
-    assert out["status"] == "fail" and out["value"] == 1
-    assert out["details"] == {"active_suppressions": 4, "lifted": 2, "violations": 1}
-    assert "bypassed" in out["message"]
-
-
-def test_a_lifted_suppression_is_not_a_violation() -> None:
-    """An explicit operator merge lifts the suppression and the two identities then
-    legitimately share a broker — the query has to exclude lifted rows or every
-    override would red the check."""
-    from scripts.verify_pipeline import _BROKER_SUPPRESSION_SQL as sql
-    from scripts.verify_pipeline import check_broker_merge_suppression
-
-    assert "s.lifted_at is null" in sql
-    assert sql.count("join broker_identities") == 2
-    assert "lo.broker_id = hi.broker_id" in sql
-    out = check_broker_merge_suppression(_OneRow((3, 9, 0)), THRESHOLDS)
-    assert out["status"] == "ok" and out["details"]["lifted"] == 9
-
-
-def test_broker_suppression_check_is_registered() -> None:
-    """An unregistered check is dead code that never writes a row."""
-    from scripts.verify_pipeline import check_broker_merge_suppression
-
-    assert _by_key("broker_merge_suppression").fn is check_broker_merge_suppression
 
 
 # --- run_checks isolation --------------------------------------------------
@@ -412,10 +342,11 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
 
     keys = _keys()
     assert len(keys) == len(set(keys)) == 20
-    # Waves 3-4: the worker hosts the platform and portal checks; GitHub keeps what needs a
-    # checkout (migration_drift) or an address that is not the scrapers' (the outbound probe).
+    # Waves 3-5: the worker hosts the platform, portal and dedup checks; GitHub keeps the legacy
+    # data-quality keys until wave 6, and for good what needs a checkout (migration_drift) or an
+    # address that is not the scrapers' (the outbound probe).
     assert _hosted("realtime-worker") == _WORKER_KEYS
-    assert len(_hosted("github-actions")) == 13 and not _hosted("pg_cron")
+    assert len(_hosted("github-actions")) == 12 and not _hosted("pg_cron")
     for c in CHECKS:
         assert c.label.strip(), c.key
         assert c.cls in vp.CLASSES and c.cls in {"alarm", "gauge"}, c.key
@@ -426,6 +357,27 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
         assert c.owner_path == "" or c.owner_path.startswith("/"), c.key
         # a body wired under the wrong key would store its rows under another check's name
         assert c.fn.__name__ == f"check_{c.key}", c.key
+
+
+def test_the_dedup_check_is_the_workers_eighth_with_the_contracts_metadata() -> None:
+    """Wave 5 (D1): an alarm every 10 min on the worker, labelled Engine, after coverage on the
+    page, on the 45 s database budget; stale after 30 min, due after 540 s, a recovery hold of
+    1,800 s. Eight worker budgets now fill the health lane's 360 s pass exactly
+    (scraper/realtime_worker.HEALTH_PASS_BUDGET_SECONDS): a ninth worker check raises that cap."""
+    from scripts import verify_pipeline as vp
+    from scripts.checks.dedup import check_dedup
+    from toolkit.system_alerts import _hold
+
+    c = _by_key("dedup")
+    assert (c.fn, c.domain, c.cls, c.host, c.cadence_s, c.label, c.unit, c.owner_path) == (
+        check_dedup, "dedup", "alarm", "realtime-worker", 600, "Engine", "cells",
+        "/autodedup/progress")
+    assert c.budget_s == vp._CHECK_BUDGET_S == 45.0
+    assert _keys().index("dedup") == _keys().index("coverage") + 1
+    assert (c.staleness_budget, c.due_after_s) == (_dt.timedelta(minutes=30), 540)
+    assert _hold(c.cadence_s) == _dt.timedelta(seconds=1_800)
+    worker = [k for k in CHECKS if k.host == "realtime-worker"]
+    assert len(worker) == 8 and vp.lane_budget_for(worker) == 360.0
 
 
 def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
@@ -485,14 +437,14 @@ def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
     """The worker's checks run every 10 minutes, capacity every 30 and the coverage gauge
-    hourly; on GitHub broker_merge_suppression and migration_drift run hourly, the URL probe
-    weekly, everything else 6-hourly."""
+    hourly; on GitHub migration_drift runs hourly, the URL probe weekly, everything else
+    6-hourly."""
     assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
         "jobs": 600, "capacity": 1_800, "llm": 600, "scraping": 600, "publishing": 600,
-        "delisting": 600, "coverage": 3_600}
+        "delisting": 600, "coverage": 3_600, "dedup": 600}
     github = set(_hosted("github-actions"))
     hourly = {k for k in github if _by_key(k).cadence_s == 3_600}
-    assert hourly == {"broker_merge_suppression", "migration_drift"}
+    assert hourly == {"migration_drift"}
     assert _by_key("outbound_url_conformance").cadence_s == 604_800
     rest = github - hourly - {"outbound_url_conformance"}
     assert {_by_key(k).cadence_s for k in rest} == {21_600}
@@ -565,25 +517,23 @@ def test_a_check_is_due_once_its_newest_result_is_a_cadence_old() -> None:
         return _NOW - _dt.timedelta(**kw)
 
     conn = _DueConn({
-        "migration_drift": ago(minutes=30),           # hourly, half a cadence old: not due
-        "broker_merge_suppression": ago(minutes=61),  # hourly, over a cadence old: due
+        "migration_drift": ago(minutes=61),   # hourly, over a cadence old: due
         "field_fill_matrix": ago(hours=5),    # 6-hourly: not due
         "floor_convention": ago(hours=7),     # 6-hourly: due
         "outbound_url_conformance": ago(days=6),  # weekly: not due
     })
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
-    assert "migration_drift" not in due and "field_fill_matrix" not in due
-    assert "outbound_url_conformance" not in due
-    assert "broker_merge_suppression" in due and "floor_convention" in due
+    assert "field_fill_matrix" not in due and "outbound_url_conformance" not in due
+    assert "migration_drift" in due and "floor_convention" in due
     assert due == [k for k in _keys() if k in due], "registry order is the run order"
-    assert len(due) == len(_hosted("github-actions")) - 3
+    assert len(due) == len(_hosted("github-actions")) - 2
     (sql, params), = conn.executed  # one round trip for the whole host
     assert "max(r.run_at)" in sql and "unnest(%(keys)s::text[])" in sql
     assert params["keys"] == _hosted("github-actions")
     worker = _DueConn({
         "capacity": ago(minutes=20),  # 30-minute: not due
         "scraping": ago(minutes=11),  # 10-minute: due
-        "coverage": ago(minutes=30),  # hourly: not due
+        "coverage": ago(minutes=30),  # hourly, half a cadence old: not due
     })
     due = [c.key for c in due_checks(worker, "realtime-worker", _NOW)]
     assert "capacity" not in due and "coverage" not in due and "scraping" in due
@@ -624,15 +574,13 @@ def test_rows_from_before_a_keys_registration_never_make_it_not_due() -> None:
     registered = _NOW - _dt.timedelta(minutes=1)  # project_registry runs first in main()
     conn = _DueConn({"outbound_url_conformance": _NOW - _dt.timedelta(days=2),
                      "field_fill_matrix": _NOW - _dt.timedelta(hours=3),
-                     "broker_merge_suppression": _NOW - _dt.timedelta(seconds=30)},
+                     "migration_drift": _NOW - _dt.timedelta(seconds=30)},
                     declared=dict.fromkeys(
-                        ("outbound_url_conformance", "field_fill_matrix",
-                         "broker_merge_suppression"),
+                        ("outbound_url_conformance", "field_fill_matrix", "migration_drift"),
                         registered))
     due = [c.key for c in due_checks(conn, "github-actions", _NOW)]
     assert "outbound_url_conformance" in due and "field_fill_matrix" in due
-    assert "broker_merge_suppression" not in due, \
-        "a row written since the registration still counts"
+    assert "migration_drift" not in due, "a row written since the registration still counts"
     (sql, _params), = conn.executed
     assert "left join health_checks h on h.key = k.key" in " ".join(sql.split())
 
@@ -736,15 +684,15 @@ def test_projection_keeps_declared_at_unless_the_host_or_cadence_changed() -> No
 
     then = _NOW - _dt.timedelta(days=3)
     conn = _HealthChecksConn({
-        "broker_merge_suppression": {"host": "github-actions", "cadence_s": 3_600,
-                                     "declared_at": then},
+        "outbound_url_coverage": {"host": "github-actions", "cadence_s": 21_600,
+                                  "declared_at": then},
         # wave 3 moved migration_drift from 6-hourly to hourly
         "migration_drift": {"host": "github-actions", "cadence_s": 21_600, "declared_at": then},
         "floor_convention": {"host": "realtime-worker", "cadence_s": 21_600,
                              "declared_at": then},
     })
     project_registry(conn, "github-actions", _NOW)
-    assert conn.table["broker_merge_suppression"]["declared_at"] == then  # unchanged: kept
+    assert conn.table["outbound_url_coverage"]["declared_at"] == then     # unchanged: kept
     assert conn.table["migration_drift"]["declared_at"] == _NOW           # cadence moved
     assert conn.table["floor_convention"]["declared_at"] == _NOW          # host moved
     assert conn.table["floor_convention"]["host"] == "github-actions"
@@ -800,6 +748,27 @@ def test_the_first_projection_from_main_retires_the_seven_portal_keys() -> None:
     assert project_registry(conn, "realtime-worker", _NOW) == {
         "upserted": len(_WORKER_KEYS), "deleted": 0}
     assert {"scraping", "publishing", "delisting", "coverage"} <= set(conn.table)
+
+
+def test_the_first_projection_from_main_retires_the_broker_rulings_key() -> None:
+    """Wave 5's dedup check judges the broker suppressions as its rulings/brokers arm, every 10 min
+    on the worker. The hourly GitHub row goes at the canary's first projection from main, the
+    ladder closes any incident of its own as retired, with no notice, and the worker projects
+    dedup on its first health pass; until that canary run both rows show on the page."""
+    from scripts import verify_pipeline as vp
+
+    assert "broker_merge_suppression" not in _keys()
+    assert "broker_suppression_violations_fail" not in THRESHOLDS
+    assert not hasattr(vp, "check_broker_merge_suppression")
+    assert not hasattr(vp, "_BROKER_SUPPRESSION_SQL")
+    conn = _HealthChecksConn({"broker_merge_suppression": {
+        "host": "github-actions", "cadence_s": 3_600, "declared_at": _NOW}})
+    assert vp.project_registry(conn, "realtime-worker", _NOW) == {
+        "upserted": len(_WORKER_KEYS), "deleted": 0}
+    assert "dedup" in conn.table and "broker_merge_suppression" in conn.table, \
+        "the worker leaves GitHub's row be"
+    assert vp.project_registry(conn, "github-actions", _NOW)["deleted"] == 1
+    assert "broker_merge_suppression" not in conn.table
 
 
 # --- persistence --------------------------------------------------------------------

@@ -6,8 +6,10 @@
  *   * the four KPI tiles read the STATS payload, and say "not yet" — never a
  *     zero — whenever the store is missing or a figure is null. A zero on a
  *     progress page reads as a measured result;
- *   * the caps ($200 program, $25/run) and the mode (SHADOW) are program
- *     CONSTANTS and render with no backend at all — they are never "not yet";
+ *   * the lede says the engine merges in production inside the apply scope and
+ *     links Health for the live state; no shadow-mode claim is left anywhere;
+ *   * the caps ($200 program, $25/run) are program CONSTANTS and render with no
+ *     backend at all — they are never "not yet";
  *   * a measured $0.00 is money, not a gap: the census and export iterations
  *     really are free, and printing them as "not yet" would lose that;
  *   * the current wave is the wave of the NEWEST iteration, not a constant;
@@ -126,15 +128,20 @@ describe('<AutodedupProgress>', () => {
     vi.mocked(api.getAutodedupIterations).mockResolvedValue(page([NEWEST, OLDER]));
   });
 
-  /* The block names live in the cohort module and in each iteration's
-   * sample_stats, never in the prose — so nothing here pins them. */
-  it('says the trial merges nothing, and shows the mode as a constant', async () => {
+  /* Q4's exact words (Health dashboard sprint wave 5): the engine merges in
+   * production, so the page says where and sends the reader to the Health row
+   * for the live state, and the old shadow-mode lede and chip are gone. */
+  it('says the engine merges inside the apply scope, and links Health', async () => {
     renderPage();
-    const lede = (await screen.findByText(/shadow mode/)).closest('p')!;
-    expect(lede).toHaveTextContent('merges nothing');
-    expect(lede).toHaveTextContent('negative-control');
-    /* SHADOW is a program constant (D4/E39): present regardless of any read. */
-    expect(screen.getByText('SHADOW')).toBeInTheDocument();
+    const lede = (await screen.findByText(/merges in production inside the apply scope/)).closest('p')!;
+    expect(lede).toHaveTextContent(
+      'The engine merges in production inside the apply scope; live lane health is on Health.',
+    );
+    expect(within(lede).getByRole('link', { name: 'Health' })).toHaveAttribute('href', '/health#dedup');
+    await screen.findByText('Cohort export');
+    for (const gone of ['shadow', 'SHADOW', 'merges nothing', 'Nothing has been merged']) {
+      expect(document.body).not.toHaveTextContent(gone);
+    }
   });
 
   it('prints the caps even before the store answers', async () => {

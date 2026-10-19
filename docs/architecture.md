@@ -2054,10 +2054,11 @@ renumber.** Navigate by area:
     `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
     `gauge`), host, cadence, label, unit and owner page, and each host projects (and deletes) only
     its own keys in `health_checks`. Hosts: `realtime-worker` — the platform alarms `jobs`,
-    `capacity` and `llm` since wave 3 and the portal alarms `scraping`, `publishing` and
-    `delisting` with the `coverage` gauge since wave 4, measured by the worker's health lane
+    `capacity` and `llm` since wave 3, the portal alarms `scraping`, `publishing` and
+    `delisting` with the `coverage` gauge since wave 4, and the engine alarm `dedup` since Health
+    dashboard sprint wave 5, measured by the worker's health lane
     (`run_due` on a 60 s tick, a pass capped at 360 s); `github-actions` — every other `CHECKS`
-    key until waves 5-6 move them, measured by the
+    key until wave 6 moves the gauges (migration_drift and the URL probe stay there), measured by the
     hourly canary's `run_due`; `pg_cron` — the watcher's one `liveness` key. A
     `pipeline_check_results` row carries one of FOUR statuses — `ok` / `warn` / `fail` / `unknown`,
     shown as OK / Watch / Problem / Not measured — where `unknown` means the measurement did not
@@ -3614,10 +3615,12 @@ wins outright — but only for pairs it actually brings together (`lo.broker_id 
 lifting an already-co-located pair would silently clear the evidence of a bypass rather than overrule
 a decision. `GET /broker-review/suppressions` (active first) and `POST
 /broker-review/suppressions/{id}/lift` make the ledger readable and clearable through the product.
-`verify_pipeline`'s `broker_merge_suppression` check — an hourly alarm, O(1) — fails on
-any active suppression whose identities share a broker. It matters MORE now that no portal
-allowlist gates the engine: remax contacts are email-only and ceskereality's phone-only, so one
-shared contact plus a name match is the entire case for those merges.
+The Health `dedup` check's `rulings/brokers` cell — since Health dashboard sprint wave 5 an alarm
+every 10 min on the worker, one O(1) read moved verbatim from the hourly `broker_merge_suppression`
+check it replaced — reads Problem on any active suppression whose identities share a broker.
+It matters MORE now that no portal allowlist gates the engine: remax contacts are email-only and
+ceskereality's phone-only, so one shared contact plus a name match is the entire case for those
+merges.
 
 ## Location data — one store, one lane, one label
 

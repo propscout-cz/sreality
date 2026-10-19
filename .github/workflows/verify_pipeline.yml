@@ -20,10 +20,10 @@ name: "Monitoring: health canary (hourly)"
 #
 # GitHub delivers this hourly cron about five times a day (median gap ~4.9 h), so the email
 # can trail a problem by hours; the watchers themselves run every 5 min and every 60 s. GitHub
-# sends it to whoever last edited the cron line. The platform checks moved to the worker's
-# health lane in wave 3 and waves 4-6 move the rest; the two that need GitHub stay in this step:
-# migration_drift reads the checkout, and the portal-link probe needs an address other than
-# the scrapers'.
+# sends it to whoever last edited the cron line. The worker's health lane took the platform
+# checks in wave 3, the portal checks in wave 4 and the engine's in wave 5; wave 6 replaces the
+# legacy data-quality checks still measured here. Two stay in this step for good: migration_drift
+# reads the checkout, and the portal-link probe needs an address other than the scrapers'.
 #
 # A dispatch from a branch other than main measures but never projects the registry, and its
 # poller step writes nothing. Writes only its result, registry and poller rows. Required GitHub secret: SUPABASE_DB_URL; the
@@ -46,8 +46,8 @@ concurrency:
 jobs:
   canary:
     runs-on: ubuntu-latest
-    # The harness still carries the legacy checks until waves 4-6 move them, and every one can be
-    # due at once (after a long gap, or when the registry changes). The rail in
+    # The harness still carries the legacy data-quality checks until wave 6 replaces them, and every
+    # one can be due at once (after a long gap, or when the registry changes). The rail in
     # test_verify_pipeline.py fits the poller step's limit, the harness step's limit and eight
     # minutes for setup and the assertions under this number.
     timeout-minutes: 35
@@ -74,9 +74,9 @@ jobs:
         timeout-minutes: 5
         run: python -m scripts.record_workflow_failures
 
-      # Its own limit holds 20 check budgets (1,050 s) plus 180 s headroom, so an overrun fails this
-      # step, which reds the run, instead of the job's kill, which is silent. It runs after a failed
-      # poll, not after a cancel.
+      # Its own limit holds every GitHub-hosted check's budget plus 180 s headroom (the rail in
+      # test_verify_pipeline.py), so an overrun fails this step, which reds the run, instead of the
+      # job's kill, which is silent. It runs after a failed poll, not after a cancel.
       - name: Measure the GitHub-hosted checks
         if: ${{ !cancelled() }}
         timeout-minutes: 21

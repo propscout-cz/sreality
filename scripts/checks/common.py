@@ -20,6 +20,20 @@ _RANK = {"ok": 0, "warn": 1, "fail": 2}
 _NAMED = 5
 
 CLOCK_SQL = "select now()"
+# scraper/realtime_worker.WORKER_NAME, the heartbeat's key (a check never imports the worker).
+WORKER = "realtime-worker"
+# Migration 620's c_worker_dead: past it the watcher's `worker` cell judges a dead worker, and
+# lanes read from an older beat would ring the same outage a second time.
+BEAT_FRESH_S = 600.0
+
+# A check's own newest stored cells: what a rule that compares with its previous measurement
+# reads (the jobs lanes' counters and failing portals, the Engine's open decision lag).
+PREVIOUS_CELLS_SQL = """
+select run_at, details -> 'cells' from pipeline_check_results
+ where check_key = %(key)s and jsonb_typeof(details -> 'cells') = 'array'
+ order by run_at desc
+ limit 1
+"""
 
 
 def now(conn: Any) -> _dt.datetime:
@@ -52,6 +66,21 @@ def ago(seconds: float) -> str:
     if seconds < 48 * 3600:
         return f"{seconds / 3600:.1f} h"
     return f"{seconds / 86400:.1f} d"
+
+
+def previous_result(conn: Any,
+                    check_key: str) -> tuple[_dt.datetime | None, dict[str, dict[str, Any]]]:
+    """When this check last stored a result, and its cells by subject; (None, {}) if none."""
+    row = fetchone(conn, PREVIOUS_CELLS_SQL, {"key": check_key})
+    if row is None:
+        return None, {}
+    cells = row[1] if isinstance(row[1], list) else []
+    return as_utc(row[0]), {c.get("subject"): c for c in cells if isinstance(c, dict)}
+
+
+def previous_cells(conn: Any, check_key: str) -> dict[str, dict[str, Any]]:
+    """This check's previous measurement, cell by subject."""
+    return previous_result(conn, check_key)[1]
 
 
 def oneline(text: Any, limit: int = 200) -> str:
