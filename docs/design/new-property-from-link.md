@@ -1,6 +1,6 @@
 # New property from a pasted ad link — the paste box, the tenth portal, and the retirement of estimation-4
 
-Status: **PROPOSED 2026-10-20 — awaiting the operator's rulings (§8).** Investigated read-only by six Opus
+Status: **APPROVED 2026-10-20 (all six rulings in §8 as recommended); W1–W4 run on this text, each merge waits for the autodedup session's green light.** Investigated read-only by six Opus
 readers (the dormant URL parser, the write path and property birth, every downstream lane, the SPA and
 pipeline surfaces, duplicate detection, the governing docs) and verified against the live database and
 Railway; the load-bearing claims were then attacked by seven Opus skeptics and a completeness critic,
