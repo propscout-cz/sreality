@@ -51,6 +51,12 @@ const Price = ({ value, lease, className }: { value: number | null; lease: boole
   </span>
 );
 const isLease = (v: Valuation) => ppm2BasisFromToken(v.ppm2_basis) === 'rent';
+/* Its per-m² average the same way, naming its own unit (rule 23): a sale row and a lease row sit 300x apart. */
+const PerM2 = ({ v, className }: { v: Valuation; className?: string }) => {
+  const n = v.result?.avg_price_m2 ?? null;
+  const fmt = (x: number | null) => fmtMeasuredPricePerM2(x, ppm2BasisFromToken(v.ppm2_basis));
+  return <span className={className} title={n == null ? undefined : fmt(n)}>{fmt(n == null ? null : shownPerM2(n, isLease(v)))}</span>;
+};
 const ENVIRONMENT: Record<Valuation['environment'], string> = { sandbox: 'sandbox', production: 'ostré' };
 const BRICK = 'text-[0.75rem] text-[var(--color-brick)]';
 
@@ -192,8 +198,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
     <EstimateCard eyebrow={eyebrow} aside={aside}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
         <Price value={r.avg_price} lease={lease} className="text-lg font-medium font-mono tabular-nums" />
-        <span className={`text-[0.72rem] font-mono tabular-nums ${INK3}`} title={perM2(r.avg_price_m2)}>
-          {perM2(r.avg_price_m2 == null ? null : shownPerM2(r.avg_price_m2, lease))}</span>
+        <PerM2 v={v} className={`text-[0.72rem] font-mono tabular-nums ${INK3}`} />
       </div>
       {reach.length > 0 && <p className="mt-0.5 text-[0.72rem] font-mono tabular-nums text-[var(--color-ink-2)]">{reach.join('\u00a0· ')}</p>}
       {v.summary?.not_enough && (
@@ -232,11 +237,7 @@ const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
     header: 'Průměr', right: true, className: 'font-mono tabular-nums text-[var(--color-ink)]',
     cell: (v) => <Price value={v.result?.avg_price ?? null} lease={v.result != null && isLease(v)} />,
   },
-  // Each cell names its own unit (rule 23): a sale row and a lease row sit 300x apart.
-  {
-    header: 'Za m²', right: true, className: 'font-mono tabular-nums text-[var(--color-ink-2)]',
-    cell: (v) => fmtMeasuredPricePerM2(v.result?.avg_price_m2, ppm2BasisFromToken(v.ppm2_basis)),
-  },
+  { header: 'Za m²', right: true, className: 'font-mono tabular-nums text-[var(--color-ink-2)]', cell: (v) => <PerM2 v={v} /> },
   { header: 'Stav', cell: (v) => <RunStatusChip status={v.status} /> },
   { header: 'Prostředí', className: `text-[0.65rem] tracking-[0.14em] uppercase ${INK3}`, cell: (v) => ENVIRONMENT[v.environment] },
 ];
@@ -245,6 +246,9 @@ const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
 const webUrl = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? u : null);
 const NO_PHOTO = 'block h-[3.375rem] w-[4.5rem] rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)]';
 const NUM = 'text-right font-mono tabular-nums whitespace-nowrap';
+/* A shade on the box's right edge while columns sit past it (below ~1024 px): the paper cover rides with the content
+ * (local) and hides the edge's shade (scroll) once the last column is in view, or when nothing overflows. */
+const SCROLL_HINT = '[background:linear-gradient(var(--color-paper),var(--color-paper))_right/1.5rem_100%_no-repeat_local,linear-gradient(to_left,var(--color-rule-strong),transparent)_right/1rem_100%_no-repeat_scroll]';
 const SOLD = (
   <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)"
     className={`block font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
@@ -275,10 +279,11 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
       const href = webUrl(r.advert_url);
       const text = address(r) ?? (href ? 'Inzerát' : '—');
       const link = href ? <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">{text}</a> : text;
-      return <span title={text} className="block max-w-[12rem] truncate">{link}</span>;
+      return <span title={text} className="w-[12rem] line-clamp-2">{link}</span>;
     }],
-    ['Velikost', 'whitespace-nowrap text-[var(--color-ink-2)]', (r) => (
-      <>{r.local_type != null && `${optionLabel(fields, 'local_type', r.local_type)} · `}<span className="font-mono tabular-nums">{fmtArea(r.calc_area)}</span></>
+    ['Velikost', 'whitespace-nowrap font-mono tabular-nums text-[var(--color-ink-2)]', (r) => (
+      // 4ch holds every layout Valuo names ("2+kk", "Jiná"), so the area starts at one x down the column.
+      <>{r.local_type != null && <><span className="inline-block min-w-[4ch]">{optionLabel(fields, 'local_type', r.local_type)}</span> · </>}{fmtArea(r.calc_area)}</>
     )],
     ['Cena', `${NUM} text-[var(--color-ink)]`, (r) => (
       <>{czk(r.price)}<span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</span>{r.sale_price && SOLD}</>
@@ -293,7 +298,7 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
       <SectionLabel>
         Srovnávací nemovitosti · <span className="font-mono tabular-nums tracking-normal">{records.length}</span>
       </SectionLabel>
-      <div className="mt-3 min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)]">
+      <div className={`mt-3 min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)] ${SCROLL_HINT}`}>
         <table aria-label="Srovnávací nemovitosti Valuo" className="w-full text-sm">
           <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
             <tr>{columns.map(([h, cls]) => <Th key={h} size="xs" align={cls.startsWith(NUM) ? 'right' : 'left'}>{h}</Th>)}</tr>
@@ -301,7 +306,7 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
           <tbody>
             {records.map((r, i) => (
               <tr key={`${r.id}:${i}`} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
-                {columns.map(([h, cls, cell]) => <td key={h} className={`px-3 py-2 ${cls}`.trim()}>{cell(r, i)}</td>)}
+                {columns.map(([h, cls, cell]) => <td key={h} className={`px-3 py-2 align-top ${cls}`.trim()}>{cell(r, i)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -417,8 +422,8 @@ const BOOL = [{ value: null, label: 'neuvedeno' }, { value: 'ano', label: 'ano' 
 const INPUT = 'w-full px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]';
 // DecimalField as tall as the dropdowns beside it, its unit inside the box; this editor only.
 const NUMBOX = 'relative [&_input]:py-1.5 [&_input]:pl-2 [&_input]:pr-8 [&>span]:absolute [&>span]:right-2 [&>span]:top-1/2 [&>span]:-translate-y-1/2 [&>span]:pointer-events-none';
-// One height for every box (a dropdown drew 1 px short); a refused box framed in brick.
-const BOX = '[&_select]:h-[2.125rem] [&_[aria-invalid=true]]:border-[var(--color-brick)] [&_[aria-invalid=true]>button]:border-[var(--color-brick)]';
+// One height for every box (a dropdown drew 1 px short, a toggle 4 px); a refused box framed in brick.
+const BOX = '[&_select]:h-[2.125rem] [&_button]:h-[2.125rem] [&_[aria-invalid=true]]:border-[var(--color-brick)] [&_[aria-invalid=true]>button]:border-[var(--color-brick)]';
 
 function Param({ field: f, value, provenance, issues, onChange }: {
   field: ValuoField;
@@ -462,7 +467,7 @@ function Param({ field: f, value, provenance, issues, onChange }: {
       </span>
     }>
       <div className={`${BOX} ${value == null && !f.fixed ? ABSENT : ''}`}>{control}</div>
-      {issues.length > 0 && <div id={issuesId}>{issues.map((m, k) => <p key={k} className={`mt-1 ${BRICK}`}>{m}</p>)}</div>}
+      {issues.length > 0 && <div id={issuesId}>{issues.map((m, k) => <p key={k} className={`mt-1 ${BRICK}`}>Valuo: „{m}“</p>)}</div>}
     </Field>
   );
 }

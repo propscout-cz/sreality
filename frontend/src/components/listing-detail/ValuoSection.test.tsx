@@ -331,30 +331,30 @@ describe('<ValuoSection> editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Ocenit přes Valuo →' }));
     fireEvent.click(cta());
     expect(await screen.findByText('Valuo odmítlo některé parametry.')).toBeInTheDocument();
-    expect(param('Stav').getByText('Invalid enum value')).toBeInTheDocument();
+    expect(param('Stav').getByText('Valuo: „Invalid enum value“')).toBeInTheDocument();
     expect(screen.getByText('Required')).toBeInTheDocument(); // names no parameter
     expect(screen.getByText('country_code: Invalid literal')).toBeInTheDocument(); // names none on this form
-    // A refused box says so to a screen reader, and names what Valuo said about it.
+    // A refused box says so to a screen reader, and quotes what Valuo said about it, as Valuo's (its words are English).
     expect(placeBox()).toHaveAttribute('aria-invalid', 'true');
-    expect(placeBox()).toHaveAccessibleDescription('Place not found');
+    expect(placeBox()).toHaveAccessibleDescription('Valuo: „Place not found“');
     expect(screen.getByRole('textbox', { name: 'Plocha' })).not.toHaveAttribute('aria-invalid');
     const rating = screen.getByRole('combobox', { name: 'Stav' });
     expect(rating).toHaveAttribute('aria-invalid', 'true');
-    expect(rating).toHaveAccessibleDescription('Invalid enum value');
+    expect(rating).toHaveAccessibleDescription('Valuo: „Invalid enum value“');
     // The folded band counts its refused parameter, so folding never hides one.
     fireEvent.click(screen.getByRole('button', { name: 'Další parametry · 1 vyplněno · 1 předpoklad · 1 chyba' }));
-    expect(param('Podlaží').getByText('Expected number')).toBeInTheDocument();
+    expect(param('Podlaží').getByText('Valuo: „Expected number“')).toBeInTheDocument();
     const floor = screen.getByRole('textbox', { name: 'Podlaží' });
     expect(floor).toHaveAttribute('aria-invalid', 'true');
-    expect(floor).toHaveAccessibleDescription('Expected number');
+    expect(floor).toHaveAccessibleDescription('Valuo: „Expected number“');
   });
 
   it('opens the editor of a refused row with its issues under their fields, the folded band open', async () => {
     renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' }, history: [REFUSED] }));
     expect(await screen.findByText('Valuo odmítlo některé parametry.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Nové ocenění →' }));
-    expect(param('Stav').getByText('Invalid enum value')).toBeInTheDocument();
-    expect(param('Podlaží').getByText('Expected number')).toBeInTheDocument();
+    expect(param('Stav').getByText('Valuo: „Invalid enum value“')).toBeInTheDocument();
+    expect(param('Podlaží').getByText('Valuo: „Expected number“')).toBeInTheDocument();
   });
 
   it('never names an ignored parameter: v3 has no such echo, whatever ignored_ids a row carries', async () => {
@@ -481,8 +481,9 @@ describe('<ValuoSection> states', () => {
     expect(within(rows[2]).getByText('Prodej')).toBeInTheDocument();
     expect(within(rows[2]).getByText('ostré')).toBeInTheDocument();
     expect(screen.queryByText(/Odeslaná poloha|Valuo: „/)).not.toBeInTheDocument(); // only an engine refusal says them
-    // The ledger rounds the average as the card does, the exact one in its title.
+    // The ledger rounds the average and its per-m² as the card does, the exact ones in their titles.
     expect(within(rows[2]).getByTitle(t(fmtCzk(6_123_456.7)))).toHaveTextContent(t(fmtCzk(6_120_000)));
+    expect(within(rows[2]).getByTitle(t(fmtMeasuredPricePerM2(111_937, 'sale')))).toHaveTextContent(t(fmtMeasuredPricePerM2(111_900, 'sale')));
     fireEvent.click(within(rows[2]).getByRole('button')); // the keyboard's way in
     expect(screen.getAllByText(t(fmtCzk(6_120_000))).length).toBeGreaterThan(1);
     expect(screen.queryByText('Valuo hlásí příliš mnoho dotazů, zkuste to později.')).not.toBeInTheDocument();
@@ -519,7 +520,8 @@ describe('<ValuoSection> states', () => {
     expect(link).toHaveAttribute('href', 'https://www.example.test/inzerat/r1');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link.getAttribute('rel')).toContain('noopener');
-    expect(link.parentElement).toHaveAttribute('title', 'Testovací 148, Sandboxov'); // one line, the whole address on hover
+    expect(link.parentElement).toHaveAttribute('title', 'Testovací 148, Sandboxov'); // two lines at most, the whole address on hover
+    expect(link.parentElement).toHaveClass('line-clamp-2');
     // A realised sale, tagged under its figures and explained.
     expect(rows[1]).toHaveTextContent(t(`${fmtCzk(5_900_000)}${fmtMeasuredPricePerM2(113_462, 'sale')}prodáno`));
     expect(first.getByText('prodáno')).toHaveAttribute('title', 'Realizovaná prodejní cena (ČÚZK / realitní kanceláře)');

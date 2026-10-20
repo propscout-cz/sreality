@@ -68,18 +68,18 @@ class Field:
 LOCAL_TYPES = ("1+0", "1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1", "6+kk", "6+1",
                "7+kk", "7+1")
 
-# Editor order; commercial_type right after the fixed type: it matters most there (operator, 2026-10-20).
+# Editor order; commercial_type (it matters most) after the two-track place: 3 columns close a row (operator, 10-20).
 FIELDS: tuple[Field, ...] = (
     Field("property_type", "Nemovitost", "enum", (
         (FLAT, "Byt"), (HOUSE, "Dům"), (LAND, "Pozemek"), (COMMERCIAL, "Komerční prostor"),
     ), required=ALL, fixed=True),
+    Field("place", "Poloha (adresa nebo souřadnice)", "text", required=ALL),
     Field("commercial_type", "Typ prostoru", "enum", (
         ("office", "Kancelář"), ("storage", "Sklad"), ("retail", "Obchodní prostor"), ("production", "Výroba"),
         ("restaurant", "Restaurace"), ("accommodation", "Ubytování"), ("agriculture", "Zemědělský objekt"),
         ("apartment_building", "Činžovní dům"), ("apartment", "Apartmán"), ("medical_office", "Ordinace"),
         ("other", "Jiný"),
     ), applies=(COMMERCIAL,), recommended=(COMMERCIAL,)),
-    Field("place", "Poloha (adresa nebo souřadnice)", "text", required=ALL),
     Field("kind", "Typ obchodu", "enum", (("sale", "Prodej"), ("lease", "Pronájem")), required=ALL),
     Field("floor_area", "Plocha", "number", applies=BUILT, required=BUILT),
     Field("lot_area", "Plocha pozemku", "number", applies=(HOUSE, LAND, COMMERCIAL), required=(LAND,)),

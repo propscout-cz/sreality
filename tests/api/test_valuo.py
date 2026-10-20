@@ -102,7 +102,7 @@ def test_each_type_offers_exactly_its_v3_schema(ptype):
 
 
 def test_a_commercial_space_type_leads_its_editor():
-    assert [f.name for f in valuo.fields_for("commercial")][:2] == ["property_type", "commercial_type"]
+    assert [f.name for f in valuo.fields_for("commercial")][:3] == ["property_type", "place", "commercial_type"]
 
 
 def test_the_v3_enums_are_valuos_own():
