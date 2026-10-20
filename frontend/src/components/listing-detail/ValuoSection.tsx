@@ -126,7 +126,6 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
       <section id="valuo" className="scroll-mt-6">
         <div className="flex items-baseline justify-between gap-3">
           <SectionLabel>Valuo</SectionLabel>
-          {/* No count here: the ledger below counts its rows, and the phone shows one answer. */}
           {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
             <span className={`px-1.5 border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[0.58rem] tracking-[0.18em] uppercase ${INK3}`}>
               Sandbox
@@ -193,7 +192,8 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
     <EstimateCard eyebrow={eyebrow} aside={aside}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
         <Price value={r.avg_price} lease={lease} className="text-lg font-medium font-mono tabular-nums" />
-        <span className={`text-[0.72rem] font-mono tabular-nums ${INK3}`}>{perM2(r.avg_price_m2)}</span>
+        <span className={`text-[0.72rem] font-mono tabular-nums ${INK3}`} title={perM2(r.avg_price_m2)}>
+          {perM2(r.avg_price_m2 == null ? null : shownPerM2(r.avg_price_m2, lease))}</span>
       </div>
       {reach.length > 0 && <p className="mt-0.5 text-[0.72rem] font-mono tabular-nums text-[var(--color-ink-2)]">{reach.join('\u00a0· ')}</p>}
       {v.summary?.not_enough && (
@@ -311,8 +311,8 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
         <Suspense fallback={null}>
           {/* The viewer has no caption prop: its under-photo bar says which comparable this is. */}
           <ImageLightbox images={opened.photos.map((p, i) => bareImage(i, null, p.full))} startIndex={0} onClose={() => setOpened(null)}
-            actionsAt={() => (<p className="text-center text-sm text-[var(--color-paper)]">
-              {address(opened) ?? 'Srovnání'} · <span className="font-mono tabular-nums">{czk(opened.price)}</span></p>)} />
+            actionsAt={() => (<p className="text-center"><span className="inline-block px-2 py-0.5 rounded-[var(--radius-xs)] bg-[var(--color-paper)] text-sm text-[var(--color-ink)]">
+              {address(opened) ?? 'Srovnání'} · <span className="font-mono tabular-nums">{czk(opened.price)}</span></span></p>)} />
         </Suspense>
       )}
     </div>
@@ -372,7 +372,6 @@ function ValuoEditor({ propertyId, page, refused, onCancel, onDone }: {
       <p className="mt-1 text-sm text-[var(--color-ink-2)]">
         {[page.subject.label, page.subject.location?.label].filter(Boolean).join(' · ')}
       </p>
-      {/* What the button above did or waits for, where the eye is right after the click. */}
       {missing.length > 0 && <p className={`mt-3 text-[0.75rem] ${INK3}`}>Chybí povinné parametry: {missing.join(', ')}.</p>}
       {busy && <p className={`mt-3 flex items-center gap-2 text-sm ${INK3}`}><Spinner /> Valuo počítá…</p>}
       {failed && <Failure valuation={failed} />}
@@ -418,7 +417,7 @@ const BOOL = [{ value: null, label: 'neuvedeno' }, { value: 'ano', label: 'ano' 
 const INPUT = 'w-full px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]';
 // DecimalField as tall as the dropdowns beside it, its unit inside the box; this editor only.
 const NUMBOX = 'relative [&_input]:py-1.5 [&_input]:pl-2 [&_input]:pr-8 [&>span]:absolute [&>span]:right-2 [&>span]:top-1/2 [&>span]:-translate-y-1/2 [&>span]:pointer-events-none';
-// Every box one height (a dropdown drew a pixel short); a refused one framed in brick.
+// One height for every box (a dropdown drew 1 px short); a refused box framed in brick.
 const BOX = '[&_select]:h-[2.125rem] [&_[aria-invalid=true]]:border-[var(--color-brick)] [&_[aria-invalid=true]>button]:border-[var(--color-brick)]';
 
 function Param({ field: f, value, provenance, issues, onChange }: {

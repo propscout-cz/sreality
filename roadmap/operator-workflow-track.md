@@ -41,7 +41,8 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
 - **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
   exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
   confirms the lease basis (a lease reads as monthly: `ValuoSection` `Price`) and whether a house's plot is sent; a per-plan monthly
-  quota counted from the rows before the production token.
+  quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`).
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:

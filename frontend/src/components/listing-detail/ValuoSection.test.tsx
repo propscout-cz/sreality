@@ -79,7 +79,7 @@ const SALE: Valuation = {
   // Unrounded, as Valuo sends it; min/max ride along but are not the band.
   result: {
     avg_price: 6_123_456.7, range_price: [5_643_210, 6_587_654], min_price: 4_100_000, max_price: 8_900_000,
-    avg_price_m2: 111_900, range_price_m2: [103_540, 120_870], std_price_m2: 7_200, calc_area: 54.5, flags: [],
+    avg_price_m2: 111_937, range_price_m2: [103_540, 120_870], std_price_m2: 7_200, calc_area: 54.5, flags: [],
   } as Valuation['result'],
   summary: {
     count: 12, avg_distance: 406, avg_age: 30, avg_duration: 21, avg_score: 0.8, distance: 2000, age: 90, not_enough: false,
@@ -398,6 +398,7 @@ describe('<ValuoSection> states', () => {
     // Rounded to 10 000 Kč as shown, the exact figure in its title.
     const headline = await screen.findByText(t(fmtCzk(6_120_000)));
     expect(headline).toHaveAttribute('title', fmtCzk(6_123_456.7));
+    expect(screen.getByText(t(fmtMeasuredPricePerM2(111_900, 'sale')))).toHaveAttribute('title', fmtMeasuredPricePerM2(111_937, 'sale'));
     expect(screen.getByText('Odhad ceny · Valuo')).toBeInTheDocument();
     expect(screen.queryByText(/^\d+ ocenění$/)).not.toBeInTheDocument(); // the ledger counts its rows, the header does not
     expect(screen.getByText('Sandbox')).toBeInTheDocument();

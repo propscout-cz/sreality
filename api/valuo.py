@@ -68,7 +68,7 @@ class Field:
 LOCAL_TYPES = ("1+0", "1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1", "6+kk", "6+1",
                "7+kk", "7+1")
 
-# In the editor's order: a commercial space's own type leads, it matters most there (operator, 2026-10-20).
+# Editor order; commercial_type right after the fixed type: it matters most there (operator, 2026-10-20).
 FIELDS: tuple[Field, ...] = (
     Field("property_type", "Nemovitost", "enum", (
         (FLAT, "Byt"), (HOUSE, "Dům"), (LAND, "Pozemek"), (COMMERCIAL, "Komerční prostor"),
