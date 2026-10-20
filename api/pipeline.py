@@ -3,7 +3,8 @@ its cards, at most one card per property per account; a bookmark is a card at
 the entry stage.
 
 Every WRITE path takes exactly one required account_id (resolved at the route
-edge by tenant_pool.require_account_id) and predicates with `account_id = %s`.
+edge by tenant_pool.require_acting_account_id: the caller's own account, or under
+X-Act-As the owner whose edit share migration 641 grants) and predicates with `account_id = %s`.
 Explicit even under RLS, and NOT because RLS can be bypassed: the PK is
 (account_id, property_id) and `pipeline_stages_one_entry` is unique per account,
 so a write must NAME its one owner — RLS's WITH CHECK can validate the account a
@@ -22,13 +23,14 @@ import psycopg
 from fastapi import HTTPException
 
 from api import schemas as s
+from api import shares
 from api.dismissals import lift_dismissals_of_live_deals
 from toolkit.property_identity import resolve_active_property_id
 
 
 def list_stages(conn: "psycopg.Connection") -> dict[str, Any]:
     """The caller's stages — RLS-only: no account argument, because reading is
-    "what may I see" (`current_account_ids()`), not "which account am I writing"."""
+    "what may I see" (`acting_account_ids()`), not "which account am I writing"."""
     sql = (
         "SELECT id, key, label, position, color, is_terminal, is_entry, code "
         "FROM pipeline_stages WHERE archived_at IS NULL ORDER BY position"
@@ -425,12 +427,20 @@ def _unique_key(
     return f"{base}_{n}"
 
 
+# The card's delegated stamp (migration 641's ledger key: account_id:property_id, the trigger's
+# argument order; the board views spell the same key).
+_CARD_STAMP = shares.delegated_stamp(
+    "property_pipeline", "pp.account_id::text || ':' || pp.property_id::text", "pp.updated_at",
+)
+
+
 def _fetch_card(
     conn: "psycopg.Connection", property_id: int, account_id: uuid.UUID,
 ) -> dict[str, Any] | None:
     sql = (
         "SELECT pp.property_id, pp.stage_id, ps.key, ps.label, pp.board_position, "
-        "       pp.entered_stage_at, pp.added_at, ps.code, ps.color "
+        "       pp.entered_stage_at, pp.added_at, ps.code, ps.color, "
+        f"      {_CARD_STAMP} "
         "FROM property_pipeline pp JOIN pipeline_stages ps ON ps.id = pp.stage_id "
         "WHERE pp.property_id = %s AND pp.account_id = %s"
     )
@@ -452,6 +462,8 @@ def _fetch_card(
         # without a second round trip for the stage list.
         "stage_code":       row[7],
         "stage_color":      row[8],
+        "edited_by_email":  row[9],
+        "edited_at":        _iso(row[10]),
     }
 
 

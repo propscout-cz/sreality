@@ -2,8 +2,8 @@
 
 Three tenants: A owns a collection holding one property and shares it with B; C is a
 bystander. Every assertion about what a tenant can read or write runs through
-`_scoped` (SET LOCAL ROLE authenticated + the caller's JWT claims, exactly as
-api.tenant_pool.tenant_conn scopes a request), so the policies bind as in production.
+`tests/_tenant_scope.scoped` (SET LOCAL ROLE authenticated + the caller's JWT claims, exactly
+as api.tenant_pool.tenant_conn scopes a request), so the policies bind as in production.
 Setup and read-backs run as the owner login, which RLS never binds.
 
 Skip behaviour: skips without TEST_DATABASE_URL like its siblings; CI's migrations lane
@@ -12,14 +12,14 @@ sets DB_RAILS_REQUIRED=1, so a lane that loses its database goes RED instead of 
 
 from __future__ import annotations
 
-import contextlib
-import json
 import os
 import uuid
 from collections.abc import Iterator
 from typing import Any, NamedTuple
 
 import pytest
+
+from tests._tenant_scope import scoped
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 _REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
@@ -28,26 +28,6 @@ pytestmark = pytest.mark.skipif(
     not _DB_URL and not _REQUIRED,
     reason="TEST_DATABASE_URL not set — this rail runs in CI's migrations lane",
 )
-
-
-@contextlib.contextmanager
-def _scoped(sub: uuid.UUID) -> Iterator[Any]:
-    """One transaction scoped the way tenant_conn scopes: SET LOCAL ROLE authenticated + the
-    caller's JWT claims (the same shape as tests/test_tenant_isolation_live.py's)."""
-    import psycopg
-
-    conn = psycopg.connect(_DB_URL, autocommit=False)
-    try:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                cur.execute("SET LOCAL ROLE authenticated")
-                cur.execute(
-                    "SELECT set_config('request.jwt.claims', %s, true)",
-                    (json.dumps({"sub": str(sub), "role": "authenticated"}),),
-                )
-            yield conn
-    finally:
-        conn.close()
 
 
 class _Tenant(NamedTuple):
@@ -149,13 +129,13 @@ def world(svc: Any, tenants: dict[str, _Tenant]) -> Iterator[_World]:
 
 
 def _rows(t: _Tenant, sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
-    with _scoped(t.user) as conn, conn.cursor() as cur:
+    with scoped(t.user) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
 
 
 def _touched(t: _Tenant, sql: str, params: tuple[Any, ...]) -> int:
-    with _scoped(t.user) as conn, conn.cursor() as cur:
+    with scoped(t.user) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.rowcount
 
@@ -547,12 +527,12 @@ def test_a_share_notification_is_stamped_to_the_recipient_and_read_by_them_only(
     import psycopg
 
     a, b, c = tenants["a"], tenants["b"], tenants["c"]
-    key = f"share:{world.coll}:{b.acc}"
+    key = f"share:collection:{world.coll}:{b.acc}"
     with svc.cursor() as cur:
         cur.execute(
             "INSERT INTO notification_dispatches "
             "(source_kind, collection_id, change_kind, message, account_id, dedupe_key) "
-            "VALUES ('collection_share', %s, 'shared', 'shared with you', %s, %s) "
+            "VALUES ('share', %s, 'shared', 'shared with you', %s, %s) "
             "RETURNING account_id",
             (world.coll, b.acc, key),
         )
@@ -561,7 +541,7 @@ def test_a_share_notification_is_stamped_to_the_recipient_and_read_by_them_only(
             cur.execute(
                 "INSERT INTO notification_dispatches "
                 "(source_kind, collection_id, change_kind, dedupe_key) "
-                "VALUES ('collection_share', %s, 'shared', %s)",
+                "VALUES ('share', %s, 'shared', %s)",
                 (world.coll, f"{key}:unstamped"),
             )
     read = "SELECT account_id FROM notification_dispatches WHERE dedupe_key = %s"

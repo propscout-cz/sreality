@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 # The notification_dispatches producers (rule 16; CHECK notification_dispatches_source_ck).
-SourceKind = Literal["watchdog", "collection_monitor", "collection_share", "system_health"]
+SourceKind = Literal["watchdog", "collection_monitor", "share", "system_health"]
 SourceKindFilter = Literal[SourceKind, "all"]
 
 

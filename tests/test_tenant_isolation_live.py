@@ -13,7 +13,6 @@ what makes RLS bind, both here and in production.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import re
 import uuid
@@ -24,6 +23,7 @@ import pytest
 
 from tests._admin_gate_shape import gate_is_sound
 from tests._tenant_registry import TENANT_TABLES
+from tests._tenant_scope import scoped
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -351,26 +351,6 @@ def tenants(svc: Any) -> "Iterator[dict[str, uuid.UUID]]":
             cur.execute("DELETE FROM auth.users WHERE id IN (%s, %s)", (a_user, b_user))
 
 
-@contextlib.contextmanager
-def _scoped(sub: uuid.UUID) -> "Iterator[Any]":
-    """One transaction scoped the way tenant_conn scopes: SET LOCAL ROLE
-    authenticated + the caller's JWT claims, evaporating at transaction end."""
-    import psycopg
-
-    conn = psycopg.connect(_DB_URL, autocommit=False)
-    try:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                cur.execute("SET LOCAL ROLE authenticated")
-                cur.execute(
-                    "SELECT set_config('request.jwt.claims', %s, true)",
-                    (json.dumps({"sub": str(sub), "role": "authenticated"}),),
-                )
-            yield conn
-    finally:
-        conn.close()
-
-
 def test_signup_seeds_the_default_board(
     svc: Any, tenants: dict[str, uuid.UUID],
 ) -> None:
@@ -432,7 +412,7 @@ def test_pipeline_event_cannot_name_a_foreign_stage(
             (tenants["b_acc"],),
         )
         b_entry = cur.fetchone()[0]
-    with _scoped(tenants["a_user"]) as conn:
+    with scoped(tenants["a_user"]) as conn:
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
                 with conn.cursor() as cur:
@@ -458,7 +438,7 @@ def test_cross_tenant_pipeline_writes_match_nothing(
             (tenants["b_acc"],),
         )
         b_entry = cur.fetchone()[0]
-    with _scoped(tenants["a_user"]) as conn:
+    with scoped(tenants["a_user"]) as conn:
         with conn.cursor() as cur:
             for sql in (
                 "UPDATE pipeline_stages SET label = 'taken' WHERE id = %s",
@@ -487,7 +467,7 @@ def test_cross_tenant_denial(svc: Any, tenants: dict[str, uuid.UUID]) -> None:
         )
         coll_id = cur.fetchone()[0]
     try:
-        with _scoped(tenants["b_user"]) as conn:
+        with scoped(tenants["b_user"]) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM collections WHERE name = %s", (name,))
                 assert cur.fetchall() == [], "tenant B must not see tenant A's collection"
@@ -498,7 +478,7 @@ def test_cross_tenant_denial(svc: Any, tenants: dict[str, uuid.UUID]) -> None:
                 assert cur.rowcount == 0, "tenant B must not update tenant A's collection"
                 cur.execute("DELETE FROM collections WHERE id = %s", (coll_id,))
                 assert cur.rowcount == 0, "tenant B must not delete tenant A's collection"
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM collections WHERE name = %s", (name,))
                 assert len(cur.fetchall()) == 1, "tenant A must see their own collection"
@@ -580,7 +560,7 @@ def test_a5_properties_readable_listings_still_deny_all(
             (srid, f"iso-a5-{srid}", prop),
         )
     try:
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 # A5: the read policy makes base `properties` visible to a tenant.
                 cur.execute("SELECT id FROM properties WHERE id = %s", (prop,))
@@ -720,7 +700,7 @@ def test_estimates_view_scopes_per_account(
     )
 
     def visible(sub: uuid.UUID) -> set[int]:
-        with _scoped(sub) as conn:
+        with scoped(sub) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT property_id FROM property_estimates_public "
@@ -752,7 +732,7 @@ def test_estimates_view_sees_a_non_sreality_subject(
     would silently never show one."""
     pn = seeded_estimate_rows["nonsreality"]
     for who in ("a_user", "b_user"):
-        with _scoped(tenants[who]) as conn:
+        with scoped(tenants[who]) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT run_count FROM property_estimates_public WHERE property_id = %s",
@@ -820,7 +800,7 @@ def test_llm_calls_scoped_through_owning_run(
     ca, cb = seeded_llm_calls_rows["a"], seeded_llm_calls_rows["b"]
 
     def visible(sub: uuid.UUID) -> set[int]:
-        with _scoped(sub) as conn:
+        with scoped(sub) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT id FROM llm_calls WHERE id = ANY(%s)", ([ca, cb],))
                 return {r[0] for r in cur.fetchall()}
@@ -976,11 +956,11 @@ def test_tenant_view_scopes_both_ways(
     of reaching production."""
     clause, params = seeded_tenant_rows[view]
     sql = f"SELECT * FROM {view} WHERE {clause}"  # noqa: S608 - fixed view list
-    with _scoped(tenants["b_user"]) as conn:
+    with scoped(tenants["b_user"]) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             assert cur.fetchall() == [], f"tenant B saw tenant A's row through {view}"
-    with _scoped(tenants["a_user"]) as conn:
+    with scoped(tenants["a_user"]) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             assert len(cur.fetchall()) == 1, (
@@ -1035,7 +1015,7 @@ def test_portal_lookup_membership_is_rls_only(
     _, source, native = seeded_lookup_listing
     items = [api_schemas.PortalLookupItem(source=source, source_id=native)]
 
-    with _scoped(tenants["a_user"]) as conn_a:
+    with scoped(tenants["a_user"]) as conn_a:
         out_a = lookup_portal_listings(svc, conn_a, items)
     assert len(out_a["data"]) == len(items), "the LATERAL must not multiply rows"
     entry_a = out_a["data"][0]
@@ -1045,7 +1025,7 @@ def test_portal_lookup_membership_is_rls_only(
     )
     assert entry_a["pipeline"]["stage_label"] == "iso"
 
-    with _scoped(tenants["b_user"]) as conn_b:
+    with scoped(tenants["b_user"]) as conn_b:
         out_b = lookup_portal_listings(svc, conn_b, items)
     assert len(out_b["data"]) == len(items)
     entry_b = out_b["data"][0]
@@ -1071,12 +1051,12 @@ def test_pipeline_card_read_is_account_scoped_after_respelling(
     prop_id = seeded_tenant_rows["property_pipeline_public"][1][0]
     a_acc, b_acc = tenants["a_acc"], tenants["b_acc"]
 
-    with _scoped(tenants["a_user"]) as conn_a:
+    with scoped(tenants["a_user"]) as conn_a:
         card = pipeline_module._fetch_card(conn_a, prop_id, a_acc)
     assert card is not None, "tenant A must read back its own card"
     assert card["stage_label"] == "iso"
 
-    with _scoped(tenants["b_user"]) as conn_b:
+    with scoped(tenants["b_user"]) as conn_b:
         assert pipeline_module._fetch_card(conn_b, prop_id, b_acc) is None
         assert pipeline_module._fetch_card(conn_b, prop_id, a_acc) is None, (
             "naming another account must not surface its card — RLS is the backstop"
@@ -1330,7 +1310,7 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
             f"seed did not reach {unreachable} — the deny assertion for those views "
             f"would be vacuous, so fix the fixture rather than trusting the zero"
         )
-    with _scoped(tenants["a_user"]) as conn:
+    with scoped(tenants["a_user"]) as conn:
         with conn.cursor() as cur:
             for name in _ADMIN_GATED_VIEWS:
                 cur.execute(f"SELECT count(*) FROM {name}")
@@ -1353,7 +1333,7 @@ def test_admin_ops_views_deny_non_admin_allow_admin(
             (tenants["a_user"],),
         )
     try:
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 for name in _ADMIN_GATED_VIEWS:
                     cur.execute(f"SELECT count(*) FROM {name}")  # must not raise
@@ -1400,7 +1380,7 @@ def test_an_admin_reads_the_registry_view_as_the_caller(
 
     RED by: dropping `grant execute on function health_stale(...) to authenticated`."""
     with _platform_admin(svc, tenants["a_user"]):
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT status, effective_status, last_measured_at IS NOT NULL, incidents "
@@ -1456,7 +1436,7 @@ def test_a_platform_admin_marks_a_system_alert_read(
     """Migration 619: all 861 system alerts sat unseen because no UPDATE arm reached a
     SYSTEM-account row. RED by: dropping notification_dispatches_admin_update."""
     with _platform_admin(svc, tenants["a_user"]):
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE notification_dispatches SET seen_at = now() WHERE id = %s",
@@ -1481,7 +1461,7 @@ def test_a_platform_admin_cannot_rewrite_a_system_alert(
     import psycopg
 
     with _platform_admin(svc, tenants["a_user"]):
-        with _scoped(tenants["a_user"]) as conn:
+        with scoped(tenants["a_user"]) as conn:
             for sql in (
                 "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
                 "UPDATE notification_dispatches SET target_channels = '{telegram}' WHERE id = %s",
@@ -1512,7 +1492,7 @@ def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
     with svc.cursor() as cur:
         cur.execute(seen_at, (seeded_dispatches["system"],))
         before = cur.fetchone()[0]
-    with _scoped(tenants["b_user"]) as conn:
+    with scoped(tenants["b_user"]) as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE notification_dispatches SET seen_at = now()")
             cur.execute(
@@ -1850,7 +1830,7 @@ def test_write_then_read_back_one_transaction(
     name = f"iso-rw-{uuid.uuid4().hex}"
     claims = {"sub": str(tenants["a_user"]), "role": "authenticated"}
     try:
-        gen = tenant_pool.tenant_conn(claims)
+        gen = tenant_pool.tenant_conn(claims, act_as=None, method="POST")
         conn = next(gen)
         with conn.cursor() as cur:
             cur.execute(
@@ -1861,11 +1841,11 @@ def test_write_then_read_back_one_transaction(
             assert cur.fetchone()[0] == 1, "row must be visible INSIDE the same transaction"
         next(gen, None)  # resume past the yield -> clean commit + close
 
-        with _scoped(tenants["a_user"]) as conn_a:
+        with scoped(tenants["a_user"]) as conn_a:
             with conn_a.cursor() as cur:
                 cur.execute("SELECT count(*) FROM collections WHERE name = %s", (name,))
                 assert cur.fetchone()[0] == 1, "committed row must be visible to tenant A"
-        with _scoped(tenants["b_user"]) as conn_b:
+        with scoped(tenants["b_user"]) as conn_b:
             with conn_b.cursor() as cur:
                 cur.execute("SELECT count(*) FROM collections WHERE name = %s", (name,))
                 assert cur.fetchone()[0] == 0, "committed row must be invisible to tenant B"

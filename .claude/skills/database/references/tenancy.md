@@ -103,6 +103,69 @@ never rewrite or remove one. One active row per (property, account) is a PARTIAL
 index (`where lifted_at is null`), so an idempotent insert spells its conflict target with
 the predicate: `ON CONFLICT (property_id, account_id) WHERE lifted_at IS NULL`.
 
+**Migration 641 — `pipeline_shares` + `delegated_edits`**: the share is one row per (owner `account_id`,
+`recipient_account_id`) with `mode ∈ {read, edit}`, the same party-policy / no-INSERT / either-party-deletes
+shape as `collection_shares`, written by the API on the service role; the ledger is the delegation section below.
+
+## Delegation (migration 641)
+
+Two questions, two functions. `current_account_ids()` answers **who the caller IS** and stays
+untouched; `acting_account_ids(for_board boolean default false)` (`SECURITY DEFINER`, `RETURNS TABLE (account_id
+uuid)`) answers **whom the caller acts FOR on curation**. Exactly eleven policies read the second, in
+`USING` and `WITH CHECK` (switched by `ALTER POLICY`; the three pipeline tables pass `true`): `collections`, `tags`, `property_notes`,
+`collection_properties`, `property_tags`, `property_note_attachments`, `property_artifact_links`,
+`property_dismissals`, `property_pipeline`, `pipeline_stages`, `property_pipeline_events`. **Every
+other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications,
+the two share tables, `share_party_emails()` — so a delegate never reads, writes or spends as the owner
+there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
+`test_exactly_the_eleven_curation_policies_act`).
+
+- **The header and the method.** `x-act-as: <owner account>` rides the request; PostgREST exposes it as
+  the transaction-local GUC `request.headers` (JSON, lower-case keys) and the method as
+  `request.method`, and the API's tenant transaction sets the same two next to `request.jwt.claims`
+  (bind parameters). `acting()` is true when the header is non-empty. Without it,
+  `acting_account_ids()` returns exactly `current_account_ids()`'s rows (641's DO block checks up to
+  50 members, all of them today). With it, the function returns the owner when a share from that
+  owner to the caller exists — `edit` on any method and table; `read` on `GET`/`HEAD` only and on the
+  three pipeline tables only (`for_board`; ruling 2: a read share sees the board, never the owner's
+  notes, files, tags, collections, dismissals or links; a missing method counts as a write) — and
+  **nothing** otherwise. The API runs a GET/HEAD that acts `READ ONLY`, as PostgREST does.
+- **Replace, never union.** While acting, the eleven tables show the owner's rows and none of the
+  caller's own, so the card map, the entry stage, the dismissal rule and Browse's curated scope stay
+  single-account. The child triggers (292's shape) read the owner's parent under the acting identity
+  and stamp the owner's account, which `WITH CHECK` accepts in edit mode.
+- **Fail closed.** A stale, revoked or forged header yields an EMPTY identity, never the caller's own
+  rows; a header that is not a uuid is an error. A read grant's write sees no rows (UPDATE/DELETE
+  touch 0, INSERT is 42501).
+- **The share rows are the caller's own consent**, so both party policies (`collection_shares_party`,
+  `pipeline_shares_party`) carry `and not acting()`: while acting the four `*_shared_read` arms add
+  nothing, and a delegate neither sees nor revokes the owner's shares.
+- **The ledger.** `delegated_edits` (append-only; `actor_user_id` = the JWT `sub`, `actor_account_id`
+  = the share's recipient, `owner_account_id`, `relation`, `row_key` = the PK values joined by `:`,
+  `op`, `at`) is written only by `stamp_delegated_edit()`, ONE `SECURITY DEFINER` trigger function on
+  the eleven tables (`AFTER … FOR EACH ROW WHEN (acting())`, the PK column names as trigger
+  arguments). `authenticated` holds SELECT only; the owner reads it (`delegated_edits_owner_read`),
+  nobody else. A row's stamp is defined once, `latest_delegated_edit(relation, row_key, changed_at)`
+  (invoker: its latest delegated edit, NULL when the row changed after it, so the owner's own later
+  write clears it); `pipeline_stages_public`, `property_pipeline_public` and `pipeline_board_public`
+  append it as `edited_by_account_id` + `edited_at`, and the API's note and card projections call it.
+  `share_party_emails()` (both share kinds, plus every actor in the caller's own ledger, so a revoked
+  delegate stays named) is the label door; deleting the actor's account nulls the actor, not the row.
+- **One notification kind.** `notification_dispatches.source_kind = 'share'` for both kinds
+  (`collection_id` set for a collection share, NULL for a pipeline share); 641 renamed
+  `collection_share` (and its keys to `share:collection:<collection>:<recipient>`); `api/shares.py`
+  writes both.
+- **The API declares, per write route, which account it writes.** `tenant_conn` carries the header
+  and the method into the transaction (`tenant_pool.tenant_transaction(claims, act_as=, method=)`,
+  both required); `require_acting_account_id` (curation writes: own account, or the owner the
+  function grants, else 403) or `require_account_id` (everything else: own account, 403 under the
+  header). Sharing never delegates: both share-create routes declare `require_account_id`, and a
+  delegate may not switch on the owner's collection monitoring (403). `tests/api/test_acting_routes_census.py`
+  pins that the first writes only the eleven tables, the second none of them (or says why), and that an
+  RLS-only route that reaches the service role or mixes curation with other writes declares one.
+- **Tests** scope through ONE helper, `tests/_tenant_scope.scoped(sub, act_as=, method=, cur=)`; the
+  four-tenant lane is `tests/test_pipeline_shares_live.py`.
+
 ## Composite PK: `property_pipeline` (migration 295)
 
 The **only** table where the primary key itself changed, not just an added/scoped
@@ -172,7 +235,8 @@ four, or add it here with a reason, but do not leave it unnamed.
 
 **1. Reads on a tenant connection are scoped by RLS alone.** `current_account_ids()` — the
 SECURITY DEFINER function every per-account policy already calls — is the ONE definition of
-who the caller is. It is **plural**, because membership is plural: a user may belong to more
+who the caller is (on the eleven curation tables the policies read `acting_account_ids()`, which
+equals it without the `x-act-as` header; § Delegation). It is **plural**, because membership is plural: a user may belong to more
 than one account, and any code that picks "the" account re-defines the caller more narrowly
 than the database does. A read route on `tenant_conn` therefore takes **no account argument**
 and its SQL carries **no account predicate**. An `UPDATE`/`DELETE` *by id* is this same shape:
@@ -190,7 +254,8 @@ see the row takes `SELECT … FOR UPDATE`, which applies the UPDATE policy. Exam
 `update_note`) and `api/note_attachments.add_attachment`.
 
 **2. Writes carry exactly ONE account, resolved once at the route edge.**
-`tenant_pool.require_account_id` (FastAPI dependency) resolves it and raises
+`tenant_pool.require_account_id` (FastAPI dependency; a curation write declares its twin
+`require_acting_account_id`, § Delegation) resolves it and raises
 `400 "no account for caller"` when there is none. Never a silent `None` (the account columns
 are `NOT NULL`, see the per-table section, so a forwarded NULL is an empty result set or an
 opaque 500) and never a `SYSTEM` fallback (migration 290's `WITH CHECK` has no SYSTEM arm to
@@ -206,8 +271,8 @@ about a caller the database has already scoped. The live sites: `toolkit/propert
 and must partition every join between the retired and survivor sides: by an explicit `account_id`,
 or through a key one account owns, as a `CurationTable`'s collection/tag/subscription id does; and the
 routing inside `detach_listings`, whose carry-row identity, twins and conflicts all name the account), the
-merge's receipt (`api/property_merge.merge_receipt`: the acting account's own carry rows), the split's preview
-and receipt (`toolkit/property_split`: the acting account's own items only, nothing of another's), `api/estimation_runs.py`
+merge's receipt (`api/property_merge.merge_receipt`: the caller's account's own carry rows), the split's preview
+and receipt (`toolkit/property_split`: the caller's account's own items only, nothing of another's), `api/estimation_runs.py`
 (service-role child runs from `building_runs`), and the Stripe webhook (no caller identity at
 all — the HMAC over the raw body is the auth). On a tenant connection the same predicate is the
 #917 bug: `POST /listings/lookup` bound `NULL` into three `account_id IS NOT DISTINCT FROM %s`
@@ -224,7 +289,7 @@ empty: an unresolvable account narrows to `[SYSTEM]`, a missing or bad credentia
 
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
-`tenant_pool.tenant_transaction(claims)` in the handler, for three reasons:
+`tenant_pool.tenant_transaction(claims, act_as=None, method="POST")` in the handler, for three reasons:
 
 - *The write gate is narrower than the read policy.* `estimation_runs`' three-arm read policy
   (migration 291) passes every SYSTEM run, and migration 292's trigger stamps a child row with
@@ -265,7 +330,8 @@ the request-long `tenant_conn`: its service-role work is two fast INSERTs, not a
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
 counterparties only) and by the admin entitlements route; and the share route's email lookup,
 `tenant_pool.account_for_email` (service role, confirmed emails only). A share is never membership:
-`current_account_ids()` is untouched, and a recipient's identity never widens.
+`current_account_ids()` is untouched — a collection share widens what the caller reads as themselves; a
+pipeline share lets the caller ACT AS the owner on curation (`acting_account_ids()`, § Delegation).
 
 ### The two test rules that would have caught #917
 

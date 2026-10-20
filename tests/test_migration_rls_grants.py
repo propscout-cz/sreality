@@ -602,14 +602,20 @@ def test_dynamic_ddl_is_annotated():
     )
 
 
-# --- the sharing policies (migration 610), pinned ---------------------------
-# A share widens READS only, and it does so through exactly these five permissive policies.
+# --- the sharing policies (migrations 610, 641), pinned ---------------------
+# A collection share widens READS only, through exactly these five permissive policies; a
+# pipeline share widens nothing (its recipient ACTS AS the owner, below) and its party policy,
+# like collection_shares_party, hides itself while acting. An `alter policy` that swaps only
+# USING / WITH CHECK keeps the pinned shape for the two PARTY policies alone (641 adds `not acting()`
+# that way, and test_the_share_rows_are_invisible_while_acting checks their final USING); any alter
+# of a `*_shared_read` still fails here.
 # 610's own assert block checks them once, when 610 applies; this census re-reads EVERY
 # migration so a later one that re-creates a `*_shared_read` as FOR ALL (WITH CHECK defaults
 # to USING: a recipient could write) or drops `to authenticated` (anon reaches it), or that
 # alters or drops one, fails here instead of shipping green.
 _SHARE_POLICY_PIN: dict[str, tuple[str, str, frozenset[str]]] = {
     "collection_shares_party": ("collection_shares", "all", frozenset({"authenticated"})),
+    "pipeline_shares_party": ("pipeline_shares", "all", frozenset({"authenticated"})),
     "collections_shared_read": ("collections", "select", frozenset({"authenticated"})),
     "collection_properties_shared_read": (
         "collection_properties", "select", frozenset({"authenticated"})),
@@ -630,6 +636,12 @@ def _policy_shape(rest: str) -> tuple[str, frozenset[str], bool]:
     )
 
 
+def _only_swaps_expressions(rest: str) -> bool:
+    """`on <table> using (...) [with check (...)]`: no rename, no role change."""
+    return bool(re.match(r'\s*on (?:public\.)?"?\w+"? (?:using|with check)\b', rest)) and not re.search(
+        r"\brename to\b", rest)
+
+
 def _final_share_policies() -> dict[str, object]:
     state: dict[str, object] = {}
     paths = sorted(
@@ -644,8 +656,11 @@ def _final_share_policies() -> dict[str, object]:
                 cmd, roles, restrictive = _policy_shape(m.group(3))
                 state[m.group(1)] = (m.group(2), cmd, roles, restrictive, p.name)
                 continue
-            m = re.match(r'(drop|alter) policy (?:if exists )?"?(\w+)"?', low)
+            m = re.match(r'(drop|alter) policy (?:if exists )?"?(\w+)"?(.*)$', low)
             if m and m.group(2) in _SHARE_POLICY_PIN:
+                if (m.group(1) == "alter" and m.group(2) in _HIDDEN_WHILE_ACTING
+                        and _only_swaps_expressions(m.group(3))):
+                    continue
                 state[m.group(2)] = f"{m.group(1)} policy in {p.name}"
     return state
 
@@ -665,4 +680,123 @@ def test_the_sharing_policies_stay_select_only_and_authenticated_only():
         "a sharing policy drifted from its pin (docs/design/collection-sharing.md §3.1, §7): a "
         "share must widen reads only, to signed-in callers only. If the change is deliberate, "
         "update _SHARE_POLICY_PIN in the same PR:\n" + "\n".join(drifted)
+    )
+
+
+# --- acting as the owner (migration 641), pinned ------------------------------
+# A pipeline share lets its recipient ACT AS the owner on exactly the eleven curation tables:
+# their FOR ALL policies read acting_account_ids() (who the caller acts FOR) in USING and WITH
+# CHECK; the three pipeline tables pass `true`, the only ones a READ share reaches (ruling 2). Every other policy keeps current_account_ids() (who the caller IS): billing, estimations,
+# watchdog, presets, notifications and the share tables never act (docs/design/pipeline-sharing.md
+# §3.7). A later migration that moves a twelfth policy onto the acting function, or moves one of
+# the eleven back, fails here instead of shipping green. Both share-party policies hide while acting.
+_ACTING_POLICIES: dict[str, str] = {
+    "collections_tenant_rw": "collections",
+    "tags_tenant_rw": "tags",
+    "property_notes_tenant_rw": "property_notes",
+    "collection_properties_tenant_rw": "collection_properties",
+    "property_tags_tenant_rw": "property_tags",
+    "property_note_attachments_tenant_rw": "property_note_attachments",
+    "property_artifact_links_tenant_rw": "property_artifact_links",
+    "property_dismissals_tenant_rw": "property_dismissals",
+    "property_pipeline_tenant_rw": "property_pipeline",
+    "pipeline_stages_tenant_rw": "pipeline_stages",
+    "property_pipeline_events_tenant_rw": "property_pipeline_events",
+}
+_BOARD_POLICIES = frozenset({
+    "property_pipeline_tenant_rw", "pipeline_stages_tenant_rw", "property_pipeline_events_tenant_rw",
+})
+_HIDDEN_WHILE_ACTING = ("collection_shares_party", "pipeline_shares_party")
+
+
+def _clause(rest: str, keyword: str) -> str | None:
+    """The parenthesised expression after `using` / `with check` in a policy tail, else None."""
+    m = re.search(rf"\b{keyword}\s*\(", rest)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while i < len(rest) and depth:
+        depth += {"(": 1, ")": -1}.get(rest[i], 0)
+        i += 1
+    return rest[m.end(): i - 1]
+
+
+def _final_policy_expressions() -> dict[str, tuple[str, str | None, str | None]]:
+    """name -> (table, USING, WITH CHECK) as the migrations leave them, in numeric order."""
+    state: dict[str, tuple[str, str | None, str | None]] = {}
+    paths = sorted(
+        (p for p in MIGRATIONS_DIR.glob("*.sql") if _migration_number(p) is not None),
+        key=lambda p: _migration_number(p) or 0,
+    )
+    for p in paths:
+        for stmt in _statements(p.read_text(encoding="utf-8")):
+            low = re.sub(r"\s+", " ", stmt.lower()).strip()
+            m = re.match(r'create policy "?(\w+)"? on (?:public\.)?"?(\w+)"?(.*)$', low)
+            if m:
+                state[m.group(1)] = (m.group(2), _clause(m.group(3), "using"),
+                                     _clause(m.group(3), "with check"))
+                continue
+            m = re.match(r'alter policy "?(\w+)"? on (?:public\.)?"?(\w+)"?(.*)$', low)
+            if m and m.group(1) in state:
+                _, using, check = state[m.group(1)]
+                state[m.group(1)] = (m.group(2), _clause(m.group(3), "using") or using,
+                                     _clause(m.group(3), "with check") or check)
+                continue
+            m = re.match(r'drop policy (?:if exists )?"?(\w+)"?', low)
+            if m:
+                state.pop(m.group(1), None)
+    return state
+
+
+def test_exactly_the_eleven_curation_policies_act():
+    state = _final_policy_expressions()
+    wrong = []
+    for name, table in _ACTING_POLICIES.items():
+        got = state.get(name)
+        if got is None or got[0] != table:
+            wrong.append(f"  {name}: missing on {table}")
+            continue
+        call = "acting_account_ids(true)" if name in _BOARD_POLICIES else "acting_account_ids()"
+        for side, expr in (("USING", got[1]), ("WITH CHECK", got[2])):
+            if not expr or call not in expr or "current_account_ids" in expr:
+                wrong.append(f"  {name}: {side} does not read {call} alone: {expr}")
+    strays = sorted(
+        name for name, (_, using, check) in state.items()
+        if name not in _ACTING_POLICIES and "acting_account_ids" in f"{using} {check}"
+    )
+    wrong += [f"  {name}: reads acting_account_ids() but is not a curation policy" for name in strays]
+    assert not wrong, (
+        "the acting identity drifted (docs/design/pipeline-sharing.md §3.1, §3.7): the eleven "
+        "curation policies read acting_account_ids(), every other policy current_account_ids():\n"
+        + "\n".join(wrong)
+    )
+
+
+def test_the_share_rows_are_invisible_while_acting():
+    state = _final_policy_expressions()
+    for name in _HIDDEN_WHILE_ACTING:
+        assert name in state, f"{name} is gone"
+        using = state[name][1] or ""
+        assert "not acting()" in using and "current_account_ids()" in using, (
+            f"{name} must stay the caller's own consent (current_account_ids) and hide while "
+            f"acting (`and not acting()`): {using}"
+        )
+
+
+def test_the_eleven_curation_tables_carry_no_other_policy():
+    """Replace, never union: a twelfth permissive policy on a curation table that reads
+    current_account_ids() would union the delegate's own rows into the acting view. The only
+    others allowed are the four pinned `*_shared_read` arms, whose share rows hide while acting."""
+    tables = set(_ACTING_POLICIES.values())
+    allowed = set(_ACTING_POLICIES) | {
+        name for name, (table, _cmd, _roles) in _SHARE_POLICY_PIN.items() if table in tables
+    }
+    extra = sorted(
+        f"  {name} on {table}" for name, (table, _u, _c) in _final_policy_expressions().items()
+        if table in tables and name not in allowed
+    )
+    assert not extra, (
+        "a curation table gained a policy outside its acting `*_tenant_rw` and the pinned "
+        "`*_shared_read` arms (docs/design/pipeline-sharing.md §3.1, replace semantics):\n"
+        + "\n".join(extra)
     )
