@@ -107,13 +107,12 @@ it (`api/`). They do not apply to the scraper.
    of the token: `/admin/*` (incl. `POST /admin/health/acknowledge {key}`: stamps `ops_incidents.acknowledged_at` on
    that check's open cell incidents on the service role, which stops their reminders), `/properties/merge*`, `/labeling/*`,
    `/outreach/*`, `/broker-review/*`, `/autodedup/*`, `/new-dedup/*`,
-   `/skill-refinements/*`, `/location/*`, dataset-write/dispatch routes on price-stats, and the manual-estimate writes (shared
-   reference data, mig 290; stamp the admin into `updated_by`, + `account_id` on insert) use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
-   `/pipeline/*`, `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE gates, then the service role writes the share + its notification), `/tags`, `/filter-presets` (per account, mig 595), `PUT /stats/dashboard` (per account, mig 626: the Browse › Stats board, a whole-document upsert validated by `toolkit/stats_registry.py`; the SPA reads it through RLS), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
+   `/skill-refinements/*`, `/location/*` and dataset-write/dispatch routes on price-stats use `require_admin` (JWT-gated, see below) instead of plain `require_token`;
+   `/pipeline/*` (+ `GET`/`POST /pipeline/shares`, `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me`, mig 641), `/collections` (+ `POST`/`DELETE /collections/{id}/shares`, mig 610: the tenant UPDATE (own accounts, `require_account_id`) gates, then the service role writes the share + its notification; both kinds are ONE module, `api/shares.py`), `/tags`, `/filter-presets` (per account, mig 595), `PUT /stats/dashboard` (per account, mig 626: the Browse › Stats board, a whole-document upsert validated by `toolkit/stats_registry.py`; the SPA reads it through RLS), `/estimations` create/detail/scenario/trace payload/feedback (its refiner admin-only), notes,
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (account resolved by hand: no tenant transaction across the paid call) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   the manual-estimate read, estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -281,9 +280,14 @@ Six auth primitives coexist — four in `api/dependencies.py` over ONE header re
   includes `app_metadata` in every issued JWT by default, no Custom Access Token Hook needed).
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
   `Depends(tenant_conn)` there is circular). The ONE no-account posture: resolved once at the route edge,
-  else `400 "no account for caller"`. EVERY tenant-connection WRITE declares it (`/pipeline/*` writes,
-  `POST /collections` `/tags` `/properties/{id}/notes` `/notifications/subscriptions`); reads take none,
-  and an UPDATE/DELETE *by id* none either (its policy's USING clause is the scope). It replaced three
+  else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,
+  both share-create routes never act; a delegate's collection-monitoring field is a 403). Its twin `require_acting_account_id` (migration 641) is the caller's own
+  account without the header, else the owner `acting_account_ids()` grants (`403 "no edit share from that
+  account"`): EVERY curation write declares it (`/pipeline/*` writes incl. stages, `POST /collections` `/tags`
+  `/properties/{id}/notes` `/dismissals`, `PUT .../artifact-link`), and `tests/api/test_acting_routes_census.py`
+  pins that it writes only the eleven curation tables. `tenant_conn` reads `X-Act-As` (400 unless a uuid) and
+  sets it + the method as PostgREST's GUCs (an acting GET/HEAD runs READ ONLY, as PostgREST does). Reads take neither dependency, and an UPDATE/DELETE *by id*
+  none either (its policy's USING clause is the scope). It replaced three
   postures: notifications' 400, curation's `SYSTEM` fallback (290 has no SYSTEM arm → a 500), pipeline's `None`.
 
 `SYSTEM_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"` (migration 286) owns a SERVICE-ROLE

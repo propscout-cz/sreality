@@ -6,20 +6,37 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { listTags } from '@/lib/api';
 import { curationKeys, fetchPropertyTagMemberSet } from '@/lib/queries';
 
-export function useCardTags(property_id: number) {
+/* The tag index and the member map — the caller's, or inside <ActingAs> the
+ * owner's (lib/acting). `enabled` false skips both reads (a read-only board
+ * cannot see the owner's tags); `index` / `members` false skips that one (the
+ * filter's tag list needs no whole-set member read, a tag row no index). */
+export function useTagReads({
+  enabled = true,
+  index = true,
+  members = true,
+}: { enabled?: boolean; index?: boolean; members?: boolean } = {}) {
+  const actAs = useActAs();
   const tagsQ = useQuery({
-    queryKey: curationKeys.tags,
-    queryFn: listTags,
+    queryKey: actingKey(actAs, curationKeys.tags),
+    queryFn: () => listTags(...actOpts(actAs)),
     staleTime: 60_000,
+    enabled: enabled && index,
   });
   const membersQ = useQuery({
-    queryKey: curationKeys.propertyTagMembers,
-    queryFn: fetchPropertyTagMemberSet,
+    queryKey: actingKey(actAs, curationKeys.propertyTagMembers),
+    queryFn: ({ signal }) => fetchPropertyTagMemberSet({ signal, actAs }),
     staleTime: 30_000,
+    enabled: enabled && members,
   });
+  return { tagsQ, membersQ };
+}
+
+export function useCardTags(property_id: number) {
+  const { tagsQ, membersQ } = useTagReads();
   const memberIds = useMemo(
     () => new Set(membersQ.data?.get(property_id) ?? []),
     [membersQ.data, property_id],

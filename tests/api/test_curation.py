@@ -717,7 +717,7 @@ def test_update_note_is_one_update_and_no_probe():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("UPDATE property_notes"),
-         [(5, 42, "edited", False, _T0, _T0, None)]),
+         [(5, 42, "edited", False, _T0, _T0, None, None, None)]),
     ])
     out = curation.update_note(conn, 42, 5, _s.UpdateNoteIn(body="edited"))
     assert out["body"] == "edited"
@@ -739,8 +739,8 @@ def test_list_notes_helper_orders_newest_first():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: "FROM property_notes" in q, [
-            (2, 42, "second", False, "2026-05-10T00:00:02+00:00", None, None),
-            (1, 42, "first",  False, "2026-05-10T00:00:01+00:00", None, None),
+            (2, 42, "second", False, "2026-05-10T00:00:02+00:00", None, None, None, None),
+            (1, 42, "first",  False, "2026-05-10T00:00:01+00:00", None, None, None, None),
         ]),
     ])
     out = curation.list_notes(conn, property_id=42)
@@ -752,7 +752,7 @@ def test_create_note_derives_the_legacy_origin_from_the_surrogate_only():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("INSERT INTO property_notes"),
-         [(5, 42, "hi", False, _T0, None, None)]),
+         [(5, 42, "hi", False, _T0, None, None, None, None)]),
     ])
     note = curation.create_note(
         conn, 42, _s.CreateNoteIn(body="hi", origin_listing_ref_id=777), "acct",
@@ -763,10 +763,12 @@ def test_create_note_derives_the_legacy_origin_from_the_surrogate_only():
     assert params == (42, "hi", False, 777, 777, "acct")
     # The one Note shape, in this key order (the SPA and extension read it).
     assert list(note) == [
-        "id", "property_id", "body", "shared", "created_at", "updated_at", "owner_email"]
+        "id", "property_id", "body", "shared", "created_at", "updated_at", "owner_email",
+        "edited_by_email", "edited_at"]
     assert note == {
         "id": 5, "property_id": 42, "body": "hi", "shared": False,
         "created_at": "2026-05-10T00:00:00", "updated_at": None, "owner_email": None,
+        "edited_by_email": None, "edited_at": None,
     }
 
 
@@ -778,7 +780,7 @@ def test_create_note_redirects_merged_away_to_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),  # 99 merged into active 42
         (lambda q: "INSERT INTO property_notes" in q,
-         [(1, 42, "hi", False, datetime(2026, 1, 1), None, None)]),
+         [(1, 42, "hi", False, datetime(2026, 1, 1), None, None, None, None)]),
     ])
     out = curation.create_note(conn, 99, _s.CreateNoteIn(body="hi"), account_id=_ACCT)
     assert out["property_id"] == 42
@@ -857,7 +859,7 @@ def test_update_note_redirects_merged_away_to_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "UPDATE property_notes" in q,
-         [(5, 42, "edited", False, datetime(2026, 1, 1), datetime(2026, 1, 2), None)]),
+         [(5, 42, "edited", False, datetime(2026, 1, 1), datetime(2026, 1, 2), None, None, None)]),
     ])
     out = curation.update_note(conn, 99, 5, _s.UpdateNoteIn(body="edited"))
     assert out["property_id"] == 42
@@ -871,7 +873,7 @@ def test_list_notes_follows_a_merged_away_id_to_the_survivor():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "FROM property_notes" in q,
-         [(5, 42, "on the survivor", False, datetime(2026, 1, 1), None, None)]),
+         [(5, 42, "on the survivor", False, datetime(2026, 1, 1), None, None, None, None)]),
     ])
     out = curation.list_notes(conn, 99)
     assert [n["property_id"] for n in out["data"]] == [42]
@@ -985,7 +987,7 @@ def test_a_shared_collection_names_its_owner_and_reads_monitoring_as_the_callers
     assert out["owner_email"] == "owner@x.cz"
     assert out["shared_with"] == [{"account_id": _RECIPIENT, "email": None}]
     proj = " ".join(curation._COLLECTION_PROJECTION.split())
-    mine = "c.account_id IN (SELECT current_account_ids())"
+    mine = "c.account_id IN (SELECT acting_account_ids())"
     assert f"CASE WHEN {mine} THEN c.monitoring_enabled ELSE false END" in proj
     assert f"CASE WHEN {mine} THEN c.notify_channels ELSE '{{}}'::text[] END" in proj
     assert f"CASE WHEN {mine} THEN NULL ELSE" in proj
@@ -998,8 +1000,10 @@ def test_a_share_of_a_collection_the_caller_does_not_own_is_404_before_any_ident
     with pytest.raises(fastapi.HTTPException) as exc:
         curation.create_share(conn, opener, 7, _s.ShareCollectionIn(email="b@x.cz"))
     assert exc.value.status_code == 404
+    # The gate names the caller's OWN accounts: an edit delegate acting as the owner matches nothing.
     assert [q for q, _ in conn.executed] == [
-        "UPDATE collections SET updated_at = now() WHERE id = %s RETURNING name"]
+        "UPDATE collections SET updated_at = now() "
+        "WHERE id = %s AND account_id IN (SELECT current_account_ids()) RETURNING name"]
     assert opener.opened == 0, "a refused caller must not cost a service-role connection"
 
 
@@ -1065,13 +1069,16 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_c
     assert share[1] == (1, _RECIPIENT) and "ON CONFLICT DO NOTHING RETURNING account_id" in share[0]
     assert len([q for q, _ in identity.executed if "notification_dispatches" in q]) == 1
     sql, params = dispatch
-    assert "VALUES ('collection_share', %s::bigint, 'shared'," in sql
-    assert "account_email(%s::uuid)" in sql
+    # One kind for both shares (migration 641): 'share', collection_id set for a collection.
+    assert "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text," in sql
     # One notification per (collection, recipient) ever: no time in the key, so a revoke +
     # re-share loop cannot refill the recipient's inbox.
-    assert "'share:' || %s::text || ':' || %s::text)" in sql and "epoch" not in sql
-    # (collection, owner for the label, name, recipient = the stamped account, the dedupe key's two)
-    assert params == (1, _OWNER, "Byty", _RECIPIENT, 1, _RECIPIENT)
+    assert "ON CONFLICT DO NOTHING" in sql and "epoch" not in sql
+    # (collection, owner for the label, the text after it, recipient = the stamped account, key)
+    assert params == (
+        1, _OWNER, ' shared the collection "Byty" with you', _RECIPIENT,
+        f"share:collection:1:{_RECIPIENT}",
+    )
     assert identity.tx == ["commit"]
     # The gate ran first, and the response is re-read on the tenant connection.
     assert _gate(conn.executed[0][0]) and "FROM collections c" in conn.executed[-1][0]
@@ -1124,7 +1131,7 @@ def test_create_note_passes_the_shared_mark():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("INSERT INTO property_notes"),
-         [(5, 42, "hi", True, _T0, None, None)]),
+         [(5, 42, "hi", True, _T0, None, None, None, None)]),
     ])
     note = curation.create_note(conn, 42, _s.CreateNoteIn(body="hi", shared=True), "acct")
     assert note["shared"] is True
@@ -1135,7 +1142,7 @@ def test_marking_a_note_shared_is_one_update_that_leaves_updated_at_alone():
     conn = ScriptConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),
         (lambda q: q.startswith("UPDATE property_notes"),
-         [(5, 42, "body", True, _T0, _T0, None)]),
+         [(5, 42, "body", True, _T0, _T0, None, None, None)]),
     ])
     out = curation.update_note(conn, 42, 5, _s.UpdateNoteIn(shared=True))
     assert out["shared"] is True
@@ -1148,7 +1155,19 @@ def test_marking_a_note_shared_is_one_update_that_leaves_updated_at_alone():
 
 def test_a_foreign_note_carries_its_authors_label():
     proj = " ".join(curation._NOTE_PROJECTION.split())
-    assert "CASE WHEN n.account_id IN (SELECT current_account_ids()) THEN NULL ELSE" in proj
+    # Mine = the identity the caller acts as (migration 641): the owner, under X-Act-As.
+    assert "CASE WHEN n.account_id IN (SELECT acting_account_ids()) THEN NULL ELSE" in proj
     assert "share_party_emails()" in proj
-    note = curation._to_note((9, 42, "theirs", True, _T0, None, "b@x.cz"))
+    note = curation._to_note((9, 42, "theirs", True, _T0, None, "b@x.cz", None, None))
     assert note["owner_email"] == "b@x.cz" and note["shared"] is True
+
+
+def test_a_note_carries_its_latest_delegated_edit_labelled_through_the_party_door():
+    proj = " ".join(curation._NOTE_PROJECTION.split())
+    # One stamp definition (migration 641's latest_delegated_edit); a later body edit clears it.
+    latest = "latest_delegated_edit('property_notes', n.id::text, greatest(n.updated_at, n.created_at))"
+    assert f"(SELECT e.email FROM share_party_emails() e WHERE e.account_id = (SELECT l.actor_account_id FROM {latest} l)) AS edited_by_email" in proj
+    assert proj.endswith(f"(SELECT l.at FROM {latest} l) AS edited_at")
+    assert "FROM delegated_edits" not in proj
+    note = curation._to_note((9, 42, "x", False, _T0, None, None, "c@x.cz", _T0))
+    assert note["edited_by_email"] == "c@x.cz" and note["edited_at"] == "2026-05-10T00:00:00"

@@ -202,7 +202,7 @@ export default function ListingCards({
             : total == null
               ? '—'
               : total === 0
-                ? '0 listings'
+                ? '0 properties'
                 : `${loaded.toLocaleString('cs-CZ')} of ${total.toLocaleString('cs-CZ')}`}
         </span>
         <div className="flex items-center gap-2 shrink-0">

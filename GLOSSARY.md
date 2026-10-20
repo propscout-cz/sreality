@@ -168,6 +168,25 @@ A read-only grant of one collection to one account. The owner revokes it, the re
 it; the recipient can never change the collection.
 _Avoid_: invite, membership, access (alone), collaborator
 
+**Pipeline share**:
+A grant of one account's whole pipeline, and with it that account's curation, to another account:
+to view the board only, or to edit the board and the curation. The owner revokes it or changes its mode, the recipient may leave it. Only
+the owner shares their own pipeline.
+_Avoid_: board share, team board, membership, delegation (alone)
+
+**Acting as**:
+Working on another account's curation as that account, through a pipeline share: while acting, the
+pipeline, notes, collections, tags, files, artifact links and dismissals you see and write are the
+owner's and none of your own; everything else (estimations, watchdogs, presets, billing,
+notifications, shares) stays yours. A view-only share acts for reading the board only.
+_Avoid_: impersonate, switch account, log in as, view as; "acting account" for the caller's own
+account (merge and split code say so; write "the caller's account")
+
+**Delegated edit**:
+One change someone made while acting as another account, recorded with who made it and when; only
+the owner sees the record, shown as "edited by" on the note, card or stage until the owner changes it.
+_Avoid_: audit log, activity, change history
+
 **Shared note**:
 A note its author marked for the people they share its property with: readable by the other party
 of any share the author is party to whose collection holds that property, including shares made

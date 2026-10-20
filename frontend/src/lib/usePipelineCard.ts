@@ -21,13 +21,14 @@
 
 import type { QueryClient } from '@tanstack/react-query';
 
+import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { addPipelineCard, movePipelineCard, removePipelineCard } from '@/lib/api';
 import { settlePatches, settleRereads } from '@/lib/curationSettle';
 import { dismissalKeys } from '@/lib/queries';
 import {
   cachedStage,
   dropCard,
-  PIPELINE_REVALIDATE,
+  pipelineRevalidate,
   placeCard,
 } from '@/lib/pipelineCache';
 import type { PipelineStage } from '@/lib/types';
@@ -41,49 +42,64 @@ export interface PipelineMove {
 
 /* A write lands on the members map, then settles the Browse reads it moved
  * (lib/curationSettle, ruling 9). With no cached stage nothing is painted, so
- * there is nothing to judge from and every Browse read re-reads instead. */
-const land = (qc: QueryClient, propertyId: number, stage: PipelineStage | null) =>
-  stage ? [...placeCard(propertyId, stage), ...settlePatches(qc, propertyId, 'pipeline')] : [];
-const reread = (qc: QueryClient, propertyId: number, failed: boolean) => [
-  ...PIPELINE_REVALIDATE,
-  ...settleRereads(qc, propertyId, 'pipeline', failed),
+ * there is nothing to judge from and every Browse read re-reads instead.
+ * Acting as an owner (`actAs`, lib/acting) a write moves the owner's board
+ * entries only: Browse never acts, so it neither settles nor re-reads. */
+const land = (qc: QueryClient, propertyId: number, stage: PipelineStage | null, actAs: string | null) =>
+  stage ? [...placeCard(propertyId, stage, actAs), ...settlePatches(qc, propertyId, 'pipeline', actAs)] : [];
+const reread = (qc: QueryClient, propertyId: number, failed: boolean, actAs: string | null) => [
+  ...pipelineRevalidate(actAs),
+  ...settleRereads(qc, propertyId, 'pipeline', failed, actAs),
 ];
 /* A card at a live stage lifts the caller's dismissal (api/dismissals.py), so
  * a property this device knows as dismissed may re-enter any list that hides
  * dismissals: everything re-reads, as on a restore. */
-const lifts = (qc: QueryClient, propertyId: number, stage: PipelineStage | null) =>
-  stage != null && !stage.is_terminal && qc.getQueryData<boolean>(dismissalKeys.state(propertyId)) === true;
+const lifts = (qc: QueryClient, propertyId: number, stage: PipelineStage | null, actAs: string | null) =>
+  stage != null &&
+  !stage.is_terminal &&
+  qc.getQueryData<boolean>(actingKey(actAs, dismissalKeys.state(propertyId))) === true;
 
 export function usePipelineCard() {
+  /* The mutation keys carry the acting segment too, so the pending index of the
+   * owner's board and the caller's own never answer for each other. */
+  const actAs = useActAs();
   const add = useOptimisticWrite({
-    mutationKey: ['write', 'pipeline', 'add'],
-    mutationFn: (property_id: number) => addPipelineCard(property_id),
+    mutationKey: actingKey(actAs, ['write', 'pipeline', 'add']),
+    mutationFn: (property_id: number) => addPipelineCard(property_id, ...actOpts(actAs)),
     // The entry stage IS the bookmark (rule #22). Unknown until the stage list
     // has loaded — then nothing is painted and the funnel fills when the
     // revalidation lands.
-    patch: (property_id, qc) => land(qc, property_id, cachedStage(qc, 'entry')),
+    patch: (property_id, qc) => land(qc, property_id, cachedStage(qc, 'entry', actAs), actAs),
     revalidate: (property_id, failed, qc) => {
-      const stage = cachedStage(qc, 'entry');
-      return reread(qc, property_id, failed || stage == null || lifts(qc, property_id, stage));
+      const stage = cachedStage(qc, 'entry', actAs);
+      return reread(qc, property_id, failed || stage == null || lifts(qc, property_id, stage, actAs), actAs);
     },
     pendingKey: (property_id) => property_id,
   });
 
   const remove = useOptimisticWrite({
-    mutationKey: ['write', 'pipeline', 'remove'],
-    mutationFn: (property_id: number) => removePipelineCard(property_id),
-    patch: (property_id, qc) => [...dropCard(property_id), ...settlePatches(qc, property_id, 'pipeline')],
-    revalidate: (property_id, failed, qc) => reread(qc, property_id, failed),
+    mutationKey: actingKey(actAs, ['write', 'pipeline', 'remove']),
+    mutationFn: (property_id: number) => removePipelineCard(property_id, ...actOpts(actAs)),
+    patch: (property_id, qc) => [
+      ...dropCard(property_id, actAs),
+      ...settlePatches(qc, property_id, 'pipeline', actAs),
+    ],
+    revalidate: (property_id, failed, qc) => reread(qc, property_id, failed, actAs),
     pendingKey: (property_id) => property_id,
   });
 
   const move = useOptimisticWrite({
-    mutationKey: ['write', 'pipeline', 'move'],
-    mutationFn: ({ propertyId, stageId }: PipelineMove) => movePipelineCard(propertyId, stageId),
-    patch: ({ propertyId, stageId }, qc) => land(qc, propertyId, cachedStage(qc, stageId)),
+    mutationKey: actingKey(actAs, ['write', 'pipeline', 'move']),
+    mutationFn: ({ propertyId, stageId }: PipelineMove) =>
+      /* Not `...actOpts`: the option sits behind the positional board_position,
+       * and outside a provider the call stays the two-argument call it was. */
+      actAs
+        ? movePipelineCard(propertyId, stageId, undefined, { actAs })
+        : movePipelineCard(propertyId, stageId),
+    patch: ({ propertyId, stageId }, qc) => land(qc, propertyId, cachedStage(qc, stageId, actAs), actAs),
     revalidate: ({ propertyId, stageId }, failed, qc) => {
-      const stage = cachedStage(qc, stageId);
-      return reread(qc, propertyId, failed || stage == null || lifts(qc, propertyId, stage));
+      const stage = cachedStage(qc, stageId, actAs);
+      return reread(qc, propertyId, failed || stage == null || lifts(qc, propertyId, stage, actAs), actAs);
     },
     pendingKey: ({ propertyId }) => propertyId,
   });

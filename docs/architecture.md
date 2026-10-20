@@ -803,7 +803,11 @@ rules. Identify which one a task belongs to before you start.
   `/pipeline` on the phone frame is `components/phone/PhonePipeline.tsx`, one swiped page per
   stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
   not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
-  stage management on the phone (#1768).
+  stage management on the phone (#1768). A board shared with me (migration 641) is picked from the
+  same switcher strip above the stage tabs: a read board has no stage sheet and no tag chips or
+  artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
+  remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
+  board, and "Upravit jako", stay desktop-only.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
@@ -821,6 +825,30 @@ rules. Identify which one a task belongs to before you start.
   and the phone property page's first section, one `LocationBody`) is a Mapy static image the API
   streams on every view (`api/routes/property_location.py`; Mapy's terms forbid storing it, so never
   R2, only an hour of private browser cache) — never a WebGL map on the phone.
+- **Acting as a pipeline's owner is one selection, one context, one option, one key segment**
+  (`frontend/src/lib/acting.ts`, migration 641, `docs/design/pipeline-sharing.md` §3.5). The
+  ACTIVE BOARD is a per-device `localStorage` choice (`sreality.pipeline.activeBoard`; "Můj
+  pipeline" = null) written by the Pipeline tab's `BoardSwitcher` and checked against
+  `GET /pipeline/shares` (`lib/pipelineShares.useBoardSelection`; a board the server no longer lists
+  resets to my own with a toast). `<ActingAs share>` is mounted in exactly two places: the Pipeline
+  tab on a shared board (desktop kanban and phone pages), and the desktop property page while the
+  active board is an EDIT share and "Upravit jako {email}" is on (`sreality.pipeline.editAsOwner`,
+  sticky per device until "Ukončit" or any active-board change; the in-page banner sits under the
+  header, never in the 3.5 rem bar; offered only once `GET /pipeline/shares` confirms the board). A
+  change of signed-in account resets the active board (`lib/auth`, beside `queryClient.clear()`), and
+  a change of board drops the board's URL collection/tag scopes (their ids are one account's). Inside it the curation and pipeline hooks prefix every query
+  and mutation key with `actingKey` (`['acting', owner, …]`; outside a provider the key is
+  byte-identical to before) and hand `{ actAs }` to `lib/api` `request` (the `X-Act-As` header) or
+  `pgRead` (`setHeader`); the "Browse never acts" rule lives once, in `lib/curationSettle`
+  (`settlePatches` / `settleRereads` / `browseReads` take `actAs` and answer nothing for it). Only the header's pipeline / collection / dismiss controls and
+  `CurationBlock` (tags, artifact link, notes) are wrapped on the property page; estimations, Valuo,
+  the maps, sold comps, merges, Browse, Collections, Notifications, watchdog, presets and the
+  extension never act, and sharing calls (`/pipeline/shares`, `/collections/{id}/shares`) never
+  carry the header. A read board renders without drag, stage menu, trash, stage editor, tag chips
+  or artifact buttons, and never asks for the owner's tags or collections (not readable under a
+  read share). Delegated stamps go through ONE helper, `lib/delegatedStamp`: the API's
+  `edited_by_email` as is; a board view's `edited_by_account_id` named only from the caller's own
+  `shared_with` list (my own board), else the time alone ("upraveno · …").
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical
@@ -1845,9 +1873,11 @@ renumber.** Navigate by area:
     claim as its row stored it (E960), so a merge is applied only when every advert it moves was
     refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
     engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
-    pass re-claims waiting groups whole, oldest first, 100 adverts on its first attempt, each
-    group at most once in 6 h, and none while the apply scope is closed or the reject ledger is
-    inert. It reconciles only a generation a
+    pass re-claims waiting groups whole, oldest first, 200 adverts on top of its feeds (E971:
+    the worker's memory holds a pass to ~300 adverts), never more than the claim cap a death
+    halves (E948), on its first attempt, each group at most once in 6 h, and none while the
+    apply scope is closed or the reject ledger is inert. It
+    reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) whose build
     phase ended, and review pages default to `rt` under the same condition (else the newest batch
     pass). The brake is the interval (0), then `mode=unapply` — a live apply or unapply refuses
@@ -2093,7 +2123,7 @@ renumber.** Navigate by area:
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
     `notification_dispatches` is the **unified notification event table** (migration 206 —
     physical name kept; conceptually "notifications"): one source-generic, append-only event row per
-    `(source_kind ∈ {watchdog, collection_monitor, collection_share, system_health}, subject,
+    `(source_kind ∈ {watchdog, collection_monitor, share, system_health}, subject,
     change_kind)` — **property-grain** for the first two, a text row for the last two (the
     `SourceKind` alias in `api/notifications.py` is the list),
     deduped by a single per-event **`dedupe_key`** (`wd:{sub}:new:{property_id}` once-ever;
@@ -2222,7 +2252,7 @@ renumber.** Navigate by area:
     freshness (the canary's own keys included); the API tells; the canary watches pg_cron, the
     teller and whether an alarm was heard; the worker's `jobs` check watches every scheduled
     machine, the canary's poller included (wave 3). **The `system_health` arm is
-    one of the two producers (with `collection_share`) that are NOT property-grain** — it is about
+    one of the two producers (with `share`) that are NOT property-grain** — it is about
     the pipeline, not a listing, so `listing_id` / `sreality_id` / `subscription_id` /
     `collection_id` are all NULL, the operator-state merge reconciler has nothing to re-point on it,
     and `compose_message()` sends its stored `message` verbatim as the body instead of building a
@@ -2235,13 +2265,16 @@ renumber.** Navigate by area:
     a red production run is now a `jobs` cell carrying its reason line
     (`scripts/failure_signature.reason_line`), and a portal failing inside the worker a lane cell.
     Delivery, watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
-    **A FOURTH producer is live (migration 610): `collection_share`.** `POST
-    /collections/{id}/shares` writes ONE dispatch per (collection, recipient) ever (`dedupe_key`
-    `share:<collection>:<recipient>`, no time: a revoke + re-share loop cannot refill an inbox) —
-    `collection_id` set, `subscription_id` NULL (`notification_dispatches_source_ck` gained the
-    arm), `change_kind = 'shared'`, `message` "<owner email> shared the collection "<name>" with
-    you" (the one stored copy of an email in the sharing model, a snapshot at share time), in-app
-    only (`target_channels` empty, never routed to email/Telegram). It is stamped to
+    **A FOURTH producer is live (migration 610, one kind for both shares since 641): `share`.**
+    `api/shares.py` writes it for a collection share (`POST /collections/{id}/shares`: ONE dispatch
+    per (collection, recipient) ever, `dedupe_key` `share:collection:<collection>:<recipient>`, no
+    time: a revoke + re-share loop cannot refill an inbox; `collection_id` set; "<owner email> shared
+    the collection "<name>" with you") and for a pipeline share (`POST /pipeline/shares`: one per
+    (owner, recipient, mode), `share:pipeline:<owner>:<recipient>:<mode>`, written when the grant is
+    new or widens to edit; `collection_id` NULL; "<owner email> shared their pipeline with you (view
+    only|edit)") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
+    in the sharing model (a snapshot at share time), in-app only (`target_channels` empty, never
+    routed to email/Telegram). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
     `sync_notification_dispatches_account_id()` trigger KEEPS the supplied account for this kind
     and raises when none is supplied. Like `system_health` it is NOT property-grain
@@ -2513,6 +2546,30 @@ renumber.** Navigate by area:
     label definition; a shared collection reads `monitoring_enabled = false` (alerts stay the
     owner's). A share is keyed on the collection, which a merge never changes, so it needs no
     carrier; the `shared` mark rides the note through a merge and a split's copy.
+    **Acting as the owner (migration 641, `docs/design/pipeline-sharing.md`): a pipeline share
+    REPLACES the identity on curation, it never widens it.** `pipeline_shares` (owner, recipient,
+    mode `read|edit`; browser SELECT + DELETE, no INSERT) lets the recipient send `X-Act-As:
+    <owner account>`; on that request, and only on the eleven curation tables (`collections`,
+    `tags`, `property_notes`, `collection_properties`, `property_tags`, `property_note_attachments`,
+    `property_artifact_links`, `property_dismissals`, `property_pipeline`, `pipeline_stages`,
+    `property_pipeline_events`), whose policies read `acting_account_ids()` instead of
+    `current_account_ids()`, the caller IS the owner: an `edit` share reads and writes all eleven;
+    a `read` share reads the board only — the three pipeline tables, whose policies pass
+    `acting_account_ids(true)` (ruling 2) — and only on GET/HEAD (`request.method`, set by
+    PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs an acting GET READ ONLY). Without the header the two functions agree; a header
+    naming no live share yields an EMPTY identity (fail closed). Every other table — billing,
+    estimations, watchdog, presets, notifications, both share tables — stays the caller's own. A
+    tenant write route declares which account it writes: `tenant_pool.require_acting_account_id`
+    (the eleven tables only, pinned by `tests/api/test_acting_routes_census.py`) or
+    `require_account_id` (always the caller's own; 403 under the header — watchdog, presets, the stats
+    board, both share-create routes: sharing itself; a delegate may not set the owner's collection
+    monitoring either). Every write made while acting is stamped in `delegated_edits` (actor user
+    + account, owner, relation, row key, op, time) by ONE trigger function on the eleven tables; only
+    the owner reads it, and notes, cards and the board views carry the row's stamp
+    (`edited_by_email` / `edited_by_account_id` + `edited_at`) from ONE definition,
+    `latest_delegated_edit()` (cleared once the owner changes the row), labelled through
+    `share_party_emails()`, now over both share kinds and the owner's own ledger actors. The ledger names rows, not properties, so it
+    needs no carrier; cards and curation stay owned by exactly one account.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
     groupings, a dismissal is one boolean per property, and a pseudo-collection would need a
@@ -2880,7 +2937,14 @@ renumber.** Navigate by area:
     curated-index precedent). Every account gets its own copy of the default board at signup
     (`seed_default_pipeline`, migration 612), and every stage reference — the card's and the
     event ledger's `from_stage_id` / `to_stage_id` — is account-qualified (a composite FK onto
-    `pipeline_stages (account_id, id)`). **A "bookmark / interested" is
+    `pipeline_stages (account_id, id)`). **A board is shared by account, never copied (migration
+    641):** an owner shares it with an email (`POST /pipeline/shares {email, mode}`; `GET` lists
+    `shared_with` + `shared_with_me`, `DELETE /pipeline/shares/{account_id}?side=` revokes or leaves),
+    and the recipient opens it by ACTING AS the owner (`X-Act-As`, rule 18): a `read` share sees the
+    owner's stages and cards, an `edit` share also moves, adds and removes cards and manages the
+    owner's stages, every such write stamped in `delegated_edits`. The board stays one account's —
+    one entry stage, one card per property — because acting replaces the identity, never unions two
+    boards. Sharing itself is never delegated. **A "bookmark / interested" is
     just the entry stage** (`pipeline_stages.is_entry`), not a separate flag: presence of a
     `property_pipeline` row == the property is in the pipeline. Single-valued-ness is why it
     can't live at advert grain (unlike the m2m curation of rule #18) — so it gets its OWN

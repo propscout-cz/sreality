@@ -9,7 +9,7 @@ import { createElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { browseKeys } from './browseKeys';
-import { settleMemberWrite, settlePatches, settleRereads, type CurationLens } from './curationSettle';
+import { browseReads, settleMemberWrite, settlePatches, settleRereads, type CurationLens } from './curationSettle';
 import { DEFAULT_FILTERS, type ListingFilters } from './filters';
 import { curationKeys, DEFAULT_SORT, dismissalKeys, pipelineKeys, type PipelineMembers } from './queries';
 import type { SetScope } from './setScope';
@@ -245,6 +245,19 @@ describe('the optimistic halves', () => {
   it('a failed write re-reads every Browse surface', () => {
     const qc = new QueryClient();
     expect(settleRereads(qc, P, 'pipeline', true)).toEqual([...browseKeys.all]);
+  });
+
+  it('a write made as a pipeline\'s owner settles and re-reads no Browse read — Browse never acts', () => {
+    const qc = new QueryClient();
+    const f = filters({ pipeline: scope({ set: 'out' }) });
+    seed(qc, f, [[P, 1]]);
+    qc.setQueryData(pipelineKeys.members, members([]));
+    expect(settlePatches(qc, P, 'pipeline')).not.toEqual([]);
+    expect(settlePatches(qc, P, 'pipeline', 'owner-1')).toEqual([]);
+    expect(settleRereads(qc, P, 'pipeline', false, 'owner-1')).toEqual([]);
+    expect(settleRereads(qc, P, 'pipeline', true, 'owner-1')).toEqual([]);
+    expect(browseReads('owner-1', browseKeys.all)).toEqual([]);
+    expect(browseReads(null, browseKeys.all)).toEqual([...browseKeys.all]);
   });
 });
 

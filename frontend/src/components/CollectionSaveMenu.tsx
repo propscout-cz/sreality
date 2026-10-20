@@ -30,6 +30,7 @@ import {
   addPropertiesToCollection,
   removePropertyFromCollection,
 } from '@/lib/api';
+import { actOpts, useActAs } from '@/lib/acting';
 import { settleCollectionWrite, useCollections } from '@/lib/collectionCache';
 import { ROUTES } from '@/lib/routes';
 
@@ -85,8 +86,13 @@ const SIZES = {
 } as const;
 
 const WORDS = {
-  popover: { heading: 'Save to collection', loading: 'Loading…', create: 'Create a collection →' },
-  sheet: { heading: null, loading: 'Načítám…', create: 'Založit sbírku →' },
+  popover: {
+    heading: 'Save to collection',
+    loading: 'Loading…',
+    create: 'Create a collection →',
+    ownerHasNone: 'The owner has no collections',
+  },
+  sheet: { heading: null, loading: 'Načítám…', create: 'Založit sbírku →', ownerHasNone: 'Vlastník nemá žádné sbírky' },
 } as const;
 
 export function CollectionSaveList({
@@ -104,14 +110,15 @@ export function CollectionSaveList({
   /* Mine only: a collection shared with me is view-only, so it is never a
    * target here (no disabled variant to explain). */
   const { mine, query: collectionsQ } = useCollections();
+  const actAs = useActAs();
 
   const add = useMutation({
-    mutationFn: (cid: number) => addPropertiesToCollection(cid, [property_id]),
-    onSuccess: (_, cid) => settleCollectionWrite(qc, property_id, cid, true),
+    mutationFn: (cid: number) => addPropertiesToCollection(cid, [property_id], ...actOpts(actAs)),
+    onSuccess: (_, cid) => settleCollectionWrite(qc, property_id, cid, true, actAs),
   });
   const remove = useMutation({
-    mutationFn: (cid: number) => removePropertyFromCollection(cid, property_id),
-    onSuccess: (_, cid) => settleCollectionWrite(qc, property_id, cid, false),
+    mutationFn: (cid: number) => removePropertyFromCollection(cid, property_id, ...actOpts(actAs)),
+    onSuccess: (_, cid) => settleCollectionWrite(qc, property_id, cid, false, actAs),
   });
   const pending = add.isPending || remove.isPending;
 
@@ -146,9 +153,15 @@ export function CollectionSaveList({
           </button>
         </p>
       ) : sorted.length === 0 ? (
-        <Link to={ROUTES.collections.build()} className={cls.create}>
-          {words.create}
-        </Link>
+        /* The Collections page never acts: a collection made there would be
+         * mine, not the owner's this list writes to. */
+        actAs ? (
+          <p className={cls.note}>{words.ownerHasNone}</p>
+        ) : (
+          <Link to={ROUTES.collections.build()} className={cls.create}>
+            {words.create}
+          </Link>
+        )
       ) : (
         <ul className={cls.list}>
           {sorted.map((c) => {

@@ -14,7 +14,6 @@ TENANT_TABLES: tuple[str, ...] = (
     "property_notes",
     "filter_presets",
     "notification_subscriptions",
-    "manual_rental_estimates",
     "collection_properties",
     "property_tags",
     "notification_dispatches",
@@ -35,4 +34,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "collection_shares",
     # Migration 626: the Stats board, one row per account; the SPA reads it, the API writes it.
     "stats_dashboards",
+    # Migration 641: account_id = the owner; browser roles SELECT + DELETE, never INSERT.
+    # (delegated_edits is not here: browser roles only SELECT it, and it names its owner
+    # `owner_account_id`.)
+    "pipeline_shares",
 )

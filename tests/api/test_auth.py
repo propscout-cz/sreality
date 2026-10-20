@@ -24,6 +24,7 @@ from api import feedback as api_feedback
 from api import main as api_main
 from api import maps as api_maps
 from api import pipeline as api_pipeline
+from api import shares as api_shares
 from api import tenant_pool
 from scraper import url_parser as scraper_url_parser
 
@@ -128,7 +129,7 @@ def client(monkeypatch):
     # POST /estimations/{id}/feedback opens its own short tenant transaction in the
     # handler (verify_jwt stays its route dependency, so this census still gates it).
     @contextlib.contextmanager
-    def _stub_tenant_transaction(claims: dict):
+    def _stub_tenant_transaction(claims: dict, *, act_as: object, method: str):
         yield object()
 
     monkeypatch.setattr(tenant_pool, "tenant_transaction", _stub_tenant_transaction)
@@ -245,6 +246,15 @@ def client(monkeypatch):
         },
     )
 
+    monkeypatch.setattr(
+        api_shares, "list_pipeline_shares",
+        lambda conn: {"shared_with": [], "shared_with_me": []},
+    )
+    monkeypatch.setattr(api_shares, "grant", lambda open_identity_conn, email, share: None)
+    monkeypatch.setattr(
+        api_shares, "revoke_pipeline", lambda conn, party, side: {"deleted": True},
+    )
+
     monkeypatch.setattr(api_maps, "suggest", lambda *a, **kw: {"items": []})
     monkeypatch.setattr(
         api_maps,
@@ -319,6 +329,9 @@ def _jwt_gated_calls() -> list:
         ("POST",   "/pipeline/cards", _PIPELINE_CARD_BODY),
         ("PATCH",  "/pipeline/cards/1", {"stage_id": 1}),
         ("DELETE", "/pipeline/cards/1", None),
+        ("GET",    "/pipeline/shares", None),
+        ("POST",   "/pipeline/shares", {"email": "b@example.com", "mode": "read"}),
+        ("DELETE", "/pipeline/shares/33333333-3333-3333-3333-333333333333?side=shared_with", None),
         ("POST",   "/estimations", _CREATE_ESTIMATION_BODY),
         ("GET",    "/estimations/1", None),
         ("PATCH",  "/estimations/1/scenario", {"rent_czk": 15000}),
@@ -595,6 +608,6 @@ def test_tenant_conn_without_pool_dsn_raises(monkeypatch):
     a silently unscoped service-role connection, which is how the bad-DSN
     incident stayed invisible (roadmap/public-release-track.md)."""
     monkeypatch.delenv("TENANT_POOL_DB_URL", raising=False)
-    gen = tenant_pool.tenant_conn(claims={"sub": _ACCT})
+    gen = tenant_pool.tenant_conn(claims={"sub": _ACCT}, act_as=None, method="GET")
     with pytest.raises(RuntimeError, match="TENANT_POOL_DB_URL"):
         next(gen)

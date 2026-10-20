@@ -4,8 +4,7 @@
  * The header shows the property exactly as its Browse card does: the
  * `properties_public` row, whose advert fields are its canonical advert's and
  * whose physical facts are the first non-empty in the same order (migration 561,
- * decision 18). Photos, manual estimates and freshness checks are that canonical
- * advert's. The brokers are a list over the adverts (MS7), the price chart draws
+ * decision 18). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
  * every advert's own line (MS9), and a lowest active price that differs from the
  * header's is named under it (MS8). The merged-adverts section is the only list
  * of adverts, each advert's own facts in its row; `?advert=<id>` opens that row.
@@ -56,6 +55,9 @@ import DismissButton from '@/components/DismissButton';
 import CollectionSaveToggle from '@/components/listing-detail/CollectionSaveToggle';
 import ExternalMapLinks from '@/components/listing-detail/ExternalMapLinks';
 import DownloadPropertyButton from '@/components/listing-detail/DownloadPropertyButton';
+import { ActingBanner, EditAsOwnerToggle } from '@/components/listing-detail/EditAsOwner';
+import { ActingAs, useEditAsOwnerShare } from '@/lib/acting';
+import { useBoardSelection } from '@/lib/pipelineShares';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { Hairline, SectionLabel } from '@/components/section';
 import MergedAdvertsSection from '@/components/listing-detail/MergedAdvertsSection';
@@ -71,9 +73,6 @@ import type { PastedLinkState } from '@/pages/Link';
 export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
-);
-const ManualEstimatesBlock = lazyChunk(
-  () => import('@/components/listing-detail/ManualEstimatesBlock'),
 );
 const SoldCompsBlock = lazyChunk(
   () => import('@/components/listing-detail/SoldCompsBlock'),
@@ -212,6 +211,23 @@ export default function PropertyDetail() {
   // estimation runs. Read above the early returns (#310); the reads stay here.
   const phone = usePhoneShell();
 
+  // The active board (kept honest against GET /pipeline/shares while a shared
+  // one is set) and, on an EDIT share with "Upravit jako" on, the share the
+  // curation controls act through (design §3.5). Desktop only (the phone
+  // never reads the lists); above the early returns (#310). Nothing is offered
+  // or acted on until the server's lists confirm the remembered board: this
+  // device may remember a board another sign-in picked.
+  const { active: rememberedBoard, sharesQ } = useBoardSelection({ always: false, enabled: !phone });
+  const activeBoard =
+    rememberedBoard != null &&
+    sharesQ.data?.shared_with_me.some(
+      (s) => s.account_id === rememberedBoard.account_id && s.mode === rememberedBoard.mode,
+    )
+      ? rememberedBoard
+      : null;
+  const editAsShare = useEditAsOwnerShare();
+  const actingShare = activeBoard != null ? editAsShare : null;
+
   if (propertyId == null) return <NotFoundState id={idParam ?? null} />;
   if (propertyQ.isLoading) return <LoadingState />;
   if (propertyQ.error) return <FailedState error={propertyQ.error} />;
@@ -252,13 +268,21 @@ export default function PropertyDetail() {
             it — all property-grain (rule #18) — then download the ad (a PDF + the
             gallery's photos) and run a new estimation. */}
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <PipelineToggle property_id={propertyId} />
-          <CollectionSaveToggle property_id={propertyId} />
-          <DismissButton property_id={propertyId} variant="header" />
+          {activeBoard?.mode === 'edit' && (
+            <EditAsOwnerToggle share={activeBoard} on={actingShare != null} />
+          )}
+          {/* Keyed by the identity: a menu or draft never carries over from
+              myself to the owner, nor back. */}
+          <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+            <PipelineToggle property_id={propertyId} />
+            <CollectionSaveToggle property_id={propertyId} />
+            <DismissButton property_id={propertyId} variant="header" />
+          </ActingAs>
           <DownloadPropertyButton propertyId={propertyId} images={images} />
           <NewEstimationButton prefill={newEstimationPrefill} />
         </div>
       </div>
+      {actingShare && <ActingBanner share={actingShare} />}
       <ListingOverview
         listing={property}
         priceNote={priceNote}
@@ -283,7 +307,9 @@ export default function PropertyDetail() {
              under the description and above the estimates: what the operator
              has already decided about this property comes before the numbers. */
           <Suspense fallback={<Skeleton height={140} />}>
-            <CurationBlock property_id={propertyId} listing_id={property.id} />
+            <ActingAs key={actingShare?.account_id ?? 'own'} share={actingShare}>
+              <CurationBlock property_id={propertyId} listing_id={property.id} />
+            </ActingAs>
           </Suspense>
         }
         estimatesSlot={
@@ -322,15 +348,6 @@ export default function PropertyDetail() {
         </>
       )}
       <Hairline />
-      <Suspense fallback={<Skeleton height={120} />}>
-        {/* Manual estimates + freshness checks are stored against the legacy
-            sreality_id, so both are empty by construction for a non-sreality
-            advert. Curation above is property-grain and stays rendered. */}
-        {property.sreality_id != null && (
-          <ManualEstimatesBlock sreality_id={property.sreality_id} />
-        )}
-      </Suspense>
-      <Hairline />
       <Suspense fallback={<Skeleton height={160} />}>
         {/* The only REALIZED prices on the page — registered sales near this
             point, which is why they sit beside the estimates rather than with
@@ -356,6 +373,8 @@ export default function PropertyDetail() {
         snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
       />
       <Hairline />
+      {/* Freshness checks are stored against the legacy sreality_id: empty by
+          construction for a non-sreality advert. */}
       {property.sreality_id != null && (
         <FreshnessBlock sreality_id={property.sreality_id} checks={checksQ.data ?? []} />
       )}

@@ -644,7 +644,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     /manual_estimates/{id}` take `require_admin` (migration 290: every account reads, only
     platform admins write) and stamp the admin into `updated_by` (+ `account_id` on insert); the
     SPA sends `jwt: true` and shows the controls only to admins; the `GET` read is unchanged.
-    Behaviour: `tests/api/test_manual_estimates.py`. **DONE 2026-10-12 — `/filter-presets*`**
+    (All four routes retired 2026-10-19 with the feature, migrations 638/639.) **DONE 2026-10-12 — `/filter-presets*`**
     (ticket #1761, Phone app W1): every route rides `verify_jwt` + `tenant_conn`, so migration
     290's policy scopes the reads, the reorder and UPDATE/DELETE by id; `POST` stamps the
     account from `require_account_id`; migration 595 backfills ownerless rows to the operator's

@@ -805,6 +805,22 @@ def test_a_group_tried_lately_is_not_offered_again_and_old_stamps_expire() -> No
         "a group no claim can refresh sorts last")
 
 
+def test_the_re_claim_budget_is_what_the_worker_s_memory_leaves_beside_the_feeds() -> None:
+    """E971: the re-claims ride ON TOP of the feeds' limit, and a pass holds ~6 GB plus ~4.5 GB
+    a hundred claimed adverts against the worker's 22,888 MB, so ~300 claimed in all; 200 beside
+    the 16-39 the feeds brought a pass on 2026-10-20 stays under it. 250 waiting adverts in
+    two-advert groups yield 200 at the default budget: 100 whole groups, oldest wait first."""
+    assert reconcile.STALE_FLOOR == 200
+    now = datetime(2026, 10, 20, 6, 0, tzinfo=timezone.utc)
+    groups = [[2 * k, 2 * k + 1] for k in range(125)]
+    ages = {i: (now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1 + i), True)
+            for group in groups for i in group}
+    taken, stamps = reconcile.select_claims(groups, ages, {}, now)
+    assert len(taken) == reconcile.STALE_FLOOR == 200
+    assert set(taken) == set(range(50, 250)), "the oldest hundred groups, whole"
+    assert len(stamps) == 100, "only the groups taken are stamped tried"
+
+
 def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(
         monkeypatch: pytest.MonkeyPatch) -> None:
     """The review's livelock (E960): seventy three-advert groups, each with two moved members,
@@ -1537,6 +1553,20 @@ def test_only_a_claim_the_clock_cut_and_filled_doubles(claimed: int, bound: dict
     rate, doubled = _measure_rate(claimed, 200.0, 2.0, bound)
     assert (rate, doubled) == (round(0.5 * claimed / 200.0 + 0.5 * 2.0, 6), False)
     assert rate < 4.0
+
+
+def test_the_re_claims_on_top_of_the_limit_fill_none_of_it() -> None:
+    """E971 at 2026-10-20 06:04Z's rate (0.437855: a limit of 229): 200 re-claims and 30 from
+    the feeds in 480 s are measured (the quotient counts every advert) but blended, not doubled
+    — the clock cut the feeds' 30, not the re-claims; the same feeds filling the limit double."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.437855
+    bound = {**_bound("time", int(525.0 * rate), 525.0), "stale": 200}
+    assert bound["limit"] == 229
+    assert _measure_rate(230, 480.0, rate, bound) == (
+        round(0.5 * 230 / 480.0 + 0.5 * rate, 6), False)
+    assert _measure_rate(429, 480.0, rate, bound) == (round(2.0 * rate, 6), True)
 
 
 class _LaneClock:

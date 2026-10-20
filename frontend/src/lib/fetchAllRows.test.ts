@@ -24,6 +24,7 @@ import type { PgBuilder } from './pgRead';
 const reply = (
   envelope: PostgrestSingleResponse<unknown>,
   signals?: AbortSignal[],
+  headers?: Array<[string, string]>,
 ): PgBuilder & { abortSignal(s: AbortSignal): unknown } => {
   const b = {
     then: <A = PostgrestSingleResponse<unknown>, B = never>(
@@ -31,6 +32,10 @@ const reply = (
       onR?: ((e: unknown) => B | PromiseLike<B>) | null,
     ) => Promise.resolve(envelope).then(onF, onR),
     retry: () => b,
+    setHeader: (name: string, value: string) => {
+      headers?.push([name, value]);
+      return b;
+    },
     abortSignal: (s: AbortSignal) => {
       signals?.push(s);
       return b;
@@ -54,6 +59,7 @@ function fakeServer(rows: Row[], { clamp = Infinity, exactCount = false } = {}) 
   const orderCalls: OrderSpec[][] = [];
   const rangeCalls: Array<[number, number]> = [];
   const signals: AbortSignal[] = [];
+  const headers: Array<[string, string]> = [];
   const build = (): PageBuilder => {
     const applied: OrderSpec[] = [];
     orderCalls.push(applied);
@@ -76,12 +82,13 @@ function fakeServer(rows: Row[], { clamp = Infinity, exactCount = false } = {}) 
             statusText: 'OK',
           },
           signals,
+          headers,
         );
       },
     };
     return builder;
   };
-  return { build, orderCalls, rangeCalls, signals };
+  return { build, orderCalls, rangeCalls, signals, headers };
 }
 
 const opts = { relation: 'test', orderBy: [{ column: 'id' }], key: ['id'] as const };
@@ -183,6 +190,19 @@ describe('fetchAllRows', () => {
     expect(srv.signals.some((s) => s.aborted)).toBe(false);
     ctrl.abort();
     expect(srv.signals.every((s) => s.aborted)).toBe(true);
+  });
+
+  it('acts as the owner on every page, and on none without one (migration 641)', async () => {
+    const acting = fakeServer(makeRows(2500), { exactCount: true });
+    await fetchAllRows<Row>({ ...opts, build: acting.build, expectMax: 10_000, actAs: 'owner-1' });
+    expect(acting.headers).toEqual([
+      ['x-act-as', 'owner-1'],
+      ['x-act-as', 'owner-1'],
+      ['x-act-as', 'owner-1'],
+    ]);
+    const own = fakeServer(makeRows(2500), { exactCount: true });
+    await fetchAllRows<Row>({ ...opts, build: own.build, expectMax: 10_000 });
+    expect(own.headers).toEqual([]);
   });
 
   describe('exact-count fast path (W2b)', () => {

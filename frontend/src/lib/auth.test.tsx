@@ -6,7 +6,8 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
+import { ACTIVE_BOARD_KEY, EDIT_AS_OWNER_KEY, getActiveBoard, setActiveBoard, setEditAsOwner } from './acting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const h = vi.hoisted(() => ({
@@ -175,6 +176,24 @@ describe('AuthProvider session bootstrap', () => {
     expect(qc.getQueryData(['session', 'agendas', 'user-1'])).toBeNull();
     expect(getByTestId('agendas').textContent).toBe('null');
     expect(h.reads.filter((r) => r === 'plans')).toHaveLength(1);
+  });
+
+  it('forgets the previous account\'s pipeline board and "edit as owner" on an identity change', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    act(() => {
+      setActiveBoard({ account_id: 'owner-1', email: 'jana@example.cz', mode: 'edit' });
+      setEditAsOwner(true);
+    });
+    expect(getActiveBoard()).not.toBeNull();
+
+    for (const cb of h.listeners) cb('SIGNED_OUT', null);
+
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(localStorage.getItem(ACTIVE_BOARD_KEY)).toBeNull();
+    expect(localStorage.getItem(EDIT_AS_OWNER_KEY)).toBeNull();
   });
 
   it('does not clear the cache on the first sign-in of a session', async () => {

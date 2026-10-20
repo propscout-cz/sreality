@@ -110,7 +110,7 @@ export interface BrowseFeatures {
   presetBar?: boolean;
   /* "Create watchdog" CTA + name-prompt modal. */
   watchdog?: boolean;
-  /* Dedup merge mode toggle on the Listings cards — page only. */
+  /* Dedup merge mode toggle on the Properties cards — page only. */
   mergeMode?: boolean;
   /* The big "Browse" heading in the summary block — hidden in the modal,
    * which has its own header. */
@@ -253,7 +253,7 @@ export default function BrowseExperience({
   const cardImageLarge = useCardImageLarge();
   const cardCoverTag = useCardCoverTag();
   const sortOrderPortal = orderPortal(filters, sort);
-  /* The map is only present on the Listings tab AND only when not collapsed —
+  /* The map is only present on the Properties tab AND only when not collapsed —
    * the single source of truth the data-fetch gates and the layout both read,
    * so they can never disagree. */
   const mapVisible = tab === 'map' && !mapCollapsed.value;
@@ -609,7 +609,7 @@ export default function BrowseExperience({
   ]);
 
   const tabs: ReadonlyArray<Tab<TabKey>> = [
-    { key: 'map', label: 'Listings', badge: cohortTotal?.toLocaleString('cs-CZ') },
+    { key: 'map', label: 'Properties', badge: cohortTotal?.toLocaleString('cs-CZ') },
     { key: 'table', label: 'Table' },
     ...(f.stats ? [{ key: 'stats', label: 'Stats' } as Tab<TabKey>] : []),
   ];
@@ -1061,7 +1061,7 @@ function MapSkeleton() {
   );
 }
 
-/* Listings-tab layout switch: fold the map panel away to give the cards the
+/* Properties-tab layout switch: fold the map panel away to give the cards the
  * full width (they reflow to more columns automatically), or bring it back.
  * Reuses the app's segmented-control idiom (LocationModeSection): paper-2
  * track, copper-fill active, borders-only — civic-archive consistent. The
@@ -1083,7 +1083,7 @@ function MapViewToggle({
   return (
     <div
       role="group"
-      aria-label="Listings layout"
+      aria-label="Properties layout"
       className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]"
     >
       <button

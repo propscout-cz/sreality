@@ -7,7 +7,7 @@
  * remove flow (stage moves are drag-only; the select fallback was removed).
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -19,6 +19,14 @@ import * as queries from '@/lib/queries';
 import * as brokersApi from '@/lib/brokers';
 import { createMutationCache } from '@/lib/mutationCache';
 import * as toast from '@/lib/toast';
+import {
+  ACTIVE_BOARD_KEY,
+  getActiveBoard,
+  reloadActingStore,
+  resetActiveBoard,
+  setActiveBoard,
+} from '@/lib/acting';
+import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -34,6 +42,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     attachTag: vi.fn(),
     detachTag: vi.fn(),
     fetchArtifactLinks: vi.fn(),
+    listPipelineShares: vi.fn(),
+    sharePipeline: vi.fn(),
+    unsharePipeline: vi.fn(),
+    createPipelineStage: vi.fn(),
   };
 });
 
@@ -233,9 +245,13 @@ function renderBoard(entry = '/pipeline') {
   );
 }
 
+/* Nobody shares a board with me unless a test says so (migration 641). */
+const NO_SHARES = { shared_with: [], shared_with_me: [] };
+
 describe('<Pipeline> board', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(api.listPipelineShares).mockResolvedValue(NO_SHARES);
     vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
     vi.mocked(api.attachTag).mockResolvedValue({ attached: true });
     vi.mocked(api.detachTag).mockResolvedValue({ detached: true });
@@ -827,5 +843,211 @@ describe('<Pipeline> board', () => {
     expect(button).toHaveTextContent('Artifact');
     // The card without a link offers nothing.
     expect(screen.getAllByRole('link', { name: /^Artifact:/ })).toHaveLength(1);
+  });
+});
+
+/* Pipeline sharing (migration 641, design §3.5): the switcher, a shared board
+ * read through <ActingAs> (the owner's rows under the acting header), the read
+ * board's gating, the edit board's tools, my own board's Sharing block, the
+ * viewer's leave, and a revoked board falling back to my own. */
+describe('<Pipeline> shared boards', () => {
+  const READ = { account_id: 'owner-r', email: 'petr@example.cz', mode: 'read' as const };
+  const EDIT = { account_id: 'owner-e', email: 'jana@example.cz', mode: 'edit' as const };
+
+  beforeEach(() => {
+    localStorage.clear();
+    reloadActingStore();
+    for (const fn of [
+      toast.pushToast,
+      api.listTags,
+      api.fetchArtifactLinks,
+      api.unsharePipeline,
+      api.sharePipeline,
+      api.createPipelineStage,
+      api.removePipelineCard,
+    ]) {
+      vi.mocked(fn).mockClear();
+    }
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [READ, EDIT] });
+    vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map([[42, [5]]]));
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
+    vi.mocked(queries.fetchListingCovers).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPropertySourcesByPropertyIds).mockResolvedValue(new Map());
+    vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(new Map());
+    vi.mocked(api.listCollections).mockResolvedValue({ data: COLLECTIONS, total: COLLECTIONS.length });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  });
+  afterEach(() => resetActiveBoard());
+
+  it('lists my board and every board shared with me, and remembers the pick', async () => {
+    renderBoard();
+    const switcher = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    expect(within(switcher).getByRole('button', { name: 'Můj pipeline' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(switcher).getByRole('button', { name: 'jana@example.cz · úpravy' }));
+    /* The page starts afresh on the picked board (keyed by it), switcher included. */
+    const after = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    expect(within(after).getByRole('button', { name: 'jana@example.cz · úpravy' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(within(after).getByRole('button', { name: 'Můj pipeline' })).toHaveAttribute('aria-pressed', 'false');
+    expect(JSON.parse(localStorage.getItem(ACTIVE_BOARD_KEY) ?? 'null')).toEqual(EDIT);
+    /* The owner's board is read as the owner: the header rides every read. */
+    await waitFor(() =>
+      expect(queries.fetchPipelineBoard).toHaveBeenLastCalledWith(expect.objectContaining({ actAs: 'owner-e' })),
+    );
+  });
+
+  it('drops my tag / collection scope on a switch — its ids are my sets, not the owner\'s', async () => {
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockImplementation(async (opts) =>
+      opts?.actAs ? new Map() : new Map([[42, [5]]]),
+    );
+    renderBoard('/pipeline?tags=5');
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    const switcher = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    fireEvent.click(within(switcher).getByRole('button', { name: 'jana@example.cz · úpravy' }));
+    await waitFor(() =>
+      expect(queries.fetchPropertyTagMemberSet).toHaveBeenCalledWith(expect.objectContaining({ actAs: 'owner-e' })),
+    );
+    /* Kept, my tag 5 would match none of the owner's cards: an empty board. */
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+  });
+
+  it('shows a read board without drag, trash, stage editor, tags or sharing', async () => {
+    setActiveBoard(READ);
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(queries.fetchPipelineStages).toHaveBeenLastCalledWith(expect.objectContaining({ actAs: 'owner-r' }));
+    expect(screen.queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Odebrat z pipeline' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Spravovat fáze' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Sdílení/ })).toBeNull();
+    expect(screen.queryByText('k prohlídce')).toBeNull();
+    /* The owner's curation is not readable under a read share: not even asked for. */
+    expect(api.listTags).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
+    expect(api.fetchArtifactLinks).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
+    expect(screen.getByText('petr@example.cz')).toBeInTheDocument();
+    expect(screen.getByText(/jen ke čtení/, { selector: 'span' })).toBeInTheDocument();
+  });
+
+  it('gives an edit board drag, trash, the stage editor and the owner\'s tags — all as the owner', async () => {
+    vi.mocked(api.createPipelineStage).mockResolvedValue(STAGES[0]);
+    setActiveBoard(EDIT);
+    renderBoard();
+    expect(await screen.findByLabelText('Přetáhnout kartu do jiné fáze')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Odebrat z pipeline' })).toBeInTheDocument();
+    expect(await screen.findByText('k prohlídce')).toBeInTheDocument();
+    expect(api.listTags).toHaveBeenCalledWith({ actAs: 'owner-e' });
+    expect(screen.queryByRole('button', { name: /^Sdílení/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Spravovat fáze' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Nová fáze' }), { target: { value: 'Prohlídka' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat' }));
+    await waitFor(() =>
+      expect(api.createPipelineStage).toHaveBeenCalledWith({ label: 'Prohlídka' }, { actAs: 'owner-e' }),
+    );
+  });
+
+  it('removes a card from an edit board as the owner', async () => {
+    vi.mocked(api.removePipelineCard).mockResolvedValue({ removed: true });
+    setActiveBoard(EDIT);
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Odebrat z pipeline' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Odebrat' }));
+    await waitFor(() => expect(api.removePipelineCard).toHaveBeenCalledWith(42, { actAs: 'owner-e' }));
+  });
+
+  it('leaves a shared board in two steps and lands back on my own', async () => {
+    vi.mocked(api.unsharePipeline).mockResolvedValue({ deleted: true });
+    setActiveBoard(READ);
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Odebrat z mého seznamu' }));
+    expect(api.unsharePipeline).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Odebrat' }));
+    await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('owner-r', 'shared_with_me'));
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+  });
+
+  it('falls back to my own board, with a toast, when the server no longer lists it', async () => {
+    setActiveBoard({ account_id: 'gone', email: 'x@example.cz', mode: 'edit' });
+    renderBoard();
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(toast.pushToast).toHaveBeenCalledWith('info', BOARD_GONE_MESSAGE);
+  });
+
+  it('falls back to my own board when the shared board reads no stages', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockImplementation(async ({ actAs } = {}) =>
+      actAs ? [] : STAGES,
+    );
+    setActiveBoard(READ);
+    renderBoard();
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(toast.pushToast).toHaveBeenCalledWith('info', BOARD_GONE_MESSAGE);
+  });
+
+  /* Ruling 5: a card or stage last changed by a delegate is stamped. My own
+   * board names the delegate from my recipients; a shared board, where only my
+   * own grant is known, shows the time alone. */
+  describe('delegated stamps', () => {
+    const STAMPED = [{ ...CARDS[0], edited_by_account_id: 'acc-b', edited_at: '2026-10-20T10:00:00Z' }];
+    const STAMPED_STAGES = STAGES.map((st, i) =>
+      i === 0 ? { ...st, edited_by_account_id: 'acc-b', edited_at: '2026-10-20T11:00:00Z' } : st,
+    );
+
+    it('names my recipient on my own board — on the card and in the stage editor', async () => {
+      vi.mocked(api.listPipelineShares).mockResolvedValue({
+        shared_with: [{ account_id: 'acc-b', email: 'eva@example.cz', mode: 'edit' }],
+        shared_with_me: [],
+      });
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(STAMPED);
+      vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAMPED_STAGES);
+      renderBoard();
+      expect(await screen.findByText(/^upravil eva@example\.cz · /)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Spravovat fáze' }));
+      expect(await screen.findAllByText(/^upravil eva@example\.cz · /)).toHaveLength(2);
+    });
+
+    it('shows the time alone on a board shared with me', async () => {
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(STAMPED);
+      setActiveBoard(READ);
+      renderBoard();
+      expect(await screen.findByText(/^upraveno · /)).toBeInTheDocument();
+      expect(screen.queryByText(/^upravil /)).toBeNull();
+    });
+  });
+
+  describe('my own board\'s Sharing block', () => {
+    beforeEach(() => {
+      vi.mocked(api.listPipelineShares).mockResolvedValue({
+        shared_with: [{ account_id: 'acc-b', email: 'eva@example.cz', mode: 'edit' }],
+        shared_with_me: [],
+      });
+    });
+
+    it('shares with an email at a chosen mode, and shows a 422 under the field', async () => {
+      vi.mocked(api.sharePipeline).mockRejectedValueOnce(new api.ApiError('No account uses this email.', 422, null));
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'E-mail' }), { target: { value: 'nikdo@example.cz' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Úpravy' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Sdílet' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('No account uses this email.');
+      expect(api.sharePipeline).toHaveBeenCalledWith('nikdo@example.cz', 'edit');
+    });
+
+    it('lists recipients with their mode and stops sharing only after a confirm', async () => {
+      vi.mocked(api.unsharePipeline).mockResolvedValue({ deleted: true });
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      const list = screen.getByRole('list', { name: 'Sdíleno s' });
+      expect(within(list).getByText('Úpravy')).toBeInTheDocument();
+      fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet s eva@example.cz' }));
+      expect(api.unsharePipeline).not.toHaveBeenCalled();
+      fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet' }));
+      await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('acc-b', 'shared_with'));
+    });
   });
 });

@@ -192,8 +192,9 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 // A read pairs the key with a queryFn; an invalidateQueries over it is a writer's refresh.
+// The key may carry the acting segment (lib/acting `actingKey(actAs, …)`).
 const KEY_READ =
-  /queryKey:\s*curationKeys\.(collections|propertyCollectionMembers),\s*queryFn\b/;
+  /queryKey:\s*(?:actingKey\(\s*\w+,\s*)?curationKeys\.(collections|propertyCollectionMembers)\)?,\s*queryFn\b/;
 const FETCHER_IMPORT =
   /import\s*\{[^}]*\b(listCollections|fetchPropertyCollectionMemberSet)\b[^}]*\}\s*from/;
 // lib/api.ts + lib/queries.ts define the fetchers; queries.ts's Browse collection

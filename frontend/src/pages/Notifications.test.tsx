@@ -82,7 +82,7 @@ const feed: WatchdogDispatchesResponse = {
     {
       ...baseDispatch,
       id: 'd4',
-      source_kind: 'collection_share',
+      source_kind: 'share',
       change_kind: 'shared',
       message: 'owner@example.com shared the collection "Vinohrady" with you',
       subscription_id: null,
@@ -103,7 +103,7 @@ const feed: WatchdogDispatchesResponse = {
 const counts: NotificationUnreadCount = {
   watchdog: 2,
   collection_monitor: 0,
-  collection_share: 0,
+  share: 0,
   system_health: 0,
   total: 2,
   unread_count: 2,
@@ -176,13 +176,31 @@ describe('<Notifications> collection share row', () => {
     await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledWith('d4'));
   });
 
-  it('offers a Shared source tab that asks for collection_share', async () => {
+  /* The same kind and the same renderer for a pipeline share (migration 641):
+   * no collection_id, so the link opens the Pipeline tab instead. */
+  it('renders a pipeline share with the one renderer, linking to the pipeline', () => {
+    const pipelineShare = {
+      ...feed.data[3],
+      id: 'd5',
+      message: 'owner@example.com shared their pipeline with you (edit)',
+      collection_id: null,
+      collection_name: null,
+    };
+    renderPage({ ...feed, data: [pipelineShare], total: 1 });
+    expect(
+      screen.getByRole('button', { name: /^Shared owner@example\.com shared their pipeline with you \(edit\)/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open pipeline' })).toHaveAttribute('href', '/pipeline');
+    expect(screen.queryByRole('link', { name: 'Open collection' })).toBeNull();
+  });
+
+  it('offers a Shared source tab that asks for the share kind', async () => {
     vi.mocked(listNotifications).mockResolvedValue({ data: [], total: 0 } as never);
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Shared' }));
     await waitFor(() =>
       expect(listNotifications).toHaveBeenLastCalledWith(
-        expect.objectContaining({ source_kind: 'collection_share' }),
+        expect.objectContaining({ source_kind: 'share' }),
       ));
   });
 });

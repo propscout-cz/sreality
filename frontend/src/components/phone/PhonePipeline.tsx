@@ -15,7 +15,13 @@
  * and a short stage has no empty tail. Swipe and strip stay in step: the pages'
  * scroll picks the active tab (one rAF per frame), a tab tap scrolls the pages,
  * and the active tab is kept in view. The stage last looked at is remembered
- * per device. */
+ * per device, per board.
+ *
+ * SHARED BOARDS (migration 641, ruling 6): the same per-device active board as
+ * the desktop (lib/acting), switched in a strip above the stages; a shared
+ * board renders inside <ActingAs>. A read share is read-only — no stage sheet,
+ * no tag chips, no artifact link; an edit share moves cards through the stage
+ * sheet as the owner. Sharing itself, and leaving, stay on the desktop. */
 
 import {
   useEffect,
@@ -25,6 +31,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import { Link, useNavigationType } from 'react-router-dom';
 
@@ -45,9 +52,13 @@ import {
 } from '@/lib/phonePipeline';
 import { TAB_BAR_SPACE } from '@/lib/phoneShell';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
+import { ActingAs, useActAs, useActingReadOnly, type ActiveBoard } from '@/lib/acting';
+import { useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
 import { useCardTags } from '@/lib/useCardTags';
 import TagChip from '@/components/curation/TagChip';
 import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
+import DelegatedStamp from '@/components/DelegatedStamp';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
@@ -89,6 +100,16 @@ function pipelineLayoutLine(c: PipelineBoardCard): string {
 }
 
 export default function PhonePipeline() {
+  const { active, sharesQ } = useBoardSelection();
+  const switcher = <BoardSwitcher boards={sharesQ.data?.shared_with_me ?? []} active={active} size="phone" />;
+  return (
+    <ActingAs share={active}>
+      <PhoneBoard key={active?.account_id ?? 'own'} active={active} switcher={switcher} />
+    </ActingAs>
+  );
+}
+
+function PhoneBoard({ active, switcher }: { active: ActiveBoard; switcher: ReactNode }) {
   const stagesQ = usePipelineStages();
   const boardQ = usePipelineBoard();
   const stages = stagesQ.data ?? NO_STAGES;
@@ -102,6 +123,8 @@ export default function PhonePipeline() {
 
   usePhoneHeaderAside(loaded && !failed ? cardsWord(total) : null);
 
+  useSharedBoardGuard(active, stagesQ.data);
+
   const listingIds = useMemo(
     () => cards.map((c) => c.listing_id).filter((id): id is number => id != null),
     [cards],
@@ -109,32 +132,45 @@ export default function PhonePipeline() {
 
   if (failed) {
     return (
-      <Notice
-        title="Pipeline se nepodařilo načíst."
-        detail="Spojení nebo databáze teď neodpověděly. Zkuste to znovu."
-        action={{
-          label: 'Zkusit znovu',
-          onClick: () => {
-            void stagesQ.refetch();
-            void boardQ.refetch();
-          },
-        }}
-      />
+      <>
+        {switcher}
+        <Notice
+          title="Pipeline se nepodařilo načíst."
+          detail="Spojení nebo databáze teď neodpověděly. Zkuste to znovu."
+          action={{
+            label: 'Zkusit znovu',
+            onClick: () => {
+              void stagesQ.refetch();
+              void boardQ.refetch();
+            },
+          }}
+        />
+      </>
     );
   }
   if (!loaded) return <PhonePipelineSkeleton />;
 
   return (
     <CardHydrationProvider listingIds={listingIds} renders={{ covers: true }}>
-      <StagePager pages={pages} stages={ordered} />
+      <StagePager pages={pages} stages={ordered} switcher={switcher} />
     </CardHydrationProvider>
   );
 }
 
-function StagePager({ pages, stages }: { pages: StagePage[]; stages: PipelineStage[] }) {
+function StagePager({
+  pages,
+  stages,
+  switcher,
+}: {
+  pages: StagePage[];
+  stages: PipelineStage[];
+  switcher: ReactNode;
+}) {
   const stripRef = useRef<HTMLDivElement>(null);
   const pagerRef = useRef<HTMLDivElement>(null);
-  const remembered = useRef(readLastStage());
+  /* The stage last looked at is remembered per board (lib/phonePipeline). */
+  const board = useActAs();
+  const remembered = useRef(readLastStage(board));
   const [activeId, setActiveId] = useState<number | null>(null);
   const [sheetFor, setSheetFor] = useState<{
     kind: 'stage' | 'tags';
@@ -157,7 +193,7 @@ function StagePager({ pages, stages }: { pages: StagePage[]; stages: PipelineSta
     const page = pages[i];
     if (!page) return;
     setActiveId(page.stage.id);
-    writeLastStage(page.stage.id);
+    writeLastStage(page.stage.id, board);
   };
 
   /* Land on the active page without animation: on first paint, when the stage
@@ -247,6 +283,7 @@ function StagePager({ pages, stages }: { pages: StagePage[]; stages: PipelineSta
 
   return (
     <div className="flex flex-col" style={{ height: FRAME_HEIGHT }}>
+      {switcher && <div className="shrink-0 border-b border-[var(--color-rule-soft)]">{switcher}</div>}
       <div
         ref={stripRef}
         role="tablist"
@@ -351,6 +388,7 @@ function StagePageView({
   }, [navType, stage.id]);
 
   const badge = stageBadge(stage, stages) ?? '·';
+  const readOnly = useActingReadOnly();
   return (
     <section
       ref={ref}
@@ -389,7 +427,9 @@ function StagePageView({
         </div>
       ) : (
         <p className="mx-4 my-1 rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] px-4 py-6 text-[13px] text-[var(--color-ink-3)]">
-          V této fázi teď nic není. Kartu sem přesunete z jejího odznaku fáze.
+          {readOnly
+            ? 'V této fázi teď nic není.'
+            : 'V této fázi teď nic není. Kartu sem přesunete z jejího odznaku fáze.'}
         </p>
       )}
     </section>
@@ -413,6 +453,8 @@ function PipelinePhoneCard({
 }) {
   const { coverFor } = useCardHydration();
   const src = coverFor(card.listing_id);
+  /* A read share's board (ruling 2): no stage sheet, no tags, no artifact link. */
+  const readOnly = useActingReadOnly();
   const [broken, setBroken] = useState<string | null>(null);
 
   const price = feedPrice(card);
@@ -479,24 +521,38 @@ function PipelinePhoneCard({
           {mf && <span title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)">{mf}</span>}
           {!card.is_active && <span>neaktivní</span>}
         </p>
-        <PhoneCardTags property_id={card.property_id} onOpen={() => onTags(card, sheetSubject)} />
-        <ArtifactLinkButton
-          property_id={card.property_id}
-          className="card-action mt-1 h-7 self-start px-2 text-[12px]"
-        />
+        {!readOnly && (
+          <>
+            <PhoneCardTags property_id={card.property_id} onOpen={() => onTags(card, sheetSubject)} />
+            <ArtifactLinkButton
+              property_id={card.property_id}
+              className="card-action mt-1 h-7 self-start px-2 text-[12px]"
+            />
+          </>
+        )}
+        <DelegatedStamp stamp={card} className="truncate" />
       </div>
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        aria-label={`Fáze ${stage.label}, změnit`}
-        onClick={() => onStage(card, sheetSubject)}
-        className="card-action group flex h-12 w-[52px] shrink-0 items-center justify-center gap-0.5 self-center text-[var(--st)]"
-      >
-        <span aria-hidden className={`${BADGE} group-active:bg-[var(--st-soft)]`}>
-          {badge}
+      {readOnly ? (
+        <span className="flex h-12 w-[52px] shrink-0 items-center justify-center self-center text-[var(--st)]">
+          <span aria-hidden className={BADGE}>
+            {badge}
+          </span>
+          <span className="sr-only">Fáze {stage.label}</span>
         </span>
-        <ChevronDownIcon className="h-3.5 w-3.5" />
-      </button>
+      ) : (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-label={`Fáze ${stage.label}, změnit`}
+          onClick={() => onStage(card, sheetSubject)}
+          className="card-action group flex h-12 w-[52px] shrink-0 items-center justify-center gap-0.5 self-center text-[var(--st)]"
+        >
+          <span aria-hidden className={`${BADGE} group-active:bg-[var(--st-soft)]`}>
+            {badge}
+          </span>
+          <ChevronDownIcon className="h-3.5 w-3.5" />
+        </button>
+      )}
     </article>
   );
 }

@@ -94,7 +94,7 @@ tenant-scoped:
   authorization — a route needing per-account isolation must use it, not `get_db_conn`. There
   is NO fallback connection (the static-`API_TOKEN` bypass was deleted 2026-09-11): an unset
   `TENANT_POOL_DB_URL` raises.
-  `tenant_transaction(claims)` is the same block as a context manager, for one named
+  `tenant_transaction(claims, act_as=, method=)` is the same block as a context manager, for one named
   exception (`references/tenancy.md`): it commits before slow service-role work.
 
 **Pooler-safe mutual exclusion: lease-row CAS, not session advisory locks (migration
@@ -200,18 +200,18 @@ policy before assuming service-role-only access still applies everywhere. The mo
 `00000000-0000-0000-0000-000000000000`) + `account_members(account_id, user_id, role)` + a
 separate `admins(user_id)` platform-admin allowlist (migration 286). Two SECURITY DEFINER
 helpers, `current_account_ids()` and `is_platform_admin()` (keyed off the JWT `sub` claim via
-`account_members`/`admins`), are the **sole** definition point for every per-account RLS policy
-since — don't hand-roll a second way to check tenancy.
+`account_members`/`admins`), are the definition point for every per-account RLS policy; 641 adds the one
+sanctioned second, `acting_account_ids()`, read only by the eleven curation policies (§ Delegation) — don't hand-roll a third.
 
-Per-table RLS pattern, repeated across migrations 290 (6 curation tables: `collections`, `tags`,
-`property_notes`, `filter_presets`, `notification_subscriptions`, `manual_rental_estimates`),
+Per-table RLS pattern, repeated across migrations 290 (5 live curation tables: `collections`, `tags`,
+`property_notes`, `filter_presets`, `notification_subscriptions`; its sixth was dropped by 639),
 291 (`estimation_runs`/`building_runs`, `account_id` NULLABLE, defaults to SYSTEM), 292 (6
 child-grain tables incl. `notification_dispatches`, `account_id` **trigger-derived** from the
 parent row, not caller-supplied), and 294 (pipeline tables): `revoke all ... from anon,
 authenticated` → `grant select/insert/update/delete ... to authenticated` → a `for all
 using/with check (account_id in (select current_account_ids()))` policy. **An integer surrogate id is
 `bigint generated always as identity`** (611), never `bigserial`: a browser-chosen id pre-claims the sequence
-and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`).
+and breaks every account's inserts; a uuid id (`gen_random_uuid()`) cannot be pre-claimed and stays as is. **Sharing (610)** widens READS only: `collection_shares` (owner-stamped, no browser INSERT) + four `FOR SELECT` `*_shared_read` policies; writes stay owner-only; a share is never membership (`references/tenancy.md`). **Delegation (641)**: a pipeline share lets its recipient ACT AS the owner (`x-act-as` header → `acting_account_ids()`, fail-closed, read mode on GET only, every write stamped in `delegated_edits`) on the eleven curation tables (a read share: the three pipeline tables only); every other policy keeps `current_account_ids()` (`references/tenancy.md` § Delegation).
 
 `property_pipeline` gets a **composite PK swap**, `(property_id)` → `(account_id,
 property_id)`, migration 295 — the one table where the PK itself changed. **Explicitly
@@ -239,10 +239,10 @@ and market facts through a service-role connection (as `portal_lookup` does). Do
 list and policy text, and the two test rules that would have caught the 2026-09 seven-week
 outage: `references/tenancy.md`. (1) **Reads on a tenant connection are scoped by RLS alone** —
 `current_account_ids()` is the ONE definition of who the caller is (PLURAL, because membership
-is); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
+is; on the eleven curation tables `acting_account_ids()`, equal to it without the `x-act-as` header); a read route takes no account, and an UPDATE/DELETE *by id* is this shape too and is its own
 ownership gate (rowcount 0 → 404, never a SELECT probe: that proves visibility, not ownership).
 (2) **Writes carry exactly ONE account, resolved once at the route edge** by
-`tenant_pool.require_account_id` — `400 "no account for caller"` on none, never a silent NULL nor
+`tenant_pool.require_account_id` (a curation write: its twin `require_acting_account_id`) — `400 "no account for caller"` on none, never a silent NULL nor
 a SYSTEM fallback. (3) **An explicit
 `account_id = %s` predicate appears ONLY on a service-role connection**
 (`toolkit/pipeline_identity.py`, `api/estimation_runs.py`, the Stripe webhook), where RLS is off

@@ -9,12 +9,14 @@ One transaction per write, UniqueViolation -> 409, flat dicts out.
 
 Sharing (migration 610, docs/design/collection-sharing.md) widens READS only: a shared collection
 and the other party's notes marked `shared` arrive through the same projections, told apart by ONE
-field, `owner_email` (null iff the row is the caller's). A share row is written on the service-role
-connection (browser roles hold no INSERT on it) only after the tenant UPDATE gate passed.
+field, `owner_email` (null iff the row belongs to the identity the caller acts as — themselves, or
+under X-Act-As the owner, migration 641). The share row itself is api/shares.py's, written only
+after the tenant UPDATE gate passed.
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any, Callable, ContextManager
 
@@ -23,7 +25,7 @@ from fastapi import HTTPException
 
 from api import note_attachments
 from api import schemas as s
-from api import tenant_pool
+from api import shares
 from toolkit.property_identity import (
     resolve_active_property_id,
     resolve_active_property_ids,
@@ -33,13 +35,8 @@ from toolkit.property_identity import (
 # --- collections -----------------------------------------------------------
 
 def _is_mine(col: str) -> str:
-    """The one "is this row the caller's" predicate every share-aware projection uses."""
-    return f"{col} IN (SELECT current_account_ids())"
-
-
-def _party_label(col: str) -> str:
-    """The account's label as the caller may see it: a counterparty's email, else NULL."""
-    return f"(SELECT e.email FROM share_party_emails() e WHERE e.account_id = {col})"
+    """The one "is this row the acting identity's" predicate every share-aware projection uses."""
+    return f"{col} IN (SELECT acting_account_ids())"
 
 
 _COLLECTION_IS_MINE = _is_mine("c.account_id")
@@ -58,11 +55,11 @@ _COLLECTION_PROJECTION = (
     f"CASE WHEN {_COLLECTION_IS_MINE} THEN c.notify_channels ELSE '{{}}'::text[] END "
     "  AS notify_channels, "
     "c.is_system, "
-    f"CASE WHEN {_COLLECTION_IS_MINE} THEN NULL ELSE {_party_label('c.account_id')} END "
+    f"CASE WHEN {_COLLECTION_IS_MINE} THEN NULL ELSE {shares.party_label('c.account_id')} END "
     "  AS owner_email, "
     "(SELECT coalesce(json_agg(json_build_object("
     "    'account_id', s.recipient_account_id, "
-    f"    'email', {_party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
+    f"    'email', {shares.party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
     "  '[]'::json) "
     " FROM collection_shares s WHERE s.collection_id = c.id) AS shared_with"
 )
@@ -292,30 +289,18 @@ def remove_property_from_collection(
 
 # --- shares (migration 610) -------------------------------------------------
 
-# The ownership gate (shape 1): a recipient sees the row but its UPDATE matches nothing.
-_SHARE_GATE_SQL = "UPDATE collections SET updated_at = now() WHERE id = %s RETURNING name"
 
-# account_id is the OWNER, stamped by trigger from the collection; RETURNING it names the sender.
-_INSERT_SHARE_SQL = (
-    "INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s) "
-    "ON CONFLICT DO NOTHING RETURNING account_id"
-)
+def refuse_monitoring_while_acting(act_as: uuid.UUID | None, *monitoring_set: object) -> None:
+    """403 when a delegate sets the owner's collection monitoring: its alerts are the owner's (spec §3.8)."""
+    if act_as is not None and any(monitoring_set):
+        raise HTTPException(403, "collection monitoring is the owner's own setting")
 
-# The fourth notification producer: in-app only, stamped to the RECIPIENT (the trigger keeps it).
-# ONE notification per (collection, recipient) ever: a revoke + re-share loop must not let a
-# sender refill someone's inbox with text it chose (the collection name), so the key has no time.
-_INSERT_SHARE_DISPATCH_SQL = (
-    "INSERT INTO notification_dispatches "
-    "  (source_kind, collection_id, change_kind, message, account_id, dedupe_key) "
-    "VALUES ('collection_share', %s::bigint, 'shared', "
-    "  account_email(%s::uuid) || ' shared the collection \"' || %s::text || '\" with you', "
-    "  %s::uuid, "
-    "  'share:' || %s::text || ':' || %s::text) "
-    "ON CONFLICT DO NOTHING"
-)
 
-_DELETE_SHARE_SQL = (
-    "DELETE FROM collection_shares WHERE collection_id = %s AND recipient_account_id = %s"
+# The ownership gate (shape 1): a recipient sees the row but its UPDATE matches nothing. It names
+# the caller's OWN accounts, not the acting identity: sharing never delegates (migration 641).
+_SHARE_GATE_SQL = (
+    "UPDATE collections SET updated_at = now() "
+    "WHERE id = %s AND account_id IN (SELECT current_account_ids()) RETURNING name"
 )
 
 
@@ -333,22 +318,7 @@ def create_share(
         gate = cur.fetchone()
     if gate is None:
         raise HTTPException(404, "collection not found")
-    with open_identity_conn() as identity_conn:
-        recipient = tenant_pool.account_for_email(identity_conn, body.email)
-        if recipient is None:
-            raise HTTPException(422, "No account uses this email.")
-        with identity_conn.transaction(), identity_conn.cursor() as cur:
-            # Only the share's own CHECK (not-self) is a 422; a CHECK on the dispatch is drift
-            # and must page as a 500.
-            try:
-                cur.execute(_INSERT_SHARE_SQL, (collection_id, recipient))
-            except psycopg.errors.CheckViolation:
-                raise HTTPException(422, "That's your own account.")
-            inserted = cur.fetchone()
-            if inserted is not None:
-                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
-                    collection_id, inserted[0], gate[0], recipient, collection_id, recipient,
-                ))
+    shares.grant(open_identity_conn, body.email, shares.CollectionShare(collection_id, gate[0]))
     coll = _fetch_collection(conn, collection_id)
     if coll is None:
         raise HTTPException(404, "collection not found")
@@ -359,21 +329,19 @@ def delete_share(
     conn: "psycopg.Connection", collection_id: int, account_id: str,
 ) -> dict[str, Any]:
     """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_DELETE_SHARE_SQL, (collection_id, account_id))
-        if cur.rowcount == 0:
-            raise HTTPException(404, "share not found")
-    return {"deleted": True}
+    return shares.revoke_collection(conn, collection_id, account_id)
 
 
 # --- notes -----------------------------------------------------------------
 
 
-# owner_email: null iff the caller wrote it; a foreign note is readable only when marked shared.
+# owner_email: null iff the acting identity wrote it; a foreign note is readable only when marked
+# shared. edited_by_email / edited_at: the note's delegated stamp (owner-only; cleared by a later body edit).
 _NOTE_PROJECTION = (
     "n.id, n.property_id, n.body, n.shared, n.created_at, n.updated_at, "
-    f"CASE WHEN {_is_mine('n.account_id')} THEN NULL ELSE {_party_label('n.account_id')} END "
-    "  AS owner_email"
+    f"CASE WHEN {_is_mine('n.account_id')} THEN NULL ELSE {shares.party_label('n.account_id')} END "
+    "  AS owner_email, "
+    f"{shares.delegated_stamp('property_notes', 'n.id::text', 'greatest(n.updated_at, n.created_at)')}"
 )
 
 # Marking shared is not an edit: updated_at moves only with the body.
@@ -428,7 +396,7 @@ def create_note(
     # collection_properties/property_tags, mig 292) and no DEFAULT (unlike
     # estimation_runs) — a tenant_conn caller with account_id left NULL fails
     # the table's WITH CHECK closed, so it is REQUIRED (no default): the route
-    # resolves exactly one via tenant_pool.require_account_id, or 400s.
+    # resolves exactly one via tenant_pool.require_acting_account_id, or 400s/403s.
     #
     # The id -> sreality_id map reads through listing_natural_key_public, NOT base
     # `listings`: on the tenant conn (SET LOCAL ROLE authenticated) `listings` is
@@ -712,6 +680,8 @@ def _to_note(row: tuple[Any, ...]) -> dict[str, Any]:
         "created_at":  _iso(row[4]),
         "updated_at":  _iso(row[5]),
         "owner_email": row[6],
+        "edited_by_email": row[7],
+        "edited_at":   _iso(row[8]),
     }
 
 

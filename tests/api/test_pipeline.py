@@ -193,7 +193,7 @@ class _FakeConn:
         return _Cur(self)
 
 
-_CARD_ROW = (42, 1, "interested", "Zájem", 5, None, None, "1", "copper")
+_CARD_ROW = (42, 1, "interested", "Zájem", 5, None, None, "1", "copper", None, None)
 
 
 def test_add_card_inserts_at_entry_stage_and_logs_event():
@@ -213,7 +213,7 @@ def test_add_card_inserts_at_entry_stage_and_logs_event():
 
 
 def test_add_card_idempotent_returns_existing_stage_no_event():
-    existing = (42, 3, "offer", "Nabídka", 2, None, None, "3", "teal")
+    existing = (42, 3, "offer", "Nabídka", 2, None, None, "3", "teal", None, None)
     conn = _FakeConn([
         (lambda q: "RECURSIVE chain" in q, [(42, 42)]),  # property active -> itself
         (lambda q: "WHERE is_entry" in q, [(1,)]),
@@ -304,7 +304,7 @@ def test_move_card_to_new_stage_logs_event_and_stamps_entered():
     conn = _FakeConn([
         (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
-         [(42, 3, "offer", "Nabídka", 2, None, None, "3", "teal")]),
+         [(42, 3, "offer", "Nabídka", 2, None, None, "3", "teal", None, None)]),
     ])
     out = pipeline_module.move_card(conn, 42, s.MoveCardIn(stage_id=3), account_id=_ACCT)
     sqls = [q for q, _ in conn.executed]
@@ -343,7 +343,7 @@ def test_move_card_redirects_merged_away_to_survivor():
         (lambda q: "RECURSIVE chain" in q, [(99, 42)]),
         (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
-         [(42, 3, "offer", "Nabídka", 2, None, None, "3", "teal")]),
+         [(42, 3, "offer", "Nabídka", 2, None, None, "3", "teal", None, None)]),
     ])
     pipeline_module.move_card(conn, 99, s.MoveCardIn(stage_id=3), account_id=_ACCT)
     locks = [p for q, p in conn.executed if "FOR UPDATE" in q]
@@ -358,7 +358,7 @@ def test_move_card_stage_change_asks_the_live_deal_rule():
     conn = _FakeConn([
         (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(9,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
-         [(42, 2, "call", "For Call", 2, None, None, "2", "teal")]),
+         [(42, 2, "call", "For Call", 2, None, None, "2", "teal", None, None)]),
     ])
     pipeline_module.move_card(conn, 42, s.MoveCardIn(stage_id=2), account_id=_ACCT)
     lifts = [p for q, p in conn.executed if "UPDATE property_dismissals" in q]
@@ -369,7 +369,7 @@ def test_move_card_reorder_only_leaves_dismissals_alone():
     conn = _FakeConn([
         (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
-         [(42, 1, "interested", "Zájem", 3, None, None, "1", "copper")]),
+         [(42, 1, "interested", "Zájem", 3, None, None, "1", "copper", None, None)]),
     ])
     pipeline_module.move_card(conn, 42, s.MoveCardIn(stage_id=1, board_position=2.5), account_id=_ACCT)
     assert not any("property_dismissals" in q for q, _ in conn.executed)
@@ -410,7 +410,7 @@ def test_move_card_reorder_only_logs_no_event():
     conn = _FakeConn([
         (lambda q: "SELECT stage_id FROM property_pipeline WHERE property_id" in q, [(1,)]),
         (lambda q: "FROM property_pipeline pp JOIN pipeline_stages" in q,
-         [(42, 1, "interested", "Zájem", 3, None, None, "1", "copper")]),
+         [(42, 1, "interested", "Zájem", 3, None, None, "1", "copper", None, None)]),
     ])
     pipeline_module.move_card(conn, 42, s.MoveCardIn(stage_id=1, board_position=2.5), account_id=_ACCT)
     sqls = [q for q, _ in conn.executed]
@@ -656,3 +656,18 @@ def test_pipeline_writes_without_an_account_are_400(client, monkeypatch):
         res = call(path, json=body) if body is not None else call(path)
         assert res.status_code == 400, f"{method.upper()} {path} -> {res.status_code}"
         assert res.json()["detail"] == "no account for caller"
+
+
+def test_a_card_carries_its_delegated_stamp_keyed_like_the_ledger_trigger():
+    """The card key must match migration 641's trigger arguments ('account_id', 'property_id')
+    joined by ':' — the board views spell the same key; the stamp comes from the one SQL definition."""
+    import re
+    from pathlib import Path
+
+    stamp = " ".join(pipeline_module._CARD_STAMP.split())
+    key = "pp.account_id::text || ':' || pp.property_id::text"
+    assert f"latest_delegated_edit('property_pipeline', {key}, pp.updated_at)" in stamp
+    migration = next(Path(__file__).resolve().parents[2].glob("migrations/641_*.sql")).read_text()
+    assert re.search(r"on property_pipeline\s+for each row when \(acting\(\)\) "
+                     r"execute function stamp_delegated_edit\('account_id', 'property_id'\)", migration)
+    assert migration.count(key) == 2, "the board view's card key drifted from the API's"

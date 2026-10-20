@@ -165,6 +165,15 @@ describe('<CollectionDetail>', () => {
       );
     });
 
+    /* The one ShareBlock (components/ShareBlock) — a collection share has no
+       mode, so no access choice is offered (the Pipeline tab's has one). */
+    it('offers no access mode for a collection share', async () => {
+      renderPage();
+      expect(await screen.findByText('Sharing')).toBeInTheDocument();
+      expect(screen.queryByText('Access')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Can edit' })).toBeNull();
+    });
+
     it('shows a 422 inline under the field', async () => {
       vi.mocked(api.shareCollection).mockRejectedValue(
         new api.ApiError('No account uses this email.', 422, null),
