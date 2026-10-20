@@ -261,6 +261,8 @@ export function Segmented<T extends string | number | null>({
   onChange,
   variant = 'soft',
   label,
+  ariaInvalid,
+  ariaDescribedBy,
 }: {
   options: ReadonlyArray<{ value: T; label: string }>;
   value: T;
@@ -268,9 +270,12 @@ export function Segmented<T extends string | number | null>({
   variant?: 'soft' | 'solid';
   /* Names the choice when no Field caption does. */
   label?: string;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
 }) {
   return (
-    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label}>
+    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label}
+      aria-invalid={ariaInvalid || undefined} aria-describedby={ariaDescribedBy}>
       {options.map((o) => (
         <PickButton
           key={String(o.value)}
@@ -447,6 +452,8 @@ export function DecimalField({
   integer,
   cell,
   className = '',
+  ariaInvalid,
+  ariaDescribedBy,
 }: {
   label: string;
   value: number | null;
@@ -458,6 +465,9 @@ export function DecimalField({
   integer?: boolean;
   cell?: boolean;
   className?: string;
+  /* The boxed input only; `cell` has no use for them yet. */
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
 }) {
   const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
   const [buf, setBuf] = useState({ text: shown(value), value });
@@ -483,6 +493,8 @@ export function DecimalField({
       <input
         type="text"
         aria-label={label}
+        aria-invalid={ariaInvalid || undefined}
+        aria-describedby={ariaDescribedBy}
         inputMode={integer ? 'numeric' : 'decimal'}
         readOnly={readOnly}
         value={buf.text}

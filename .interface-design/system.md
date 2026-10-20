@@ -37,15 +37,19 @@ section and shelf names, JetBrains Mono (`font-mono`) with `tabular-nums` on EVE
   dashed beyond the solid set; a series cap with a refusal sentence instead of a legend of dozens.
 - **Refusals** read as one Czech sentence in the body; the surrounding chrome (title, ledger) stays.
 - **Valuation ruler** (`estimation/RangeStrip.tsx`, the Valuo card): an outside band low · mid · high on the printer's
-  ruler with a REQUIRED caption naming the three ("min · průměr · max (Valuo)"); copper is the middle only, every other
+  ruler with a REQUIRED caption naming it (Valuo's confidence band `range_price`: "pásmo spolehlivosti (Valuo)", never
+  its min/max); copper is the middle only, every other
   figure read against it (the ask, our run, MF) is an ink tick with its label on its own row, growing toward the wider
   side; one outside the band pins to the end it passed with "mimo pásmo" — never a sideways scroll at 360 px.
 - **Provenance tag** (`listing-detail/ValuoSection.tsx` Param): after a field's caption, tracked small caps
   (`0.58rem`, `0.16em`) say where the value came from — "z inzerátu" ink-3, "odvozeno" ink-3, "předpoklad" ink-2,
   "chybí" ink-3 over a dashed control (nothing is sent), "upraveno" copper (the user's choice); the rule or note behind
-  it sits in an InfoHint, and brick "Valuo ignorovalo" marks a parameter the answer did not use. Every estimate
+  it sits in an InfoHint. Every estimate
   figure's card frame is ONE `estimation/EstimateCard.tsx`: plain rule = an outside authority, copper wash = ours,
   dashed = absent.
+- **Comparables table** (the Valuo card): the first column is the comparable's first photo (fixed ~72×54 box, lazy;
+  a broken image is a dashed empty box) opening the app's existing gallery; numbers mono tabular; a realised sale
+  price is tagged "prodáno"; the table scrolls inside its own box at narrow widths, never the page.
 
 ## Health page (2026-10-19)
 Added after the Health page rebuild (`docs/design/health-dashboard.md` § 5, wave 8). It extends the ledger

@@ -2,7 +2,7 @@
  * inside them (rule 12), for every signed-in user (operator ruling 2026-10-19). The card flips into its
  * editor in place (system.md), drawn from the API's `fields` alone, every value tagged with where it came
  * from. The phone reads the latest answer only: no editor, no button (#1760 Q10). */
-import { useMemo, useState, type ReactNode } from 'react';
+import { Suspense, useId, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import ErrorBanner from '@/components/ErrorBanner';
@@ -16,16 +16,23 @@ import { RunStatusChip } from '@/components/estimation/RunPanel';
 import { SingleSelectDropdown } from '@/components/filter-controls/SingleSelectDropdown';
 import { InfoHint } from '@/components/settings/SectionChrome';
 import { Hairline, SectionLabel } from '@/components/section';
+import { Th } from '@/components/table';
 import { ApiError } from '@/lib/api';
-import { czPlural, fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24 } from '@/lib/format';
+import {
+  czPlural, fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24, fmtTomDays,
+} from '@/lib/format';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { mfShape } from '@/lib/mfReference';
 import { estimationKeys, fetchEstimationsForListings, propertyRunIds, type PropertyPublic } from '@/lib/queries';
-import type { EstimationRun } from '@/lib/types';
+import type { EstimationRun, ImagePublic } from '@/lib/types';
 import {
-  LEASE_PERIOD, missingRequired, optionLabel, useRunValuo, useValuoPage, withEdit,
-  type Provenance, type Valuation, type ValuoField, type ValuoPage, type ValuoRun, type ValuoValue, type ValuoValues,
+  LEASE_PERIOD, band, formErrors, missingRequired, optionLabel, reliability, shownPrice, useRunValuo, useValuoPage,
+  withEdit, type Provenance, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoPhoto,
+  type ValuoRun, type ValuoValue, type ValuoValues,
 } from '@/lib/valuo';
+
+const ImageLightbox = lazyChunk(() => import('@/components/ImageLightbox'));
 
 const NONE = 'Nevyplněno';
 const INK3 = 'text-[var(--color-ink-3)]';
@@ -34,8 +41,15 @@ const LINK = 'text-[0.8rem] text-[var(--color-copper)] hover:underline underline
 const GRID = 'grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]';
 const ABSENT = '[&_input]:border-dashed [&_select]:border-dashed [&_button]:border-dashed'; // dashed = nothing sent
 const Period = ({ on }: { on: boolean }) => (on ? <span className={`ml-1 text-[0.7rem] ${INK3}`}>{LEASE_PERIOD}</span> : null);
+/* Valuo's average, rounded as shown; the exact figure rides in the title. */
+const Price = ({ value, lease, className }: { value: number | null; lease: boolean; className?: string }) => (
+  <span className={className} title={value == null ? undefined : fmtCzk(value)}>
+    {fmtCzk(value == null ? null : shownPrice(value, lease))}<Period on={lease} />
+  </span>
+);
 const isLease = (v: Valuation) => ppm2BasisFromToken(v.ppm2_basis) === 'rent';
 const ENVIRONMENT: Record<Valuation['environment'], string> = { sandbox: 'sandbox', production: 'ostré' };
+const BRICK = 'text-[0.75rem] text-[var(--color-brick)]';
 
 export default function ValuoSection({ property, listingIds, readOnly = false, bare = false }: {
   property: PropertyPublic;
@@ -68,8 +82,11 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
   };
   const done = ({ reused, valuation: v }: ValuoRun) => pick(v.id, reused ? v.created_at : null);
   const card = (v: Valuation) => (
-    <ValuoCard valuation={v} page={page} property={property} runs={runsQ.data?.data ?? []}
-      onEdit={canRun ? () => setEditing(true) : undefined} />
+    <>
+      <ValuoCard valuation={v} page={page} property={property} runs={runsQ.data?.data ?? []}
+        onEdit={canRun ? () => setEditing(true) : undefined} />
+      {!readOnly && <Comparables key={v.id} valuation={v} fields={page?.fields ?? []} />}
+    </>
   );
 
   let body: ReactNode = null;
@@ -89,7 +106,7 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
           </p>
         )}
         {open ? (
-          <ValuoEditor propertyId={property.property_id} page={page} ignored={shown?.ignored_ids ?? []}
+          <ValuoEditor propertyId={property.property_id} page={page} refused={formErrors(shown)}
             onCancel={() => setEditing(false)} onDone={done} />
         ) : shown ? card(shown) : !page.refusal && (
           <EstimateCard tone="absent" eyebrow="Ocenění Valuo" className="flex flex-col items-start gap-2">
@@ -156,29 +173,40 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
     { label: 'náš odhad', value: ours && (lease ? ours.estimated_monthly_rent_czk : ours.estimated_sale_price_czk) },
     { label: 'MF', value: lease && mf.kind === 'value' ? mf.ref.monthly_rent_czk : null },
   ].filter((m): m is { label: string; value: number } => m.value != null);
+  // Against the exact average, never the rounded one on screen.
   const delta = ask != null && r.avg_price ? ((ask - r.avg_price) / r.avg_price) * 100 : null;
+  const range = band(v, 'range_price');
+  const rangeM2 = band(v, 'range_price_m2');
   const flags = Array.isArray(r.flags) ? r.flags.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))).join(', ') : null;
   const rows: [string, string | null][] = [
-    ['Za m² (min–max)', r.min_price_m2 != null && r.max_price_m2 != null ? `${fmtCount(Math.round(r.min_price_m2))}–${perM2(r.max_price_m2)}` : null],
+    ['Za m² (pásmo)', rangeM2 && `${fmtCount(Math.round(rangeM2[0]))}–${perM2(rangeM2[1])}`],
     ['Směr. odchylka Valuo', r.std_price_m2 != null ? `± ${perM2(r.std_price_m2)}` : null],
     ['Plocha výpočtu', r.calc_area != null ? fmtArea(r.calc_area) : null],
-    ['Okruh srovnání', r.distance != null ? fmtDistanceM(r.distance) : null], // metres: unverified until the probe
     ['Ke dni', typeof v.request.as_of === 'string' ? fmtDateSlash(v.request.as_of) : null],
   ];
   // An empty list is an answer (Valuo raised none), so no row; only a missing one is the dashed gap.
   if (flags !== '') rows.push(['Příznaky', flags]);
-  // Said only when there is something to say: a point coarser than a street, a parameter the answer did not use.
-  const notes = [['Poloha', v.provenance.place?.note], ['Valuo ignorovalo', (v.ignored_labels ?? []).join(', ')]].filter((n): n is [string, string] => !!n[1]);
+  // Said only when there is something to say: what the point sent stands for (the place the user typed, as typed).
+  const place = v.provenance.place?.class === 'user' ? v.request.place : v.provenance.place?.note;
+  const reach = v.summary ? reliability(v.summary) : []; // rows from before v3 carry no summary
   return (
     <EstimateCard eyebrow={eyebrow} aside={aside}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
-        <span className="text-lg font-medium font-mono tabular-nums">{fmtCzk(r.avg_price)}<Period on={lease} /></span>
+        <Price value={r.avg_price} lease={lease} className="text-lg font-medium font-mono tabular-nums" />
         <span className={`text-[0.72rem] font-mono tabular-nums ${INK3}`}>{perM2(r.avg_price_m2)}</span>
       </div>
-      {r.min_price != null && r.max_price != null && r.avg_price != null && (
+      {reach.length > 0 && <p className="mt-0.5 text-[0.72rem] font-mono tabular-nums text-[var(--color-ink-2)]">{reach.join(' · ')}</p>}
+      {v.summary?.not_enough && (
+        // Ochre lives in the dot only: ochre text fails contrast on paper (system.md).
+        <p className="mt-1 flex items-center gap-1.5 text-[0.72rem] text-[var(--color-ink-2)]">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-ochre)]" />
+          Valuo nenašlo dost srovnatelných nemovitostí ani v maximálním okruhu.
+        </p>
+      )}
+      {range && r.avg_price != null && (
         <div className="mt-3">
-          <RangeStrip range={{ low: r.min_price, mid: r.avg_price, high: r.max_price }}
-            caption="min · průměr · max (Valuo)" format={fmtCzk} marks={marks} />
+          <RangeStrip range={{ low: shownPrice(range[0], lease), mid: r.avg_price, high: shownPrice(range[1], lease) }}
+            caption="pásmo spolehlivosti (Valuo)" format={fmtCzk} marks={marks} />
         </div>
       )}
       {delta != null && (
@@ -192,9 +220,8 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
             {value ?? <span className={`px-1.5 border border-dashed border-[var(--color-rule-strong)] rounded-[var(--radius-xs)] ${INK3}`}>—</span>}
           </CardRow>
         ))}
-        {notes.map(([label, text]) => <CardRow key={label} label={label}>{text}</CardRow>)}
+        {typeof place === 'string' && place !== '' && <CardRow label="Poloha">{place}</CardRow>}
       </dl>
-      <p className="mt-1.5 text-[0.58rem] text-[var(--color-ink-4)]">Valuo API · počet srovnání Valuo neuvádí</p>
     </EstimateCard>
   );
 }
@@ -203,7 +230,7 @@ const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
   { header: 'Druh', className: `text-[0.8rem] ${INK3}`, cell: (v) => v.kind_label ?? '—' },
   {
     header: 'Průměr', right: true, className: 'font-mono tabular-nums text-[var(--color-ink)]',
-    cell: (v) => <>{fmtCzk(v.result?.avg_price)}<Period on={v.result != null && isLease(v)} /></>,
+    cell: (v) => <Price value={v.result?.avg_price ?? null} lease={v.result != null && isLease(v)} />,
   },
   // Each cell names its own unit (rule 23): a sale row and a lease row sit 300x apart.
   {
@@ -214,32 +241,136 @@ const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
   { header: 'Prostředí', className: `text-[0.65rem] tracking-[0.14em] uppercase ${INK3}`, cell: (v) => ENVIRONMENT[v.environment] },
 ];
 
-function ValuoEditor({ propertyId, page, ignored, onCancel, onDone }: {
+/* The app's one lightbox shows a photo with no stored copy from its own URL, which sits in `sreality_url`. */
+const asImage = (p: ValuoPhoto, i: number): ImagePublic => ({
+  id: i, sreality_id: 0, sequence: i, sreality_url: p.full, storage_path: null, clip_fine_tag: null,
+  clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
+});
+/* Only a web address becomes a link: the URL is Valuo's, not ours. */
+const webUrl = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? u : null);
+const NO_PHOTO = 'block h-[3.375rem] w-[4.5rem] rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)]';
+
+/* Valuo's comparables under its card, in Valuo's order; every per-m² cell names its own unit (rule 23).
+ * The phone card leaves them out. */
+function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: readonly ValuoField[] }) {
+  const [photos, setPhotos] = useState<ValuoPhoto[] | null>(null);
+  const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
+  const records = v.records ?? [];
+  if (records.length === 0) return null;
+  const basis = ppm2BasisFromToken(v.ppm2_basis);
+  const lease = basis === 'rent';
+  const num = 'px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap';
+  return (
+    <div className="pt-3">
+      <SectionLabel>
+        Srovnávací nemovitosti · <span className="font-mono tabular-nums tracking-normal">{records.length}</span>
+      </SectionLabel>
+      <div className="mt-3 min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)]">
+        <table aria-label="Srovnávací nemovitosti Valuo" className="w-full text-sm">
+          <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
+            <tr>
+              <Th size="xs">Foto</Th>
+              <Th size="xs">Adresa</Th>
+              <Th size="xs">Dispozice</Th>
+              <Th size="xs" align="right">Plocha</Th>
+              <Th size="xs" align="right">Cena</Th>
+              <Th size="xs" align="right">Za m²</Th>
+              <Th size="xs" align="right">Upravená cena</Th>
+              <Th size="xs" align="right">Vzdálenost</Th>
+              <Th size="xs" align="right">Shoda</Th>
+              <Th size="xs" align="right">V inzerci</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {records.map((r, i) => {
+              // The advert detail's shape is unseen in production yet: only a string reads as an address.
+              const address = typeof r.address === 'string' && r.address !== '' ? r.address : r.place;
+              const first = r.photos?.[0];
+              const href = webUrl(r.advert_url);
+              return (
+                <tr key={`${r.id}:${i}`} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
+                  <td className="px-3 py-2">
+                    {first && !broken.has(i) ? (
+                      <button type="button" onClick={() => setPhotos(r.photos ?? null)}
+                        aria-label={`Fotografie (${r.photos?.length ?? 0}): ${address ?? 'srovnání'}`}
+                        className="block h-[3.375rem] w-[4.5rem] overflow-hidden rounded-[var(--radius-xs)] bg-[var(--color-inset)]">
+                        <img src={first.thumb} alt={address ?? 'Fotka srovnání'} loading="lazy" decoding="async"
+                          onError={() => setBroken((b) => new Set(b).add(i))} className="block h-full w-full object-cover" />
+                      </button>
+                    ) : <span aria-hidden className={NO_PHOTO} />}
+                  </td>
+                  <td className="px-3 py-2 min-w-[10rem] text-[var(--color-ink)]">
+                    {href ? (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">
+                        {address ?? 'Inzerát'}
+                      </a>
+                    ) : (address ?? '—')}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-[var(--color-ink-2)]">{optionLabel(fields, 'local_type', r.local_type)}</td>
+                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtArea(r.calc_area)}</td>
+                  <td className={`${num} text-[var(--color-ink)]`}>
+                    {r.sale_price && (
+                      <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)"
+                        className={`mr-1.5 font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
+                    )}
+                    {fmtCzk(r.price)}<Period on={lease && r.price != null} />
+                  </td>
+                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</td>
+                  <td className={`${num} text-[var(--color-ink)]`}>{fmtCzk(r.adjusted_price)}<Period on={lease && r.adjusted_price != null} /></td>
+                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtDistanceM(r.distance)}</td>
+                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtPct(r.score_prct, { digits: 0 })}</td>
+                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtTomDays(r.days)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {photos && photos.length > 0 && (
+        <Suspense fallback={null}>
+          <ImageLightbox images={photos.map(asImage)} startIndex={0} onClose={() => setPhotos(null)} />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+
+function ValuoEditor({ propertyId, page, refused, onCancel, onDone }: {
   propertyId: number;
   page: ValuoPage;
-  ignored: string[];
+  refused: ValuoIssue[]; // what Valuo refused on the row on screen, until this form's own answer replaces it
   onCancel: () => void;
   onDone: (run: ValuoRun) => void;
 }) {
   const run = useRunValuo(propertyId);
   const [edits, setEdits] = useState<ValuoValues>({});
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failed, setFailed] = useState<Valuation | null>(null);
   const values = { ...page.defaults, ...edits };
   const missing = missingRequired(page.fields, values);
   const busy = run.isPending;
   const submit = () => {
     setFailed(null);
     // A failed paid call is a stored row too: the form stays open to try again.
-    run.mutate(edits, { onSuccess: (res) => (res.valuation.error ? setFailed(res.valuation.error.message) : onDone(res)) });
+    run.mutate(edits, { onSuccess: (res) => (res.valuation.error ? setFailed(res.valuation) : onDone(res)) });
   };
+  const issues = failed ? formErrors(failed) : refused;
+  const said = (name: string) => issues.filter((i) => i.field === name).map((i) => i.message);
+  // An issue naming no parameter on this form still reads, under the banner.
+  const loose = issues.filter((i) => i.field == null || !page.fields.some((f) => f.name === i.field));
   const param = (f: ValuoField) => (
-    <Param key={f.name} field={f} value={values[f.name] ?? null} ignored={ignored.includes(f.name)}
+    <Param key={f.name} field={f} value={values[f.name] ?? null} issues={said(f.name)}
       provenance={f.name in edits ? { class: 'user', note: null } : page.provenance[f.name]}
       onChange={(v) => setEdits((e) => withEdit(e, page.defaults, f.name, v))} />
   );
   const more = page.fields.filter((f) => f.group === 'more');
   const assumed = more.filter((f) => !(f.name in edits) && page.provenance[f.name]?.class === 'assumed').length;
-  const counts = `${more.filter((f) => values[f.name] != null).length} vyplněno · ${assumed} ${czPlural(assumed, 'předpoklad', 'předpoklady', 'předpokladů')}`;
+  // A refused parameter inside the folded group is counted on its band, so folding never hides it.
+  const wrong = more.filter((f) => said(f.name).length > 0).length;
+  const counts = [
+    `${more.filter((f) => values[f.name] != null).length} vyplněno`,
+    `${assumed} ${czPlural(assumed, 'předpoklad', 'předpoklady', 'předpokladů')}`,
+    wrong > 0 && `${wrong} ${czPlural(wrong, 'chyba', 'chyby', 'chyb')}`,
+  ].filter(Boolean).join(' · ');
   const aside = (
     <div className="flex flex-wrap items-center justify-end gap-1">
       <button type="button" onClick={() => setEdits({})} disabled={busy || Object.keys(edits).length === 0} className={QUIET}>
@@ -261,7 +392,7 @@ function ValuoEditor({ propertyId, page, ignored, onCancel, onDone }: {
         <div className={GRID}>{page.fields.filter((f) => f.group === 'basic').map(param)}</div>
         {more.length > 0 && (
           <div className="mt-5">
-            <CollapsibleGroup title={`Další parametry · ${counts}`} active={more.some((f) => f.name in edits)}>
+            <CollapsibleGroup title={`Další parametry · ${counts}`} active={more.some((f) => f.name in edits)} defaultOpen={wrong > 0}>
               <div className={GRID}>{more.map(param)}</div>
             </CollapsibleGroup>
           </div>
@@ -269,57 +400,67 @@ function ValuoEditor({ propertyId, page, ignored, onCancel, onDone }: {
       </fieldset>
       {missing.length > 0 && <p className={`mt-3 text-[0.75rem] ${INK3}`}>Chybí povinné parametry: {missing.join(', ')}.</p>}
       {busy && <p className={`mt-3 flex items-center gap-2 text-sm ${INK3}`}><Spinner /> Valuo počítá…</p>}
-      {failed != null && <ErrorBanner title="Ocenění selhalo:" message={failed} />}
+      {failed?.error && <ErrorBanner title="Ocenění selhalo:" message={failed.error.message} />}
+      {loose.map((i, k) => <p key={k} className={`mt-1.5 ${BRICK}`}>{i.field ? `${i.field}: ${i.message}` : i.message}</p>)}
       {run.error && <ErrorBanner title="Nelze ocenit:" message={run.error.message} />}
     </EstimateCard>
   );
 }
 
-/* Where a value came from, after its caption; brick marks one Valuo's answer did not use. */
+/* Where a value came from, after its caption. */
 const TAGS: Record<Provenance['class'], [string, string]> = {
   ad: ['z inzerátu', INK3], property: ['z inzerátu', INK3], inferred: ['odvozeno', INK3],
   assumed: ['předpoklad', 'text-[var(--color-ink-2)]'], missing: ['chybí', INK3], user: ['upraveno', 'text-[var(--color-copper)]'],
 };
 const BOOL = [{ value: null, label: 'neuvedeno' }, { value: 'ano', label: 'ano' }, { value: 'ne', label: 'ne' }] as const;
 
-function Param({ field: f, value, provenance, ignored, onChange }: {
+const INPUT = 'w-full px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]';
+
+function Param({ field: f, value, provenance, issues, onChange }: {
   field: ValuoField;
   value: ValuoValue;
   provenance: Provenance | undefined;
-  ignored: boolean;
+  issues: string[];
   onChange: (v: ValuoValue) => void;
 }) {
   const [word, tone] = TAGS[provenance?.class ?? 'missing'];
   const text = value == null ? null : String(value);
+  const issuesId = useId();
+  const invalid = issues.length > 0 ? { 'aria-invalid': true, 'aria-describedby': issuesId } : {};
+  const aria = issues.length > 0 ? { ariaInvalid: true, ariaDescribedBy: issuesId } : {};
   const control =
-    f.fixed || f.type === 'text' ? (
+    f.fixed ? (
       <p className="py-1.5 text-sm text-[var(--color-ink-2)]">{f.type === 'enum' ? optionLabel([f], f.name, value) : (text ?? '—')}</p>
+    ) : f.type === 'text' ? (
+      // An empty box is no value: a required one then holds the call.
+      <input type="text" aria-label={f.label} value={text ?? ''} maxLength={f.max_length ?? undefined} className={INPUT} {...invalid}
+        onChange={(e) => onChange(e.target.value.trim() === '' ? null : e.target.value)} />
     ) : f.type === 'enum' && f.options.length <= 3 ? (
-      <Segmented label={f.label} value={text} onChange={onChange}
+      <Segmented label={f.label} value={text} onChange={onChange} {...aria}
         options={f.required ? f.options : [{ value: null, label: NONE }, ...f.options]} />
     ) : f.type === 'enum' ? (
-      <SingleSelectDropdown label={f.label} value={text} options={f.options} onChange={onChange} placeholder={NONE} />
+      <SingleSelectDropdown label={f.label} value={text} options={f.options} onChange={onChange} placeholder={NONE} {...aria} />
     ) : f.type === 'boolean' ? (
-      <Segmented label={f.label} options={BOOL} value={value == null ? null : value ? 'ano' : 'ne'}
+      <Segmented label={f.label} options={BOOL} value={value == null ? null : value ? 'ano' : 'ne'} {...aria}
         onChange={(v) => onChange(v == null ? null : v === 'ano')} />
     ) : f.type === 'date' ? (
       // Never cleared: a request without its date would meet another day's answer in the dedupe.
       <input type="date" aria-label={f.label} value={text ?? ''} onChange={(e) => e.target.value && onChange(e.target.value)}
-        className="w-full px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]" />
+        className={INPUT} {...invalid} />
     ) : (
       <DecimalField label={f.label} value={typeof value === 'number' ? value : null} onChange={onChange}
-        suffix={f.unit ?? undefined} integer={f.type === 'integer'} />
+        suffix={f.unit ?? undefined} integer={f.type === 'integer'} {...aria} />
     );
   const tag = (
     <span className="inline-flex items-center gap-1.5 text-[0.58rem] tracking-[0.16em] uppercase">
       <span className={tone}>{word}</span>
       {provenance?.note && <InfoHint text={provenance.note} className="[&>svg]:h-3 [&>svg]:w-3" />}
-      {ignored && <span className="text-[var(--color-brick)]">Valuo ignorovalo</span>}
     </span>
   );
   return (
     <Field label={f.label} aside={tag}>
       <div className={value == null && !f.fixed ? ABSENT : undefined}>{control}</div>
+      {issues.length > 0 && <div id={issuesId}>{issues.map((m, k) => <p key={k} className={`mt-1 ${BRICK}`}>{m}</p>)}</div>}
     </Field>
   );
 }

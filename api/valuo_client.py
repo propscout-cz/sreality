@@ -1,15 +1,18 @@
-"""Valuo's calculation API (valuo.cz/docs/api): which credential answers, and one paid call.
+"""Valuo's API v3 (docs.valuo.com): which credential answers, one paid market-value call
+(`POST api.valuo.com/v1/market-value/{type}`), and one advert-detail call for its comparables' photos.
 
-The variable's NAME is the environment — `VALUO_API_TOKEN` (production) wins over
+The variable's NAME picks the token — `VALUO_API_TOKEN` (production) wins over
 `VALUO_SANDBOX_API_TOKEN`, neither set means Valuo is unconfigured — so there is no flag. Both
-environments call the one documented URL and differ only by token (unverified until Valuo says
-otherwise in writing). One call, never retried: a retry is a second payment. The token rides the
-Authorization header only and is never logged or returned; a row records `token_sha` instead.
+call the one host and differ only by token; the sandbox answers synthetic data and says so in `ver`,
+which `answered_by` believes over the variable's name. A call is never retried: a retry is a second
+payment. The token rides the Authorization header only and is never logged or returned; a row records
+`token_sha` instead.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -19,12 +22,14 @@ from api import http_json
 
 LOG = logging.getLogger(__name__)
 
-URL = "https://api.valuo.cz/v1/calculation"
+BASE_URL = "https://api.valuo.com/v1"
 TIMEOUT = (5, 20)  # connect, read — seconds
+COUNTRY_CODE = "cs"  # Valuo's code for Czechia; api/valuo.py refuses every other country before a request exists
 TOKEN_ENV: tuple[tuple[str, str], ...] = (
     ("VALUO_API_TOKEN", "production"),
     ("VALUO_SANDBOX_API_TOKEN", "sandbox"),
 )
+DETAIL_LIMIT = 300
 
 # The closed set of ways a call can fail, each with the one sentence the page shows.
 ERRORS: dict[str, str] = {
@@ -35,6 +40,7 @@ ERRORS: dict[str, str] = {
     "timeout": "Valuo neodpovědělo do 20 sekund.",
     "invalid_response": "Valuo vrátilo odpověď, které nerozumíme.",
     "form_errors": "Valuo odmítlo některé parametry.",
+    "calculation": "Valuo nemovitost neocenilo.",
     "no_price": "Valuo cenu nevrátilo.",
 }
 
@@ -58,25 +64,51 @@ def credential() -> Credential | None:
     return None
 
 
+def answered_by(cred: Credential, body: Any) -> str:
+    """The environment that ANSWERED: a sandbox token pasted into VALUO_API_TOKEN still says `-sandbox`."""
+    ver = body.get("ver") if isinstance(body, dict) else None
+    return "sandbox" if isinstance(ver, str) and ver.endswith("-sandbox") else cred.environment
+
+
 class ValuoError(Exception):
-    """A call that bought no price. `response` is Valuo's JSON answer when it sent one."""
+    """A call that bought no answer. `response` is Valuo's JSON when it sent one, `detail` its own words."""
 
     def __init__(self, code: str, http_status: int | None = None, response: Any = None) -> None:
         super().__init__(f"{code} status={http_status}")
         self.code, self.http_status, self.response = code, http_status, response
+        said = response.get("message") if isinstance(response, dict) else None
+        self.detail = (said.strip()[:DETAIL_LIMIT] or None) if isinstance(said, str) else None
 
     @property
     def message(self) -> str:
+        if self.code == "calculation" and self.detail:
+            return f"{ERRORS['calculation'].rstrip('.')}: {self.detail}"
         return ERRORS[self.code]
 
 
-def calculate(cred: Credential, request: dict[str, Any]) -> dict[str, Any]:
-    """Valuo's verbatim answer when it carries a price; ValuoError otherwise."""
-    status: int | None = 200
+def form_issues(body: Any) -> list[dict[str, Any]]:
+    """Valuo's refused form as [{field, message}]: its error body's `message` is the list of zod issues (JSON-encoded,
+    or already a list), each naming the parameter as `path[0]`. [] when the body is anything else."""
+    issues = body.get("message") if isinstance(body, dict) else None
+    if isinstance(issues, str):
+        try:
+            issues = json.loads(issues)
+        except ValueError:
+            return []
+    if not isinstance(issues, list) or not issues or not all(isinstance(i, dict) for i in issues):
+        return []
+    out = []
+    for issue in issues:
+        path = issue.get("path")
+        head = path[0] if isinstance(path, list) and path else None
+        out.append({"field": head if isinstance(head, str) else None, "message": str(issue.get("message") or "")})
+    return out
+
+
+def _post(cred: Credential, path: str, body: dict[str, Any]) -> Any:
     try:
-        body = http_json.fetch_json(
-            "POST", URL, json=request, timeout=TIMEOUT, headers={"Authorization": f"Bearer {cred.token}"},
-        )
+        return http_json.fetch_json("POST", f"{BASE_URL}/{path}", json=body, timeout=TIMEOUT,
+                                    headers={"Authorization": f"Bearer {cred.token}"})
     except http_json.HttpJsonError as exc:
         status = exc.status
         if exc.reason == "timeout":
@@ -87,16 +119,28 @@ def calculate(cred: Credential, request: dict[str, Any]) -> dict[str, Any]:
             raise _failed("rate_limited", status, exc.body) from None
         if exc.reason == "not_json":
             raise _failed("invalid_response", status) from None
-        if status is None or status >= 500 or not isinstance(exc.body, dict):
-            raise _failed("unavailable", status, exc.body) from None
-        body = exc.body  # a 4xx that still answers in Valuo's own shape: judged below
+        # Request validation answers HTTP 500 today (400 later, Valuo says); 400 itself is the engine's refusal.
+        if form_issues(exc.body):
+            raise _failed("form_errors", status, exc.body) from None
+        raise _failed("calculation" if status == 400 else "unavailable", status, exc.body) from None
+
+
+def calculate(cred: Credential, request: dict[str, Any]) -> dict[str, Any]:
+    """Valuo's verbatim answer when it carries a price; ValuoError otherwise."""
+    body = _post(cred, f"market-value/{request['property_type']}", request)
     if not isinstance(body, dict):
-        raise _failed("invalid_response", status)
-    if body.get("form_errors"):
-        raise _failed("form_errors", status, body)
+        raise _failed("invalid_response", 200)
     result = body.get("result")
-    if body.get("success") is False or not isinstance(result, dict) or not _is_number(result.get("avg_price")):
-        raise _failed("no_price", status, body)
+    if not isinstance(result, dict) or not _is_number(result.get("avg_price")):
+        raise _failed("no_price", 200, body)
+    return body
+
+
+def advert_details(cred: Credential, ids: list[Any]) -> list[Any]:
+    """Valuo's verbatim per-advert answer (photos as storage paths) for its comparables' ids; ValuoError otherwise."""
+    body = _post(cred, "advert/detail", {"country_code": COUNTRY_CODE, "ids": ids})
+    if not isinstance(body, list):
+        raise _failed("invalid_response", 200)
     return body
 
 

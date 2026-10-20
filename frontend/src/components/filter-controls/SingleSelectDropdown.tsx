@@ -13,6 +13,8 @@ export function SingleSelectDropdown<T extends string | number>({
   options,
   onChange,
   placeholder = 'any',
+  ariaInvalid,
+  ariaDescribedBy,
 }: {
   /* REQUIRED. `placeholder` only renders as the blank option's text — an
    * option's text is a VALUE, never the select's name. */
@@ -21,10 +23,14 @@ export function SingleSelectDropdown<T extends string | number>({
   options: ReadonlyArray<EnumOptionLite<T>>;
   onChange: (v: T | null) => void;
   placeholder?: string;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
 }) {
   return (
     <select
       aria-label={label}
+      aria-invalid={ariaInvalid || undefined}
+      aria-describedby={ariaDescribedBy}
       value={value == null ? '' : String(value)}
       onChange={(e) => {
         const raw = e.target.value;
