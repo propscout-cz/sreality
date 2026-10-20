@@ -169,6 +169,16 @@ def test_no_working_board_yet_reads_null(client, conn) -> None:
     assert res.json() is None
 
 
+def test_the_working_board_never_acts_for_another_account(client, conn) -> None:
+    """A delegate under X-Act-As reads and writes no board of the owner's (pipeline-sharing §3.7)."""
+    acting = {"X-Act-As": "22222222-2222-2222-2222-222222222222"}
+    for res in (client.get("/stats/dashboard", headers=acting),
+                client.put("/stats/dashboard", json={"charts": [_CHART]}, headers=acting)):
+        assert res.status_code == 403
+        assert res.json()["detail"] == "this route does not act for another account"
+    assert conn.executed == []
+
+
 def test_both_routes_ride_the_tenant_connection_and_name_their_account() -> None:
     routes = {(m, r.path): r for r in api_main.app.routes if isinstance(r, APIRoute)
               for m in r.methods if r.path == "/stats/dashboard"}

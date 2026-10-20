@@ -138,7 +138,10 @@ def test_the_list_is_named_dashboards_own_and_shared_in_the_saved_order(client, 
     assert body["total"] == 2 and body["data"][0] == _OWN_PAYLOAD
     assert body["data"][1]["owner_email"] == "owner@x.cz" and body["data"][1]["filter_spec"] is None
     [(sql, params)] = conn.executed
-    assert sql.endswith("FROM stats_dashboards t WHERE name IS NOT NULL ORDER BY t.position ASC, t.created_at DESC")
+    # Own dashboards first, then the shared ones, each group in its saved order (the SPA splits the same way).
+    assert sql.endswith("FROM stats_dashboards t WHERE name IS NOT NULL "
+                        "ORDER BY (t.account_id IN (SELECT current_account_ids())) DESC, "
+                        "t.position ASC, t.created_at DESC")
     assert params is None
 
 
@@ -189,6 +192,41 @@ def test_a_recipients_update_or_delete_matches_nothing_and_is_a_404(client, conn
     assert client.get(f"/stats/dashboards/{_ID}").status_code == 404
     assert [q.split(" ", 1)[0] for q, _ in conn.executed] == ["UPDATE", "DELETE", "SELECT"]
     assert not any("account_id = %s" in q for q, _ in conn.executed)
+
+
+@pytest.mark.parametrize("body", [{}, {"name": None, "charts": None}], ids=["empty", "only nulls that keep"])
+def test_a_put_that_changes_nothing_still_answers_only_to_the_owner(client, conn, body) -> None:
+    """No field to write would fall back to a plain read, which a recipient passes (the shared-read arm).
+    The row is locked FOR UPDATE instead, which applies the UPDATE policy: a recipient's PUT is the same 404
+    a real change gets, and nothing is bumped."""
+    res = client.put(f"/stats/dashboards/{_ID}", json=body)
+    assert res.status_code == 404 and res.json()["detail"] == "dashboard not found"
+    [(sql, params)] = conn.executed
+    assert sql.startswith("SELECT t.id") and sql.endswith("WHERE t.id = %s AND name IS NOT NULL FOR UPDATE OF t")
+    assert params == (str(_ID),)
+    conn.script = [(lambda q: q.endswith("FOR UPDATE OF t"), [_OWN])]
+    assert client.put(f"/stats/dashboards/{_ID}", json=body).json() == _OWN_PAYLOAD
+    assert not any(q.startswith("UPDATE") for q, _ in conn.executed)
+
+
+def test_update_refuses_a_field_the_kind_does_not_have(conn) -> None:
+    with pytest.raises(AssertionError):
+        ss.update(conn, DASHBOARDS, str(_ID), {"account_id": str(_ACCT)})
+    assert conn.executed == []
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [
+    ("get", "/stats/dashboards/42", None),
+    ("put", "/stats/dashboards/42", {"name": "x"}),
+    ("delete", "/stats/dashboards/42", None),
+    ("put", "/stats/dashboards/reorder", {"ids": ["42"]}),
+    ("post", "/stats/dashboards/42/shares", {"email": "b@x.cz"}),
+    ("delete", f"/stats/dashboards/42/shares/{_RECIPIENT}", None),
+])
+def test_a_malformed_id_from_a_hand_edited_link_is_a_422(client, conn, method, path, body) -> None:
+    call = getattr(client, method)
+    assert (call(path, json=body) if body is not None else call(path)).status_code == 422
+    assert conn.executed == []
 
 
 def test_delete_and_reorder(client, conn) -> None:
@@ -272,6 +310,30 @@ def test_a_re_share_writes_no_second_notification(client, conn, monkeypatch) -> 
     assert client.post(f"/stats/dashboards/{_ID}/shares", json={"email": "b@x.cz"}).status_code == 200
     assert sum(q.startswith("INSERT INTO stats_dashboard_shares") for q, _ in identity.executed) == 1
     assert not any("notification_dispatches" in q for q, _ in identity.executed)
+
+
+def test_a_revoke_then_re_share_notifies_no_second_time(client, conn, monkeypatch) -> None:
+    """The share row is new again after a revoke, so the grant reaches its dispatch again, with the SAME key
+    (no time in it) and ON CONFLICT DO NOTHING: migration 206's unique dedupe_key keeps the one notification,
+    so a revoke + re-share loop cannot refill the recipient's bell with text the owner chose."""
+    import re
+
+    from tests.migration_defs import MIGRATIONS
+
+    keys: list[Any] = []
+    for _round in range(2):
+        conn.script = [(lambda q: q == _GATE, [("Praha byty",)]), (_starts("SELECT t.id"), [_OWN])]
+        identity = _identity((_starts("INSERT INTO stats_dashboard_shares"), [(_ACCT,)]))
+        monkeypatch.setattr(deps, "open_background_conn", _Opener(identity))
+        assert client.post(f"/stats/dashboards/{_ID}/shares", json={"email": "b@x.cz"}).status_code == 200
+        [(sql, params)] = [(q, p) for q, p in identity.executed if "notification_dispatches" in q]
+        assert sql.endswith("ON CONFLICT DO NOTHING")
+        keys.append(params[4])
+        revoke = ScriptConn([(_starts("DELETE FROM stats_dashboard_shares"), [(1,)])])
+        assert shares.revoke_dashboard(revoke, str(_ID), str(_RECIPIENT)) == {"deleted": True}
+    assert keys == [f"share:dashboard:{_ID}:{_RECIPIENT}"] * 2
+    s206 = " ".join((MIGRATIONS / "206_notifications_unified_event_model.sql").read_text().split())
+    assert re.search(r"add constraint notification_dispatches_dedupe_key_key unique \(dedupe_key\)", s206)
 
 
 def test_sharing_with_your_own_account_is_422_and_rolled_back(client, conn, monkeypatch) -> None:

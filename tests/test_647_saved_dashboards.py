@@ -58,16 +58,20 @@ def test_every_statement_re_runs_as_a_no_op() -> None:
     for name, on in (("stats_dashboard_shares_party", "public.stats_dashboard_shares"),
                      ("stats_dashboards_shared_read", "public.stats_dashboards")):
         assert CODE.index(f"drop policy if exists {name} on {on};") < CODE.index(f"create policy {name} on {on}")
-    for trigger in ("stats_dashboard_shares_account_id_bi", "stats_dashboards_name_guard"):
+    for trigger in ("stats_dashboard_shares_account_id_biu", "stats_dashboards_name_guard"):
         assert CODE.index(f"drop trigger if exists {trigger}") < CODE.index(f"create trigger {trigger}")
+    for check in ("stats_dashboards_charts_check", "stats_dashboards_filter_spec_check"):
+        assert CODE.index(f"drop constraint if exists {check};") < CODE.index(f"add constraint {check} ")
     assert CODE.count("create function") == 0 and CODE.count("create or replace function") == 3
-    # The key swap is the one statement pair that cannot re-run bare (the new FK depends on the new key).
+    # The key swap is the one statement pair that cannot re-run bare (the new FK depends on the new key). It
+    # drops the old key by the name the catalog gives it, whatever 626's apply called it.
     key = _flat(_block("key"))
-    assert ("if exists (select 1 from pg_constraint k join pg_attribute a on a.attrelid = k.conrelid "
+    assert ("select k.conname into old_key from pg_constraint k join pg_attribute a on a.attrelid = k.conrelid "
             "and a.attnum = any (k.conkey) where k.conrelid = 'public.stats_dashboards'::regclass "
-            "and k.contype = 'p' and a.attname = 'account_id') then") in key
-    assert ("alter table public.stats_dashboards drop constraint stats_dashboards_pkey; "
+            "and k.contype = 'p' and a.attname = 'account_id'; if old_key is not null then") in key
+    assert ("execute format('alter table public.stats_dashboards drop constraint %I', old_key); "
             "alter table public.stats_dashboards add constraint stats_dashboards_pkey primary key (id);") in key
+    assert "-- ci-allow-dynamic: stats_dashboards' old primary key is dropped by the name" in SQL
 
 
 # --- stats_dashboards: the saved-set row ----------------------------------------------
@@ -82,6 +86,11 @@ def test_the_board_becomes_a_saved_set_row_keyed_on_id() -> None:
         "alter table public.stats_dashboards add column if not exists position integer not null default 0;",
         "alter table public.stats_dashboards add column if not exists created_at timestamptz not null default now();",
         "alter table public.stats_dashboards alter column account_id set not null;",
+        # A direct PostgREST write cannot hand a recipient junk: an array board, an object filter, both capped.
+        "alter table public.stats_dashboards add constraint stats_dashboards_charts_check "
+        "check (jsonb_typeof(charts) = 'array' and pg_column_size(charts) <= 262144);",
+        "alter table public.stats_dashboards add constraint stats_dashboards_filter_spec_check "
+        "check (filter_spec is null or (jsonb_typeof(filter_spec) = 'object' and pg_column_size(filter_spec) <= 65536));",
         "create index if not exists stats_dashboards_account_idx on public.stats_dashboards (account_id);",
         "create unique index if not exists stats_dashboards_one_working_per_account "
         "on public.stats_dashboards (account_id) where name is null;",
@@ -90,6 +99,14 @@ def test_the_board_becomes_a_saved_set_row_keyed_on_id() -> None:
     # The key swap comes before anything references the new key.
     assert CODE.index("add constraint stats_dashboards_pkey primary key (id)") < CODE.index(
         "references public.stats_dashboards(id)")
+
+
+def test_the_table_and_its_columns_say_what_they_hold() -> None:
+    assert "'(stats_dashboards_name_guard). charts are validated by" in SQL
+    for column in ("id", "name", "filter_spec", "position", "color"):
+        assert f"comment on column public.stats_dashboards.{column} is" in CODE, column
+    assert ("'The dashboard''s name; NULL = the account''s one working board. Never crosses NULL on UPDATE.';"
+            ) in SQL
 
 
 def test_a_rows_name_never_crosses_null() -> None:
@@ -150,7 +167,7 @@ def test_the_tenant_policy_is_untouched_and_the_shared_arm_is_select_only() -> N
     recipient READS through one FOR SELECT arm, so every write stays the owner's."""
     assert "stats_dashboards_tenant_rw" not in _flat(SQL[: SQL.index("do $post$")])
     assert ("create policy stats_dashboards_shared_read on public.stats_dashboards for select to authenticated "
-            "using (id in (select dashboard_id from public.stats_dashboard_shares));") in CODE
+            "using (name is not null and id in (select dashboard_id from public.stats_dashboard_shares));") in CODE
     assert "acting_account_ids" not in CODE
 
 
@@ -191,7 +208,9 @@ def test_the_trigger_stamps_the_owner_and_refuses_the_working_board() -> None:
     assert "security definer" not in fn
     assert ("revoke all on function public.sync_account_id_from_dashboard() "
             "from public, anon, authenticated;") in CODE
-    assert ("create trigger stats_dashboard_shares_account_id_bi before insert on public.stats_dashboard_shares "
+    # Belt and braces: re-pointing a share at another dashboard re-stamps the owner and refuses the working board.
+    assert ("create trigger stats_dashboard_shares_account_id_biu before insert or update of dashboard_id "
+            "on public.stats_dashboard_shares "
             "for each row execute function public.sync_account_id_from_dashboard();") in CODE
 
 
@@ -224,7 +243,16 @@ def test_the_post_conditions_name_the_new_shape() -> None:
         "is distinct from array['id'] then",
         "and a.attname = 'account_id') then raise exception",
         "pg_get_indexdef(i.indexrelid) like '%USING btree (account_id) WHERE (name IS NULL)'",
-        "'stats_dashboards_name_check', 'stats_dashboards_color_check', 'stats_dashboard_shares_not_self'",
+        "'stats_dashboards_name_check', 'stats_dashboards_color_check', 'stats_dashboards_charts_check', "
+        "'stats_dashboards_filter_spec_check', 'stats_dashboard_shares_not_self')) <> 5 then",
+        "where k.conrelid = 'public.stats_dashboard_shares'::regclass and k.contype = 'p') "
+        "is distinct from array['dashboard_id', 'recipient_account_id'] then",
+        "and k.confrelid = 'public.stats_dashboards'::regclass and k.confdeltype = 'c'",
+        "and a.attname = 'dashboard_id')] and k.confkey = array[(select a.attnum from pg_attribute a "
+        "where a.attrelid = 'public.stats_dashboards'::regclass and a.attname = 'id')]) then",
+        "policyname = 'stats_dashboards_shared_read' and position('name IS NOT NULL' in qual) > 0) then",
+        "and tgname = 'stats_dashboard_shares_account_id_biu'",
+        "like '%BEFORE INSERT OR UPDATE OF dashboard_id ON public.stats_dashboard_shares FOR EACH ROW%') then",
         "position('not acting()' in lower(qual)) > 0",
         "has_table_privilege('authenticated', 'public.stats_dashboard_shares', 'INSERT')",
         "or has_table_privilege('anon', 'public.stats_dashboard_shares', 'SELECT') then",
@@ -260,6 +288,8 @@ def test_the_receipt_probes_what_the_file_creates() -> None:
         "column:stats_dashboards.color",
         "column:stats_dashboards.created_at",
         "constraint:stats_dashboards.stats_dashboards_pkey",
+        "constraint:stats_dashboards.stats_dashboards_charts_check",
+        "constraint:stats_dashboards.stats_dashboards_filter_spec_check",
         "policy:stats_dashboard_shares.stats_dashboard_shares_party",
         "policy:stats_dashboards.stats_dashboards_shared_read",
     ]

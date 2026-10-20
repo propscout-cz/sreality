@@ -113,7 +113,7 @@ a column dimension; the title is derived, never stored. (Migration 628 rewrote t
 into `stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒ the SPA shows
 `DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one status, and no
 byty-only dimension) and the first save persists the whole list. A board holds at most `MAX_CHARTS` charts
-(registry, validated as `Charts` in `api/saved_sets.py`); the SPA offers no "Přidat graf" at the cap.
+(registry, validated as `Charts` in `api/schemas.py`); the SPA offers no "Přidat graf" at the cap.
 
 ### SPA — `frontend/src/lib/stats.ts` + `frontend/src/components/stats/`
 

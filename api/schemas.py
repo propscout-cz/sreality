@@ -11,9 +11,13 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
+from fastapi import HTTPException
+from pydantic import (
+    AfterValidator, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator, model_validator,
+)
 
-from api.saved_sets import Charts, PresetSpec
+from api.location_filter import DistrictChip
+from toolkit import stats_registry as sr
 
 
 def _as_str_list(v: Any) -> Any:
@@ -637,6 +641,36 @@ class ReorderStagesIn(BaseModel):
 # Both instances' bodies (migrations 151, 626, 647). Each blob carries its one validator in
 # its type: PresetSpec (every place chip coded), Charts (toolkit.stats_registry; a refusal is
 # a 422 naming the chart and the reason).
+
+_CHIPS = TypeAdapter(list[DistrictChip])
+
+
+# The blob is stored VERBATIM, so its chips are checked strictly (a "582786" or a
+# `true` id would be stored as written), where the SPA reads them (`readPresetSpec`:
+# `spec.filters`, else a legacy bare filter set). `strict=` at validation time: a
+# `ConfigDict(strict=True)` on the adapter does not reach the nested model.
+def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
+    """Every place chip in the blob is a level plus a RÚIAN code, or the write is a 422."""
+    filters = spec["filters"] if spec.get("filters") is not None else spec
+    if isinstance(filters, dict) and filters.get("districts") is not None:
+        _CHIPS.validate_python(filters["districts"], strict=True)
+    return spec
+
+
+def _valid_board(charts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The board as the stats registry normalises it: the only specs the pivot accepts.
+
+    A refusal is an HTTPException, not a ValueError: pydantic re-raises it unwrapped, so the
+    422's detail is the registry's reason naming the chart, as PUT /stats/dashboard has always
+    answered."""
+    try:
+        return sr.validate_board(charts)
+    except sr.SpecError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+PresetSpec = Annotated[dict[str, Any], AfterValidator(_coded_chips)]
+Charts = Annotated[list[dict[str, Any]], AfterValidator(_valid_board)]
 
 
 class CreatePresetIn(BaseModel):

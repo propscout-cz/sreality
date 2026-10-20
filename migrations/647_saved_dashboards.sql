@@ -18,14 +18,18 @@
 --      board being named in place ("Uložit jako dashboard" always INSERTs a new row, so the working row keeps
 --      its identity). The API never does either; the guard closes a direct PostgREST UPDATE (the browser
 --      holds UPDATE on the table), which would otherwise turn a SHARED dashboard into a working board.
+--      The same direct write cannot hand a recipient junk either: `charts` is a JSON array of at most 256 KiB,
+--      `filter_spec` NULL or a JSON object of at most 64 KiB (stats_dashboards_charts_check /
+--      stats_dashboards_filter_spec_check). The old primary key is dropped by its catalog name.
 --   2. 626's FOR ALL policy stats_dashboards_tenant_rw is untouched: it reads current_account_ids(), so a
 --      delegate acting under a pipeline share reads no dashboard of the owner (pipeline-sharing.md §3.7). A
---      FOR SELECT policy, stats_dashboards_shared_read, lets a share's recipient READ a shared dashboard;
---      PostgreSQL ORs permissive policies per command, so writes stay the owner's (a recipient's UPDATE or
---      DELETE by id matches no row, the API's 404).
+--      FOR SELECT policy, stats_dashboards_shared_read, lets a share's recipient READ a shared NAMED dashboard
+--      (it names `name is not null` itself, belt and braces with the trigger below); PostgreSQL ORs permissive
+--      policies per command, so writes stay the owner's (a recipient's UPDATE or DELETE by id matches no row,
+--      the API's 404).
 --   3. public.stats_dashboard_shares: one row per (dashboard, recipient account), 610's shape. account_id is
---      the OWNER, stamped by the BEFORE INSERT trigger sync_account_id_from_dashboard(), which also refuses a
---      dashboard with no name: the working board is never shareable, by the database. Browser roles get
+--      the OWNER, stamped by the BEFORE INSERT OR UPDATE OF dashboard_id trigger sync_account_id_from_dashboard(),
+--      which also refuses a dashboard with no name: the working board is never shareable, by the database. Browser roles get
 --      SELECT + DELETE and NO INSERT (account uuids are learnable): the API creates a share on the service role
 --      after resolving a confirmed email (POST /stats/dashboards/{id}/shares). Either party deletes (the owner
 --      revokes, the recipient leaves). The party policy carries 641's `not acting()`: a share row is the
@@ -66,18 +70,31 @@ alter table public.stats_dashboards add column if not exists color text
   ));
 alter table public.stats_dashboards add column if not exists created_at timestamptz not null default now();
 
+-- ci-allow-dynamic: stats_dashboards' old primary key is dropped by the name the catalog gives it (no CREATE)
 do $key$
+declare
+  old_key text;
 begin
-  if exists (select 1 from pg_constraint k
-               join pg_attribute a on a.attrelid = k.conrelid and a.attnum = any (k.conkey)
-              where k.conrelid = 'public.stats_dashboards'::regclass and k.contype = 'p'
-                and a.attname = 'account_id') then
-    alter table public.stats_dashboards drop constraint stats_dashboards_pkey;
+  select k.conname into old_key
+    from pg_constraint k
+    join pg_attribute a on a.attrelid = k.conrelid and a.attnum = any (k.conkey)
+   where k.conrelid = 'public.stats_dashboards'::regclass and k.contype = 'p'
+     and a.attname = 'account_id';
+  if old_key is not null then
+    execute format('alter table public.stats_dashboards drop constraint %I', old_key);
     alter table public.stats_dashboards add constraint stats_dashboards_pkey primary key (id);
   end if;
 end
 $key$;
 alter table public.stats_dashboards alter column account_id set not null;
+
+alter table public.stats_dashboards drop constraint if exists stats_dashboards_charts_check;
+alter table public.stats_dashboards add constraint stats_dashboards_charts_check
+  check (jsonb_typeof(charts) = 'array' and pg_column_size(charts) <= 262144);
+alter table public.stats_dashboards drop constraint if exists stats_dashboards_filter_spec_check;
+alter table public.stats_dashboards add constraint stats_dashboards_filter_spec_check
+  check (filter_spec is null
+         or (jsonb_typeof(filter_spec) = 'object' and pg_column_size(filter_spec) <= 65536));
 
 create index if not exists stats_dashboards_account_idx on public.stats_dashboards (account_id);
 create unique index if not exists stats_dashboards_one_working_per_account
@@ -105,8 +122,19 @@ create trigger stats_dashboards_name_guard
 comment on table public.stats_dashboards is
   'Browse > Stats boards (migrations 626, 647). One unnamed row per account is its WORKING board '
   '(GET/PUT /stats/dashboard; partial unique index); every named row is a saved dashboard the account lists, '
-  'loads, reorders and may share read-only (stats_dashboard_shares). charts are validated by '
-  'toolkit.stats_registry.validate_board; filter_spec is the filter-preset blob, NULL = no filter.';
+  'loads, reorders and may share read-only (stats_dashboard_shares). A name never crosses NULL '
+  '(stats_dashboards_name_guard). charts are validated by toolkit.stats_registry.validate_board; filter_spec '
+  'is the filter-preset blob, NULL = no filter.';
+comment on column public.stats_dashboards.id is
+  'The row''s identity (647; was account_id): the saved dashboard''s id, or the working board''s.';
+comment on column public.stats_dashboards.name is
+  'The dashboard''s name; NULL = the account''s one working board. Never crosses NULL on UPDATE.';
+comment on column public.stats_dashboards.filter_spec is
+  'The Browse filter saved with the dashboard, in the filter-preset blob format; NULL = no filter.';
+comment on column public.stats_dashboards.position is
+  'The dashboard''s place in its owner''s list (0 = first); rewritten by PUT /stats/dashboards/reorder.';
+comment on column public.stats_dashboards.color is
+  'Optional chip colour from the shared tag palette (migration 201''s CHECK); NULL = neutral.';
 
 -- ---------------------------------------------------------------------------
 -- 2. The share row: owner-stamped, never of the working board, no browser INSERT.
@@ -138,9 +166,9 @@ end;
 $$;
 revoke all on function public.sync_account_id_from_dashboard() from public, anon, authenticated;
 
-drop trigger if exists stats_dashboard_shares_account_id_bi on public.stats_dashboard_shares;
-create trigger stats_dashboard_shares_account_id_bi
-  before insert on public.stats_dashboard_shares
+drop trigger if exists stats_dashboard_shares_account_id_biu on public.stats_dashboard_shares;
+create trigger stats_dashboard_shares_account_id_biu
+  before insert or update of dashboard_id on public.stats_dashboard_shares
   for each row execute function public.sync_account_id_from_dashboard();
 
 alter table public.stats_dashboard_shares enable row level security;
@@ -165,7 +193,7 @@ comment on table public.stats_dashboard_shares is
 drop policy if exists stats_dashboards_shared_read on public.stats_dashboards;
 create policy stats_dashboards_shared_read on public.stats_dashboards
   for select to authenticated
-  using (id in (select dashboard_id from public.stats_dashboard_shares));
+  using (name is not null and id in (select dashboard_id from public.stats_dashboard_shares));
 
 -- ---------------------------------------------------------------------------
 -- 4. The label door over all three share kinds (641's body + the dashboard arm).
@@ -222,8 +250,27 @@ begin
   if (select count(*) from pg_constraint
        where conrelid in ('public.stats_dashboards'::regclass, 'public.stats_dashboard_shares'::regclass)
          and conname in ('stats_dashboards_name_check', 'stats_dashboards_color_check',
-                         'stats_dashboard_shares_not_self')) <> 3 then
-    raise exception '647 did not land: a name, colour or not-self CHECK is missing';
+                         'stats_dashboards_charts_check', 'stats_dashboards_filter_spec_check',
+                         'stats_dashboard_shares_not_self')) <> 5 then
+    raise exception '647 did not land: a name, colour, charts, filter or not-self CHECK is missing';
+  end if;
+  if (select array_agg(a.attname::text order by array_position(k.conkey, a.attnum))
+        from pg_constraint k
+        join pg_attribute a on a.attrelid = k.conrelid and a.attnum = any (k.conkey)
+       where k.conrelid = 'public.stats_dashboard_shares'::regclass and k.contype = 'p')
+     is distinct from array['dashboard_id', 'recipient_account_id'] then
+    raise exception '647 did not land: the primary key of stats_dashboard_shares is not (dashboard_id, recipient_account_id)';
+  end if;
+  if not exists (select 1 from pg_constraint k
+                  where k.conrelid = 'public.stats_dashboard_shares'::regclass and k.contype = 'f'
+                    and k.confrelid = 'public.stats_dashboards'::regclass and k.confdeltype = 'c'
+                    and k.conkey = array[(select a.attnum from pg_attribute a
+                                           where a.attrelid = 'public.stats_dashboard_shares'::regclass
+                                             and a.attname = 'dashboard_id')]
+                    and k.confkey = array[(select a.attnum from pg_attribute a
+                                            where a.attrelid = 'public.stats_dashboards'::regclass
+                                              and a.attname = 'id')]) then
+    raise exception '647 did not land: stats_dashboard_shares.dashboard_id does not cascade from stats_dashboards(id)';
   end if;
 
   if (select count(*) from pg_policies
@@ -243,6 +290,11 @@ begin
                     and position('current_account_ids()' in qual) > 0) then
     raise exception '647 did not land: stats_dashboard_shares_party does not hide shares while acting';
   end if;
+  if not exists (select 1 from pg_policies
+                  where schemaname = 'public' and policyname = 'stats_dashboards_shared_read'
+                    and position('name IS NOT NULL' in qual) > 0) then
+    raise exception '647 did not land: stats_dashboards_shared_read reaches an unnamed row';
+  end if;
 
   if not (select relrowsecurity from pg_class where oid = 'public.stats_dashboard_shares'::regclass) then
     raise exception '647 did not land: RLS is off on stats_dashboard_shares';
@@ -257,9 +309,11 @@ begin
 
   if not exists (select 1 from pg_trigger
                   where tgrelid = 'public.stats_dashboard_shares'::regclass
-                    and tgname = 'stats_dashboard_shares_account_id_bi'
-                    and tgfoid = 'public.sync_account_id_from_dashboard()'::regprocedure) then
-    raise exception '647 did not land: the owner-stamping trigger is missing';
+                    and tgname = 'stats_dashboard_shares_account_id_biu'
+                    and tgfoid = 'public.sync_account_id_from_dashboard()'::regprocedure
+                    and pg_get_triggerdef(oid) like
+                        '%BEFORE INSERT OR UPDATE OF dashboard_id ON public.stats_dashboard_shares FOR EACH ROW%') then
+    raise exception '647 did not land: the owner-stamping trigger (insert or update of dashboard_id) is missing';
   end if;
   if not exists (select 1 from pg_trigger t
                   where t.tgrelid = 'public.stats_dashboards'::regclass
