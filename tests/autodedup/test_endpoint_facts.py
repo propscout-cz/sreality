@@ -510,7 +510,8 @@ def test_a_queued_backlog_that_cannot_fit_never_keeps_an_arrival_from_committing
     """The review of #1822's probe: nine adverts queued as two stale groups whose re-claim
     exceeds the pair budget an arrival alone fits. The re-claim rides the pass's FIRST attempt
     only, so the refused attempt's retry is the normal feeds alone and the arrival commits; both
-    groups were stamped tried ahead of the pass, so the next pass does not offer them again."""
+    groups are stamped tried as the pass ends (E973), so the next pass does not offer them
+    again."""
     from autodedup import incremental_lane, reconcile
 
     monkeypatch.setattr(incremental_lane.SqlWork, "_evidence_feed", lambda self, *a, **k: [])
@@ -580,6 +581,76 @@ def test_a_pass_that_dies_with_re_claims_pauses_them_once_and_halves_them(
         "committed with its re-claims: whole again")
     whole = incremental_lane.run_incremental(lambda: world)
     assert whole["feeds"].get("stale") == len(ids) - 6, "the rest, untried, at the full budget"
+
+
+class _Killed(BaseException):
+    """What the system does to a pass (a deploy's SIGKILL, the OOM killer): no handler runs."""
+
+
+@pytest.mark.parametrize("ending, stamped", [
+    ("committed", True), ("refused", True), ("deadline", True), ("raised", True),
+    ("shutdown", False), ("raised_in_shutdown", False), ("lease_lost", False),
+    ("killed", False)])
+def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
+        ending: str, stamped: bool, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """E973: the back-off stamps were written AHEAD of the pass, so the passes a train of eight
+    deploys rolled back on 2026-10-20 locked 134 groups (616 owed adverts, the head of the
+    queue) out for 6 h with none of their members refreshed. A pass now stamps the groups it
+    re-claimed once it ends on its own terms: committed, refused by the pair budget, cut by
+    its deadline or broken by a raise (E960: such a re-claim must not hold the head). A pass
+    the worker's shutdown stopped (at a checkpoint, or by cancelling its statement), whose
+    lease was lost or that the system killed stamps nothing; its count in flight still
+    pauses and halves the next re-claim (E941), whatever the stamps."""
+    from autodedup import incremental_lane, reconcile, rt_lease
+    from autodedup.incremental import PassDeadline, PassStopped
+
+    monkeypatch.setattr(incremental_lane.SqlWork, "_evidence_feed", lambda self, *a, **k: [])
+    _open_scope(monkeypatch)
+    world = _built_world(tmp_path)
+    ids = sorted(i for (_g, i) in world.rt_fp)
+    for row in world.rt_fp.values():
+        row["updated_at"] = world.now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1)
+    world.settings[reconcile.redecide_key(GEN)] = [[i] for i in ids]
+    world.settings[reconcile.budget_key(GEN)] = {"budget": 4}
+    ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
+                               engine_since=None)
+    taken = reconcile.claims([[i] for i in ids], ages, 4)
+    assert len(taken) == 4
+    real = incremental_lane.run_pass_bounded
+    stop = {"now": False}
+    seen: dict[str, Any] = {}
+    if ending == "refused":
+        monkeypatch.setattr(incremental_lane, "PASS_LIMITS",
+                            replace(incremental_lane.PASS_LIMITS, max_pairs=-1))
+
+    def ends(*args, **kwargs):
+        seen["tried"] = world.settings.get(reconcile.tried_key(GEN))
+        if ending in ("committed", "refused"):
+            return real(*args, **kwargs)
+        if ending in ("shutdown", "raised_in_shutdown"):
+            stop["now"] = True
+        raise {"deadline": PassDeadline("the pass ran past its deadline"),
+               "raised": RuntimeError("canceling statement due to statement timeout"),
+               "shutdown": PassStopped("the worker is shutting down"),
+               "raised_in_shutdown": RuntimeError("canceling statement due to user request"),
+               "lease_lost": rt_lease.LeaseLost("gone"),
+               "killed": _Killed()}[ending]
+
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", ends)
+    if ending in ("raised", "raised_in_shutdown", "killed"):
+        with pytest.raises((RuntimeError, _Killed)):
+            incremental_lane.run_incremental(lambda: world, stopping=lambda: stop["now"])
+    else:
+        incremental_lane.run_incremental(lambda: world, stopping=lambda: stop["now"])
+
+    assert seen["tried"] is None, "nothing is stamped before the pass"
+    if stamped:
+        assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in taken}
+    else:
+        assert reconcile.tried_key(GEN) not in world.settings, "the same groups lead again"
+    budget = world.settings[reconcile.budget_key(GEN)]
+    assert budget == ({"budget": reconcile.STALE_FLOOR} if ending == "committed" else
+                      {"budget": 4} if ending == "refused" else {"budget": 4, "inflight": 4})
 
 
 @pytest.mark.parametrize("why", ["scope_closed", "ledger_inert"])

@@ -103,7 +103,9 @@ REDECIDE_CAP: int = 5000
 # own pause and halving below answer the death.
 STALE_FLOOR: int = 200
 # A group the lane tried to re-claim is not tried again for this long, whatever came of it: a
-# re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
+# re-claim the pair budget refused, the deadline cut or a raise broke must not hold the head of
+# the queue. Stamped once the pass that carried it ended on its own terms (E973): one the
+# worker's shutdown, a lost lease or the system's kill took away is offered again at once.
 TRIED_SETTING: str = "rt_redecide_tried"
 TRIED_BACKOFF_HOURS: float = 6.0
 # E972, the operator's Prague priority of 2026-10-20: the waiting groups are handed on and
@@ -262,7 +264,8 @@ def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
                   ) -> tuple[list[int], dict[str, str]]:
     """The adverts the next pass re-claims (`claims` at `budget`) over the groups not tried
     within `TRIED_BACKOFF_HOURS`, and the back-off map with those groups stamped `now` and the
-    expired or forgotten stamps dropped (E960). Keyed by a group's first advert."""
+    expired or forgotten stamps dropped (E960), for the lane to write once that pass ends on its
+    own terms (E973). Keyed by a group's first advert."""
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     cutoff = now.timestamp() - TRIED_BACKOFF_HOURS * 3600.0
     queued = {str(min(group)) for group in groups if group}

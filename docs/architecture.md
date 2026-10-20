@@ -1877,8 +1877,10 @@ renumber.** Navigate by area:
     (E973), then flats for sale, flats for rent, the rest (E972, the operator's Prague
     priority), oldest first within each — 200 adverts on top of
     its feeds (E971: the worker's memory holds a pass to ~300 adverts), never more than the
-    claim cap a death halves (E948), on its first attempt, each group at most once in 6 h,
-    and none while the apply scope is closed or the reject ledger is inert. It
+    claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
+    (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
+    shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is
+    closed or the reject ledger is inert. It
     reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) whose build
     phase ended, and review pages default to `rt` under the same condition (else the newest batch
