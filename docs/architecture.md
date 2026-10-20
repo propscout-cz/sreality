@@ -1421,7 +1421,9 @@ renumber.** Navigate by area:
     determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
     `velmi_dobry` is sent as Valuo's `good` (`assumed`), energy class G is not sent (`assumed` —
-    Czech ads without a PENB certificate must state G too).
+    Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
+    when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
+    lift), so a no stays `missing` with its reason.
 
     Calibration — how a Valuo number is judged — reads production rows only, drops every row that
     leaned on an assumption for a required parameter (a success never lacks one: the POST refuses)

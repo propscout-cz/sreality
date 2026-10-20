@@ -20,7 +20,9 @@ from psycopg.types.json import Jsonb
 
 from api import valuo_client
 from api.routes.property_location import load_location
-from toolkit.filter_registry import DISPOSITION_OPTIONS, SUBTYPE_OPTIONS, label_cs, type_label_cs
+from toolkit.filter_registry import (
+    CATEGORY_MAIN_NOUN_CS, DISPOSITION_OPTIONS, SUBTYPE_OPTIONS, label_cs, type_label_cs,
+)
 from toolkit.measures import ppm2_basis
 
 LOG = logging.getLogger(__name__)
@@ -236,6 +238,11 @@ def _source(column: str, value: Any) -> dict[str, Any]:
     return {"column": column, "value": _plain(value)}
 
 
+def _word(column: str, raw: str) -> str:
+    """Our Czech word for a stored value; a category by its noun (Byt), not the filter's plural (Byty)."""
+    return (CATEGORY_MAIN_NOUN_CS.get(raw) if column == "category_main" else label_cs(column, raw)) or raw
+
+
 def _option_label(param: str, value: Any) -> str:
     if isinstance(value, bool):
         return "ano" if value else "ne"
@@ -262,14 +269,15 @@ def build_request(
         if raw is None:
             continue
         value, rule = table.get(raw, (None, MISSING))
-        if rule == _DIRECT:
-            put(param, value, _SOURCE[column], _source(column, raw))
+        ours, theirs = _word(column, raw), _option_label(param, value)
+        step = f"{ours} → {theirs}"
+        if rule == _DIRECT:  # named only where Valuo words it otherwise: Dobrý → Průměrný, never 2+kk → 2+kk
+            put(param, value, _SOURCE[column], _source(column, raw), None if ours == theirs else step)
         elif value is None:
             note = _NOT_SENT_NOTES.get((column, raw)) or (None if raw in table else "Hodnota mimo slovník.")
             put(param, None, rule, _source(column, raw), note)
         else:
-            ours = label_cs(column, raw) or raw
-            put(param, value, rule, _source(column, raw), f"{ours} → {_option_label(param, value)}")
+            put(param, value, rule, _source(column, raw), step)
 
     place = f"{location['lat']:.6f}, {location['lon']:.6f}"
     put("place", place, AD if location["precision"] == "street" else INFERRED,
@@ -297,8 +305,9 @@ def build_request(
         else:  # Valuo's reading of a basement is unproven: the user sends it, the ad does not
             put("floor", None, MISSING, _source("floor", floor), "Podzemní podlaží se samo neposílá.")
     for flag, param, value, cls, noun in _FLAGS:
-        if subject.get(flag):
-            put(param, value, cls, _source(flag, True))
+        if subject.get(flag):  # an inferred value names its rule; one copied as it stands needs none
+            put(param, value, cls, _source(flag, True),
+                f"{noun.capitalize()}: ano → {value}" if cls == INFERRED else None)
         elif subject.get(flag) is False:
             put(param, None, MISSING, _source(flag, False), f"Inzerát {noun} neuvádí jako ano — neposílá se.")
     put("as_of", datetime.now(_PRAGUE).date().isoformat(), ASSUMED, None, "Dnešní datum.")

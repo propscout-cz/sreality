@@ -103,8 +103,12 @@ def test_a_flat_maps_from_its_ad_and_its_property():
     }
     assert list(request) == [f.name for f in valuo.FIELDS if f.name in request]
     assert prov["rating"] == {"class": "ad", "from": {"column": "condition", "value": "po_rekonstrukci"},
-                              "note": None}
-    assert prov["construction"]["class"] == "property"
+                              "note": "Po rekonstrukci → Po kompletní rekonstrukci"}
+    assert prov["construction"] == {"class": "property", "from": {"column": "building_type", "value": "cihla"},
+                                    "note": "Cihla → Cihlová"}
+    # The same word on both sides needs no note (Byt, Prodej, 2+kk, C).
+    for name in ("property_type", "kind", "local_type", "energy_performance"):
+        assert prov[name]["note"] is None, name
     assert prov["place"]["class"] == "ad"
     assert prov["equipment"] == {"class": "inferred", "from": {"column": "furnished", "value": "ne"},
                                  "note": "Nevybaveno → ne"}
@@ -124,6 +128,15 @@ def test_a_missing_condition_blocks_rather_than_guessing():
     assert "rating" not in request
     assert prov["rating"]["class"] == "missing"
     assert valuo.blocking(request) == ["rating"]
+
+
+def test_a_yes_flag_is_sent_naming_an_inferred_rule_and_a_no_is_not_sent():
+    request, prov = _build(FLAT | {"has_lift": False, "garage": True})
+    assert request["garages"] == 1 and "elevator" not in request
+    assert prov["garages"] == {"class": "inferred", "from": {"column": "garage", "value": True},
+                               "note": "Garáž: ano → 1"}
+    assert prov["elevator"] == {"class": "missing", "from": {"column": "has_lift", "value": False},
+                                "note": "Inzerát výtah neuvádí jako ano — neposílá se."}
 
 
 def test_velmi_dobry_is_assumed_average_not_renovated():
