@@ -57,7 +57,7 @@ import { portalLabel } from '@/lib/portals';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import { MergeSelection } from '@/components/CurationMarks';
 import MergeTakenBack from '@/components/MergeTakenBack';
-import PresetBar from '@/components/PresetBar';
+import FilterPresetBar from '@/components/FilterPresetBar';
 import type { ListingEstimate } from '@/lib/types';
 import {
   createEstimation,
@@ -106,7 +106,7 @@ import type { BrowseViewState, TabKey } from '@/lib/browseState';
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
 
 export interface BrowseFeatures {
-  /* Saved-filter preset bar — page only. */
+  /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
   presetBar?: boolean;
   /* "Create watchdog" CTA + name-prompt modal. */
   watchdog?: boolean;
@@ -697,7 +697,7 @@ export default function BrowseExperience({
           />
           {f.presetBar && (
             <div className="mt-3">
-              <PresetBar
+              <FilterPresetBar
                 filters={filters}
                 sort={sort}
                 activePresetId={activePresetId}
@@ -880,7 +880,7 @@ export default function BrowseExperience({
             )}
             {tab === 'stats' && (
               <Suspense fallback={<Skeleton height={320} className="my-8" />}>
-                <StatsDashboard filters={filters} />
+                <StatsDashboard filters={filters} view={f.presetBar ? view : undefined} />
               </Suspense>
             )}
           </div>

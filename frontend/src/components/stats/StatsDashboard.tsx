@@ -15,14 +15,23 @@ import {
   type ChartSpec,
 } from '@/lib/stats';
 import StatsChart, { type CardFocus } from './StatsChart';
+import DashboardBar, { type DashboardView } from './DashboardBar';
 
-/* Browse › Stats: the account's board of charts over the current filter. The
- * filter only picks the sample; the board (which charts, in which order) is ONE
- * document per account, read through RLS and written whole through
- * PUT /stats/dashboard through the one optimistic write (lib/useOptimisticWrite).
- * No saved row ⇒ the four default charts, and the first save persists the whole
- * list. */
-export default function StatsDashboard({ filters }: { filters: ListingFilters }) {
+/* Browse › Stats: the account's WORKING board of charts over the current filter.
+ * The filter only picks the sample; the board (which charts, in which order) is
+ * ONE document per account, read through GET /stats/dashboard and written whole
+ * through PUT /stats/dashboard by the one optimistic write (lib/useOptimisticWrite)
+ * — the card list's edits and the dashboard bar's loads alike. No saved row ⇒ the
+ * four default charts, and the first save persists the whole list. The named
+ * dashboards' bar leads the tab where Browse hands over its view state (`view`;
+ * the explore modals do not). */
+export default function StatsDashboard({
+  filters,
+  view,
+}: {
+  filters: ListingFilters;
+  view?: DashboardView;
+}) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<ChartSpec | null>(null);
   /* Where focus lands after a board-level change: the moved card's arrow, the
@@ -106,6 +115,7 @@ export default function StatsDashboard({ filters }: { filters: ListingFilters })
 
   return (
     <div className="space-y-4">
+      {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutate(next)} /> : null}
       <p className="text-[0.75rem] text-[var(--color-ink-3)]">
         Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.
       </p>

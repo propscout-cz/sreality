@@ -1,12 +1,14 @@
-/* Name + colour dialog for saving / updating / editing a Browse filter preset.
+/* Name + colour dialog for saving / updating / editing a saved set (a Browse
+ * filter preset, a Stats dashboard — components/SavedSetBar).
  *
- * One small modal serves all flows (Browse owns which one is open and what to
- * do on submit). The colour swatches reuse the shared tag palette (TAG_COLORS)
- * so presets and tags speak one colour vocabulary. When a map area is currently
- * applied it offers an "Include current map area" toggle so the operator can
- * decide whether the viewport bounding box is part of the preset; the
- * metadata-only edit flow hides it (filters are untouched). Modelled on
- * CreateWatchdogModal for visual consistency. */
+ * One small modal serves all flows (the bar owns which one is open and what to
+ * do on submit); the words are the instance's. The colour swatches reuse the
+ * shared tag palette (TAG_COLORS) so saved sets and tags speak one colour
+ * vocabulary. A save or an update may offer ONE checkbox (`extra`): presets ask
+ * whether the current map area is part of the preset, dashboards whether the
+ * Browse filter is saved with the charts; the metadata-only edit flow never
+ * offers it (the stored blob is untouched). Modelled on CreateWatchdogModal for
+ * visual consistency. */
 
 import { useEffect, useId, useRef, useState } from 'react';
 
@@ -14,34 +16,45 @@ import { type TagColor } from '@/lib/types';
 import Dialog from '@/components/Dialog';
 import TagColorPicker from '@/components/TagColorPicker';
 
-export interface PresetSaveModalProps {
+/* The instance's words for the dialog chrome. */
+export interface SaveModalWords {
+  /* The small-caps eyebrow above the title ("Filter preset", "Dashboard"). */
+  kind: string;
+  nameLabel: string;
+  namePlaceholder: string;
+  color: string;
+  cancel: string;
+  saving: string;
+}
+
+export interface SavedSetSaveModalProps {
+  words: SaveModalWords;
   title: string;
   initialName: string;
   initialColor: TagColor | null;
   submitLabel: string;
-  /* Show the "Include current map area" toggle (a map area must be applied). */
-  showMapAreaToggle: boolean;
-  initialIncludeMapArea: boolean;
+  /* The one checkbox this save offers, with its starting state; null = none. */
+  extra: { label: string; initial: boolean } | null;
   busy: boolean;
   error: string | null;
-  onSubmit: (name: string, includeMapArea: boolean, color: TagColor | null) => void;
+  onSubmit: (name: string, extra: boolean, color: TagColor | null) => void;
   onClose: () => void;
 }
 
-export default function PresetSaveModal({
+export default function SavedSetSaveModal({
+  words,
   title,
   initialName,
   initialColor,
   submitLabel,
-  showMapAreaToggle,
-  initialIncludeMapArea,
+  extra,
   busy,
   error,
   onSubmit,
   onClose,
-}: PresetSaveModalProps) {
+}: SavedSetSaveModalProps) {
   const [name, setName] = useState(initialName);
-  const [includeMapArea, setIncludeMapArea] = useState(initialIncludeMapArea);
+  const [checked, setChecked] = useState(extra?.initial ?? false);
   const [color, setColor] = useState<TagColor | null>(initialColor);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
@@ -56,20 +69,15 @@ export default function PresetSaveModal({
   const trimmed = name.trim();
   const submit = () => {
     if (trimmed.length === 0 || busy) return;
-    onSubmit(trimmed, includeMapArea, color);
+    onSubmit(trimmed, extra != null && checked, color);
   };
 
   /* Escape, the focus trap, initial + restored focus, the backdrop click and
-   * the body scroll lock all come from <Dialog> (lib/useDialog.ts). The
-   * hand-rolled window listener that used to live here is gone, and so is the
-   * panel's `onClick={(e) => e.stopPropagation()}` — that existed only to stop
-   * the backdrop's own `onClick={onClose}` from firing on a click INSIDE the
-   * dialog, and <Dialog> makes the target test instead of asking the panel to
-   * swallow every click that reaches it. */
+   * the body scroll lock all come from <Dialog> (lib/useDialog.ts). */
   return (
     <Dialog open onClose={onClose} labelledBy={titleId} initialFocus={inputRef} className="w-full max-w-md p-5">
       <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        Filter preset
+        {words.kind}
       </p>
       <h2
         id={titleId}
@@ -81,7 +89,7 @@ export default function PresetSaveModal({
 
       <label className="mt-4 block">
         <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-          Preset name
+          {words.nameLabel}
         </span>
         <input
           ref={inputRef}
@@ -91,14 +99,14 @@ export default function PresetSaveModal({
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit();
           }}
-          placeholder="e.g. 2+kk Praha pod 6M"
+          placeholder={words.namePlaceholder}
           className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink)] focus-visible:border-[var(--color-copper)]"
         />
       </label>
 
       <div className="mt-4">
         <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-          Color
+          {words.color}
         </span>
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
           <TagColorPicker
@@ -111,17 +119,17 @@ export default function PresetSaveModal({
         </div>
       </div>
 
-      {showMapAreaToggle ? (
+      {extra ? (
         <button
           type="button"
-          onClick={() => setIncludeMapArea((v) => !v)}
-          aria-pressed={includeMapArea}
+          onClick={() => setChecked((v) => !v)}
+          aria-pressed={checked}
           className="mt-3 flex w-full items-center gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-left transition-colors hover:border-[var(--color-rule-strong)]"
         >
           <span
             className={[
               'flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] border text-[0.6rem]',
-              includeMapArea
+              checked
                 ? 'border-[var(--color-copper)] bg-[var(--color-copper)] text-white'
                 : 'border-[var(--color-rule-strong)] text-transparent',
             ].join(' ')}
@@ -130,7 +138,7 @@ export default function PresetSaveModal({
             ✓
           </span>
           <span className="text-[0.8rem] text-[var(--color-ink-2)]">
-            Include the current map area in this preset
+            {extra.label}
           </span>
         </button>
       ) : null}
@@ -145,7 +153,7 @@ export default function PresetSaveModal({
           onClick={onClose}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)] transition-colors"
         >
-          Cancel
+          {words.cancel}
         </button>
         <button
           type="button"
@@ -153,7 +161,7 @@ export default function PresetSaveModal({
           disabled={trimmed.length === 0 || busy}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
         >
-          {busy ? 'Saving…' : submitLabel}
+          {busy ? words.saving : submitLabel}
         </button>
       </div>
     </Dialog>

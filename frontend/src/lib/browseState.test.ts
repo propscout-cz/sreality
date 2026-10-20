@@ -1,11 +1,12 @@
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import { bboxAround, fromSearchParams, DEFAULT_FILTERS } from './filters';
 import {
   DEFAULT_OVERLAY,
   PIN_LIMIT_DEFAULT,
+  applySavedFilter,
   PIN_LIMIT_MAX,
   PIN_LIMIT_MIN,
   browseFiltersForArea,
@@ -19,7 +20,7 @@ import {
 } from './browseState';
 import { layersFromSearchParams } from './mapOverlays';
 import { DEFAULT_SORT } from './queries';
-import type { ListingPublic } from './types';
+import type { ListingPublic, SavedDashboard } from './types';
 
 const TREBIC: Pick<ExploreAreaSeed, 'lat' | 'lng'> = { lat: 49.2147, lng: 15.8816 };
 
@@ -350,5 +351,106 @@ describe('layers on the map overlay', () => {
     expect(localStorage.getItem(REMEMBERED)).toBe('flood_q5');
     act(() => result.current.setOverlay({ priceMetric: 'per_m2' }));
     expect(localStorage.getItem(REMEMBERED)).toBe('flood_q5');
+  });
+});
+
+describe('the dashboard on the URL', () => {
+  const urlState = (initial: string) =>
+    renderHook(
+      () => ({ view: useUrlBrowseState(), search: useLocation().search, nav: useNavigationType() }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(MemoryRouter, { initialEntries: [initial] }, children),
+      },
+    );
+  const params = (search: string) => new URLSearchParams(search);
+  const dashboard = (over: Partial<SavedDashboard> = {}): SavedDashboard => ({
+    id: 'd1',
+    name: 'Ceny',
+    charts: [],
+    filter_spec: null,
+    position: 0,
+    color: null,
+    created_at: '2026-10-20T10:00:00+00:00',
+    updated_at: '2026-10-20T10:00:00+00:00',
+    owner_email: null,
+    shared_with: [],
+    ...over,
+  });
+  const SPEC = { filters: { ...DEFAULT_FILTERS, priceMax: 5_000_000 }, sort: '-price_czk' };
+
+  it('reads `dashboard` and carries it through a filter change and a tab switch', () => {
+    const { result } = urlState('/browse?tab=stats&dashboard=d1');
+    expect(result.current.view.activeDashboardId).toBe('d1');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 4_000_000 }));
+    expect(params(result.current.search).get('dashboard')).toBe('d1');
+    act(() => result.current.view.setTab('map'));
+    expect(result.current.view.activeDashboardId).toBe('d1');
+  });
+
+  it('sets and clears the id alone, replacing the entry', () => {
+    const { result } = urlState('/browse?tab=stats&cat=byt');
+    act(() => result.current.view.setActiveDashboardId('d2'));
+    expect(params(result.current.search).get('dashboard')).toBe('d2');
+    expect(result.current.nav).toBe('REPLACE');
+    act(() => result.current.view.setActiveDashboardId(null));
+    expect(params(result.current.search).has('dashboard')).toBe(false);
+    expect(params(result.current.search).get('cat')).toBe('byt');
+  });
+
+  it('loads a dashboard without a filter as its id alone: the filters and the preset stay', () => {
+    const { result } = urlState('/browse?tab=stats&preset=p1&cat=dum');
+    const before = result.current.view.filters;
+    expect(before.categoryMain).toEqual(['dum']);
+    act(() => result.current.view.loadDashboard(dashboard()));
+    const sp = params(result.current.search);
+    expect(sp.get('dashboard')).toBe('d1');
+    expect(sp.get('preset')).toBe('p1');
+    expect(sp.get('cat')).toBe('dum');
+    expect(result.current.view.filters).toEqual(before);
+    expect(result.current.nav).toBe('REPLACE');
+  });
+
+  it('loads a dashboard with a filter as a preset load would, deselecting the preset, pushed', () => {
+    const { result } = urlState('/browse?tab=stats&preset=p1&pm=per_m2');
+    act(() => result.current.view.loadDashboard(dashboard({ filter_spec: SPEC })));
+    const sp = params(result.current.search);
+    expect(sp.get('dashboard')).toBe('d1');
+    expect(sp.has('preset')).toBe(false);
+    expect(sp.get('sort')).toBe('-price_czk');
+    expect(sp.get('tab')).toBe('stats');
+    expect(sp.get('pm')).toBe('per_m2');
+    expect(result.current.view.filters.priceMax).toBe(5_000_000);
+    expect(result.current.nav).toBe('PUSH');
+  });
+
+  it('writes a preset and a dashboard filter through ONE body (applySavedFilter)', () => {
+    const current = new URLSearchParams('tab=stats&sort=-price_czk&layers=metro');
+    const viaHelper = applySavedFilter({ filters: SPEC.filters, sort: null }, current);
+    expect(viaHelper.has('sort')).toBe(false);
+    expect(viaHelper.get('layers')).toBe('metro');
+    const { result } = urlState(`/browse?${current.toString()}`);
+    act(() =>
+      result.current.view.loadPreset({
+        id: 'p9',
+        name: 'x',
+        filter_spec: { filters: SPEC.filters, sort: null },
+        created_at: '',
+        updated_at: '',
+        position: 0,
+        color: null,
+      }),
+    );
+    const sp = params(result.current.search);
+    expect(sp.get('preset')).toBe('p9');
+    sp.delete('preset');
+    expect(sp.toString()).toBe(viaHelper.toString());
+  });
+
+  it('has no dashboard in the in-memory (Explore) view', () => {
+    const { result } = renderHook(() => useMemoryBrowseState({ filters: DEFAULT_FILTERS }));
+    expect(result.current.activeDashboardId).toBeNull();
+    act(() => result.current.loadDashboard(dashboard({ filter_spec: SPEC })));
+    expect(result.current.filters).toEqual(DEFAULT_FILTERS);
   });
 });

@@ -318,6 +318,9 @@ export const apiPut = <T>(
   signal?: AbortSignal,
 ): Promise<T> => request<T>(path, { method: 'PUT', json: body, signal });
 
+export const apiDelete = <T>(path: string, signal?: AbortSignal): Promise<T> =>
+  request<T>(path, { method: 'DELETE', signal });
+
 /* GET for bytes (an image an <img> cannot fetch itself, since it sends no JWT). */
 export const apiGetBlob = (
   path: string,

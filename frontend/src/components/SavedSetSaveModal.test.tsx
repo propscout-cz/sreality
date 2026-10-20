@@ -1,4 +1,5 @@
-/* PresetSaveModal — the name + colour dialog behind "Save preset".
+/* SavedSetSaveModal — the name + colour dialog behind "Save preset" and
+ * "Uložit jako dashboard" (components/SavedSetBar), here with the preset's words.
  *
  * The modal-dialog contract (src/test/a11y.ts, over lib/useDialog): named,
  * focus trapped and wrapping both ways, Escape closing exactly ONE layer,
@@ -16,9 +17,16 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 
 import { expectDialogContract } from '@/test/a11y';
-import PresetSaveModal, { type PresetSaveModalProps } from './PresetSaveModal';
+import { PRESET_COPY } from './FilterPresetBar';
+import SavedSetSaveModal, { type SavedSetSaveModalProps } from './SavedSetSaveModal';
 
-function Host({ onSubmit = vi.fn() }: { onSubmit?: PresetSaveModalProps['onSubmit'] }) {
+function Host({
+  onSubmit = vi.fn(),
+  extra = { label: 'Include the current map area in this preset', initial: false },
+}: {
+  onSubmit?: SavedSetSaveModalProps['onSubmit'];
+  extra?: SavedSetSaveModalProps['extra'];
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -27,13 +35,13 @@ function Host({ onSubmit = vi.fn() }: { onSubmit?: PresetSaveModalProps['onSubmi
       </button>
       {/* Mounting IS opening — the shape lib/useDialog's contract requires. */}
       {open ? (
-        <PresetSaveModal
+        <SavedSetSaveModal
+          words={PRESET_COPY}
           title="Update preset"
           initialName="2+kk Praha pod 6M"
           initialColor={null}
           submitLabel="Update preset"
-          showMapAreaToggle
-          initialIncludeMapArea={false}
+          extra={extra}
           busy={false}
           error={null}
           onSubmit={onSubmit}
@@ -44,7 +52,7 @@ function Host({ onSubmit = vi.fn() }: { onSubmit?: PresetSaveModalProps['onSubmi
   );
 }
 
-describe('<PresetSaveModal> dialog contract', () => {
+describe('<SavedSetSaveModal> dialog contract', () => {
   it('names itself, traps focus, closes one layer on Escape and gives focus back', () => {
     render(<Host />);
     const trigger = screen.getByRole('button', { name: 'Save preset' });
@@ -76,5 +84,36 @@ describe('<PresetSaveModal> dialog contract', () => {
     fireEvent.mouseDown(screen.getByRole('textbox', { name: 'Preset name' }));
     fireEvent.click(screen.getByRole('textbox', { name: 'Preset name' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+});
+
+describe('<SavedSetSaveModal> the extra checkbox', () => {
+  const open = () => fireEvent.click(screen.getByRole('button', { name: 'Save preset' }));
+
+  it('submits the name, the box as ticked and the colour', () => {
+    const onSubmit = vi.fn();
+    render(<Host onSubmit={onSubmit} />);
+    open();
+    const box = screen.getByRole('button', { name: 'Include the current map area in this preset' });
+    expect(box).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(box);
+    expect(box).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    expect(onSubmit).toHaveBeenCalledWith('2+kk Praha pod 6M', true, null);
+  });
+
+  it('starts from the state it is given', () => {
+    render(<Host extra={{ label: 'Uložit i nastavení filtru', initial: true }} />);
+    open();
+    expect(screen.getByRole('button', { name: 'Uložit i nastavení filtru' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('offers no box, and submits false, when the flow has none', () => {
+    const onSubmit = vi.fn();
+    render(<Host onSubmit={onSubmit} extra={null} />);
+    open();
+    expect(screen.queryByRole('button', { name: /map area/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    expect(onSubmit).toHaveBeenCalledWith('2+kk Praha pod 6M', false, null);
   });
 });
