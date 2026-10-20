@@ -105,7 +105,9 @@ STALE_FLOOR: int = 200
 # A group the lane tried to re-claim is not tried again for this long, whatever came of it: a
 # re-claim the pair budget refused, the deadline cut or a raise broke must not hold the head of
 # the queue. Stamped once the pass that carried it ended on its own terms (E973): one the
-# worker's shutdown, a lost lease or the system's kill took away is offered again at once.
+# worker's shutdown, a lost lease or the system's kill took away is not stamped, so its groups
+# lead the re-claim again once the paused pass is over (its count in flight, `rt_redecide_budget`,
+# still pauses the next pass's re-claim and halves the one after).
 TRIED_SETTING: str = "rt_redecide_tried"
 TRIED_BACKOFF_HOURS: float = 6.0
 # E972, the operator's Prague priority of 2026-10-20: the waiting groups are handed on and

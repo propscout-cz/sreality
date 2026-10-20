@@ -1294,8 +1294,9 @@ class SqlWork:
         self.rate_per_s = float(rate_per_s)
         self.claim_cap = claim_cap
         # E960: the adverts of the groups the last reconcile handed on that this pass re-claims
-        # (chosen and stamped ahead of the pass), offered on its FIRST claim only, so a retry
-        # after the pair budget refused is the normal feeds alone (E75); and how many wait.
+        # (chosen ahead of the pass and stamped tried once it ends on its own terms, E973),
+        # offered on its FIRST claim only, so a retry after the pair budget refused is the
+        # normal feeds alone (E75); and how many wait.
         self.stale_claims = [int(i) for i in stale_claims]
         self.stale_waiting = int(stale_waiting)
         self.stale_budget = int(stale_budget)

@@ -600,7 +600,8 @@ def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
     its deadline or broken by a raise (E960: such a re-claim must not hold the head). A pass
     the worker's shutdown stopped (at a checkpoint, or by cancelling its statement), whose
     lease was lost or that the system killed stamps nothing; its count in flight still
-    pauses and halves the next re-claim (E941), whatever the stamps."""
+    pauses the next pass's re-claim and halves the one after (E941), whose head is then the
+    same groups, not an offer at once."""
     from autodedup import incremental_lane, reconcile, rt_lease
     from autodedup.incremental import PassDeadline, PassStopped
 
@@ -651,6 +652,17 @@ def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
     budget = world.settings[reconcile.budget_key(GEN)]
     assert budget == ({"budget": reconcile.STALE_FLOOR} if ending == "committed" else
                       {"budget": 4} if ending == "refused" else {"budget": 4, "inflight": 4})
+    if stamped:
+        return
+    monkeypatch.setattr(incremental_lane, "run_pass_bounded", real)
+    world.lease.clear()  # a lost lease or a kill: its TTL has run out
+    paused = incremental_lane.run_incremental(lambda: world)
+    assert not paused["aborted"] and not paused["feeds"].get("stale"), "paused, not at once"
+    assert world.settings[reconcile.budget_key(GEN)] == {"budget": 2}
+    again = incremental_lane.run_incremental(lambda: world)
+    assert again["feeds"].get("stale") == 2
+    assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in taken[:2]}, (
+        "the same groups lead, at half the budget")
 
 
 @pytest.mark.parametrize("why", ["scope_closed", "ledger_inert"])
