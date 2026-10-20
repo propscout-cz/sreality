@@ -1,8 +1,8 @@
 /* THE deal-pipeline card menu (rule #22): move this property to another stage,
  * or take it off the board.
  *
- * One menu for every surface that carries the funnel — the Browse cards, the
- * Browse table rows and the listing-detail header all open this exact component
+ * One menu for every surface that carries the funnel — the Browse cards and
+ * the listing-detail header both open this exact component
  * from their own `<PipelineMark>`. Before it, each surface had its own answer
  * to "the property is already in the pipeline, now what": Browse REMOVED it on
  * a single unconfirmed click (a stray click in a 60-card grid silently dropped

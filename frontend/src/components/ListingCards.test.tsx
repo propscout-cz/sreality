@@ -29,14 +29,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
 import ListingCards from './ListingCards';
-import ListingTable from './ListingTable';
 import { CardHydrationProvider } from '@/lib/hydration';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtShortDate } from '@/lib/format';
-import type { CardRow, TableRow } from '@/lib/queries';
+import type { CardRow } from '@/lib/queries';
 import type { ImagePublic, ListingEstimate } from '@/lib/types';
 import type { CoverTag } from '@/lib/imageTags';
 
@@ -648,30 +647,6 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
     renderGrid();
     fireEvent.click(await screen.findByRole('button', { name: /Kolekce se nepodařilo načíst/ }));
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
-  });
-
-  it('puts the note mark on every table row too', async () => {
-    render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter>
-          <ListingTable
-            rows={[ROW as unknown as TableRow]}
-            total={1}
-            sort={{ field: 'last_seen_at', dir: 'desc' } as never}
-            isLoading={false}
-            isFetchingNextPage={false}
-            hasNextPage={false}
-            onReachEnd={() => {}}
-            hasFilters={false}
-            hoveredIds={new Set()}
-            onHover={() => {}}
-            onSort={() => {}}
-            onClearFilters={() => {}}
-          />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    );
-    expect(await screen.findByTitle('Poznámky: 3')).toHaveTextContent('3');
   });
 });
 

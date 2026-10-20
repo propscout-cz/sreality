@@ -45,7 +45,7 @@ export type BuildingMaterial = 'cihla' | 'panel' | 'smisena' | 'ostatni';
 
 /* Map-viewport rectangle. west < east, south < north, all WGS84
  * degrees. Acts as an additional filter alongside the sidebar fields:
- * cards / table / stats all narrow to listings whose (lng, lat) falls
+ * cards / stats all narrow to listings whose (lng, lat) falls
  * inside the rectangle. NULL = no map area applied. */
 export interface MapBounds {
   west: number;

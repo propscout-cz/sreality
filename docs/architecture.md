@@ -613,7 +613,7 @@ rules. Identify which one a task belongs to before you start.
   two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as a separate
   service alongside the API.
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
-  trusting a list here, which rots). Today it spans **Browse** (filters → Map / Table /
+  trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
   signature visual element), **Region**, **Health** (operator dashboard),
   **Estimations** + **Estimation Detail**, **Building Detail**, **Collections** +
@@ -2625,9 +2625,8 @@ renumber.** Navigate by area:
     reachable by id. The outbox drain (service-role) skips a dispatch whose own account dismissed
     its property, on both the new and the retry pass: it gets no `channel_sends` row and ages out
     of the 7-day window unless the dismissal is lifted first.
-    **One control.** `<DismissButton>` (`overlay` on the Browse card, `inline` in the Table's
-    action cell beside the funnel, `header` on the listing page) over one hook,
-    `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
+    **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
+    `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
     sticky "Vrátit" toast (each new dismissal replaces the last) restores; it keeps working after
     the dismissed card has unmounted. The dismissal leaves every cached Browse list that hides
     dismissed properties at once and those lists are NOT refetched (a triage run must not re-read
@@ -2965,9 +2964,8 @@ renumber.** Navigate by area:
     `GET /pipeline/stages`). **The "Přidat do pipeline" affordance is the shared `<PipelineMark>`
     (`<FunnelIcon>` — a funnel with three arrows, filled body = in-pipeline — plus the stage
     badge), rendered by the listing-detail header (`PipelineToggle`, in the top action bar next to
-    "New estimation", NOT buried in CurationBlock), every Browse card AND every Browse **table
-    row** (`PipelineFunnelButton`, a leading unsortable column) and the Pipeline scope chip + its
-    sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
+    "New estimation", NOT buried in CurationBlock), every Browse card (`PipelineFunnelButton`)
+    and the Pipeline scope chip + its sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
     (`is_entry` — filled = the entry stage) — so the "into the pipeline" concept reads as one
     icon everywhere.** Two surfaces carry their own versions today. The kanban card has no mark
     (its column IS the stage): it moves by drag and removes through its own trash + two-step
@@ -3013,7 +3011,7 @@ renumber.** Navigate by area:
     overflow the viewport, reposition on scroll, close when the anchor scrolls out of sight.
     **Every pipeline write shares one cache patch** (`lib/pipelineCache`): TWO caches hold "where
     is this property" — `members` (the account's whole card set, keyed by `property_id`; read by
-    the Browse funnels, the table rows, the listing header and the pipeline scope alike) and
+    the Browse funnels, the listing header and the pipeline scope alike) and
     `board` (the kanban's own ordered array) — and each surface used to patch only the one it
     could see, so a kanban drag left every Browse funnel badging the pre-drag stage. It was three
     until W3: a per-property `card(id)` cache duplicated a single row of `members`, so every
@@ -3077,7 +3075,7 @@ renumber.** Navigate by area:
     column headers and stage-editor swatch still use their own `stageColor`
     (`pages/Pipeline.tsx`), which falls back to grey. The stage editor exposes `code` as a 4-char
     box whose placeholder IS the ordinal, so "empty = automatic" is visible. Card writes
-    (add/remove/move) from EVERY surface — the Browse funnels, the table rows, the listing header
+    (add/remove/move) from EVERY surface — the Browse funnels, the listing header
     and the kanban's drag and trash — go through one hook, `lib/usePipelineCard.ts`; the property
     id travels with each call, so one instance serves a whole board. It writes over
     `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches and the re-read list.
@@ -3465,16 +3463,14 @@ renumber.** Navigate by area:
     2026-10-17 by pointing `pg_column` at the published `tom_days`, and the escape set the
     test had grown for it was deleted.
 
-    **Known residue, named.** Browse's table still SELECTS and SORTS the raw `estate_area`
-    column while it now FILTERS the measure, so a bazos/realitymix/mmreality/remax land row can
-    match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell — the fix is three lines but
-    `estate_area` is a `SortField`, so a saved `?sort=estate_area` would silently fall back to
-    the default sort, which makes it a Browse-cohort decision rather than an area one. And
-    `browse_stats_properties`, `browse_list`'s own RPCs and
-    `browse_map_cells` still compare `l.estate_area` in SQL. They are inert from the SPA today
-    (`frontend/src/lib/queries.ts` sends them no `estate_area_min_filter`), and moving them
-    means re-creating three large `SECURITY DEFINER` bodies — its own wave, with its own drift
-    hazard (migrations 371/376).
+    **The residue is gone.** Browse's Table tab SELECTED and SORTED the raw `estate_area`
+    column while the cohort FILTERED the measure, so a bazos/realitymix/mmreality/remax land row
+    could match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell. The tab and the
+    `estate_area` sort were deleted together on 2026-10-20 (operator ruling): a saved
+    `?sort=estate_area` now reads as the default sort through `parseSort`, and Browse reads the
+    raw column nowhere (it stays on `browse_projection` / `browse_list`, unread by Browse). The
+    two aggregate RPCs that compared `l.estate_area` in SQL, `browse_stats_properties` and
+    `browse_map_cells`, narrow `plot_area_m2` since migration 547.
 
     **The plausibility view gained the arm that would have caught the sum** (migration 534
     appends two columns to `measure_plausibility_by_source`). `estate_sum_share` is the share of

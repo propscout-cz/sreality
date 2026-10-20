@@ -15,6 +15,9 @@ toolkit work.
   "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
   defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
   own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+- **Done: Table tab removed 2026-10-20** (operator ruling; ~490 lines net; cards sort menu gains
+  Plocha + Naposledy viděno; `estate_area` sort deleted). An old `?tab=table` link opens the
+  Properties tab, and a one-tab strip (the broker modal) is not drawn.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
@@ -259,7 +262,7 @@ oxidised-copper accent, Fraunces / Inter / JetBrains Mono, tabular
 numerals, Czech locale formatting).
 - **Browse**: filter sidebar (district typeahead, disposition multi-toggle,
   dual-handle price + area sliders, tri-state status, last-seen-within,
-  has-balcony/lift/parking) → Map / Table / Stats tabs. Filter and
+  has-balcony/lift/parking) → Map / Stats tabs (the Table tab went 2026-10-20). Filter and
   sort state in URL params; bookmarkable, refresh-survives.
 - **Listing detail** (`/listing/:sreality_id`): hero, mini-map, key
   facts, snapshot timeline strip (the product's signature visual

@@ -12,7 +12,10 @@ interface Props<T extends string> {
   onChange: (next: T) => void;
 }
 
+/* One tab is not a choice: below two, no strip at all (the broker modal keeps
+ * Browse's Properties tab only). */
 export default function Tabs<T extends string>({ tabs, active, onChange }: Props<T>) {
+  if (tabs.length < 2) return null;
   return (
     <div role="tablist" className="flex items-center gap-1 border-b border-[var(--color-rule)]">
       {tabs.map((t) => {

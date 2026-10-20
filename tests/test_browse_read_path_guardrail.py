@@ -350,12 +350,10 @@ def test_frontend_read_contract_subset_of_projection() -> None:
         if d.pg_column and Agenda.BROWSE in d.agendas
     }
     card_cols = set(_ts_string_const("CARD_COLS").split(","))
-    table_cols = set(_ts_string_const("TABLE_COLS").split(","))
     map_cols = set(_ts_string_const("MAP_COLS").split(","))
     contract = (
         registry_cols
         | card_cols
-        | table_cols
         | map_cols
         | _sortable_fields()
         | HAND_CODED_FILTER_COLUMNS
