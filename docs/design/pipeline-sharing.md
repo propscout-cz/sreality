@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **proposal, 2026-10-20** — awaiting the operator's rulings (§8). Written from three code maps
+Status: **proposal, 2026-10-20 (v1.1: the active board is an app-level selection; acting on a property page needs it)** — awaiting the operator's rulings (§8). Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
@@ -147,7 +147,7 @@ answers as the caller. Without the header nothing changes.
 | Move a card between stages / remove a card | yes | no (drag off) | yes, as O | no |
 | Add a property to the board (property page, funnel button) | yes | no | yes, while acting as O | no |
 | Manage stages (create, rename, reorder, archive) | yes | no | **no** (§8-3) | no |
-| "Edit as pipeline owner" on a property page | — | no | yes, when O's board holds the property (§8-4) | no |
+| "Edit as pipeline owner" on a property page | — | no | yes, while O's board is the ACTIVE board (§8-4) | no |
 | While acting: notes, collections, tags, files, artifact link, dismissal | — | — | as O (O's lists, O's rows, written as O) | — |
 | While acting: O's estimations, watchdog, presets, billing, shares, notifications | — | never | never | — |
 | Share the board with an email / change mode / revoke | yes | no | no | no |
@@ -184,31 +184,38 @@ answers as the caller. Without the header nothing changes.
 
 ### 3.5 SPA
 
-- **One context, one option, one key segment.** `useActing()` returns `{account_id, email, mode} | null`
-  from an `<ActingAs>` provider. The two transports take `actAs`: `request(path, {actAs})` adds the
-  header, `pgRead(builder, {actAs})` calls `setHeader`. The curation and pipeline hooks (the W3/W5 hook
-  family in `lib/collectionCache.ts`, `lib/pipelineReads.ts`, `useCardTags`, `useArtifactLinks`,
+- **One selection, one context, one option, one key segment.** The **active board** is an app-level
+  selection made in the Pipeline tab's switcher and remembered per device (`localStorage`, the same
+  shape as the desktop-view setting): "Můj pipeline" (default) or one board shared with me. `useActing()`
+  returns `{account_id, email, mode} | null` from an `<ActingAs>` provider that two places mount: the
+  Pipeline tab, always, when the active board is shared; the property page, when the active board is an
+  EDIT share and "Upravit jako {email}" is on. The two transports take `actAs`: `request(path, {actAs})`
+  adds the header, `pgRead(builder, {actAs})` calls `setHeader`. The curation and pipeline hooks (the
+  W3/W5 hook family in `lib/collectionCache.ts`, `lib/pipelineReads.ts`, `useCardTags`, `useArtifactLinks`,
   `useDismissal`, `NotesRow`'s reads, `usePipelineCard`/`useOptimisticWrite`'s keys and pending index,
   `curationSettle`) prefix their query keys with the acting account, so the owner's rows never land in
-  the caller's own caches and the two never collide. Nothing outside the provider changes.
-- **Pipeline tab:** a board switcher — "Můj pipeline" plus every board shared with me, labelled
-  `email · jen ke čtení | úpravy` — above the kanban. A shared board renders inside `<ActingAs>`: the
-  columns are the owner's stages, the cards the owner's; read mode disables drag, the stage menu, the
-  trash and the manage button; edit mode enables drag and the stage menu, keeps the manage button off.
-  The owner's page gets a **Sharing** block (email, mode, recipients with mode and a two-step "Stop
-  sharing") — the collection page's `SharingBlock` generalised into one `ShareBlock`. A viewer gets the
-  `ViewerLine` with a two-step "Remove from my list". The URL carries `?board=<account_id>` so a link
-  opens the same board; the phone's remembered stage id is keyed per board.
-- **Property page:** when an edit-mode board shared with me holds the property, the header shows
-  "Upravit jako {email}" (§8-4). Entering wraps the header's curation controls (pipeline, save to
+  the caller's own caches and the two never collide. Browse, the Collections page, Notifications and the
+  extension never act: a shared active board changes nothing there.
+- **Pipeline tab:** the switcher above the kanban lists "Můj pipeline" plus every board shared with me,
+  labelled `email · jen ke čtení | úpravy`; the choice is the active board. A shared board renders inside
+  `<ActingAs>`: the columns are the owner's stages, the cards the owner's; read mode disables drag, the
+  stage menu, the trash and the manage button; edit mode enables drag and the stage menu, keeps the
+  manage button off. The owner's own board gets a **Sharing** block (email, mode, recipients with mode
+  and a two-step "Stop sharing") — the collection page's `SharingBlock` generalised into one
+  `ShareBlock`. A viewer gets the `ViewerLine` with a two-step "Remove from my list" (which also resets
+  the active board to own). A revoked active board reads empty and resets to own with a toast.
+- **Property page:** while the active board is an EDIT share, the header shows "Upravit jako {email}"
+  on every property page (§8-4: the board need not hold the property, so a property can be ADDED to the
+  owner's board from here). Switching it on wraps the header's curation controls (pipeline, save to
   collection, dismiss) and the curation block (tags, artifact link, notes) in `<ActingAs>`; a banner
   "Upravujete jako {email} · Ukončit" sits on the page, not in the 3.5 rem top bar. Everything inside
   reads and writes as the owner through the same components; nothing outside changes (estimations,
-  Valuo, the map). Leaving the page leaves the mode.
+  Valuo, the map). The mode is sticky per device (§8-10): it stays on across property pages until
+  "Ukončit", or until the active board changes back to "Můj pipeline" (which clears it).
 - **Notifications page:** the `share` row renders for both kinds (one renderer; "Open collection" /
   "Open pipeline" link).
-- **Phone:** the board switcher, read-only for every shared board (§8-6); no acting on the phone
-  property page. **Extension:** unchanged (no header; its lookup and writes stay the caller's own).
+- **Phone:** the same per-device active board, read-only for every shared board (§8-6); no "Upravit
+  jako" on the phone property page. **Extension:** unchanged (no header; its lookup and writes stay the caller's own).
 
 ### 3.6 Notes while acting
 
@@ -288,7 +295,7 @@ merge.
   merge, API status.
 - **W2 `feature/pipeline-sharing-surfaces`** (SPA). §3.5 desktop + phone + Notifications; vitest for the
   switcher gating (drag/menu/trash/manage per mode), the key segment (own caches untouched while a
-  shared board is open), the property-page button + banner, `ShareBlock`, the share row. Verify: vite
+  shared board is open), the active-board selection (per device, reset on revoke/leave), the property-page button + sticky mode + banner, `ShareBlock`, the share row. Verify: vite
   status, then the operator's first real share.
 - **W3 `cleanup/account-members-role`** — migration 641 drops `account_members.role` (ruling §8-8);
   CLAUDE.md "out of scope" line + tenancy.md updated. Separate PR, after W2.
@@ -313,8 +320,9 @@ merge.
 2. **Read-only share** = **see the board only**; nothing on the property page / also "view as owner"
    (read the owner's notes, tags, collections on that property, no writes).
 3. **Stage management** (create, rename, reorder, archive) in edit mode: **owner only** / delegates too.
-4. **"Upravit jako {email}" appears** **only when that owner's board holds the property** (as asked) /
-   whenever an edit share exists.
+4. **"Upravit jako {email}" appears on every property page while an edit-mode board is the active
+   board** (the board need not hold the property, so you can add one to it from there) / only when
+   that board already holds the property.
 5. **Attribution of delegated edits:** **none — "as if I was that user"** / stamp the acting user on
    `property_pipeline_events` and `property_notes` (+2 columns, shown as "upravil {email}").
 6. **Phone:** **shared boards read-only on the phone; acting desktop-only** / phone can move cards on
@@ -323,4 +331,7 @@ merge.
 8. **Drop `account_members.role`** (dead; delegation now lives in explicit shares): **yes (W3)** / keep.
 9. **Co-recipients:** **do not see each other** (each sees only their own grant); the board shows no
    "who else" / list them.
-10. **Multiple edit shares holding the same property:** **the button offers a picker** / first only.
+10. **The mode is sticky per device:** once on, it stays on across property pages until "Ukončit" or
+    until the active board goes back to "Můj pipeline" / it ends when you leave the property page.
+11. **The active board is remembered per device** (like the desktop-view setting; survives reloads; the
+    extension and other devices are unaffected) / per tab only.
