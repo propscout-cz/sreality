@@ -1,6 +1,6 @@
-/* One tile of a strip (wave 8, contract D3; wave 10 moves Costs' and LocationQuality's Stat
- * copies onto it). Pins:
- * - the tile, label, value and hint classes (Costs' Stat, the hint in ink-3, never ink-4);
+/* One tile of a strip (wave 8, contract D3; wave 10 moved Costs' and LocationQuality's Stat
+ * copies and AutodedupProgress's Tile onto it). Pins:
+ * - the tile, label, value and hint classes (the hint in ink-3, never ink-4);
  * - the number is never coloured: a status is a dot beside the label, its word sr-only;
  * - no dot and no hint line unless asked. */
 import { describe, expect, it } from 'vitest';

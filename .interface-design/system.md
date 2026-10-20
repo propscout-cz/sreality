@@ -52,6 +52,9 @@ above for status and adds no token.
   `ink-4` dot, so a check nobody measured can never look healthy. Stale reads the same.
 - **Shared admin primitives**: `Panel` (paper-2, rule border, small-caps title) is the card of Health, Costs,
   LocationQuality, LocationPinAudit and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
-  dot; never a coloured number); `StatusDot`; `ErrorBanner`, the one failure banner (`flush` under a settings
-  heading). Acknowledge is an outlined copper button: the operator's own act. Costs' and LocationQuality's own
-  tiles, skeletons and banners, and AutodedupProgress's tiles, move in wave 10b (ruled 2026-10-20: all of them; a red dot beside the label where a number was brick).
+  dot; never a coloured number) the tile of Health, Costs, LocationQuality and AutodedupProgress; `StatusDot`;
+  `Skeleton`, the loading block (static: no pulse); `ErrorBanner`, the one failure banner (`flush` under a
+  settings heading). A tile's trouble count is never a brick number (Costs' by-feature errors column, a table cell, awaits its own ruling): the page passes `status='fail'` only
+  while its own condition holds (a count above zero; a share above the page's bound) and the tile draws a brick
+  dot beside its label, the word Problem sr-only. Copper stays "chosen or central", never a number's emphasis.
+  Acknowledge is an outlined copper button: the operator's own act.

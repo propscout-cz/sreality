@@ -14,7 +14,6 @@
 import { useState, type ReactNode } from 'react';
 import { InfoIcon } from '@/components/icons';
 import { PickButton } from '@/components/controls';
-import SharedErrorBanner from '@/components/ErrorBanner';
 
 /* -------------------------------------------------------------------- */
 /* Expand/collapse twisty — right-pointing when closed, rotates to point  */
@@ -228,9 +227,4 @@ export function CollapsibleSection({
       ) : null}
     </section>
   );
-}
-
-/* The shared banner, flush (it stands in for the content it failed to load) and titled for these English pages. */
-export function ErrorBanner({ message }: { message: string }) {
-  return <SharedErrorBanner flush title="Failed:" message={message} />;
 }
