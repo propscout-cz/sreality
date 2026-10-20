@@ -1,6 +1,6 @@
-"""Sharing, both kinds (migrations 610 + 641; docs/design/pipeline-sharing.md §3.4): grant, notify, revoke, label."""
+"""Sharing, all three kinds (migrations 610, 641, 647; docs/design/pipeline-sharing.md §3.4): grant, notify, revoke, label."""
 
-# A grant is written on the SERVICE ROLE (browser roles hold no INSERT on either share table, nor on
+# A grant is written on the SERVICE ROLE (browser roles hold no INSERT on any share table, nor on
 # notification_dispatches), only after the route's own-account tenant gate passed (sharing never
 # delegates). A revoke or a leave is a tenant DELETE that the party policy scopes.
 
@@ -29,6 +29,12 @@ class PipelineShare:
     mode: ShareMode
 
 
+@dataclass(frozen=True)
+class DashboardShare:
+    dashboard_id: uuid.UUID
+    name: str
+
+
 def party_label(col: str) -> str:
     """The account's label as the caller may see it: a counterparty's email, else NULL."""
     return f"(SELECT e.email FROM share_party_emails() e WHERE e.account_id = {col})"
@@ -43,9 +49,13 @@ def delegated_stamp(relation: str, row_key: str, changed_at: str) -> str:
     )
 
 
-# account_id is the OWNER, stamped by trigger from the collection; RETURNING it names the sender.
+# account_id is the OWNER, stamped by trigger from the collection or dashboard; RETURNING it names the sender.
 _INSERT_COLLECTION_SHARE_SQL = (
     "INSERT INTO collection_shares (collection_id, recipient_account_id) VALUES (%s, %s) "
+    "ON CONFLICT DO NOTHING RETURNING account_id"
+)
+_INSERT_DASHBOARD_SHARE_SQL = (
+    "INSERT INTO stats_dashboard_shares (dashboard_id, recipient_account_id) VALUES (%s, %s) "
     "ON CONFLICT DO NOTHING RETURNING account_id"
 )
 
@@ -68,6 +78,9 @@ _INSERT_SHARE_DISPATCH_SQL = (
 
 _DELETE_COLLECTION_SHARE_SQL = (
     "DELETE FROM collection_shares WHERE collection_id = %s AND recipient_account_id = %s"
+)
+_DELETE_DASHBOARD_SHARE_SQL = (
+    "DELETE FROM stats_dashboard_shares WHERE dashboard_id = %s AND recipient_account_id = %s"
 )
 
 # The path names the counterparty; the side says which of the caller's two lists it sits in, so a
@@ -107,7 +120,7 @@ def resolve_recipient(identity_conn: "psycopg.Connection", email: str) -> uuid.U
 def grant(
     open_identity_conn: Callable[[], ContextManager["psycopg.Connection"]],
     email: str,
-    share: CollectionShare | PipelineShare,
+    share: CollectionShare | PipelineShare | DashboardShare,
 ) -> None:
     """Write the grant and, when new (or widened to edit), its one notification; one service-role transaction."""
     with open_identity_conn() as identity_conn:
@@ -118,6 +131,8 @@ def grant(
             try:
                 if isinstance(share, CollectionShare):
                     cur.execute(_INSERT_COLLECTION_SHARE_SQL, (share.collection_id, recipient))
+                elif isinstance(share, DashboardShare):
+                    cur.execute(_INSERT_DASHBOARD_SHARE_SQL, (share.dashboard_id, recipient))
                 else:
                     cur.execute(_UPSERT_PIPELINE_SHARE_SQL, (share.owner, recipient, share.mode))
             except psycopg.errors.CheckViolation:
@@ -129,6 +144,11 @@ def grant(
                 cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
                     share.collection_id, row[0], f' shared the collection "{share.name}" with you',
                     recipient, f"share:collection:{share.collection_id}:{recipient}",
+                ))
+            elif isinstance(share, DashboardShare):
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
+                    None, row[0], f' shared the dashboard "{share.name}" with you',
+                    recipient, f"share:dashboard:{share.dashboard_id}:{recipient}",
                 ))
             elif row[0] or share.mode == "edit":
                 cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
@@ -143,6 +163,13 @@ def revoke_collection(
 ) -> dict[str, Any]:
     """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
     return _delete(conn, _DELETE_COLLECTION_SHARE_SQL, (collection_id, recipient))
+
+
+def revoke_dashboard(
+    conn: "psycopg.Connection", dashboard_id: str, recipient: str,
+) -> dict[str, Any]:
+    """Revoke (owner) or leave (recipient): the party policy's USING decides which; 0 rows -> 404."""
+    return _delete(conn, _DELETE_DASHBOARD_SHARE_SQL, (dashboard_id, recipient))
 
 
 def revoke_pipeline(

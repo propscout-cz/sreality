@@ -188,7 +188,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
     **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
     per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `share` (not property-grain; recipient-stamped by `api/shares.py`, in-app only; collection mig 610 + pipeline mig 641). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `share` (not property-grain; recipient-stamped by `api/shares.py`, in-app only; collection mig 610 + pipeline mig 641 + dashboard mig 647). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).

@@ -35,9 +35,10 @@ is added there.
 trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
 `notification_subscriptions` (and `manual_rental_estimates`, dropped by 639). Later siblings: `property_dismissals`
 (536), `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
-caller-supplied account, API-only reads and writes) and `stats_dashboards` (626, `account_id` is the
-primary key: one Browse › Stats board per account, caller-supplied account; the SPA reads it through
-RLS, `PUT /stats/dashboard` writes it whole). The column was added nullable (the tables
+caller-supplied account, API-only reads and writes) and `stats_dashboards` (626; 647 re-keyed it on
+`id`: named dashboards, the saved-set CRUD of `/stats/dashboards`, plus ONE unnamed working board per account
+by partial unique index, read and written by `GET`/`PUT /stats/dashboard` with the account `require_account_id`
+resolves: there the account is the row's KEY, RLS still the scope). The column was added nullable (the tables
 already held rows); it is NOT NULL on four of the five since `notification_subscriptions` 364,
 `filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
 about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row).
@@ -105,6 +106,11 @@ the predicate: `ON CONFLICT (property_id, account_id) WHERE lifted_at IS NULL`.
 `recipient_account_id`) with `mode ∈ {read, edit}`, the same party-policy / no-INSERT / either-party-deletes
 shape as `collection_shares`, written by the API on the service role; the ledger is the delegation section below.
 
+**Migration 647 — `stats_dashboard_shares`**, the third kind, 610's shape over one named Stats dashboard:
+owner-stamped by `sync_account_id_from_dashboard()` (which also refuses the unnamed working board), one
+`stats_dashboards_shared_read` `FOR SELECT` arm, the party policy with `not acting()`, created by
+`POST /stats/dashboards/{id}/shares` (tenant gate, then the service role); `share_party_emails()` reads all three.
+
 ## Delegation (migration 641)
 
 Two questions, two functions. `current_account_ids()` answers **who the caller IS** and stays
@@ -114,7 +120,7 @@ uuid)`) answers **whom the caller acts FOR on curation**. Exactly eleven policie
 `collection_properties`, `property_tags`, `property_note_attachments`, `property_artifact_links`,
 `property_dismissals`, `property_pipeline`, `pipeline_stages`, `property_pipeline_events`. **Every
 other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications,
-the two share tables, `share_party_emails()` — so a delegate never reads, writes or spends as the owner
+the three share tables, `share_party_emails()` — so a delegate never reads, writes or spends as the owner
 there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 `test_exactly_the_eleven_curation_policies_act`).
 
@@ -135,9 +141,9 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 - **Fail closed.** A stale, revoked or forged header yields an EMPTY identity, never the caller's own
   rows; a header that is not a uuid is an error. A read grant's write sees no rows (UPDATE/DELETE
   touch 0, INSERT is 42501).
-- **The share rows are the caller's own consent**, so both party policies (`collection_shares_party`,
-  `pipeline_shares_party`) carry `and not acting()`: while acting the four `*_shared_read` arms add
-  nothing, and a delegate neither sees nor revokes the owner's shares.
+- **The share rows are the caller's own consent**, so every party policy (`collection_shares_party`,
+  `pipeline_shares_party`, `stats_dashboard_shares_party`) carries `and not acting()`: while acting the five
+  `*_shared_read` arms add nothing, and a delegate neither sees nor revokes the owner's shares.
 - **The ledger.** `delegated_edits` (append-only; `actor_user_id` = the JWT `sub`, `actor_account_id`
   = the share's recipient, `owner_account_id`, `relation`, `row_key` = the PK values joined by `:`,
   `op`, `at`) is written only by `stamp_delegated_edit()`, ONE `SECURITY DEFINER` trigger function on
@@ -147,17 +153,17 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   (invoker: its latest delegated edit, NULL when the row changed after it, so the owner's own later
   write clears it); `pipeline_stages_public`, `property_pipeline_public` and `pipeline_board_public`
   append it as `edited_by_account_id` + `edited_at`, and the API's note and card projections call it.
-  `share_party_emails()` (both share kinds, plus every actor in the caller's own ledger, so a revoked
+  `share_party_emails()` (every share kind, plus every actor in the caller's own ledger, so a revoked
   delegate stays named) is the label door; deleting the actor's account nulls the actor, not the row.
-- **One notification kind.** `notification_dispatches.source_kind = 'share'` for both kinds
-  (`collection_id` set for a collection share, NULL for a pipeline share); 641 renamed
+- **One notification kind.** `notification_dispatches.source_kind = 'share'` for every kind
+  (`collection_id` set for a collection share, NULL for a pipeline or dashboard share); 641 renamed
   `collection_share` (and its keys to `share:collection:<collection>:<recipient>`); `api/shares.py`
-  writes both.
+  writes all three (`share:dashboard:<dashboard>:<recipient>`, 647).
 - **The API declares, per write route, which account it writes.** `tenant_conn` carries the header
   and the method into the transaction (`tenant_pool.tenant_transaction(claims, act_as=, method=)`,
   both required); `require_acting_account_id` (curation writes: own account, or the owner the
   function grants, else 403) or `require_account_id` (everything else: own account, 403 under the
-  header). Sharing never delegates: both share-create routes declare `require_account_id`, and a
+  header). Sharing never delegates: every share-create route declares `require_account_id`, and a
   delegate may not switch on the owner's collection monitoring (403). `tests/api/test_acting_routes_census.py`
   pins that the first writes only the eleven tables, the second none of them (or says why), and that an
   RLS-only route that reaches the service role or mixes curation with other writes declares one.

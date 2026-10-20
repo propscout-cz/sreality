@@ -918,6 +918,21 @@ def test_dispatch_select_names_the_check_a_system_alert_is_about() -> None:
     ) in _DISPATCH_SELECT
 
 
+def test_dispatch_select_names_what_a_share_opens() -> None:
+    """A share's bell row opens its collection, the owner's pipeline or the dashboard (migration 647):
+    api/shares.py keys every share `share:<kind>:<ref>:<recipient>…`, so the kind is the second segment and
+    the collection id / owner / dashboard id the third; every other producer reads NULL for both."""
+    from api.notifications import _DISPATCH_SELECT
+
+    assert ("CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 2) END AS share_kind, "
+            "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref"
+            ) in _DISPATCH_SELECT
+    for key, kind, ref in (("share:collection:7:r", "collection", "7"),
+                           ("share:pipeline:o:r:edit", "pipeline", "o"),
+                           ("share:dashboard:d:r", "dashboard", "d")):
+        assert key.split(":")[1:3] == [kind, ref]
+
+
 def test_dispatch_feed_reads_listings_through_the_public_view() -> None:
     """Every listing column on the feed comes from `listings_public`, never from
     `listings`.

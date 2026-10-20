@@ -62,8 +62,10 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     "POST /notifications/subscriptions",
     "POST /filter-presets",
     "PUT /stats/dashboard",
+    "POST /stats/dashboards",
     "POST /pipeline/shares",
     "POST /collections/{collection_id}/shares",
+    "POST /stats/dashboards/{dashboard_id}/shares",
 })
 
 _WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+([a-z_][a-z0-9_]*)", re.I)

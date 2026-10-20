@@ -164,8 +164,8 @@ ones, or in no collection at all ("V žádné kolekci"); own and shared-with-me 
 _Avoid_: list, folder, favourites, saved list
 
 **Share**:
-A read-only grant of one collection to one account. The owner revokes it, the recipient may leave
-it; the recipient can never change the collection.
+A read-only grant of one collection or one dashboard to one account. The owner revokes it, the
+recipient may leave it; the recipient can never change what was shared.
 _Avoid_: invite, membership, access (alone), collaborator
 
 **Pipeline share**:
@@ -173,6 +173,16 @@ A grant of one account's whole pipeline, and with it that account's curation, to
 to view the board only, or to edit the board and the curation. The owner revokes it or changes its mode, the recipient may leave it. Only
 the owner shares their own pipeline.
 _Avoid_: board share, team board, membership, delegation (alone)
+
+**Dashboard**:
+A named set of Stats charts an account saved, optionally with the Browse filter it was built on. Loading
+one copies it into the working board; it changes only when its owner saves changes. It may be shared
+read-only; a recipient loads a copy and may save it as their own.
+_Avoid_: report, view (alone), saved board
+
+**Working board**:
+The charts the Stats tab shows right now: one per account, never shared, never listed among dashboards.
+_Avoid_: default dashboard, scratch, draft
 
 **Acting as**:
 Working on another account's curation as that account, through a pipeline share: while acting, the
@@ -394,7 +404,7 @@ _Avoid_: cluster, bubble, cell, bin, group
 **Chart (Stats)**:
 One saved view on the Browse Stats tab: up to six nested row dimensions, at most one column
 dimension and one measure, drawn as a table, lines, bars or boxes over the properties the filter
-picks. A user's charts together are their dashboard; the title is derived, never typed.
+picks. A user's charts together are their working board; the title is derived, never typed.
 _Avoid_: card, widget, report, graph (for the saved thing)
 
 **Sample ledger**:

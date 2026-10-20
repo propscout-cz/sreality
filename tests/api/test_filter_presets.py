@@ -1,9 +1,10 @@
 """Tests for the /filter-presets endpoints (Browse saved filter presets).
 
 Hermetic — overrides the tenant connection + JWT (the routes are per account
-since ticket #1761) so no real DB is hit, and patches the api.filter_presets.*
-persistence helpers with in-memory fakes. Pydantic validation (blank name,
-missing filter_spec) runs unmodified through the route layer. The account
+since ticket #1761) so no real DB is hit, and patches the saved-set persistence
+functions (api/saved_sets.py, the presets instance) with in-memory fakes. Pydantic
+validation (blank name, missing filter_spec) and the PUT's field rule
+(`saved_sets.changes`) run unmodified through the route layer. The account
 resolver is stubbed to a distinctive sentinel, never to None (tenancy.md's
 #917 rule), and the tests assert the sentinel ARRIVES at the insert.
 """
@@ -20,9 +21,10 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from fastapi.routing import APIRoute
 
 from api import dependencies as deps
-from api import filter_presets as fp
 from api import main as api_main
+from api import saved_sets as ss
 from api import tenant_pool
+from api.routes.filter_presets import PRESETS
 
 _SUB = "11111111-1111-1111-1111-111111111111"
 _ACCT = "33333333-3333-3333-3333-333333333333"
@@ -41,13 +43,15 @@ def client(monkeypatch):
 
 @pytest.fixture()
 def store(monkeypatch):
-    """In-memory replacement for the filter_presets.* persistence functions."""
+    """In-memory replacement for the saved-set persistence functions, presets kind only."""
     state: dict[str, Any] = {"presets": {}, "owners": {}, "next_id": 1}
 
     def _to_dict(pid: str) -> dict[str, Any]:
         return dict(state["presets"][pid])
 
-    def fake_create_preset(conn, *, name, filter_spec, color=None, account_id):
+    def fake_create_preset(conn, kind, values, *, account_id):
+        assert kind is PRESETS
+        name, filter_spec, color = values["name"], values["filter_spec"], values["color"]
         pid = str(state["next_id"])
         state["next_id"] += 1
         state["owners"][pid] = account_id
@@ -66,40 +70,37 @@ def store(monkeypatch):
         }
         return _to_dict(pid)
 
-    def fake_list_presets(conn):
+    def fake_list_presets(conn, kind):
+        assert kind is PRESETS
         rows = [_to_dict(pid) for pid in state["presets"]]
         rows.sort(key=lambda r: (r["position"], r["created_at"]))
         return rows
 
-    def fake_get_preset(conn, pid):
+    def fake_get_preset(conn, kind, pid):
         return _to_dict(pid) if pid in state["presets"] else None
 
-    def fake_update_preset(conn, pid, *, name=None, filter_spec=None, color=fp._UNSET):
+    def fake_update_preset(conn, kind, pid, fields):
+        # The route hands over only what changes (saved_sets.changes), so the fake applies it whole.
         if pid not in state["presets"]:
             return None
-        if name is not None:
-            state["presets"][pid]["name"] = name
-        if filter_spec is not None:
-            state["presets"][pid]["filter_spec"] = filter_spec
-        if color is not fp._UNSET:
-            state["presets"][pid]["color"] = color
+        state["presets"][pid].update(fields)
         return _to_dict(pid)
 
-    def fake_delete_preset(conn, pid):
+    def fake_delete_preset(conn, kind, pid):
         return state["presets"].pop(pid, None) is not None
 
-    def fake_reorder_presets(conn, ids):
+    def fake_reorder_presets(conn, kind, ids):
         for pos, pid in enumerate(ids):
             if pid in state["presets"]:
                 state["presets"][pid]["position"] = pos
-        return fake_list_presets(conn)
+        return fake_list_presets(conn, kind)
 
-    monkeypatch.setattr(fp, "create_preset", fake_create_preset)
-    monkeypatch.setattr(fp, "list_presets", fake_list_presets)
-    monkeypatch.setattr(fp, "get_preset", fake_get_preset)
-    monkeypatch.setattr(fp, "update_preset", fake_update_preset)
-    monkeypatch.setattr(fp, "delete_preset", fake_delete_preset)
-    monkeypatch.setattr(fp, "reorder_presets", fake_reorder_presets)
+    monkeypatch.setattr(ss, "create", fake_create_preset)
+    monkeypatch.setattr(ss, "list_rows", fake_list_presets)
+    monkeypatch.setattr(ss, "get", fake_get_preset)
+    monkeypatch.setattr(ss, "update", fake_update_preset)
+    monkeypatch.setattr(ss, "delete", fake_delete_preset)
+    monkeypatch.setattr(ss, "reorder", fake_reorder_presets)
 
     return state
 
@@ -354,7 +355,7 @@ class _Cursor:
         self.log.append((sql, params))
 
     def fetchone(self) -> tuple:
-        return ("p-1",)
+        return ("p-1", "p", SPEC, None, None, 0, None)
 
 
 class _Conn:
@@ -365,18 +366,17 @@ class _Conn:
         return _Cursor(self.log)
 
 
-def test_create_preset_sql_binds_the_account(monkeypatch):
+def test_create_preset_sql_binds_the_account():
     """The persistence layer writes the owner into the row, and takes it as a
     REQUIRED keyword (no default: a dropped argument is a TypeError, not a NULL)."""
     import inspect
 
-    param = inspect.signature(fp.create_preset).parameters["account_id"]
+    param = inspect.signature(ss.create).parameters["account_id"]
     assert param.default is inspect.Parameter.empty
     assert param.kind is inspect.Parameter.KEYWORD_ONLY
 
-    monkeypatch.setattr(fp, "get_preset", lambda conn, pid: {"id": pid})
     conn = _Conn()
-    fp.create_preset(conn, name="p", filter_spec=SPEC, color=None, account_id=_ACCT)
+    ss.create(conn, PRESETS, {"name": "p", "filter_spec": SPEC, "color": None}, account_id=_ACCT)
     sql, params = conn.log[0]
     assert "account_id" in sql.split("VALUES")[0]
     assert params[-1] == _ACCT
@@ -388,6 +388,8 @@ def test_reads_and_writes_by_id_carry_no_account_predicate():
     definition of the caller (the #917 bug), not a gate."""
     import inspect
 
-    for fn in (fp.list_presets, fp.get_preset, fp.update_preset, fp.delete_preset,
-               fp.reorder_presets):
+    for fn in (ss.list_rows, ss.get, ss.update, ss.delete, ss.reorder, ss.changes):
         assert "account_id" not in inspect.getsource(fn), fn.__name__
+    for sql in (ss._list_sql(PRESETS), ss._get_sql(PRESETS), ss._delete_sql(PRESETS),
+                ss._update_sql(PRESETS, ("name", "filter_spec", "color")), ss._reorder_sql(PRESETS)):
+        assert "account_id" not in sql, sql

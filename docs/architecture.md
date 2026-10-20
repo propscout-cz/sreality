@@ -2265,14 +2265,15 @@ renumber.** Navigate by area:
     a red production run is now a `jobs` cell carrying its reason line
     (`scripts/failure_signature.reason_line`), and a portal failing inside the worker a lane cell.
     Delivery, watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
-    **A FOURTH producer is live (migration 610, one kind for both shares since 641): `share`.**
+    **A FOURTH producer is live (migration 610, one kind for every share since 641; dashboards since 647): `share`.**
     `api/shares.py` writes it for a collection share (`POST /collections/{id}/shares`: ONE dispatch
     per (collection, recipient) ever, `dedupe_key` `share:collection:<collection>:<recipient>`, no
     time: a revoke + re-share loop cannot refill an inbox; `collection_id` set; "<owner email> shared
     the collection "<name>" with you") and for a pipeline share (`POST /pipeline/shares`: one per
     (owner, recipient, mode), `share:pipeline:<owner>:<recipient>:<mode>`, written when the grant is
     new or widens to edit; `collection_id` NULL; "<owner email> shared their pipeline with you (view
-    only|edit)") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
+    only|edit)") and for a dashboard share (647: `share:dashboard:<dashboard>:<recipient>`, once ever, `collection_id`
+    NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
     in the sharing model (a snapshot at share time), in-app only (`target_channels` empty, never
     routed to email/Telegram). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
@@ -2545,7 +2546,8 @@ renumber.** Navigate by area:
     `share_party_emails()` (the caller's counterparties only) over `account_email()`, the one
     label definition; a shared collection reads `monitoring_enabled = false` (alerts stay the
     owner's). A share is keyed on the collection, which a merge never changes, so it needs no
-    carrier; the `shared` mark rides the note through a merge and a split's copy.
+    carrier; the `shared` mark rides the note through a merge and a split's copy. A named Stats dashboard is
+    shared the same way (migration 647, `stats_dashboard_shares`; never the account's working board).
     **Acting as the owner (migration 641, `docs/design/pipeline-sharing.md`): a pipeline share
     REPLACES the identity on curation, it never widens it.** `pipeline_shares` (owner, recipient,
     mode `read|edit`; browser SELECT + DELETE, no INSERT) lets the recipient send `X-Act-As:
@@ -2558,17 +2560,17 @@ renumber.** Navigate by area:
     `acting_account_ids(true)` (ruling 2) — and only on GET/HEAD (`request.method`, set by
     PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs an acting GET READ ONLY). Without the header the two functions agree; a header
     naming no live share yields an EMPTY identity (fail closed). Every other table — billing,
-    estimations, watchdog, presets, notifications, both share tables — stays the caller's own. A
+    estimations, watchdog, presets, notifications, dashboards, the share tables — stays the caller's own. A
     tenant write route declares which account it writes: `tenant_pool.require_acting_account_id`
     (the eleven tables only, pinned by `tests/api/test_acting_routes_census.py`) or
     `require_account_id` (always the caller's own; 403 under the header — watchdog, presets, the stats
-    board, both share-create routes: sharing itself; a delegate may not set the owner's collection
+    board, every share-create route: sharing itself; a delegate may not set the owner's collection
     monitoring either). Every write made while acting is stamped in `delegated_edits` (actor user
     + account, owner, relation, row key, op, time) by ONE trigger function on the eleven tables; only
     the owner reads it, and notes, cards and the board views carry the row's stamp
     (`edited_by_email` / `edited_by_account_id` + `edited_at`) from ONE definition,
     `latest_delegated_edit()` (cleared once the owner changes the row), labelled through
-    `share_party_emails()`, now over both share kinds and the owner's own ledger actors. The ledger names rows, not properties, so it
+    `share_party_emails()`, now over every share kind (647 added dashboards) and the owner's own ledger actors. The ledger names rows, not properties, so it
     needs no carrier; cards and curation stay owned by exactly one account.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many

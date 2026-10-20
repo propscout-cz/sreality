@@ -251,6 +251,22 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "UPDATE by a list of ids — migration 290's USING clause is the row set, so another "
         "account's id matches nothing"
     ),
+    "GET /stats/dashboards": (
+        "RLS-only read — migration 626's tenant policy (own) plus 647's shared-read arm "
+        "(dashboards shared with the caller); labels through share_party_emails()"
+    ),
+    "GET /stats/dashboards/{dashboard_id}": "RLS-only read (migrations 626 + 647, as above)",
+    "PUT /stats/dashboards/{dashboard_id}": (
+        "UPDATE by id — migration 626's USING clause; a shared row is visible, never updatable (404)"
+    ),
+    "DELETE /stats/dashboards/{dashboard_id}": "DELETE by id — migration 626 USING clause",
+    "PUT /stats/dashboards/reorder": (
+        "UPDATE by a list of ids — migration 626's USING clause is the row set, so another "
+        "account's (or a shared) dashboard matches nothing"
+    ),
+    "DELETE /stats/dashboards/{dashboard_id}/shares/{account_id}": (
+        "DELETE by key — migration 647's party policy USING (owner revokes, recipient leaves)"
+    ),
     "GET /notifications/subscriptions": (
         "RLS-only read (migration 290 on `notification_subscriptions`)"
     ),
