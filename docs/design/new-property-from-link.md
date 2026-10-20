@@ -125,9 +125,11 @@ headroom, and CLAUDE.md sits at 299 of 300 lines.
 functions: `native_id(source, href)` (what the seven parsers and `mmreality_main` import instead of their
 private regexes; applied to the URL path, relative index hrefs included, with the exact semantics each
 walk uses today — sreality and bezrealitky, which have no Python rule, take the browser rule) and
-`resolve_url(url)` → `(source, native_id, canonical_url) | refusal`. Hosts match by registrable-domain
-suffix (as `_KIND_SUFFIXES` does), so a portal subdomain never becomes a second identity; a URL on a
-portal domain that is not one ad is refused; known wrapper links (`l.facebook.com/l.php?u=`,
+`resolve_url(url)` → `(source, native_id, canonical_url) | refusal`. Hosts match an EXACT per-portal list
+(the lists `portalIds.ts` holds, which are the only hosts the walks store — a sibling subdomain such as
+`auto.bazos.cz` is refused, so the drain never fetches a host the portal client was not built for; W1
+review); a URL on a portal domain that is not one ad, a rewritten path (`.`/`..` segments, a backslash), a
+non-default port or an id over 18 digits is refused; known wrapper links (`l.facebook.com/l.php?u=`,
 `google.com/url?q=`, …) are unwrapped before resolution without a fetch. Patterns use `[0-9]`, no
 `\b`, no named groups, no lookbehind, so the same strings are valid in both languages.
 
@@ -136,8 +138,9 @@ surviving canonicaliser (today's `api/estimation_runs._canonical_url`, corrected
 userinfo and default port stripped, fragment dropped, tracking parameters dropped (`utm_*`, `fbclid`,
 `gclid`, `gbraid`, `wbraid`, `mc_eid`, `igshid`; `ref` and `src` are KEPT — sites use them for ids),
 remaining query sorted and KEPT (sites that key ads by `?id=` must not collapse), trailing slash stripped,
-512 characters at most (live max of any stored URL: 183). The canonical URL is the identity; the as-pasted
-URL minus its fragment is the `detail_ref` the drain fetches.
+512 characters at most (live max of any stored URL: 183). The canonical URL is the identity; the `detail_ref`
+the drain fetches is the pasted URL rebuilt from the checked host, minus its fragment and the tracking keys
+(`source_url` is stored and never rebuilt, so an `fbclid` must not reach it; W1 review).
 
 `frontend/src/lib/portalIds.ts` keeps its API and its literals (the extension imports it cross-tree and
 the manifest derives from it; a repo-root file would break the SPA's Docker context, whose build CI never
