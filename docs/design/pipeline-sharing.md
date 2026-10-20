@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **v1.2, 2026-10-20 — rulings 1–6 and 8–11 in (§8); ruling 7 (the share notification) pending.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards. Written from three code maps
+Status: **v1.2, 2026-10-20 — rulings 1–6 and 8–11 in (§8); ruling 7 (the share notification) pending.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
@@ -297,17 +297,17 @@ more objects than switching the eleven curation policies, and it muddles "who I 
 
 | Addition | Paid by (deletion) | Evidence |
 |---|---|---|
-| `pipeline_shares` + party policy | DROP `account_members.role` (641, destructive by class, ruling §8-8) — the dead placeholder for delegation | CLAUDE.md "written and read by nothing"; `grep -rn "\.role\b" api toolkit frontend` = 0 readers |
+| `pipeline_shares` + party policy | the collection share route's email resolver, grant write and notification fold into one `api/shares.py` serving both kinds (one body, not two) | `api/curation.py:293-370`; ruling 8 keeps `account_members.role`, so no column is dropped |
 | `acting()`, `acting_account_ids()` | no new view, route-twin, RPC or SPA read path: eleven `ALTER POLICY`, zero new policies | §3.1 |
 | `request.headers` + `request.method` GUCs in `tenant_transaction` | mirrors PostgREST's own shape — one function reads both paths | §2 |
 | `require_acting_account_id` | — (a second dependency; declared per route; pinned by a census) | §3.4 |
-| `api/shares.py`, `POST/DELETE/GET /pipeline/shares` | the collection share route's body moves into the module (one email resolver, one grant write, one notification); `source_kind` values −1 (`collection_share` → `share`, one renderer) | `api/curation.py:293-370` |
+| `POST/DELETE/GET /pipeline/shares` | `source_kind` values −1 (`collection_share` → `share`, one feed renderer for both kinds) | `api/notifications.py` `SourceKind` |
 | `ShareBlock` | the collection page's `SharingBlock` (one component for both pages) | `pages/CollectionDetail.tsx` |
 | `useActing`, the `actAs` transport option, the key segment | the four `_scoped` copies in the live lanes become one `tests/_tenant_scope.py` (with `act_as=`, `method=`) | test_tenant_isolation_live:355, collection_shares_live:34, tenant_ids_identity_live:81, curated_set_scope_live:58 |
 | `delegated_edits` + `stamp_delegated_edit()` + eleven triggers | no column on any curation table; one ledger in the house's append-only event shape (like `property_pipeline_events`, `property_status_events`) | ruling 5 |
 | `tests/test_pipeline_shares_live.py` | the collection live lane's three-tenant fixture becomes the shared fixture it already is in shape | — |
 
-**Net, plainly.** Database objects +2 tables, +3 functions, +2 policies, +11 triggers, −1 column; routes +3, −0 (one body
+**Net, plainly.** Database objects +2 tables, +3 functions, +2 policies, +11 triggers, −0 (ruling 8 keeps the role column); routes +3, −0 (one body
 moved); SPA +1 context, +1 transport option, −1 component copy; tests −3 helper copies. Production
 lines will be net positive: a second share kind and an acting mode are new facts. The payment is
 structural — nothing in the app learns a second way to read or write curation.
@@ -315,8 +315,7 @@ structural — nothing in the app learns a second way to read or write curation.
 ## 6. Waves
 
 Merges wait for the autodedup session's green light (`autodedup.settings rt_bootstrap:rt` false and its
-word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 (+641 for the drop) — next free at
-merge.
+word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 — next free at merge.
 
 - **W1 `feature/pipeline-shares-acting`** (database + API + doctrine). Migration 640; `tenant_transaction`
   GUCs; `tenant_conn` header; `require_acting_account_id` on the curation, pipeline-card and stage writes, the `delegated_edits` ledger + trigger + the stamp columns in the projections and the two board views (security_invoker restated),
@@ -339,9 +338,6 @@ merge.
   switcher gating (drag/menu/trash/manage per mode), the key segment (own caches untouched while a
   shared board is open), the active-board selection (per device, reset on revoke/leave), the property-page button + sticky mode + banner, `ShareBlock`, the share row. Verify: vite
   status, then the operator's first real share.
-- **W3 `cleanup/account-members-role`** — migration 641 drops `account_members.role` (ruling §8-8);
-  CLAUDE.md "out of scope" line + tenancy.md updated. Separate PR, after W2.
-
 ## 7. Risks and mitigations
 
 | Risk | Mitigation |
@@ -355,7 +351,7 @@ merge.
 | email enumeration on share | same stance as collections: accepted for a closed platform |
 | the top bar must stay 3.5 rem | the acting banner lives in the page, below the bar |
 
-## 8. Rulings (2026-10-20: 1, 2, 4, 8, 9, 10, 11 as recommended; 3, 5, 6 as ruled below; 7 pending)
+## 8. Rulings (2026-10-20: 1, 2, 4, 9, 10, 11 as recommended; 3, 5, 6, 8 as ruled below; 7 pending)
 
 1. **Acting covers** **all eleven curation tables** (notes, collections + memberships, tags + memberships,
    note files, artifact link, dismissals, pipeline cards/stages read, pipeline events) / pipeline cards only.
@@ -371,7 +367,7 @@ merge.
    "Upravit jako" on the phone property page.
 7. **Notification on share** (pending the operator's decision): **in-app row, like collections** (one
    `share` kind) / none.
-8. **Drop `account_members.role`** (dead; delegation now lives in explicit shares): **yes (W3)** / keep.
+8. `account_members.role` — **RULED: keep** (2026-10-20); no column drop in this sprint.
 9. **Co-recipients:** **do not see each other** (each sees only their own grant); the board shows no
    "who else" / list them.
 10. **The mode is sticky per device:** once on, it stays on across property pages until "Ukončit" or
