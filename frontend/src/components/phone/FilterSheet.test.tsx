@@ -47,6 +47,10 @@ const NOT_ON_SHEET: Record<string, string> = {
   category_sub_cb: 'dropped from the sidebar in #300: the registry entry has no options',
   min_garden_area: 'not placed on the desktop sidebar either',
   max_garden_area: 'not placed on the desktop sidebar either',
+  building_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
+  building_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
+  apartment_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
+  apartment_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
 };
 
 /* Every cohort-conditional group open: a house cohort shows Subtype, Prodej shows Yield. */
@@ -110,39 +114,43 @@ describe('the registry walk', () => {
     expect(drawn.size).toBe(browse.length - Object.keys(NOT_ON_SHEET).length);
   });
 
-  it("groups and orders the rows as the desktop sidebar does, the map's group left out", () => {
+  it('bands and orders the rows as the desktop sidebar does, the map-only row left out', () => {
     renderSheet({ filters: HOUSES_FOR_SALE });
     const bands = within(sheet()).getAllByRole('region').map((el) => el.getAttribute('aria-label'));
     expect(bands).toEqual(BROWSE_FILTER_BANDS.map((b) => b.title));
-    const groups = sheetBands(HOUSES_FOR_SALE).map((b) => [b.title, b.groups.map((g) => g.title)]);
-    expect(groups).toEqual([
-      ['Essentials', ['Category', 'Subtype', 'Status', 'Location', 'Disposition', 'Size', 'Condition & material', 'Price', 'Yield']],
-      ['Features', ['Unit', 'Amenities']],
-      ['Curation & quality', ['Curation', 'City quality', 'Advanced city-quality rules', 'Market growth (datasets)']],
-      ['Other', ['Source portal', 'Velocity']],
+    const rows = sheetBands(HOUSES_FOR_SALE).map((b) => [b.title, b.groups.flatMap((g) => g.rows.map((r) => r.key))]);
+    expect(rows).toEqual([
+      ['Essentials', [
+        'category_type', 'status', 'tom_observed_only', 'category_main_in', 'subtype', 'districts',
+        'min_price_czk', 'min_price_per_m2', 'recently_added_days', 'recently_changed_days', 'ownership',
+        'include_no_price', 'dispositions', 'min_area_m2', 'min_estate_area', 'min_usable_area',
+        'condition_match', 'building_material', 'furnished',
+        'has_balcony', 'has_lift', 'has_parking', 'terrace', 'cellar', 'garage', 'min_parking_lots',
+      ]],
+      ['Curation', ['show_dismissed', 'pipeline', 'collections', 'tags', 'portals', 'with_estimates']],
+      ['Velocity & price activity', [
+        'price_change_count_min', 'price_change_window_days', 'total_price_change_pct',
+        'first_seen_min_days', 'last_seen_min_days', 'tom_days_min',
+      ]],
+      ['Advanced', [
+        'min_mf_gross_yield_pct', 'min_city_population',
+        'near_pop_5km_min', 'near_pop_15km_min', 'near_jobs_5km_min', 'near_jobs_15km_min',
+        'near_youth_5km_min', 'near_youth_15km_min', 'near_overall_5km_min', 'near_overall_15km_min',
+        'city_index_rules', 'market_growth',
+      ]],
     ]);
     /* Řazení leads, then the sidebar's own words. */
-    const rows = [...sheet().querySelectorAll('[data-filter-row]')].map((el) => el.getAttribute('data-filter-row'));
-    expect(rows.slice(0, 4)).toEqual(['sort', 'category_main_in', 'category_type', 'subtype']);
+    const drawn = [...sheet().querySelectorAll('[data-filter-row]')].map((el) => el.getAttribute('data-filter-row'));
+    expect(drawn.slice(0, 4)).toEqual(['sort', 'category_type', 'status', 'tom_observed_only']);
     expect(within(sheet()).getByRole('button', { name: /^Listing for/ })).toBeInTheDocument();
   });
 
-  it("draws 'Newly listed only' directly under the status buttons, not parked among the rarely-touched filters", () => {
-    const groups = sheetBands(HOUSES_FOR_SALE).flatMap((b) => b.groups.map((g) => [b.title, g] as const));
-    const status = groups.find(([, g]) => g.title === 'Status');
-    expect(status?.[0]).toBe('Essentials');
-    expect(status?.[1].rows.map((r) => r.key)).toEqual([
-      'status', 'tom_observed_only', 'recently_added_days', 'recently_changed_days',
-    ]);
-    const velocity = groups.find(([, g]) => g.title === 'Velocity');
-    expect(velocity?.[1].rows.map((r) => r.key)).not.toContain('tom_observed_only');
-  });
-
   it('shows Subtype and Yield only for the cohorts the sidebar shows them for', () => {
-    const titles = (f: ListingFilters) => sheetBands(f)[0].groups.map((g) => g.title);
-    expect(titles(DEFAULT_FILTERS)).not.toContain('Subtype');
-    expect(titles(DEFAULT_FILTERS)).not.toContain('Yield');
-    expect(titles(HOUSES_FOR_SALE)).toEqual(expect.arrayContaining(['Subtype', 'Yield']));
+    const keys = (f: ListingFilters) => sheetBands(f).flatMap((b) => b.groups.flatMap((g) => g.rows.map((r) => r.key)));
+    const RENT_FLATS: ListingFilters = { ...DEFAULT_FILTERS, categoryType: 'pronajem' };
+    expect(keys(RENT_FLATS)).not.toContain('subtype');
+    expect(keys(RENT_FLATS)).not.toContain('min_mf_gross_yield_pct');
+    expect(keys(HOUSES_FOR_SALE)).toEqual(expect.arrayContaining(['subtype', 'min_mf_gross_yield_pct']));
   });
 });
 
@@ -150,7 +158,7 @@ describe('the registry walk', () => {
 const FILLED: ListingFilters = {
   ...DEFAULT_FILTERS,
   categoryMain: ['dum', 'komercni'],
-  categoryType: 'prodej',
+  categoryType: 'pronajem',
   subtype: ['vila'],
   status: 'inactive',
   recentlyAddedDays: 7,
