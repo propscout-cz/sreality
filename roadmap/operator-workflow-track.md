@@ -7,18 +7,19 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
-### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, not started)
+### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
-The operator merged one flat with about 26 others (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč)
-and later read Browse as if the merge had come undone: the property detail lists the merged ads, yet the
-grid still shows a wall of Lužická cards. Facts captured read-only on 2026-10-19: 26 `property_merge_events`
-at 15:15:29Z into one survivor (property 813505, now 27 ads), none undone; `browse_list` still held 25
-Lužická byt/prodej 2+1 properties (17 active cards, 6 multi-ad) — the 24 besides 813505 are DIFFERENT
-properties, never retired. To investigate: were they outside the merge-mode selection, born afterwards
-(straggler singletons for new ads), or seen during the ≤15-minute patch race that ONE PIN W1 (migration
-630) has since closed? Then decide whether Browse should say "merged into …" on a retired card's
-successor, and whether merge mode needs a "select all identical" affordance. Ids and the SQL: memory note
-`one-pin-sprint-2026-10-19` (operator machine).
+The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;
+survivor property 813505) and read Browse as if the merge had come undone. Root cause, read-only: the
+merge (15:15:29Z) landed inside the 15:15 list rebuild (15:15:00–15:16:01Z), whose swap discarded the
+merge's patch, so the 26 retired cards reappeared until the 15:30 rebuild — the patch race ONE PIN W1
+closed (migration 630 re-patches identity changes inside the rebuild). The detail page was right all
+along. The other "Lužická" cards are at least twelve different flats (prices 2.5–14.5 M, areas 50–88 m²);
+the only unmerged twin of the operator's flat is property 983290, one active sreality ad hidden by the
+status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 28 ads sit in one rt group
+(cluster 18836145) and its lane folds 983290 into 813505 at the next re-read under the 12 h freshness rule.
+- Open idea (not started): merge mode could name twins outside the current status/portal filter
+  ("3 more properties share this address") so a merge made under a narrow filter is not read as broken.
 
 ### Phase U-VALUO: a Valuo valuation on the property page (in progress, 2026-10-19)
 - **Done (W2, backend):** migration 637 `valuo_valuations` (one row per paid call, service-role only, keyed by ad),
