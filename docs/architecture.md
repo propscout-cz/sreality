@@ -803,7 +803,11 @@ rules. Identify which one a task belongs to before you start.
   `/pipeline` on the phone frame is `components/phone/PhonePipeline.tsx`, one swiped page per
   stage on the board's own two cache entries (`lib/pipelineReads`, shared with the kanban, which is
   not mounted there) with every write through the stage sheet's `usePipelineCard` — no drag and no
-  stage management on the phone (#1768).
+  stage management on the phone (#1768). A board shared with me (migration 641) is picked from the
+  same switcher strip above the stage tabs: a read board has no stage sheet and no tag chips or
+  artifact button; an edit board moves cards through the stage sheet as the owner (ruling 6). The
+  remembered stage is per board (`sreality.phone.pipelineStage:<owner>`); sharing and leaving a
+  board, and "Upravit jako", stay desktop-only.
   The W4 screens (`pages/phone/`, #1769) add no read either: a collection's members and a
   broker's ads are the feed's card read under the `collections` / `brokerId` prefilter, the
   lists and the dossier are the desktop pages' own API calls, and each page component picks
@@ -821,6 +825,30 @@ rules. Identify which one a task belongs to before you start.
   and the phone property page's first section, one `LocationBody`) is a Mapy static image the API
   streams on every view (`api/routes/property_location.py`; Mapy's terms forbid storing it, so never
   R2, only an hour of private browser cache) — never a WebGL map on the phone.
+- **Acting as a pipeline's owner is one selection, one context, one option, one key segment**
+  (`frontend/src/lib/acting.ts`, migration 641, `docs/design/pipeline-sharing.md` §3.5). The
+  ACTIVE BOARD is a per-device `localStorage` choice (`sreality.pipeline.activeBoard`; "Můj
+  pipeline" = null) written by the Pipeline tab's `BoardSwitcher` and checked against
+  `GET /pipeline/shares` (`lib/pipelineShares.useBoardSelection`; a board the server no longer lists
+  resets to my own with a toast). `<ActingAs share>` is mounted in exactly two places: the Pipeline
+  tab on a shared board (desktop kanban and phone pages), and the desktop property page while the
+  active board is an EDIT share and "Upravit jako {email}" is on (`sreality.pipeline.editAsOwner`,
+  sticky per device until "Ukončit" or any active-board change; the in-page banner sits under the
+  header, never in the 3.5 rem bar; offered only once `GET /pipeline/shares` confirms the board). A
+  change of signed-in account resets the active board (`lib/auth`, beside `queryClient.clear()`), and
+  a change of board drops the board's URL collection/tag scopes (their ids are one account's). Inside it the curation and pipeline hooks prefix every query
+  and mutation key with `actingKey` (`['acting', owner, …]`; outside a provider the key is
+  byte-identical to before) and hand `{ actAs }` to `lib/api` `request` (the `X-Act-As` header) or
+  `pgRead` (`setHeader`); the "Browse never acts" rule lives once, in `lib/curationSettle`
+  (`settlePatches` / `settleRereads` / `browseReads` take `actAs` and answer nothing for it). Only the header's pipeline / collection / dismiss controls and
+  `CurationBlock` (tags, artifact link, notes) are wrapped on the property page; estimations, Valuo,
+  the maps, sold comps, merges, Browse, Collections, Notifications, watchdog, presets and the
+  extension never act, and sharing calls (`/pipeline/shares`, `/collections/{id}/shares`) never
+  carry the header. A read board renders without drag, stage menu, trash, stage editor, tag chips
+  or artifact buttons, and never asks for the owner's tags or collections (not readable under a
+  read share). Delegated stamps go through ONE helper, `lib/delegatedStamp`: the API's
+  `edited_by_email` as is; a board view's `edited_by_account_id` named only from the caller's own
+  `shared_with` list (my own board), else the time alone ("upraveno · …").
 - **`UserFacingError` (`frontend/src/lib/errors.ts`) marks the errors a person should
   read.** `ErrorBoundary` renders its `userMessage` + `recovery` as the headline and
   folds the technical text (the `cause`, when there is one) under a collapsed "Technical

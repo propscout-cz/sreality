@@ -26,7 +26,9 @@ import { listingKindLabel } from '@/lib/enums';
 import { propertyPath } from '@/lib/listingUrl';
 import { splitCardPlace } from '@/lib/cardPlace';
 import { useCardTags } from '@/lib/useCardTags';
+import { useActingReadOnly } from '@/lib/acting';
 import { TrashIcon } from '@/components/icons';
+import DelegatedStamp from '@/components/DelegatedStamp';
 import PriceDelta from '@/components/PriceDelta';
 import CityIndexStrip from '@/components/CityIndexStrip';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
@@ -143,6 +145,10 @@ export function CardFace({
    * in-column and inside the drag overlay, so context is what keeps those two
    * mount points from drifting apart. */
   const { coverFor, brokersFor, brokersPending } = useCardHydration();
+  /* A read-only shared board shows no tags and no artifact link: the owner's
+   * curation is not readable under a read share (ruling 2), so neither read is
+   * made — the card is the board's own fields only. */
+  const readOnly = useActingReadOnly();
   const cover = coverFor(card.listing_id);
   /* MS7: the property's list, compact — its first broker, "+N" for the rest. */
   const brokerList = brokersFor(card.property_id);
@@ -254,11 +260,18 @@ export function CardFace({
               </span>
             )}
           </div>
-          <CardTags property_id={card.property_id} />
-          <ArtifactLinkButton
-            property_id={card.property_id}
-            className="mt-1 px-1.5 py-0.5 text-[0.68rem] leading-[1.2]"
-          />
+          {!readOnly && (
+            <>
+              <CardTags property_id={card.property_id} />
+              <ArtifactLinkButton
+                property_id={card.property_id}
+                className="mt-1 px-1.5 py-0.5 text-[0.68rem] leading-[1.2]"
+              />
+            </>
+          )}
+          {/* Who last moved it acting as the board's owner (ruling 5). Board
+              data, so a read share sees it too. */}
+          <DelegatedStamp stamp={card} className="mt-1 truncate" />
           {/* The broker line streams in behind the card. Its height is
               reserved while the read is in flight so the column does not
               reflow when it lands; once resolved, a card with no attributed
@@ -309,8 +322,11 @@ export default function BoardCard({
   size?: PipelineCardSize;
   onRemove: (propertyId: number) => void;
 }) {
+  /* A read share's board: no drag handle, no trash (ruling 2). */
+  const readOnly = useActingReadOnly();
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `${CARD_PREFIX}${card.property_id}`,
+    disabled: readOnly,
   });
   const [confirming, setConfirming] = useState(false);
   const style = {
@@ -331,33 +347,38 @@ export default function BoardCard({
       className={`rounded-[var(--radius-md)] border p-2.5 ${surface}`}
     >
       <div className="flex items-start gap-1.5">
-        <button
-          type="button"
-          {...attributes}
-          {...listeners}
-          aria-label="Přetáhnout kartu do jiné fáze"
-          className="shrink-0 cursor-grab touch-none pt-0.5 leading-none text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] active:cursor-grabbing"
-        >
-          ⠿
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            aria-label="Přetáhnout kartu do jiné fáze"
+            className="shrink-0 cursor-grab touch-none pt-0.5 leading-none text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] active:cursor-grabbing"
+          >
+            ⠿
+          </button>
+        )}
         <div className="min-w-0 flex-1">
           <CardFace card={card} cityQuality={cityQuality} size={size} />
         </div>
-        <button
-          type="button"
-          onClick={() => setConfirming((v) => !v)}
-          aria-label="Odebrat z pipeline"
-          aria-expanded={confirming}
-          title="Odebrat z pipeline"
-          className="shrink-0 rounded-[var(--radius-xs)] pt-0.5 text-[var(--color-ink-4)] hover:text-[var(--color-brick)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-rule-strong)]"
-        >
-          <TrashIcon className="h-3.5 w-3.5" />
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={() => setConfirming((v) => !v)}
+            aria-label="Odebrat z pipeline"
+            aria-expanded={confirming}
+            title="Odebrat z pipeline"
+            className="shrink-0 rounded-[var(--radius-xs)] pt-0.5 text-[var(--color-ink-4)] hover:text-[var(--color-brick)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-rule-strong)]"
+          >
+            <TrashIcon className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {/* Inline two-step confirm (the app's destructive-action pattern) — removing
           a property from the pipeline drops the card entirely. Stage moves are
           drag-only now; the select fallback was removed. */}
-      {confirming && (
+      {/* `!readOnly`: the owner can lower the share to read mid-confirm. */}
+      {confirming && !readOnly && (
         <div className="mt-2 flex items-center gap-2 border-t border-[var(--color-rule-soft)] pt-2 text-[0.72rem]">
           <span className="mr-auto text-[var(--color-ink-3)]">Odebrat z pipeline?</span>
           <button

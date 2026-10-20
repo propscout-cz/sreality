@@ -670,6 +670,10 @@ export interface Note {
   shared: boolean;
   /* Null iff the caller wrote it; else the author's email (read-only here). */
   owner_email: string | null;
+  /* The note's latest delegated edit (migration 641): who wrote it acting as
+   * the owner, and when; null when none, or when the owner edited it since. */
+  edited_by_email?: string | null;
+  edited_at?: string | null;
   /* Its files, oldest first (migration 592). Only the list read carries them. */
   attachments?: NoteAttachment[];
 }
@@ -704,6 +708,27 @@ export interface PipelineStage {
   /* Short operator-owned badge shown inside the funnel (migration 377). NULL =
    * fall back to the stage's 1-based ordinal among live stages. */
   code: string | null;
+  /* The stage's latest delegated edit (migration 641's view columns; null when
+   * none). Only the view read carries them — the API's stage writes do not. */
+  edited_by_account_id?: string | null;
+  edited_at?: string | null;
+}
+
+/* A pipeline share (migration 641): the OTHER party and the grant's mode. In
+ * `shared_with` it is a recipient of my board; in `shared_with_me` the owner
+ * whose board I may open (read) or act on (edit). */
+export type PipelineShareMode = 'read' | 'edit';
+
+export interface PipelineShare {
+  account_id: string;
+  email: string | null;
+  mode: PipelineShareMode;
+}
+
+/* GET /pipeline/shares (and the POST's answer): both of my lists. */
+export interface PipelineShares {
+  shared_with: PipelineShare[];
+  shared_with_me: PipelineShare[];
 }
 
 /* A board card = the property_pipeline row joined to its property's display
@@ -778,6 +803,11 @@ export interface PipelineBoardCard {
   category_type: string | null;
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
+  /* The card's latest delegated edit (migration 641's view columns): the
+   * account that last moved it acting as the board's owner, and when; null
+   * when none, or when the owner changed it since. */
+  edited_by_account_id?: string | null;
+  edited_at?: string | null;
   /* No image_url and no broker here on purpose. Both are DECORATIONS: they are
    * fetched by lib/hydration keyed on `listing_id` and reach the card through
    * CardHydrationProvider, so nothing on the board's critical path waits for
@@ -1177,9 +1207,10 @@ export interface FilterPreset {
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
-  /* A collection was shared with the caller (migration 610): collection_id
-   * set, change_kind 'shared', no listing subject — the `message` text. */
-  | 'collection_share'
+  /* Something was shared with the caller (migrations 610 + 641): a collection
+   * (collection_id set) or a pipeline (collection_id null); change_kind
+   * 'shared', no listing subject — the `message` text. */
+  | 'share'
   /* System-health alerts (migration 273/274 producer): pipeline stalls, credit
    * outages, etc. No listing subject — the payload is the `message` text. */
   | 'system_health';
@@ -1201,7 +1232,7 @@ export interface WatchdogDispatch {
   property_id: number | null;
   change_kind: string;
   /* Free-text body for the rows with no listing subject: source_kind=
-   * 'system_health' (change_kind 'system_alert') and 'collection_share'
+   * 'system_health' (change_kind 'system_alert') and 'share'
    * (change_kind 'shared'); null on watchdog / collection_monitor rows, which
    * describe a listing subject instead. Those two kinds also carry no listing,
    * so their `sreality_id` is null at runtime despite the type (widening it
@@ -1273,7 +1304,7 @@ export interface WatchdogDispatchesResponse {
 export interface NotificationUnreadCount {
   watchdog: number;
   collection_monitor: number;
-  collection_share: number;
+  share: number;
   system_health: number;
   /* `total` sums EVERY source_kind (incl. system_health); the nav bell badge
    * reads `unread_count` (= total when unscoped), so system alerts count too. */

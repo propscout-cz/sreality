@@ -16,12 +16,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
 import PipelineMark from '@/components/PipelineMark';
 import PipelineStageMenu from '@/components/pipeline/PipelineStageMenu';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
-import { fetchPipelineMembers, fetchPipelineStages, pipelineKeys } from '@/lib/queries';
+import { usePipelineMembers, usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 
@@ -36,16 +34,8 @@ export default function PipelineFunnelButton({
   property_id,
   variant = 'overlay',
 }: PipelineFunnelButtonProps) {
-  const membersQ = useQuery({
-    queryKey: pipelineKeys.members,
-    queryFn: fetchPipelineMembers,
-    staleTime: 30_000,
-  });
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+  const membersQ = usePipelineMembers();
+  const stagesQ = usePipelineStages();
 
   const member = membersQ.data?.get(property_id) ?? null;
   const inPipeline = member != null;

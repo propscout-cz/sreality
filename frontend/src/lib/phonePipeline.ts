@@ -71,12 +71,17 @@ export function fmtDaysInStage(days: number | null): string | null {
 }
 
 /* The stage page this device last looked at, by stage id (stages are
- * reordered on the desktop; an index would land on the wrong one). */
+ * reordered on the desktop; an index would land on the wrong one), per board:
+ * my own under the plain key, a board shared with me (lib/acting) under the
+ * key plus its owner's account. */
 export const PHONE_PIPELINE_STAGE_KEY = 'sreality.phone.pipelineStage';
 
-export function readLastStage(): number | null {
+const lastStageKey = (board: string | null = null): string =>
+  board ? `${PHONE_PIPELINE_STAGE_KEY}:${board}` : PHONE_PIPELINE_STAGE_KEY;
+
+export function readLastStage(board: string | null = null): number | null {
   try {
-    const raw = localStorage.getItem(PHONE_PIPELINE_STAGE_KEY);
+    const raw = localStorage.getItem(lastStageKey(board));
     const id = raw == null ? NaN : Number(raw);
     return Number.isInteger(id) ? id : null;
   } catch {
@@ -85,9 +90,9 @@ export function readLastStage(): number | null {
   }
 }
 
-export function writeLastStage(stageId: number): void {
+export function writeLastStage(stageId: number, board: string | null = null): void {
   try {
-    localStorage.setItem(PHONE_PIPELINE_STAGE_KEY, String(stageId));
+    localStorage.setItem(lastStageKey(board), String(stageId));
   } catch {
     /* ignore */
   }

@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Session, User } from '@supabase/supabase-js';
+import { resetActiveBoard } from './acting';
 import { supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
@@ -130,6 +131,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (prevUserId.current !== null && prevUserId.current !== userId) {
       queryClient.clear();
+      /* The per-device pipeline board and "edit as owner" were the previous
+       * account's pick (lib/acting): the next one starts on its own board. */
+      resetActiveBoard();
     }
     prevUserId.current = userId;
   }, [userId, queryClient]);

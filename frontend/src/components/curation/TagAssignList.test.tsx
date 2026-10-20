@@ -20,6 +20,7 @@ vi.mock('@/lib/api', async (orig) => ({
 }));
 
 import { attachTag, createTag, detachTag, listTags } from '@/lib/api';
+import { ActingAs, actingKey } from '@/lib/acting';
 import { TAG_SEARCH_LABEL, TagAssignList } from './TagAssignList';
 
 const tag = (id: number, name: string): Tag => ({
@@ -106,5 +107,34 @@ describe('<TagAssignList>', () => {
     expect(screen.queryByText(/Zatím žádné štítky/)).toBeNull();
     fireEvent.click(retry);
     expect(await screen.findByRole('list', { name: 'Štítky' })).toBeInTheDocument();
+  });
+
+  it('inside <ActingAs> lists and attaches the owner\'s tags, on the owner\'s map, and leaves Browse alone', async () => {
+    const owner = { account_id: 'owner-1', email: 'jana@example.cz', mode: 'edit' as const };
+    const f = { ...DEFAULT_FILTERS, tags: { set: 'out' as const, in: [], out: [] } };
+    const cards = browseKeys.cards(f, DEFAULT_SORT);
+    type Page = { rows: { property_id: number }[] };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(curationKeys.propertyTagMembers, new Map<number, number[]>());
+    qc.setQueryData(actingKey('owner-1', curationKeys.propertyTagMembers), new Map<number, number[]>());
+    qc.setQueryData<InfiniteData<Page>>(cards, { pages: [{ rows: [{ property_id: 42 }] }], pageParams: [null] });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={qc}>
+        <ActingAs share={owner}>
+          <TagAssignList property_id={42} memberIds={new Set()} />
+        </ActingAs>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /k prohlídce/, pressed: false }));
+    await waitFor(() => expect(attachTag).toHaveBeenCalledWith(42, 5, { actAs: 'owner-1' }));
+    expect(listTags).toHaveBeenCalledWith({ actAs: 'owner-1' });
+    await waitFor(() =>
+      expect(qc.getQueryData<Map<number, number[]>>(actingKey('owner-1', curationKeys.propertyTagMembers))?.get(42)).toEqual([5]),
+    );
+    expect(qc.getQueryData<Map<number, number[]>>(curationKeys.propertyTagMembers)?.size).toBe(0);
+    expect(qc.getQueryData<InfiniteData<Page>>(cards)!.pages[0].rows).toEqual([{ property_id: 42 }]);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.tags) });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: curationKeys.tags });
   });
 });

@@ -52,11 +52,10 @@ import {
   fmtShortDate,
 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
+import { usePipelineMembers } from '@/lib/pipelineReads';
 import {
-  fetchPipelineMembers,
   fetchSoldComparables,
   fetchSoldCoverage,
-  pipelineKeys,
   SOLD_COMPS_LIMIT,
   type PipelineMembers,
 } from '@/lib/queries';
@@ -187,14 +186,9 @@ function SoldComps({
     staleTime: 5 * 60_000,
   });
 
-  /* The SAME members query every funnel on this page reads — PipelineToggle's
-   * key and its staleTime — so this is a cache hit, not a second read. */
-  const membersQ = useQuery({
-    queryKey: pipelineKeys.members,
-    queryFn: fetchPipelineMembers,
-    staleTime: 30_000,
-    enabled: propertyId != null,
-  });
+  /* The SAME members read every funnel on this page makes (lib/pipelineReads),
+   * so this is a cache hit, not a second read. Sold comps never act: mine. */
+  const membersQ = usePipelineMembers({ enabled: propertyId != null });
   const card = cardState(membersQ.data, propertyId);
 
   /* Whether anyone has LOOKED in this municipality — which is what a filter

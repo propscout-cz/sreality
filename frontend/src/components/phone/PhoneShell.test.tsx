@@ -55,7 +55,7 @@ beforeEach(() => {
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
     watchdog: 0,
     collection_monitor: 0,
-    collection_share: 0,
+    share: 0,
     system_health: 0,
     total: 0,
     unread_count: 0,
