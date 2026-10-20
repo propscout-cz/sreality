@@ -1394,3 +1394,27 @@ export interface SoldCoverage {
   last_attempt_at: string | null;
   last_attempt_status: string | null;
 }
+
+/* POST /listings/ingest and GET /listings/ingest/{source}/{native_id}
+ * (docs/design/new-property-from-link.md §3.2): ONE state shape for a pasted ad
+ * link. `held` = we hold the ad (`property_id` null until its property is born);
+ * `queued` = the worker will fetch its page; `refused` / `gone` / `failed` carry
+ * one Czech sentence in `message_cs`. Market data only — no per-account field. */
+export type IngestStateName = 'refused' | 'held' | 'queued' | 'gone' | 'failed';
+
+export interface IngestQueue {
+  attempts: number;
+  claimed_at: string | null;
+  given_up: boolean;
+}
+
+export interface IngestState {
+  state: IngestStateName;
+  message_cs: string | null;
+  source: string | null;
+  source_id_native: string | null;
+  listing_id: number | null;
+  is_active: boolean | null;
+  property_id: number | null;
+  queue: IngestQueue | null;
+}

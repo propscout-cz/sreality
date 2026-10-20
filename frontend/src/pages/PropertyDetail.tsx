@@ -20,6 +20,7 @@ import {
   type NewEstimationPrefill,
 } from '@/components/NewEstimationModal';
 import { useExploreAreaModal } from '@/components/ExploreAreaModal';
+import Spinner from '@/components/Spinner';
 import { listingTypeLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
 import { useQuery } from '@tanstack/react-query';
@@ -80,6 +81,7 @@ const SoldCompsBlock = lazyChunk(
 const EstimationsBlock = lazyChunk(
   () => import('@/components/listing-detail/EstimationsBlock'),
 );
+const AdvertNotFoundBody = lazyChunk(() => import('@/components/listing-detail/AdvertNotFound'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
  * first visit stays inside scripts/bundle-budget.mjs. */
@@ -386,10 +388,14 @@ export default function PropertyDetail() {
 /* Old addresses                                                              */
 /* -------------------------------------------------------------------------- */
 
+const ATTACHING_POLL_MS = 2_000;
+
 /* Every advert address ever handed out — `/listing/{source}/{native}` (emails,
    the extension's "Otevřít v aplikaci"), `/listing/{sreality_id}` (every older
    link) and `/listing?property=<id>` — lands on the property page, the advert's
-   row open. The query string and hash ride along (`?run=` / `#estimations`). */
+   row open. The query string and hash ride along (`?run=` / `#estimations`).
+   An advert we hold whose property is not born yet (a new row waits for the
+   maintenance lane, ~30 s) is ATTACHING, not missing: re-read every 2 s. */
 export function AdvertRedirect() {
   const { sreality_id: legacyParam, source, nativeId } = useParams();
   const location = useLocation();
@@ -405,6 +411,8 @@ export function AdvertRedirect() {
     queryFn: ({ signal }) => fetchAdvertProperty(key!, { signal }),
     enabled: key != null,
     staleTime: 60_000,
+    refetchInterval: (query) =>
+      query.state.data != null && query.state.data.property_id == null ? ATTACHING_POLL_MS : false,
   });
 
   const params = new URLSearchParams(location.search);
@@ -428,6 +436,7 @@ export function AdvertRedirect() {
     );
   }
   if (q.isLoading) return <LoadingState />;
+  if (q.data && q.data.property_id == null) return <AttachingState />;
   if (q.error) return <FailedState error={q.error} />;
   if (source && nativeId) {
     return (
@@ -441,49 +450,39 @@ export function AdvertRedirect() {
   return <NotFoundState id={legacyParam ?? nativeId ?? propertyParam} />;
 }
 
-/* A portal advert we hold no row for — most often a link pasted on the phone
-   (#1767) to an ad the scrapers have not reached yet. On the phone it says so
-   in Czech and, when the paste carried the URL, offers the portal's own page
-   (same window: an installed iOS app opens it in its in-app Safari sheet). The
-   desktop keeps the generic not-found. */
-function AdvertNotFound({
-  source,
-  nativeId,
-  pastedUrl,
-}: {
-  source: string;
-  nativeId: string;
-  pastedUrl: string | null;
-}) {
+/* The advert is ours, its property is on the way (AdvertRedirect polls). */
+function AttachingState() {
   const phone = usePhoneShell();
-  if (!phone) return <NotFoundState id={nativeId} />;
+  const line = (
+    <p role="status" className="flex items-center gap-2 text-sm text-[var(--color-ink-2)]">
+      <Spinner size={12} />
+      <span>Zakládám nemovitost…</span>
+    </p>
+  );
+  if (phone) return <div className="px-4 py-8">{line}</div>;
   return (
-    <div className="px-4 py-8">
-      <p className="text-[0.7rem] font-medium uppercase tracking-[0.18em] text-[var(--color-ink-3)]">
-        Nenalezeno
-      </p>
-      <h2 className="mt-2 font-display text-[22px] font-medium leading-tight tracking-[-0.01em] text-[var(--color-ink)]">
-        Tento inzerát v databázi nemáme
-      </h2>
-      <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-[var(--color-ink-2)]">
-        <span className="inline-flex h-5 items-center rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 text-[11px]">
-          {portalLabel(source) ?? source}
-        </span>
-        <span className="break-all font-mono text-[12px] tabular-nums">{nativeId}</span>
-      </p>
-      <p className="mt-3 text-[13px] leading-relaxed text-[var(--color-ink-3)]">
-        Buď je nový a k nám ještě nedorazil, nebo ho portál stáhl dřív, než jsme ho přečetli.
-      </p>
-      {pastedUrl && (
-        <a
-          href={pastedUrl}
-          className="mt-4 inline-flex h-11 items-center gap-1 text-[15px] font-medium text-[var(--color-copper)]"
-        >
-          Otevřít na portálu {portalLabel(source) ?? source}
-          <span aria-hidden>↗</span>
-        </a>
-      )}
-    </div>
+    <Page>
+      <Crumb />
+      <div className="mt-8">{line}</div>
+    </Page>
+  );
+}
+
+/* A portal advert we hold no row for: one state for both shells, its body its
+   own chunk (components/listing-detail/AdvertNotFound). */
+function AdvertNotFound(props: { source: string; nativeId: string; pastedUrl: string | null }) {
+  const phone = usePhoneShell();
+  const body = (
+    <Suspense fallback={null}>
+      <AdvertNotFoundBody {...props} heading={phone ? 'h2' : 'h1'} />
+    </Suspense>
+  );
+  if (phone) return <div className="px-4 py-8">{body}</div>;
+  return (
+    <Page>
+      <Crumb />
+      <div className="mt-12">{body}</div>
+    </Page>
   );
 }
 

@@ -7,6 +7,22 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
+
+Spec `docs/design/new-property-from-link.md` (PR #1913, approved 2026-10-20, six rulings in). North star: a
+pasted link is an ordinary ad — one identity rule, one fetch path (the drain), one write, one birth; the sites
+we do not crawl are the tenth portal `web`.
+- [ ] **W1 `feature/link-ingest`** — `scraper/portal_identity.py` (the one URL→(source, native id) canon; the
+      seven parsers import it; `tests/fixtures/portal_url_probes.json` pins Python and `portalIds.ts` alike),
+      `POST/GET /listings/ingest` (admin; enqueue, never fetch), the maintenance lane at 30 s + births inside the
+      daily sweep, `NewPropertyDialog` on Pipeline, Browse and the Odkaz tab, the extension's "Přidat do databáze".
+- [ ] **W2 `cleanup/estimation-four`** — estimation = add the ad, then estimate it (`listing_id` in, `url` out);
+      the LLM URL parser, both previews, `url_parser`, the orphan machinery and the sreality-only late-binder go.
+- [ ] **W3 `feature/web-portal`** — the tenth portal (deterministic parser, text-lane reading, `indexless`
+      presence seam, daily walk, contract, broker row, chip "Web"); after #1910.
+- [ ] **W4 `cleanup/estimation-four-schema`** — drop `parsed_url_cache`, nine parse columns, two settings, the
+      `idnes_reality` portals row (destructive, backup + OK given 2026-10-20; after 643).
+
 ### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
 The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;

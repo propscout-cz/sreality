@@ -886,9 +886,9 @@ rules. Identify which one a task belongs to before you start.
 - Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
   listing pages. The content script matches **every scraped portal's host** (sreality,
   bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
-  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) is the single source of
-  truth for the host list, shared with the SPA's paste-a-link (`parsePortalUrl` →
-  `/listing/:source/:nativeId`) and imported cross-tree exactly like `lib/brand.ts` (it lives under
+  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) mirrors the canon,
+  `scraper/portal_identity.py`, held to it by `tests/fixtures/portal_url_probes.json`; the phone's quick
+  path (`parsePortalUrl`; an admin paste is `POST /listings/ingest`) imports it cross-tree like `lib/brand.ts` (it lives under
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
@@ -970,8 +970,8 @@ rules. Identify which one a task belongs to before you start.
   once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
   excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
   one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
-  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
-  truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
+  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` mirrors
+  `scraper/portal_identity.py` (the canon); `tests/fixtures/portal_url_probes.json` holds both. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
@@ -2768,8 +2768,8 @@ renumber.** Navigate by area:
     new stragglers (singletons only — the old geo Tier-1 matcher was removed; grouping is
     out-of-band, rule #15) and recomputes **only the queued properties** (the full
     recompute SQL scoped to
-    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~2 on
-    the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
+    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~30 s
+    on the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
@@ -2782,8 +2782,9 @@ renumber.** Navigate by area:
     237 s against a 900 s cadence). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
     since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
-    New listings (`property_id` NULL) are born + recomputed by straggler-attach, not the queue
-    (bounded at 2000 per pass; it patches `browse_list` for the births). The
+    New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
+    brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
+    of the daily full sweep, under the lease that sweep already holds. The
     **daily full sweep** (`recompute_property_stats.yml`, no `--incremental`, 04:15 UTC) is the
     reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:

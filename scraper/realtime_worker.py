@@ -34,7 +34,7 @@ matcher/outbox pattern from api/notifications + api/notification_outbox):
              realtime_sreality_count_dispatch_enabled setting) it triggers a
              targeted index_walk sooner than the */15 cron. Always records
              per-pair totals to sreality_count_probe_state (migration 270).
-- maintenance: every `realtime_maintenance_interval_seconds` (default 120), one
+- maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
              incremental property-maintenance pass — straggler attach + dirty-set
              recompute, via scripts.recompute_property_stats.
              run_incremental_pass (THE same implementation the GH cron runs;
@@ -281,7 +281,9 @@ class _PassLock:
 # fix is the point); interval <= 0 idles it. Safe beside the GH cron + daily
 # sweep by construction: all three serialize on the maintenance lease row
 # (migration 279) inside run_incremental_pass (a concurrent caller skips).
-MAINTENANCE_INTERVAL_DEFAULT = 120
+# 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
+# (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
+MAINTENANCE_INTERVAL_DEFAULT = 30
 MAINTENANCE_BATCH_SIZE_DEFAULT = 2000
 
 # estimation lane (Wave 1 W1-3 / Amendment A10): drain `pending` estimation_runs

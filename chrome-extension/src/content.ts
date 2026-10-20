@@ -34,6 +34,7 @@ import {
   runIndexOverlay,
   type IndexOverlayHandle,
 } from './index_overlay';
+import { INGEST_STEP_CS, isAdminGate, outcomeMessage, runIngest, type IngestStep } from './ingest_flow';
 import { onAccountChange } from './session';
 import type {
   AgentQuota,
@@ -47,6 +48,7 @@ import type {
   ExtCollection,
   ExtNote,
   ExtTag,
+  IngestState,
   PipelineCardResult,
   PipelineStage,
   PortalListing,
@@ -223,6 +225,11 @@ interface PanelState {
   /* The caller's agent-estimation allowance (null = not loaded / fetch failed —
    * the counter is simply hidden, never blocking the estimate button). */
   quota: AgentQuota | null;
+  /* "Přidat do databáze" on an ad we do not hold: the step on screen while the
+   * flow runs (null = idle), and the sentence it ended on when it did not end
+   * with the ad held. */
+  ingestStep: IngestStep | null;
+  ingestMessage: string | null;
   errorMessage: string | null;
 }
 
@@ -805,7 +812,7 @@ function mountPanel(): {
     }
     if (state.phase === 'deactivated') {
       renderAuthStrip(body, state);
-      body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
+      renderNotInDb(body, state);
       return;
     }
 
@@ -827,6 +834,25 @@ function mountPanel(): {
     if (state.errorMessage != null) body.appendChild(errorLine(state.errorMessage));
     // Focus + scroll are restored by render(), around this build.
   };
+
+  /* An ad we do not hold: say so and offer to add it. While the flow runs, its
+   * step stands where the button was; a refusal or failure is one sentence
+   * above the button, which a click re-sends (the API is idempotent). */
+  function renderNotInDb(body: HTMLElement, state: PanelState): void {
+    body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
+    if (state.ingestStep != null) {
+      body.appendChild(note(INGEST_STEP_CS[state.ingestStep], 'note--loading'));
+      return;
+    }
+    if (state.ingestMessage != null) body.appendChild(errorLine(state.ingestMessage));
+    if (ingestForbidden) return;
+    const add = document.createElement('button');
+    add.className = 'btn-primary';
+    add.type = 'button';
+    add.textContent = 'Přidat do databáze';
+    add.onclick = () => { void onIngest(); };
+    body.appendChild(add);
+  }
 
   function note(text: string, variant = ''): HTMLElement {
     const p = document.createElement('p');
@@ -1624,7 +1650,7 @@ function mountPanel(): {
   function renderMfBlock(body: HTMLElement, state: PanelState): void {
     const l = state.listing;
     if (l == null || !l.found) {
-      body.appendChild(note('Tato nemovitost zatím není v naší databázi.'));
+      renderNotInDb(body, state);
       return;
     }
     const shape = mfShape(l.mf_reference_rent);
@@ -2102,6 +2128,51 @@ async function onCreateRun(): Promise<void> {
     return;
   }
   setStateIf(epoch, (prev) => seedFromRun({ ...prev, busy: false }, row));
+}
+
+/* "Přidat do databáze": the API enqueues the ad's page for the worker's drain
+ * and the flow polls its one state on the estimate's budget. Once the ad is held
+ * with a property the lookup is re-read (by the identity the server resolved)
+ * and painted through showListing, so the controls appear as for any ad we hold.
+ * Epoch-guarded like the estimate: leaving the page stops the poll, never the
+ * server-side work. The first admin-gate answer hides the button until the
+ * account changes: a non-admin is told once, not offered a click that always fails. */
+let ingestForbidden = false;
+
+async function onIngest(): Promise<void> {
+  const epoch = renderEpoch;
+  const url = panelUrl;
+  const outcome = await runIngest(url, {
+    call: (message) => call<IngestState>(message),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    alive: () => epoch === renderEpoch,
+    onStep: (step) => setStateIf(epoch, (prev) => ({
+      ...prev, ingestStep: step, ingestMessage: null,
+    })),
+    intervalMs: POLL_INTERVAL_MS,
+    maxPolls: POLL_MAX_ATTEMPTS,
+  });
+  if (outcome.kind === 'cancelled') return;
+  if (outcome.kind !== 'held') {
+    if (isAdminGate(outcome)) ingestForbidden = true;
+    setStateIf(epoch, (prev) => ({
+      ...prev, ingestStep: null, ingestMessage: outcomeMessage(outcome, friendlyDetail),
+    }));
+    return;
+  }
+  const res = await call<PortalListing[]>({
+    type: 'lookup_listings',
+    items: [{ source: outcome.source, source_id: outcome.nativeId }],
+  });
+  if (epoch !== renderEpoch) return;
+  if (!res.ok) {
+    setStateIf(epoch, (prev) => ({
+      ...prev, ingestStep: null,
+      ingestMessage: `Načtení inzerátu selhalo: ${friendlyDetail(res.detail)}`,
+    }));
+    return;
+  }
+  await showListing(epoch, url, res.data[0] ?? null);
 }
 
 /* "Upgradovat" — no purchase flow yet (Wave 1); open the web app where plan
@@ -2603,6 +2674,7 @@ async function loadTags(refresh = false): Promise<void> {
  * drops the lists (the next open re-reads them) and puts the panel on the prompt or re-reads it. */
 onAccountChange((user) => {
   sessionGen++;
+  ingestForbidden = false;
   cachedStages = cachedCollections = cachedTags = null;
   stagesLoading = collectionsLoading = tagsLoading = false;
   if (panelRef == null || document.getElementById(HOST_ELEMENT_ID) == null) return;
@@ -2862,6 +2934,7 @@ export async function openPanel(
     tags: cachedTags, tagsFailed: false, tagsOpen: false, tagBusy: false, tagError: null,
     notes: null, notesFailed: false, noteBusy: false, quota: null, errorMessage: null,
     noteEditingId: null, noteConfirmDeleteId: null, noteRowBusy: false,
+    ingestStep: null, ingestMessage: null,
   };
   await minimizedReady;  // persisted minimized pref before first paint → no flash
   if (epoch !== renderEpoch) return;
@@ -2904,19 +2977,27 @@ export async function openPanel(
   /* The lookup for a listing the operator has already navigated away from must
    * not land — this is the apply that would otherwise show A's yield under B. */
   if (epoch !== renderEpoch) return;
+  await showListing(epoch, url, listing);
+}
 
+/* Paint one lookup row and start what a held ad needs. Shared by openPanel and
+ * the add-to-database flow (onIngest), so an ad the panel just added gets
+ * exactly the controls of any ad we hold. */
+async function showListing(
+  epoch: number, url: string, listing: PortalListing | null,
+): Promise<void> {
   const saleApt =
     listing?.found
       ? listing.category_main === 'byt' && listing.category_type === 'prodej'
       : urlSaleApartmentHint(url);
 
-  /* Show the panel for ANY listing we have (app link + facts). The only dead
-   * end is a listing not in our DB whose URL clearly isn't a sale apartment —
-   * nothing to link, no MF, no estimate. */
+  /* Show the panel for ANY listing we have (app link + facts). A listing not in
+   * our DB whose URL clearly isn't a sale apartment has no MF and no estimate:
+   * only the offer to add it. */
   const active = Boolean(listing?.found) || saleApt !== false;
   setStateIf(epoch, (prev) => ({
     ...prev, phase: active ? 'active' : 'deactivated',
-    listing, isSaleApt: saleApt,
+    listing, isSaleApt: saleApt, ingestStep: null, ingestMessage: null,
   }));
   if (!active) return;
 

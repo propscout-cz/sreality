@@ -73,9 +73,9 @@ def _snapshot(cur: Any, listing_id: int, price: int | None, hours_ago: float) ->
 
 
 def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _seen(cur: Any, listing_id: int, first_days_ago: float, last_days_ago: float = 0) -> None:

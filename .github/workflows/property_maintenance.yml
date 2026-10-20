@@ -22,7 +22,7 @@ name: "Jobs: property maintenance (incremental)"
 # */5 measured a 2h MEDIAN / 4.1h worst gap (fleet audit, 2026-07-07). The
 # actual "reflected within minutes" cadence is the realtime worker's
 # MAINTENANCE lane (scraper/realtime_worker.py, every
-# realtime_maintenance_interval_seconds, default 120), which calls the SAME
+# realtime_maintenance_interval_seconds, default 30), which calls the SAME
 # scripts.recompute_property_stats.run_incremental_pass. This cron stays as the
 # worker-outage backstop (deploy restarts, the env kill-switch) — whenever GH
 # gets around to firing it.

@@ -15,8 +15,17 @@ maxima, remax, mmreality, ceskereality).
   (Výnos MF headline on a sale flat + the rent), the town's published range with
   its note behind an (i), or the reason note alone — and nothing before the
   advert is attached to a property. **Apartments for sale** additionally get a
-  comparables-based estimation as the deeper tool / fallback. Listings not in
-  our DB show a short "není v databázi" note.
+  comparables-based estimation as the deeper tool / fallback. A listing not in
+  our DB shows "Tato nemovitost zatím není v naší databázi." and a **Přidat do
+  databáze** button: it `POST`s the page URL to `/listings/ingest` (admins
+  only in v1), polls `GET /listings/ingest/{source}/{native_id}` every 2 s on
+  the estimate's budget (Hledám inzerát → Stahuji stránku → Zakládám
+  nemovitost), and once the ad is held with a property re-reads the lookup, so
+  every control above appears as for any listing we have. A refused, gone or
+  failed ad shows the API's one Czech sentence above the button. A non-admin's
+  first click answers the admin sentence and hides the button until the account
+  changes (the extension cannot read the admin claim). The flow itself is
+  `src/ingest_flow.ts` (no DOM, no `chrome`), tested by `npm test` (CI too).
   - The **notes** are property-grain (rule #18), the same notes the SPA's
     listing-detail `CurationBlock` shows. The panel lists the property's existing
     notes (most-recent-first) and an add box ("Přidat poznámku…" → **Uložit
@@ -297,7 +306,9 @@ npm install
 npm run build
 ```
 
-The output lands in `chrome-extension/dist/`.
+The output lands in `chrome-extension/dist/`. `npm test` runs the extension's
+unit tests (`src/*.test.ts`) with Node's built-in runner, which needs Node
+≥ 22.18 to strip the types; `npm run type-check` type-checks them with the rest.
 
 `npm run build` runs vite **twice** — `--mode content`, then `--mode background`
 — and that is not a style choice. A manifest-declared content script is a

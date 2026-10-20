@@ -27,6 +27,7 @@ import type {
   EstimationListParams,
   EstimationListResponse,
   EstimationRun,
+  IngestState,
   ListingEstimate,
   ListingSummaryBatchRow,
   ArtifactLink,
@@ -324,6 +325,29 @@ export const apiGetBlob = (
   params?: Record<string, QueryValue>,
   signal?: AbortSignal,
 ): Promise<Blob> => requestBlob(path, { query: params, signal });
+
+/* ----- a pasted ad link (docs/design/new-property-from-link.md §3.2) ------ */
+
+/* POST /listings/ingest — the server resolves the pasted text (its first URL)
+ * to one ad and answers ONE state; a link we do not hold is queued for the
+ * worker's drain. Market data only: never acts (no X-Act-As). */
+export const ingestListing = (
+  url: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>('/listings/ingest', { method: 'POST', json: { url }, signal });
+
+/* GET /listings/ingest/{source}/{native_id} — the same state, re-read while the
+ * page is fetched and the ad's property is born. */
+export const ingestState = (
+  source: string,
+  nativeId: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>(
+    `/listings/ingest/${encodeURIComponent(source)}/${encodeURIComponent(nativeId)}`,
+    { signal },
+  );
 
 /* ----- estimations ------------------------------------------------------- */
 
@@ -2660,8 +2684,8 @@ export const undismissProperty = (
 export const addPipelineCard = (
   property_id: number,
   { actAs }: Acting = {},
-): Promise<{ property_id: number; stage_key: string; added: boolean }> =>
-  request<{ property_id: number; stage_key: string; added: boolean }>(
+): Promise<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }> =>
+  request<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }>(
     '/pipeline/cards',
     { method: 'POST', json: { property_id }, actAs },
   );

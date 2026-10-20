@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import curation
+from api import ingest as ingest_module
 from api import note_attachments
 from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
@@ -1118,6 +1119,28 @@ def post_listings_lookup(
     2026-07-23 to 2026-09-11. Wave 5's route census lists it on the explicit
     RLS-only allowlist for exactly that reason."""
     return lookup_portal_listings(market_conn, conn, body.items)
+
+
+@app.post("/listings/ingest", response_model=s.IngestState)
+def post_listings_ingest(
+    body: s.IngestIn,
+    conn: Any = Depends(deps.get_db_conn),
+    _: dict = Depends(deps.require_admin),
+) -> dict[str, Any]:
+    """A pasted ad link → one ingest state; an ad we lack is queued for the worker's drain
+    (docs/design/new-property-from-link.md §3.2). Admins only in v1."""
+    return ingest_module.ingest_link(conn, body.url)
+
+
+@app.get("/listings/ingest/{source}/{native_id:path}", response_model=s.IngestState)
+def get_listings_ingest(
+    source: str,
+    native_id: str,
+    conn: Any = Depends(deps.get_db_conn),
+    _: dict = Depends(deps.require_admin),
+) -> dict[str, Any]:
+    """The same state, read-only: what the paste dialog polls while the drain works."""
+    return ingest_module.ingest_state(conn, source, native_id)
 
 
 @app.post("/buildings")
