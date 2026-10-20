@@ -241,8 +241,6 @@ def _word(column: str, raw: str) -> str:
 
 
 def _option_label(param: str, value: Any) -> str:
-    if isinstance(value, bool):
-        return "ano" if value else "ne"
     return dict(_BY_NAME[param].options).get(value, str(value))
 
 
@@ -435,16 +433,11 @@ def _photos(advert: dict[str, Any]) -> list[dict[str, str]]:
 def _records(result: dict[str, Any], adverts: Any) -> list[dict[str, Any]]:
     """Valuo's comparables in its own order, each cut to what the page shows, with its advert's photos."""
     records = result.get("records")
-    if not isinstance(records, list):
-        return []
     by_id = {str(a.get("id")): a for a in adverts if isinstance(a, dict)} if isinstance(adverts, list) else {}
-    out = []
-    for r in records:
-        if isinstance(r, dict):
-            advert = by_id.get(str(r.get("id")), {})
-            out.append({**{k: r.get(k) for k in RECORD_KEYS}, "photos": _photos(advert),
-                        "advert_url": advert.get("advert_url"), "address": advert.get("address")})
-    return out
+    pairs = ([(r, by_id.get(str(r.get("id")), {})) for r in records if isinstance(r, dict)]
+             if isinstance(records, list) else [])
+    return [{**{k: r.get(k) for k in RECORD_KEYS}, "photos": _photos(a), "advert_url": a.get("advert_url"),
+             "address": a.get("address")} for r, a in pairs]
 
 
 def _summary(response: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -466,7 +459,6 @@ def present(row: dict[str, Any]) -> dict[str, Any]:
     response = row["response"] if isinstance(row["response"], dict) else {}
     result = response.get("result") if row["status"] == "success" else None
     result = result if isinstance(result, dict) else None
-    error = row["error"]
     return {
         "id": row["id"], "created_at": row["created_at"], "listing_id": row["listing_id"],
         "environment": row["environment"], "status": row["status"],
@@ -475,7 +467,7 @@ def present(row: dict[str, Any]) -> dict[str, Any]:
         "records": _records(result, row.get("adverts")) if result else [],
         "summary": _summary(response, result) if result else None,
         "kind_label": _option_label("kind", row["request"].get("kind")),
-        "error": _error(error, response) if error else None,
+        "error": _error(row["error"], response) if row["error"] else None,
         "ppm2_basis": result_basis(row["request"]),
     }
 
