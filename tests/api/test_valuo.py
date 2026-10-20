@@ -99,7 +99,7 @@ def test_a_flat_maps_from_its_ad_and_its_property():
         "property_type": "flat", "place": "50.080000, 14.420000", "kind": "sale", "floor_area": 54.5,
         "rating": "very_good", "as_of": _today(), "local_type": "2+kk", "ownership": "private",
         "construction": "brick", "floor": 3, "total_floors": 6, "energy_performance": "C",
-        "elevator": True, "equipment": False, "garages": 0,
+        "elevator": True, "equipment": False,
     }
     assert list(request) == [f.name for f in valuo.FIELDS if f.name in request]
     assert prov["rating"] == {"class": "ad", "from": {"column": "condition", "value": "po_rekonstrukci"},
@@ -108,7 +108,9 @@ def test_a_flat_maps_from_its_ad_and_its_property():
     assert prov["place"]["class"] == "ad"
     assert prov["equipment"] == {"class": "inferred", "from": {"column": "furnished", "value": "ne"},
                                  "note": "Nevybaveno → ne"}
-    assert prov["garages"]["note"] == "Garáž: ne → 0"
+    assert prov["elevator"] == {"class": "property", "from": {"column": "has_lift", "value": True}, "note": None}
+    assert prov["garages"] == {"class": "missing", "from": {"column": "garage", "value": False},
+                               "note": "Inzerát garáž neuvádí jako ano — neposílá se."}
     assert prov["as_of"]["class"] == "assumed"
     assert prov["balcony_area"] == {"class": "missing", "from": {"column": "has_balcony", "value": True},
                                     "note": "Inzerát uvádí balkon, ne plochu."}

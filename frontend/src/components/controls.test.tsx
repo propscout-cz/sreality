@@ -76,9 +76,9 @@ describe('<DecimalField>', () => {
     expect(type('52', { readOnly: true })).toEqual([]);
   });
 
-  it('in integer mode emits whole numbers only, a fraction staying typed text', () => {
+  it('in integer mode emits a whole number, a fraction truncated like the filters always did', () => {
     expect(type('-2', { integer: true })).toEqual([[-2]]);
-    expect(type('2,5', { integer: true })).toEqual([]);
+    expect(type('2,5', { integer: true })).toEqual([[2]]);
   });
 
   /* Typed key by key into a host that keeps the value: the box once showed

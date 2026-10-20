@@ -180,7 +180,10 @@ _SOURCE: dict[str, str] = {
 }
 # Columns sent as they stand, through the gate a user's value passes: one Valuo cannot take is not sent.
 _COPIED = (("total_floors", "total_floors", AD), ("garden_area", "garden_area", PROPERTY),
-           ("has_lift", "elevator", PROPERTY), ("parking_lots", "parking_spaces", PROPERTY))
+           ("parking_lots", "parking_spaces", PROPERTY))
+# A yes/no flag is sent only when the ad says yes: some portals store "not mentioned" as no (sreality's garage is
+# never NULL), so a no is not evidence and is not sent.
+_FLAGS = (("has_lift", "elevator", True, PROPERTY, "výtah"), ("garage", "garages", 1, INFERRED, "garáž"))
 _NOT_SENT_NOTES: dict[tuple[str, str], str] = {
     ("energy_rating", "G"): "Třídu G uvádějí i inzeráty bez průkazu PENB, proto se neposílá.",
     ("furnished", "castecne"): "Částečné vybavení se neposílá.",
@@ -293,10 +296,11 @@ def build_request(
             put("floor", int(floor), AD, _source("floor", floor))
         else:  # Valuo's reading of a basement is unproven: the user sends it, the ad does not
             put("floor", None, MISSING, _source("floor", floor), "Podzemní podlaží se samo neposílá.")
-    if subject.get("garage") is not None:
-        garages = 1 if subject["garage"] else 0
-        put("garages", garages, INFERRED, _source("garage", subject["garage"]),
-            f"Garáž: {'ano' if garages else 'ne'} → {garages}")
+    for flag, param, value, cls, noun in _FLAGS:
+        if subject.get(flag):
+            put(param, value, cls, _source(flag, True))
+        elif subject.get(flag) is False:
+            put(param, None, MISSING, _source(flag, False), f"Inzerát {noun} neuvádí jako ano — neposílá se.")
     put("as_of", datetime.now(_PRAGUE).date().isoformat(), ASSUMED, None, "Dnešní datum.")
 
     for param, value in overrides.items():
