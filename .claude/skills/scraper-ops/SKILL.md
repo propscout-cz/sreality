@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing per-source HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
 ---
 
 # Scraper operations
@@ -26,18 +26,10 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
    `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
    the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
 
-## Refreshing per-source HTML fixtures
+## Refreshing portal HTML fixtures
 
-The LLM-driven parsers (`scraper/source_parsers/`) are tested against saved listing HTML in
-`tests/fixtures/source_html/`. Real listings get taken down or change layout, so every few
-months the fixtures need a refresh. Don't fetch live in tests — that would burn LLM credit and
-break offline runs.
-
-Refresh (CLI, fastest): `gh workflow run fetch-fixtures.yml --ref <branch>` (add `-f` inputs to
-override URLs), or Actions → **Fetch + anonymize source HTML fixtures** → **Run workflow**. It
-fetches each URL, scrubs via `scripts/fetch_and_anonymize_fixtures.py` and commits the
-`*_sample.html` files back to the branch; the skipif tests in
-`tests/scraper/test_source_parsers/test_real_fixtures.py` light up once they exist.
+Portal media fixtures (`tests/scraper/test_portal_media_fixtures.py`) are saved detail pages scrubbed by
+`scripts/fetch_and_anonymize_fixtures.py --scrub-contacts`; never fetch live in tests.
 
 Anonymization scope: phones → `+420 XXX XXX XXX`, emails → `agent@example.cz`, street numbers
 (`123/45`) → `XXX/YY`. Listing prices and the surrounding HTML structure are preserved — public
@@ -69,7 +61,7 @@ Two tests in `tests/location_data/test_payload_norm_measured.py` fail if a commi
 carries contact details in plaintext **or** in Cloudflare's hex.
 
 **The nine SCRAPER portal parsers are a separate fixture set** in `tests/fixtures/portal_html/`
-(`tests/scraper/test_portal_media_fixtures.py`), distinct from the LLM `source_parsers` set
+(`tests/scraper/test_portal_media_fixtures.py`)
 above. They exist because a hand-authored fixture can only assert back the strings the test
 itself planted, so it is structurally blind to upstream drift — that blindness is what let a
 19-day realitymix gallery blackout and a ~63% idnes photo loss both ship with CI green. Never
@@ -196,7 +188,7 @@ OWN predicates (`phash`, `clip_tagged_at`). It deletes no label/review/CLIP-cach
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
 and `properties`, so a parser's coordinate/locality/street reading is evidence for the resolver,
 not a write; a listing's place is `listing_location` (join on `listing_id`).
-`scraper/geocoding.py` survives for `/maps/*` and the on-demand URL parse only.
+`scraper/geocoding.py` survives for `/maps/*` and the curated-city seed only.
 
 One monitoring workflow watches the rest: the canary, `verify_pipeline.yml` ("Monitoring: health canary (hourly)"; GitHub
 delivers ~5 runs a day). Step 1, the poller `scripts/record_workflow_failures.py`, records PRODUCTION runs only (event

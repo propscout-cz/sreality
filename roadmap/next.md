@@ -64,6 +64,10 @@ the sreality BFF sort HAR spike.
 
 ### Phase B1: Building decomposition — URL ingest + unit extractor + confirmation UI (active)
 
+**Entry retired 2026-10-20** (`docs/design/new-property-from-link.md` §3.5): the URL parser and
+`POST /buildings/from_url` are deleted, so the flow has no live entry — `POST /buildings` creates
+only a `pending` shell. Keep-or-retire ruling owed: `roadmap/building-decomposition-track.md`.
+
 Second slice of the building-paste flow. Builds on B0's persistence:
 operator pastes a `dum` (house) or `komercni` URL → backend parses
 via the existing dispatcher → an LLM-vision skill reads the
@@ -92,12 +96,14 @@ Headline scope:
   estimator skill — its job is structural extraction only.
 - `POST /buildings/from_url` replaces B0's minimal `POST /buildings`
   as the operator-facing entry. Rejects `category_main='byt'` (those
-  go through `/estimations`).
+  go through `/estimations`). (Retired 2026-10-20,
+  `docs/design/new-property-from-link.md` §3.5.)
 - `POST /buildings/{id}/confirm_units` accepts the operator-edited
   unit list, validates, writes to `units`, advances status to
   `estimating`. Idempotency via 409 on non-`awaiting_input` rows.
 - Frontend: new `kind` toggle on `NewEstimationModal` ("apartment" /
-  "building"), `BuildingUnitEditor` component for the review step,
+  "building") (retired 2026-10-20, `docs/design/new-property-from-link.md`
+  §3.5), `BuildingUnitEditor` component for the review step,
   new `/building/:id` page (initially read-only — full rollup view
   ships with B2).
 

@@ -20,7 +20,6 @@ import type {
   Collection,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
-  CreateBuildingFromUrlIn,
   UpdateBuildingInputsIn,
   CreateEstimationIn,
   EstimationFeedback,
@@ -33,7 +32,6 @@ import type {
   ArtifactLink,
   Note,
   NoteAttachment,
-  ParseResult,
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
@@ -351,20 +349,6 @@ export const ingestState = (
 
 /* ----- estimations ------------------------------------------------------- */
 
-/* POST /estimations/preview — generic URL parser (sreality fast path
- * + LLM-driven per-source parser for everything else, dispatched on
- * the backend). When force_refresh is true the 7-day URL cache is
- * bypassed and a fresh parse is performed (the cache row is also
- * upserted on success). */
-export const previewListingUrl = (
-  url: string,
-  options: { force_refresh?: boolean } = {},
-): Promise<ParseResult> =>
-  request<ParseResult>('/estimations/preview', {
-    method: 'POST',
-    json: { url, force_refresh: options.force_refresh ?? false },
-  });
-
 export const createEstimation = (
   input: CreateEstimationIn,
 ): Promise<EstimationRun> =>
@@ -526,14 +510,6 @@ export const verifyListingFreshness = (
   });
 
 /* ----- buildings (Phase B1) ---------------------------------------------- */
-
-export const createBuildingFromUrl = (
-  input: CreateBuildingFromUrlIn,
-): Promise<BuildingRun> =>
-  request<BuildingRun>('/buildings/from_url', {
-    method: 'POST',
-    json: input,
-  });
 
 export const getBuilding = (id: number): Promise<BuildingRun> =>
   request<BuildingRun>(`/buildings/${id}`);

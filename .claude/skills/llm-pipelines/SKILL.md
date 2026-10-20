@@ -1,6 +1,6 @@
 ---
 name: llm-pipelines
-description: Use when working on any LLM-backed path — the on-demand URL parser (source_dispatcher + per-source parsers), the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: parse_url, source_parsers, app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
+description: Use when working on any LLM-backed path — the cached analytical vision/text tools (summarize_listing, compare_listing_images, score_listing_condition, extract_building_units, read_floor_plan, discover_condition_markers), the unified vision downscaling tiers, or the MF Cenová mapa nájemného reference-rent calc/ingest and gross-yield filter. Triggers on: app_settings prompt/model, llm_calls, called_for, vision, max_edge downscale, reference_rent, rent map, mf_gross_yield, Gemini, provider, tool schema, additionalProperties.
 ---
 
 # LLM pipelines
@@ -10,35 +10,15 @@ result locally and auto-invalidates; each is a write-allowed toolkit exception (
 `toolkit-api` skill, rule #5). System prompts and model IDs are operator-tunable via
 `app_settings`.
 
-## LLM-backed parsing
+## A pasted link is not an LLM path (since 2026-10-20)
 
-`scraper.source_dispatcher.parse_listing_url` is the single entry point for any listing URL
-(sreality or otherwise). It classifies the URL by domain and routes to either the
-deterministic sreality flow (`scraper.url_parser`, unchanged) or an LLM-driven per-source
-parser under `scraper/source_parsers/`. Today's allowlist is `bezrealitky`, `idnes_reality`
-(reality.idnes.cz), and `remax` (remax-czech.cz); everything else falls through to a
-best-effort generic parser that always reports `parse_confidence='best_effort'`. (Note: bazos
-is ingested by its own crawler into `listings`, not through this on-demand URL parser.)
-
-The LLM path:
-1. Cache check against `parsed_url_cache`. Key is sha256 of the canonicalised URL (lowercase
-   scheme/host, no query, no trailing slash). Hit → return cached spec, no LLM, no cost.
-2. Fetch HTML, send to Claude with the system prompt from `app_settings.llm_parse_system_prompt`
-   and the per-source user prompt from `scraper.source_parsers.<source>`. The model is
-   `app_settings.llm_parse_model` (default `claude-sonnet-4-5`, from `api/llm_client.py`).
-3. The LLM is required to invoke `record_listing` exactly once with every field in a
-   `{value, confidence}` envelope. Any deviation raises `ParseError` and surfaces as a 502
-   from `/estimations/preview` or a `failed` row from `POST /estimations`.
-4. If the page didn't yield lat/lng, geocode the locality string via Mapy.cz
-   (`scraper.geocoding`). The geocode confidence rolls into
-   `parse_confidence_per_field['lat'/'lng']`.
-5. Store the full extraction + spec + warnings in `parsed_url_cache` with a 7-day TTL.
-
-Operator-tunable parser behaviour lives in `app_settings` (system prompt, model name) — edits
-take effect on the next preview/estimation, no deploy. Every prior value is preserved in
-`app_settings_history` (migration 020 trigger). Every call is recorded in `llm_calls` with
-token counts (incl. cache-read/write splits), USD cost, duration, and the optional
-`estimation_run_id`; `called_for='parse_url'`.
+The on-demand URL parser (`scraper/source_dispatcher` + `scraper/source_parsers`, `parsed_url_cache`,
+`app_settings.llm_parse_*`, both `/estimations/preview` routes) was retired by
+`docs/design/new-property-from-link.md`: a pasted link is resolved by `scraper/portal_identity` and
+ingested through the worker's drain (`POST /listings/ingest`), and an estimation is always of an ad we
+hold (`POST /estimations {listing_id | sreality_id | spec}`). The only LLM that reads listing prose is the
+text lane (`toolkit/description_extraction`, `app_settings.enrichment_model`), scoped by the location
+contracts' `llm_text` entries. `llm_calls.called_for = 'parse_url'` survives only as history.
 
 ## LLM-backed analysis
 
@@ -163,7 +143,7 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
 - **Estimations:** rent runs store `estimation_runs.reference_rent` (migration 131) from
   `toolkit.rent_map.compute_reference_rent` — a thin wrapper running the measure on the
   service-role connection, stamped `engine: 'mf_sql_v1'`. Our advert → its property's golden
-  facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a URL-parsed or
+  facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec (typed)
   typed subject → obec from `api.maps.containing_obec_kod`, KÚ NULL. Stored runs keep their
   frozen breakdown (rule #12).
 - **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE → a re-fetch no-ops) +

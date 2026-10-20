@@ -1,7 +1,7 @@
-"""Tests for /estimations endpoints (POST, GET-by-id, list, preview).
+"""Tests for /estimations endpoints (POST, GET-by-id, list).
 
 Hermetic — overrides the DB-conn, SrealityClient, and LLMClient
-dependencies, and mocks the persistence helpers + dispatcher +
+dependencies, and mocks the persistence helpers + the subject matcher +
 estimate_yield so no real DB / HTTP / LLM is hit.
 """
 
@@ -20,8 +20,6 @@ from api import estimate_yield as ey
 from api import estimation_runs as er
 from api import main as api_main
 from api import tenant_pool
-from scraper import source_dispatcher as sd
-from scraper import url_parser as scraper_url_parser
 
 SYSTEM_ACCOUNT = deps.SYSTEM_ACCOUNT_ID
 _ACCT = "22222222-2222-2222-2222-222222222222"
@@ -77,12 +75,6 @@ class _State:
 def _patch_persistence(monkeypatch) -> _State:
     state = _State()
 
-    # Default: a pasted URL doesn't match an already-scraped listings row, so
-    # resolution falls through to the (mocked) dispatcher. Tests that want the
-    # match path override this.
-    monkeypatch.setattr(er, "_match_listing_by_url", lambda conn, url: None)
-    monkeypatch.setattr(er, "_listing_id_of", lambda conn, sid: None)
-
     def fake_insert(conn, **fields: Any) -> int:
         rid = state.next_id
         state.next_id += 1
@@ -107,8 +99,8 @@ def _patch_persistence(monkeypatch) -> _State:
                 k: fields.get(k)
                 for k in (
                     "source", "mode", "status", "estimate_kind",
-                    "input_url", "input_sreality_id", "input_spec",
-                    "input_purchase_price_czk",
+                    "input_url", "input_sreality_id", "input_listing_id",
+                    "input_spec", "input_purchase_price_czk",
                     "estimated_monthly_rent_czk", "rent_p25_czk",
                     "rent_p75_czk",
                     "estimated_sale_price_czk", "sale_p25_czk",
@@ -117,9 +109,6 @@ def _patch_persistence(monkeypatch) -> _State:
                     "comparables_used", "comparables_excluded",
                     "trace", "warnings",
                     "error_message", "parent_run_id", "rerun_reason",
-                    "source_kind", "parse_confidence",
-                    "parse_confidence_per_field", "source_html",
-                    "subject_attributes",
                     "skill_name", "skill_version",
                 )
             },
@@ -199,27 +188,37 @@ def _patch_estimate(monkeypatch, exc: Exception | None = None,
     monkeypatch.setattr(ey, "estimate_yield", fake)
 
 
-def _patch_url_parser(monkeypatch, sreality_id: int = 2836292428) -> None:
-    """Patch the dispatcher's view of parse_sreality_url so a sreality URL
-    flows through the new dispatcher with the same shape as before.
-    """
-    def fake(url: str, *, client, conn, persist: bool = False) -> dict[str, Any]:
+_SPEC = {"lat": 50.087, "lng": 14.42, "area_m2": 50.0, "disposition": "2+kk", "floor": 3}
+
+
+def _patch_subject(
+    monkeypatch, *, listing_id: int = 777, source: str = "idnes",
+    native: str = "65f0c0ffee", sreality_id: int | None = None,
+    spec: dict[str, Any] | None = None, price_czk: int | None = None,
+    category_type: str | None = None,
+) -> list[int]:
+    """One ad we hold: a sreality_id body resolves to it, and the ONE matcher (keyed on
+    listings.id) answers for it. Returns the ids the matcher was asked for."""
+    asked: list[int] = []
+
+    def fake_listing_id(conn, body):
+        if body.listing_id is not None:
+            return body.listing_id
+        return listing_id if body.sreality_id == sreality_id else None
+
+    def fake_match(conn, lid):
+        asked.append(lid)
+        if lid != listing_id:
+            return None
         return {
-            "sreality_id": sreality_id,
-            "spec": {
-                "sreality_id": sreality_id,
-                "lat": 50.087,
-                "lon": 14.42,
-                "area_m2": 50.0,
-                "disposition": "2+kk",
-                "floor": 3,
-            },
-            "images": [],
-            "fetched_at": "2026-05-04T10:00:00+00:00",
-            "source_url": url,
-            "in_database": False,
+            "listing_id": listing_id, "source": source, "source_id_native": native,
+            "sreality_id": sreality_id, "spec": dict(spec or _SPEC),
+            "price_czk": price_czk, "category_type": category_type,
         }
-    monkeypatch.setattr(sd.url_parser, "parse_sreality_url", fake)
+
+    monkeypatch.setattr(er, "_subject_listing_id", fake_listing_id)
+    monkeypatch.setattr(er, "_match_listing", fake_match)
+    return asked
 
 
 # ----------------------------------------------------------------------
@@ -305,36 +304,32 @@ def test_post_with_spec_creates_success_row(client, monkeypatch):
     assert inserted["trace"]["steps"][0]["tool"] == "find_comparables"
 
 
-def test_post_with_url_calls_url_parser(client, monkeypatch):
+def test_post_with_listing_id_resolves_and_runs(client, monkeypatch):
+    """An estimation is of an ad we hold: {listing_id} names it, whatever its portal, and
+    the run carries its listings.id from submit on (rule 12: never late-bound)."""
     state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    _patch_url_parser(monkeypatch, sreality_id=2836292428)
+    asked = _patch_subject(monkeypatch, listing_id=777, source="idnes")
 
-    res = client.post(
-        "/estimations",
-        json={
-            "url": "https://www.sreality.cz/detail/.../2836292428",
-        },
-    )
+    res = client.post("/estimations", json={"listing_id": 777})
     assert res.status_code == 200
     body = res.json()
-    assert body["input_url"].endswith("2836292428")
-    assert body["input_sreality_id"] == 2836292428
+    assert body["status"] == "success"
+    assert body["input_listing_id"] == 777
+    assert body["input_sreality_id"] is None
+    assert body["input_url"] is None
     assert body["input_spec"]["lat"] == 50.087
-    assert body["input_spec"]["lng"] == 14.42  # normalised from parser's 'lon'
-    assert "lon" not in body["input_spec"]
+    assert asked == [777]
+    assert state.inserts[1]["input_listing_id"] == 777
+    assert "input_url" not in state.inserts[1]
 
 
-def test_post_with_sreality_url_excludes_target_from_comparables(
-    client, monkeypatch,
-):
-    """The scraped row a sreality URL resolves to leaves its whole property out of the
-    cohort (decision 13), so an estimate can never quote the target, or its sibling on
-    another portal, as its own comparable.
-    """
+def test_post_with_listing_id_excludes_target_from_comparables(client, monkeypatch):
+    """The subject ad leaves its whole property out of the cohort (decision 13), so an
+    estimate can never quote the target, or its sibling on another portal, as its own
+    comparable."""
     _patch_persistence(monkeypatch)
-    _patch_url_parser(monkeypatch, sreality_id=2836292428)
-    monkeypatch.setattr(er, "_listing_id_of", lambda conn, sid: 777 if sid == 2836292428 else None)
+    _patch_subject(monkeypatch, listing_id=777)
 
     captured: dict[str, Any] = {}
 
@@ -356,25 +351,19 @@ def test_post_with_sreality_url_excludes_target_from_comparables(
         }
     monkeypatch.setattr(ey, "estimate_yield", fake)
 
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.sreality.cz/detail/.../2836292428"},
-    )
+    res = client.post("/estimations", json={"listing_id": 777})
     assert res.status_code == 200
     assert captured["exclude_listing_ids"] == [777]
 
 
-def test_post_with_url_and_spec_overrides_merges(client, monkeypatch):
-    state = _patch_persistence(monkeypatch)
+def test_post_with_listing_id_and_spec_overrides_merges(client, monkeypatch):
+    _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    _patch_url_parser(monkeypatch)
+    _patch_subject(monkeypatch)
 
     res = client.post(
         "/estimations",
-        json={
-            "url": "https://www.sreality.cz/detail/x/2836292428",
-            "spec_overrides": {"area_m2": 60.0, "floor": 5},
-        },
+        json={"listing_id": 777, "spec_overrides": {"area_m2": 60.0, "floor": 5}},
     )
     assert res.status_code == 200
     body = res.json()
@@ -432,23 +421,31 @@ def test_post_default_estimate_kind_is_rent(client, monkeypatch):
     assert body["estimated_sale_price_czk"] is None
 
 
-def test_post_with_both_url_and_spec_returns_422(client):
+def test_post_with_both_listing_id_and_spec_returns_422(client):
     res = client.post(
         "/estimations",
-        json={
-            "url": "https://www.sreality.cz/detail/x/2836292428",
-            "spec": {"lat": 50.0, "lng": 14.0},
-        },
+        json={"listing_id": 777, "spec": {"lat": 50.0, "lng": 14.0}},
     )
     assert res.status_code == 422
 
 
-def test_post_with_neither_url_nor_spec_returns_422(client):
+def test_post_with_no_subject_returns_422(client):
     res = client.post(
         "/estimations",
         json={"purchase_price_czk": 5_000_000},
     )
     assert res.status_code == 422
+
+
+def test_post_with_url_returns_422(client, monkeypatch):
+    """A pasted link becomes an ad through POST /listings/ingest first; the URL arm is gone."""
+    state = _patch_persistence(monkeypatch)
+    url = "https://reality.idnes.cz/detail/prodej/byt/x/abc/"
+    for body in ({"url": url}, {"url": url, "listing_id": 7}, {"url": url, "sreality_id": 1}):
+        res = client.post("/estimations", json=body)
+        assert res.status_code == 422, body
+        assert "no longer takes a url" in res.text
+    assert state.inserts == {}
 
 
 def test_post_when_estimate_yield_raises_persists_failed(
@@ -614,24 +611,14 @@ def test_agent_basis_refusal_lands_a_failed_run_not_a_500(client, monkeypatch):
 def test_post_rent_estimate_on_sale_listing_derives_purchase_price(
     client, monkeypatch,
 ):
-    """Rent estimate against a sreality SALE listing: the listing's
-    price_czk auto-fills input_purchase_price_czk so yield gets computed
-    without the operator typing a price."""
+    """Rent estimate against a SALE ad: the ad's price_czk auto-fills
+    input_purchase_price_czk so yield gets computed without the operator
+    typing a price."""
     state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result(
-        sreality_id=2836292428,
-        wide_spec={
-            "price_czk": 8_500_000, "price_unit": "za nemovitost",
-            "category_main": "byt", "category_type": "prodej",
-            "locality": "Praha 2", "district": "Praha 2",
-        },
-    ))
+    _patch_subject(monkeypatch, price_czk=8_500_000, category_type="prodej")
 
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.sreality.cz/detail/x/2836292428"},
-    )
+    res = client.post("/estimations", json={"listing_id": 777})
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "success"
@@ -654,26 +641,15 @@ def test_post_rent_estimate_on_sale_listing_derives_purchase_price(
 def test_post_sale_estimate_on_rental_listing_derives_expected_rent(
     client, monkeypatch,
 ):
-    """Sale estimate against a sreality RENTAL listing: the listing's
-    monthly rent auto-fills expected_monthly_rent_czk so yield gets
-    computed without the operator typing a rent figure."""
+    """Sale estimate against a RENTAL ad: the ad's monthly rent auto-fills
+    expected_monthly_rent_czk so yield gets computed without the operator
+    typing a rent figure."""
     state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result(
-        sreality_id=2836292429,
-        wide_spec={
-            "price_czk": 25_000, "price_unit": "měsíc",
-            "category_main": "byt", "category_type": "pronajem",
-            "locality": "Praha 2", "district": "Praha 2",
-        },
-    ))
+    _patch_subject(monkeypatch, price_czk=25_000, category_type="pronajem")
 
     res = client.post(
-        "/estimations",
-        json={
-            "estimate_kind": "sale",
-            "url": "https://www.sreality.cz/detail/x/2836292429",
-        },
+        "/estimations", json={"estimate_kind": "sale", "listing_id": 777},
     )
     assert res.status_code == 200
     body = res.json()
@@ -699,17 +675,9 @@ def test_post_rent_estimate_on_rental_listing_skips_derivation(
     not a purchase price, so deriving it would yield nonsense."""
     state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result(
-        wide_spec={
-            "price_czk": 25_000, "price_unit": "měsíc",
-            "category_main": "byt", "category_type": "pronajem",
-        },
-    ))
+    _patch_subject(monkeypatch, price_czk=25_000, category_type="pronajem")
 
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.sreality.cz/detail/x/2836292428"},
-    )
+    res = client.post("/estimations", json={"listing_id": 777})
     assert res.status_code == 200
     body = res.json()
     assert body["input_purchase_price_czk"] is None
@@ -726,19 +694,10 @@ def test_post_operator_purchase_price_wins_over_listing(client, monkeypatch):
     auto-derivation must NOT overwrite it."""
     state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result(
-        wide_spec={
-            "price_czk": 8_500_000, "price_unit": "za nemovitost",
-            "category_main": "byt", "category_type": "prodej",
-        },
-    ))
+    _patch_subject(monkeypatch, price_czk=8_500_000, category_type="prodej")
 
     res = client.post(
-        "/estimations",
-        json={
-            "url": "https://www.sreality.cz/detail/x/2836292428",
-            "purchase_price_czk": 5_000_000,
-        },
+        "/estimations", json={"listing_id": 777, "purchase_price_czk": 5_000_000},
     )
     assert res.status_code == 200
     body = res.json()
@@ -760,112 +719,6 @@ def test_post_invalid_source_returns_422(client):
         },
     )
     assert res.status_code == 422
-
-
-# ----------------------------------------------------------------------
-# GET /estimations/preview
-# ----------------------------------------------------------------------
-
-def test_preview_returns_normalised_spec(client, monkeypatch):
-    state = _patch_persistence(monkeypatch)
-    _patch_url_parser(monkeypatch, sreality_id=2836292428)
-
-    res = client.get(
-        "/estimations/preview"
-        "?url=https://www.sreality.cz/detail/x/2836292428"
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["sreality_id"] == 2836292428
-    assert body["in_database"] is False
-    assert body["url"].endswith("2836292428")
-    assert body["spec"]["lat"] == 50.087
-    assert body["spec"]["lng"] == 14.42  # normalised from parser's 'lon'
-    assert "lon" not in body["spec"]
-    assert body["spec"]["area_m2"] == 50.0
-    assert body["spec"]["disposition"] == "2+kk"
-    assert body["spec"]["floor"] == 3
-    assert "exclude_ids" not in body["spec"]
-    # Preview must not persist anything.
-    assert len(state.inserts) == 0
-
-
-def test_preview_invalid_url_returns_400(client, monkeypatch):
-    state = _patch_persistence(monkeypatch)
-
-    res = client.get(
-        "/estimations/preview?url=https://example.com/not-a-listing"
-    )
-    assert res.status_code == 400
-    assert "sreality_id" in res.json()["detail"].lower()
-    assert len(state.inserts) == 0
-
-
-def test_preview_upstream_error_returns_502(client, monkeypatch):
-    import requests
-    state = _patch_persistence(monkeypatch)
-
-    def fake(url: str, *, client, conn, persist: bool = False) -> dict[str, Any]:
-        raise requests.HTTPError("502 Bad Gateway from sreality")
-
-    monkeypatch.setattr(scraper_url_parser, "parse_sreality_url", fake)
-
-    res = client.get(
-        "/estimations/preview"
-        "?url=https://www.sreality.cz/detail/x/2836292428"
-    )
-    assert res.status_code == 502
-    assert "sreality" in res.json()["detail"].lower()
-    assert len(state.inserts) == 0
-
-
-def test_preview_exposes_listing_block(client, monkeypatch):
-    def fake(url: str, *, client, conn, persist: bool = False) -> dict[str, Any]:
-        return {
-            "sreality_id": 2836292428,
-            "spec": {
-                "sreality_id": 2836292428,
-                "lat": 50.087, "lon": 14.42,
-                "area_m2": 50.0, "disposition": "2+kk", "floor": 3,
-                "price_czk": 18500, "price_unit": "měsíc",
-                "category_main": "byt", "category_type": "pronajem",
-                "locality": "Praha 1, Nové Město",
-                "district": "Praha 1",
-                "locality_district_id": 5001,
-                "locality_region_id": 10,
-                "total_floors": 6,
-                "has_balcony": True, "has_lift": True, "has_parking": False,
-                "building_type": "cihlová",
-                "condition": "po rekonstrukci",
-                "energy_rating": "C",
-            },
-            "images": [
-                {"url": "x", "sequence": 1},
-                {"url": "y", "sequence": 2},
-                {"url": "z", "sequence": 3},
-            ],
-            "fetched_at": "2026-05-04T10:00:00+00:00",
-            "source_url": url,
-            "in_database": True,
-        }
-    monkeypatch.setattr(scraper_url_parser, "parse_sreality_url", fake)
-
-    res = client.get(
-        "/estimations/preview"
-        "?url=https://www.sreality.cz/detail/x/2836292428"
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["in_database"] is True
-    listing = body["listing"]
-    assert listing["price_czk"] == 18500
-    assert listing["district"] == "Praha 1"
-    assert listing["total_floors"] == 6
-    assert listing["has_balcony"] is True
-    assert listing["has_parking"] is False
-    assert listing["building_type"] == "cihlová"
-    assert listing["energy_rating"] == "C"
-    assert listing["image_count"] == 3
 
 
 # ----------------------------------------------------------------------
@@ -1185,10 +1038,7 @@ def test_list_no_filters_builds_naked_sql():
     count_sql, count_params = conn.executions[1]
     # No outer WHERE clause — every filter predicate is gated behind
     # an "er.<col> = " prefix, none of which should appear here.
-    for predicate in (
-        "er.source =", "er.status =",
-        "er.input_sreality_id =", "er.source_kind =",
-    ):
+    for predicate in ("er.source =", "er.status =", "er.input_sreality_id ="):
         assert predicate not in list_sql
         assert predicate not in count_sql
     assert "ORDER BY er.created_at DESC" in list_sql
@@ -1253,28 +1103,19 @@ def test_list_with_filters_builds_where_clause():
     assert list_params["sreality_id"] == 12345
 
 
-def test_list_filters_by_source_kind():
-    conn = _FakeConn(results=[[], (0,)])
-    er.list_estimation_runs(conn, source_kind="bezrealitky", account_ids=[SYSTEM_ACCOUNT])
-    list_sql, list_params = conn.executions[0]
-    assert "er.source_kind = %(source_kind)s" in list_sql
-    assert list_params["source_kind"] == "bezrealitky"
-
-
-def test_list_join_prefers_input_listing_id():
-    """The locality-display LEFT JOIN (_LIST_FROM) must match on the surrogate
-    input_listing_id first — matching input_sreality_id only is stale (Gate 2:
-    a post-Gate-2 non-sreality subject has input_sreality_id NULL even when its
-    input_listing_id correctly resolves). The sreality_id branch stays as the
-    fallback for rows written before input_listing_id was stamped (#914)."""
+def test_list_joins_the_subject_on_its_surrogate_only():
+    """Every run of an ad carries its input_listing_id from submit, so the list's
+    LEFT JOIN has no legacy sreality arm; it projects the subject ad's (source,
+    native id), by which the SPA routes a run to its ad's page."""
     conn = _FakeConn(results=[[], (0,)])
     er.list_estimation_runs(conn, limit=1, account_ids=[SYSTEM_ACCOUNT])
     list_sql, _ = conn.executions[0]
-    assert "l.id = er.input_listing_id" in list_sql
-    assert (
-        "er.input_listing_id IS NULL AND l.sreality_id = er.input_sreality_id"
-        in list_sql
-    )
+    assert "LEFT JOIN listings l ON l.id = er.input_listing_id" in list_sql
+    assert "input_listing_id IS NULL" not in list_sql
+    assert "l.source AS subject_source" in list_sql
+    assert "l.source_id_native AS subject_source_id_native" in list_sql
+    assert "parsed_url_cache" not in list_sql
+    assert "ll.obec_name AS locality_display" in list_sql
 
 
 def test_get_estimation_run_returns_none_when_missing():
@@ -1285,462 +1126,77 @@ def test_get_estimation_run_returns_none_when_missing():
     assert "cost_usd_total" in conn.executions[0][0]
 
 
+def test_get_estimation_run_projects_the_subject_ad():
+    """The detail read runs on the tenant connection, where `listings` (RLS, no
+    policy) returns nothing, so the subject ad is joined through the owner view."""
+    row = [None] * len(er._RUN_COLUMNS_OUT)
+    row[er._RUN_COLUMNS_OUT.index("id")] = 5
+    row[er._RUN_COLUMNS_OUT.index("input_listing_id")] = 777
+    row[er._RUN_COLUMNS_OUT.index("subject_source")] = "bezrealitky"
+    row[er._RUN_COLUMNS_OUT.index("subject_source_id_native")] = "998877"
+    conn = _FakeConn(results=[tuple(row)])
+    run = er.get_estimation_run(conn, run_id=5)
+    sql = conn.executions[0][0]
+    assert "LEFT JOIN listings_public l ON l.id = er.input_listing_id" in sql
+    assert run["subject_source"] == "bezrealitky"
+    assert run["subject_source_id_native"] == "998877"
+    assert run["input_listing_id"] == 777
+    for gone in ("source_kind", "parse_confidence", "source_html", "subject_attributes"):
+        assert gone not in run
+
+
 # ----------------------------------------------------------------------
-# _match_listing_by_url — numeric columns must not leak Decimal into the
-# subject spec, which is later stored as jsonb (Jsonb -> json.dumps).
-# Regression: estimating an in-DB non-sreality listing (remax/idnes/…)
-# 500'd with "Object of type Decimal is not JSON serializable".
+# The ONE subject matcher, keyed on listings.id. Numeric columns must not
+# leak Decimal into the subject spec, which is later stored as jsonb
+# (Jsonb -> json.dumps).
 # ----------------------------------------------------------------------
 
-def test_match_listing_by_url_casts_numeric_area_to_float():
+def test_match_listing_keys_on_listings_id_and_casts_numerics():
     import json
     from decimal import Decimal
 
-    # row: sreality_id, listing_id, lat, lng, area_m2(numeric->Decimal),
+    # row: id, source, source_id_native, sreality_id, lat, lng, area_m2 (numeric),
     #      disposition, floor, price_czk, category_type
-    row = (-70120, 501, 50.4208, 14.9016, Decimal("108.0"), "2+kk", 3, 6299000, "prodej")
+    row = (501, "remax", "123", None, 50.4208, 14.9016, Decimal("108.0"), "2+kk", 3,
+           Decimal("6299000"), "prodej")
     conn = _FakeConn(results=[row])
 
-    matched = er._match_listing_by_url(
-        conn, "https://www.remax-czech.cz/reality/detail/abc/123/",
-    )
+    matched = er._match_listing(conn, 501)
 
+    sql, params = conn.executions[0]
+    assert "WHERE l.id = %(id)s" in sql and params == {"id": 501}
     assert matched is not None
-    assert matched["listing_id"] == 501
+    assert (matched["listing_id"], matched["source"], matched["source_id_native"]) == (
+        501, "remax", "123")
+    assert matched["sreality_id"] is None
     area = matched["spec"]["area_m2"]
     assert isinstance(area, float) and area == 108.0
-    # The whole spec must round-trip through json — this is what psycopg's
-    # Jsonb() does internally when _insert_run stores it as input_spec.
+    assert matched["price_czk"] == 6_299_000
     json.dumps(matched["spec"])
 
 
-def test_match_listing_by_url_null_area_stays_none():
-    row = (-70120, 501, 50.4208, 14.9016, None, "2+kk", 3, 6299000, "prodej")
-    conn = _FakeConn(results=[row])
-
-    matched = er._match_listing_by_url(
-        conn, "https://www.remax-czech.cz/reality/detail/abc/123/",
-    )
-
+def test_match_listing_unlocated_ad_has_no_point():
+    row = (501, "remax", "123", None, None, None, None, "2+kk", 3, None, "prodej")
+    matched = er._match_listing(_FakeConn(results=[row]), 501)
     assert matched is not None
-    assert matched["spec"]["area_m2"] is None
+    assert matched["spec"]["lat"] is None and matched["spec"]["area_m2"] is None
 
 
-# ----------------------------------------------------------------------
-# POST /estimations/preview
-# ----------------------------------------------------------------------
-
-def _patch_dispatcher_returns(
-    monkeypatch, parse_result: sd.ParseResult,
-) -> dict[str, Any]:
-    captured: dict[str, Any] = {}
-
-    def fake(url, *, sreality_client, llm_client, conn,
-             force_refresh: bool = False, **_kw):
-        captured["url"] = url
-        captured["force_refresh"] = force_refresh
-        return parse_result
-
-    monkeypatch.setattr(sd, "parse_listing_url", fake)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", fake)
-    return captured
+def test_match_listing_missing_ad_is_none():
+    assert er._match_listing(_FakeConn(results=[None]), 501) is None
 
 
-def _result(**overrides: Any) -> sd.ParseResult:
-    base = dict(
-        spec={
-            "lat": 50.087, "lng": 14.42, "area_m2": 50.0,
-            "disposition": "2+kk", "floor": 3,
-        },
-        source_kind="sreality",
-        parse_confidence="high",
-        parse_confidence_per_field=None,
-        source_html=None,
-        from_cache=False,
-        cost_usd=None,
-        warnings=[],
-        sreality_id=2836292428,
-        source_url="https://www.sreality.cz/detail/x/2836292428",
-        full_extraction=None,
-    )
-    base.update(overrides)
-    return sd.ParseResult(**base)
+def test_subject_listing_id_resolves_a_sreality_body_to_its_ad():
+    from api import schemas as s
 
-
-def test_preview_sreality_returns_parsed_spec(client, monkeypatch):
-    captured = _patch_dispatcher_returns(monkeypatch, _result())
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.sreality.cz/detail/x/2836292428"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["source_kind"] == "sreality"
-    assert body["parse_confidence"] == "high"
-    assert body["from_cache"] is False
-    assert body["cost_usd"] is None
-    assert body["sreality_id"] == 2836292428
-    assert body["spec"]["lat"] == 50.087
-    assert body["spec"]["lng"] == 14.42
-    assert captured["url"].endswith("2836292428")
-
-
-def test_preview_bezrealitky_returns_source_kind_and_confidence(client, monkeypatch):
-    _patch_dispatcher_returns(monkeypatch, _result(
-        source_kind="bezrealitky",
-        parse_confidence="medium",
-        parse_confidence_per_field={
-            "area_m2": "high", "disposition": "high", "lat": "medium",
-        },
-        source_html="<html>...</html>",
-        from_cache=False,
-        cost_usd=0.018,
-        sreality_id=None,
-        source_url="https://www.bezrealitky.cz/listing/abc",
-    ))
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["source_kind"] == "bezrealitky"
-    assert body["parse_confidence"] == "medium"
-    assert body["parse_confidence_per_field"]["lat"] == "medium"
-    assert body["cost_usd"] == 0.018
-
-
-def test_preview_applies_spec_overrides(client, monkeypatch):
-    _patch_dispatcher_returns(monkeypatch, _result())
-    res = client.post(
-        "/estimations/preview",
-        json={
-            "url": "https://www.sreality.cz/detail/x/2836292428",
-            "spec_overrides": {"area_m2": 65.0, "floor": 5},
-        },
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["spec"]["area_m2"] == 65.0
-    assert body["spec"]["floor"] == 5
-    assert body["spec"]["lat"] == 50.087  # unchanged
-
-
-def test_preview_returns_502_on_parse_error(client, monkeypatch):
-    def boom(url, **_kw):
-        raise sd.ParseError("LLM did not invoke record_listing")
-
-    monkeypatch.setattr(sd, "parse_listing_url", boom)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", boom)
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 502
-    assert "parse failed" in res.json()["detail"]
-
-
-def test_preview_returns_502_on_upstream_fetch_failure(client, monkeypatch):
-    def boom(url, **_kw):
-        raise RuntimeError("connection reset")
-
-    monkeypatch.setattr(sd, "parse_listing_url", boom)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", boom)
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 502
-
-
-def test_preview_sreality_returns_listing_block(client, monkeypatch):
-    _patch_dispatcher_returns(monkeypatch, _result(
-        wide_spec={
-            "price_czk": 18500, "price_unit": "měsíc",
-            "category_main": "byt", "category_type": "pronajem",
-            "locality": "Praha 1, Nové Město", "district": "Praha 1",
-            "locality_district_id": 5001, "locality_region_id": 10,
-            "total_floors": 6,
-            "has_balcony": True, "has_lift": True, "has_parking": False,
-            "building_type": "cihlová", "condition": "po rekonstrukci",
-            "energy_rating": "C",
-        },
-        fetched_at="2026-05-04T10:00:00+00:00",
-    ))
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.sreality.cz/detail/x/2836292428"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["fetched_at"] == "2026-05-04T10:00:00+00:00"
-    listing = body["listing"]
-    assert listing["price_czk"] == 18500
-    assert listing["district"] == "Praha 1"
-    assert listing["total_floors"] == 6
-    assert listing["has_balcony"] is True
-    assert listing["building_type"] == "cihlová"
-
-
-def test_preview_llm_listing_block_extracts_values_from_full_extraction(
-    client, monkeypatch,
-):
-    _patch_dispatcher_returns(monkeypatch, _result(
-        source_kind="bezrealitky",
-        parse_confidence="medium",
-        full_extraction={
-            "price_czk":     {"value": 24000, "confidence": "high"},
-            "total_floors":  {"value": 4,     "confidence": "medium"},
-            "has_balcony":   {"value": True,  "confidence": "high"},
-            "building_type": {"value": "panel", "confidence": "low"},
-            "energy_rating": {"value": None,  "confidence": "low"},
-        },
-        source_html="<html>...</html>",
-        cost_usd=0.012,
-        sreality_id=None,
-        source_url="https://www.bezrealitky.cz/listing/abc",
-    ))
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    body = res.json()
-    listing = body["listing"]
-    assert listing["price_czk"] == 24000
-    assert listing["total_floors"] == 4
-    assert listing["has_balcony"] is True
-    assert listing["building_type"] == "panel"
-    assert listing["energy_rating"] is None
-    assert listing["condition"] is None
-
-
-def test_preview_force_refresh_threads_through_to_dispatcher(
-    client, monkeypatch,
-):
-    captured: dict[str, Any] = {}
-
-    def fake(url, *, sreality_client, llm_client, conn, force_refresh=False):
-        captured["force_refresh"] = force_refresh
-        return _result(source_kind="bezrealitky", parse_confidence="medium",
-                       sreality_id=None,
-                       source_url="https://www.bezrealitky.cz/listing/abc")
-
-    monkeypatch.setattr(sd, "parse_listing_url", fake)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", fake)
-
-    res = client.post(
-        "/estimations/preview",
-        json={
-            "url": "https://www.bezrealitky.cz/listing/abc",
-            "force_refresh": True,
-        },
-    )
-    assert res.status_code == 200
-    assert captured["force_refresh"] is True
-
-
-def test_preview_force_refresh_default_is_false(client, monkeypatch):
-    captured: dict[str, Any] = {}
-
-    def fake(url, *, sreality_client, llm_client, conn, force_refresh=False):
-        captured["force_refresh"] = force_refresh
-        return _result()
-
-    monkeypatch.setattr(sd, "parse_listing_url", fake)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", fake)
-
-    res = client.post(
-        "/estimations/preview",
-        json={"url": "https://www.sreality.cz/detail/x/2836292428"},
-    )
-    assert res.status_code == 200
-    assert captured["force_refresh"] is False
-
-
-# ----------------------------------------------------------------------
-# POST /estimations now flows through the dispatcher and persists
-# the four new audit columns.
-# ----------------------------------------------------------------------
-
-def test_post_with_non_sreality_url_persists_provenance(client, monkeypatch):
-    # These exercise the URL-parse path itself; the W0 Mapy kill switch
-    # (default off) would otherwise 422 the submit before the parse.
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")
-    state = _patch_persistence(monkeypatch)
-    _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result(
-        source_kind="bezrealitky",
-        parse_confidence="medium",
-        parse_confidence_per_field={
-            "area_m2": "high", "disposition": "high", "lat": "medium",
-        },
-        source_html="<html>spec</html>",
-        cost_usd=0.018,
-        warnings=["geocoded with medium confidence"],
-        sreality_id=None,
-        source_url="https://www.bezrealitky.cz/listing/abc",
-    ))
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["status"] == "success"
-    assert body["source_kind"] == "bezrealitky"
-    assert body["parse_confidence"] == "medium"
-    assert body["parse_confidence_per_field"]["lat"] == "medium"
-    assert body["source_html"] == "<html>spec</html>"
-    assert body["input_sreality_id"] is None
-    assert body["input_url"].endswith("/abc")
-    # Parse-time warnings flow through to the persisted row.
-    assert any("geocoded" in w for w in (body["warnings"] or []))
-    inserted = state.inserts[1]
-    assert inserted["source_kind"] == "bezrealitky"
-    assert inserted["parse_confidence"] == "medium"
-
-
-def test_subject_attributes_from_result_maps_typed_fields():
-    result = _result(
-        sreality_id=None,
-        source_kind="bezrealitky",
-        source_url="https://www.bezrealitky.cz/listing/abc",
-        full_extraction={
-            "building_type": {"value": "cihla"},
-            "condition": {"value": "po_rekonstrukci"},
-            "ownership": {"value": "osobni"},
-            "has_lift": {"value": True},
-            "terrace": {"value": False},
-        },
-    )
-    attrs = er._subject_attributes_from_result(result)
-    assert attrs is not None
-    assert attrs["building_type"] == "cihla"
-    assert attrs["condition"] == "po_rekonstrukci"
-    assert attrs["ownership"] == "osobni"
-    assert attrs["has_lift"] is True
-    assert attrs["terrace"] is False
-    # disposition / area come from the narrow spec
-    assert attrs["disposition"] == "2+kk"
-    assert attrs["area_m2"] == 50.0
-
-
-def test_subject_attributes_from_result_none_when_nothing_typed():
-    result = _result(sreality_id=None, full_extraction={}, spec={})
-    assert er._subject_attributes_from_result(result) is None
-
-
-def test_post_known_portal_url_reuses_scraped_listing(client, monkeypatch):
-    """A pasted link to a portal we scrape, already in our DB, reuses that row
-    (deterministic — no dispatcher / LLM) and resolves a subject listing."""
-    state = _patch_persistence(monkeypatch)
-    _patch_estimate(monkeypatch)
-    monkeypatch.setattr(er, "_match_listing_by_url", lambda conn, url: {
-        "sreality_id": -42,
-        "listing_id": 917,
-        "spec": {
-            "lat": 50.0, "lng": 14.4, "area_m2": 60.0,
-            "disposition": "2+kk", "floor": 3,
-        },
-        "price_czk": 5_000_000,
-        "category_type": "prodej",
-    })
-
-    def boom(*_a, **_k):
-        raise AssertionError("dispatcher must not run when the URL matches a row")
-
-    monkeypatch.setattr(sd, "parse_listing_url", boom)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", boom)
-
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["input_sreality_id"] == -42
-    assert body["source_kind"] is None
-    assert body["subject_attributes"] is None  # UI reads listings_public instead
-    inserted = state.inserts[1]
-    assert inserted["input_sreality_id"] == -42
-    assert inserted["input_listing_id"] == 917
-    assert inserted["subject_attributes"] is None
-
-
-def test_post_non_sreality_url_captures_subject_attributes(client, monkeypatch):
-    # These exercise the URL-parse path itself; the W0 Mapy kill switch
-    # (default off) would otherwise 422 the submit before the parse.
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")
-    """A fresh (not-in-DB) non-sreality URL parses via the dispatcher and stores
-    the parsed typed attributes so the subject still renders its facts."""
-    state = _patch_persistence(monkeypatch)
-    _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result(
-        source_kind="bezrealitky",
-        sreality_id=None,
-        source_url="https://www.bezrealitky.cz/listing/abc",
-        full_extraction={
-            "building_type": {"value": "panel"},
-            "condition": {"value": "dobry"},
-            "has_lift": {"value": True},
-        },
-    ))
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["input_sreality_id"] is None
-    assert body["subject_attributes"]["building_type"] == "panel"
-    assert body["subject_attributes"]["condition"] == "dobry"
-    assert body["subject_attributes"]["has_lift"] is True
-
-
-def test_post_when_dispatch_fails_persists_failed_row(client, monkeypatch):
-    # These exercise the URL-parse path itself; the W0 Mapy kill switch
-    # (default off) would otherwise 422 the submit before the parse.
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")
-    state = _patch_persistence(monkeypatch)
-
-    def boom(url, **_kw):
-        raise sd.ParseError("LLM did not invoke record_listing")
-
-    monkeypatch.setattr(sd, "parse_listing_url", boom)
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", boom)
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.bezrealitky.cz/listing/abc"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["status"] == "failed"
-    assert "ParseError" in body["error_message"]
-    assert "record_listing" in body["error_message"]
-    assert body["input_url"].endswith("/abc")
-    assert body["input_sreality_id"] is None
-    assert body["estimated_monthly_rent_czk"] is None
-    inserted = state.inserts[1]
-    assert inserted["status"] == "failed"
-    assert "record_listing" in inserted["error_message"]
-
-
-def test_post_with_sreality_url_populates_sreality_source_kind(client, monkeypatch):
-    state = _patch_persistence(monkeypatch)
-    _patch_estimate(monkeypatch)
-    _patch_dispatcher_returns(monkeypatch, _result())
-
-    res = client.post(
-        "/estimations",
-        json={"url": "https://www.sreality.cz/detail/x/2836292428"},
-    )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["source_kind"] == "sreality"
-    assert body["parse_confidence"] == "high"
-    assert body["parse_confidence_per_field"] is None
-    assert body["source_html"] is None
-    assert body["input_sreality_id"] == 2836292428
+    conn = _FakeConn(results=[(777,)])
+    assert er._subject_listing_id(conn, s.CreateEstimationIn(sreality_id=12345)) == 777
+    assert conn.executions == [
+        ("SELECT id FROM listings WHERE sreality_id = %s", (12345,)),
+    ]
+    quiet = _FakeConn()
+    assert er._subject_listing_id(quiet, s.CreateEstimationIn(listing_id=9)) == 9
+    assert quiet.executions == []
 
 
 # ----------------------------------------------------------------------
@@ -1783,23 +1239,15 @@ def test_sweep_stuck_runs_marks_old_pending_rows_failed():
 # GET /estimations/latest-by-listing
 # ----------------------------------------------------------------------
 
-def test_post_with_sreality_id_resolves_listing_row(client, monkeypatch):
-    """A Browse card posts just {sreality_id}; the target is built from the
-    scraped listings row by id (no URL parse, no LLM)."""
+def test_post_with_sreality_id_resolves_through_the_same_matcher(client, monkeypatch):
+    """A Browse card posts just {sreality_id}; it resolves to the ad's listings.id and
+    then to the ONE matcher a {listing_id} body uses."""
     state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    monkeypatch.setattr(
-        er, "_match_listing_by_id",
-        lambda conn, sid: {
-            "sreality_id": int(sid),
-            "spec": {
-                "lat": 50.05, "lng": 14.40, "area_m2": 43.0,
-                "disposition": "1+1", "floor": 2,
-            },
-            "listing_id": 777,
-            "price_czk": 3_898_000,
-            "category_type": "prodej",
-        },
+    asked = _patch_subject(
+        monkeypatch, listing_id=777, source="sreality", native="12345",
+        sreality_id=12345, price_czk=3_898_000, category_type="prodej",
+        spec={"lat": 50.05, "lng": 14.40, "area_m2": 43.0, "disposition": "1+1", "floor": 2},
     )
 
     res = client.post("/estimations", json={"sreality_id": 12345})
@@ -1807,32 +1255,46 @@ def test_post_with_sreality_id_resolves_listing_row(client, monkeypatch):
     body = res.json()
     assert body["status"] == "success"
     assert body["input_sreality_id"] == 12345
-    assert body["input_url"] is None
+    assert body["input_listing_id"] == 777
     assert body["input_spec"]["lat"] == 50.05
     assert body["estimate_kind"] == "rent"
     # rent estimate on a 'prodej' listing derives purchase price from the
     # asking price so gross_yield_pct can be computed.
     assert body["input_purchase_price_czk"] == 3_898_000
+    assert asked == [777]
     assert state.inserts[1]["input_sreality_id"] == 12345
 
 
-def test_post_with_unknown_sreality_id_persists_failed(client, monkeypatch):
-    _patch_persistence(monkeypatch)
+def test_post_with_unknown_ad_is_422_and_writes_nothing(client, monkeypatch):
+    state = _patch_persistence(monkeypatch)
     _patch_estimate(monkeypatch)
-    monkeypatch.setattr(er, "_match_listing_by_id", lambda conn, sid: None)
+    _patch_subject(monkeypatch, listing_id=777, sreality_id=12345)
 
     res = client.post("/estimations", json={"sreality_id": 999})
-    assert res.status_code == 200
-    body = res.json()
-    assert body["status"] == "failed"
-    assert "999" in (body["error_message"] or "")
+    assert res.status_code == 422
+    assert "999" in res.json()["detail"]
+    res = client.post("/estimations", json={"listing_id": 778})
+    assert res.status_code == 422
+    assert "778" in res.json()["detail"]
+    assert state.inserts == {}
 
 
-def test_post_with_sreality_id_and_url_returns_422(client):
-    res = client.post(
-        "/estimations",
-        json={"sreality_id": 1, "url": "https://www.sreality.cz/detail/x/1"},
-    )
+def test_post_with_unlocated_ad_is_422_before_any_gate(client, monkeypatch):
+    """The comparables search is spatial: an ad the resolver has not placed is refused
+    with the cause, before the metered gate counts it or a row is written."""
+    state = _patch_persistence(monkeypatch)
+    _patch_subject(monkeypatch, spec={"lat": None, "lng": None, "area_m2": 50.0})
+    monkeypatch.setattr(er, "_prepare_metered_submit", lambda *a, **k: pytest.fail(
+        "an unlocated subject must be refused before the gate"))
+
+    res = client.post("/estimations", json={"listing_id": 777})
+    assert res.status_code == 422
+    assert "needs a location" in res.json()["detail"]
+    assert state.inserts == {}
+
+
+def test_post_with_two_subject_handles_returns_422(client):
+    res = client.post("/estimations", json={"sreality_id": 1, "listing_id": 2})
     assert res.status_code == 422
 
 
@@ -1865,25 +1327,18 @@ def test_latest_by_listing_route_parses_csv(client, monkeypatch):
 
 
 # ----------------------------------------------------------------------
-# latest_rent_estimations_by_listing — the Browse rent chip's data source.
-# Repointed (wave-5 tail) to prefer estimation_runs.input_listing_id (the
-# surrogate stamped by #914) over input_sreality_id, which is NULL for a
-# post-Gate-2 non-sreality subject even when its input_listing_id correctly
-# resolves. The join-through-listings shape falls back to input_sreality_id
-# only for rows written before #914 stamped input_listing_id.
+# latest_rent_estimations_by_listing — the Browse rent chip's data source,
+# joined through listings on the surrogate input_listing_id only.
 # ----------------------------------------------------------------------
 
-def test_latest_rent_estimations_by_listing_query_prefers_listing_id():
+def test_latest_rent_estimations_by_listing_query_keys_on_listing_id():
     conn = _FakeConn(results=[[]])
     er.latest_rent_estimations_by_listing(
         conn, [12345], account_ids=[SYSTEM_ACCOUNT],
     )
     sql, params = conn.executions[0]
-    assert "er.input_listing_id = l.id" in sql
-    assert (
-        "er.input_listing_id IS NULL AND er.input_sreality_id = l.sreality_id"
-        in sql
-    )
+    assert "ON er.input_listing_id = l.id" in sql
+    assert "input_listing_id IS NULL" not in sql
     assert "FROM listings l" in sql
     assert "JOIN estimation_runs er" in sql
     assert params["ids"] == [12345]
@@ -1924,37 +1379,50 @@ def test_latest_rent_estimations_by_listing_empty_ids_skips_query():
     assert conn.executions == []
 
 
-def test_post_ungeocodable_url_rejected_before_spend(client, monkeypatch):
-    # W0 Mapy kill switch (R1): with geocoding disabled, a non-sreality URL
-    # that matches no scraped listing is rejected 422 BEFORE the metered gate
-    # and the LLM parse — the review-confirmed fix for "bills the quota, then
-    # dies in _build_target on float(None)".
-    monkeypatch.delenv("MAPY_GEOCODE_ENABLED", raising=False)
+def test_one_ad_has_one_idempotency_key_whichever_handle_names_it(monkeypatch):
+    """listing_id and sreality_id bodies naming the same ad share the `ad:` key, so a
+    double submit through either handle can never charge twice."""
+    from api import schemas as s
 
-    def _boom(*a, **k):
-        raise AssertionError("parse_listing_url must not run for a doomed submit")
+    _patch_subject(monkeypatch, listing_id=777, source="sreality", native="12345",
+                   sreality_id=12345)
+    by_id = s.CreateEstimationIn(listing_id=777)
+    by_sid = s.CreateEstimationIn(sreality_id=12345)
+    k1 = er._idempotency_key(by_id, er._resolve_input(object(), by_id))
+    k2 = er._idempotency_key(by_sid, er._resolve_input(object(), by_sid))
+    assert k1 == k2 == "ad:sreality:12345"
 
-    import api.estimation_runs as er
-    monkeypatch.setattr(er.source_dispatcher, "parse_listing_url", _boom)
-    monkeypatch.setattr(er, "_match_listing_by_url", lambda conn, url: None)
-    resp = client.post("/estimations", json={"url": "https://www.bezrealitky.cz/x/123"})
-    assert resp.status_code == 422
-    assert "geocoding" in resp.json()["detail"].lower()
+    _patch_subject(monkeypatch, listing_id=901, source="bezrealitky", native="998877")
+    other = s.CreateEstimationIn(listing_id=901)
+    assert er._idempotency_key(other, er._resolve_input(object(), other)) == (
+        "ad:bezrealitky:998877")
+
+    spec = s.CreateEstimationIn(spec={"lat": 50.0, "lng": 14.0})
+    assert er._idempotency_key(spec, er._resolve_input(object(), spec)).startswith("spec:")
 
 
-def test_a_scraped_subject_resolves_alike_by_id_and_by_url():
-    """One builder for both scraped-row paths: the body's overrides over a COPY of the row's spec,
-    no parse fields, the row's price / category / listing id."""
-    from types import SimpleNamespace
+def test_resolve_input_overrides_a_copy_of_the_ads_spec(monkeypatch):
+    """The body's overrides land on a COPY of the matched spec; the ad's ids, price and
+    category ride along for the yield derivation and the persisted row."""
+    from api import schemas as s
 
-    matched = {
-        "sreality_id": None, "listing_id": 9, "spec": {"lat": 50.0, "area_m2": 40.0},
-        "price_czk": 3_000_000, "category_type": "prodej",
-    }
-    r = er._resolution_from_listing(matched, SimpleNamespace(spec_overrides={"area_m2": 41.0}), "https://x/1")
-    assert r.target_spec == {"lat": 50.0, "area_m2": 41.0} and matched["spec"]["area_m2"] == 40.0
-    assert (r.input_url, r.input_sreality_id, r.input_listing_id) == ("https://x/1", None, 9)
+    _patch_subject(monkeypatch, listing_id=9, price_czk=3_000_000, category_type="prodej")
+    r = er._resolve_input(object(), s.CreateEstimationIn(
+        listing_id=9, spec_overrides={"area_m2": 41.0}))
+    assert r.target_spec["area_m2"] == 41.0 and _SPEC["area_m2"] == 50.0
+    assert (r.input_listing_id, r.input_sreality_id) == (9, None)
+    assert (r.subject_source, r.subject_source_id_native) == ("idnes", "65f0c0ffee")
     assert (r.subject_listing_price_czk, r.subject_listing_category_type) == (3_000_000, "prodej")
-    assert (r.source_kind, r.parse_confidence, r.parse_warnings, r.subject_attributes) == (None, None, [], None)
-    plain = er._resolution_from_listing(matched, SimpleNamespace(spec_overrides=None), None)
-    assert plain.target_spec == matched["spec"] and plain.target_spec is not matched["spec"]
+
+
+def test_load_subject_condition_keys_on_the_listing_id():
+    conn = _FakeConn(results=[("po_rekonstrukci", 4, 3)])
+    out = er._load_subject_condition(conn, 777)
+    sql, params = conn.executions[0]
+    assert "WHERE id = %s" in sql and params == (777,)
+    assert out == {
+        "condition": "po_rekonstrukci",
+        "apartment_condition_level": 4,
+        "building_condition_level": 3,
+    }
+    assert er._load_subject_condition(_FakeConn(), None) is None

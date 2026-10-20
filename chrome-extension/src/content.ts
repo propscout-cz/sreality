@@ -12,7 +12,7 @@
  * worker (host_permissions + the portal's CORS don't apply there). */
 
 import styles from './styles.css?inline';
-import { detailRef, portalForHost, portalForUrl, type PortalRef } from '../../frontend/src/lib/portalIds';
+import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import {
   COLLECTION_SAVE_LABEL,
   bellIconSvg,
@@ -155,8 +155,8 @@ interface PanelState {
   /* Our scraped facts + its property's MF result for the subject listing. */
   listing: PortalListing | null;
   /* byt+prodej? Gates the estimation block; the MF block renders by the
-   * result's shape and the app link + facts show regardless. null = unknown
-   * (not in our DB and no URL category hint). */
+   * result's shape and the app link + facts show regardless. null = an ad we
+   * do not hold. */
   isSaleApt: boolean | null;
   /* Optional comparables estimation (full row) for the editable yield block. */
   run: EstimationRun | null;
@@ -1649,10 +1649,7 @@ function mountPanel(): {
    * flat); a rental flat shows its rent. No reason text is written here. */
   function renderMfBlock(body: HTMLElement, state: PanelState): void {
     const l = state.listing;
-    if (l == null || !l.found) {
-      renderNotInDb(body, state);
-      return;
-    }
+    if (l == null || !l.found) return;
     const shape = mfShape(l.mf_reference_rent);
     if (shape.kind === 'none') return;
     const mf = document.createElement('div');
@@ -1944,9 +1941,9 @@ function mountPanel(): {
 let state: PanelState;
 let render: (s: PanelState) => void;
 let panelShadow: ShadowRoot | null = null;
-/* The listing URL the panel currently represents — drives create_estimation.
- * On a detail page it's location.href; opened from an index card it's that
- * card's detail href (NOT the search page). */
+/* The listing URL the panel currently represents — what "Přidat do databáze"
+ * sends. On a detail page it's location.href; opened from an index card it's
+ * that card's detail href (NOT the search page). */
 let panelUrl = '';
 /* The same listing's portal ref, kept alongside panelUrl so an account change
  * can re-run openPanel() without the caller re-supplying it. */
@@ -2054,10 +2051,8 @@ function onEdit(
  * The panel's yield wants the MISSING half of the pair: a subject being sold
  * needs a rent, a subject already let needs a sale price. Land is never
  * estimated as a rent — a per-m² of parcel is a capital figure, and the server's
- * measure guard refuses to call an area-scaled capital per-m² a monthly rent.
- * A subject we don't have keeps the historical default. */
-function estimateKindFor(l: PortalListing | null): 'rent' | 'sale' {
-  if (l == null || !l.found) return 'rent';
+ * measure guard refuses to call an area-scaled capital per-m² a monthly rent. */
+function estimateKindFor(l: PortalListing): 'rent' | 'sale' {
   if (l.category_type === 'pronajem') return 'sale';
   if (l.category_main === 'pozemek') return 'sale';
   return 'rent';
@@ -2083,15 +2078,14 @@ function onReset(): void {
  * dropped, never the work. */
 async function onCreateRun(): Promise<void> {
   const epoch = renderEpoch;
-  setState((prev) => ({ ...prev, busy: true, errorMessage: null }));
   const subject = state.listing;
+  if (subject?.listing_id == null) return;
+  setState((prev) => ({ ...prev, busy: true, errorMessage: null }));
   const res = await call<EstimationRun>({
     type: 'create_estimation',
-    url: panelUrl,
+    listing_id: subject.listing_id,
     estimate_kind: estimateKindFor(subject),
-    // Only from a listing we actually have: a guess here would pin the whole
-    // comparable cohort to the wrong category.
-    category_main: subject?.found ? subject.category_main : null,
+    category_main: subject.category_main,
   });
   if (!res.ok) {
     // 429 = the monthly allowance is spent (the atomic quota gate). Refresh the
@@ -2141,8 +2135,7 @@ let ingestForbidden = false;
 
 async function onIngest(): Promise<void> {
   const epoch = renderEpoch;
-  const url = panelUrl;
-  const outcome = await runIngest(url, {
+  const outcome = await runIngest(panelUrl, {
     call: (message) => call<IngestState>(message),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     alive: () => epoch === renderEpoch,
@@ -2172,7 +2165,7 @@ async function onIngest(): Promise<void> {
     }));
     return;
   }
-  await showListing(epoch, url, res.data[0] ?? null);
+  await showListing(epoch, res.data[0] ?? null);
 }
 
 /* "Upgradovat" — no purchase flow yet (Wave 1); open the web app where plan
@@ -2977,35 +2970,32 @@ export async function openPanel(
   /* The lookup for a listing the operator has already navigated away from must
    * not land — this is the apply that would otherwise show A's yield under B. */
   if (epoch !== renderEpoch) return;
-  await showListing(epoch, url, listing);
+  await showListing(epoch, listing);
 }
 
 /* Paint one lookup row and start what a held ad needs. Shared by openPanel and
  * the add-to-database flow (onIngest), so an ad the panel just added gets
  * exactly the controls of any ad we hold. */
 async function showListing(
-  epoch: number, url: string, listing: PortalListing | null,
+  epoch: number, listing: PortalListing | null,
 ): Promise<void> {
-  const saleApt =
-    listing?.found
-      ? listing.category_main === 'byt' && listing.category_type === 'prodej'
-      : urlSaleApartmentHint(url);
-
-  /* Show the panel for ANY listing we have (app link + facts). A listing not in
-   * our DB whose URL clearly isn't a sale apartment has no MF and no estimate:
-   * only the offer to add it. */
-  const active = Boolean(listing?.found) || saleApt !== false;
+  /* The panel is for an ad we hold (app link, facts, MF, estimate); an ad we
+   * lack gets only the offer to add it — an estimation is always of a held ad. */
+  const held = listing?.found ? listing : null;
+  const saleApt = held != null
+    ? held.category_main === 'byt' && held.category_type === 'prodej'
+    : null;
   setStateIf(epoch, (prev) => ({
-    ...prev, phase: active ? 'active' : 'deactivated',
+    ...prev, phase: held != null ? 'active' : 'deactivated',
     listing, isSaleApt: saleApt, ingestStep: null, ingestMessage: null,
   }));
-  if (!active) return;
+  if (held == null) return;
 
   /* Agent estimates are metered — fetch the remaining allowance so the estimate
    * button can show "(zbývá X)" and flip to an upgrade prompt at zero. Only the
    * estimate block (sale apartments) uses it; non-blocking, and a failure just
    * leaves the counter hidden. */
-  if (saleApt !== false) void loadQuota();
+  if (saleApt) void loadQuota();
 
   /* For a property we have, load the stage list so the in-pipeline control can
    * offer stage changes, and the collection list so the save control can name
@@ -3014,7 +3004,7 @@ async function showListing(
    * an unchanged read redraws nothing): it decides what is saved and who a
    * shared note reaches, and a share or collection made in the app since the
    * tab loaded must not leave either wrong — the SPA re-reads after 30 s. */
-  if (listing?.found && listing.property_id != null) {
+  if (held.property_id != null) {
     void loadStages();
     void loadCollections(true);
     void loadTags();
@@ -3023,7 +3013,7 @@ async function showListing(
 
   /* Lazily load an existing estimation so the editable yield block appears
    * without blocking the MF headline (only the estimation section uses it). */
-  const est = saleApt !== false ? listing?.latest_estimation : null;
+  const est = saleApt ? held.latest_estimation : null;
   if (est != null) {
     const full = await call<EstimationRun>({
       type: 'get_estimation', run_id: est.estimation_id,
@@ -3031,17 +3021,6 @@ async function showListing(
     if (full.ok && full.data.status === 'success') {
       setStateIf(epoch, (prev) => seedFromRun(prev, full.data));
     }
-  }
-}
-
-/* URL-only sale-apartment hint for the not-in-our-DB case. */
-function urlSaleApartmentHint(url: string): boolean | null {
-  const portal = portalForUrl(url);
-  if (portal?.saleApartmentHint == null) return null;
-  try {
-    return portal.saleApartmentHint(new URL(url).pathname);
-  } catch {
-    return null;
   }
 }
 

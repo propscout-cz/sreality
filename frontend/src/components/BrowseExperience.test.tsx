@@ -14,6 +14,7 @@ import BrowseExperience, { type BrowseFeatures } from './BrowseExperience';
 import { NewPropertyProvider } from './NewPropertyProvider';
 import { useMemoryBrowseState } from '@/lib/browseState';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
+import * as api from '@/lib/api';
 import { fmtShortDate } from '@/lib/format';
 import * as queries from '@/lib/queries';
 import { DEFAULT_SORT, type CardRow, type SortSpec } from '@/lib/queries';
@@ -35,6 +36,8 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listCollections: vi.fn(() => new Promise<never>(() => {})),
   listTags: vi.fn(() => new Promise<never>(() => {})),
+  createEstimation: vi.fn(),
+  latestEstimationsByListing: vi.fn(async () => ({})),
 }));
 vi.mock('@/lib/pgRead', () => ({ pgRead: vi.fn(() => new Promise<never>(() => {})) }));
 /* The Stats tab's board has its own tests (components/stats); here only the wiring. */
@@ -285,5 +288,24 @@ describe('<BrowseExperience> Nová nemovitost', () => {
     renderWith({ ...OFF, newProperty: false });
     expect(await screen.findByRole('button', { name: '+ Create watchdog' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Nová nemovitost' })).toBeNull();
+  });
+});
+
+/* A submit the API refuses (an ad it cannot place, docs/design/new-property-from-link.md
+ * §3.5) is a 422 with no run, so the card cannot learn of it from the runs read: the
+ * refusal itself has to stay on the card, or the click looks like it did nothing. */
+describe('<BrowseExperience> the on-card estimate', () => {
+  it("keeps a refused submit on the card, titled with the API's sentence", async () => {
+    const said = 'sreality ad 900 needs a location before it can be estimated';
+    vi.mocked(api.createEstimation).mockRejectedValue(new api.ApiError(said, 422, { detail: said }));
+    renderBrowse([]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Odhad' }));
+
+    const refused = await screen.findByRole('button', { name: 'Odhad ↻' });
+    expect(refused).toHaveAttribute('title', said);
+    expect(api.createEstimation).toHaveBeenCalledWith(
+      expect.objectContaining({ sreality_id: 900 }),
+    );
   });
 });

@@ -287,7 +287,7 @@ function NoRunsCard({
           <p className="text-sm text-[var(--color-ink-3)]">
             No estimation runs for this property yet.
           </p>
-          {!readOnly && (
+          {!readOnly && prefill && (
           <button
             type="button"
             onClick={() => open(prefill)}

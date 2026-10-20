@@ -31,7 +31,7 @@ other half: turning what a portal WROTE into one of those values.
 value a live row carries is either a canonical member (`ve_vystavbe`, `projekt`,
 `udrzovany`, building_type `jina`, ownership `jine`, a 6+kk disposition — all real facts
 the filters had no slot for) or a spelling of one, collapsed here. So `CANON` is exactly
-what this module may emit, and the LLM tool schema generated from it offers exactly that.
+what this module may emit.
 """
 
 from __future__ import annotations

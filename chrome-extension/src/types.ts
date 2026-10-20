@@ -291,13 +291,11 @@ export type ApiMessage =
   | { type: 'ingest_listing'; url: string }
   | { type: 'ingest_state'; source: string; native_id: string }
   | { type: 'patch_scenario'; run_id: number; body: YieldScenarioUpdate }
-  /* `estimate_kind` + `category_main` are OPTIONAL and additive: an older
-   * content bundle that sends neither still lands on the server's historical
-   * defaults (rent, byt). Sending them is what stops the panel firing an
-   * apartment monthly per-m² comparable table at a house or a plot. */
+  /* Sending `estimate_kind` + `category_main` is what stops the panel firing
+   * an apartment monthly per-m² comparable table at a house or a plot. */
   | {
       type: 'create_estimation';
-      url: string;
+      listing_id: number;
       estimate_kind?: 'rent' | 'sale';
       category_main?: string | null;
     }

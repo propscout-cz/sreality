@@ -132,6 +132,8 @@ interface Props {
    * only. estimates is undefined until the lookup resolves. */
   estimates: Record<number, ListingEstimate> | undefined;
   estimatingIds: ReadonlySet<number>;
+  /* The API's refusal sentence per sreality_id, for a submit that made no run. */
+  estimateRefusals?: Readonly<Record<number, string>>;
   onEstimate: (srealityId: number) => void;
 }
 
@@ -162,6 +164,7 @@ export default function ListingCards({
   onToggleSelect,
   estimates,
   estimatingIds,
+  estimateRefusals,
   onEstimate,
 }: Props) {
   const showSkeleton = isLoading && rows == null;
@@ -241,6 +244,7 @@ export default function ListingCards({
                        estimated, so it reads no state and shows no affordance. */
                     estimate={r.sreality_id != null ? estimates?.[r.sreality_id] : undefined}
                     estimating={r.sreality_id != null && estimatingIds.has(r.sreality_id)}
+                    refusal={r.sreality_id != null ? estimateRefusals?.[r.sreality_id] : undefined}
                     onEstimate={onEstimate}
                     orderPortal={orderPortal}
                   />
@@ -333,6 +337,7 @@ function Card({
   onToggleSelect,
   estimate,
   estimating,
+  refusal,
   onEstimate,
   orderPortal,
 }: {
@@ -351,6 +356,7 @@ function Card({
   onToggleSelect: (propertyId: number) => void;
   estimate: ListingEstimate | undefined;
   estimating: boolean;
+  refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
   orderPortal: string | null;
 }) {
@@ -634,8 +640,10 @@ function Card({
           <div className="card-action mt-1 flex justify-end">
             <EstimateCorner
               srealityId={r.sreality_id}
+              ad={r}
               estimate={estimate}
               estimating={estimating}
+              refusal={refusal}
               onEstimate={onEstimate}
             />
           </div>
@@ -687,13 +695,18 @@ function formatTitle(r: CardRow): string {
 
 function EstimateCorner({
   srealityId,
+  ad,
   estimate,
   estimating,
+  refusal,
   onEstimate,
 }: {
   srealityId: number;
+  /* The card's canonical ad — the run's subject, whose page the run lives on. */
+  ad: Pick<CardRow, 'source' | 'source_id_native'>;
   estimate: ListingEstimate | undefined;
   estimating: boolean;
+  refusal: string | undefined;
   onEstimate: (srealityId: number) => void;
 }) {
   const running =
@@ -726,7 +739,11 @@ function EstimateCorner({
     if (label != null) {
       return (
         <Link
-          to={runSurfaceUrl({ id: estimate.run_id, input_sreality_id: estimate.sreality_id })}
+          to={runSurfaceUrl({
+            id: estimate.run_id,
+            subject_source: ad.source,
+            subject_source_id_native: ad.source_id_native,
+          })}
           title="Náš odhad nájmu — otevřít detail odhadu"
           className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-1.5 py-0.5 text-[0.62rem] font-medium tabular-nums text-[var(--color-copper)] hover:bg-[var(--color-copper)]/10 transition-colors"
         >
@@ -736,12 +753,14 @@ function EstimateCorner({
     }
   }
 
-  const failed = estimate?.status === 'failed';
+  const failed = refusal != null || estimate?.status === 'failed';
   return (
     <button
       type="button"
       onClick={() => onEstimate(srealityId)}
-      title={failed ? 'Odhad selhal — zkusit znovu' : 'Spustit odhad nájmu a výnosu'}
+      title={
+        refusal ?? (failed ? 'Odhad selhal — zkusit znovu' : 'Spustit odhad nájmu a výnosu')
+      }
       className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-rule)] px-1.5 py-0.5 text-[0.62rem] font-medium text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
     >
       {failed ? 'Odhad ↻' : 'Odhad'}

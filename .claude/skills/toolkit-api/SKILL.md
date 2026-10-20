@@ -112,7 +112,7 @@ it (`api/`). They do not apply to the scraper.
    `/listings/lookup` (**RLS-ONLY**: it takes no account argument and its SQL carries no account predicate — `current_account_ids()` must stay the ONE membership definition, the same one the SPA reads; a second, explicitly-bound one is what broke the extension 2026-07-23→09-11), `/brokers/*` and `/properties/{id}/valuo` (account resolved by hand: no tenant transaction across the paid call) use `verify_jwt`/`tenant_conn` for per-account
    identity without the admin claim (`GET /estimations{,/latest-by-listing}` take `account_scope`);
    most other routes are `require_token` (any signed-in caller, no identity — buildings,
-   estimation preview, the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
+   the phone's `GET /properties/{id}/location` + `/static-map.png`, the map-overlay registry + tiles `GET /map-overlays*`). `/brokers/*` moved off `require_token` on 2026-08-12 (D1/D2 of the
    broker E2E review): the leaderboard returned up to 2000 brokers' unmasked email +
    phone behind the bundle-extractable token. Every `/brokers/*` envelope now runs
    through `toolkit.brokers.apply_pii_policy`, which swaps any contact column for
@@ -263,8 +263,8 @@ Six auth primitives coexist — four in `api/dependencies.py` over ONE header re
 - `account_scope` — `_bearer` plus a READ SCOPE (the tenancy doctrine's FOURTH shape): the local-dev
   opt-out or a JWT with no resolvable account → `[SYSTEM]`, a verified JWT → `[that account, SYSTEM]` — mirroring
   `estimation_runs_tenant_read` (291), never a second tenancy definition. Used by `GET
-  /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings` +
-  `parsed_url_cache` (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
+  /estimations{,/latest-by-listing}`, deliberately SERVICE-ROLE: their LEFT JOIN onto `listings`
+  (RLS-on, zero policies) would silently NULL `locality_display` on a tenant conn.
   `account_ids` is a REQUIRED kwarg on those read helpers — omitting it is a `TypeError`, never a silent
   unscoped read.
 - `verify_jwt` — verifies a Supabase user JWT and returns its claims over ONE path: asymmetric JWKS
@@ -321,8 +321,8 @@ enforcement is inline in `create_estimation_run` (below).
 
 **Agent-estimation metering** (Wave 1, migration 355) is the first metered path. The paid
 `mode:'agent'` submit is gated **inside `api/estimation_runs.py:create_estimation_run`**, at the
-single choke point *before the URL parse* (`_prepare_metered_submit`) so a rejected submit spends
-zero LLM cost. Meter = **per successful agent run, monthly** (operator decision, not USD): free
+single choke point after the subject is resolved (an unknown or unlocated ad is a 422 before any gate)
+and before the INSERT (`_prepare_metered_submit`), so a rejected submit spends zero LLM cost. Meter = **per successful agent run, monthly** (operator decision, not USD): free
 plan `plans.agent_estimations_monthly_quota` = 3, `trial_*` = 10 (while
 `entitlements.status='trialing'` + unexpired: a signup's first 7 days). Only a real, non-admin tenant sending `mode:'agent'`
 is metered — admin/SYSTEM and all deterministic runs bypass, mirroring `require_entitlement`.
@@ -397,7 +397,7 @@ Image storage (Cloudflare R2, S3-compatible):
   any failure → a 5-min redirect to the master. SPA: `imageSrc(img, { w: 1080 })`.
 
 LLM + maps (FastAPI service + scoring jobs):
-- `ANTHROPIC_API_KEY` — required for the URL parser, summarize/vision tools, condition
+- `ANTHROPIC_API_KEY` — required for the estimation agent, summarize/vision tools, condition
   scoring, and the agent under `provider='anthropic'`.
 - `GEMINI_API_KEY` — Google AI Studio key; required for the agent under `provider='gemini'`.
   A request selecting an unconfigured provider returns 502; missing at boot is not fatal.
@@ -409,8 +409,8 @@ LLM + maps (FastAPI service + scoring jobs):
   an EPHEMERAL RunPod proxy root the autodedup judge lane exports per pass, re-read per call and never stored; the key defaults to `none` (vLLM serves unauthenticated).
 - `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
   storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
-  explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is the
-  on-demand URL parse and `scripts/seed_curated_cities.py`. Display-only Mapy use
+  explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
+  `scripts/seed_curated_cities.py`. Display-only Mapy use
   (`/maps/suggest`, tiles, the phone's static map) is NOT gated — the prohibition is on persistence, not display.
   Do not enable without an operator decision recorded against the Mapy remediation plan.
 - `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream) and the static map.

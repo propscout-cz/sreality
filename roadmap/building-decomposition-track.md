@@ -18,6 +18,19 @@ Reference business case: `model_Kralupska.xlsx` (operator-supplied,
 2026-05-12). Six blocks: Assumptions, Floor Schedule, Unit
 Schedule, Cost Stack (with VAT splits), Revenue & P&L, Returns.
 
+### Open: operator ruling on the flow's entry (filed 2026-10-20)
+
+The paste entry (`POST /buildings/from_url`) was retired with the URL
+parser (`docs/design/new-property-from-link.md` §3.5; `building_runs`
+held 0 rows). `POST /buildings` creates only a `pending` shell, and
+`confirm_units` / `re_extract` need `awaiting_input`, so no route
+leaves `pending` (the API's startup `sweep_stuck_buildings` fails a
+shell older than 10 min). The
+operator rules: give the flow a new entry (e.g. start from a property
+we hold, with the house ad's `listing_id` and its attachments), or
+retire the subsystem (`building_runs`, the extractor skill, the
+`/building/:id` page) by a forward migration.
+
 ### Phase B0: Schema + scaffolding (done)
 
 Pure plumbing. No agent changes, no UI changes beyond type stubs.
@@ -153,8 +166,9 @@ lands in B2; B1 stops at the human-in-the-loop gate.
 
 **API endpoints**
 
-- `POST /buildings/from_url` — operator-facing entry, replaces
-  B0's minimal `POST /buildings` shell:
+- `POST /buildings/from_url` — **retired 2026-10-20** with the URL parser it rode on (0 rows
+  ever; `docs/design/new-property-from-link.md` §3.5). As built, the operator-facing entry,
+  replacing B0's minimal `POST /buildings` shell:
   1. Routes the input URL through
      `scraper.source_dispatcher.parse_listing_url` (reused as-is —
      same cache, same per-source parsers, same audit trail in
@@ -253,11 +267,8 @@ lands in B2; B1 stops at the human-in-the-loop gate.
 - Building rollup totals — same.
 - The Excel-style business case tab — B3.
 - Async / polling lifecycle — Phase 7 slice 2.
-- Multi-portal (bezrealitky / idnes / remax) building paste — the
-  source_dispatcher already routes those URLs, but per-source
-  building parsers may need extra fields beyond what the apartment
-  flow exercises; defer until a real bezrealitky `dum` URL surfaces
-  in operator testing.
+- Multi-portal (bezrealitky / idnes / remax) building paste — moot:
+  `from_url` and the source_dispatcher were retired on 2026-10-20.
 
 ### Phase B2: Per-unit fan-out + building rollup view (done)
 

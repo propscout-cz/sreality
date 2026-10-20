@@ -291,37 +291,16 @@ numerals, Czech locale formatting).
   and `status='pending'/'running'` for U4 without forcing today's
   code to write twice.
 - `scraper.url_parser`: turns a sreality URL into a parsed spec by
-  reusing `scraper.parser`.
+  reusing `scraper.parser`. (Retired 2026-10-20,
+  `docs/design/new-property-from-link.md` §3.5.)
 - `/estimations` endpoints: POST creates a run (URL or spec), GET-by-id
   reads one, GET lists with filters and pagination.
 - Trace format v1: tool calls + computations recorded with
   `output_summary` only (full data in dedicated columns).
 
-### Phase estimation-4: Generic URL parser (done)
-- Migration 020: `parsed_url_cache`, `llm_calls`, `app_settings` +
-  `app_settings_history`, plus `source_kind` /
-  `parse_confidence` / `parse_confidence_per_field` / `source_html`
-  columns on `estimation_runs`.
-- `api.llm_client.LLMClient`: wraps the Anthropic SDK, audits every
-  call to `llm_calls`, computes USD cost from a per-model price
-  table, and emits a one-time daily-cost soft warning at
-  `LLM_DAILY_COST_WARN_USD` (default $5).
-- `scraper.geocoding.geocode`: Mapy.cz forward geocoding with
-  type-based confidence (regional.address → high; street → medium;
-  city centroid → low) and a CLI verification helper.
-- `scraper.source_dispatcher`: classifies a URL by domain and routes
-  to either the deterministic sreality flow or the LLM-driven
-  per-source parsers (bezrealitky, idnes_reality, remax,
-  best-effort generic). Cache lookup on canonicalised URL hash with
-  7-day TTL.
-- `POST /estimations/preview`: parse any allowlisted URL through the
-  LLM-driven dispatcher and return spec + provenance without
-  persisting a run. Coexists with the U2-frontend's existing
-  `GET /estimations/preview` (sreality-only, read-only); the POST
-  version is the path forward for non-sreality sources.
-- `POST /estimations`: now routes through the dispatcher and
-  populates the four new audit columns; parse failures persist a
-  `failed` row with the error message.
+### Phase estimation-4: Generic URL parser (retired)
+- Retired 2026-10-20 — `docs/design/new-property-from-link.md`: a pasted link becomes an ad
+  through `POST /listings/ingest`, and an estimation is always of an ad we hold.
 
 ### Phase U2: Estimation flow (done)
 End-to-end browser flow over the U1b backend.
@@ -363,14 +342,9 @@ End-to-end browser flow over the U1b backend.
   with a per-disposition `ppm2_box` field; existing fields preserved
   for backwards compatibility.
 
-### Phase estimation-5: URL-parser frontend (done)
-- `ConfidenceIndicator` component + per-field confidence surface on
-  the review step.
-- `previewListingUrl` + `useUrlPreview` React hook: drives the
-  paste-URL step against `POST /estimations/preview`.
-- Listing-block render on the URL step; `force_refresh` to bypass
-  the 7-day cache; `cost_usd_total` rolled up from `llm_calls`.
-- Commits `e9da41f`, `65b9967`, `d66da7e`. PR #29.
+### Phase estimation-5: URL-parser frontend (retired)
+- Retired 2026-10-20 — `docs/design/new-property-from-link.md`: a pasted link becomes an ad
+  through `POST /listings/ingest`, and an estimation is always of an ad we hold.
 
 ### Phase U-BV: Browse velocity, card badges, filter overhaul (done)
 - Migration 052 promotes "turned in" (TOM = days on market) to a

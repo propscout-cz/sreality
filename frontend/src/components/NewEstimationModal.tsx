@@ -1,77 +1,45 @@
-/* Compact popup for kicking off a new estimation OR a new building decomposition.
+/* Compact popup that starts an estimation of ONE ad we hold.
  *
- * Both POST endpoints return a 'pending' row immediately and run the
- * heavy work as a FastAPI BackgroundTask — the modal closes and
- * navigates to the detail page in ~1 s. The detail page polls until
- * status reaches a terminal value.
+ * Opened from the property page (its header button, its estimations section),
+ * always with the canonical ad's `listing_id`: an estimation is always of an
+ * ad we hold, so there is no URL field — a pasted link becomes an ad first
+ * through "Nová nemovitost" (docs/design/new-property-from-link.md §3.5).
  *
- * Apartment kind (default):
- *   Paste a listing URL → POST /estimations/preview to extract spec →
- *   POST /estimations to enqueue the run → navigate to the run's surface
- *   (runSurfaceUrl: the listing page's estimations section when the
- *   subject is in our DB, /estimation/:id only for orphan-URL runs).
+ * POST /estimations returns a 'pending' row immediately and runs the heavy
+ * work as a FastAPI BackgroundTask — the modal closes and navigates to the
+ * run's surface (runSurfaceUrl: the ad's page, estimations section) in ~1 s,
+ * where the section polls until the status is terminal.
  *
- * Building kind (Phase B1):
- *   Paste a `dum` / `komercni` URL → POST /buildings/from_url enqueues
- *   extraction → navigate to /building/:id where the operator reviews
- *   the unit proposal once extraction lands. When the operator
- *   uploaded attachments in the modal we additionally wait for the
- *   first extraction pass to finish ('awaiting_input') and then
- *   re-extract so the attachments are folded in.
- *
- * Estimate kind (rent vs sale) for the apartment path is operator-
- * chosen via a segmented control, defaulted to rent. The toggle always
- * wins — pasting a `prodej` URL while the toggle is on Rent still
- * submits a rent estimate. Provider and lifecycle fall back to the
- * same defaults the form used to ship with (Claude + active).
+ * The estimate kind (rent vs sale) and the property type are operator-chosen,
+ * seeded from the ad; the toggle always wins. Provider and lifecycle fall back
+ * to the same defaults the form used to ship with (Claude + active).
  */
 
 import { createContext, useCallback, useContext, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ROUTES } from '@/lib/routes';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import Spinner from '@/components/Spinner';
 import { useCloseOnNavigation } from '@/lib/useCloseOnNavigation';
-import {
-  ApiError,
-  createBuildingFromUrl,
-  getBuilding,
-  previewListingUrl,
-  reExtractBuilding,
-  uploadBuildingAttachment,
-} from '@/lib/api';
+import type { ApiError } from '@/lib/api';
 import { estimationKeys, submitEstimation } from '@/lib/queries';
 import { runSurfaceUrl } from '@/lib/runLinks';
-import type {
-  BuildingRun,
-  CreateEstimationIn,
-  EstimationRun,
-  ParseResult,
-} from '@/lib/types';
-
-const ATTACHMENT_MIME = ['image/png', 'image/jpeg', 'image/webp'];
-const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-const ATTACHMENT_MAX_FILES = 20;
+import type { CreateEstimationIn, EstimationRun } from '@/lib/types';
 
 /* -------------------------------------------------------------------------- */
-/* Context — wires the CTA button (Shell) and the "+ New estimation"          */
-/* affordances on EstimationList / empty states to the same modal instance.   */
+/* Context — wires the property page's "New estimation" affordances to the    */
+/* one modal instance mounted in Shell.                                       */
 /* -------------------------------------------------------------------------- */
 
-/* Optional pre-fill when the modal is opened from a specific listing (e.g. the
- * Listing Detail page). A `url` locks the subject to that listing and hides the
- * URL field — the operator only picks the estimate type and hits Estimate. */
+/* The subject: the ad to estimate (listings.id) and the selectors' seeds. */
 export interface NewEstimationPrefill {
-  url?: string;
+  listingId: number;
   categoryMain?: CategoryMain;
   estimateKind?: EstimateKind;
 }
 
 interface ModalCtx {
-  open: (prefill?: NewEstimationPrefill) => void;
-  close: () => void;
-  isOpen: boolean;
+  open: (prefill: NewEstimationPrefill) => void;
 }
 
 const ctx = createContext<ModalCtx | null>(null);
@@ -85,30 +53,19 @@ export function useNewEstimationModal(): ModalCtx {
 }
 
 export function NewEstimationProvider({ children }: { children: ReactNode }) {
-  const [isOpen, setOpen] = useState(false);
   const [prefill, setPrefill] = useState<NewEstimationPrefill | null>(null);
   /* This provider mounts above <Outlet> in Shell, so without this a navigation
    * started from inside the modal — a submit that navigates to the run's
    * surface, or anything a future body renders — would change the page BEHIND
    * the open modal and leave the body scroll lock on. See
    * lib/useCloseOnNavigation.ts. */
-  useCloseOnNavigation(() => setOpen(false));
-  const value = useMemo<ModalCtx>(
-    () => ({
-      open: (p?: NewEstimationPrefill) => {
-        setPrefill(p ?? null);
-        setOpen(true);
-      },
-      close: () => setOpen(false),
-      isOpen,
-    }),
-    [isOpen],
-  );
+  useCloseOnNavigation(() => setPrefill(null));
+  const value = useMemo<ModalCtx>(() => ({ open: setPrefill }), []);
   return (
     <ctx.Provider value={value}>
       {children}
-      {isOpen && (
-        <NewEstimationModal onClose={() => setOpen(false)} prefill={prefill} />
+      {prefill && (
+        <NewEstimationModal onClose={() => setPrefill(null)} prefill={prefill} />
       )}
     </ctx.Provider>
   );
@@ -118,7 +75,6 @@ export function NewEstimationProvider({ children }: { children: ReactNode }) {
 /* Modal                                                                      */
 /* -------------------------------------------------------------------------- */
 
-type Kind = 'apartment' | 'building';
 type EstimateKind = 'rent' | 'sale';
 type CategoryMain = 'byt' | 'dum' | 'komercni';
 
@@ -140,42 +96,26 @@ function NewEstimationModal({
   prefill,
 }: {
   onClose: () => void;
-  prefill?: NewEstimationPrefill | null;
+  prefill: NewEstimationPrefill;
 }) {
-  // A prefilled url binds the subject to that listing (Listing Detail → New
-  // estimation): the URL field is hidden and only the type selectors + Estimate
-  // remain.
-  const urlLocked = Boolean(prefill?.url);
-  const [kind, setKind] = useState<Kind>('apartment');
   const [estimateKind, setEstimateKind] = useState<EstimateKind>(
-    prefill?.estimateKind ?? 'rent',
+    prefill.estimateKind ?? 'rent',
   );
   const [categoryMain, setCategoryMain] = useState<CategoryMain>(
-    prefill?.categoryMain ?? 'byt',
+    prefill.categoryMain ?? 'byt',
   );
-  const [url, setUrl] = useState(prefill?.url ?? '');
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [contextualText, setContextualText] = useState('');
-  const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [uploadStage, setUploadStage] = useState<
-    { done: number; total: number } | null
-  >(null);
   const titleId = useId();
-  const urlId = useId();
-  const urlInputRef = useRef<HTMLInputElement>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const previewMut = useMutation<ParseResult, ApiError, string>({
-    mutationFn: (url) => previewListingUrl(url),
-  });
-  const submitMut = useMutation<EstimationRun, ApiError, ParseResult>({
-    mutationFn: (preview) =>
+  const submitMut = useMutation<EstimationRun, ApiError, void>({
+    mutationFn: () =>
       submitEstimation(
         buildEstimationPayload(
-          preview, estimateKind, categoryMain,
+          prefill.listingId, estimateKind, categoryMain,
           specialInstructions, contextualText,
         ),
       ),
@@ -187,152 +127,48 @@ function NewEstimationModal({
       navigate(runSurfaceUrl(run));
     },
   });
-  const buildingMut = useMutation<BuildingRun, ApiError, string>({
-    mutationFn: async (url) => {
-      const run = await createBuildingFromUrl({
-        source: 'ui',
-        url,
-        special_instructions: specialInstructions.trim() || null,
-        contextual_text: contextualText.trim() || null,
-      });
-      if (attachmentFiles.length > 0) {
-        setUploadStage({ done: 0, total: attachmentFiles.length });
-        for (let i = 0; i < attachmentFiles.length; i++) {
-          await uploadBuildingAttachment(run.id, attachmentFiles[i]);
-          setUploadStage({ done: i + 1, total: attachmentFiles.length });
-        }
-        // The first extraction is running in a backend BackgroundTask;
-        // re_extract requires status='awaiting_input'. Poll until it
-        // lands, then force a fresh pass that folds in the attachments.
-        await waitForStatus(run.id, 'awaiting_input');
-        await reExtractBuilding(run.id);
-      }
-      return run;
-    },
-    onSuccess: (run) => {
-      onClose();
-      navigate(ROUTES.buildingDetail.build({ id: run.id }));
-    },
-  });
 
-  const pending =
-    previewMut.isPending || submitMut.isPending || buildingMut.isPending;
-  const error =
-    previewMut.error || submitMut.error || buildingMut.error;
+  const pending = submitMut.isPending;
 
   const submit = useCallback(() => {
-    const trimmed = url.trim();
-    if (!trimmed || pending) return;
-    if (kind === 'building') {
-      buildingMut.mutate(trimmed);
-      return;
-    }
-    previewMut.mutate(trimmed, {
-      onSuccess: (preview) => submitMut.mutate(preview),
-    });
-  }, [url, kind, pending, previewMut, submitMut, buildingMut]);
-
-  const onAttachmentsPicked = useCallback(
-    (picked: FileList | null) => {
-      if (!picked || picked.length === 0) return;
-      setAttachmentError(null);
-      const next = [...attachmentFiles];
-      for (const f of Array.from(picked)) {
-        if (!ATTACHMENT_MIME.includes(f.type)) {
-          setAttachmentError(
-            `"${f.name}" is ${f.type || 'an unknown type'}. ` +
-            'Allowed: PNG, JPEG, WebP.',
-          );
-          continue;
-        }
-        if (f.size > ATTACHMENT_MAX_BYTES) {
-          setAttachmentError(
-            `"${f.name}" is ${(f.size / 1024 / 1024).toFixed(1)} MB. ` +
-            'Max is 25 MB per file.',
-          );
-          continue;
-        }
-        if (next.length >= ATTACHMENT_MAX_FILES) {
-          setAttachmentError(
-            `Cap is ${ATTACHMENT_MAX_FILES} files per building.`,
-          );
-          break;
-        }
-        if (next.some((x) => x.name === f.name && x.size === f.size)) {
-          continue;
-        }
-        next.push(f);
-      }
-      setAttachmentFiles(next);
-    },
-    [attachmentFiles],
-  );
-
-  const removeAttachment = useCallback((idx: number) => {
-    setAttachmentFiles((files) => files.filter((_, i) => i !== idx));
-  }, []);
+    if (pending) return;
+    submitMut.mutate();
+  }, [pending, submitMut]);
 
   /* Escape, the focus trap, focus restore, the backdrop click and the body
-   * scroll lock all come from <Dialog> (lib/useDialog.ts) — the hand-rolled
-   * window listener that used to live here is gone. What does NOT come from
-   * the primitive is the in-flight guard: a submit is already running against
-   * the API, so every dismissal gesture (Escape, backdrop, the close glyph)
-   * stays inert until it settles, exactly as before. useDialog reads onClose
-   * through a ref, so this changing identity re-registers nothing. */
+   * scroll lock all come from <Dialog> (lib/useDialog.ts). What does NOT come
+   * from the primitive is the in-flight guard: a submit is already running
+   * against the API, so every dismissal gesture (Escape, backdrop, the close
+   * glyph) stays inert until it settles. useDialog reads onClose through a
+   * ref, so this changing identity re-registers nothing. */
   const requestClose = useCallback(() => {
     if (pending) return;
     onClose();
   }, [onClose, pending]);
 
-  const title =
-    kind === 'building' ? 'Which building?' : 'Where is the listing?';
-  const dealSeg = categoryTypeFor(estimateKind);
-  const placeholder =
-    kind === 'building'
-      ? 'https://www.sreality.cz/detail/prodej/dum/…'
-      : `https://www.sreality.cz/detail/${dealSeg}/${categoryMain}/…`;
   const categoryWord = CATEGORY_LABELS[categoryMain].toLowerCase();
   const dealWord = estimateKind === 'rent' ? 'rent' : 'sale';
-  const helpCopy =
-    kind === 'building'
-      ? 'We read the listing and start extracting units. Once the run opens you can navigate away — extraction continues in the background.'
-      : `We scrape the ${categoryWord} listing and kick off the ${dealWord} estimate. Once the run opens you can navigate away — it finishes in the background.`;
-  const submitLabel = pending
-    ? previewMut.isPending
-      ? 'Scraping…'
-      : buildingMut.isPending
-        ? uploadStage && uploadStage.done < uploadStage.total
-          ? `Uploading ${uploadStage.done}/${uploadStage.total}…`
-          : uploadStage
-            ? 'Folding in attachments…'
-            : 'Opening…'
-        : 'Opening…'
-    : kind === 'building'
-      ? 'Decompose'
-      : 'Estimate';
 
   return (
     <Dialog
       open
       onClose={requestClose}
       labelledBy={titleId}
-      /* Opened to type the URL. On the prefilled path (Listing Detail → New
-       * estimation) that field is not rendered and the primary action is the
-       * one thing left to do. */
-      initialFocus={urlLocked ? submitRef : urlInputRef}
+      /* The subject is fixed, so the primary action is the one thing to do. */
+      initialFocus={submitRef}
       className="w-full max-w-xl"
     >
       <header className="flex items-baseline justify-between gap-4 px-6 pt-5 pb-3">
         <div>
           <p className="text-[0.65rem] tracking-[0.22em] uppercase text-[var(--color-ink-3)]">
-            New {kind === 'building' ? 'building' : 'estimation'}
+            New estimation
           </p>
           <h2
             id={titleId}
             className="mt-1 text-[1.35rem] leading-tight"
             style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
           >
-            {title}
+            Estimate this property
           </h2>
         </div>
         {/* The one close glyph (components/Dialog.tsx), DISABLED — not merely
@@ -343,77 +179,41 @@ function NewEstimationModal({
       </header>
 
       <div className="px-6 pb-6">
-        <KindToggle kind={kind} setKind={setKind} disabled={pending} />
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-2">
+          <CategoryMainToggle
+            categoryMain={categoryMain}
+            setCategoryMain={setCategoryMain}
+            disabled={pending}
+          />
+          <EstimateKindToggle
+            estimateKind={estimateKind}
+            setEstimateKind={setEstimateKind}
+            disabled={pending}
+          />
+        </div>
 
-        {kind === 'apartment' && (
-          <div className="flex flex-wrap items-start gap-x-8 gap-y-2">
-            <CategoryMainToggle
-              categoryMain={categoryMain}
-              setCategoryMain={setCategoryMain}
-              disabled={pending}
-            />
-            <EstimateKindToggle
-              estimateKind={estimateKind}
-              setEstimateKind={setEstimateKind}
-              disabled={pending}
-            />
-          </div>
-        )}
-
-        {!urlLocked && (
-          <label
-            htmlFor={urlId}
-            className="mt-4 block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
-          >
-            Listing URL
-          </label>
-        )}
-        <div
-          className={[
-            'mt-2 flex items-stretch gap-2',
-            urlLocked ? 'mt-4 justify-end' : '',
-          ].join(' ')}
-        >
-          {!urlLocked && (
-            <input
-              id={urlId}
-              ref={urlInputRef}
-              type="url"
-              inputMode="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder={placeholder}
-              disabled={pending}
-              className="flex-1 min-w-0 px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
-            />
-          )}
+        <div className="mt-4 flex items-stretch justify-end gap-2">
           <button
             ref={submitRef}
             type="button"
             onClick={submit}
-            disabled={!url.trim() || pending}
+            disabled={pending}
             className={[
               'shrink-0 px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
-              !url.trim() || pending
+              pending
                 ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
                 : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
             {pending ? (
               <span className="inline-flex items-center gap-2">
-                <Spinner size={12} /><span>{submitLabel}</span>
+                <Spinner size={12} /><span>Opening…</span>
               </span>
-            ) : submitLabel}
+            ) : 'Estimate'}
           </button>
         </div>
 
-        {error && <ErrorBlock error={error} kind={kind} />}
+        {submitMut.error && <ErrorBlock error={submitMut.error} />}
 
         <OperatorInputs
           specialInstructions={specialInstructions}
@@ -421,15 +221,11 @@ function NewEstimationModal({
           contextualText={contextualText}
           setContextualText={setContextualText}
           disabled={pending}
-          allowAttachments={kind === 'building'}
-          attachments={attachmentFiles}
-          attachmentError={attachmentError}
-          onAttachmentsPicked={onAttachmentsPicked}
-          onRemoveAttachment={removeAttachment}
         />
 
         <p className="mt-4 text-[0.75rem] text-[var(--color-ink-3)] leading-relaxed">
-          {helpCopy}
+          We kick off the {dealWord} estimate of this {categoryWord}. Once the run
+          opens you can navigate away — it finishes in the background.
         </p>
       </div>
     </Dialog>
@@ -442,26 +238,15 @@ function OperatorInputs({
   contextualText,
   setContextualText,
   disabled,
-  allowAttachments,
-  attachments,
-  attachmentError,
-  onAttachmentsPicked,
-  onRemoveAttachment,
 }: {
   specialInstructions: string;
   setSpecialInstructions: (v: string) => void;
   contextualText: string;
   setContextualText: (v: string) => void;
   disabled: boolean;
-  allowAttachments: boolean;
-  attachments: File[];
-  attachmentError: string | null;
-  onAttachmentsPicked: (files: FileList | null) => void;
-  onRemoveAttachment: (idx: number) => void;
 }) {
   const instructionsId = useId();
   const contextId = useId();
-  const attachmentsId = useId();
   return (
     <details
       className="mt-4 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)]"
@@ -470,12 +255,11 @@ function OperatorInputs({
         className="cursor-pointer select-none px-3 py-2 text-[0.72rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
       >
         Operator context
-        {(specialInstructions || contextualText || attachments.length > 0) && (
+        {(specialInstructions || contextualText) && (
           <span className="ml-2 text-[var(--color-copper)] normal-case tracking-normal text-[0.7rem]">
             {[
               specialInstructions && 'instructions',
               contextualText && 'context',
-              attachments.length > 0 && `${attachments.length} file${attachments.length === 1 ? '' : 's'}`,
             ].filter(Boolean).join(' · ')}
           </span>
         )}
@@ -520,103 +304,14 @@ function OperatorInputs({
             className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
           />
         </div>
-        {allowAttachments && (
-          <div>
-            <label
-              htmlFor={attachmentsId}
-              className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]"
-            >
-              Attachments — floor plans, photos, drawings
-            </label>
-            <input
-              id={attachmentsId}
-              type="file"
-              multiple
-              accept={ATTACHMENT_MIME.join(',')}
-              disabled={disabled}
-              onChange={(e) => {
-                onAttachmentsPicked(e.target.files);
-                e.target.value = '';
-              }}
-              className="mt-1 block w-full text-[0.78rem] text-[var(--color-ink-2)] file:mr-2 file:rounded-[var(--radius-sm)] file:border file:border-[var(--color-rule)] file:bg-[var(--color-inset)] file:text-[var(--color-ink)] file:px-3 file:py-1.5 file:text-[0.78rem] file:cursor-pointer hover:file:bg-[var(--color-paper)] disabled:opacity-60"
-            />
-            {attachmentError && (
-              <p className="mt-1 text-[0.72rem] text-[var(--color-brick)]">
-                {attachmentError}
-              </p>
-            )}
-            {attachments.length > 0 && (
-              <ul className="mt-2 space-y-1 text-[0.78rem]">
-                {attachments.map((f, i) => (
-                  <li
-                    key={`${f.name}-${f.size}-${i}`}
-                    className="flex items-center justify-between gap-2 px-2 py-1 rounded-[var(--radius-sm)] bg-[var(--color-inset)]"
-                  >
-                    <span className="truncate" title={f.name}>
-                      {f.name}
-                      <span className="ml-2 text-[var(--color-ink-3)]">
-                        {(f.size / 1024).toFixed(0)} KB
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveAttachment(i)}
-                      disabled={disabled}
-                      className="text-[var(--color-ink-3)] hover:text-[var(--color-brick)] disabled:opacity-40"
-                      aria-label={`Remove ${f.name}`}
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="mt-1 text-[0.7rem] text-[var(--color-ink-3)]">
-              Up to {ATTACHMENT_MAX_FILES} files, 25 MB each. Uploaded after
-              the building row is created; the extractor re-runs so it can
-              read them.
-            </p>
-          </div>
-        )}
       </div>
     </details>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Kind toggle                                                                */
+/* Selectors                                                                  */
 /* -------------------------------------------------------------------------- */
-
-function KindToggle({
-  kind, setKind, disabled,
-}: {
-  kind: Kind;
-  setKind: (k: Kind) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="What are you pasting?"
-      className="flex items-stretch gap-0 rounded-[var(--radius-sm)] border border-[var(--color-rule)] overflow-hidden bg-[var(--color-inset)]"
-    >
-      <KindButton
-        active={kind === 'apartment'}
-        onClick={() => setKind('apartment')}
-        disabled={disabled}
-        label="Apartment"
-        sub="One flat → rent / sale estimate"
-      />
-      <KindButton
-        active={kind === 'building'}
-        onClick={() => setKind('building')}
-        disabled={disabled}
-        label="Building"
-        sub="Decompose → estimate per unit"
-      />
-    </div>
-  );
-}
 
 function CategoryMainToggle({
   categoryMain, setCategoryMain, disabled,
@@ -711,68 +406,12 @@ function EstimateKindButton({
   );
 }
 
-function KindButton({
-  active, onClick, disabled, label, sub,
-}: {
-  active: boolean;
-  onClick: () => void;
-  disabled: boolean;
-  label: string;
-  sub: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={active}
-      onClick={onClick}
-      disabled={disabled}
-      className={[
-        'flex-1 px-3 py-2 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
-        active
-          ? 'bg-[var(--color-paper)] text-[var(--color-ink)]'
-          : 'bg-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)]',
-      ].join(' ')}
-    >
-      <span className="block text-[0.8rem]" style={{ fontWeight: active ? 600 : 500 }}>
-        {label}
-      </span>
-      <span className="block text-[0.7rem] mt-0.5 text-[var(--color-ink-3)]">
-        {sub}
-      </span>
-    </button>
-  );
-}
-
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                    */
 /* -------------------------------------------------------------------------- */
 
-async function waitForStatus(
-  buildingId: number,
-  target: BuildingRun['status'],
-  {
-    intervalMs = 2000,
-    timeoutMs = 5 * 60 * 1000,
-  }: { intervalMs?: number; timeoutMs?: number } = {},
-): Promise<BuildingRun> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const row = await getBuilding(buildingId);
-    if (row.status === target) return row;
-    if (row.status === 'failed') {
-      throw new Error(row.error_message ?? 'building extraction failed');
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for status='${target}'`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-}
-
-
 function buildEstimationPayload(
-  preview: ParseResult,
+  listingId: number,
   estimateKind: EstimateKind,
   categoryMain: CategoryMain,
   specialInstructions: string,
@@ -789,36 +428,22 @@ function buildEstimationPayload(
     // cohort instead of silently falling back to byt / pronajem.
     category_main: categoryMain,
     category_type: categoryTypeFor(estimateKind),
-    url: preview.source_url,
+    listing_id: listingId,
     special_instructions: specialInstructions.trim() || null,
     contextual_text: contextualText.trim() || null,
   };
 }
 
-function ErrorBlock({ error, kind }: { error: ApiError; kind: Kind }) {
-  const headline = (() => {
-    if (error.status === 400) {
-      if (kind === 'building') {
-        return error.message || "That URL isn't a building listing.";
-      }
-      return "That URL doesn't look like a supported listing page.";
-    }
-    if (error.status === 502) {
-      return "Couldn't reach the listing source right now.";
-    }
-    if (error.status === 0) {
-      return 'Network error — check your connection or the API URL.';
-    }
-    return `Request failed (HTTP ${error.status}).`;
-  })();
+/* The API's own sentence (an ad with no location is refused: "needs a
+ * location"), else what failed. */
+function ErrorBlock({ error }: { error: ApiError }) {
+  const headline =
+    error.status === 0
+      ? 'Network error — check your connection or the API URL.'
+      : error.message || `Request failed (HTTP ${error.status}).`;
   return (
     <div className="mt-3 px-3 py-2 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-[var(--color-brick)] text-sm">
       <p className="font-medium">{headline}</p>
-      {error.message && error.message !== headline && (
-        <p className="mt-1 text-[0.78rem] text-[var(--color-brick)]/85">
-          {error.message}
-        </p>
-      )}
     </div>
   );
 }
