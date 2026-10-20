@@ -1,8 +1,9 @@
-/* Browse's filter set as LAYOUT DATA: bands → groups → blocks, in the order and
- * under the words the desktop sidebar draws them. Two surfaces render this one
+/* Browse's filter set as LAYOUT DATA: bands → rows → blocks, in the order and
+ * under the words the desktop sidebar draws them. One heading level: a band's
+ * title; a row has none, its filters' own labels name it. Two surfaces render this one
  * table — `FilterSidebar` (components/Filters.tsx) and the phone's Filtry sheet
  * (components/phone/FilterSheet.tsx) — so the phone shows the same filters,
- * grouped, ordered, labelled and optioned the same, and a filter placed here
+ * banded, ordered, labelled and optioned the same, and a filter placed here
  * lands on both. Nothing here decides what a filter MEANS: that is the registry
  * (filterRegistry.generated), the URL contract (filters.ts toSearchParams) and
  * the reads (queries.ts), rule 16.
@@ -40,7 +41,7 @@ export interface CustomBlock {
    * the phone row's label always. */
   label: string;
   caption?: boolean;
-  /* Spans every column of a grid group. */
+  /* Spans every column of a grid row. */
   span?: boolean;
   /* Not a filter: a note beside the filters. */
   note?: boolean;
@@ -48,10 +49,14 @@ export interface CustomBlock {
 
 export type FilterBlock = FormBlock | CustomBlock;
 
-export interface FilterGroup {
-  title: string;
-  layout?: 'grid';
-  /* Drawn only while the cohort gives the group a meaning. */
+export interface FilterRow {
+  /* 'stack' (default): one filter per line. 'grid': side by side, in `cols`
+   * equal columns, or as many ~11rem columns as the sidebar's width allows.
+   * 'line': the pill groups and on/off toggles of its form blocks as ONE strip
+   * of buttons on the desktop; the phone keeps a row per filter. */
+  layout?: 'grid' | 'line';
+  cols?: 2 | 3;
+  /* Drawn only while the cohort gives the row a meaning. */
   when?: (f: ListingFilters) => boolean;
   /* Drives the full-page map's spatial mode: the phone has no map. */
   mapOnly?: boolean;
@@ -65,7 +70,7 @@ export interface FilterBand {
    * deliberately absent: the viewport changes on every pan, so counting it
    * would pin the dot on. */
   keys: readonly (keyof ListingFilters)[];
-  groups: readonly FilterGroup[];
+  rows: readonly FilterRow[];
 }
 
 /* Subtype refines houses and commercial units; the options are the union over
@@ -94,104 +99,49 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     title: 'Essentials',
     defaultOpen: true,
     keys: [
-      'categoryMain', 'categoryType', 'status', 'tomObservedOnly',
-      'recentlyAddedDays', 'recentlyChangedDays',
-      'districts',
-      'dispositions', 'subtype',
-      'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax',
-      'usableAreaMin', 'usableAreaMax',
-      'conditionMatch', 'buildingMaterial',
-      'buildingConditionLevelMin', 'buildingConditionLevelMax',
-      'apartmentConditionLevelMin', 'apartmentConditionLevelMax',
+      'categoryType', 'status', 'tomObservedOnly', 'categoryMain', 'subtype', 'districts',
       'priceMin', 'priceMax', 'pricePerM2Min', 'pricePerM2Max',
-      'priceChangeCountMin', 'priceChangeWindowDays', 'totalPriceChangePct',
-      'mfGrossYieldPctMin', 'mfGrossYieldPctMax',
+      'recentlyAddedDays', 'recentlyChangedDays', 'ownership', 'includeNoPrice', 'dispositions',
+      'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax', 'usableAreaMin', 'usableAreaMax',
+      'conditionMatch', 'buildingMaterial', 'furnished',
+      'hasBalcony', 'hasLift', 'hasParking', 'terrace', 'cellar', 'garage', 'parkingLotsMin',
     ],
-    groups: [
-      { title: 'Category', blocks: [form({ category_main_in: 'Type', category_type: 'Listing for' })] },
+    rows: [
+      { blocks: [form({ category_type: 'Listing for' })] },
+      /* "Which ads count" on one line: the status buttons, then the toggle. */
+      {
+        layout: 'line',
+        blocks: [form({ status: 'Status' }), form({ tom_observed_only: 'Seen at birth' })],
+      },
+      { blocks: [form({ category_main_in: 'Type' })] },
       /* Directly under Type: it refines the chosen category. Cleared with the
        * last house / commercial category (applySidebarUpdates). */
       {
-        title: 'Subtype',
         when: (f) => subtypeMains(f.categoryMain).length > 0,
-        blocks: [{ kind: 'custom', key: 'subtype', label: 'Subtype' }],
+        blocks: [{ kind: 'custom', key: 'subtype', label: 'Subtype', caption: true }],
       },
-      /* Three form blocks, not one: a form draws its ids in REGISTRY order, which would
-       * put the toggle below both recency dropdowns. It reads as part of the status
-       * ("which ads count"), so it sits directly under the status buttons. */
+      { blocks: [{ kind: 'custom', key: 'districts', label: 'Location', caption: true }] },
+      { blocks: [form({ min_price_czk: 'Price' })] },
+      /* The Kč/m² bound's unit follows the cohort (rule 23): both surfaces
+       * pass `ppm2BoundUnit`, never the registry's static string. */
+      { blocks: [form({ min_price_per_m2: 'Price / m²' })] },
       {
-        title: 'Status',
-        blocks: [
-          form({ status: 'Status' }),
-          form({ tom_observed_only: 'Newly listed only' }),
-          form({
-            recently_added_days: 'Recently added',
-            recently_changed_days: 'Recently changed',
-          }),
-        ],
-      },
-      {
-        title: 'Location',
-        blocks: [
-          { kind: 'custom', key: 'districts', label: 'District', caption: true },
-        ],
-      },
-      { title: 'Disposition', blocks: [form({ dispositions: 'Disposition' })] },
-      {
-        title: 'Size',
         layout: 'grid',
+        cols: 2,
+        blocks: [form({ recently_added_days: 'Recently added', recently_changed_days: 'Recently changed' })],
+      },
+      { blocks: [form({ ownership: 'Ownership' })] },
+      { blocks: [{ kind: 'custom', key: 'include_no_price', label: 'Include listings without a price' }] },
+      { blocks: [form({ dispositions: 'Disposition' })] },
+      {
+        layout: 'grid',
+        cols: 3,
         blocks: [form({ min_area_m2: 'Area', min_estate_area: 'Lot area', min_usable_area: 'Usable area' })],
       },
+      { blocks: [form({ condition_match: 'Condition' })] },
+      { blocks: [form({ building_material: 'Building material' })] },
+      { blocks: [form({ furnished: 'Furnished' })] },
       {
-        title: 'Condition & material',
-        layout: 'grid',
-        blocks: [
-          form({
-            condition_match: 'Condition (Stav objektu)',
-            building_material: 'Building material',
-            building_condition_level_min: 'Building condition (1–5)',
-            apartment_condition_level_min: 'Apartment condition (1–5)',
-          }),
-        ],
-      },
-      {
-        title: 'Price',
-        layout: 'grid',
-        blocks: [
-          form({ min_price_czk: 'Price' }),
-          /* Directly below the Kč inputs it modifies, on a row of its own. */
-          { kind: 'custom', key: 'include_no_price', label: 'Include listings without a price', span: true },
-          /* The Kč/m² bound's unit follows the cohort (rule 23): both surfaces
-           * pass `ppm2BoundUnit`, never the registry's static string. */
-          form({
-            min_price_per_m2: 'Price / m²',
-            price_change_count_min: 'Price changed N+ times',
-            price_change_window_days: 'Price change window',
-            total_price_change_pct: 'Total price change % (− = drop)',
-          }),
-        ],
-      },
-      /* MF reference rent ÷ asking price: sale flats only, so Prodej only;
-       * cleared on leaving Prodej (applySidebarUpdates). */
-      {
-        title: 'Yield',
-        when: (f) => f.categoryType === 'prodej',
-        blocks: [form({ min_mf_gross_yield_pct: 'MF gross yield %' })],
-      },
-    ],
-  },
-  /* Listing-level features — per-advert portal attributes, so NOT "Property". */
-  {
-    title: 'Features',
-    keys: [
-      'furnished', 'ownership',
-      'hasBalcony', 'hasLift', 'hasParking', 'terrace', 'cellar', 'garage',
-      'parkingLotsMin',
-    ],
-    groups: [
-      { title: 'Unit', layout: 'grid', blocks: [form({ furnished: 'Furnished', ownership: 'Ownership' })] },
-      {
-        title: 'Amenities',
         layout: 'grid',
         blocks: [
           form({
@@ -201,31 +151,73 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
             terrace: 'Terrace',
             cellar: 'Cellar',
             garage: 'Garage',
-            min_parking_lots: 'Min parking spaces',
           }),
         ],
       },
+      { blocks: [form({ min_parking_lots: 'Min parking spaces' })] },
     ],
   },
   {
-    title: 'Curation & quality',
+    title: 'Curation',
     keys: [
-      'pipeline', 'tags', 'collections', 'withEstimates', 'showDismissed',
+      'showDismissed', 'pipeline', 'collections', 'tags',
+      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'withEstimates',
+    ],
+    rows: [
+      { blocks: [{ kind: 'custom', key: 'show_dismissed', label: 'Show dismissed' }] },
+      { blocks: [form({ pipeline: 'Pipeline' })] },
+      { blocks: [form({ collections: 'Collections' })] },
+      { blocks: [form({ tags: 'Tags' })] },
+      { blocks: [{ kind: 'custom', key: 'portals', label: 'Source portal', caption: true }] },
+      { blocks: [form({ with_estimates: 'With estimates' })] },
+    ],
+  },
+  {
+    title: 'Velocity & price activity',
+    keys: [
+      'priceChangeCountMin', 'priceChangeWindowDays', 'totalPriceChangePct',
+      'firstSeenMinDays', 'firstSeenMaxDays', 'lastSeenMinDays', 'lastSeenMaxDays',
+      'tomDaysMin', 'tomDaysMax',
+    ],
+    rows: [
+      {
+        layout: 'grid',
+        cols: 2,
+        blocks: [form({ price_change_count_min: 'Price changed N+ times', price_change_window_days: 'Within' })],
+      },
+      { blocks: [form({ total_price_change_pct: 'Total price change % (− = drop)' })] },
+      /* Two blocks, not one: a form draws its ids in REGISTRY order, which
+       * puts last seen before first seen. */
+      {
+        layout: 'grid',
+        cols: 2,
+        blocks: [form({ first_seen_min_days: 'First seen (days ago)' }), form({ last_seen_min_days: 'Last seen (days ago)' })],
+      },
+      { blocks: [form({ tom_days_min: 'Time on market (days)' })] },
+    ],
+  },
+  /* Rarely touched, parked at the bottom by design. */
+  {
+    title: 'Advanced',
+    keys: [
+      'mfGrossYieldPctMin', 'mfGrossYieldPctMax', 'locationMode', 'centerRadius',
       'cityIndexRules', 'minCityPopulation', 'maxCityPopulation',
       'nearPop5kmMin', 'nearPop15kmMin', 'nearJobs5kmMin', 'nearJobs15kmMin',
       'nearYouth5kmMin', 'nearYouth15kmMin', 'nearOverall5kmMin', 'nearOverall15kmMin',
       'priceGrowthRules',
     ],
-    groups: [
+    rows: [
+      /* MF reference rent ÷ asking price: sale flats only, so Prodej only;
+       * cleared on leaving Prodej (applySidebarUpdates). */
       {
-        title: 'Curation',
-        blocks: [
-          form({ tags: 'Tags', collections: 'Kolekce', pipeline: 'Pipeline', with_estimates: 'With estimates' }),
-          { kind: 'custom', key: 'show_dismissed', label: 'Show dismissed properties' },
-        ],
+        when: (f) => f.categoryType === 'prodej',
+        blocks: [form({ min_mf_gross_yield_pct: 'MF gross yield %' })],
       },
       {
-        title: 'City quality',
+        mapOnly: true,
+        blocks: [{ kind: 'custom', key: 'location_mode', label: 'Map filter' }],
+      },
+      {
         layout: 'grid',
         blocks: [
           form({
@@ -245,50 +237,9 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
       },
       /* The flexible legacy filter for the ~30 indexes the precomputed columns
        * above do not cover; matched inside the curated-city footprint. */
+      { blocks: [form({ city_index_rules: 'Advanced city-quality rules (any of ~30 indexes)' })] },
       {
-        title: 'Advanced city-quality rules',
-        blocks: [form({ city_index_rules: 'Curated city must satisfy all rules (any of ~30 indexes)' })],
-      },
-      {
-        title: 'Market growth (datasets)',
-        blocks: [
-          { kind: 'custom', key: 'market_growth', label: 'Market growth (datasets)' },
-        ],
-      },
-    ],
-  },
-  /* Rarely touched, parked at the bottom by design. */
-  {
-    title: 'Other',
-    keys: [
-      'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'locationMode', 'centerRadius',
-      'firstSeenMinDays', 'firstSeenMaxDays',
-      'lastSeenMinDays', 'lastSeenMaxDays', 'tomDaysMin', 'tomDaysMax',
-    ],
-    groups: [
-      {
-        title: 'Source portal',
-        blocks: [
-          { kind: 'custom', key: 'portals', label: 'Source portal' },
-        ],
-      },
-      {
-        title: 'Map filter',
-        mapOnly: true,
-        blocks: [
-          { kind: 'custom', key: 'location_mode', label: 'Mode' },
-        ],
-      },
-      {
-        title: 'Velocity',
-        layout: 'grid',
-        blocks: [
-          form({
-            first_seen_min_days: 'First seen (days ago)',
-            last_seen_min_days: 'Last seen (days ago)',
-            tom_days_min: 'Time on market (days)',
-          }),
-        ],
+        blocks: [{ kind: 'custom', key: 'market_growth', label: 'Market growth datasets', caption: true }],
       },
     ],
   },

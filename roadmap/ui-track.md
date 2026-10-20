@@ -15,6 +15,19 @@ toolkit work.
   the phone sheet. The canon itself (`CONDITION_OPTIONS`: stored values, Stats keys, the scraper's
   vocabulary) never gains the sentinel; only the filter's chips do (`CONDITION_FILTER_OPTIONS`).
 
+### Browse filter layout (2026-10-20, no migration)
+- **Shipped: the sidebar the operator arranged** (drag-and-drop draft, 2026-10-20). Four bands —
+  Essentials, Curation, Velocity & price activity, Advanced — with one heading level (the group
+  captions are gone on desktop and phone; `lib/filterLayout` rows), bigger band titles, and the
+  header (Reset, fold arrow) pinned while the filters scroll. Status and "Seen at birth" (was
+  "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
+  defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
+  own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+- **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
+  model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
+  entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
+  rule 14).
+
 ### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
 - **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and
   boards shared with me (per device, `lib/acting`), a shared board renders inside `<ActingAs>` (read:

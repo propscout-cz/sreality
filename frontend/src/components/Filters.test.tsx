@@ -72,7 +72,7 @@ describe('<FilterSidebar> location pick', () => {
       name: 'Na Rybníčkách', label: 'Ulice', type: 'regional.street',
       position: { lon: 15.77, lat: 50.03 },
     }]);
-    await user.type(screen.getByRole('textbox', { name: 'District' }), 'Na Ryb');
+    await user.type(screen.getByRole('textbox', { name: 'Location' }), 'Na Ryb');
     await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
 
     /* While the pick resolves, narrow the cohort to 2+kk. */

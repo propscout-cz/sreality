@@ -4,7 +4,7 @@
  * chip's "filters beyond the scope"), so both read one list. */
 
 import { formRows, type FormRow } from '@/components/FilterForm';
-import { BROWSE_FILTER_BANDS, type CustomBlock, type CustomBlockKey, type FilterGroup } from '@/lib/filterLayout';
+import { BROWSE_FILTER_BANDS, type CustomBlock, type CustomBlockKey, type FilterRow } from '@/lib/filterLayout';
 import { DEFAULT_FILTERS, REGISTRY_KEY_MAP, type ListingFilters } from '@/lib/filters';
 
 interface RowBase {
@@ -22,8 +22,8 @@ export type SheetRow =
   | (RowBase & { kind: 'form'; row: FormRow })
   | (RowBase & { kind: 'custom'; block: CustomBlock });
 
+/* One sidebar row's filters: a row each on the phone, no caption of its own. */
 export interface SheetGroup {
-  title: string;
   rows: SheetRow[];
   notes: CustomBlock[];
 }
@@ -51,7 +51,7 @@ const CUSTOM_REACH: Record<CustomBlockKey, { ids: string[]; fields: Array<keyof 
   location_mode: { ids: ['location'], fields: ['locationMode', 'centerRadius'] },
 };
 
-function groupOf(g: FilterGroup): SheetGroup {
+function groupOf(g: FilterRow): SheetGroup {
   const rows: SheetRow[] = [];
   const notes: CustomBlock[] = [];
   for (const b of g.blocks) {
@@ -75,23 +75,23 @@ function groupOf(g: FilterGroup): SheetGroup {
       });
     }
   }
-  return { title: g.title, rows, notes };
+  return { rows, notes };
 }
 
-/* What the sheet draws for these filters: the sidebar's bands and groups,
+/* What the sheet draws for these filters: the sidebar's bands and rows,
  * without the map-only one (no map on the phone), the cohort-conditional
- * groups (Subtype, Yield) exactly when the sidebar shows them. */
+ * rows (Subtype, Yield) exactly when the sidebar shows them. */
 export function sheetBands(f: ListingFilters): SheetBand[] {
   return BROWSE_FILTER_BANDS.map((band) => ({
     title: band.title,
-    groups: band.groups.filter((g) => !g.mapOnly && (!g.when || g.when(f))).map(groupOf),
+    groups: band.rows.filter((g) => !g.mapOnly && (!g.when || g.when(f))).map(groupOf),
   }));
 }
 
 /* Every row any cohort can show, the map-only one included: a desktop link may
  * carry a centre + radius, and it narrows the roll all the same. */
 const ALL_ROWS: SheetRow[] = BROWSE_FILTER_BANDS.flatMap((band) =>
-  band.groups.flatMap((g) => groupOf(g).rows),
+  band.rows.flatMap((g) => groupOf(g).rows),
 );
 
 const canon = (v: unknown): string =>
