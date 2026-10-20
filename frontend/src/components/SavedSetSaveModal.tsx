@@ -1,61 +1,43 @@
 /* Name + colour dialog for saving / updating / editing a saved set (a Browse
- * filter preset, a Stats dashboard — components/SavedSetBar).
- *
- * One small modal serves all flows (the bar owns which one is open and what to
- * do on submit); the words are the instance's. The colour swatches reuse the
- * shared tag palette (TAG_COLORS) so saved sets and tags speak one colour
- * vocabulary. A save or an update may offer ONE checkbox (`extra`): presets ask
- * whether the current map area is part of the preset, dashboards whether the
- * Browse filter is saved with the charts; the metadata-only edit flow never
- * offers it (the stored blob is untouched). Modelled on CreateWatchdogModal for
- * visual consistency. */
+ * filter preset, a Stats dashboard — components/SavedSetBar), in the instance's
+ * words. The swatches are the shared tag palette (TAG_COLORS), so saved sets and
+ * tags speak one colour vocabulary. A save or an update may offer ONE checkbox
+ * (`extra`): presets ask whether the current map area is part of the preset,
+ * dashboards whether the Browse filter is saved with the charts; the
+ * metadata-only edit never offers it (the stored blob is untouched). */
 
 import { useEffect, useId, useRef, useState } from 'react';
 
+import { ApiError } from '@/lib/api';
 import { type TagColor } from '@/lib/types';
 import Dialog from '@/components/Dialog';
 import TagColorPicker from '@/components/TagColorPicker';
 
-/* The instance's words for the dialog chrome. */
-export interface SaveModalWords {
-  /* The small-caps eyebrow above the title ("Filter preset", "Dashboard"). */
-  kind: string;
-  nameLabel: string;
-  namePlaceholder: string;
-  color: string;
-  cancel: string;
-  saving: string;
-}
+/* The instance's words for the dialog: `kind` is the small-caps eyebrow above
+ * the title ("Filter preset", "Dashboard"); `dialog` / `submit` per flow. */
+export type SaveModalWords = Record<'kind' | 'nameLabel' | 'namePlaceholder' | 'color' | 'cancel' | 'saving' | 'failed', string> &
+  Record<'dialog' | 'submit', Record<'save' | 'update' | 'edit', string>>;
+
+const CAPTION = 'text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]';
 
 export interface SavedSetSaveModalProps {
   words: SaveModalWords;
-  title: string;
-  initialName: string;
-  initialColor: TagColor | null;
-  submitLabel: string;
-  /* The one checkbox this save offers, with its starting state; null = none. */
+  mode: keyof SaveModalWords['dialog'];
+  /* The set being updated or edited; null on a save. */
+  initial: { name: string; color: TagColor | null } | null;
+  /* The one checkbox this flow offers, with its starting state; null = none. */
   extra: { label: string; initial: boolean } | null;
-  busy: boolean;
-  error: string | null;
-  onSubmit: (name: string, extra: boolean, color: TagColor | null) => void;
+  /* The write: the dialog stays open and busy until it settles, and says why it failed. */
+  onSubmit: (name: string, extra: boolean, color: TagColor | null) => Promise<unknown>;
   onClose: () => void;
 }
 
-export default function SavedSetSaveModal({
-  words,
-  title,
-  initialName,
-  initialColor,
-  submitLabel,
-  extra,
-  busy,
-  error,
-  onSubmit,
-  onClose,
-}: SavedSetSaveModalProps) {
-  const [name, setName] = useState(initialName);
+export default function SavedSetSaveModal({ words, mode, initial, extra, onSubmit, onClose }: SavedSetSaveModalProps) {
+  const [name, setName] = useState(initial?.name ?? '');
   const [checked, setChecked] = useState(extra?.initial ?? false);
-  const [color, setColor] = useState<TagColor | null>(initialColor);
+  const [color, setColor] = useState<TagColor | null>(initial?.color ?? null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
 
@@ -67,37 +49,37 @@ export default function SavedSetSaveModal({
   }, []);
 
   const trimmed = name.trim();
-  const submit = () => {
+  const submit = async () => {
     if (trimmed.length === 0 || busy) return;
-    onSubmit(trimmed, extra != null && checked, color);
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(trimmed, extra != null && checked, color);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : words.failed);
+    } finally {
+      setBusy(false);
+    }
   };
 
   /* Escape, the focus trap, initial + restored focus, the backdrop click and
    * the body scroll lock all come from <Dialog> (lib/useDialog.ts). */
   return (
     <Dialog open onClose={onClose} labelledBy={titleId} initialFocus={inputRef} className="w-full max-w-md p-5">
-      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-        {words.kind}
-      </p>
-      <h2
-        id={titleId}
-        className="mt-1 text-xl leading-tight"
-        style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
-      >
-        {title}
+      <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">{words.kind}</p>
+      <h2 id={titleId} className="mt-1 text-xl leading-tight" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>
+        {words.dialog[mode]}
       </h2>
 
       <label className="mt-4 block">
-        <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-          {words.nameLabel}
-        </span>
+        <span className={CAPTION}>{words.nameLabel}</span>
         <input
           ref={inputRef}
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') submit();
+            if (e.key === 'Enter') void submit();
           }}
           placeholder={words.namePlaceholder}
           className="mt-1 w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink)] focus-visible:border-[var(--color-copper)]"
@@ -105,17 +87,9 @@ export default function SavedSetSaveModal({
       </label>
 
       <div className="mt-4">
-        <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
-          {words.color}
-        </span>
+        <span className={CAPTION}>{words.color}</span>
         <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          <TagColorPicker
-            value={color}
-            onChange={setColor}
-            showNull
-            size="md"
-            ringOffsetVar="var(--color-paper)"
-          />
+          <TagColorPicker value={color} onChange={setColor} showNull size="md" ringOffsetVar="var(--color-paper)" />
         </div>
       </div>
 
@@ -137,15 +111,11 @@ export default function SavedSetSaveModal({
           >
             ✓
           </span>
-          <span className="text-[0.8rem] text-[var(--color-ink-2)]">
-            {extra.label}
-          </span>
+          <span className="text-[0.8rem] text-[var(--color-ink-2)]">{extra.label}</span>
         </button>
       ) : null}
 
-      {error ? (
-        <p className="mt-3 text-[0.8rem] text-[var(--color-brick)]">{error}</p>
-      ) : null}
+      {error ? <p className="mt-3 text-[0.8rem] text-[var(--color-brick)]">{error}</p> : null}
 
       <div className="mt-5 flex items-center justify-end gap-2">
         <button
@@ -157,11 +127,11 @@ export default function SavedSetSaveModal({
         </button>
         <button
           type="button"
-          onClick={submit}
+          onClick={() => void submit()}
           disabled={trimmed.length === 0 || busy}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors disabled:opacity-50"
         >
-          {busy ? words.saving : submitLabel}
+          {busy ? words.saving : words.submit[mode]}
         </button>
       </div>
     </Dialog>

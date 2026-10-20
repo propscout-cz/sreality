@@ -161,12 +161,13 @@ planned PUT, unticked it clears the filter (`filter_spec: null`), ticked on a fi
 the copy becomes active only when the shared one was. (5) Own chips come first in their order, shared ones after
 them (not interleaved by the owner's positions). (6) The bar is Browse-page only: the modals' `presetBar: false`
 gates both saved-set bars, so the memory adapter's three dashboard members are no-ops. (7) The generic bar takes
-`onReorder` with the own items in their new order (each adapter patches its cache with rows), `isOwn` (drags,
-renames, deletes, updates) for the planned `reorderable`, `extra` as a prop (the preset's box exists only while a
-map area is applied) and `suffix`; Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's
-Delete… / Confirm delete were. (8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it;
-only the board read left it. The fold of the preset bar (757 lines) into the bar, its dialog and the preset
-instance came to 956, not ~600: a generic bar carries its words as data, a shared chip and instance menu entries.
+`onReorder` with the own items in their new order, `isOwn` (drags, renames, deletes, updates) for the planned
+`reorderable`, `extra` as a prop (the preset's box exists only while a map area is applied) and `suffix`; one hook
+beside it, `useSavedSet`, reads an instance's list and persists a drag (own rows first, shared after) for both.
+Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's Delete… / Confirm delete were.
+(8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it; only the board read left it. The
+fold of the preset bar (757 lines) into the bar, its dialog and the preset instance came to 687 (956 as first cut),
+not ~600: a generic bar carries its words as data, a shared chip and instance menu entries.
 
 ## Subtraction ledger (production lines, tests and docs excluded)
 

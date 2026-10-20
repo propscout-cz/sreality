@@ -68,8 +68,8 @@ toolkit work.
   a bar atop the Stats tab — load copies one into the working board (and its filter, when it was saved with
   one), "Uložit změny" / "Uložit jako dashboard", read-only sharing by email (Načíst, Uložit jako vlastní,
   Přestat sledovat), a share notification opens it. The filter-preset bar folded into the same `SavedSetBar`
-  (presets unchanged). Line ledger (SPA production): +1,406 / −673 — the preset bar and its dialog (757) became
-  the generic bar, its dialog and the preset instance (956); the dashboard instance is 372.
+  (presets unchanged). Line ledger (SPA production): net +349 (+733 as first cut) — the preset bar and its dialog
+  (757) became the generic bar, its dialog and the preset instance (687); the dashboard instance is 257.
 - **Next:** (1) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
   the operator rules; (2) optionally `reparse --source bazos --fields disposition --missing --write
   --allow-snapshot-deferral` (dry run first), which may fill a NULL disposition the page states grammatically;

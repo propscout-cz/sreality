@@ -37,13 +37,9 @@ function Host({
       {open ? (
         <SavedSetSaveModal
           words={PRESET_COPY}
-          title="Update preset"
-          initialName="2+kk Praha pod 6M"
-          initialColor={null}
-          submitLabel="Update preset"
+          mode="update"
+          initial={{ name: '2+kk Praha pod 6M', color: null }}
           extra={extra}
-          busy={false}
-          error={null}
           onSubmit={onSubmit}
           onClose={() => setOpen(false)}
         />

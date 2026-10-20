@@ -1,7 +1,8 @@
 /* THE saved-set bar (docs/design/saved-dashboards.md): named chips an account
  * owns, loads, updates, reorders and shares. Its two instances — Browse's filter
- * presets (FilterPresetBar) and the Stats dashboards (stats/DashboardBar) — bring
- * the reads, the writes and the words; the bar decides nothing about a set's blob.
+ * presets (FilterPresetBar) and the Stats dashboards (stats/DashboardBar) — read
+ * their list and persist a drag through `useSavedSet`, and bring the other writes
+ * and the words; the bar decides nothing about a set's blob.
  *
  * A chip click loads (`onLoad`); the active chip, once `dirty`, carries a dot and
  * the copper update button appears. Own chips drag by a grip (dnd-kit, keyboard
@@ -9,69 +10,39 @@
  * owner (`suffix`), and never drags, renames, deletes or updates. */
 
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
+  DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent,
 } from '@dnd-kit/core';
 import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
+  SortableContext, arrayMove, rectSortingStrategy, sortableKeyboardCoordinates, useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-import { ApiError } from '@/lib/api';
+import { isApiConfigured } from '@/lib/api';
 import type { TagColor } from '@/lib/types';
+import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import SavedSetSaveModal, { type SaveModalWords } from '@/components/SavedSetSaveModal';
 
-export interface SavedSetItem {
-  id: string;
-  name: string;
-  color: TagColor | null;
-}
+export type SavedSetItem = { id: string; name: string; color: TagColor | null };
 
 /* A chip menu entry. A `confirm` one is two-step (the first click arms it); a
- * promise keeps the menu open and busy, closing it on success. */
+ * promise keeps the menu open and busy, closing it on success. `danger` hovers brick. */
 export interface SavedSetMenuItem {
   label: string;
   onSelect: () => void | Promise<unknown>;
   confirm?: { label: string; busy: string };
-  /* Hovers brick: the entry removes something. */
   danger?: boolean;
 }
 
-export type SavedSetModalMode = 'save' | 'update' | 'edit';
-
-/* Every string the bar draws: the presets' English, the dashboards' Czech. */
-export interface SavedSetCopy extends SaveModalWords {
-  empty: string;
-  save: string;
-  saveHint: string;
-  update: string;
-  updateHint: string;
-  /* The dialog's title and submit label per flow. */
-  dialog: Record<SavedSetModalMode, string>;
-  submit: Record<SavedSetModalMode, string>;
-  edit: string;
-  delete: string;
-  confirmDelete: string;
-  deleting: string;
-  load: (name: string) => string;
-  reorder: (name: string) => string;
-  dragHint: string;
-  options: (name: string) => string;
-  optionsHint: string;
-  edited: string;
-  editedHint: string;
-  failed: string;
-}
+/* Every string the bar draws: the presets' English, the dashboards' Czech. `load`,
+ * `reorder` and `options` name a chip as "<word>: <name>"; the update button
+ * reads as the update dialog's submit. */
+export type SavedSetCopy = SaveModalWords &
+  Record<
+    'empty' | 'save' | 'saveHint' | 'updateHint' | 'edit' | 'load' | 'reorder' | 'dragHint' | 'options' | 'edited' | 'editedHint',
+    string
+  > & { delete: Required<Pick<SavedSetMenuItem, 'label' | 'confirm'>> };
 
 export interface SavedSetBarProps<T extends SavedSetItem> {
   items: readonly T[];
@@ -100,67 +71,66 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   leading?: ReactNode;
 }
 
-type ModalState<T> = { mode: 'save' } | { mode: 'update' | 'edit'; item: T };
+type SavedSetList<T> = { data: T[]; total: number };
+
+/* An instance's list (`{data, total}` under `key`) and its drag write: the chips
+ * move on the drop, the PUT's canonical list is adopted, a failure rolls back and
+ * re-reads. Shared items stay behind the own ones. `bar` spreads onto the bar. */
+export function useSavedSet<T extends SavedSetItem>(
+  key: QueryKey,
+  list: () => Promise<SavedSetList<T>>,
+  reorder: (ids: string[]) => Promise<SavedSetList<T>>,
+  isOwn: (item: T) => boolean = () => true,
+) {
+  const qc = useQueryClient();
+  const enabled = isApiConfigured();
+  const query = useQuery({ queryKey: key, queryFn: list, enabled });
+  const write = useOptimisticWrite<T[], SavedSetList<T>>({
+    mutationKey: ['write', ...key, 'reorder'],
+    mutationFn: (own) => reorder(own.map((i) => i.id)),
+    patch: (own) => [
+      cachePatch<SavedSetList<T>>({ queryKey: key, exact: true }, (prev) =>
+        prev && { ...prev, data: [...own, ...prev.data.filter((i) => !isOwn(i))] },
+      ),
+    ],
+    // The PUT answers with the canonical list, so only a failure needs a re-read.
+    revalidate: (_own, failed) => (failed ? [key] : []),
+    onSuccess: (res) => qc.setQueryData(key, res),
+  });
+  const items = query.data?.data ?? [];
+  return { enabled, query, bar: { items, loading: query.isLoading, isOwn, onReorder: write.mutate } };
+}
+
+type ModalState<T> = { mode: 'save'; item: null } | { mode: 'update' | 'edit'; item: T };
 
 export const chipBase =
   'inline-flex items-center rounded-[var(--radius-sm)] border text-[0.8rem] transition-colors';
 
-const everyItemIsOwn = () => true;
-
 export default function SavedSetBar<T extends SavedSetItem>({
-  items,
-  loading = false,
-  activeId,
-  dirty,
-  copy,
-  onLoad,
-  onSaveNew,
-  onUpdate,
-  onRename,
-  onDelete,
-  onReorder,
-  isOwn = everyItemIsOwn,
-  suffix,
-  chipMenu,
-  extra,
-  leading,
+  items, loading = false, activeId, dirty, copy, onLoad, onSaveNew, onUpdate, onRename, onDelete, onReorder,
+  isOwn = () => true, suffix, chipMenu, extra, leading,
 }: SavedSetBarProps<T>) {
   const barRef = useRef<HTMLDivElement>(null);
+  const dirtyId = useId();
+  const [modal, setModal] = useState<ModalState<T> | null>(null);
+  /* The open chip menu, and its armed two-step entry. */
+  const [menu, setMenu] = useState<{ id: string; armed?: number } | null>(null);
+  const [running, setRunning] = useState(false);
 
   const own = items.filter(isOwn);
   const shared = items.filter((i) => !isOwn(i));
-  const active = activeId != null ? items.find((i) => i.id === activeId) ?? null : null;
-
-  const [modal, setModal] = useState<ModalState<T> | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [menuId, setMenuId] = useState<string | null>(null);
-  /* The armed two-step entry, as `${chip id}:${entry index}`. */
-  const [armed, setArmed] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
-
-  const closeMenu = () => {
-    setMenuId(null);
-    setArmed(null);
-  };
+  const active = items.find((i) => i.id === activeId);
 
   /* Click-away closes the per-chip kebab menu. */
+  const menuOpen = menu != null;
   useEffect(() => {
-    if (menuId == null) return;
+    if (!menuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (barRef.current && !barRef.current.contains(e.target as Node)) {
-        setMenuId(null);
-        setArmed(null);
-      }
+      if (barRef.current && !barRef.current.contains(e.target as Node)) setMenu(null);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [menuId]);
-
-  const openModal = (next: ModalState<T>) => {
-    setSaveError(null);
-    setModal(next);
-  };
+  }, [menuOpen]);
 
   const sensors = useSensors(
     /* A small activation distance keeps a click on the grip from registering
@@ -169,61 +139,36 @@ export default function SavedSetBar<T extends SavedSetItem>({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active: dragged, over } = event;
-    if (!over || dragged.id === over.id) return;
-    const oldIndex = own.findIndex((i) => i.id === dragged.id);
-    const newIndex = own.findIndex((i) => i.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
-    onReorder(arrayMove(own, oldIndex, newIndex));
-  };
-
-  const handleSubmit = async (name: string, checked: boolean, color: TagColor | null) => {
-    if (modal == null) return;
-    setSaving(true);
-    setSaveError(null);
-    try {
-      if (modal.mode === 'save') await onSaveNew(name, checked, color);
-      else if (modal.mode === 'update') await onUpdate(modal.item, name, checked, color);
-      else await onRename(modal.item, name, color);
-      setModal(null);
-    } catch (e) {
-      setSaveError(e instanceof ApiError ? e.message : copy.failed);
-    } finally {
-      setSaving(false);
-    }
+  const onDragEnd = ({ active: dragged, over }: DragEndEvent) => {
+    const from = own.findIndex((i) => i.id === dragged.id);
+    const to = own.findIndex((i) => i.id === over?.id);
+    if (from >= 0 && to >= 0 && from !== to) onReorder(arrayMove(own, from, to));
   };
 
   const menuFor = (item: T): SavedSetMenuItem[] => {
     const added = chipMenu?.(item) ?? [];
     if (!isOwn(item)) return added;
     return [
-      { label: copy.edit, onSelect: () => openModal({ mode: 'edit', item }) },
+      { label: copy.edit, onSelect: () => setModal({ mode: 'edit', item }) },
       ...added,
-      {
-        label: copy.delete,
-        danger: true,
-        confirm: { label: copy.confirmDelete, busy: copy.deleting },
-        onSelect: () => onDelete(item),
-      },
+      { ...copy.delete, danger: true, onSelect: () => onDelete(item) },
     ];
   };
 
   const runEntry = async (item: T, index: number, entry: SavedSetMenuItem) => {
-    const key = `${item.id}:${index}`;
-    if (entry.confirm && armed !== key) {
-      setArmed(key);
+    if (entry.confirm && menu?.armed !== index) {
+      setMenu({ id: item.id, armed: index });
       return;
     }
     const out = entry.onSelect();
     if (!(out instanceof Promise)) {
-      closeMenu();
+      setMenu(null);
       return;
     }
     setRunning(true);
     try {
       await out;
-      closeMenu();
+      setMenu(null);
     } catch {
       /* The write's own toast says why; the entry stays armed for a retry. */
     } finally {
@@ -232,46 +177,129 @@ export default function SavedSetBar<T extends SavedSetItem>({
   };
 
   const reorderable = own.length > 1;
-  const chip = (item: T) => <Chip key={item.id} {...chipProps(item)} />;
-  const chipProps = (item: T) => ({
-    item,
-    draggable: reorderable && isOwn(item),
-    isActive: item.id === activeId,
-    dirty,
-    copy,
-    suffix: suffix?.(item) ?? null,
-    menuOpen: menuId === item.id,
-    menu: menuId === item.id ? menuFor(item) : [],
-    armed,
-    running,
-    onLoad,
-    onToggleMenu: (id: string) => {
-      setArmed(null);
-      setMenuId((cur) => (cur === id ? null : id));
-    },
-    onEntry: runEntry,
-  });
+  const chip = (item: T) => {
+    const draggable = reorderable && isOwn(item);
+    const marked = item.id === activeId && dirty;
+    const entries = menu?.id === item.id ? menuFor(item) : null;
+    const owner = suffix?.(item);
+    /* The accent is the chip's colour (shared tag palette) or copper when
+     * uncolored, as CSS vars so active/hover states reuse one source. */
+    const tone = item.color ? `--color-tag-${item.color}` : '--color-copper';
+    const accent = { '--chip-accent': `var(${tone})`, '--chip-accent-soft': `var(${tone}-soft)` } as CSSProperties;
+    return (
+      <Sortable key={item.id} id={item.id} disabled={!draggable}>
+        {({ attributes, listeners, setActivatorNodeRef, isDragging }) => (
+          <>
+            <div
+              style={accent}
+              className={[
+                chipBase,
+                isDragging ? 'shadow-md' : '',
+                item.id === activeId
+                  ? 'border-[var(--chip-accent)] bg-[var(--chip-accent-soft)] text-[var(--chip-accent)]'
+                  : item.color
+                    ? 'border-[var(--chip-accent)] text-[var(--chip-accent)] hover:bg-[var(--chip-accent-soft)]'
+                    : 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)]',
+              ].join(' ')}
+            >
+              {draggable ? (
+                <button
+                  type="button"
+                  ref={setActivatorNodeRef}
+                  {...attributes}
+                  {...listeners}
+                  className="flex items-center self-stretch px-1.5 cursor-grab touch-none text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] active:cursor-grabbing"
+                  aria-label={`${copy.reorder}: ${item.name}`}
+                  title={copy.dragHint}
+                >
+                  {GRIP}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onLoad(item)}
+                className={`${draggable ? 'pl-0.5' : 'pl-2.5'} pr-2.5 py-1 max-w-[16rem] truncate`}
+                aria-describedby={marked ? dirtyId : undefined}
+                title={`${copy.load}: ${item.name}`}
+              >
+                {item.name}
+                {owner ? (
+                  <>
+                    {' '}
+                    <span className="ml-0.5 text-[0.7rem] text-[var(--color-ink-3)]">{owner}</span>
+                  </>
+                ) : null}
+                {marked ? (
+                  <>
+                    <span className="ml-1 text-[var(--chip-accent)]" title={copy.editedHint} aria-hidden>
+                      •
+                    </span>
+                    <span id={dirtyId} hidden>
+                      {copy.edited}
+                    </span>
+                  </>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMenu((cur) => (cur?.id === item.id ? null : { id: item.id }))}
+                className="px-1.5 py-1 border-l border-[var(--color-rule)] opacity-60 hover:opacity-100"
+                aria-haspopup="menu"
+                aria-expanded={entries != null}
+                aria-label={`${copy.options}: ${item.name}`}
+                title={copy.options}
+              >
+                ⋯
+              </button>
+            </div>
+
+            {entries ? (
+              <div
+                role="menu"
+                className="absolute left-0 top-[calc(100%+4px)] z-30 min-w-[10rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
+              >
+                {entries.map((entry, i) => {
+                  const armed = menu?.armed === i ? entry.confirm : undefined;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => void runEntry(item, i, entry)}
+                      disabled={armed != null && running}
+                      className={`block w-full px-3 py-1.5 text-left text-[0.8rem] ${
+                        armed
+                          ? 'text-[var(--color-brick)] hover:bg-[var(--color-brick-soft)] disabled:opacity-50'
+                          : `text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] ${entry.danger ? 'hover:text-[var(--color-brick)]' : 'hover:text-[var(--color-ink)]'}`
+                      }`}
+                    >
+                      {armed ? (running ? armed.busy : armed.label) : entry.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </>
+        )}
+      </Sortable>
+    );
+  };
 
   return (
     <div ref={barRef} className="flex items-center gap-2 flex-wrap">
       {leading}
 
       {items.length === 0 && !loading ? (
-        <span className="text-[0.75rem] text-[var(--color-ink-4)]">
-          {copy.empty}
-        </span>
+        <span className="text-[0.75rem] text-[var(--color-ink-4)]">{copy.empty}</span>
       ) : null}
 
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragStart={closeMenu}
-        onDragEnd={handleDragEnd}
+        onDragStart={() => setMenu(null)}
+        onDragEnd={onDragEnd}
       >
-        <SortableContext
-          items={own.map((i) => i.id)}
-          strategy={rectSortingStrategy}
-        >
+        <SortableContext items={own.map((i) => i.id)} strategy={rectSortingStrategy}>
           {own.map(chip)}
           {shared.map(chip)}
         </SortableContext>
@@ -280,17 +308,17 @@ export default function SavedSetBar<T extends SavedSetItem>({
       {active && dirty && isOwn(active) ? (
         <button
           type="button"
-          onClick={() => openModal({ mode: 'update', item: active })}
+          onClick={() => setModal({ mode: 'update', item: active })}
           className="px-2.5 py-1 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
           title={copy.updateHint}
         >
-          {copy.update}
+          {copy.submit.update}
         </button>
       ) : null}
 
       <button
         type="button"
-        onClick={() => openModal({ mode: 'save' })}
+        onClick={() => setModal({ mode: 'save', item: null })}
         className="px-2.5 py-1 text-[0.8rem] rounded-[var(--radius-sm)] border border-dashed border-[var(--color-rule-strong)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-copper)] transition-colors"
         title={copy.saveHint}
       >
@@ -300,18 +328,17 @@ export default function SavedSetBar<T extends SavedSetItem>({
       {modal ? (
         <SavedSetSaveModal
           words={copy}
-          title={copy.dialog[modal.mode]}
-          initialName={modal.mode === 'save' ? '' : modal.item.name}
-          initialColor={modal.mode === 'save' ? null : modal.item.color}
-          submitLabel={copy.submit[modal.mode]}
-          extra={
-            extra && modal.mode !== 'edit'
-              ? { label: extra.label, initial: extra.initial(modal.mode === 'save' ? null : modal.item) }
-              : null
+          mode={modal.mode}
+          initial={modal.item}
+          extra={extra && modal.mode !== 'edit' ? { label: extra.label, initial: extra.initial(modal.item) } : null}
+          onSubmit={(name, checked, color) =>
+            (modal.mode === 'save'
+              ? onSaveNew(name, checked, color)
+              : modal.mode === 'update'
+                ? onUpdate(modal.item, name, checked, color)
+                : onRename(modal.item, name, color)
+            ).then(() => setModal(null))
           }
-          busy={saving}
-          error={saveError}
-          onSubmit={(name, checked, color) => void handleSubmit(name, checked, color)}
           onClose={() => setModal(null)}
         />
       ) : null}
@@ -319,187 +346,34 @@ export default function SavedSetBar<T extends SavedSetItem>({
   );
 }
 
-interface ChipProps<T extends SavedSetItem> {
-  item: T;
-  /* An own chip among several: it carries the grip and drags. */
-  draggable: boolean;
-  isActive: boolean;
-  dirty: boolean;
-  copy: SavedSetCopy;
-  suffix: string | null;
-  menuOpen: boolean;
-  menu: SavedSetMenuItem[];
-  armed: string | null;
-  running: boolean;
-  onLoad: (item: T) => void;
-  onToggleMenu: (id: string) => void;
-  onEntry: (item: T, index: number, entry: SavedSetMenuItem) => void;
-}
-
-/* Every chip is a sortable node; a shared one is not among the context's
- * items and is disabled, so it neither drags nor moves for a drag. */
-function Chip<T extends SavedSetItem>({
-  item,
-  draggable,
-  isActive,
-  dirty,
-  copy,
-  suffix,
-  menuOpen,
-  menu,
-  armed,
-  running,
-  onLoad,
-  onToggleMenu,
-  onEntry,
-}: ChipProps<T>) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    setActivatorNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: item.id, disabled: !draggable });
-  const dirtyId = useId();
-
-  /* The chip's accent comes from its colour (shared tag palette) or copper when
-   * uncolored — exposed as CSS vars so active/hover states reuse one source.
-   * Uncolored chips render copper when active, neutral when not. */
-  const accent = item.color ? `var(--color-tag-${item.color})` : 'var(--color-copper)';
-  const accentSoft = item.color
-    ? `var(--color-tag-${item.color}-soft)`
-    : 'var(--color-copper-soft)';
-
-  const style: CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 30 : undefined,
-    ['--chip-accent' as string]: accent,
-    ['--chip-accent-soft' as string]: accentSoft,
-  };
-
+/* One sortable node. A shared chip is disabled and not among the context's
+ * items, so it neither drags nor moves for a drag. */
+function Sortable({
+  id,
+  disabled,
+  children,
+}: {
+  id: string;
+  disabled: boolean;
+  children: (sortable: ReturnType<typeof useSortable>) => ReactNode;
+}) {
+  const sortable = useSortable({ id, disabled });
+  const { transform, transition, isDragging } = sortable;
   return (
     <div
-      ref={setNodeRef}
-      style={style}
+      ref={sortable.setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, zIndex: isDragging ? 30 : undefined }}
       className={`relative ${isDragging ? 'opacity-90' : ''}`}
     >
-      <div
-        className={[
-          chipBase,
-          isDragging ? 'shadow-md' : '',
-          isActive
-            ? 'border-[var(--chip-accent)] bg-[var(--chip-accent-soft)] text-[var(--chip-accent)]'
-            : item.color
-              ? 'border-[var(--chip-accent)] text-[var(--chip-accent)] hover:bg-[var(--chip-accent-soft)]'
-              : 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)]',
-        ].join(' ')}
-      >
-        {draggable ? (
-          <button
-            type="button"
-            ref={setActivatorNodeRef}
-            {...attributes}
-            {...listeners}
-            className="flex items-center self-stretch px-1.5 cursor-grab touch-none text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)] active:cursor-grabbing"
-            aria-label={copy.reorder(item.name)}
-            title={copy.dragHint}
-          >
-            <GripIcon />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => onLoad(item)}
-          className={`${draggable ? 'pl-0.5' : 'pl-2.5'} pr-2.5 py-1 max-w-[16rem] truncate`}
-          aria-describedby={isActive && dirty ? dirtyId : undefined}
-          title={copy.load(item.name)}
-        >
-          {item.name}
-          {suffix ? (
-            <>
-              {' '}
-              <span className="ml-0.5 text-[0.7rem] text-[var(--color-ink-3)]">{suffix}</span>
-            </>
-          ) : null}
-          {isActive && dirty ? (
-            <>
-              <span
-                className="ml-1 text-[var(--chip-accent)]"
-                title={copy.editedHint}
-                aria-hidden
-              >
-                •
-              </span>
-              <span id={dirtyId} hidden>
-                {copy.edited}
-              </span>
-            </>
-          ) : null}
-        </button>
-        <button
-          type="button"
-          onClick={() => onToggleMenu(item.id)}
-          className="px-1.5 py-1 border-l border-[var(--color-rule)] opacity-60 hover:opacity-100"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          aria-label={copy.options(item.name)}
-          title={copy.optionsHint}
-        >
-          ⋯
-        </button>
-      </div>
-
-      {menuOpen ? (
-        <div
-          role="menu"
-          className="absolute left-0 top-[calc(100%+4px)] z-30 min-w-[10rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
-        >
-          {menu.map((entry, i) =>
-            entry.confirm && armed === `${item.id}:${i}` ? (
-              <button
-                key={i}
-                type="button"
-                role="menuitem"
-                onClick={() => onEntry(item, i, entry)}
-                disabled={running}
-                className="block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-brick)] hover:bg-[var(--color-brick-soft)] disabled:opacity-50"
-              >
-                {running ? entry.confirm.busy : entry.confirm.label}
-              </button>
-            ) : (
-              <button
-                key={i}
-                type="button"
-                role="menuitem"
-                onClick={() => onEntry(item, i, entry)}
-                className={`block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] ${
-                  entry.danger ? 'hover:text-[var(--color-brick)]' : 'hover:text-[var(--color-ink)]'
-                }`}
-              >
-                {entry.label}
-              </button>
-            ),
-          )}
-        </div>
-      ) : null}
+      {children(sortable)}
     </div>
   );
 }
 
 /* Six-dot grip — the standard "drag me" affordance, dim at rest and
  * brightening on hover (mirrors the ResizeHandle idiom). */
-function GripIcon() {
-  return (
-    <svg width="9" height="14" viewBox="0 0 9 14" fill="currentColor" aria-hidden>
-      <circle cx="2" cy="3" r="1.1" />
-      <circle cx="7" cy="3" r="1.1" />
-      <circle cx="2" cy="7" r="1.1" />
-      <circle cx="7" cy="7" r="1.1" />
-      <circle cx="2" cy="11" r="1.1" />
-      <circle cx="7" cy="11" r="1.1" />
-    </svg>
-  );
-}
+const GRIP = (
+  <svg width="9" height="14" viewBox="0 0 9 14" fill="currentColor" aria-hidden>
+    {[3, 7, 11].flatMap((cy) => [2, 7].map((cx) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.1" />))}
+  </svg>
+);
