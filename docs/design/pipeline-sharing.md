@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **v1.2, 2026-10-20 — rulings 1–6 and 8–11 in (§8); ruling 7 (the share notification) pending.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
+Status: **APPROVED 2026-10-20 (v1.2, all rulings in, §8); W1–W2 run on this text; every merge waits for the autodedup session's window.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
@@ -351,7 +351,7 @@ word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 — next f
 | email enumeration on share | same stance as collections: accepted for a closed platform |
 | the top bar must stay 3.5 rem | the acting banner lives in the page, below the bar |
 
-## 8. Rulings (2026-10-20: 1, 2, 4, 9, 10, 11 as recommended; 3, 5, 6, 8 as ruled below; 7 pending)
+## 8. Rulings (2026-10-20: all eleven in — 1, 2, 4, 7, 9, 10, 11 as recommended; 3, 5, 6, 8 as ruled below)
 
 1. **Acting covers** **all eleven curation tables** (notes, collections + memberships, tags + memberships,
    note files, artifact link, dismissals, pipeline cards/stages read, pipeline events) / pipeline cards only.
@@ -365,8 +365,8 @@ word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 — next f
    ledger (§3.1), shown on notes, cards and stages.
 6. Phone — **RULED: the phone may move cards on edit boards** through the stage sheet (2026-10-20); no
    "Upravit jako" on the phone property page.
-7. **Notification on share** (pending the operator's decision): **in-app row, like collections** (one
-   `share` kind) / none.
+7. Notification on share — **RULED by default (operator: "proceed", 2026-10-20): one in-app row, like
+   collections** (one `share` kind).
 8. `account_members.role` — **RULED: keep** (2026-10-20); no column drop in this sprint.
 9. **Co-recipients:** **do not see each other** (each sees only their own grant); the board shows no
    "who else" / list them.
