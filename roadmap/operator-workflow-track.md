@@ -58,7 +58,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   driven by an `x-act-as` header the database validates; nothing else widens; every delegated edit is
   stamped in `delegated_edits`. Spec + rulings: `docs/design/pipeline-sharing.md`. Two waves.
 - **Built:** the spec in #1903; W1 (migration 641 + API + doctrine) in PR #1906; W2 (the SPA, §3.5) in
-  PR #TBD — the Pipeline tab's board switcher (desktop + phone), read boards without drag / stage menu /
+  PR #1908 — the Pipeline tab's board switcher (desktop + phone), read boards without drag / stage menu /
   trash / stage editor / tags, edit boards acting as the owner (the phone through the stage sheet), the
   one `ShareBlock` on the pipeline and collection pages, the viewer's two-step leave, a revoked board
   resetting with a toast, "Upravit jako {email}" + the in-page banner on the desktop property page

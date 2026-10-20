@@ -7,7 +7,7 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
-### Pipeline sharing surfaces (2026-10-20, migration 641; PR #TBD)
+### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
 - **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and
   boards shared with me (per device, `lib/acting`), a shared board renders inside `<ActingAs>` (read:
   board only; edit: drag, stages, trash as the owner; the phone moves cards through the stage sheet),
