@@ -1471,9 +1471,9 @@ class SqlWork:
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
         # E960: the groups a merge waits on, re-claimed WHOLE in `reconcile._rank`'s order
-        # (E972: flats for sale, flats for rent, the rest, oldest wait first within each), so
-        # their pairs are re-decided on facts read now and the group merges in this pass's
-        # reconcile — on the pass's first claim only.
+        # (E973: an active advert first; E972: flats for sale, flats for rent, the rest; the
+        # oldest wait first within each), so their pairs are re-decided on facts read now and
+        # the group merges in this pass's reconcile — on the pass's first claim only.
         self.attempt += 1
         if self.stale_claims or self.stale_waiting:
             retiring = {item.listing_id for item in items if item.retire}
@@ -2500,8 +2500,9 @@ def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: st
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
                   handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
                   engine_since: str, cap: int) -> tuple[list[int], int, int]:
-    """What this pass re-claims for the groups the reconcile handed on (E960), flats for sale,
-    flats for rent, then the rest (E972: `reconcile.CLAIM_ORDER`), chosen BEFORE the pass and
+    """What this pass re-claims for the groups the reconcile handed on (E960) in
+    `reconcile._rank`'s order — groups with an active advert first (E973), then flats for sale,
+    flats for rent, the rest (E972: `reconcile.CLAIM_ORDER`) — chosen BEFORE the pass and
     stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
     refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
     the head of the queue. None while no reconcile follows the pass (the build, a seed of
@@ -2537,7 +2538,7 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     if taken:
         _stale_budget(conn, generation, {"budget": budget, "inflight": len(taken)},
                       "redecide_ahead")
-    return taken, sum(1 for _at, stale, _class in ages.values() if stale), budget
+    return taken, sum(1 for row in ages.values() if row.stale), budget
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:

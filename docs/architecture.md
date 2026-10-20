@@ -1873,8 +1873,9 @@ renumber.** Navigate by area:
     claim as its row stored it (E960), so a merge is applied only when every advert it moves was
     refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
     engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
-    pass re-claims waiting groups whole — flats for sale, then flats for rent, then the rest,
-    oldest first within each (E972, the operator's Prague priority) — 200 adverts on top of
+    pass re-claims waiting groups whole — a group whose cluster holds an active advert first
+    (E973), then flats for sale, flats for rent, the rest (E972, the operator's Prague
+    priority), oldest first within each — 200 adverts on top of
     its feeds (E971: the worker's memory holds a pass to ~300 adverts), never more than the
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h,
     and none while the apply scope is closed or the reject ledger is inert. It

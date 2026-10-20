@@ -29,11 +29,12 @@ What it adds is WHICH groups and WHEN:
     more than `FRESH_DECISION_HOURS` ago, under another engine, or never (E960): a pass reads a
     neighbour as its row stored it, so a stored merge can rest on facts a sighting, a location
     correction or a reparse has since moved. Every group owed a merge and not merged this pass
-    (waiting, past the run cap, out of time) is handed on (`rt_redecide`) in `CLAIM_ORDER` —
-    flats for sale, flats for rent, the rest (E972) — oldest moved member first within each;
-    the next pass re-claims whole groups of it in that order, `STALE_FLOOR` adverts on top of
-    its feeds, and the reconcile re-plans every group handed on, so a group refreshed whole
-    merges at once.
+    (waiting, past the run cap, out of time) is handed on (`rt_redecide`) in `_rank`'s order —
+    a group whose cluster holds an active advert before one that holds none (E973), then flats
+    for sale, flats for rent, the rest (E972), the oldest moved member first within each; the
+    next pass re-claims whole groups of it in that order, `STALE_FLOOR` adverts on top of its
+    feeds, and the reconcile re-plans every group handed on, so a group refreshed whole merges
+    at once.
 
 The rollout control is unchanged until W6: `app_settings.autodedup_apply_scope` must admit the
 group, and the WHOLE row is re-read before every group (blocks, deal types) and handed to the
@@ -46,7 +47,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, NamedTuple, Sequence
 
 from autodedup import apply as A
 from autodedup import apply_sql as S
@@ -109,10 +110,24 @@ TRIED_BACKOFF_HOURS: float = 6.0
 # re-claimed flats for sale first, flats for rent second, the rest third, the oldest wait first
 # within each; a group goes in its best member's class, so a flat with its komerční twin goes as
 # the flat. An order only: the same groups are re-read, none is re-decided.
+# E973 ranks above that order (ruled 2026-10-20 by the autodedup session under the operator's
+# delegation): a group whose cluster holds an active advert, on any of its properties, goes
+# before every group that holds none. No feed refreshes an inactive advert, so all-inactive
+# groups held the oldest stamps and took ~60% of the budget while the count that is watched
+# (groups with an active advert) fell ~115-155/h; they wait now, and still merge once no active
+# group is waiting.
 CLAIM_ORDER: tuple[tuple[str, str], ...] = (("byt", "prodej"), ("byt", "pronajem"))
-# Per advert, as `refreshed` reads it: its last refresh, whether a merge may NOT rest on it, and
-# its place in `CLAIM_ORDER`.
-Refresh = tuple[Any, bool, int]
+
+
+class Refresh(NamedTuple):
+    """One advert as `refreshed` reads it."""
+
+    at: Any                 # its last refresh; None without an rt_fp row
+    stale: bool             # a merge may NOT rest on it (E960)
+    place: int              # its place in `CLAIM_ORDER` (E972)
+    active: bool            # its cluster holds an active advert (E973)
+
+
 # The re-claim's own budget, kept like the rate (E941): `{budget, inflight}`, the count a pass
 # re-claims written AHEAD of it; a pass that finds a count still in flight (the last pass that
 # carried re-claims died: its deadline, a kill, a raise) offers none and halves the budget, and
@@ -182,12 +197,14 @@ def tried_key(generation: str) -> str:
 def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_hours: float,
               engine_since: str | None) -> dict[int, Refresh]:
     """Each advert's last refresh, whether a merge may NOT rest on it (E960): refreshed longer
-    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed), and its place
-    in `CLAIM_ORDER` by its row's categories (E972)."""
+    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed), its place in
+    `CLAIM_ORDER` by its row's categories (E972), and whether its cluster holds an active advert
+    (E973) — read over the whole cluster, since a group's only active advert may sit on the
+    property it merges onto and so is not among the members handed on."""
     if not listing_ids:
         return {}
-    return {int(lid): (at, bool(stale), _claim_class(main, kind))
-            for lid, at, stale, main, kind in _rows(conn, RT_STALE_SQL, {
+    return {int(lid): Refresh(at, bool(stale), _claim_class(main, kind), bool(active))
+            for lid, at, stale, main, kind, active in _rows(conn, RT_STALE_SQL, {
                 "generation": generation, "listing_ids": sorted({int(i) for i in listing_ids}),
                 "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since})}
 
@@ -195,9 +212,9 @@ def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_h
 def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
                   fresh_hours: float, engine_since: str | None) -> set[int]:
     """The adverts among `listing_ids` a merge may not rest on (E960)."""
-    return {listing_id for listing_id, (_at, stale, _class) in refreshed(
+    return {listing_id for listing_id, row in refreshed(
         conn, generation, listing_ids, fresh_hours=fresh_hours,
-        engine_since=engine_since).items() if stale}
+        engine_since=engine_since).items() if row.stale}
 
 
 def _claim_class(category_main: str | None, category_type: str | None) -> int:
@@ -206,15 +223,17 @@ def _claim_class(category_main: str | None, category_type: str | None) -> int:
     return CLAIM_ORDER.index(pair) if pair in CLAIM_ORDER else len(CLAIM_ORDER)
 
 
-def _rank(members: Sequence[int], ages: Mapping[int, Refresh]) -> tuple[int, int, Any]:
+def _rank(members: Sequence[int], ages: Mapping[int, Refresh]) -> tuple[int, int, int, Any]:
     """A group's place in the queue, over its moved members whichever of them are stale, so the
     re-claim and the hand-on's cap rank it alike: a group holding an advert with no row (no
-    claim can refresh it) last of all, then its best member's place in `CLAIM_ORDER` (E972),
-    then the oldest refresh first."""
-    known = [i for i in members if i in ages]
-    if not known or any(ages[i][0] is None for i in known):
-        return (1, 0, "")
-    return (0, min(ages[i][2] for i in known), min(ages[i][0] for i in known))
+    claim can refresh it) last of all, then a group whose cluster holds an active advert before
+    one that holds none (E973), then its best member's place in `CLAIM_ORDER` (E972), then the
+    oldest refresh first."""
+    known = [ages[i] for i in members if i in ages]
+    if not known or any(row.at is None for row in known):
+        return (1, 0, 0, "")
+    return (0, 0 if any(row.active for row in known) else 1, min(row.place for row in known),
+            min(row.at for row in known))
 
 
 def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
@@ -225,8 +244,8 @@ def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
     across passes."""
     queue = []
     for members in groups:
-        stale = sorted({int(i) for i in members if int(i) in ages and ages[int(i)][1]
-                        and ages[int(i)][0] is not None})
+        stale = sorted({int(i) for i in members if int(i) in ages and ages[int(i)].stale
+                        and ages[int(i)].at is not None})
         if stale:
             queue.append((_rank([int(i) for i in members], ages), stale))
     queue.sort()
