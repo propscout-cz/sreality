@@ -157,17 +157,18 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
     { label: 'MF', value: lease && mf.kind === 'value' ? mf.ref.monthly_rent_czk : null },
   ].filter((m): m is { label: string; value: number } => m.value != null);
   const delta = ask != null && r.avg_price ? ((ask - r.avg_price) / r.avg_price) * 100 : null;
-  const flags = Array.isArray(r.flags) && r.flags.length > 0 ? r.flags.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))).join(', ') : null;
+  const flags = Array.isArray(r.flags) ? r.flags.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))).join(', ') : null;
   const rows: [string, string | null][] = [
     ['Za m² (min–max)', r.min_price_m2 != null && r.max_price_m2 != null ? `${fmtCount(Math.round(r.min_price_m2))}–${perM2(r.max_price_m2)}` : null],
     ['Směr. odchylka Valuo', r.std_price_m2 != null ? `± ${perM2(r.std_price_m2)}` : null],
     ['Plocha výpočtu', r.calc_area != null ? fmtArea(r.calc_area) : null],
     ['Okruh srovnání', r.distance != null ? fmtDistanceM(r.distance) : null], // metres: unverified until the probe
     ['Ke dni', typeof v.request.as_of === 'string' ? fmtDateSlash(v.request.as_of) : null],
-    ['Příznaky', flags],
   ];
+  // An empty list is an answer (Valuo raised none), so no row; only a missing one is the dashed gap.
+  if (flags !== '') rows.push(['Příznaky', flags]);
   // Said only when there is something to say: a point coarser than a street, a parameter the answer did not use.
-  const notes = [['Poloha', v.provenance.place?.note], ['Valuo ignorovalo', v.ignored_labels.join(', ')]].filter((n): n is [string, string] => !!n[1]);
+  const notes = [['Poloha', v.provenance.place?.note], ['Valuo ignorovalo', (v.ignored_labels ?? []).join(', ')]].filter((n): n is [string, string] => !!n[1]);
   return (
     <EstimateCard eyebrow={eyebrow} aside={aside}>
       <div className="mt-1 flex items-baseline justify-between gap-3">
@@ -199,7 +200,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
 }
 
 const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
-  { header: 'Druh', className: `text-[0.8rem] ${INK3}`, cell: (v) => v.kind_label },
+  { header: 'Druh', className: `text-[0.8rem] ${INK3}`, cell: (v) => v.kind_label ?? '—' },
   {
     header: 'Průměr', right: true, className: 'font-mono tabular-nums text-[var(--color-ink)]',
     cell: (v) => <>{fmtCzk(v.result?.avg_price)}<Period on={v.result != null && isLease(v)} /></>,

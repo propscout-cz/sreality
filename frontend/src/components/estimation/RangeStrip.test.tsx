@@ -21,6 +21,17 @@ describe('<RangeStrip>', () => {
     expect(container.querySelector<HTMLElement>('[style]')?.style.left).toBe('calc(25% - 1px)');
   });
 
+  it('floats the two ends apart, so a caption with no room between them drops under them instead of touching', () => {
+    render(
+      <RangeStrip range={{ low: 100, mid: 150, high: 300 }} caption="min · průměr · max (Valuo)" format={(n) => `${n} Kč`} />,
+    );
+    expect(screen.getByText('100 Kč').className).toMatch(/\bfloat-left\b.*\bmr-3\b/);
+    expect(screen.getByText('300 Kč').className).toMatch(/\bfloat-right\b.*\bml-3\b/);
+    const caption = screen.getByText('min · průměr · max (Valuo)');
+    expect(caption.className).toContain('inline-block'); // atomic: it moves as one line, never word by word
+    expect(caption.parentElement!.className).toMatch(/\bflow-root\b.*\btext-center\b/);
+  });
+
   it('reads marks in ink against the band, pinning one outside it to the end it passed', () => {
     const { container } = render(
       <RangeStrip

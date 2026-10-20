@@ -274,7 +274,8 @@ describe('<ValuoSection> states', () => {
     const above = ((6_450_000 - 6_100_000) / 6_100_000) * 100;
     expect(screen.getByText(t(`Nabídka je o ${fmtPct(above)} nad průměrem Valuo.`))).toBeInTheDocument();
     expect(screen.getByText(t(`± ${fmtMeasuredPricePerM2(7_200, 'sale')}`))).toBeInTheDocument();
-    expect(screen.getAllByText('—')).toHaveLength(1); // no flags: the one dashed gap
+    expect(screen.queryByText('Příznaky')).not.toBeInTheDocument(); // an empty list is an answer, not a gap
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
     expect(within(screen.getByText('Valuo ignorovalo').parentElement!).getByText('Podlaží')).toBeInTheDocument();
     expect(screen.queryByText('Poloha')).not.toBeInTheDocument(); // a street-level point needs no note
     expect(fetchEstimationsForListings).not.toHaveBeenCalled();
@@ -287,7 +288,7 @@ describe('<ValuoSection> states', () => {
       kind_label: 'Pronájem',
       ppm2_basis: 'rent_monthly_czk_m2',
       provenance: { ...PROVENANCE, place: { class: 'inferred', note: 'Poloha jen na úrovni obce' } },
-      result: { ...SALE.result!, avg_price: 21_000, min_price: 18_000, max_price: 24_000, avg_price_m2: 385 },
+      result: { ...SALE.result!, avg_price: 21_000, min_price: 18_000, max_price: 24_000, avg_price_m2: 385, flags: null },
     };
     renderSection(page({ history: [lease] }));
     expect(await screen.findByText('Odhad nájmu · Valuo')).toBeInTheDocument();
@@ -297,6 +298,17 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText('nabídka')).not.toBeInTheDocument();
     // The card says the point sent was only a town's (it was valued over the town, not blocked).
     expect(within(screen.getByText('Poloha').parentElement!).getByText('Poloha jen na úrovni obce')).toBeInTheDocument();
+    expect(within(screen.getByText('Příznaky').parentElement!).getByText('—')).toBeInTheDocument(); // no list: the gap
+  });
+
+  it('reads a row from an API that predates its Czech labels (the API and the SPA deploy apart)', async () => {
+    const old: Valuation = { ...SALE };
+    delete old.kind_label;
+    delete old.ignored_labels;
+    renderSection(page({ history: [old, { ...old, id: 2 }] }));
+    expect(await screen.findByText('Odhad ceny · Valuo')).toBeInTheDocument();
+    expect(screen.queryByText('Valuo ignorovalo')).not.toBeInTheDocument();
+    expect(within(screen.getAllByRole('row')[1]).getByText('—')).toBeInTheDocument();
   });
 
   it('shows a failed row as its stored sentence, and a picked history row as its card', async () => {

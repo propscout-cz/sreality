@@ -19,7 +19,9 @@ export type Valuation = {
   id: number; created_at: string; environment: 'sandbox' | 'production'; status: 'pending' | 'success' | 'failed';
   request: ValuoValues; provenance: Record<string, Provenance>; result: (Record<ResultKey, number | null> & { flags: unknown }) | null;
   ignored_ids: string[]; error: { code: string; message: string } | null;
-  ignored_labels: string[]; kind_label: string; // Czech from the server, so a page with no fields still reads
+  // Czech from the server, so a page with no fields still reads; optional because the API and the SPA deploy
+  // apart: for a few minutes (or after an API rollback) this page can meet an API that predates them.
+  ignored_labels?: string[]; kind_label?: string;
   ppm2_basis: string | null; // the REQUEST's basis token (rule 23): a flipped deal type moves it
 };
 export type ValuoPage = {

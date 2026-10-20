@@ -67,12 +67,14 @@ export default function RangeStrip({ label, range, caption, format, marks = [] }
         </div>
       </div>
 
-      <div className="mt-1.5 flex items-baseline justify-between text-[0.7rem] tabular-nums text-[var(--color-ink-3)] font-mono">
-        <span>{format(low)}</span>
-        <span className="text-[0.65rem] tracking-wide uppercase text-[var(--color-ink-4)]">
+      {/* The ends float to the ruler's ends and the caption centres between them; with no room there (a
+        * phone card) it drops under them, still centred, so the three never run together. */}
+      <div className="mt-1.5 flow-root text-center text-[0.7rem] tabular-nums text-[var(--color-ink-3)] font-mono">
+        <span className="float-left mr-3">{format(low)}</span>
+        <span className="float-right ml-3">{format(high)}</span>
+        <span className="inline-block text-[0.65rem] tracking-wide uppercase text-[var(--color-ink-4)]">
           {caption}
         </span>
-        <span>{format(high)}</span>
       </div>
     </div>
   );
