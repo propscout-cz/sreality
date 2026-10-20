@@ -539,8 +539,11 @@ export function CityPopulationHint() {
 
 const rowClass = (r: FilterRow): string => {
   if (r.layout !== 'grid') return 'space-y-5';
-  if (r.cols === 2) return 'grid grid-cols-2 gap-x-3 gap-y-5';
-  if (r.cols === 3) return 'grid grid-cols-3 gap-x-2 gap-y-5';
+  /* Bottom-aligned: a label that wraps to two lines must not push its control
+   * below its neighbour's. */
+  if (r.cols === 2) return 'grid grid-cols-2 items-end gap-x-3 gap-y-5';
+  /* Three min–max pairs in ~280 px: slimmer input padding keeps "min" / "max" whole. */
+  if (r.cols === 3) return 'grid grid-cols-3 items-end gap-x-2 gap-y-5 [&_input]:px-1.5';
   return 'grid gap-x-4 gap-y-5 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]';
 };
 
