@@ -2428,8 +2428,8 @@ renumber.** Navigate by area:
     `lib/collectionScope.ts` and `resolveTag/Collection/PipelinePrefilter` turned membership rows
     into property-id allowlists, and migration 598's trailing `property_ids_excluded bigint[]` (the
     one DENYLIST, for `tags_excluded`) carried exclusions — lists that only grow (the edge rejects
-    a GET past ~2,300 ids, measured 2026-10-19) and could not say "in none of my collections". 598's parameter stays until the
-    contract migration (operator's word); the bundle no longer sends it.
+    a GET past ~2,300 ids, measured 2026-10-19) and could not say "in none of my collections". 598's parameter left with the
+    contract migration 640 (2026-10-20, operator's word; the bundle had stopped sending it with 629).
     **Tags are collections' twin (2026-10-14).** The same five pieces, one each: ONE whole
     member map (`fetchPropertyTagMemberSet` under `curationKeys.propertyTagMembers`, the one
     `fetchMemberSet` reader both maps share — glyphs and the board read it; Browse's cohort no

@@ -47,9 +47,9 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `CollectionsPicker`, the three client resolvers + the denylist seam, `HIDING_DISMISSED`, the
   board's second codec, the `cohortScoped` / `pipelineScoped` / `collectionScoped` props, the
   registry's `tags_excluded`. Architecture § rules 18 + 22.
-- **Next:** the contract migration (drop `property_ids_excluded`) on the operator's word after
-  Railway confirms the rollout; whole-collection / tag DELETEs and merges still revalidate broadly
-  instead of settling.
+- **Done (2026-10-20):** the contract migration 640 dropped `property_ids_excluded` from both
+  aggregate RPCs on the operator's word (revert shipped unapplied under `migrations/reverts/`).
+- **Next:** whole-collection / tag DELETEs and merges still revalidate broadly instead of settling.
 
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:

@@ -122,9 +122,13 @@ def test_the_cohort_where_is_625s_byte_for_byte() -> None:
     # one inserted block is that scope's and nothing else.
     base, later = _where(S625).split("\n"), _where(EFFECTIVE).split("\n")
     anchor = next(i for i, ln in enumerate(base) if "property_ids_excluded" in ln)
-    start = later.index(base[anchor]) + 1
+    # 640 dropped that one conjunct itself (598's denylist parameter left once 629 judged membership
+    # in the database), so the effective WHERE is 625's minus that line, plus the block inserted
+    # right after its predecessor (the property_ids_filter allowlist).
+    base_now = base[:anchor] + base[anchor + 1:]
+    start = later.index(base[anchor - 1]) + 1
     end = later.index(base[anchor + 1], start)
-    assert later[:start] + later[end:] == base, "the effective WHERE is not 625's plus one inserted block"
+    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop plus one inserted block"
     block = " ".join(later[start:end])
     assert later[start].lstrip().startswith("-- migration 629: the curated-set scope")
     assert all(f"{c}_set" in block for c in ("tags", "collections", "pipeline")), block

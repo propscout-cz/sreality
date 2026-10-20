@@ -61,7 +61,8 @@ as a parameter, so the SPA reads ONE source for both lenses) then the nine;
 PostgREST calls a GET function with typed parameters directly, the SQL body inlines and the
 keyset index survives (probe 2026-10-19: page 2.3 ms vs 0.9 ms baseline; exact count over 177k
 rows with three exclusions 208 ms vs 44 ms; inactive sides never execute). `property_ids_excluded`
-stays until the contract migration. Rails: `tests/test_curated_set_scope_migration.py` (offline),
+was dropped by the contract migration 640 (2026-10-20, operator's word; rails in
+`tests/test_640_drop_property_ids_excluded.py`). Rails: `tests/test_curated_set_scope_migration.py` (offline),
 `tests/test_curated_set_scope_live.py` (replayed schema: RLS scoping, `{}`, AND for tags).
 
 **The SPA sends a side only when it is active** (`undefined`, never `null`: postgrest-js

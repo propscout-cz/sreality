@@ -89,8 +89,8 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list. Re-read the
 # chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "634_stats_status_lens.sql",
-    "browse_map_cells": "630_one_browse_read_model.sql",
+    "browse_stats_properties": "640_drop_property_ids_excluded.sql",
+    "browse_map_cells": "640_drop_property_ids_excluded.sql",
 }
 
 
@@ -207,6 +207,8 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
     nine curated-set scope parameters (tests/test_curated_set_scope_migration.py)."""
     gone = {"tag_ids", "districts_context_filter", "city_index_rules", "city_proximity",
             "with_estimates", "listing_ids_filter"}
+    # 640 dropped 598's denylist once 629 judged membership in the database.
+    gone_later = {"property_ids_excluded"}
     for func, previous, own in (
         ("browse_stats_properties", "436_city_quality_obec_key.sql", ["spec"]),
         ("browse_map_cells", "439_browse_map_cells.sql", []),
@@ -214,11 +216,13 @@ def test_the_rpc_signatures_keep_the_chip_parameters() -> None:
         new = _params_of(latest_definition(func).read_text(encoding="utf-8"), func)
         old = _params_of((MIGRATIONS / previous).read_text(encoding="utf-8"), func)
         assert new == [p for p in old if p not in gone] + [
+            p for p in (
             "hide_dismissed", "portal_excluded_filter", "portal_excluded_active_only",
             "property_ids_excluded", "tom_observed_only", *own,
             # 629: the curated-set scope, three sets x (set, in, out), judged under RLS.
             "tags_set", "tags_in", "tags_out", "collections_set", "collections_in",
             "collections_out", "pipeline_set", "pipeline_in", "pipeline_out",
+            ) if p not in gone_later
         ], f"{func}: parameter list changed"
         for chip_param in (
             "districts_filter", "districts_levels", "districts_ids", "districts_excluded_filter",
