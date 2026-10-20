@@ -13,6 +13,11 @@
 --      index keeps ONE working board per account and is the upsert target of PUT /stats/dashboard
 --      (`ON CONFLICT (account_id) WHERE name IS NULL`). The existing rows (one per account, no name) become the
 --      working boards untouched. account_id stays NOT NULL, stated again because the old key carried it.
+--      A row's name never crosses NULL: the BEFORE UPDATE OF name trigger stats_dashboards_name_guard
+--      (guard_stats_dashboard_name()) refuses a named dashboard becoming the working board and the working
+--      board being named in place ("Uložit jako dashboard" always INSERTs a new row, so the working row keeps
+--      its identity). The API never does either; the guard closes a direct PostgREST UPDATE (the browser
+--      holds UPDATE on the table), which would otherwise turn a SHARED dashboard into a working board.
 --   2. 626's FOR ALL policy stats_dashboards_tenant_rw is untouched: it reads current_account_ids(), so a
 --      delegate acting under a pipeline share reads no dashboard of the owner (pipeline-sharing.md §3.7). A
 --      FOR SELECT policy, stats_dashboards_shared_read, lets a share's recipient READ a shared dashboard;
@@ -77,6 +82,25 @@ alter table public.stats_dashboards alter column account_id set not null;
 create index if not exists stats_dashboards_account_idx on public.stats_dashboards (account_id);
 create unique index if not exists stats_dashboards_one_working_per_account
   on public.stats_dashboards (account_id) where name is null;
+
+create or replace function public.guard_stats_dashboard_name()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  if old.name is not null and new.name is null then
+    raise exception 'stats_dashboards %: a named dashboard never becomes the working board', old.id;
+  end if;
+  if old.name is null and new.name is not null then
+    raise exception 'stats_dashboards %: the working board is never named in place (save a new dashboard)', old.id;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.guard_stats_dashboard_name() from public, anon, authenticated;
+
+drop trigger if exists stats_dashboards_name_guard on public.stats_dashboards;
+create trigger stats_dashboards_name_guard
+  before update of name on public.stats_dashboards
+  for each row execute function public.guard_stats_dashboard_name();
 
 comment on table public.stats_dashboards is
   'Browse > Stats boards (migrations 626, 647). One unnamed row per account is its WORKING board '
@@ -237,6 +261,13 @@ begin
                     and tgfoid = 'public.sync_account_id_from_dashboard()'::regprocedure) then
     raise exception '647 did not land: the owner-stamping trigger is missing';
   end if;
+  if not exists (select 1 from pg_trigger t
+                  where t.tgrelid = 'public.stats_dashboards'::regclass
+                    and t.tgname = 'stats_dashboards_name_guard'
+                    and t.tgfoid = 'public.guard_stats_dashboard_name()'::regprocedure
+                    and pg_get_triggerdef(t.oid) like '%BEFORE UPDATE OF name ON public.stats_dashboards FOR EACH ROW%') then
+    raise exception '647 did not land: the name guard (BEFORE UPDATE OF name) is missing';
+  end if;
   if position('public.stats_dashboard_shares' in
               (select p.prosrc from pg_proc p where p.oid = 'public.share_party_emails()'::regprocedure)) = 0 then
     raise exception '647 did not land: share_party_emails() does not read stats_dashboard_shares';
@@ -244,7 +275,9 @@ begin
   if not has_function_privilege('authenticated', 'public.share_party_emails()', 'EXECUTE')
      or has_function_privilege('anon', 'public.share_party_emails()', 'EXECUTE')
      or has_function_privilege('authenticated', 'public.sync_account_id_from_dashboard()', 'EXECUTE')
-     or has_function_privilege('anon', 'public.sync_account_id_from_dashboard()', 'EXECUTE') then
+     or has_function_privilege('anon', 'public.sync_account_id_from_dashboard()', 'EXECUTE')
+     or has_function_privilege('authenticated', 'public.guard_stats_dashboard_name()', 'EXECUTE')
+     or has_function_privilege('anon', 'public.guard_stats_dashboard_name()', 'EXECUTE') then
     raise exception '647 did not land: function grants drifted';
   end if;
 end

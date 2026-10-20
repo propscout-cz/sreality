@@ -207,6 +207,44 @@ def test_the_working_board_cannot_be_shared(
         _share(svc, world.working, tenants["b"])
 
 
+def test_a_shared_dashboard_never_becomes_the_working_board(
+    svc: Any, tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    """The owner holds UPDATE on the table (PostgREST); nulling a SHARED dashboard's name would hand its
+    recipients the owner's working board. The guard refuses it; a rename between names still works."""
+    import psycopg
+
+    from api import saved_sets
+    from api.routes.stats_dashboards import DASHBOARDS
+
+    a = tenants["a"]
+    with pytest.raises(psycopg.errors.RaiseException, match="a named dashboard never becomes the working board"):
+        _rows(a, "UPDATE stats_dashboards SET name = NULL WHERE id = %s RETURNING id", (world.named,),
+              method="PATCH")
+    with scoped(a.user, method="PUT") as conn:
+        renamed = saved_sets.update(conn, DASHBOARDS, str(world.named), {"name": "Brno byty"})
+    assert renamed is not None and renamed["name"] == "Brno byty"
+    with svc.cursor() as cur:
+        cur.execute("SELECT name FROM stats_dashboards WHERE id = %s", (world.named,))
+        assert cur.fetchone() == ("Brno byty",)
+
+
+def test_the_working_board_is_never_named_in_place(
+    svc: Any, tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    """"Uložit jako dashboard" INSERTs a new row, so the working row keeps its identity; naming it in place
+    (a direct PATCH) is refused, and the account keeps exactly one working board."""
+    import psycopg
+
+    a = tenants["a"]
+    with pytest.raises(psycopg.errors.RaiseException, match="the working board is never named in place"):
+        _rows(a, "UPDATE stats_dashboards SET name = 'Povýšená' WHERE id = %s RETURNING id", (world.working,),
+              method="PATCH")
+    with svc.cursor() as cur:
+        cur.execute("SELECT id FROM stats_dashboards WHERE account_id = %s AND name IS NULL", (a.acc,))
+        assert cur.fetchall() == [(world.working,)]
+
+
 def test_a_second_save_replaces_the_working_board_in_place(
     svc: Any, tenants: dict[str, _Tenant], world: _World,
 ) -> None:

@@ -2,7 +2,8 @@
 
 What only the text can show (docs/design/saved-dashboards.md, "Schema"): stats_dashboards is re-keyed on
 `id` with the preset row's columns (the colour CHECK is 201's, verbatim) and keeps ONE unnamed working board
-per account through a partial unique index the API's upsert infers; the share table is 610's shape (owner
+per account through a partial unique index the API's upsert infers, and a row's name never crosses NULL (a
+guard trigger); the share table is 610's shape (owner
 stamped by trigger, which also refuses the working board; SELECT + DELETE, no browser INSERT; a party policy
 that hides while acting); the shared-read arm is FOR SELECT only; share_party_emails() is 641's body plus one
 arm; every statement re-runs as a no-op; the post-conditions name the new shape. Behaviour is
@@ -57,9 +58,9 @@ def test_every_statement_re_runs_as_a_no_op() -> None:
     for name, on in (("stats_dashboard_shares_party", "public.stats_dashboard_shares"),
                      ("stats_dashboards_shared_read", "public.stats_dashboards")):
         assert CODE.index(f"drop policy if exists {name} on {on};") < CODE.index(f"create policy {name} on {on}")
-    assert (CODE.index("drop trigger if exists stats_dashboard_shares_account_id_bi")
-            < CODE.index("create trigger stats_dashboard_shares_account_id_bi"))
-    assert CODE.count("create function") == 0 and CODE.count("create or replace function") == 2
+    for trigger in ("stats_dashboard_shares_account_id_bi", "stats_dashboards_name_guard"):
+        assert CODE.index(f"drop trigger if exists {trigger}") < CODE.index(f"create trigger {trigger}")
+    assert CODE.count("create function") == 0 and CODE.count("create or replace function") == 3
     # The key swap is the one statement pair that cannot re-run bare (the new FK depends on the new key).
     key = _flat(_block("key"))
     assert ("if exists (select 1 from pg_constraint k join pg_attribute a on a.attrelid = k.conrelid "
@@ -89,6 +90,41 @@ def test_the_board_becomes_a_saved_set_row_keyed_on_id() -> None:
     # The key swap comes before anything references the new key.
     assert CODE.index("add constraint stats_dashboards_pkey primary key (id)") < CODE.index(
         "references public.stats_dashboards(id)")
+
+
+def test_a_rows_name_never_crosses_null() -> None:
+    """A named dashboard never becomes the working board (a SHARED one would carry its shares with it), and
+    the working board is never named in place ("Uložit jako dashboard" INSERTs a new row). The API does
+    neither; the guard closes a direct PostgREST UPDATE, which the browser's UPDATE grant allows."""
+    fn = _function(SQL, "public.guard_stats_dashboard_name")
+    assert fn == (
+        "function public.guard_stats_dashboard_name() returns trigger language plpgsql set search_path = '' "
+        "as $$ begin "
+        "if old.name is not null and new.name is null then "
+        "raise exception 'stats_dashboards %: a named dashboard never becomes the working board', old.id; "
+        "end if; "
+        "if old.name is null and new.name is not null then "
+        "raise exception 'stats_dashboards %: the working board is never named in place (save a new dashboard)', "
+        "old.id; end if; return new; end; $$;")
+    assert ("revoke all on function public.guard_stats_dashboard_name() from public, anon, authenticated;"
+            ) in CODE
+    assert ("create trigger stats_dashboards_name_guard before update of name on public.stats_dashboards "
+            "for each row execute function public.guard_stats_dashboard_name();") in CODE
+    # The guard needs the column, and it lands before any share can exist.
+    assert (CODE.index("add column if not exists name text") < CODE.index("create trigger stats_dashboards_name_guard")
+            < CODE.index("create table if not exists public.stats_dashboard_shares"))
+
+
+def test_no_api_write_sends_a_null_name_for_a_dashboard() -> None:
+    from api import saved_sets
+    from api.routes import stats_dashboards as sd
+
+    assert "name" not in sd.DASHBOARDS.nullable
+    body = sd.DASHBOARDS.update_in.model_validate({"name": None})
+    assert saved_sets.changes(sd.DASHBOARDS, body) == {}
+    # The working-board upsert and the share gate never write the column at all.
+    assert sd._SAVE_WORKING_BOARD_SQL.startswith("INSERT INTO stats_dashboards (account_id, charts, updated_at) ")
+    assert "name =" not in sd._SAVE_WORKING_BOARD_SQL and "name =" not in sd._SHARE_GATE_SQL
 
 
 def test_the_colour_check_is_201s_palette_verbatim_and_the_apis() -> None:
@@ -193,6 +229,11 @@ def test_the_post_conditions_name_the_new_shape() -> None:
         "has_table_privilege('authenticated', 'public.stats_dashboard_shares', 'INSERT')",
         "or has_table_privilege('anon', 'public.stats_dashboard_shares', 'SELECT') then",
         "tgfoid = 'public.sync_account_id_from_dashboard()'::regprocedure",
+        "and t.tgname = 'stats_dashboards_name_guard' "
+        "and t.tgfoid = 'public.guard_stats_dashboard_name()'::regprocedure "
+        "and pg_get_triggerdef(t.oid) like '%BEFORE UPDATE OF name ON public.stats_dashboards FOR EACH ROW%') then",
+        "or has_function_privilege('authenticated', 'public.guard_stats_dashboard_name()', 'EXECUTE') "
+        "or has_function_privilege('anon', 'public.guard_stats_dashboard_name()', 'EXECUTE') then",
         "position('public.stats_dashboard_shares' in (select p.prosrc from pg_proc p "
         "where p.oid = 'public.share_party_emails()'::regprocedure)) = 0",
         "or has_function_privilege('authenticated', 'public.sync_account_id_from_dashboard()', 'EXECUTE')",
@@ -209,6 +250,7 @@ def test_the_receipt_probes_what_the_file_creates() -> None:
         "relation:stats_dashboards_account_idx",
         "relation:stats_dashboards_one_working_per_account",
         "relation:stats_dashboard_shares_recipient_idx",
+        "function:public.guard_stats_dashboard_name",
         "function:public.sync_account_id_from_dashboard",
         "function:public.share_party_emails",
         "column:stats_dashboards.id",
