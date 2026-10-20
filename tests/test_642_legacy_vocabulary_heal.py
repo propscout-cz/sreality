@@ -128,7 +128,8 @@ def test_the_sql_grammar_is_the_vocabulary_grammar() -> None:
 def test_the_file_keeps_the_seam_rules() -> None:
     assert "listing_snapshots" not in CODE and "last_seen_at" not in CODE
     assert CODE.count("insert into dirty_properties (property_id, marked_at)") == 2
-    assert CODE.count("clock_timestamp() from") == 2
+    assert CODE.count("clock_timestamp()\n  from (select distinct property_id from") == 2, (
+        "distinct BEFORE the per-row clock, or ON CONFLICT hits a property twice (apply run 39399998245)")
     assert CODE.count("on conflict (property_id) do update set marked_at = excluded.marked_at;") == 2
     backup = f"backup_{NUMBER}"
     assert f"create schema if not exists {backup};" in CODE

@@ -39,7 +39,8 @@
 -- RULES. The seam's (R9), as 554: never last_seen_at (rule 4); every touched row's property enqueued into
 -- dirty_properties in the SAME statement as its write (rule 20), stamped with the statement clock so a maintenance
 -- pass whose cutoff falls inside this transaction cannot clear the mark before it recomputed on the healed values
--- (scripts/recompute_property_stats.py claims and deletes by `marked_at <= cutoff`); properties.condition /
+-- (scripts/recompute_property_stats.py claims and deletes by `marked_at <= cutoff`) -- the ids are made distinct
+-- BEFORE the stamp, because clock_timestamp() differs per row and ON CONFLICT may touch a row only once; properties.condition /
 -- .disposition and the Browse row follow on that lane's next pass (served rows only: a merged-away property keeps
 -- its last rollup, which nothing serves). No listing_snapshots row -- and none deferred either: bazos hashes its own
 -- PARSE, which this file does not change, so the next fetch's hash is what it would have been anyway; the column
@@ -56,7 +57,8 @@
 --      where b.listing_id = l.id
 --     returning l.property_id)
 --   insert into dirty_properties (property_id, marked_at)
---   select distinct property_id, clock_timestamp() from restored where property_id is not null
+--   select d.property_id, clock_timestamp()
+--     from (select distinct property_id from restored where property_id is not null) d
 --   on conflict (property_id) do update set marked_at = excluded.marked_at;
 -- The backup goes once the Stats charts have read clean for a week, as a FORWARD migration (`drop table if exists
 -- backup_642.listings_vocabulary; drop schema if exists backup_642;`) so the migration_drift probe retires the
@@ -157,7 +159,8 @@ with healed as (
   returning l.property_id
 )
 insert into dirty_properties (property_id, marked_at)
-select distinct property_id, clock_timestamp() from healed where property_id is not null
+select d.property_id, clock_timestamp()
+  from (select distinct property_id from healed where property_id is not null) d
 on conflict (property_id) do update set marked_at = excluded.marked_at;
 
 -- ---------------------------------------------------------------------------
@@ -171,7 +174,8 @@ with refused as (
   returning l.property_id
 )
 insert into dirty_properties (property_id, marked_at)
-select distinct property_id, clock_timestamp() from refused where property_id is not null
+select d.property_id, clock_timestamp()
+  from (select distinct property_id from refused where property_id is not null) d
 on conflict (property_id) do update set marked_at = excluded.marked_at;
 
 -- ---------------------------------------------------------------------------
