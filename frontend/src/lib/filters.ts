@@ -1,6 +1,7 @@
 import type { Disposition } from './types';
 import {
   BUILDING_MATERIAL_BUCKETS,
+  CONDITION_CANONICAL,
   FURNISHED_CANONICAL,
   OWNERSHIP_CANONICAL,
   filterById,
@@ -203,6 +204,7 @@ export interface ListingFilters {
   portals: string[];
   portalsExcluded: string[];
   portalsExcludedActiveOnly: boolean;
+  /* Carries the '__unknown__' sentinel like furnished / ownership. */
   conditionMatch: string[];
   categorySubCb: number | null;
   /* Portal-agnostic property sub-type (multi-select). Only surfaced for
@@ -402,12 +404,12 @@ const TRI_VALUES: ReadonlyArray<TriState> = ['any', 'yes', 'no'];
 const STATUS_VALUES: ReadonlyArray<ListingStatus> = ['active', 'inactive', 'any'];
 /* Multi-select wire values incl. the '__unknown__' sentinel (NULL / non-canonical).
  * The canonical sets are re-exported from the generated registry
- * (toolkit.filter_registry.{FURNISHED,OWNERSHIP}_CANONICAL) — one source, no
- * hand-coded duplicate that can drift from the SQL RPC / Watchdog / toolkit
- * (architectural rule #16). queries.ts:applyFilters uses them for the
- * `not.in.(…)` unknown predicate. */
+ * (toolkit.filter_registry.{FURNISHED,OWNERSHIP}_CANONICAL and
+ * COLUMN_CANONICAL_VALUES['condition']) — one source, no hand-coded duplicate
+ * that can drift from the SQL RPC / Watchdog / toolkit (architectural rule #16).
+ * queries.ts:applyFilters uses them for the `not.in.(…)` unknown predicate. */
 export const UNKNOWN_FILTER_VALUE = '__unknown__';
-export { FURNISHED_CANONICAL, OWNERSHIP_CANONICAL };
+export { CONDITION_CANONICAL, FURNISHED_CANONICAL, OWNERSHIP_CANONICAL };
 const FURNISHED_VALUES: ReadonlyArray<string> = [...FURNISHED_CANONICAL, UNKNOWN_FILTER_VALUE];
 const OWNERSHIP_VALUES: ReadonlyArray<string> = [...OWNERSHIP_CANONICAL, UNKNOWN_FILTER_VALUE];
 const CONDITION_VALUES: ReadonlyArray<string> = (

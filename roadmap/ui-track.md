@@ -7,6 +7,14 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Condition filter: the "Neuvedeno" chip (2026-10-20, migration 644)
+- **Built:** Browse's "Condition (Stav objektu)" filter offers "Neuvedeno" as furnished and ownership
+  do: a property whose condition is NULL or off the canon. One meaning on every surface (rule 16):
+  the list, count and pins (`queries.ts`), Stats and the map cells (644 restates both RPCs with the
+  furnished shape, md5-gated on 640), the Watchdog and every estimation cohort (`filter_compiler`),
+  the phone sheet. The canon itself (`CONDITION_OPTIONS`: stored values, Stats keys, the scraper's
+  vocabulary) never gains the sentinel; only the filter's chips do (`CONDITION_FILTER_OPTIONS`).
+
 ### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
 - **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and
   boards shared with me (per device, `lib/acting`), a shared board renders inside `<ActingAs>` (read:

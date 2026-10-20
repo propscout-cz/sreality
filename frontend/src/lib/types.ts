@@ -1058,8 +1058,9 @@ export interface WatchdogFilterSpec {
   // Multi-select enums; the '__unknown__' element matches NULL / non-canonical.
   furnished: string[] | null;
   ownership: string[] | null;
-  // Raw sreality condition enum (Stav objektu). Matches l.condition = ANY(...);
-  // null / empty = any. Honoured by the matcher (_build_match_clauses).
+  // The canonical condition (Stav objektu). Matches l.condition = ANY(...), and
+  // '__unknown__' NULL / non-canonical like furnished; null / empty = any.
+  // Honoured by the matcher (_build_match_clauses).
   condition_match: string[] | null;
   // The portal rule's two sides (MS19 + migration 597): a property with an ad on
   // one of `portals` (null / empty = all) and none on `portals_excluded` (any ad,

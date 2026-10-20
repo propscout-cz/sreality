@@ -166,7 +166,7 @@ const FILLED: ListingFilters = {
   estateAreaMax: 900,
   usableAreaMin: 40,
   usableAreaMax: 120,
-  conditionMatch: ['novostavba'],
+  conditionMatch: ['novostavba', '__unknown__'],
   buildingMaterial: ['cihla'],
   buildingConditionLevelMin: 2,
   buildingConditionLevelMax: 4,
