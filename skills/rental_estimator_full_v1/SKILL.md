@@ -139,10 +139,10 @@ You have three filters for condition matching. Use them together,
 not as substitutes. Full descriptions live in each filter's tool
 schema; what follows is strategy.
 
-- `condition_match` — multi-select on the portals' "Stav objektu"
-  enum (eleven values, `projekt` … `k_demolici`; the tool schema
-  lists them). NOT always populated: many listings state no
-  condition, and the `__unknown__` value selects exactly those.
+- `condition_match` — multi-select on sreality's "Stav objektu"
+  enum (`novostavba`, `po_rekonstrukci`, `velmi_dobry`, `dobry`,
+  `pred_rekonstrukci`, `k_demolici`). Always populated on
+  scraped listings.
 
 - `apartment_condition_level_min` — INT 1-5 derived score on the
   unit itself (jádro, kuchyň, podlahy, vnitřní rozvody). 5 =
