@@ -14,6 +14,7 @@
 import { useState, type ReactNode } from 'react';
 import { InfoIcon } from '@/components/icons';
 import { PickButton } from '@/components/controls';
+import SharedErrorBanner from '@/components/ErrorBanner';
 
 /* -------------------------------------------------------------------- */
 /* Expand/collapse twisty — right-pointing when closed, rotates to point  */
@@ -157,7 +158,6 @@ export function CollapsibleSection({
   hint,
   description,
   infoExpanded,
-  defaultOpen = true,
   children,
 }: {
   id: string;
@@ -174,10 +174,9 @@ export function CollapsibleSection({
   hint?: string;
   description?: ReactNode;
   infoExpanded: boolean;
-  defaultOpen?: boolean;
   children: ReactNode;
 }) {
-  const [isOpen, toggle] = useCollapsed(id, defaultOpen);
+  const [isOpen, toggle] = useCollapsed(id, true);
   const hintText = hint ?? (typeof description === 'string' ? description : undefined);
   return (
     <section
@@ -231,14 +230,7 @@ export function CollapsibleSection({
   );
 }
 
-/* -------------------------------------------------------------------- */
-/* Shared error banner                                                   */
-/* -------------------------------------------------------------------- */
-
+/* The shared banner, flush (it stands in for the content it failed to load) and titled for these English pages. */
 export function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div className="p-3 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-sm text-[var(--color-brick)]">
-      <strong className="font-medium">Failed:</strong> {message}
-    </div>
-  );
+  return <SharedErrorBanner flush title="Failed:" message={message} />;
 }

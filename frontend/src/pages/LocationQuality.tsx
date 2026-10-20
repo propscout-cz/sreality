@@ -17,9 +17,10 @@
  * Visual note: enum mixes are single-hue horizontal bars — magnitude of one
  * measure, so one hue; identity color would be noise. */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
+import Panel from '@/components/Panel';
 import {
   fetchCorpusSummary, fetchInspector, fetchInspectorByNative, fetchSourceOverview,
   submitCorrection,
@@ -30,20 +31,6 @@ import { ApiError } from '../lib/api';
 import { fmtCount, fmtRelative } from '../lib/format';
 
 /* ---------- shared bits (Costs.tsx idiom) ---------- */
-
-function Card({ title, accessory, children }: {
-  title: string; accessory?: React.ReactNode; children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)]">
-      <header className="flex items-center gap-3 border-b border-[var(--color-rule-soft)] px-4 py-2.5">
-        <h2 className="text-[0.7rem] tracking-[0.12em] uppercase text-[var(--color-ink-3)]">{title}</h2>
-        {accessory ? <div className="ml-auto">{accessory}</div> : null}
-      </header>
-      <div className="px-4 py-3">{children}</div>
-    </section>
-  );
-}
 
 function Stat({ label, value, hint, accent, danger }: {
   label: string; value: string; hint?: string; accent?: boolean; danger?: boolean;
@@ -117,16 +104,16 @@ function OverviewPanels({ ov }: { ov: SourceOverview }) {
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Card title="Granularity × count (listing grain)">
+        <Panel title="Granularity × count (listing grain)">
           <BarList rows={ov.mixes.granularity ?? []} total={t.active_rows} />
-        </Card>
-        <Card title="Match confidence">
+        </Panel>
+        <Panel title="Match confidence">
           <BarList rows={ov.mixes.match_confidence ?? []} total={t.active_rows} />
-        </Card>
+        </Panel>
       </div>
 
       <div className="mt-4">
-        <Card
+        <Panel
           title="Registry version"
           accessory={ov.current_registry ? (
             <span className="text-[0.7rem] text-[var(--color-ink-3)]">
@@ -146,7 +133,7 @@ function OverviewPanels({ ov }: { ov: SourceOverview }) {
             Rows on an older registry version re-resolve on the next drain after a registry load —
             a growing stale share means the drain is behind, not that data got worse.
           </p>
-        </Card>
+        </Panel>
       </div>
     </>
   );
@@ -172,7 +159,7 @@ function InspectorSection({ source }: { source: string }) {
   });
   const ins = inspector.data?.data ?? null;
   return (
-    <Card title="Listing inspector (read-your-writes)">
+    <Panel title="Listing inspector (read-your-writes)">
       <form
         className="flex items-end gap-2 max-w-md"
         onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
@@ -197,7 +184,7 @@ function InspectorSection({ source }: { source: string }) {
       </form>
       {inspector.error ? <div className="mt-3"><ErrorBanner error={inspector.error} /></div> : null}
       {ins ? <InspectorBody ins={ins} onCorrected={() => inspector.refetch()} /> : null}
-    </Card>
+    </Panel>
   );
 }
 
@@ -355,20 +342,6 @@ export default function LocationQuality() {
   const refreshedAt = overview.dataUpdatedAt
     ? fmtRelative(new Date(overview.dataUpdatedAt).toISOString())
     : null;
-  const select = useMemo(
-    () => (
-      <Field label="Source" as="control">
-        <select
-          className="rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1.5 text-sm"
-          value={source}
-          onChange={(e) => setSource(e.target.value)}
-        >
-          {LOCATION_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </Field>
-    ),
-    [source],
-  );
 
   return (
     <div className="px-6 pt-5 pb-8 max-w-screen-2xl mx-auto">
@@ -380,7 +353,15 @@ export default function LocationQuality() {
             {refreshedAt ? <> · refreshed {refreshedAt}</> : null}
           </p>
         </div>
-        {select}
+        <Field label="Source" as="control">
+          <select
+            className="rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-2 py-1.5 text-sm"
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+          >
+            {LOCATION_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
       </header>
 
       <div className="mt-4 space-y-4">
@@ -399,7 +380,7 @@ export default function LocationQuality() {
 
         <InspectorSection source={source} />
 
-        <Card title="All sources (active listings, listing grain)">
+        <Panel title="All sources (active listings, listing grain)">
           {summary.error ? <ErrorBanner error={summary.error} /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm max-w-3xl">
@@ -442,7 +423,7 @@ export default function LocationQuality() {
               </table>
             </div>
           )}
-        </Card>
+        </Panel>
       </div>
     </div>
   );

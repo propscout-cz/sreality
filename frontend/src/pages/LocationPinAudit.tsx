@@ -36,6 +36,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
+import Panel from '@/components/Panel';
 import Spinner from '@/components/Spinner';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -78,28 +79,6 @@ const TH = 'py-1.5 pr-3 font-medium whitespace-nowrap';
 const TD = 'py-1.5 pr-3 align-top';
 const NUM = 'py-1.5 pr-3 text-right font-mono tabular-nums';
 const ROW = 'border-t border-[var(--color-rule-soft)]';
-
-function Card({
-  title,
-  lede,
-  children,
-}: {
-  title: string;
-  lede: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 py-4">
-      <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-        {title}
-      </h2>
-      <p className="mt-2 text-[0.78rem] leading-relaxed text-[var(--color-ink-2)] max-w-[52rem]">
-        {lede}
-      </p>
-      <div className="mt-3">{children}</div>
-    </section>
-  );
-}
 
 function Chip({
   on,
@@ -390,7 +369,7 @@ export default function LocationPinAudit() {
         ty, u kterých už doběhl a polohu neurčil.
       </p>
       <div className="mt-5">
-        <Card
+        <Panel
           title="Vodopád"
           lede={`Odkud se to číslo bere. Cesta od všech inzerátů v databázi až k těm skrytým — u každého kroku je vidět, kolik jich zbylo, kolik jich tam ubylo a jaký je to podíl z celé databáze. Skryté se tak čtou proti celku, ne samy proti sobě.${
             refreshedAt ? ` Stav k ${fmtDateSlash(refreshedAt)}; přepočítává se každou hodinu.` : ''
@@ -403,7 +382,7 @@ export default function LocationPinAudit() {
           ) : (
             <WaterfallTable steps={waterfallSteps} />
           )}
-        </Card>
+        </Panel>
       </div>
 
       <div
@@ -439,7 +418,7 @@ export default function LocationPinAudit() {
         téže nemovitosti. To je samostatné rozhodnutí, zatím se tak neděje.
       </p>
 
-      {err ? <ErrorBanner message={(err as Error).message} /> : null}
+      {err ? <ErrorBanner message={err.message} /> : null}
 
       <div className="mt-6 grid gap-5">
         <div
@@ -468,7 +447,7 @@ export default function LocationPinAudit() {
           </span>
         </div>
 
-        <Card
+        <Panel
           title="Přehled"
           lede="Řádky jsou portály, sloupce druhy nemovitosti. Číslo v buňce je počet skrytých inzerátů — po započtení filtrů níže. Kliknutím na buňku se filtr nastaví právě na ni."
         >
@@ -545,9 +524,9 @@ export default function LocationPinAudit() {
               </table>
             </div>
           )}
-        </Card>
+        </Panel>
 
-        <Card
+        <Panel
           title="Filtry"
           lede="Filtry platí pro přehled i seznam zároveň a vždy jen v rámci skupiny vybrané nahoře. Nevybrat nic znamená „bez omezení“."
         >
@@ -650,7 +629,7 @@ export default function LocationPinAudit() {
             <div>
               <button
                 type="button"
-                className="self-start text-[0.78rem] text-[var(--color-ink-3)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-ink)]"
+                className="text-[0.78rem] text-[var(--color-ink-3)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-ink)]"
                 onClick={() =>
                   setFilters((f) => ({ ...EMPTY_PIN_AUDIT_FILTERS, state: f.state }))
                 }
@@ -659,9 +638,9 @@ export default function LocationPinAudit() {
               </button>
             </div>
           </div>
-        </Card>
+        </Panel>
 
-        <Card
+        <Panel
           title="Seznam"
           lede="Jeden řádek = jeden inzerát. Název vede na jeho stránku u nás, odkaz „portál“ na původní inzerát. „Verdikt“ shrnuje, co o poloze ví nový systém."
         >
@@ -790,7 +769,7 @@ export default function LocationPinAudit() {
             total={totalMatched}
             loadingLabel="Načítám další…"
           />
-        </Card>
+        </Panel>
       </div>
     </div>
   );
