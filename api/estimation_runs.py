@@ -1920,30 +1920,21 @@ def _load_subject_condition(
     conn: "psycopg.Connection",
     sreality_id: int | None,
 ) -> dict[str, Any] | None:
-    """Fetch the subject listing's condition fields for the agent prompt.
+    """Fetch the subject listing's `condition` for the agent prompt.
 
-    Returns the sreality `condition` enum plus the two derived 1-5
-    levels (apartment + building). Derived levels are NULL until the
-    scoring phase has run on that snapshot; the agent prompt teaches
-    the LLM to skip the matching level_min filter when its target is
-    NULL on that axis.
+    The derived 1-5 levels are not sent: condition scoring is parked (rule 14).
     """
     if sreality_id is None:
         return None
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT condition, apartment_condition_level, "
-            "building_condition_level FROM listings WHERE sreality_id = %s",
+            "SELECT condition FROM listings WHERE sreality_id = %s",
             (sreality_id,),
         )
         row = cur.fetchone()
     if row is None:
         return None
-    return {
-        "condition": row[0],
-        "apartment_condition_level": row[1],
-        "building_condition_level": row[2],
-    }
+    return {"condition": row[0]}
 
 
 # The subject's MF facts when it is one of our adverts: its PROPERTY's golden record and
@@ -2094,10 +2085,6 @@ def _build_filters(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
         tom_days_min=body.tom_days_min,
         tom_days_max=body.tom_days_max,
         tom_observed_only=body.tom_observed_only,

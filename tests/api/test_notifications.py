@@ -461,41 +461,19 @@ def test_build_clauses_categoryless_spec() -> None:
     assert "category_type" not in params
 
 
-def test_build_clauses_condition_level_maximums() -> None:
-    spec = WatchdogFilterSpec(
-        building_condition_level_max=3,
-        apartment_condition_level_max=2,
-    )
-    where, params = _build_match_clauses(spec)
-    assert any("building_condition_level <= %(building_condition_level_max)s" in w for w in where)
-    assert any("apartment_condition_level <= %(apartment_condition_level_max)s" in w for w in where)
-    assert params["building_condition_level_max"] == 3
-    assert params["apartment_condition_level_max"] == 2
-
-
-def test_build_clauses_condition_level_minimums() -> None:
-    """Watchdog must honour the new condition-level filters so the
-    operator can say 'alert me when a level-5 apartment shows up'."""
-    spec = WatchdogFilterSpec(
-        building_condition_level_min=4,
-        apartment_condition_level_min=5,
-    )
-    where, params = _build_match_clauses(spec)
-    assert any("building_condition_level >= %(building_condition_level_min)s" in w for w in where)
-    assert any("apartment_condition_level >= %(apartment_condition_level_min)s" in w for w in where)
-    assert params["building_condition_level_min"] == 4
-    assert params["apartment_condition_level_min"] == 5
-
-
-def test_build_clauses_condition_level_minimums_omitted_by_default() -> None:
-    """Absent filters add no clauses — NULL rows would otherwise be
-    excluded by an unintended `IS NOT NULL` check."""
-    spec = WatchdogFilterSpec()
-    where, params = _build_match_clauses(spec)
-    assert not any("building_condition_level" in w for w in where)
-    assert not any("apartment_condition_level" in w for w in where)
-    assert "building_condition_level_min" not in params
-    assert "apartment_condition_level_min" not in params
+@pytest.mark.parametrize("fid", [
+    "building_condition_level_min", "building_condition_level_max",
+    "apartment_condition_level_min", "apartment_condition_level_max",
+])
+def test_build_clauses_parked_condition_levels_are_retired_loudly(fid: str) -> None:
+    """Condition scoring is parked (rule 14, operator ruling 2026-10-20). A stored spec still
+    deserialises, but a level bound raises (the matcher skips that subscription) rather than
+    silently widening to every property; an unset one renders nothing."""
+    with pytest.raises(ValueError, match=f"{fid} is retired"):
+        _build_match_clauses(WatchdogFilterSpec(**{fid: 3}))
+    where, params = _build_match_clauses(WatchdogFilterSpec())
+    assert not any("condition_level" in w for w in where)
+    assert not any("condition_level" in k for k in params)
 
 
 # --- match_once with a fake psycopg connection ---------------------------

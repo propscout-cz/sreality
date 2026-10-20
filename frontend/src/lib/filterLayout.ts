@@ -101,8 +101,6 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
       'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax',
       'usableAreaMin', 'usableAreaMax',
       'conditionMatch', 'buildingMaterial',
-      'buildingConditionLevelMin', 'buildingConditionLevelMax',
-      'apartmentConditionLevelMin', 'apartmentConditionLevelMax',
       'priceMin', 'priceMax', 'pricePerM2Min', 'pricePerM2Max',
       'priceChangeCountMin', 'priceChangeWindowDays', 'totalPriceChangePct',
       'mfGrossYieldPctMin', 'mfGrossYieldPctMax',
@@ -149,8 +147,6 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
           form({
             condition_match: 'Condition (Stav objektu)',
             building_material: 'Building material',
-            building_condition_level_min: 'Building condition (1–5)',
-            apartment_condition_level_min: 'Apartment condition (1–5)',
           }),
         ],
       },

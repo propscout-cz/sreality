@@ -61,9 +61,8 @@ def test_each_kind_renders_its_template(grain: fc.FilterGrain) -> None:
         ({"has_lift": False}, "l.has_lift = %(has_lift)s", {"has_lift": False}),
         ({"min_usable_area": 10}, "l.usable_area >= %(min_usable_area)s",
          {"min_usable_area": 10}),
-        ({"building_condition_level_max": 0},
-         "l.building_condition_level <= %(building_condition_level_max)s",
-         {"building_condition_level_max": 0}),
+        ({"max_usable_area": 0}, "l.usable_area <= %(max_usable_area)s",
+         {"max_usable_area": 0}),
         ({"furnished": ["ano", fr.UNKNOWN_FILTER_VALUE]},
          "(l.furnished = ANY(%(furnished)s) OR "
          "(l.furnished IS NULL OR NOT (l.furnished = ANY(%(furnished_canon)s))))",
@@ -257,6 +256,19 @@ def test_a_retired_filter_raises_even_when_empty(value: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="near_city_proximity is retired"):
         compile_filter_where({"near_city_proximity": value}, PROPERTIES_GRAIN)
     compile_filter_where({"near_city_proximity": None}, PROPERTIES_GRAIN)
+
+
+_PARKED_CONDITION_LEVELS = ("building_condition_level_min", "building_condition_level_max",
+                            "apartment_condition_level_min", "apartment_condition_level_max")
+
+
+@pytest.mark.parametrize("fid", _PARKED_CONDITION_LEVELS)
+def test_a_parked_condition_level_raises_on_both_grains_even_at_zero(fid: str) -> None:
+    """Condition scoring is parked (rule 14): a level bound never narrows a cohort or a watchdog."""
+    for grain in _GRAINS:
+        with pytest.raises(ValueError, match=f"{fid} is retired"):
+            compile_filter_where({fid: 0}, grain)
+        compile_filter_where({fid: None}, grain)
 
 
 def test_an_unregistered_key_is_a_programming_error() -> None:

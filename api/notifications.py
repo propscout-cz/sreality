@@ -158,9 +158,8 @@ class WatchdogFilterSpec(BaseModel):
     # Parking lots minimum.
     min_parking_lots: int | None = None
 
-    # Derived condition scores (migrations 072 / 073). NULL rows excluded
-    # by the `>= N` / `<= N` comparison — same semantics as the Browse
-    # filter.
+    # RETIRED (condition scoring parked, operator ruling 2026-10-20): kept only so an old
+    # saved spec deserialises; any value raises in toolkit/filter_compiler.RETIRED_FILTERS.
     building_condition_level_min: int | None = None
     building_condition_level_max: int | None = None
     apartment_condition_level_min: int | None = None

@@ -74,10 +74,6 @@ class FindComparablesIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
     tom_observed_only: bool | None = None
@@ -175,10 +171,6 @@ class ComputeMarketVelocityIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
     tom_observed_only: bool | None = None
@@ -338,10 +330,6 @@ class CreateEstimationIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
     tom_observed_only: bool | None = None
@@ -453,10 +441,6 @@ class EstimateYieldIn(BaseModel):
     min_usable_area: float | None = None
     max_usable_area: float | None = None
     min_parking_lots: int | None = None
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     tom_days_min: int | None = None
     tom_days_max: int | None = None
     tom_observed_only: bool | None = None

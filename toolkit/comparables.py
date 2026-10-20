@@ -104,14 +104,6 @@ class ComparableFilters:
     min_garden_area: float | None = None
     max_garden_area: float | None = None
     min_parking_lots: int | None = None
-    # Derived condition scores (migrations 072/073). NULL rows are filtered
-    # out by the `>= N` / `<= N` comparison — that's intentional: "show me
-    # 4+" means "I want scored listings at level 4 or above", not "scored
-    # OR unscored".
-    building_condition_level_min: int | None = None
-    building_condition_level_max: int | None = None
-    apartment_condition_level_min: int | None = None
-    apartment_condition_level_max: int | None = None
     # TOM = time on market in days, the one measure (measure_tom_days, migration 617):
     # now() - first_seen_at for active ads, last_seen_at - first_seen_at for inactive.
     # Inclusive bounds.
@@ -423,10 +415,6 @@ def _filters_used(
         "min_garden_area": filters.min_garden_area,
         "max_garden_area": filters.max_garden_area,
         "min_parking_lots": filters.min_parking_lots,
-        "building_condition_level_min": filters.building_condition_level_min,
-        "building_condition_level_max": filters.building_condition_level_max,
-        "apartment_condition_level_min": filters.apartment_condition_level_min,
-        "apartment_condition_level_max": filters.apartment_condition_level_max,
         "tom_days_min": filters.tom_days_min,
         "tom_days_max": filters.tom_days_max,
         "tom_observed_only": filters.tom_observed_only,

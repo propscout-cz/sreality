@@ -1169,17 +1169,13 @@ export const buildBrowseStatsArgs = (
     /* Migration 133 — MF gross rental yield % bounds (sale apartments). */
     mf_gross_yield_pct_min:  f.mfGrossYieldPctMin,
     mf_gross_yield_pct_max:  f.mfGrossYieldPctMax,
-    /* Migration 173 — merged price-history predicates + condition-level
-     * bounds. Property grain; columns maintained by the recompute job. */
+    /* Migration 173 — merged price-history predicates. Property grain;
+     * columns maintained by the recompute job. */
     price_change_count_min:        f.priceChangeCountMin,
     price_change_window_days:      f.priceChangeWindowDays,
     total_price_change_pct_filter: f.totalPriceChangePct,
     /* Migration 537 — the caller's dismissed properties, excluded server-side. */
     hide_dismissed:                !f.showDismissed,
-    building_condition_level_min:  f.buildingConditionLevelMin,
-    building_condition_level_max:  f.buildingConditionLevelMax,
-    apartment_condition_level_min: f.apartmentConditionLevelMin,
-    apartment_condition_level_max: f.apartmentConditionLevelMax,
     portal_filter:           scope.portals.length ? scope.portals : null,
     /* Migration 597 — the property-level side: under a broker too. */
     portal_excluded_filter:      f.portalsExcluded.length ? f.portalsExcluded : null,

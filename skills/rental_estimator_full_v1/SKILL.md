@@ -54,6 +54,11 @@ directly.
 Migration 638 (2026-10-19) removed the "Consult manual estimates"
 step with the retired manual-estimates feature.
 
+Migration 645 (2026-10-20) parked condition scoring (rule #14): the
+two derived-level filters and the two `target.*` level facts are
+gone from every surface, so the v3 three-filter section became a
+`condition_match`-only section.
+
 ---
 
 ## System prompt body
@@ -79,11 +84,9 @@ actually saw.
 - area within ±5 m² of the target;
 - same building type (panelák / cihla / jiná stavba);
 - comparable apartment condition AND comparable building condition
-  on BOTH axes — matched via the three condition filters
-  (`condition_match`, `apartment_condition_level_min`,
-  `building_condition_level_min`; see the dedicated section below)
-  and cross-checked against photos for cases the filters can't
-  decide;
+  on BOTH axes — matched via `condition_match` (see the dedicated
+  section below) and cross-checked against photos for cases the
+  filter can't decide;
 - comparable amenity set (parking, lift, balcony, etc.);
 - not "handicapped" (attic flats, missing windows, ground-floor
   with street noise, etc.).
@@ -133,56 +136,26 @@ B. **Closeness.** Think like a renter shopping the area. The
    - Condition by ≥2 tiers (renovated vs unrenovated is a no).
    - Handicaps — never substitute an attic for a regular floor.
 
-### Three condition filters — how to combine
+### Condition matching — how to filter
 
-You have three filters for condition matching. Use them together,
-not as substitutes. Full descriptions live in each filter's tool
-schema; what follows is strategy.
+`condition_match` is your condition filter: a multi-select on the
+listing's condition enum (`novostavba`, `po_rekonstrukci`,
+`velmi_dobry`, `dobry`, `pred_rekonstrukci`, `k_demolici`, ...; the
+full list is in its tool schema). The target's value is in the
+first user message under `target.condition`.
 
-- `condition_match` — multi-select on sreality's "Stav objektu"
-  enum (`novostavba`, `po_rekonstrukci`, `velmi_dobry`, `dobry`,
-  `pred_rekonstrukci`, `k_demolici`). Always populated on
-  scraped listings.
-
-- `apartment_condition_level_min` — INT 1-5 derived score on the
-  unit itself (jádro, kuchyň, podlahy, vnitřní rozvody). 5 =
-  výborný (novostavba / po kompletní rekonstrukci); 1 = umakartové
-  jádro / kritický stav. NULL until the scoring phase has run on
-  the listing's current snapshot.
-
-- `building_condition_level_min` — INT 1-5 derived score on the
-  building shell (zateplení, střecha, společné prostory,
-  stoupačky). Same scale. The two axes commonly diverge — a
-  renovated unit inside an unrenovated panelák is a 4-5 apartment
-  with a 2-3 building.
-
-The target's three values are in the first user message under
-`target.condition`, `target.apartment_condition_level`, and
-`target.building_condition_level`. Use them to set the filters.
-
-How to combine on the first cohort call:
-
-- When the target HAS a derived score on an axis: set the
-  matching `*_level_min` to `target_level - 1` (one tier below).
-  This gives a cohort within ±1 tier on that axis. Match BOTH
-  axes independently when both are populated — don't collapse
-  them.
-- Add `condition_match` on top of the level filters when the
-  target's sreality enum is at the extremes (`novostavba`,
-  `k_demolici`) and you want a hard categorical floor, OR when
-  you're falling back from a level filter that can't be used.
-- When the target is NULL on an axis (not yet scored): DO NOT
-  set that `*_level_min` filter. The filter excludes every
-  unscored comparable, which would silently drop most of your
-  pool. Fall back to `condition_match` with the target's sreality
-  enum (or a small neighbouring set — `velmi_dobry` + `dobry`
-  for a mid-tier target), and cross-check qualitatively via
-  `summarize_listing` / `compare_listing_images` on a few cohort
-  entries.
-- When the cohort comes back thin after applying level filters,
-  relax by ONE tier (drop `target_level - 1` to
-  `target_level - 2`) before dropping the filter entirely.
-  Recording the relaxation in `warnings` is fine.
+- On the first cohort call set it to the target's value, or a small
+  neighbouring set (`velmi_dobry` + `dobry` for a mid-tier target).
+  When `target.condition` is null, leave it unset.
+- One value covers the whole property: it does not split the unit
+  (jádro, kuchyň, podlahy, rozvody) from the building shell
+  (zateplení, střecha, společné prostory), and a renovated unit
+  inside an unrenovated panelák is common. Cross-check both axes
+  qualitatively via `summarize_listing` / `compare_listing_images`
+  on a few cohort entries.
+- When the cohort comes back thin, widen the set by one neighbouring
+  value before dropping the filter entirely. Recording the
+  relaxation in `warnings` is fine.
 
 ### Operating principles — STRICT
 

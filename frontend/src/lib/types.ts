@@ -498,8 +498,6 @@ export interface EstimationFilters {
   min_usable_area: number | null;
   max_usable_area: number | null;
   min_parking_lots: number | null;
-  building_condition_level_min: number | null;
-  apartment_condition_level_min: number | null;
 }
 
 export interface CreateEstimationIn extends Partial<EstimationFilters> {
@@ -1068,12 +1066,6 @@ export interface WatchdogFilterSpec {
   portals_excluded: string[] | null;
   portals_excluded_active_only: boolean;
   min_parking_lots: number | null;
-  // Derived condition scores (migrations 072 / 073). Same NULL-excluding
-  // `>= N` / `<= N` semantics as the Browse filter.
-  building_condition_level_min: number | null;
-  building_condition_level_max: number | null;
-  apartment_condition_level_min: number | null;
-  apartment_condition_level_max: number | null;
   // Price-history aggregates (migration 173). Property grain; the matcher
   // reads them off properties_public. The window (30/90/365, null = all
   // time) picks which precomputed count column the count min reads;
@@ -1147,10 +1139,6 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   portals_excluded: null,
   portals_excluded_active_only: false,
   min_parking_lots: null,
-  building_condition_level_min: null,
-  building_condition_level_max: null,
-  apartment_condition_level_min: null,
-  apartment_condition_level_max: null,
   price_change_count_min: null,
   price_change_window_days: null,
   total_price_change_pct: null,

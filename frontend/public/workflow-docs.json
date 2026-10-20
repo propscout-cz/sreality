@@ -1199,7 +1199,7 @@
     {
       "filename": "condition_score_batches.yml",
       "name": "Scraping: Sreality condition scoring (batch API)",
-      "description": "Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
+      "description": "PARKED (rule #14, operator ruling 2026-10-20): both crons are off and no filter, agent fact or estimate reads the levels. Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1263,8 +1263,8 @@
     },
     {
       "filename": "condition_scores.yml",
-      "name": "Scraping: Sreality condition scoring (hourly + manual backfill)",
-      "description": "Decoupled condition-scoring job. Scores building/apartment condition (1..5) for active listings whose latest snapshot doesn't yet have a row in `listing_condition_scores`, writing both the cache row AND the two listings.*_condition_level columns in one transaction per listing (autocommit — every successful score commits independently, so a timeout or cancel preserves the rows already done). Resumable: scored listings drop out of the next selection.",
+      "name": "Scraping: Sreality condition scoring (PARKED, manual backfill)",
+      "description": "PARKED (rule #14, operator ruling 2026-10-20): dispatch-only, and no filter, agent fact or estimate reads the levels it writes. Decoupled condition-scoring job. Scores building/apartment condition (1..5) for active listings whose latest snapshot doesn't yet have a row in `listing_condition_scores`, writing both the cache row AND the two listings.*_condition_level columns in one transaction per listing (autocommit — every successful score commits independently, so a timeout or cancel preserves the rows already done). Resumable: scored listings drop out of the next selection.",
       "manual": true,
       "schedules": [],
       "onPush": false,

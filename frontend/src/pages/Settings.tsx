@@ -131,7 +131,7 @@ export default function Settings() {
         eyebrow="Scoring"
         title="Hodnocení stavu — kraje"
         infoExpanded={infoExpanded}
-        description="Condition scoring runs kraj by kraj. Enabling a kraj means the scheduled batch job (every 3 h) starts draining that kraj automatically; the count is how many active listings there still await a condition score."
+        description="Condition scoring is PARKED: no job is scheduled, so enabling a kraj runs nothing by itself — it only scopes a manually dispatched scoring run, and no filter or estimate reads the scores. The count is how many active listings there still lack a condition score."
       >
         <ConditionRegionsSection />
       </CollapsibleSection>
