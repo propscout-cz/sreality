@@ -1875,8 +1875,9 @@ renumber.** Navigate by area:
     engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
     pass re-claims waiting groups whole — a group whose cluster holds an active advert first
     (E973), then flats for sale, flats for rent, the rest (E972, the operator's Prague
-    priority), oldest first within each — 200 adverts on top of
-    its feeds (E971: the worker's memory holds a pass to ~300 adverts), never more than the
+    priority), oldest first within each — 200 adverts on top of its feeds (E971: the worker's
+    memory holds a pass to ~300 adverts; a group that does not fit is skipped for the next
+    ones, the first taken whole whatever its size, E973), never more than the
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
     (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
     shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is

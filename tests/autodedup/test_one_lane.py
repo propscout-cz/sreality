@@ -853,8 +853,9 @@ def test_the_re_claim_serves_flats_for_sale_then_flats_for_rent_then_the_rest(
     assert taken == [3, 1, 2, 4, 5, 10, 11, 12, 20, 21, 22], (
         "flats for sale oldest first, then flats for rent, then the rest")
     taken, stamps = reconcile.select_claims(groups, ages, {}, db.now, budget=4)
-    assert taken == [3, 1, 2] and set(stamps) == {"3", "1"}, (
-        "the budget goes to flats for sale; the older rent flat that would fit waits its turn")
+    assert taken == [3, 1, 2, 10] and set(stamps) == {"3", "1", "10"}, (
+        "the budget goes to flats for sale; the sale group that does not fit is skipped and the "
+        "rent flat that does fills it (E973)")
 
     monkeypatch.setattr(reconcile, "REDECIDE_CAP", 6)
     assert reconcile._hand_on(db, RT, "rt:e972", groups, ages) == (4, 3)
@@ -913,6 +914,27 @@ def test_a_group_whose_cluster_holds_an_active_advert_goes_before_every_group_wi
                                fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
     assert reconcile.claims(groups, ages, 100) == [10, 11, 31, 32, 20, 21], (
         "with no active group left, E972's order: the inactive groups still merge")
+
+
+def test_a_group_that_does_not_fit_the_budget_is_skipped_and_the_next_ones_tried() -> None:
+    """E973: `claims` stopped at the first group that did not fit, so the 12:40Z pass of
+    2026-10-20 re-claimed 188 of its 200. A group that does not fit is skipped and the next
+    ones are tried; the first group is still taken whole whatever its size, so a group bigger
+    than the budget is re-claimed alone, never cut, and the others wait for the next pass."""
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    sizes = {100: 3, 200: 4, 300: 1, 400: 2, 500: 2}
+    groups = [[head + k for k in range(size)] for head, size in sizes.items()]
+    ages = {i: reconcile.Refresh(now - timedelta(hours=40 - n), True, 0, True)
+            for n, group in enumerate(groups) for i in group}
+    assert reconcile.claims(groups, ages, 6) == [100, 101, 102, 300, 400, 401], (
+        "the four-advert group does not fit after the first three: skipped, the next fit")
+    assert reconcile.claims(groups, ages, 12) == [i for g in groups for i in g]
+    big = {i: row._replace(at=now - timedelta(hours=50)) for i, row in ages.items()
+           if i in groups[1]}
+    assert reconcile.claims(groups, {**ages, **big}, 3) == [200, 201, 202, 203], (
+        "a head bigger than the budget is taken whole, and alone")
+    taken, stamps = reconcile.select_claims(groups, ages, {}, now, budget=6)
+    assert set(stamps) == {"100", "300", "400"}, "a skipped group is not stamped tried"
 
 
 def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(

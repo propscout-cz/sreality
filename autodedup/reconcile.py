@@ -241,9 +241,9 @@ def _rank(members: Sequence[int], ages: Mapping[int, Refresh]) -> tuple[int, int
 def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
            budget: int) -> list[int]:
     """The adverts a pass re-claims for the groups handed on (E960): WHOLE groups — every stale
-    member a claim can refresh (it has a row) — in `_rank`'s order, the hand-on's (E972), until
-    `budget` adverts; the first group is taken whatever its size, so no group is ever cut
-    across passes."""
+    member a claim can refresh (it has a row) — in `_rank`'s order, the hand-on's (E972), as
+    many as fit in `budget` adverts: a group that does not fit is skipped for the next ones
+    (E973), and the first is taken whatever its size, so no group is ever cut across passes."""
     queue = []
     for members in groups:
         stale = sorted({int(i) for i in members if int(i) in ages and ages[int(i)].stale
@@ -254,7 +254,7 @@ def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
     out: list[int] = []
     for _place, stale in queue:
         if out and len(out) + len(stale) > budget:
-            break
+            continue
         out.extend(i for i in stale if i not in out)
     return out
 
