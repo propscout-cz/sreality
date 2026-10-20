@@ -68,7 +68,7 @@ def _expected() -> str:
 
 
 def test_it_is_the_effective_definition_and_the_only_one_in_the_file() -> None:
-    assert latest_definition(FN).name == THIS.name
+    assert latest_definition(FN).name == "640_drop_property_ids_excluded.sql"  # 640 restated it minus the denylist parameter
     assert SQL.count(f"create or replace function public.{FN}(") == 1
 
 
