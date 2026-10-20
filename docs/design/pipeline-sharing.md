@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **proposal, 2026-10-20 (v1.1: the active board is an app-level selection; acting on a property page needs it)** — awaiting the operator's rulings (§8). Written from three code maps
+Status: **v1.2, 2026-10-20 — rulings 1–6 and 8–11 in (§8); ruling 7 (the share notification) pending.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards. Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
@@ -106,6 +106,38 @@ alter policy collection_shares_party on collection_shares
   using ((account_id in (select current_account_ids()) or recipient_account_id in (select current_account_ids()))
          and not acting());
 
+-- Every delegated edit is stamped: one append-only ledger, one trigger function on the eleven tables,
+-- no column on any curation table. Fires only while acting (ruling 5).
+create table delegated_edits (
+  id               bigint generated always as identity primary key,
+  at               timestamptz not null default now(),
+  actor_user_id    uuid not null,                                        -- the JWT sub
+  actor_account_id uuid not null references accounts(id) on delete cascade,
+  owner_account_id uuid not null references accounts(id) on delete cascade,
+  relation         text not null,                                        -- 'property_notes', 'property_pipeline', …
+  row_key          text not null,                                        -- the row's primary key, text
+  op               text not null check (op in ('insert', 'update', 'delete'))
+);
+create index delegated_edits_owner_idx on delegated_edits (owner_account_id, at desc);
+create index delegated_edits_row_idx on delegated_edits (relation, row_key, at desc);
+alter table delegated_edits enable row level security;
+revoke all on delegated_edits from anon, authenticated;
+grant select on delegated_edits to authenticated;                         -- written by the trigger only
+create policy delegated_edits_owner_read on delegated_edits for select to authenticated
+  using (owner_account_id in (select current_account_ids()));            -- the OWNER reads what was done as them
+create function stamp_delegated_edit() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if acting() then
+    insert into delegated_edits (actor_user_id, actor_account_id, owner_account_id, relation, row_key, op)
+    select (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid,
+           (select account_id from current_account_ids() limit 1),
+           (select account_id from acting_account_ids() limit 1),
+           tg_table_name, coalesce(new, old)::text /* the PK, built per table */, lower(tg_op);
+  end if;
+  return coalesce(new, old);
+end $$;
+-- one AFTER INSERT OR UPDATE OR DELETE trigger per curation table (eleven), each handing its PK as row_key.
+
 -- One label door for both share kinds (counterparties of every share the caller is party to).
 create or replace function share_party_emails() … from collection_shares … union … from pipeline_shares … ;
 
@@ -144,9 +176,9 @@ answers as the caller. Without the header nothing changes.
 | Action | Owner | Recipient (read) | Recipient (edit) | Anyone else |
 |---|---|---|---|---|
 | See the board in the Pipeline tab's switcher | own | yes, "{email} · jen ke čtení" | yes, "{email} · úpravy" | no |
-| Move a card between stages / remove a card | yes | no (drag off) | yes, as O | no |
+| Move a card between stages / remove a card | yes | no (drag off) | yes, as O (desktop drag; phone stage sheet, ruling 6) | no |
 | Add a property to the board (property page, funnel button) | yes | no | yes, while acting as O | no |
-| Manage stages (create, rename, reorder, archive) | yes | no | **no** (§8-3) | no |
+| Manage stages (create, rename, reorder, archive) | yes | no | yes, as O (ruling 3) | no |
 | "Edit as pipeline owner" on a property page | — | no | yes, while O's board is the ACTIVE board (§8-4) | no |
 | While acting: notes, collections, tags, files, artifact link, dismissal | — | — | as O (O's lists, O's rows, written as O) | — |
 | While acting: O's estimations, watchdog, presets, billing, shares, notifications | — | never | never | — |
@@ -160,8 +192,8 @@ answers as the caller. Without the header nothing changes.
 - **Two write-account dependencies, by declaration:** `require_account_id` (unchanged: the caller's own
   account; **403 when the acting header is present**) stays on watchdog subscriptions and filter presets;
   `require_acting_account_id` (the one row of `acting_account_ids()`; 403 "no edit share from that
-  account" when the header is present and the function returns nothing) goes on the curation and
-  pipeline-card writes. The route declares whether it can be delegated; a census pins that every
+  account" when the header is present and the function returns nothing) goes on the curation writes,
+  the pipeline-card writes AND the stage routes (ruling 3: a delegate manages the owner's stages as O). The route declares whether it can be delegated; a census pins that every
   `require_acting_account_id` route writes only the eleven tables.
 - **`tenant_transaction`** sets `request.headers` (`{"x-act-as": …}` when the header is present, else
   absent) and `request.method` next to `request.jwt.claims`, as bind parameters. `tenant_conn` gains the
@@ -178,7 +210,11 @@ answers as the caller. Without the header nothing changes.
 - **Notifications:** `SourceKind` value `collection_share` becomes `share` (one kind, one renderer);
   the message says what was shared: `'<owner> shared the collection "<name>" with you'` /
   `'<owner> shared their pipeline with you (view only|edit)'`.
-- **Unchanged:** stage CRUD (own account only), the dismissal invariant SQL (correct under replace
+- **Projections carry the stamp:** `_NOTE_PROJECTION`, the card read and `pipeline_board_public` /
+  `pipeline_stages_public` gain `edited_by_email` + `edited_at` from the row's latest `delegated_edits`
+  entry (null when the owner did it themselves), labelled through `share_party_emails()` (the actor's
+  account is the owner's counterparty).
+- **Unchanged:** the dismissal invariant SQL (correct under replace
   semantics), merge carriers (per card account), `POST /listings/lookup` (no header → own board),
   Browse RPCs, Watchdog, collection monitor.
 
@@ -199,8 +235,8 @@ answers as the caller. Without the header nothing changes.
 - **Pipeline tab:** the switcher above the kanban lists "Můj pipeline" plus every board shared with me,
   labelled `email · jen ke čtení | úpravy`; the choice is the active board. A shared board renders inside
   `<ActingAs>`: the columns are the owner's stages, the cards the owner's; read mode disables drag, the
-  stage menu, the trash and the manage button; edit mode enables drag and the stage menu, keeps the
-  manage button off. The owner's own board gets a **Sharing** block (email, mode, recipients with mode
+  stage menu, the trash and the manage button; edit mode enables drag, the stage menu and the manage button (stages are created, renamed,
+  reordered and archived as the owner). The owner's own board gets a **Sharing** block (email, mode, recipients with mode
   and a two-step "Stop sharing") — the collection page's `SharingBlock` generalised into one
   `ShareBlock`. A viewer gets the `ViewerLine` with a two-step "Remove from my list" (which also resets
   the active board to own). A revoked active board reads empty and resets to own with a toast.
@@ -214,8 +250,10 @@ answers as the caller. Without the header nothing changes.
   "Ukončit", or until the active board changes back to "Můj pipeline" (which clears it).
 - **Notifications page:** the `share` row renders for both kinds (one renderer; "Open collection" /
   "Open pipeline" link).
-- **Phone:** the same per-device active board, read-only for every shared board (§8-6); no "Upravit
-  jako" on the phone property page. **Extension:** unchanged (no header; its lookup and writes stay the caller's own).
+- **Phone:** the same per-device active board; a read board is read-only, an edit board moves cards
+  through the stage sheet as the owner (ruling 6); no "Upravit jako" on the phone property page.
+- **Stamps:** a note, card or stage last changed by a delegate shows "upravil {email} · {time}" (desktop
+  "edited by") from the projection; the owner's own edits show nothing. **Extension:** unchanged (no header; its lookup and writes stay the caller's own).
 
 ### 3.6 Notes while acting
 
@@ -223,7 +261,8 @@ A note written while acting is the owner's note (owner's account, `owner_email` 
 The consent mark (`shared`) and the audience are the owner's, computed from the owner's shares. Notes
 third parties shared with the DELEGATE do not appear while acting (`collection_shares` is invisible
 under the header), so a page in acting mode shows exactly what the owner would see of their own
-curation and nothing of the delegate's. No actor is recorded unless ruled (§8-5).
+curation and nothing of the delegate's. Every delegated write is recorded in `delegated_edits` (who, as whom, which row, when; ruling 5): the
+owner reads it, the delegate does not; items show their latest delegated edit.
 
 ### 3.7 What stays identity-scoped, by table
 
@@ -237,7 +276,8 @@ and paid calls are never spent by a delegate.
 ### 3.8 Merges, splits, monitoring, the extension
 
 Cards and curation stay owned by exactly one account, so the carriers, the sold-comps worker and merge
-receipts are untouched. A split routes only the acting account's items (unchanged: a delegate on a
+receipts are untouched. `delegated_edits.row_key` names rows, not properties, so it needs no carrier
+entry; a merge that moves a note keeps the note's id and therefore its stamps. A split routes only the acting account's items (unchanged: a delegate on a
 split route acts as the caller, not the owner — the merge routes are admin-only and never carry the
 header). Collection monitoring and watchdog never act. The extension never acts.
 
@@ -264,9 +304,10 @@ more objects than switching the eleven curation policies, and it muddles "who I 
 | `api/shares.py`, `POST/DELETE/GET /pipeline/shares` | the collection share route's body moves into the module (one email resolver, one grant write, one notification); `source_kind` values −1 (`collection_share` → `share`, one renderer) | `api/curation.py:293-370` |
 | `ShareBlock` | the collection page's `SharingBlock` (one component for both pages) | `pages/CollectionDetail.tsx` |
 | `useActing`, the `actAs` transport option, the key segment | the four `_scoped` copies in the live lanes become one `tests/_tenant_scope.py` (with `act_as=`, `method=`) | test_tenant_isolation_live:355, collection_shares_live:34, tenant_ids_identity_live:81, curated_set_scope_live:58 |
+| `delegated_edits` + `stamp_delegated_edit()` + eleven triggers | no column on any curation table; one ledger in the house's append-only event shape (like `property_pipeline_events`, `property_status_events`) | ruling 5 |
 | `tests/test_pipeline_shares_live.py` | the collection live lane's three-tenant fixture becomes the shared fixture it already is in shape | — |
 
-**Net, plainly.** Database objects +1 table, +2 functions, +1 policy, −1 column; routes +3, −0 (one body
+**Net, plainly.** Database objects +2 tables, +3 functions, +2 policies, +11 triggers, −1 column; routes +3, −0 (one body
 moved); SPA +1 context, +1 transport option, −1 component copy; tests −3 helper copies. Production
 lines will be net positive: a second share kind and an acting mode are new facts. The payment is
 structural — nothing in the app learns a second way to read or write curation.
@@ -278,12 +319,13 @@ word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 (+641 for 
 merge.
 
 - **W1 `feature/pipeline-shares-acting`** (database + API + doctrine). Migration 640; `tenant_transaction`
-  GUCs; `tenant_conn` header; `require_acting_account_id` on the curation/pipeline-card writes,
+  GUCs; `tenant_conn` header; `require_acting_account_id` on the curation, pipeline-card and stage writes, the `delegated_edits` ledger + trigger + the stamp columns in the projections and the two board views (security_invoker restated),
   `require_account_id` refusing the header; `_is_mine`; `api/shares.py` with both kinds; `SourceKind`
   `share`; `tests/_tenant_scope.py` (one `_scoped`); `tests/test_pipeline_shares_live.py` (owner A,
   read recipient B, edit recipient C, bystander D: B reads A's board and nothing of their own while
   acting; B's writes see no rows; C moves A's card and the event lands in A's account; C writes a note,
-  a tag, a membership and a dismissal as A; C cannot read A's entitlements, presets, subscriptions,
+  a tag, a membership and a dismissal as A and each lands one `delegated_edits` row readable by A only;
+  C creates, renames, reorders and archives A's stages; C cannot read A's entitlements, presets, subscriptions,
   shares or estimations while acting; D's header yields nothing; a revoke denies on the next statement;
   `acting_account_ids()` equals `current_account_ids()` without the header on every tenant;
   `share_party_emails()` names both kinds' counterparties; no 42P17); the two-dependency census;
@@ -313,21 +355,22 @@ merge.
 | email enumeration on share | same stance as collections: accepted for a closed platform |
 | the top bar must stay 3.5 rem | the acting banner lives in the page, below the bar |
 
-## 8. Rulings (bold = recommended default)
+## 8. Rulings (2026-10-20: 1, 2, 4, 8, 9, 10, 11 as recommended; 3, 5, 6 as ruled below; 7 pending)
 
 1. **Acting covers** **all eleven curation tables** (notes, collections + memberships, tags + memberships,
    note files, artifact link, dismissals, pipeline cards/stages read, pipeline events) / pipeline cards only.
 2. **Read-only share** = **see the board only**; nothing on the property page / also "view as owner"
    (read the owner's notes, tags, collections on that property, no writes).
-3. **Stage management** (create, rename, reorder, archive) in edit mode: **owner only** / delegates too.
+3. Stage management in edit mode — **RULED: delegates too** (2026-10-20).
 4. **"Upravit jako {email}" appears on every property page while an edit-mode board is the active
    board** (the board need not hold the property, so you can add one to it from there) / only when
    that board already holds the property.
-5. **Attribution of delegated edits:** **none — "as if I was that user"** / stamp the acting user on
-   `property_pipeline_events` and `property_notes` (+2 columns, shown as "upravil {email}").
-6. **Phone:** **shared boards read-only on the phone; acting desktop-only** / phone can move cards on
-   edit boards through the stage sheet.
-7. **Notification on share:** **in-app row, like collections** (one `share` kind) / none.
+5. Attribution — **RULED: stamp the acting user and the time** (2026-10-20); built as the `delegated_edits`
+   ledger (§3.1), shown on notes, cards and stages.
+6. Phone — **RULED: the phone may move cards on edit boards** through the stage sheet (2026-10-20); no
+   "Upravit jako" on the phone property page.
+7. **Notification on share** (pending the operator's decision): **in-app row, like collections** (one
+   `share` kind) / none.
 8. **Drop `account_members.role`** (dead; delegation now lives in explicit shares): **yes (W3)** / keep.
 9. **Co-recipients:** **do not see each other** (each sees only their own grant); the board shows no
    "who else" / list them.
