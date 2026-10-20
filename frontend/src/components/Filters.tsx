@@ -14,9 +14,11 @@ import {
   subtypeOptions,
   type CustomBlock,
   type FilterBlock,
+  type FilterRow,
 } from '@/lib/filterLayout';
+import { FILTER_REGISTRY, type FilterDef } from '@/lib/filterRegistry.generated';
 import type { MapySuggestion } from '@/lib/maps';
-import { CollapsibleGroup, ControlGroup, PickButton, Section } from '@/components/controls';
+import { CollapsibleGroup, PickButton, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { pgRead } from '@/lib/pgRead';
@@ -365,6 +367,7 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
       case 'location_mode':
         return (
           <LocationModeSection
+            label={b.label}
             mode={filters.locationMode}
             centerRadius={filters.centerRadius}
             onModeChange={(mode) => onChange({ ...filters, locationMode: mode })}
@@ -404,7 +407,8 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
           : 'shrink-0 border-r border-[var(--color-rule)] sticky top-14 self-start max-h-[calc(100dvh-3.5rem)] overflow-y-auto'
       }
     >
-      <div className="px-5 py-4 flex items-center justify-between border-b border-[var(--color-rule-soft)]">
+      {/* Pinned: Reset and the fold arrow stay in reach however far the filters scroll. */}
+      <div className="sticky top-0 z-10 bg-[var(--color-paper)] px-5 py-4 flex items-center justify-between border-b border-[var(--color-rule-soft)]">
         <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
           Filters
         </h2>
@@ -432,10 +436,10 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         </div>
       </div>
 
-      {/* Three tiers from one table (lib/filterLayout, shared with the phone's
-          Filtry sheet): collapsible bands → ControlGroups (bordered={false},
-          the band owns separation) → rows. The registry decides each form
-          row's widget, so a `toolkit/filter_registry.py` edit flows through. */}
+      {/* Two tiers from one table (lib/filterLayout, shared with the phone's
+          Filtry sheet): collapsible bands → rows, each row named by its filters'
+          own labels. The registry decides each form row's widget, so a
+          `toolkit/filter_registry.py` edit flows through. */}
       <div className="px-5">
         {BROWSE_FILTER_BANDS.map((band) => (
           <CollapsibleGroup
@@ -444,13 +448,17 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
             defaultOpen={band.defaultOpen}
             active={bandActive(filters, band.keys)}
           >
-            {band.groups
-              .filter((g) => !g.when || g.when(filters))
-              .map((g) => (
-                <ControlGroup key={g.title} title={g.title} bordered={false} layout={g.layout}>
-                  {g.blocks.map(renderBlock)}
-                </ControlGroup>
-              ))}
+            {band.rows
+              .filter((r) => !r.when || r.when(filters))
+              .map((r, i) =>
+                r.layout === 'line' ? (
+                  <PillLine key={i} blocks={r.blocks} state={registryView} onChange={handleRegistryChange} />
+                ) : (
+                  <div key={i} className={rowClass(r)}>
+                    {r.blocks.map(renderBlock)}
+                  </div>
+                ),
+              )}
           </CollapsibleGroup>
         ))}
       </div>
@@ -529,19 +537,89 @@ export function CityPopulationHint() {
 /* bbox client-side; the main map still draws the precise circle overlay).    */
 /* -------------------------------------------------------------------------- */
 
+const rowClass = (r: FilterRow): string => {
+  if (r.layout !== 'grid') return 'space-y-5';
+  /* Bottom-aligned: a label that wraps to two lines must not push its control
+   * below its neighbour's. */
+  if (r.cols === 2) return 'grid grid-cols-2 items-end gap-x-3 gap-y-5';
+  /* Three min–max pairs in ~280 px: slimmer input padding keeps "min" / "max" whole. */
+  if (r.cols === 3) return 'grid grid-cols-3 items-end gap-x-2 gap-y-5 [&_input]:px-1.5';
+  return 'grid gap-x-4 gap-y-5 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]';
+};
+
+const REGISTRY_DEF = new Map(FILTER_REGISTRY.filters.map((d) => [d.id, d]));
+
+/* What an on/off button in a line means, when its label alone cannot say it. */
+const LINE_TIPS: Readonly<Record<string, string>> = {
+  tom_observed_only: 'Only ads we saw appear: hides ads that were already live when we first scraped them.',
+};
+
+/* A 'line' row: its pill groups and on/off toggles as ONE strip of buttons
+ * (Status: Vše · Aktivní · Neaktivní, then Seen at birth), captioned with the
+ * first filter's label; a toggle carries its own. */
+function PillLine({
+  blocks,
+  state,
+  onChange,
+}: {
+  blocks: readonly FilterBlock[];
+  state: Readonly<Record<string, unknown>>;
+  onChange: (updates: ReadonlyArray<{ id: string; value: unknown }>) => void;
+}) {
+  const items = blocks.flatMap((b) =>
+    b.kind === 'form'
+      ? b.ids.flatMap((id) => {
+          const def = REGISTRY_DEF.get(id);
+          return def ? [{ def, label: b.labels[id] ?? id }] : [];
+        })
+      : [],
+  );
+  if (items.length === 0) return null;
+  const button = ({ def, label }: { def: FilterDef; label: string }): ReactNode =>
+    def.ui_control === 'boolean' ? (
+      <span key={def.id} className="ml-1.5" title={LINE_TIPS[def.id]}>
+        <PickButton
+          on={state[def.id] === true}
+          onClick={() => onChange([{ id: def.id, value: state[def.id] !== true }])}
+          variant="solid"
+        >
+          {label}
+        </PickButton>
+      </span>
+    ) : (
+      (def.enum_values ?? []).map((o) => (
+        <PickButton
+          key={`${def.id}:${String(o.value)}`}
+          on={state[def.id] === o.value}
+          onClick={() => onChange([{ id: def.id, value: o.value }])}
+          variant="solid"
+        >
+          {o.label_cs}
+        </PickButton>
+      ))
+    );
+  return (
+    <Section label={items[0].label}>
+      <div className="flex flex-wrap items-center gap-1">{items.map(button)}</div>
+    </Section>
+  );
+}
+
 function LocationModeSection({
+  label,
   mode,
   centerRadius,
   onModeChange,
   onCenterRadiusChange,
 }: {
+  label: string;
   mode: LocationMode;
   centerRadius: CenterRadius | null;
   onModeChange: (next: LocationMode) => void;
   onCenterRadiusChange: (next: CenterRadius | null) => void;
 }) {
   return (
-    <Section label="Mode">
+    <Section label={label}>
       <div className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]">
         {(['viewport', 'center_radius'] as const).map((m) => {
           const on = mode === m;

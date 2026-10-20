@@ -135,7 +135,8 @@ export interface ListingFilters {
    * already treats a missing category_type that way (comparables, the watchdog
    * matcher, browse_stats_properties all guard the clause), and because a
    * cohort like "everything in my pipeline" spans rent AND sale. The default
-   * stays `pronajem`, so an empty URL is unchanged. */
+   * is `prodej` (operator, 2026-10-20; Browse's own — the registry's shared
+   * default stays `pronajem` for estimation and comparables). */
   categoryType: CategoryType | null;
   districts: DistrictChip[];
   dispositions: Disposition[];
@@ -297,7 +298,7 @@ export interface ListingFilters {
 
 export const DEFAULT_FILTERS: ListingFilters = {
   categoryMain: ['byt'],
-  categoryType: 'pronajem',
+  categoryType: 'prodej',
   districts: [],
   dispositions: [],
   priceMin: null,
@@ -542,11 +543,11 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
       ? [...DEFAULT_CATEGORY_MAIN]
       : splitCsv(sp.get('cat')).filter((c): c is CategoryMain =>
           (CATEGORY_MAIN_VALUES as ReadonlyArray<string>).includes(c)),
-    /* `deal=any` is the explicit "no constraint" state; an ABSENT param keeps
-     * meaning the default (`pronajem`), so a bare /browse URL is untouched. */
+    /* `deal=any` is the explicit "no constraint" state; an ABSENT param means
+     * the default (`prodej` since 2026-10-20 — a link that omits it opens on sale). */
     categoryType: sp.get('deal') === ANY_DEAL_TYPE
       ? null
-      : enumOr(sp.get('deal'), CATEGORY_TYPE_VALUES, 'pronajem'),
+      : enumOr(sp.get('deal'), CATEGORY_TYPE_VALUES, DEFAULT_FILTERS.categoryType ?? 'prodej'),
     districts: parseDistrictChips(
       sp.get('districts'),
       sp.get('districts_ctx'),
@@ -755,7 +756,7 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
     sp.set('cat', f.categoryMain.join(','));
   }
   if (f.categoryType == null) sp.set('deal', ANY_DEAL_TYPE);
-  else if (f.categoryType !== 'pronajem') sp.set('deal', f.categoryType);
+  else if (f.categoryType !== DEFAULT_FILTERS.categoryType) sp.set('deal', f.categoryType);
   for (const [k, v] of Object.entries(districtChipsToCsvParams(f.districts))) {
     sp.set(k, v);
   }
