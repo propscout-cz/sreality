@@ -6,7 +6,9 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { ApiError, apiGet, apiPost } from '@/lib/api';
-import { fmtArea, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24, fmtTomDays } from '@/lib/format';
+import {
+  fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24, fmtTomDays,
+} from '@/lib/format';
 import { estimationKeys, fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
 import type { EstimationRun } from '@/lib/types';
 import type { Valuation, ValuoField, ValuoPage, ValuoRecord } from '@/lib/valuo';
@@ -270,6 +272,10 @@ describe('<ValuoSection> editor', () => {
     fireEvent.click(cta());
     expect(await screen.findByText('Valuo neodpovědělo do 20 sekund.')).toBeInTheDocument();
     expect(cta()).toBeInTheDocument();
+    // By the button, above the fields: seen right after the click, with no "failed:" prefix the sentence already says.
+    const banner = screen.getByRole('alert');
+    expect(banner.compareDocumentPosition(placeBox()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(banner.textContent?.trim()).toBe('Valuo neodpovědělo do 20 sekund.');
   });
 
   it('takes a typed place as an override, and holds the call while the box is empty', async () => {
@@ -393,7 +399,7 @@ describe('<ValuoSection> states', () => {
     const headline = await screen.findByText(t(fmtCzk(6_120_000)));
     expect(headline).toHaveAttribute('title', fmtCzk(6_123_456.7));
     expect(screen.getByText('Odhad ceny · Valuo')).toBeInTheDocument();
-    expect(screen.getByText('1 ocenění')).toBeInTheDocument();
+    expect(screen.queryByText(/^\d+ ocenění$/)).not.toBeInTheDocument(); // the ledger counts its rows, the header does not
     expect(screen.getByText('Sandbox')).toBeInTheDocument();
     // The ruler is Valuo's confidence band, never its min/max.
     expect(screen.getByText('pásmo spolehlivosti (Valuo)')).toBeInTheDocument();
@@ -401,8 +407,9 @@ describe('<ValuoSection> states', () => {
     expect(screen.getByText(t(fmtCzk(6_590_000)))).toBeInTheDocument();
     expect(screen.queryByText(t(fmtCzk(4_100_000)))).not.toBeInTheDocument();
     expect(screen.queryByText(t(fmtCzk(8_900_000)))).not.toBeInTheDocument();
-    expect(within(screen.getByText('Za m² (pásmo)').parentElement!)
-      .getByText(t(`103 540–${fmtMeasuredPricePerM2(120_870, 'sale')}`))).toBeInTheDocument();
+    // The per-m² band rounds to 100 Kč like the headline rounds, the exact ends in its title.
+    expect(within(screen.getByText('Za m² (pásmo)').parentElement!).getByText(t(`103 500–${fmtMeasuredPricePerM2(120_900, 'sale')}`)))
+      .toHaveAttribute('title', `${fmtCount(103_540)}–${fmtMeasuredPricePerM2(120_870, 'sale')}`);
     expect(screen.getByText('nabídka')).toBeInTheDocument();
     expect(screen.getByText('náš odhad')).toBeInTheDocument();
     expect(screen.queryByText('MF')).not.toBeInTheDocument(); // a sale has no rent-map mark
@@ -472,11 +479,23 @@ describe('<ValuoSection> states', () => {
     const rows = screen.getAllByRole('row');
     expect(within(rows[2]).getByText('Prodej')).toBeInTheDocument();
     expect(within(rows[2]).getByText('ostré')).toBeInTheDocument();
+    expect(screen.queryByText(/Odeslaná poloha|Valuo: „/)).not.toBeInTheDocument(); // only an engine refusal says them
     // The ledger rounds the average as the card does, the exact one in its title.
     expect(within(rows[2]).getByTitle(t(fmtCzk(6_123_456.7)))).toHaveTextContent(t(fmtCzk(6_120_000)));
     fireEvent.click(within(rows[2]).getByRole('button')); // the keyboard's way in
     expect(screen.getAllByText(t(fmtCzk(6_120_000))).length).toBeGreaterThan(1);
     expect(screen.queryByText('Valuo hlásí příliš mnoho dotazů, zkuste to později.')).not.toBeInTheDocument();
+  });
+
+  it("quotes Valuo's own words once, as Valuo's, under the API's sentence, with the place that was sent", async () => {
+    const refused: Valuation = {
+      ...SALE, id: 4, status: 'failed', result: null, records: [], summary: null,
+      error: { code: 'calculation', message: 'Valuo nemovitost neocenilo: Place could not be resolved' },
+    };
+    renderSection(page({ history: [refused] }));
+    expect((await screen.findByRole('alert')).textContent?.trim()).toBe('Valuo nemovitost neocenilo.');
+    expect(screen.getByText('Valuo: „Place could not be resolved“')).toBeInTheDocument();
+    expect(screen.getByText(PLACE).parentElement).toHaveTextContent(`Odeslaná poloha: ${PLACE}`);
   });
 
   it('lists the comparables Valuo sent under the card, in its order, each per-m² figure with its unit', async () => {
@@ -485,21 +504,23 @@ describe('<ValuoSection> states', () => {
     expect(label).toHaveTextContent('Srovnávací nemovitosti · 2');
     const table = screen.getByRole('table', { name: 'Srovnávací nemovitosti Valuo' });
     const rows = within(table).getAllByRole('row');
-    expect(within(rows[0]).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
-      'Foto', 'Adresa', 'Dispozice', 'Plocha', 'Cena', 'Za m²', 'Upravená cena', 'Vzdálenost', 'Shoda', 'V inzerci',
+    // Short one-line headers, the layout and the area in one cell, the per-m² under its price: no sideways scroll at 1024 px.
+    expect(within(rows[0]).getAllByRole('columnheader').map((h) => t(h.textContent!))).toEqual([
+      'Foto', 'Adresa', 'Velikost', 'Cena', 'Upravená', 'Vzdálenost', 'Shoda', 'V inzerci',
     ]);
     const first = within(rows[1]);
+    expect(rows[1]).toHaveTextContent(t(`2+kk · ${fmtArea(52)}`));
     for (const text of [
-      '2+kk', fmtArea(52), fmtMeasuredPricePerM2(113_462, 'sale'), fmtCzk(6_050_000),
-      fmtDistanceM(350), fmtPct(87, { digits: 0 }), fmtTomDays(41),
+      fmtMeasuredPricePerM2(113_462, 'sale'), fmtCzk(6_050_000), fmtDistanceM(350), fmtPct(87, { digits: 0 }), fmtTomDays(41),
     ]) expect(first.getByText(t(text))).toBeInTheDocument();
     // The address opens Valuo's advert in a new tab.
     const link = first.getByRole('link', { name: 'Testovací 148, Sandboxov' });
     expect(link).toHaveAttribute('href', 'https://www.example.test/inzerat/r1');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link.getAttribute('rel')).toContain('noopener');
-    // A realised sale, tagged and explained.
-    expect(rows[1]).toHaveTextContent(t(`prodáno${fmtCzk(5_900_000)}`));
+    expect(link.parentElement).toHaveAttribute('title', 'Testovací 148, Sandboxov'); // one line, the whole address on hover
+    // A realised sale, tagged under its figures and explained.
+    expect(rows[1]).toHaveTextContent(t(`${fmtCzk(5_900_000)}${fmtMeasuredPricePerM2(113_462, 'sale')}prodáno`));
     expect(first.getByText('prodáno')).toHaveAttribute('title', 'Realizovaná prodejní cena (ČÚZK / realitní kanceláře)');
     // Without the advert detail: the place as text, no photo, no link.
     const second = within(rows[2]);
@@ -519,6 +540,7 @@ describe('<ValuoSection> states', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fotografie (2): Testovací 148, Sandboxov' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('1 / 2')).toBeInTheDocument();
+    expect(within(dialog).getByTestId('lightbox-actions')).toHaveTextContent(t(`Testovací 148, Sandboxov · ${fmtCzk(5_900_000)}`));
     expect(dialog.querySelector('img')).toHaveAttribute('src', 'https://pics.valuo.cz/p/a/1.jpg');
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -549,6 +571,7 @@ describe('<ValuoSection> states', () => {
     expect(await screen.findByText(t(fmtCzk(6_120_000)))).toBeInTheDocument();
     expect(screen.getByText('pásmo spolehlivosti (Valuo)')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^\d+ ocenění$/)).not.toBeInTheDocument(); // one card, no count
     unmount();
 
     const { container } = renderSection(page({ history: [] }), { readOnly: true });

@@ -28,8 +28,8 @@ import { mfShape } from '@/lib/mfReference';
 import { estimationKeys, fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
 import { bareImage, type EstimationRun } from '@/lib/types';
 import {
-  band, formErrors, missingRequired, optionLabel, reliability, shownPrice, useRunValuo, useValuoPage, withEdit,
-  type Provenance, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoPhoto, type ValuoRecord,
+  band, formErrors, missingRequired, optionLabel, reliability, shownPerM2, shownPrice, useRunValuo, useValuoPage, withEdit,
+  type Provenance, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoRecord,
   type ValuoRun, type ValuoValue, type ValuoValues,
 } from '@/lib/valuo';
 
@@ -39,7 +39,10 @@ const NONE = 'Nevyplněno';
 const INK3 = 'text-[var(--color-ink-3)]';
 const QUIET = 'px-2 py-1 text-[0.8rem] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] disabled:opacity-50';
 const LINK = 'text-[0.8rem] text-[var(--color-copper)] hover:underline underline-offset-2';
-const GRID = 'grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]';
+/* A field = a caption track over a control track (subgrid): a wrapped caption never lowers its control. pb-4 spaces the
+ * rows, -mb-4 takes the last back; a lone field keeps one track, the place (free text) takes two (coordinates fit). */
+const GRID = 'grid gap-x-4 -mb-4 [grid-template-columns:repeat(auto-fill,minmax(11rem,1fr))]';
+const CELL = 'row-span-2 grid grid-cols-1 grid-rows-subgrid pb-4 [&>:first-child]:self-end';
 const ABSENT = '[&_input]:border-dashed [&_select]:border-dashed [&_button]:border-dashed'; // dashed = nothing sent
 /* Valuo's average, rounded as shown, the exact figure in the title; a lease reads as monthly (unverified until P1). */
 const Price = ({ value, lease, className }: { value: number | null; lease: boolean; className?: string }) => (
@@ -123,14 +126,12 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
       <section id="valuo" className="scroll-mt-6">
         <div className="flex items-baseline justify-between gap-3">
           <SectionLabel>Valuo</SectionLabel>
-          <div className="flex items-baseline gap-3 text-[0.7rem] text-[var(--color-ink-3)]">
-            {history.length > 0 && <p className="tracking-wide font-mono tabular-nums">{history.length} ocenění</p>}
-            {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
-              <span className="px-1.5 border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[0.58rem] tracking-[0.18em] uppercase">
-                Sandbox
-              </span>
-            )}
-          </div>
+          {/* No count here: the ledger below counts its rows, and the phone shows one answer. */}
+          {(open || !shown ? page?.environment : shown.environment) === 'sandbox' && (
+            <span className={`px-1.5 border border-[var(--color-rule)] rounded-[var(--radius-xs)] text-[0.58rem] tracking-[0.18em] uppercase ${INK3}`}>
+              Sandbox
+            </span>
+          )}
         </div>
         <div className="mt-4">{body}</div>
         {!readOnly && page && history.length > 1 && (
@@ -158,8 +159,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
   if (r == null) {
     return (
       <EstimateCard eyebrow={eyebrow} aside={aside}>
-        {v.error ? <ErrorBanner title="Ocenění selhalo:" message={v.error.message} />
-          : <p className={`mt-2 flex items-center gap-2 text-sm ${INK3}`}><Spinner /> Valuo počítá…</p>}
+        {v.error ? <Failure valuation={v} /> : <p className={`mt-2 flex items-center gap-2 text-sm ${INK3}`}><Spinner /> Valuo počítá…</p>}
       </EstimateCard>
     );
   }
@@ -177,8 +177,9 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
   const range = band(v, 'range_price');
   const rangeM2 = band(v, 'range_price_m2');
   const flags = Array.isArray(r.flags) ? r.flags.map((f) => (typeof f === 'string' ? f : JSON.stringify(f))).join(', ') : null;
-  const rows: [string, string | null][] = [
-    ['Za m² (pásmo)', rangeM2 && `${fmtCount(Math.round(rangeM2[0]))}–${perM2(rangeM2[1])}`],
+  const m2 = ([low, high]: number[]) => `${fmtCount(low)}–${perM2(high)}`; // the unit once, after the high end
+  const rows: [string, ReactNode][] = [
+    ['Za m² (pásmo)', rangeM2 && <span title={m2(rangeM2.map(Math.round))}>{m2(rangeM2.map((n) => shownPerM2(n, lease)))}</span>],
     ['Směr. odchylka Valuo', r.std_price_m2 != null ? `± ${perM2(r.std_price_m2)}` : null],
     ['Plocha výpočtu', r.calc_area != null ? fmtArea(r.calc_area) : null],
     ['Ke dni', typeof v.request.as_of === 'string' ? fmtDateSlash(v.request.as_of) : null],
@@ -194,7 +195,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
         <Price value={r.avg_price} lease={lease} className="text-lg font-medium font-mono tabular-nums" />
         <span className={`text-[0.72rem] font-mono tabular-nums ${INK3}`}>{perM2(r.avg_price_m2)}</span>
       </div>
-      {reach.length > 0 && <p className="mt-0.5 text-[0.72rem] font-mono tabular-nums text-[var(--color-ink-2)]">{reach.join(' · ')}</p>}
+      {reach.length > 0 && <p className="mt-0.5 text-[0.72rem] font-mono tabular-nums text-[var(--color-ink-2)]">{reach.join('\u00a0· ')}</p>}
       {v.summary?.not_enough && (
         // Ochre lives in the dot only: ochre text fails contrast on paper (system.md).
         <p className="mt-1 flex items-center gap-1.5 text-[0.72rem] text-[var(--color-ink-2)]">
@@ -246,13 +247,13 @@ const NO_PHOTO = 'block h-[3.375rem] w-[4.5rem] rounded-[var(--radius-xs)] borde
 const NUM = 'text-right font-mono tabular-nums whitespace-nowrap';
 const SOLD = (
   <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)"
-    className={`mr-1.5 font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
+    className={`block font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
 );
 
-/* Valuo's comparables under its card, in Valuo's order; every per-m² cell names its own unit (rule 23).
- * The phone card leaves them out. */
+/* Valuo's comparables under its card, in Valuo's order; every per-m² figure names its own unit (rule 23). Fits a 1024 px
+ * page without a sideways scroll, so a tag sits under its figure, never beside it; the phone card leaves them out. */
 function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: readonly ValuoField[] }) {
-  const [photos, setPhotos] = useState<ValuoPhoto[] | null>(null);
+  const [opened, setOpened] = useState<ValuoRecord | null>(null);
   const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
   const records = v.records ?? [];
   if (records.length === 0) return null;
@@ -263,26 +264,29 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
   const address = (r: ValuoRecord) => (typeof r.address === 'string' && r.address !== '' ? r.address : r.place);
   const columns: [string, string, (r: ValuoRecord, i: number) => ReactNode][] = [
     ['Foto', '', (r, i) => (r.photos?.[0] && !broken.has(i) ? (
-      <button type="button" onClick={() => setPhotos(r.photos ?? null)}
+      <button type="button" onClick={() => setOpened(r)}
         aria-label={`Fotografie (${r.photos?.length ?? 0}): ${address(r) ?? 'srovnání'}`}
         className="block h-[3.375rem] w-[4.5rem] overflow-hidden rounded-[var(--radius-xs)] bg-[var(--color-inset)]">
         <img src={r.photos[0].thumb} alt={address(r) ?? 'Fotka srovnání'} loading="lazy" decoding="async"
           onError={() => setBroken((b) => new Set(b).add(i))} className="block h-full w-full object-cover" />
       </button>
     ) : <span aria-hidden className={NO_PHOTO} />)],
-    ['Adresa', 'min-w-[10rem] text-[var(--color-ink)]', (r) => {
+    ['Adresa', 'text-[var(--color-ink)]', (r) => {
       const href = webUrl(r.advert_url);
-      return href ? <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">{address(r) ?? 'Inzerát'}</a>
-        : (address(r) ?? '—');
+      const text = address(r) ?? (href ? 'Inzerát' : '—');
+      const link = href ? <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">{text}</a> : text;
+      return <span title={text} className="block max-w-[12rem] truncate">{link}</span>;
     }],
-    ['Dispozice', 'whitespace-nowrap text-[var(--color-ink-2)]', (r) => optionLabel(fields, 'local_type', r.local_type)],
-    ['Plocha', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtArea(r.calc_area)],
-    ['Cena', `${NUM} text-[var(--color-ink)]`, (r) => <>{r.sale_price && SOLD}{czk(r.price)}</>],
-    ['Za m²', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtMeasuredPricePerM2(r.price_m2, basis)],
-    ['Upravená cena', `${NUM} text-[var(--color-ink)]`, (r) => czk(r.adjusted_price)],
+    ['Velikost', 'whitespace-nowrap text-[var(--color-ink-2)]', (r) => (
+      <>{r.local_type != null && `${optionLabel(fields, 'local_type', r.local_type)} · `}<span className="font-mono tabular-nums">{fmtArea(r.calc_area)}</span></>
+    )],
+    ['Cena', `${NUM} text-[var(--color-ink)]`, (r) => (
+      <>{czk(r.price)}<span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</span>{r.sale_price && SOLD}</>
+    )],
+    ['Upravená', `${NUM} text-[var(--color-ink)]`, (r) => czk(r.adjusted_price)],
     ['Vzdálenost', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtDistanceM(r.distance)],
     ['Shoda', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtPct(r.score_prct, { digits: 0 })],
-    ['V inzerci', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtTomDays(r.days)],
+    ['V\u00a0inzerci', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtTomDays(r.days)],
   ];
   return (
     <div className="pt-3">
@@ -303,9 +307,12 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
           </tbody>
         </table>
       </div>
-      {photos && photos.length > 0 && (
+      {opened?.photos && opened.photos.length > 0 && (
         <Suspense fallback={null}>
-          <ImageLightbox images={photos.map((p, i) => bareImage(i, null, p.full))} startIndex={0} onClose={() => setPhotos(null)} />
+          {/* The viewer has no caption prop: its under-photo bar says which comparable this is. */}
+          <ImageLightbox images={opened.photos.map((p, i) => bareImage(i, null, p.full))} startIndex={0} onClose={() => setOpened(null)}
+            actionsAt={() => (<p className="text-center text-sm text-[var(--color-paper)]">
+              {address(opened) ?? 'Srovnání'} · <span className="font-mono tabular-nums">{czk(opened.price)}</span></p>)} />
         </Suspense>
       )}
     </div>
@@ -365,6 +372,12 @@ function ValuoEditor({ propertyId, page, refused, onCancel, onDone }: {
       <p className="mt-1 text-sm text-[var(--color-ink-2)]">
         {[page.subject.label, page.subject.location?.label].filter(Boolean).join(' · ')}
       </p>
+      {/* What the button above did or waits for, where the eye is right after the click. */}
+      {missing.length > 0 && <p className={`mt-3 text-[0.75rem] ${INK3}`}>Chybí povinné parametry: {missing.join(', ')}.</p>}
+      {busy && <p className={`mt-3 flex items-center gap-2 text-sm ${INK3}`}><Spinner /> Valuo počítá…</p>}
+      {failed && <Failure valuation={failed} />}
+      {loose.map((i, k) => <p key={k} className={`mt-1.5 ${BRICK}`}>{i.field ? `${i.field}: ${i.message}` : i.message}</p>)}
+      {run.error && <ErrorBanner title="Nelze ocenit:" message={run.error.message} />}
       <fieldset disabled={busy} className="mt-4 min-w-0 border-0 p-0 m-0 disabled:opacity-60">
         <div className={GRID}>{page.fields.filter((f) => f.group === 'basic').map(param)}</div>
         {more.length > 0 && (
@@ -375,12 +388,23 @@ function ValuoEditor({ propertyId, page, refused, onCancel, onDone }: {
           </div>
         )}
       </fieldset>
-      {missing.length > 0 && <p className={`mt-3 text-[0.75rem] ${INK3}`}>Chybí povinné parametry: {missing.join(', ')}.</p>}
-      {busy && <p className={`mt-3 flex items-center gap-2 text-sm ${INK3}`}><Spinner /> Valuo počítá…</p>}
-      {failed?.error && <ErrorBanner title="Ocenění selhalo:" message={failed.error.message} />}
-      {loose.map((i, k) => <p key={k} className={`mt-1.5 ${BRICK}`}>{i.field ? `${i.field}: ${i.message}` : i.message}</p>)}
-      {run.error && <ErrorBanner title="Nelze ocenit:" message={run.error.message} />}
     </EstimateCard>
+  );
+}
+
+/* A failed row: the API's Czech sentence once, no prefix (each says what failed); for an engine refusal, Valuo's own
+ * words (the API appends them after ": ") as Valuo's, and the place that was sent. */
+function Failure({ valuation: { error: e, request } }: { valuation: Valuation }) {
+  const engine = e?.code === 'calculation';
+  const at = engine ? e.message.indexOf(': ') : -1;
+  const note = 'mt-1 text-[0.75rem] text-[var(--color-ink-2)]';
+  return e && (
+    <>
+      <ErrorBanner title="" message={at < 0 ? e.message : `${e.message.slice(0, at)}.`} />
+      {at >= 0 && <p className={note}>Valuo: „{e.message.slice(at + 2)}“</p>}
+      {engine && typeof request.place === 'string' && (
+        <p className={note}>Odeslaná poloha: <span className="font-mono tabular-nums">{request.place}</span></p>)}
+    </>
   );
 }
 
@@ -392,6 +416,10 @@ const TAGS: Record<Provenance['class'], [string, string]> = {
 const BOOL = [{ value: null, label: 'neuvedeno' }, { value: 'ano', label: 'ano' }, { value: 'ne', label: 'ne' }] as const;
 
 const INPUT = 'w-full px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)]';
+// DecimalField as tall as the dropdowns beside it, its unit inside the box; this editor only.
+const NUMBOX = 'relative [&_input]:py-1.5 [&_input]:pl-2 [&_input]:pr-8 [&>span]:absolute [&>span]:right-2 [&>span]:top-1/2 [&>span]:-translate-y-1/2 [&>span]:pointer-events-none';
+// Every box one height (a dropdown drew a pixel short); a refused one framed in brick.
+const BOX = '[&_select]:h-[2.125rem] [&_[aria-invalid=true]]:border-[var(--color-brick)] [&_[aria-invalid=true]>button]:border-[var(--color-brick)]';
 
 function Param({ field: f, value, provenance, issues, onChange }: {
   field: ValuoField;
@@ -425,16 +453,16 @@ function Param({ field: f, value, provenance, issues, onChange }: {
         className={INPUT} {...invalid} />
     ) : (
       <DecimalField label={f.label} value={typeof value === 'number' ? value : null} onChange={onChange}
-        suffix={f.unit ?? undefined} integer={f.type === 'integer'} aria={invalid} />
+        suffix={f.unit ?? undefined} integer={f.type === 'integer'} aria={invalid} className={NUMBOX} />
     );
   return (
-    <Field label={f.label} aside={
+    <Field label={f.label} className={f.type === 'text' ? `${CELL} col-span-2` : CELL} aside={
       <span className="inline-flex items-center gap-1.5 text-[0.58rem] tracking-[0.16em] uppercase">
         <span className={tone}>{word}</span>
         {provenance?.note && <InfoHint text={provenance.note} className="[&>svg]:h-3 [&>svg]:w-3" />}
       </span>
     }>
-      <div className={value == null && !f.fixed ? ABSENT : undefined}>{control}</div>
+      <div className={`${BOX} ${value == null && !f.fixed ? ABSENT : ''}`}>{control}</div>
       {issues.length > 0 && <div id={issuesId}>{issues.map((m, k) => <p key={k} className={`mt-1 ${BRICK}`}>{m}</p>)}</div>}
     </Field>
   );

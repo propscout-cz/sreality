@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { fmtDistanceM, fmtPct, fmtTomDays } from './format';
 import {
-  band, formErrors, missingRequired, reliability, shownPrice, withEdit, type Valuation, type ValuoField, type ValuoSummary,
+  band, formErrors, missingRequired, reliability, shownPerM2, shownPrice, withEdit, type Valuation, type ValuoField, type ValuoSummary,
 } from './valuo';
 
 describe('withEdit', () => {
@@ -55,23 +55,33 @@ it('shownPrice rounds a sale to 10 000 Kč and a monthly rent to 100 Kč', () =>
   expect(shownPrice(21_050, true)).toBe(21_100);
 });
 
+it('shownPerM2 rounds a sale per m² to 100 Kč and a monthly rent per m² to 1 Kč', () => {
+  expect(shownPerM2(112_912, false)).toBe(112_900);
+  expect(shownPerM2(126_585, false)).toBe(126_600);
+  expect(shownPerM2(318.6, true)).toBe(319);
+});
+
 describe('reliability', () => {
+  // Each part is unbreakable (no-break spaces inside); compared here as plain text.
+  const plain = (parts: string[]) => parts.map((p) => p.replace(/\s/g, ' '));
   const full: ValuoSummary = {
     count: 12, avg_distance: 406, avg_age: 30, avg_duration: 21, avg_score: 0.8, distance: 2000, age: 90, not_enough: false,
   };
 
   it('says how many comparables, how near and how alike they are, and how far Valuo reached', () => {
-    expect(reliability(full)).toEqual([
+    expect(plain(reliability(full))).toEqual(plain([
       '12 srovnání', `ø ${fmtDistanceM(406)}`, `shoda ${fmtPct(80, { digits: 0 })}`,
       `okruh ${fmtDistanceM(2000)} / ${fmtTomDays(90)}`,
-    ]);
+    ]));
+    // A line wraps between parts, never inside one ("okruh 2,0 km" / "/ 180 dní" on the phone).
+    expect(reliability(full).some((p) => p.includes(' '))).toBe(false);
   });
 
   it('leaves out every part Valuo did not report', () => {
-    expect(reliability({ ...full, count: null, avg_score: null, distance: null })).toEqual([
+    expect(plain(reliability({ ...full, count: null, avg_score: null, distance: null }))).toEqual(plain([
       `ø ${fmtDistanceM(406)}`, `okruh ${fmtTomDays(90)}`,
-    ]);
-    expect(reliability({ ...full, count: 0, avg_distance: null, avg_score: null, distance: null, age: null })).toEqual([
+    ]));
+    expect(plain(reliability({ ...full, count: 0, avg_distance: null, avg_score: null, distance: null, age: null }))).toEqual([
       '0 srovnání',
     ]);
   });

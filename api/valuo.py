@@ -68,10 +68,17 @@ class Field:
 LOCAL_TYPES = ("1+0", "1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1", "6+kk", "6+1",
                "7+kk", "7+1")
 
+# In the editor's order: a commercial space's own type leads, it matters most there (operator, 2026-10-20).
 FIELDS: tuple[Field, ...] = (
     Field("property_type", "Nemovitost", "enum", (
         (FLAT, "Byt"), (HOUSE, "Dům"), (LAND, "Pozemek"), (COMMERCIAL, "Komerční prostor"),
     ), required=ALL, fixed=True),
+    Field("commercial_type", "Typ prostoru", "enum", (
+        ("office", "Kancelář"), ("storage", "Sklad"), ("retail", "Obchodní prostor"), ("production", "Výroba"),
+        ("restaurant", "Restaurace"), ("accommodation", "Ubytování"), ("agriculture", "Zemědělský objekt"),
+        ("apartment_building", "Činžovní dům"), ("apartment", "Apartmán"), ("medical_office", "Ordinace"),
+        ("other", "Jiný"),
+    ), applies=(COMMERCIAL,), recommended=(COMMERCIAL,)),
     Field("place", "Poloha (adresa nebo souřadnice)", "text", required=ALL),
     Field("kind", "Typ obchodu", "enum", (("sale", "Prodej"), ("lease", "Pronájem")), required=ALL),
     Field("floor_area", "Plocha", "number", applies=BUILT, required=BUILT),
@@ -90,12 +97,6 @@ FIELDS: tuple[Field, ...] = (
         ("family_house", "Rodinný dům"), ("villa", "Vila"), ("cottage", "Chalupa"), ("hut", "Chata"),
         ("other", "Jiný"),
     ), applies=(HOUSE,), recommended=(HOUSE,)),
-    Field("commercial_type", "Typ prostoru", "enum", (
-        ("office", "Kancelář"), ("storage", "Sklad"), ("retail", "Obchodní prostor"), ("production", "Výroba"),
-        ("restaurant", "Restaurace"), ("accommodation", "Ubytování"), ("agriculture", "Zemědělský objekt"),
-        ("apartment_building", "Činžovní dům"), ("apartment", "Apartmán"), ("medical_office", "Ordinace"),
-        ("other", "Jiný"),
-    ), applies=(COMMERCIAL,), recommended=(COMMERCIAL,)),
     Field("local_type", "Dispozice", "enum", tuple((d, d) for d in LOCAL_TYPES) + (("jiné", "Jiná"),),
           applies=(FLAT,)),
     Field("ownership", "Vlastnictví", "enum", (

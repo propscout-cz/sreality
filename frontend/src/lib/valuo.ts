@@ -72,13 +72,13 @@ export function band(v: Valuation, key: Band): [number, number] | null {
   return typeof low === 'number' && typeof high === 'number' ? [low, high] : null;
 }
 
-/* Valuo's unrounded price as shown (its docs advise rounding): a sale to 10 000 Kč, a monthly rent to 100 Kč. */
-export const shownPrice = (n: number, lease: boolean): number => {
-  const step = lease ? 100 : 10_000;
-  return Math.round(n / step) * step;
-};
+/* Valuo's unrounded figures as shown (its docs advise rounding): a sale to 10 000 Kč and 100 Kč/m², a monthly
+ * rent to 100 Kč and 1 Kč/m². */
+const roundTo = (n: number, step: number): number => Math.round(n / step) * step;
+export const shownPrice = (n: number, lease: boolean): number => roundTo(n, lease ? 100 : 10_000);
+export const shownPerM2 = (n: number, lease: boolean): number => roundTo(n, lease ? 1 : 100);
 
-/* How far the answer reaches and how close its comparables sit: only the parts Valuo reported. */
+/* How far the answer reaches and how close its comparables sit: only the parts Valuo reported, each one unbreakable. */
 export function reliability(s: ValuoSummary): string[] {
   const reach = [s.distance != null && fmtDistanceM(s.distance), s.age != null && fmtTomDays(s.age)].filter(Boolean);
   return [
@@ -86,7 +86,7 @@ export function reliability(s: ValuoSummary): string[] {
     s.avg_distance != null && `ø ${fmtDistanceM(s.avg_distance)}`,
     s.avg_score != null && `shoda ${fmtPct(s.avg_score * 100, { digits: 0 })}`,
     reach.length > 0 && `okruh ${reach.join(' / ')}`,
-  ].filter((p): p is string => typeof p === 'string');
+  ].filter((p): p is string => typeof p === 'string').map((p) => p.replace(/ /g, '\u00a0'));
 }
 
 export const optionLabel = (fields: readonly ValuoField[], name: string, value: ValuoValue): string =>
