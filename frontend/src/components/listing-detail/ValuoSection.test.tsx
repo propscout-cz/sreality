@@ -440,7 +440,7 @@ describe('<ValuoSection> states', () => {
     renderSection(page({ history: [lease] }));
     expect(await screen.findByText('Odhad nájmu · Valuo')).toBeInTheDocument();
     // A monthly rent rounds to 100 Kč.
-    expect(screen.getByTitle(t(fmtCzk(21_037)))).toHaveTextContent(t(`${fmtCzk(21_000)}/měs`));
+    expect(screen.getByTitle(t(`${fmtCzk(21_037)} /měs`))).toHaveTextContent(t(`${fmtCzk(21_000)}/měs`));
     expect(screen.getByText(t(fmtCzk(18_000)))).toBeInTheDocument();
     expect(screen.getByText(t(fmtCzk(24_000)))).toBeInTheDocument();
     expect(screen.getByText('/měs')).toBeInTheDocument();
@@ -511,7 +511,7 @@ describe('<ValuoSection> states', () => {
       'Foto', 'Adresa', 'Velikost', 'Cena', 'Upravená', 'Vzdálenost', 'Shoda', 'V inzerci',
     ]);
     const first = within(rows[1]);
-    expect(rows[1]).toHaveTextContent(t(`2+kk · ${fmtArea(52)}`));
+    expect(rows[1]).toHaveTextContent(t(`2+kk${fmtArea(52)}`));
     for (const text of [
       fmtMeasuredPricePerM2(113_462, 'sale'), fmtCzk(6_050_000), fmtDistanceM(350), fmtPct(87, { digits: 0 }), fmtTomDays(41),
     ]) expect(first.getByText(t(text))).toBeInTheDocument();

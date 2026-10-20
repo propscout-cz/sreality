@@ -46,7 +46,7 @@ const CELL = 'row-span-2 grid grid-cols-1 grid-rows-subgrid pb-4 [&>:first-child
 const ABSENT = '[&_input]:border-dashed [&_select]:border-dashed [&_button]:border-dashed'; // dashed = nothing sent
 /* Valuo's average, rounded as shown, the exact figure in the title; a lease reads as monthly (unverified until P1). */
 const Price = ({ value, lease, className }: { value: number | null; lease: boolean; className?: string }) => (
-  <span className={className} title={value == null ? undefined : fmtCzk(value)}>
+  <span className={className} title={value == null ? undefined : `${fmtCzk(value)}${lease ? ' /měs' : ''}`}>
     {fmtCzk(value == null ? null : shownPrice(value, lease))}{lease && <PerMonth />}
   </span>
 );
@@ -219,7 +219,7 @@ function ValuoCard({ valuation: v, page, property, runs, onEdit }: {
           {`Nabídka je o ${fmtPct(Math.abs(delta))} ${delta >= 0 ? 'nad' : 'pod'} průměrem Valuo.`}
         </p>
       )}
-      <dl className="mt-2 space-y-0.5 text-[0.72rem] tabular-nums">
+      <dl className="mt-2 space-y-0.5 text-[0.72rem] font-mono tabular-nums">
         {rows.map(([label, value]) => (
           <CardRow key={label} label={label}>
             {value ?? <span className={`px-1.5 border border-dashed border-[var(--color-rule-strong)] rounded-[var(--radius-xs)] ${INK3}`}>—</span>}
@@ -283,7 +283,7 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
     }],
     ['Velikost', 'whitespace-nowrap font-mono tabular-nums text-[var(--color-ink-2)]', (r) => (
       // 4ch holds every layout Valuo names ("2+kk", "Jiná"), so the area starts at one x down the column.
-      <>{r.local_type != null && <><span className="inline-block min-w-[4ch]">{optionLabel(fields, 'local_type', r.local_type)}</span> · </>}{fmtArea(r.calc_area)}</>
+      <>{r.local_type != null && <><span className="inline-block min-w-[5ch]">{optionLabel(fields, 'local_type', r.local_type)}</span></>}{fmtArea(r.calc_area)}</>
     )],
     ['Cena', `${NUM} text-[var(--color-ink)]`, (r) => (
       <>{czk(r.price)}<span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</span>{r.sale_price && SOLD}</>
