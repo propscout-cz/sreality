@@ -1470,9 +1470,10 @@ class SqlWork:
             # longer holds it, so there is nothing to re-decide it into.
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
-        # E960: the groups a merge waits on, re-claimed WHOLE, oldest wait first, so their pairs
-        # are re-decided on facts read now and the group merges in this pass's reconcile — on
-        # the pass's first claim only.
+        # E960: the groups a merge waits on, re-claimed WHOLE in `reconcile._rank`'s order
+        # (E972: flats for sale, flats for rent, the rest, oldest wait first within each), so
+        # their pairs are re-decided on facts read now and the group merges in this pass's
+        # reconcile — on the pass's first claim only.
         self.attempt += 1
         if self.stale_claims or self.stale_waiting:
             retiring = {item.listing_id for item in items if item.retire}

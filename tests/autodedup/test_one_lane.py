@@ -830,7 +830,8 @@ def test_the_re_claim_serves_flats_for_sale_then_flats_for_rent_then_the_rest(
     flats for sale first, flats for rent second, the rest third, the oldest wait first within
     each, however the ages interleave across classes. A budget smaller than the flats for sale
     takes only them, and a full hand-on list drops the rest before any flat. A mixed group (a
-    flat with its komerční twin is a sanctioned pair) ranks by its lowest-id advert."""
+    flat with its komerční twin is a sanctioned pair) goes as its flat, whichever member has the
+    lower id or is stale, in the re-claim and the hand-on's cap alike."""
     db = LaneDb()
     sale, rent, rest = ("byt", "prodej"), ("byt", "pronajem"), ("komercni", "prodej")
     hours = {1: 20, 2: 20, 3: 26, 4: 15, 5: 15, 10: 30, 11: 18, 12: 18, 20: 40, 21: 16, 22: 16}
@@ -853,10 +854,18 @@ def test_the_re_claim_serves_flats_for_sale_then_flats_for_rent_then_the_rest(
     assert db.lane_settings[reconcile.redecide_key(RT)] == [[3], [1, 2], [4, 5], [10]], (
         "the cap cuts the same order: oldest first would have kept [20] and dropped [4, 5]")
 
-    at = db.now - timedelta(hours=20)
-    sale_class, rest_class = reconcile._claim_class(*sale), reconcile._claim_class(*rest)
-    assert reconcile._rank([6, 30], {6: (at, True, sale_class), 30: (at, True, rest_class)}) < (
-        reconcile._rank([23, 24], {23: (at, True, rest_class), 24: (at, True, sale_class)}))
+    fresh, at, older = (db.now - timedelta(hours=h) for h in (1, 20, 30))
+    sale_class, rent_class, rest_class = (reconcile._claim_class(*c) for c in (sale, rent, rest))
+    mixed = {30: (fresh, False, rest_class), 31: (at, True, sale_class),
+             40: (fresh, False, sale_class), 41: (at, True, rest_class),
+             50: (older, True, rent_class)}
+    groups = [[50], [30, 31], [40, 41]]
+    assert reconcile.claims(groups, mixed, 2) == [31, 41], (
+        "a flat for sale goes first whether its fresh twin or its own fresh row has the lower id")
+    monkeypatch.setattr(reconcile, "REDECIDE_CAP", 4)
+    assert reconcile._hand_on(db, RT, "rt:e972", groups, mixed) == (2, 1)
+    assert db.lane_settings[reconcile.redecide_key(RT)] == [[30, 31], [40, 41]], (
+        "the cap ranks them as the re-claim does: the older rent flat is the one dropped")
 
 
 def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(

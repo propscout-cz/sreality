@@ -91,7 +91,7 @@ WAITING = "block_not_fully_read"
 FRESH_DECISION_HOURS: float = 12.0
 STALE = "stale_decision"
 REDECIDE_SETTING: str = "rt_redecide"
-# The adverts the handed-on groups may name in all, whole groups, oldest wait first.
+# The adverts the handed-on groups may name in all: whole groups, in `_rank`'s order (E972).
 REDECIDE_CAP: int = 5000
 # The adverts a pass re-claims for waiting groups, whatever its time-bound share: a share of 1
 # (a pass of 9 adverts) would leave a backlog of thousands for days. They ride ON TOP of the
@@ -107,7 +107,8 @@ TRIED_SETTING: str = "rt_redecide_tried"
 TRIED_BACKOFF_HOURS: float = 6.0
 # E972, the operator's Prague priority of 2026-10-20: the waiting groups are handed on and
 # re-claimed flats for sale first, flats for rent second, the rest third, the oldest wait first
-# within each. An order only: the same groups are re-read, none is re-decided.
+# within each; a group goes in its best member's class, so a flat with its komerční twin goes as
+# the flat. An order only: the same groups are re-read, none is re-decided.
 CLAIM_ORDER: tuple[tuple[str, str], ...] = (("byt", "prodej"), ("byt", "pronajem"))
 # Per advert, as `refreshed` reads it: its last refresh, whether a merge may NOT rest on it, and
 # its place in `CLAIM_ORDER`.
@@ -206,27 +207,28 @@ def _claim_class(category_main: str | None, category_type: str | None) -> int:
 
 
 def _rank(members: Sequence[int], ages: Mapping[int, Refresh]) -> tuple[int, int, Any]:
-    """A group's place in the queue: its lowest-id advert's place in `CLAIM_ORDER` (E972), then
-    the oldest refresh first; a group holding an advert with no row (no claim can refresh it)
-    last of all."""
+    """A group's place in the queue, over its moved members whichever of them are stale, so the
+    re-claim and the hand-on's cap rank it alike: a group holding an advert with no row (no
+    claim can refresh it) last of all, then its best member's place in `CLAIM_ORDER` (E972),
+    then the oldest refresh first."""
     known = [i for i in members if i in ages]
     if not known or any(ages[i][0] is None for i in known):
         return (1, 0, "")
-    return (0, ages[min(known)][2], min(ages[i][0] for i in known))
+    return (0, min(ages[i][2] for i in known), min(ages[i][0] for i in known))
 
 
 def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
            budget: int) -> list[int]:
     """The adverts a pass re-claims for the groups handed on (E960): WHOLE groups — every stale
-    member a claim can refresh (it has a row) — in `CLAIM_ORDER`, oldest wait first within each
-    (E972), until `budget` adverts; the first group is taken whatever its size, so no group is
-    ever cut across passes."""
+    member a claim can refresh (it has a row) — in `_rank`'s order, the hand-on's (E972), until
+    `budget` adverts; the first group is taken whatever its size, so no group is ever cut
+    across passes."""
     queue = []
     for members in groups:
         stale = sorted({int(i) for i in members if int(i) in ages and ages[int(i)][1]
                         and ages[int(i)][0] is not None})
         if stale:
-            queue.append((_rank(stale, ages), stale))
+            queue.append((_rank([int(i) for i in members], ages), stale))
     queue.sort()
     out: list[int] = []
     for _place, stale in queue:
