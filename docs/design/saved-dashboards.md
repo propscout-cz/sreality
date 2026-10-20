@@ -149,6 +149,25 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 - Bundle: `DashboardBar` ships in the Stats chunk (lazy); the first-visit budget (330 KB gzip) must not grow — the
   Table tab's removal pays for anything the preset bar refactor adds.
 
+**W3 as built** (2026-10-20). Where it differs from the plan above: (1) the named dashboards' clients and their
+list key sit in `lib/stats.ts` beside `fetchDashboard` / `saveDashboard` (the Stats chunk), not in `lib/api.ts` /
+`lib/queries.ts`, which are first-visit code; `lib/api.ts` gains only the generic `apiDelete`. (2) Arrival loads
+the URL's dashboard only when this browser tab has not loaded it already (a `sessionStorage` marker, memory as
+fallback): as planned, every Stats remount (a tab switch, Back) and every reload would have copied the stored
+charts over the working board's unsaved edits. (3) "Uložit změny" opens the same dialog as "Update preset"
+(name, colour, "Uložit i nastavení filtru" ticked iff the dashboard carries a filter); left alone it sends the
+planned PUT, unticked it clears the filter (`filter_spec: null`), ticked on a filterless one it adds it.
+(4) "Uložit jako vlastní" is one POST of the shared dashboard's stored charts, filter, name and colour, no dialog;
+the copy becomes active only when the shared one was. (5) Own chips come first in their order, shared ones after
+them (not interleaved by the owner's positions). (6) The bar is Browse-page only: the modals' `presetBar: false`
+gates both saved-set bars, so the memory adapter's three dashboard members are no-ops. (7) The generic bar takes
+`onReorder` with the own items in their new order (each adapter patches its cache with rows), `isOwn` (drags,
+renames, deletes, updates) for the planned `reorderable`, `extra` as a prop (the preset's box exists only while a
+map area is applied) and `suffix`; Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's
+Delete… / Confirm delete were. (8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it;
+only the board read left it. The fold of the preset bar (757 lines) into the bar, its dialog and the preset
+instance came to 956, not ~600: a generic bar carries its words as data, a shared chip and instance menu entries.
+
 ## Subtraction ledger (production lines, tests and docs excluded)
 
 Deleted: the Table tab (~575, wave 1); `fetchDashboard`'s pgRead and the single-membership caveat (~20);

@@ -64,6 +64,12 @@ toolkit work.
   listings) and 28 impossible dispositions (812 listings) that charted as raw-spelled "pod 5" rows now read
   as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the
   old values — drop it after a clean week.
+- **Done: saved dashboards 2026-10-20 (migration 647, `docs/design/saved-dashboards.md`):** named chart sets on
+  a bar atop the Stats tab — load copies one into the working board (and its filter, when it was saved with
+  one), "Uložit změny" / "Uložit jako dashboard", read-only sharing by email (Načíst, Uložit jako vlastní,
+  Přestat sledovat), a share notification opens it. The filter-preset bar folded into the same `SavedSetBar`
+  (presets unchanged). Line ledger (SPA production): +1,406 / −673 — the preset bar and its dialog (757) became
+  the generic bar, its dialog and the preset instance (956); the dashboard instance is 372.
 - **Next:** (1) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
   the operator rules; (2) optionally `reparse --source bazos --fields disposition --missing --write
   --allow-snapshot-deferral` (dry run first), which may fill a NULL disposition the page states grammatically;
