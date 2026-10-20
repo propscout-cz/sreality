@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **APPROVED 2026-10-20 (v1.2, rulings 1–11 in, §8; 12 is a W1 deviation awaiting the operator); W1–W2 run on this text; every merge waits for the autodedup session's window. W1 (database + API + doctrine) in PR #1906; W2 (the SPA) in PR #TBD.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
+Status: **APPROVED 2026-10-20 (v1.2, rulings 1–11 in, §8; 12 is a W1 deviation awaiting the operator); W1–W2 run on this text; every merge waits for the autodedup session's window. W1 (database + API + doctrine) in PR #1906; W2 (the SPA) in PR #1908.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
