@@ -482,7 +482,8 @@ def _hand_on(conn: Any, generation: str, run_id: str, groups: Sequence[Sequence[
              ages: Mapping[int, Refresh]) -> tuple[int, int]:
     """Every group owed a merge and not attempted (waiting, past the run cap, out of time), as its
     moved members, in the re-claim's order (`_rank`), whole groups up to `REDECIDE_CAP` adverts
-    (E960); a full list drops the rest's newest waits before any flat's (E972). It REPLACES the
+    (E960); a full list drops the all-inactive groups before any group with an active advert
+    (E973), and within each the rest's newest waits before any flat's (E972). It REPLACES the
     list: every group on it was re-planned this pass, so what stays owed is here."""
     kept: list[list[int]] = []
     total = 0
