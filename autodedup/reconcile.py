@@ -30,8 +30,9 @@ What it adds is WHICH groups and WHEN:
     neighbour as its row stored it, so a stored merge can rest on facts a sighting, a location
     correction or a reparse has since moved. Every group owed a merge and not merged this pass
     (waiting, past the run cap, out of time) is handed on (`rt_redecide`), oldest moved member
-    first; the next pass re-claims whole groups of it, at least `STALE_FLOOR` adverts, and the
-    reconcile re-plans every group handed on, so a group refreshed whole merges at once.
+    first; the next pass re-claims whole groups of it, `STALE_FLOOR` adverts on top of its
+    feeds, and the reconcile re-plans every group handed on, so a group refreshed whole merges
+    at once.
 
 The rollout control is unchanged until W6: `app_settings.autodedup_apply_scope` must admit the
 group, and the WHOLE row is re-read before every group (blocks, deal types) and handed to the
@@ -91,11 +92,13 @@ STALE = "stale_decision"
 REDECIDE_SETTING: str = "rt_redecide"
 # The adverts the handed-on groups may name in all, whole groups, oldest wait first.
 REDECIDE_CAP: int = 5000
-# The adverts a pass re-claims for waiting groups at the least, whatever its time-bound share: a
-# re-claim costs an advert's pairs (~36 decided at 39.7k), and a share of 1 (a pass of 9 adverts)
-# would leave a backlog of thousands for days. A share is at most 500 // 5, so this is the
-# arm's budget.
-STALE_FLOOR: int = 100
+# The adverts a pass re-claims for waiting groups, whatever its time-bound share: a share of 1
+# (a pass of 9 adverts) would leave a backlog of thousands for days. They ride ON TOP of the
+# feeds' limit, so this is what the worker's memory leaves beside the feeds (E971): ~6 GB plus
+# ~4.5 GB a hundred claimed adverts against its 22,888 MB holds a pass to ~300 adverts, and the
+# feeds brought 16-39 a pass on 2026-10-20. A pass the feeds overfill dies, and E948b's cap and
+# this arm's own pause and halving below answer the death.
+STALE_FLOOR: int = 200
 # A group the lane tried to re-claim is not tried again for this long, whatever came of it: a
 # re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
 TRIED_SETTING: str = "rt_redecide_tried"

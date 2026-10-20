@@ -1301,7 +1301,8 @@ class SqlWork:
         # this pass is the one that empties it (E98).
         self.bootstrap_done = False
         self.bootstrap_backlog: int | None = None
-        # What bound this pass's claim — the count, the cap or the clock — for the run summary.
+        # What bound this pass's claim — the count, the cap or the clock — and the re-claims
+        # riding on top of it (`stale`), for the run summary and the rate's measurement.
         self.claim_bound: dict[str, Any] = {}
         self.parents = dict(parents or {})
         self.enter_blocks = _enter_blocks(scope, self.parents)
@@ -1476,6 +1477,7 @@ class SqlWork:
                      if self.attempt == 1 else [])
             self.evidence = {**self.evidence, "stale": self.stale_waiting,
                              "stale_claimed": len(taken), "stale_budget": self.stale_budget}
+            self.claim_bound["stale"] = len(taken)
             items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
                          for listing_id in taken)
         for item in items:
@@ -2457,9 +2459,12 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
                   bound: Mapping[str, Any]) -> tuple[float | None, bool]:
     """The rate a pass stores (E98's blend, E951's doubling) and whether the doubling won."""
     # A claim the clock cut is a measurement at any size: without that, a rate halved to a
-    # one-listing claim would never be measured again.
+    # one-listing claim would never be measured again. The re-claims ride on top of the limit
+    # (E960), so they fill none of it (E971): 200 of them beside the feeds' ~30 would read as
+    # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from.
     limit = int(bound.get("limit") or 0)
-    saturated = bound.get("bound_by") == "time" and limit > 0 and claimed >= limit
+    fed = claimed - int(bound.get("stale") or 0)
+    saturated = bound.get("bound_by") == "time" and limit > 0 and fed >= limit
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
         return None, False
     start = max(1e-6, previous)
