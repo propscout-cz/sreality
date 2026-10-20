@@ -57,7 +57,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   {email}"); a read share sees the board only. One identity function for curation, `acting_account_ids()`,
   driven by an `x-act-as` header the database validates; nothing else widens; every delegated edit is
   stamped in `delegated_edits`. Spec + rulings: `docs/design/pipeline-sharing.md`. Two waves.
-- **In review:** W1 (migration 641 + API + doctrine) in PR #TBD. **Next:** W2, the SPA (§3.5). W1 and W2
+- **In review:** W1 (migration 641 + API + doctrine) in PR #1906. **Next:** W2, the SPA (§3.5). W1 and W2
   merge together inside the autodedup session's window, 641 applied immediately before (the
   `collection_share` → `share` rename couples them). Ruling 12 (`DELETE …?side=`) awaits the operator.
 
