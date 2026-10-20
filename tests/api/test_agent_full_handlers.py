@@ -502,7 +502,6 @@ def test_per_listing_tool_schemas_accept_listing_id():
         "verify_listing_freshness",
         "compute_listing_velocity",
         "summarize_listing",
-        "get_manual_rental_estimates",
     ):
         schema = agent_mod.AGENT_TOOLS[name].input_schema
         assert "listing_id" in schema["properties"], name

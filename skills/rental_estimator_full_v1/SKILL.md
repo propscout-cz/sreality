@@ -14,7 +14,6 @@ allowed_tools:
   - summarize_listing
   - compare_listing_images
   - verify_listing_freshness
-  - get_manual_rental_estimates
   - read_floor_plan
   - record_estimate
 preferred_model:
@@ -51,6 +50,9 @@ user message under `target.condition`,
 `target.apartment_condition_level`, and
 `target.building_condition_level` so the agent can match them
 directly.
+
+Migration 638 (2026-10-19) removed the "Consult manual estimates"
+step with the retired manual-estimates feature.
 
 ---
 
@@ -288,13 +290,6 @@ what fits the target and what you find as you go.
   should broadly match the cohort's. `compute_amenity_supply`
   follows when you want to know *what* a mid-range walkability
   score is missing.
-
-- **Consult manual estimates.** Call `get_manual_rental_estimates`
-  on the subject's sreality_id once before `record_estimate`.
-  Manual figures are operator judgement, not comparables — never
-  replace your distribution with one, but if your point estimate
-  diverges from any manual figure by > 15%, name each manual
-  figure and its `source_kind` in a warning.
 
 ### Localisation
 
