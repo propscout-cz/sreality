@@ -189,8 +189,8 @@ def test_every_recreated_function_restates_its_acl_and_nothing_cascades() -> Non
 # 632 restated the Stats pivot with its floor at five, 634 with its status fact on the cohort's own portal
 # rule (each pinned as 'nothing else moved'), so the pivot's latest definition is 634's; the rest is 629's.
 _LATER = {
-    "browse_stats_properties": "634_stats_status_lens.sql",
-    "browse_map_cells": "630_one_browse_read_model.sql",
+    "browse_stats_properties": "640_drop_property_ids_excluded.sql",
+    "browse_map_cells": "640_drop_property_ids_excluded.sql",
 }
 
 
