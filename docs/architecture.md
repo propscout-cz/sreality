@@ -2309,8 +2309,9 @@ renumber.** Navigate by area:
     without deleting one, on the operator's ruling of 2026-10-19 (the five place dimensions). The
     working board is one unnamed row per account (`stats_dashboards`, read and written whole through
     `GET`/`PUT /stats/dashboard`); the named dashboards beside it are saved sets the Stats tab's bar
-    loads, saves and shares (`docs/design/saved-dashboards.md`, migration 647). It replaced four fixed cards and the LLM box-plot annotations (summarize-1, deleted
-    with them; migration 627 drops their cache table and settings).
+    loads, saves and shares (`docs/design/saved-dashboards.md`, migration 647). It replaced four
+    fixed cards and the LLM box-plot annotations (summarize-1, deleted with them; migration 627
+    drops their cache table and settings).
 17. **City-quality indexes are a normalized, operator-curated time series.** `curated_cities`
     + `city_index_revisions` + `city_index_values` + `city_index_definitions` +
     `city_population` (migration 078 onward) store per-city indexes long-form, so a new index

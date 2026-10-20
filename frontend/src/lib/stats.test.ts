@@ -47,7 +47,9 @@ import {
   sanitizeCharts,
   saveDashboard,
   createStatsDashboard,
+  deleteStatsDashboard,
   reorderStatsDashboards,
+  shareStatsDashboard,
   unshareStatsDashboard,
   updateStatsDashboard,
   seriesModel,
@@ -640,7 +642,7 @@ describe('the board', () => {
 });
 
 describe('the named dashboards\' routes', () => {
-  it('creates, updates, reorders and unshares on the contract\'s paths', async () => {
+  it('creates, updates, reorders, shares, deletes and unshares on the contract\'s paths', async () => {
     const charts = [chart({ id: 'a' })];
     await createStatsDashboard({ name: 'Ceny', charts });
     expect(apiPost).toHaveBeenCalledWith('/stats/dashboards', { name: 'Ceny', charts });
@@ -648,7 +650,12 @@ describe('the named dashboards\' routes', () => {
     expect(apiPut).toHaveBeenLastCalledWith('/stats/dashboards/d%2F1', { filter_spec: null });
     await reorderStatsDashboards(['b', 'a']);
     expect(apiPut).toHaveBeenLastCalledWith('/stats/dashboards/reorder', { ids: ['b', 'a'] });
+    await shareStatsDashboard('d1', 'b@example.com');
+    expect(apiPost).toHaveBeenLastCalledWith('/stats/dashboards/d1/shares', { email: 'b@example.com' });
+    await deleteStatsDashboard('d1');
+    expect(apiDelete).toHaveBeenLastCalledWith('/stats/dashboards/d1');
+    // A revoke (owner) and a leave (recipient, its own grant) are the one DELETE.
     await unshareStatsDashboard('d1', 'acct-1');
-    expect(apiDelete).toHaveBeenCalledWith('/stats/dashboards/d1/shares/acct-1');
+    expect(apiDelete).toHaveBeenLastCalledWith('/stats/dashboards/d1/shares/acct-1');
   });
 });

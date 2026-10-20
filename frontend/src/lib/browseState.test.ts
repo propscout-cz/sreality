@@ -424,6 +424,14 @@ describe('the dashboard on the URL', () => {
     expect(result.current.nav).toBe('PUSH');
   });
 
+  it('replaces the entry instead when asked (an arrival from a link)', () => {
+    const { result } = urlState('/browse?tab=stats&dashboard=d1');
+    act(() => result.current.view.loadDashboard(dashboard({ filter_spec: SPEC }), { replace: true }));
+    expect(params(result.current.search).get('dashboard')).toBe('d1');
+    expect(result.current.view.filters.priceMax).toBe(5_000_000);
+    expect(result.current.nav).toBe('REPLACE');
+  });
+
   it('writes a preset and a dashboard filter through ONE body (applySavedFilter)', () => {
     const current = new URLSearchParams('tab=stats&sort=-price_czk&layers=metro');
     const viaHelper = applySavedFilter({ filters: SPEC.filters, sort: null }, current);

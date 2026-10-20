@@ -17,6 +17,7 @@ import {
   shareStatsDashboard, statsDashboardKeys, unshareStatsDashboard, updateStatsDashboard, type ChartSpec, type DashboardList,
 } from '@/lib/stats';
 import type { SavedDashboard } from '@/lib/types';
+import { pushToast } from '@/lib/toast';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import SavedSetBar, { useSavedSet, type SavedSetCopy, type SavedSetMenuItem } from '@/components/SavedSetBar';
@@ -43,31 +44,39 @@ const COPY: SavedSetCopy = {
   cancel: 'Zrušit',
   saving: 'Ukládám…',
   edit: 'Přejmenovat',
-  delete: { label: 'Smazat', confirm: { label: 'Opravdu smazat', busy: 'Mažu…' } },
+  delete: { label: 'Smazat…', confirm: { label: 'Opravdu smazat', busy: 'Mažu…' } },
   load: 'Načíst dashboard',
   reorder: 'Přesunout dashboard',
   dragHint: 'Přetažením změníte pořadí',
   options: 'Možnosti dashboardu',
   edited: 'Upraveno od načtení',
   editedHint: 'Upraveno od načtení — změny uložíte tlačítkem Uložit změny',
+  shared: { by: 'sdílí', editedHint: 'Upraveno od načtení — změny uložíte přes Uložit jako vlastní' },
   failed: 'Něco se nepovedlo.',
 };
 
 const listKey = statsDashboardKeys.all;
 const DISPLAY_TITLE = { fontFamily: 'var(--font-display)', fontWeight: 600 };
 const isOwn = (d: SavedDashboard): boolean => d.owner_email == null;
+/* A failed dashboard write, said in the Stats tab's words (StatsDashboard's
+ * "Grafy se nepodařilo uložit: …"); declaring it silences the global toast. */
+const failed = (what: string) => (err: Error) => pushToast('err', `${what}: ${err.message}`);
 
 /* The dashboard this browser tab last loaded (a click, an arrival, a save). The
- * URL's `dashboard` asks for a load only when it names ANOTHER one: a tab switch,
- * a Back or a reload repeats the URL and must not copy the stored charts over the
- * working board's edits. sessionStorage outlives a reload; memory backs it up. */
+ * URL's `dashboard` asks for a load only when it names ANOTHER one. A tab switch,
+ * a reload, or a Back to an entry of the same dashboard repeats the URL and
+ * leaves the working board, its edits included, as it is; a Back to the entry of
+ * a different dashboard (a click with a filter pushes one) loads that one again.
+ * Memory is read first, so a storage that refuses writes cannot loop a load;
+ * sessionStorage carries the marker over a reload. */
 const LOADED_KEY = 'stats.loadedDashboard';
 let loadedInMemory: string | null = null;
 const lastLoaded = (): string | null => {
+  if (loadedInMemory != null) return loadedInMemory;
   try {
     return sessionStorage.getItem(LOADED_KEY);
   } catch {
-    return loadedInMemory;
+    return null;
   }
 };
 const markLoaded = (id: string): void => {
@@ -78,6 +87,9 @@ const markLoaded = (id: string): void => {
     /* memory only */
   }
 };
+export function __resetLoadedDashboardForTests(): void {
+  loadedInMemory = null;
+}
 
 /* The cached list with one row rewritten. */
 const withRow =
@@ -89,12 +101,20 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   /* The working board as read (sanitized). */
   working: ChartSpec[];
   /* The board's one write (StatsDashboard's optimistic PUT /stats/dashboard). */
-  onLoadCharts: (charts: ChartSpec[]) => void;
+  onLoadCharts: (charts: ChartSpec[]) => Promise<unknown>;
 }) {
   const qc = useQueryClient();
-  const { enabled, query, bar } = useSavedSet(listKey, listStatsDashboards, reorderStatsDashboards, isOwn);
+  /* Re-read on every mount: a link that names a dashboard shared a minute ago
+   * must find it in the list, not in a cache from before the share. */
+  const { enabled, query, bar } = useSavedSet(listKey, listStatsDashboards, reorderStatsDashboards, {
+    isOwn,
+    refetchOnMount: 'always',
+    onReorderError: failed('Pořadí dashboardů se nepodařilo uložit'),
+  });
   const { items } = bar;
   const [sharingId, setSharingId] = useState<string | null>(null);
+  /* A load's board write in flight: the board still holds the old charts. */
+  const [loadingBoard, setLoadingBoard] = useState(false);
   const shareTitleId = useId();
 
   const { filters, sort, activeDashboardId } = view;
@@ -102,10 +122,11 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   const dirty = useMemo(
     () =>
       active != null &&
+      !loadingBoard &&
       (!chartsEqual(working, sanitizeCharts(active.charts)) ||
         (active.filter_spec != null &&
           !filtersEqualForPreset(filters, readPresetSpec(active.filter_spec).filters))),
-    [active, working, filters],
+    [active, loadingBoard, working, filters],
   );
 
   /* A dashboard's filter is the preset blob, captured as a preset save captures
@@ -114,26 +135,20 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   const adopt = (saved: SavedDashboard) => qc.setQueryData(listKey, withRow(saved.id, (d) => ({ ...d, ...saved })));
 
   /* ONE load: the stored charts into the working board, then the URL. */
-  const load = (d: SavedDashboard) => {
+  const load = (d: SavedDashboard, opts?: { replace?: boolean }) => {
     const charts = sanitizeCharts(d.charts);
-    if (!chartsEqual(working, charts)) onLoadCharts(charts);
+    if (!chartsEqual(working, charts)) {
+      setLoadingBoard(true);
+      const done = () => setLoadingBoard(false);
+      onLoadCharts(charts).then(done, done);
+    }
     markLoaded(d.id);
-    view.loadDashboard(d);
+    view.loadDashboard(d, opts);
   };
   const activate = (id: string) => {
     markLoaded(id);
     view.setActiveDashboardId(id);
   };
-
-  /* Arrival: the URL names a dashboard this tab has not loaded — load it, as a
-   * click would. One the caller can no longer read clears the param. Judged on a
-   * settled list only, so a re-read in flight never clears a dashboard just made. */
-  const settled = query.isSuccess && !query.isFetching;
-  useEffect(() => {
-    if (activeDashboardId == null || !settled) return;
-    if (active == null) view.setActiveDashboardId(null);
-    else if (lastLoaded() !== active.id) load(active);
-  });
 
   /* The POST answers the row: it joins the list at once, so the arrival rule
    * above never sees an active id the cache does not hold yet. */
@@ -141,6 +156,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     mutationKey: ['write', 'stats-dashboards', 'create'],
     mutationFn: createStatsDashboard,
     revalidate: [listKey],
+    onError: failed('Dashboard se nepodařilo uložit'),
     onSuccess: (created) =>
       qc.setQueryData<DashboardList>(listKey, (prev) =>
         prev && !prev.data.some((d) => d.id === created.id)
@@ -156,8 +172,9 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
       cachePatch({ queryKey: listKey, exact: true }, withRow(id, (d) => ({ ...d, ...patch }))),
     ],
     // The PUT answers the row as stored, so only a failure needs a re-read.
-    revalidate: (_vars, failed) => (failed ? [listKey] : []),
+    revalidate: (_vars, refused) => (refused ? [listKey] : []),
     onSuccess: adopt,
+    onError: failed('Dashboard se nepodařilo uložit'),
   });
 
   /* Off the caller's list: the owner deletes it; a recipient leaves with its own
@@ -172,7 +189,24 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
       ),
     ],
     revalidate: [listKey],
+    onError: (err, d) =>
+      failed(isOwn(d) ? 'Dashboard se nepodařilo smazat' : 'Sdílený dashboard se nepodařilo odebrat')(err),
   });
+
+  /* Arrival: the URL names a dashboard this tab has not loaded — load it as a
+   * click would, but REPLACING the entry (the link's own entry holds no filter,
+   * and Back must leave Browse, not land there). One the caller can no longer read
+   * clears the param. Judged only on the list as re-read since this mount; a
+   * dashboard being deleted or left keeps the param until its write settles, so
+   * a refused DELETE leaves it active. */
+  const settled = query.isSuccess && query.isFetchedAfterMount && !query.isFetching;
+  useEffect(() => {
+    if (activeDashboardId == null || !settled) return;
+    if (active == null) {
+      if (!drop.isPending) view.setActiveDashboardId(null);
+    } else if (lastLoaded() !== active.id) load(active, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load and view are re-made each render; these decide.
+  }, [activeDashboardId, settled, active, drop.isPending]);
 
   /* A shared dashboard as the caller's own: its stored charts and filter, its name. */
   const copyAsOwn = (d: SavedDashboard) =>

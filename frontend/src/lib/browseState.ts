@@ -127,10 +127,12 @@ export interface BrowseViewState {
    * preset's twin: a view knob, carried through filtering, outside preset
    * identity. `loadDashboard` writes a dashboard's filter exactly as
    * `loadPreset` writes a preset's (applySavedFilter) — the preset is deselected,
-   * you have left its view — or, for a dashboard without one, only the id. */
+   * you have left its view — or, for a dashboard without one, only the id.
+   * Pushed like a preset; `replace` when the URL already asked for it (an
+   * arrival from a link must not leave a second, filterless entry behind). */
   activeDashboardId: string | null;
   setActiveDashboardId: (id: string | null) => void;
-  loadDashboard: (d: SavedDashboard) => void;
+  loadDashboard: (d: SavedDashboard, opts?: { replace?: boolean }) => void;
 }
 
 /* The legacy spellings of a `layers` selection — `kraje` and the rent map's
@@ -288,10 +290,11 @@ export function useUrlBrowseState(): BrowseViewState {
     [searchParams, setSearchParams],
   );
 
-  /* With a filter: pushed, like a preset (Back undoes it). Without one the
-   * filters stay and only the id moves, replaced like the preset id is. */
+  /* With a filter: pushed, like a preset (Back undoes it), unless `replace`.
+   * Without one the filters stay and only the id moves, replaced like the
+   * preset id is. */
   const loadDashboard = useCallback(
-    (d: SavedDashboard) => {
+    (d: SavedDashboard, { replace = false }: { replace?: boolean } = {}) => {
       if (d.filter_spec == null) {
         setActiveDashboardId(d.id);
         return;
@@ -299,7 +302,7 @@ export function useUrlBrowseState(): BrowseViewState {
       const sp = applySavedFilter(d.filter_spec, searchParams);
       sp.delete('preset');
       sp.set('dashboard', d.id);
-      setSearchParams(sp, { replace: false });
+      setSearchParams(sp, { replace });
     },
     [searchParams, setSearchParams, setActiveDashboardId],
   );

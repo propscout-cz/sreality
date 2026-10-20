@@ -152,9 +152,11 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 **W3 as built** (2026-10-20). Where it differs from the plan above: (1) the named dashboards' clients and their
 list key sit in `lib/stats.ts` beside `fetchDashboard` / `saveDashboard` (the Stats chunk), not in `lib/api.ts` /
 `lib/queries.ts`, which are first-visit code; `lib/api.ts` gains only the generic `apiDelete`. (2) Arrival loads
-the URL's dashboard only when this browser tab has not loaded it already (a `sessionStorage` marker, memory as
-fallback): as planned, every Stats remount (a tab switch, Back) and every reload would have copied the stored
-charts over the working board's unsaved edits. (3) "Uložit změny" opens the same dialog as "Update preset"
+the URL's dashboard only when this browser tab has not loaded it already (a marker in memory, read first, and in
+`sessionStorage` for a reload): as planned, every Stats remount (a tab switch, Back) and every reload would have
+copied the stored charts over the working board's unsaved edits. It judges only the list as re-read since the
+mount (`refetchOnMount: 'always'`), so a dashboard shared a minute ago is found, and it REPLACES the link's
+history entry (a click still pushes), so Back leaves Browse instead of landing on a filterless copy of it. (3) "Uložit změny" opens the same dialog as "Update preset"
 (name, colour, "Uložit i nastavení filtru" ticked iff the dashboard carries a filter); left alone it sends the
 planned PUT, unticked it clears the filter (`filter_spec: null`), ticked on a filterless one it adds it.
 (4) "Uložit jako vlastní" is one POST of the shared dashboard's stored charts, filter, name and colour, no dialog;
@@ -165,17 +167,26 @@ gates both saved-set bars, so the memory adapter's three dashboard members are n
 `reorderable`, `extra` as a prop (the preset's box exists only while a map area is applied) and `suffix`; one hook
 beside it, `useSavedSet`, reads an instance's list and persists a drag (own rows first, shared after) for both.
 Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's Delete… / Confirm delete were.
-(8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it; only the board read left it. The
-fold of the preset bar (757 lines) into the bar, its dialog and the preset instance came to 687 (956 as first cut),
-not ~600: a generic bar carries its words as data, a shared chip and instance menu entries.
+(8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it; only the board read left it.
+(9) `fetchDashboard` now goes through the API, so a dev or preview build without `VITE_API_BASE_URL` shows the
+board's error banner on Stats instead of the defaults (production always has the API). (10) "Own" is
+`owner_email == null`, as on a collection; an account with no member email would read as the caller's own, an
+edge no share can reach (a share needs a confirmed email). The fold of the preset bar (757 lines) into the bar,
+its dialog and the preset instance came to 707 (956 as first cut), not ~600: a generic bar carries its words as
+data, a shared chip and instance menu entries.
 
 ## Subtraction ledger (production lines, tests and docs excluded)
 
-Deleted: the Table tab (~575, wave 1); `fetchDashboard`'s pgRead and the single-membership caveat (~20);
+Planned: deleted the Table tab (~575, wave 1); `fetchDashboard`'s pgRead and the single-membership caveat (~20);
 `PresetBar` + `PresetSaveModal` folded into one bar and one modal (757 → ~600, −157); `api/filter_presets.py` +
 the CRUD routes folded into one module (286 → ~260, −26). Added: migration 647 (~250), the dashboards router (~120),
 the shares arm (~40), the dashboard adapter + share modal (~260), notifications (~10). Net production ≈ −100; no flag,
 no per-surface mode, one new table that is the third instance of an existing pattern.
+
+Actual W3 (SPA production, after review): +1,212 / −805, net +407 — the bar, its dialog and the preset instance
+are 707 lines where the preset bar and its dialog were 757 (−50, not −157); the dashboard instance with its share
+dialog is 291; browseState, lib/stats, types and Notifications carry the rest. The sprint's net turns on W1's
+Table removal and W2's API fold.
 
 ## Waves and merges
 

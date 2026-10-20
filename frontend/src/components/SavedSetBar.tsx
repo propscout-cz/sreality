@@ -37,12 +37,16 @@ export interface SavedSetMenuItem {
 
 /* Every string the bar draws: the presets' English, the dashboards' Czech. `load`,
  * `reorder` and `options` name a chip as "<word>: <name>"; the update button
- * reads as the update dialog's submit. */
+ * reads as the update dialog's submit. `shared` words a chip shared WITH the
+ * account: the owner's lead-in for a screen reader, and its dirty dot's hint. */
 export type SavedSetCopy = SaveModalWords &
   Record<
     'empty' | 'save' | 'saveHint' | 'updateHint' | 'edit' | 'load' | 'reorder' | 'dragHint' | 'options' | 'edited' | 'editedHint',
     string
-  > & { delete: Required<Pick<SavedSetMenuItem, 'label' | 'confirm'>> };
+  > & {
+    delete: Required<Pick<SavedSetMenuItem, 'label' | 'confirm'>>;
+    shared?: { by: string; editedHint: string };
+  };
 
 export interface SavedSetBarProps<T extends SavedSetItem> {
   items: readonly T[];
@@ -75,16 +79,26 @@ type SavedSetList<T> = { data: T[]; total: number };
 
 /* An instance's list (`{data, total}` under `key`) and its drag write: the chips
  * move on the drop, the PUT's canonical list is adopted, a failure rolls back and
- * re-reads. Shared items stay behind the own ones. `bar` spreads onto the bar. */
+ * re-reads (`onReorderError` replaces the global toast). Shared items stay behind
+ * the own ones. `refetchOnMount: 'always'` re-reads a fresh cache on every mount.
+ * `bar` spreads onto the bar. */
 export function useSavedSet<T extends SavedSetItem>(
   key: QueryKey,
   list: () => Promise<SavedSetList<T>>,
   reorder: (ids: string[]) => Promise<SavedSetList<T>>,
-  isOwn: (item: T) => boolean = () => true,
+  {
+    isOwn = () => true,
+    refetchOnMount,
+    onReorderError,
+  }: {
+    isOwn?: (item: T) => boolean;
+    refetchOnMount?: 'always';
+    onReorderError?: (error: Error) => void;
+  } = {},
 ) {
   const qc = useQueryClient();
   const enabled = isApiConfigured();
-  const query = useQuery({ queryKey: key, queryFn: list, enabled });
+  const query = useQuery({ queryKey: key, queryFn: list, enabled, refetchOnMount });
   const write = useOptimisticWrite<T[], SavedSetList<T>>({
     mutationKey: ['write', ...key, 'reorder'],
     mutationFn: (own) => reorder(own.map((i) => i.id)),
@@ -96,6 +110,7 @@ export function useSavedSet<T extends SavedSetItem>(
     // The PUT answers with the canonical list, so only a failure needs a re-read.
     revalidate: (_own, failed) => (failed ? [key] : []),
     onSuccess: (res) => qc.setQueryData(key, res),
+    onError: onReorderError,
   });
   const items = query.data?.data ?? [];
   return { enabled, query, bar: { items, loading: query.isLoading, isOwn, onReorder: write.mutate } };
@@ -156,6 +171,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
   };
 
   const runEntry = async (item: T, index: number, entry: SavedSetMenuItem) => {
+    if (running) return;
     if (entry.confirm && menu?.armed !== index) {
       setMenu({ id: item.id, armed: index });
       return;
@@ -182,6 +198,10 @@ export default function SavedSetBar<T extends SavedSetItem>({
     const marked = item.id === activeId && dirty;
     const entries = menu?.id === item.id ? menuFor(item) : null;
     const owner = suffix?.(item);
+    /* "<name> — <by> <owner>": two shared chips of one name stay two for a screen reader. */
+    const ownerLead = ['—', copy.shared?.by].filter(Boolean).join(' ');
+    const named = owner ? `${item.name} ${ownerLead} ${owner}` : item.name;
+    const editedHint = isOwn(item) ? copy.editedHint : (copy.shared?.editedHint ?? copy.editedHint);
     /* The accent is the chip's colour (shared tag palette) or copper when
      * uncolored, as CSS vars so active/hover states reuse one source. */
     const tone = item.color ? `--color-tag-${item.color}` : '--color-copper';
@@ -225,13 +245,13 @@ export default function SavedSetBar<T extends SavedSetItem>({
                 {item.name}
                 {owner ? (
                   <>
-                    {' '}
-                    <span className="ml-0.5 text-[0.7rem] text-[var(--color-ink-3)]">{owner}</span>
+                    <span className="sr-only"> {ownerLead} </span>
+                    <span className="ml-1.5 text-[0.7rem] text-[var(--color-ink-3)]">{owner}</span>
                   </>
                 ) : null}
                 {marked ? (
                   <>
-                    <span className="ml-1 text-[var(--chip-accent)]" title={copy.editedHint} aria-hidden>
+                    <span className="ml-1 text-[var(--chip-accent)]" title={editedHint} aria-hidden>
                       •
                     </span>
                     <span id={dirtyId} hidden>
@@ -246,7 +266,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
                 className="px-1.5 py-1 border-l border-[var(--color-rule)] opacity-60 hover:opacity-100"
                 aria-haspopup="menu"
                 aria-expanded={entries != null}
-                aria-label={`${copy.options}: ${item.name}`}
+                aria-label={`${copy.options}: ${named}`}
                 title={copy.options}
               >
                 ⋯
@@ -266,10 +286,10 @@ export default function SavedSetBar<T extends SavedSetItem>({
                       type="button"
                       role="menuitem"
                       onClick={() => void runEntry(item, i, entry)}
-                      disabled={armed != null && running}
-                      className={`block w-full px-3 py-1.5 text-left text-[0.8rem] ${
+                      disabled={running}
+                      className={`block w-full px-3 py-1.5 text-left text-[0.8rem] disabled:opacity-50 ${
                         armed
-                          ? 'text-[var(--color-brick)] hover:bg-[var(--color-brick-soft)] disabled:opacity-50'
+                          ? 'text-[var(--color-brick)] hover:bg-[var(--color-brick-soft)]'
                           : `text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] ${entry.danger ? 'hover:text-[var(--color-brick)]' : 'hover:text-[var(--color-ink)]'}`
                       }`}
                     >

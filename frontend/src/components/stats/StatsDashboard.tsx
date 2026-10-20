@@ -115,7 +115,7 @@ export default function StatsDashboard({
 
   return (
     <div className="space-y-4">
-      {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutate(next)} /> : null}
+      {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} /> : null}
       <p className="text-[0.75rem] text-[var(--color-ink-3)]">
         Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.
       </p>

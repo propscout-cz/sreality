@@ -10,6 +10,9 @@ import { ApiError } from '@/lib/api';
 import { PRESET_COPY } from './FilterPresetBar';
 import SavedSetBar, { type SavedSetBarProps, type SavedSetItem } from './SavedSetBar';
 
+/* The preset's words, plus the two a shared chip needs (presets have none). */
+const COPY = { ...PRESET_COPY, shared: { by: 'shared by', editedHint: 'Edited — save a copy of your own' } };
+
 interface Item extends SavedSetItem {
   owner: string | null;
 }
@@ -39,7 +42,9 @@ describe('<SavedSetBar> chips', () => {
   it('lists own chips first with a grip each, then a shared chip with its owner and no grip', () => {
     renderBar();
     const loads = screen.getAllByRole('button', { name: /^(Alfa|Beta|Cizí)/ });
-    expect(loads.map((b) => b.textContent)).toEqual(['Alfa', 'Beta', 'Cizí owner@example.com']);
+    expect(loads.map((b) => b.textContent)).toEqual(['Alfa', 'Beta', 'Cizí — shared by owner@example.com']);
+    expect(loads[2]).toHaveAccessibleName('Cizí — shared by owner@example.com');
+    expect(screen.getByRole('button', { name: 'Preset options: Cizí — shared by owner@example.com' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reorder preset: Alfa' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reorder preset: Beta' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reorder preset: Cizí' })).toBeNull();
@@ -81,7 +86,9 @@ describe('<SavedSetBar> dirty', () => {
 
   it('never offers the update for a shared chip', () => {
     renderBar({ activeId: 's', dirty: true });
-    expect(screen.getByRole('button', { name: /^Cizí/ })).toHaveAccessibleDescription('Edited since loaded');
+    const load = screen.getByRole('button', { name: /^Cizí/ });
+    expect(load).toHaveAccessibleDescription('Edited since loaded');
+    expect(within(load).getByTitle('Edited — save a copy of your own')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Update preset' })).toBeNull();
   });
 
@@ -158,7 +165,7 @@ describe('<SavedSetBar> menus', () => {
           ? []
           : [{ label: 'Přestat sledovat', danger: true, confirm: { label: 'Opravdu přestat sledovat', busy: 'Odcházím…' }, onSelect: leave }],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Preset options: Cizí' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preset options: Cizí — shared by owner@example.com' }));
     const menu = screen.getByRole('menu');
     expect(within(menu).getAllByRole('menuitem').map((m) => m.textContent)).toEqual(['Přestat sledovat']);
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Přestat sledovat' }));
@@ -181,7 +188,7 @@ function renderBarProps(): SavedSetBarProps<Item> {
     items: ITEMS,
     activeId: null,
     dirty: false,
-    copy: PRESET_COPY,
+    copy: COPY,
     onLoad: vi.fn(),
     onSaveNew: vi.fn(async () => undefined),
     onUpdate: vi.fn(async () => undefined),
