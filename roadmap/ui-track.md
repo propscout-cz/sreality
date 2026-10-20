@@ -7,6 +7,19 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Browse filter layout (2026-10-20, no migration)
+- **Shipped: the sidebar the operator arranged** (drag-and-drop draft, 2026-10-20). Four bands —
+  Essentials, Curation, Velocity & price activity, Advanced — with one heading level (the group
+  captions are gone on desktop and phone; `lib/filterLayout` rows), bigger band titles, and the
+  header (Reset, fold arrow) pinned while the filters scroll. Status and "Seen at birth" (was
+  "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
+  defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
+  own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+- **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
+  model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
+  entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
+  rule 14).
+
 ### Stats dashboard (2026-10-19, migration 626)
 - **Shipped: Browse › Stats is a dashboard the user composes** (`docs/design/stats-dashboard.md`,
   operator rulings 2026-10-19). Charts = rows (up to six nested dimensions) × one column × a measure

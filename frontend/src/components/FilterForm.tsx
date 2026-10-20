@@ -561,12 +561,10 @@ function PillRow({
 }) {
   const opts = optionsFor(def);
   if (opts.length === 0) return null;
-  /* A nullable pill group gets an explicit leading "Vše" (all) pill. Clicking
-   * the selected pill already cleared the value, but that affordance is
-   * invisible — and for `category_type` the model could not even hold the
-   * cleared state, so the URL round-trip silently snapped back to the default.
-   * Declared once in the registry (FilterDef.nullable), so any future nullable
-   * enum gets the same control without touching this file. */
+  /* No "Vše" pill (operator, 2026-10-20): a nullable group's "no constraint"
+   * state (FilterDef.nullable — `category_type` via the Pipeline chip, the
+   * phone feed's Vše scope) lights no pill, and clicking the selected pill
+   * returns to it. */
   // Auto-fit grid instead of a fixed column count: each pill claims a
   // ~4rem minimum and the browser packs as many per row as the group's
   // current width allows, then stretches them to fill. So as the
@@ -576,11 +574,6 @@ function PillRow({
   // ~4 across — unchanged from before.
   return (
     <div className="grid gap-1 [grid-template-columns:repeat(auto-fit,minmax(4rem,1fr))]">
-      {def.nullable ? (
-        <PickButton on={value == null} onClick={() => onChange(null)} variant="solid">
-          Vše
-        </PickButton>
-      ) : null}
       {opts.map((opt) => (
         <PickButton
           key={String(opt.value)}
