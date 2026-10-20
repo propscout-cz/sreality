@@ -4,8 +4,7 @@
  * The header shows the property exactly as its Browse card does: the
  * `properties_public` row, whose advert fields are its canonical advert's and
  * whose physical facts are the first non-empty in the same order (migration 561,
- * decision 18). Photos, manual estimates and freshness checks are that canonical
- * advert's. The brokers are a list over the adverts (MS7), the price chart draws
+ * decision 18). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
  * every advert's own line (MS9), and a lowest active price that differs from the
  * header's is named under it (MS8). The merged-adverts section is the only list
  * of adverts, each advert's own facts in its row; `?advert=<id>` opens that row.
@@ -74,9 +73,6 @@ import type { PastedLinkState } from '@/pages/Link';
 export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
-);
-const ManualEstimatesBlock = lazyChunk(
-  () => import('@/components/listing-detail/ManualEstimatesBlock'),
 );
 const SoldCompsBlock = lazyChunk(
   () => import('@/components/listing-detail/SoldCompsBlock'),
@@ -352,15 +348,6 @@ export default function PropertyDetail() {
         </>
       )}
       <Hairline />
-      <Suspense fallback={<Skeleton height={120} />}>
-        {/* Manual estimates + freshness checks are stored against the legacy
-            sreality_id, so both are empty by construction for a non-sreality
-            advert. Curation above is property-grain and stays rendered. */}
-        {property.sreality_id != null && (
-          <ManualEstimatesBlock sreality_id={property.sreality_id} />
-        )}
-      </Suspense>
-      <Hairline />
       <Suspense fallback={<Skeleton height={160} />}>
         {/* The only REALIZED prices on the page — registered sales near this
             point, which is why they sit beside the estimates rather than with
@@ -386,6 +373,8 @@ export default function PropertyDetail() {
         snapshots={snapshotsQ.data ?? NO_SNAPSHOTS}
       />
       <Hairline />
+      {/* Freshness checks are stored against the legacy sreality_id: empty by
+          construction for a non-sreality advert. */}
       {property.sreality_id != null && (
         <FreshnessBlock sreality_id={property.sreality_id} checks={checksQ.data ?? []} />
       )}

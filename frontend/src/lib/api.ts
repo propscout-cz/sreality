@@ -29,9 +29,6 @@ import type {
   EstimationRun,
   ListingEstimate,
   ListingSummaryBatchRow,
-  ManualRentalEstimate,
-  CreateManualEstimateIn,
-  UpdateManualEstimateIn,
   ArtifactLink,
   Note,
   NoteAttachment,
@@ -2764,42 +2761,6 @@ export const unsharePipeline = (
   request<{ deleted: boolean }>(`/pipeline/shares/${encodeURIComponent(account_id)}`, {
     method: 'DELETE',
     query: { side },
-  });
-
-/* Manual rental estimates (Phase U-ME): shared reference data every account
- * reads; the writes are admin-only (require_admin), so they carry the user's
- * JWT. */
-
-export const listManualEstimates = (
-  sreality_id: number,
-): Promise<{ data: ManualRentalEstimate[] }> =>
-  request<{ data: ManualRentalEstimate[] }>(
-    `/listings/${sreality_id}/manual_estimates`,
-  );
-
-export const createManualEstimate = (
-  sreality_id: number,
-  body: CreateManualEstimateIn,
-): Promise<ManualRentalEstimate> =>
-  request<ManualRentalEstimate>(
-    `/listings/${sreality_id}/manual_estimates`,
-    { method: 'POST', json: body },
-  );
-
-export const updateManualEstimate = (
-  estimate_id: number,
-  body: UpdateManualEstimateIn,
-): Promise<ManualRentalEstimate> =>
-  request<ManualRentalEstimate>(
-    `/manual_estimates/${estimate_id}`,
-    { method: 'PATCH', json: body },
-  );
-
-export const deleteManualEstimate = (
-  estimate_id: number,
-): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(`/manual_estimates/${estimate_id}`, {
-    method: 'DELETE',
   });
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */

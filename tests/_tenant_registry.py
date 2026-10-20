@@ -14,7 +14,6 @@ TENANT_TABLES: tuple[str, ...] = (
     "property_notes",
     "filter_presets",
     "notification_subscriptions",
-    "manual_rental_estimates",
     "collection_properties",
     "property_tags",
     "notification_dispatches",

@@ -1950,8 +1950,6 @@ export const curationKeys = {
   allPropertyNotes: ['curation', 'property-notes'] as const,
   artifactLinks: ['curation', 'artifact-links'] as const,
   noteCounts: ['curation', 'note-counts'] as const,
-  manualEstimates: (sreality_id: number) =>
-    ['curation', 'manual-estimates', sreality_id] as const,
 };
 
 /* Deal pipeline (migration 205). The "is this property bookmarked + at which

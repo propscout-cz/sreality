@@ -1314,61 +1314,6 @@ export interface NotificationUnreadCount {
 
 export type WatchdogSeenFilter = 'all' | 'seen' | 'unseen';
 
-/* Manual rental estimates (Phase U-ME).
- * Operator-recorded point-estimate rentals attached to a listing.
- * Read path: the API (/listings/{id}/manual_estimates); platform-wide data, not account-scoped. */
-
-export type ManualEstimateSourceKind =
-  | 'broker'
-  | 'gut'
-  | 'external_comp'
-  | 'portfolio'
-  | 'other';
-
-export const MANUAL_ESTIMATE_SOURCE_KINDS: ReadonlyArray<ManualEstimateSourceKind> = [
-  'broker',
-  'gut',
-  'external_comp',
-  'portfolio',
-  'other',
-];
-
-export const manualEstimateSourceLabel = (kind: ManualEstimateSourceKind): string => {
-  switch (kind) {
-    case 'broker':        return 'Broker';
-    case 'gut':           return 'Gut';
-    case 'external_comp': return 'External comp';
-    case 'portfolio':     return 'Portfolio';
-    case 'other':         return 'Other';
-  }
-};
-
-export interface ManualRentalEstimate {
-  id: number;
-  sreality_id: number | null;
-  listing_id: number | null;
-  rent_czk: number;
-  author: string;
-  source_kind: ManualEstimateSourceKind;
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateManualEstimateIn {
-  rent_czk: number;
-  author: string;
-  source_kind: ManualEstimateSourceKind;
-  notes?: string | null;
-}
-
-export interface UpdateManualEstimateIn {
-  rent_czk?: number;
-  author?: string;
-  source_kind?: ManualEstimateSourceKind;
-  notes?: string | null;
-}
-
 /* One row of property_sources_public — one advert of a property: a row of the
  * property page's merged-adverts section. */
 export interface PropertySource {

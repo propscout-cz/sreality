@@ -26,7 +26,6 @@ from api import pipeline as pipeline_module
 from api import shares as shares_module
 from api import price_stats as price_stats_module
 from api import stats_dashboard as stats_dashboard_module
-from api import manual_estimates as me
 from api import dependencies as deps
 from api import maps
 from api import sreality_price_map
@@ -1892,60 +1891,6 @@ def decide_skill_refinement(
         return refiner_module.dismiss_refinement(conn, refinement_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-# --- manual rental estimates --------------------------------------------
-# Phase U-ME: point-estimate rental figures attached to a listing.
-# Shared reference data (migration 290): every account reads, only platform
-# admins write. The read stays token-gated; the writes require an admin JWT.
-
-
-@app.get("/listings/{sreality_id}/manual_estimates")
-def get_listing_manual_estimates(
-    sreality_id: int,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return me.list_manual_estimates(conn, sreality_id)
-
-
-@app.post("/listings/{sreality_id}/manual_estimates")
-def post_listing_manual_estimate(
-    sreality_id: int,
-    body: s.CreateManualEstimateIn,
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.require_admin),
-) -> dict[str, Any]:
-    return me.create_manual_estimate(conn, sreality_id, body, claims)
-
-
-@app.patch("/manual_estimates/{estimate_id}")
-def patch_manual_estimate(
-    estimate_id: int,
-    body: s.UpdateManualEstimateIn,
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.require_admin),
-) -> dict[str, Any]:
-    return me.update_manual_estimate(conn, estimate_id, body, claims)
-
-
-@app.delete("/manual_estimates/{estimate_id}")
-def delete_manual_estimate(
-    estimate_id: int,
-    conn: Any = Depends(deps.get_db_conn),
-    _: dict = Depends(deps.require_admin),
-) -> dict[str, Any]:
-    return me.delete_manual_estimate(conn, estimate_id)
-
-
-@app.post("/tools/get_manual_rental_estimates")
-def post_get_manual_rental_estimates(
-    body: s.GetManualRentalEstimatesIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    from toolkit.manual_estimates import get_manual_rental_estimates
-    return get_manual_rental_estimates(conn, body.sreality_id)
 
 
 def _build_comparables_inputs(
