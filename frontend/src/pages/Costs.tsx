@@ -26,10 +26,11 @@ import { fmtCount, fmtRelative, fmtUsd, fmtUsdPerCall } from '@/lib/format';
 import { useTokenColors } from '@/lib/useTokenColors';
 import { timeLabel, timeLabelFull, valueAxisSpec } from '@/lib/chartAxis';
 import GrainToggle, { type Grain } from '@/components/GrainToggle';
+import Panel from '@/components/Panel';
 
 /* Operator dashboard for LLM spend — aggregates of the `llm_calls` audit
  * table via `llm_cost_daily_public` (migration 280) and its hour-grain
- * twin `llm_cost_hourly_public` (migration 281). Read-only, anon.
+ * twin `llm_cost_hourly_public` (migration 281).
  *
  * The page has three day labels — the "Today" tile, the daily chart's axis and
  * its tooltip — and since migration 437 all three mean the SAME civil day
@@ -44,12 +45,9 @@ const TOKEN_KEYS = [
   '--color-ink-3',
   '--color-rule',
   '--color-paper-2',
-  '--color-tag-ochre',
-  '--color-tag-slate',
   '--color-tag-brick',
   '--color-tag-teal',
   '--color-tag-plum',
-  '--color-tag-sage',
   '--color-tag-sand',
   '--color-tag-copper',
 ];
@@ -77,7 +75,7 @@ export default function Costs() {
 
       {error ? (
         <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] px-4 py-3 text-sm text-[var(--color-brick)]">
-          Failed to load cost data: {(error as Error).message}
+          Failed to load cost data: {error.message}
         </div>
       ) : null}
 
@@ -127,7 +125,7 @@ function Body({ rows }: { rows: LlmCostDailyRow[] }) {
         />
       </div>
 
-      <Card
+      <Panel
         title={
           grain === 'hour'
             ? `Hourly spend · last ${CHART_HOURS} h · by feature`
@@ -138,7 +136,7 @@ function Body({ rows }: { rows: LlmCostDailyRow[] }) {
         {grain === 'hour' ? (
           hourlyQuery.error ? (
             <p className="text-sm text-[var(--color-brick)]">
-              Failed to load hourly data: {(hourlyQuery.error as Error).message}
+              Failed to load hourly data: {hourlyQuery.error.message}
             </p>
           ) : !hourly ? (
             <p className="text-sm text-[var(--color-ink-3)]">Loading hourly spend…</p>
@@ -148,15 +146,15 @@ function Body({ rows }: { rows: LlmCostDailyRow[] }) {
         ) : (
           <CostChart series={daily} grain="day" />
         )}
-      </Card>
+      </Panel>
 
-      <Card title="By feature · 7 d / 30 d">
+      <Panel title="By feature · 7 d / 30 d">
         <FeatureTable features={features} />
-      </Card>
+      </Panel>
 
-      <Card title="By model · last 30 d">
+      <Panel title="By model · last 30 d">
         <ModelTable models={models} />
-      </Card>
+      </Panel>
     </div>
   );
 }
@@ -374,28 +372,6 @@ function ModelTable({ models }: { models: ReturnType<typeof summarizeByModel> })
         </tbody>
       </table>
     </div>
-  );
-}
-
-function Card({
-  title,
-  accessory,
-  children,
-}: {
-  title: string;
-  accessory?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 py-4">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-          {title}
-        </h3>
-        {accessory ?? null}
-      </div>
-      <div className="mt-3">{children}</div>
-    </section>
   );
 }
 

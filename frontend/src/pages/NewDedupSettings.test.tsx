@@ -5,7 +5,8 @@
  * and the page's Compact/Detailed toggle switches every explanation inline, the
  * boolean toggle flips immediately, a number field only calls the API after
  * Enter (not per keystroke), the "not yet calibrated" / "edited" badges gate on
- * decided/is_override, and reset calls the reset endpoint. Backend CRUD is
+ * decided/is_override, reset calls the reset endpoint, and a failed read draws the
+ * shared banner flush (mt-0) as an alert with no nested control. Backend CRUD is
  * covered by tests/api/test_new_dedup_routes.py; this only checks the wiring.
  */
 
@@ -16,6 +17,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import NewDedupSettings from './NewDedupSettings';
 import type { NewDedupSetting } from '@/lib/api';
 import * as api from '@/lib/api';
+import { expectNoNestedInteractive } from '@/test/a11y';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -230,5 +232,12 @@ describe('<NewDedupSettings>', () => {
         'first_shared_family',
       ),
     );
+  });
+
+  it('draws a failed read in the shared banner, flush under the header', async () => {
+    vi.mocked(api.listNewDedupSettings).mockRejectedValue(new Error('HTTP 500'));
+    renderPage();
+    expect(await screen.findByRole('alert')).toHaveClass('mt-0');
+    expectNoNestedInteractive(document.body);
   });
 });

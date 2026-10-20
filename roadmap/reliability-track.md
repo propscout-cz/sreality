@@ -723,3 +723,49 @@ link landing on its check.
 
 **Next:** wave 9 — drop the old health layer: its 8 matviews, 11 functions and 12 views stop costing
 database time, after a backup and 48 h with no reads of them (destructive, Q5).
+
+## 2026-10-20 — Health dashboard sprint, wave 10a (shipped with this PR)
+
+Wave 10, the shared admin page parts, is split in two: 10a, this PR, moves the admin pages onto the
+shared panel and error banner where nothing on screen changes, plus the one change Q4 already ruled;
+10b, a second draft PR, holds the other moves that change how a page looks; you ruled on 2026-10-20: all of it, with a red dot beside the label where a number was brick.
+Plan: [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 10, and its
+"As built" note. Wave 10a goes ahead of wave 9, which keeps its gate (wave 8's Next, above).
+
+What Health dashboard sprint wave 10a changed:
+- **One panel**: the cards of LLM costs, NEW DEDUP · Audit poloh and the NEW DEDUP dashboard were
+  copies of the shared `Panel` and now draw it, the same on screen. Location quality's cards lose their
+  header bar to match them, as Q4 ruled (their titles a little wider and lighter, the content 4 px
+  further in). Screen readers now list each card as a region named by its title.
+- **One error banner**: the settings pages' own banner copy goes; its 8 places draw the shared
+  `ErrorBanner` through a new `flush` option that keeps each where it sat, and they now announce as
+  alerts.
+- **Dead parts out**: Panel's unused `as` option (LLM costs' card titles become h2, the same on
+  screen) and dead code in the touched files.
+- The plan's "status maps → StatusDot" item is struck: the two colour maps left are run and plan
+  states, which a status dot must not draw.
+
+Ruled 2026-10-20, all of it (wave 10b, the next PR; the exact figures are in the design's "As built" note):
+- **The stat tiles** on LLM costs, Location quality and AUTODEDUP · Progress: coloured numbers turn
+  ink (copper "Projected / month" and "With a town"; brick failed calls, disputes and stale registry),
+  labels and hints change size or tone, and the Progress tiles get about 17–20 px shorter.
+- **The three brick numbers** (LLM costs' failed calls, Location quality's disputes and stale
+  registry): a small brick dot beside the label, with the word "Problem" for screen readers, or no mark.
+- **The loading placeholders** on LLM costs and Location quality stop pulsing, and their tiles change
+  corner and border slightly.
+- **The error banners** on LLM costs and Location quality change margin and padding; LLM costs' also its
+  corners and title weight; Location quality's gain a "Failed:" title and a softer border.
+
+Owed and stated (also in the design's "As built" note):
+- LLM costs and Settings have no page test, so the nested-control check does not run on them.
+- With the API down, Settings can announce up to six alerts at once.
+- The settings pages still import their banner through SectionChrome, now a thin wrapper over the
+  shared one; moving their 8 call sites onto the shared import would delete it.
+- Admin pages the plan did not list keep their own panel-shaped boxes (AUTODEDUP · Pair, NEW DEDUP ·
+  Candidates and Labeling, Settings' rent map, Outreach), and Datasets its banner-like box.
+
+To check after the merge: Railway's vite status reads success; then, read only, LLM costs, Location
+quality, Audit poloh, NEW DEDUP, Settings and NEW DEDUP · Settings in both explicit themes: each as
+before, except Location quality's cards without their header bar.
+
+**Next:** wave 10b (ruled 2026-10-20; the list above), then wave 9 at its gate.

@@ -270,7 +270,7 @@ Build distinct levels distinguishable at a glance. Headlines need weight and tig
 
 ## Card Layouts
 
-A metric card doesn't have to look like a plan card doesn't have to look like a settings card. Design each card's internal structure for its specific content — but keep the surface treatment consistent: same border weight, shadow depth, corner radius, padding scale.
+A metric card doesn't have to look like a plan card doesn't have to look like a settings card. Design each card's internal structure for its specific content — but keep the surface treatment consistent: same border weight, shadow depth, corner radius, padding scale. **Admin pages (this repo)** draw the shared primitives in `frontend/src/components/`, never a local copy: `Panel` (a card), `Stat` (one figure, never a coloured number), `StatusDot` (a check's status, its word beside it), `Skeleton` (a loading block), `Spinner` (an inline wait), `ErrorBanner` (a failure) and `RunStatusChip` (an estimation run's state, in `estimation/RunPanel.tsx`); a copy still on a page waits for the operator's ruling, never a quiet restyle (`.interface-design/system.md`).
 
 ## Controls
 
