@@ -44,8 +44,9 @@ toolkit work.
   as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the
   old values — drop it after a clean week.
 - **Next:** (1) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
-  the operator rules; (2) optionally `reparse --source bazos --fields disposition --missing`, which may fill a
-  NULL disposition the page states grammatically; nothing else is owed on places.
+  the operator rules; (2) optionally `reparse --source bazos --fields disposition --missing --write
+  --allow-snapshot-deferral` (dry run first), which may fill a NULL disposition the page states grammatically;
+  nothing else is owed on places.
 
 ### Negative portal filters (2026-10-13, migration 597)
 - **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal

@@ -1,9 +1,11 @@
-"""Migration 642 heals the last off-canon spellings; its mapping renders the vocabulary, never restates it.
+"""The legacy-vocabulary heal migration renders the vocabulary; it never restates it.
 
-The file's CASE is read back here and held against `scraper.vocabulary`: every target is a canon
-member, every source is not, and a spelling the vocabulary already reads gets the vocabulary's
-answer. What the vocabulary does not read is the operator's ruling, listed once below, so a
-phrase cannot be mapped twice in two places with two answers."""
+The file's CASE is read back here and held against `scraper.vocabulary`: every target is a
+member of the canon AS IT STOOD when the file was written (a later addition to the canon is
+not a defect of an applied file), every source is not, and a spelling the vocabulary reads
+gets an answer that AGREES with the vocabulary's. What the vocabulary did not read on
+2026-10-20 is this PR's reading under the operator's delegation, listed once below; if the
+vocabulary later learns one of those spellings, the two must agree -- never exclude each other."""
 
 from __future__ import annotations
 
@@ -15,30 +17,36 @@ import pytest
 from scraper import vocabulary
 from toolkit.filter_registry import CONDITION_OPTIONS
 
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "642_legacy_vocabulary_heal.sql"
+MIGRATION = sorted((Path(__file__).resolve().parents[1] / "migrations").glob("*_legacy_vocabulary_heal.sql"))[-1]
+NUMBER = MIGRATION.name[:3]
 SQL = MIGRATION.read_text(encoding="utf-8")
 CODE = "\n".join(line for line in SQL.splitlines() if not line.lstrip().startswith("--"))
 
-CANON = frozenset(option.value for option in CONDITION_OPTIONS)
+# The canon the file was written against. The live registry may grow; it may not shrink or rename.
+CANON_AT_HEAL = frozenset({
+    "projekt", "ve_vystavbe", "novostavba", "po_rekonstrukci", "velmi_dobry", "dobry",
+    "udrzovany", "v_rekonstrukci", "pred_rekonstrukci", "spatny", "k_demolici",
+})
 _CASE = re.compile(r"when '([^']+)'\s+then (?:'([^']+)'|null)")
 MAPPING: dict[str, str | None] = {src: (tgt or None) for src, tgt in _CASE.findall(CODE)}
 GRAMMAR_SQL = r"'^[1-9]\+(kk|1)$'"
 
-# The operator's reading (2026-10-20) of each phrase the vocabulary does not know. A foreign
-# "very good" is velmi_dobry, a typo is its word, an elaboration of "v puvodnim stavu" is what the
-# vocabulary says of the plain phrase unless it says "udrzovany", a construction stage is
-# ve_vystavbe, and a word that is not a condition is NULL.
+# This PR's reading (2026-10-20, under "resolve the legacy vocabulary") of each phrase the vocabulary
+# did not read. A foreign "very good" is velmi_dobry; a typo is its word; an elaboration of "v puvodnim
+# stavu" is what the vocabulary says of the plain phrase (dobry -- udrzovany ranks below dobry, so a
+# better-kept original state must not land there); a construction stage is ve_vystavbe (pred kolaudaci
+# follows legal status: unfinished until approved); a word that is not a condition is NULL.
 RULED: dict[str, str | None] = {
     "puvodni": "dobry",
     "puvodni_zachovaly": "dobry",
     "zachovaly": "dobry",
     "v_puvodnim_ale_zachovalem_stavu": "dobry",
+    "v_puvodnim,_avsak_velmi_udrzovanem_stavu": "dobry",
+    "v_puvodnim,_peclive_udrzovanem_stavu": "dobry",
     "v_originalnim,_autentickem_stavu": "dobry",
     "dobre_stavu": "dobry",
     "dobny": "dobry",
     "bezny": "dobry",
-    "v_puvodnim,_avsak_velmi_udrzovanem_stavu": "udrzovany",
-    "v_puvodnim,_peclive_udrzovanem_stavu": "udrzovany",
     "ve_velmi_dobrem_stavu": "velmi_dobry",
     "sehr_dobry": "velmi_dobry",
     "bardzo_dobry": "velmi_dobry",
@@ -69,19 +77,25 @@ def _vocabulary_reads(spelling: str) -> str | None:
     return answer
 
 
+def test_the_canon_the_file_was_written_against_still_stands() -> None:
+    live = frozenset(option.value for option in CONDITION_OPTIONS)
+    assert CANON_AT_HEAL <= live, "a canon member the heal targets was renamed or removed"
+
+
 def test_the_case_maps_every_source_once_and_only_to_the_canon() -> None:
     assert len(MAPPING) == 31
     assert len(_CASE.findall(CODE)) == len(MAPPING), "a spelling is mapped twice"
-    assert not (set(MAPPING) & CANON), "a canon member is never a source"
-    assert {t for t in MAPPING.values() if t is not None} <= CANON
+    assert not (set(MAPPING) & CANON_AT_HEAL), "a canon member is never a source"
+    assert {t for t in MAPPING.values() if t is not None} <= CANON_AT_HEAL
 
 
 @pytest.mark.parametrize("source", sorted(MAPPING))
-def test_a_spelling_the_vocabulary_reads_gets_its_answer(source: str) -> None:
+def test_the_file_agrees_with_whatever_the_vocabulary_reads(source: str) -> None:
     answer = _vocabulary_reads(source)
     if answer is not None:
-        assert source not in RULED, f"{source}: the vocabulary reads it; the ruling must not restate it"
-        assert MAPPING[source] == answer
+        assert MAPPING[source] == answer, f"{source}: the vocabulary reads {answer!r}, the file wrote {MAPPING[source]!r}"
+        if source in RULED:
+            assert RULED[source] == answer, f"{source}: the ruling and the vocabulary disagree"
     else:
         assert source in RULED, f"{source}: the vocabulary does not read it and no ruling names it"
         assert MAPPING[source] == RULED[source]
@@ -89,18 +103,17 @@ def test_a_spelling_the_vocabulary_reads_gets_its_answer(source: str) -> None:
 
 def test_the_ruling_names_nothing_the_file_does_not_map() -> None:
     assert set(RULED) <= set(MAPPING)
-    assert {s for s in MAPPING if _vocabulary_reads(s) is None} == set(RULED)
 
 
-def test_the_canon_literals_are_the_registry_three_times() -> None:
+def test_the_canon_literals_are_the_canon_at_heal_everywhere() -> None:
     lists = re.findall(r"condition not in \(([^)]+)\)", CODE)
-    assert len(lists) == 3
+    assert len(lists) == 4, "backup, gate, update, post-condition"
     for literal in lists:
-        assert frozenset(re.findall(r"'([^']+)'", literal)) == CANON
+        assert frozenset(re.findall(r"'([^']+)'", literal)) == CANON_AT_HEAL
 
 
 def test_the_sql_grammar_is_the_vocabulary_grammar() -> None:
-    assert CODE.count(GRAMMAR_SQL) == 3
+    assert CODE.count(GRAMMAR_SQL) == 4, "backup, gate, update, post-condition"
     grammar = re.compile(GRAMMAR_SQL.strip("'"))
     for member in vocabulary.CANON["disposition"]:
         assert grammar.fullmatch(member), member
@@ -114,14 +127,19 @@ def test_the_sql_grammar_is_the_vocabulary_grammar() -> None:
 
 def test_the_file_keeps_the_seam_rules() -> None:
     assert "listing_snapshots" not in CODE and "last_seen_at" not in CODE
-    assert CODE.count("insert into dirty_properties (property_id)") == 2
-    assert CODE.count("on conflict (property_id) do update set marked_at = now()") == 2
-    assert "create schema if not exists backup_642;" in CODE
-    assert "create table if not exists backup_642.listings_vocabulary as" in CODE
-    assert "revoke all on all tables in schema backup_642 from anon, authenticated;" in CODE
-    assert "alter table backup_642.listings_vocabulary enable row level security;" in CODE
-    assert CODE.index("backup_642.listings_vocabulary as") < CODE.index("update public.listings l")
-    assert "set lock_timeout = '5s';" in CODE and CODE.count("begin;") == 1 and CODE.count("commit;") == 1
-    assert "raise exception '642 did not land: an off-canon condition survived';" in CODE
-    assert "raise exception '642 did not land: a disposition outside the grammar survived';" in CODE
+    assert CODE.count("insert into dirty_properties (property_id, marked_at)") == 2
+    assert CODE.count("clock_timestamp() from") == 2
+    assert CODE.count("on conflict (property_id) do update set marked_at = excluded.marked_at;") == 2
+    backup = f"backup_{NUMBER}"
+    assert f"create schema if not exists {backup};" in CODE
+    assert f"create table if not exists {backup}.listings_vocabulary as" in CODE
+    assert f"revoke all on all tables in schema {backup} from anon, authenticated;" in CODE
+    assert f"alter table {backup}.listings_vocabulary enable row level security;" in CODE
+    assert CODE.index(f"{backup}.listings_vocabulary as") < CODE.index("not exists (select 1 from")
+    assert CODE.index("not exists (select 1 from") < CODE.index("update public.listings l")
+    assert f"raise exception '{NUMBER} refused: % row(s) to heal are not in {backup}" in CODE
+    assert "set lock_timeout = '5s';" in CODE and "set local lock_timeout = '5s';" in CODE
+    assert CODE.count("begin;") == 1 and CODE.count("commit;") == 1
+    assert f"raise exception '{NUMBER} did not land: an off-canon condition survived';" in CODE
+    assert f"raise exception '{NUMBER} did not land: a disposition outside the grammar survived';" in CODE
     assert "else null" in CODE, "an off-canon spelling the file does not name still becomes NULL"
