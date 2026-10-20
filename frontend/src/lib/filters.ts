@@ -869,10 +869,10 @@ const CATEGORY_MAIN_PLURAL: Record<CategoryMain, string> = {
 };
 
 /* Join the multi-select category_main into a human label, e.g.
- * ['byt','dum'] -> "apartments / houses". Empty = "listings" (no constraint). */
+ * ['byt','dum'] -> "apartments / houses". Empty = "properties" (no constraint). */
 const categoryMainLabel = (cats: ReadonlyArray<CategoryMain>): string =>
   cats.length === 0
-    ? 'listings'
+    ? 'properties'
     : cats.map((c) => CATEGORY_MAIN_PLURAL[c]).join(' / ');
 
 /* URL token for "no deal-type constraint". Spelled the same as a curated
