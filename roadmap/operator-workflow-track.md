@@ -51,6 +51,13 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   aggregate RPCs on the operator's word (revert shipped unapplied under `migrations/reverts/`).
 - **Next:** whole-collection / tag DELETEs and merges still revalidate broadly instead of settling.
 
+### Phase U-PIPE-SHARE: Pipeline sharing — view or edit another account's board, act as its owner (proposal, 2026-10-20)
+- **Proposed:** a share row (owner, recipient, mode read|edit); the recipient switches to the owner's board
+  in the Pipeline tab and, under an edit share, acts as the owner on a shared property's curation
+  ("Upravit jako {email}"). One identity function for curation, `acting_account_ids()`, driven by an
+  `x-act-as` header the database validates; nothing else widens. Spec + rulings:
+  `docs/design/pipeline-sharing.md`. Three waves; merges wait for the autodedup session's green light.
+
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:
   `docs/design/collection-sharing.md`; a share is one row that widens READS only, `owner_email` is
