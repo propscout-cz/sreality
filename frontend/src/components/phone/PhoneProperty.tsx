@@ -53,7 +53,6 @@ import {
 } from './PropertySections';
 
 const EstimationsBlock = lazyChunk(() => import('@/components/listing-detail/EstimationsBlock'));
-const ManualEstimatesBlock = lazyChunk(() => import('@/components/listing-detail/ManualEstimatesBlock'));
 const PhoneTagsAndNotes = lazyChunk(() =>
   import('@/components/listing-detail/CurationBlock').then((m) => ({ default: m.PhoneTagsAndNotes })),
 );
@@ -232,13 +231,6 @@ export default function PhoneProperty({
             <EstimationsBlock listing={property} listingIds={advertIds} readOnly bare label="Odhady" />
           </Suspense>
         </div>
-        {property.sreality_id != null && (
-          <div className={BLOCK}>
-            <Suspense fallback={<Skeleton height={100} />}>
-              <ManualEstimatesBlock sreality_id={property.sreality_id} label="Ruční odhady" />
-            </Suspense>
-          </div>
-        )}
         {property.sreality_id != null && (
           <div className={BLOCK}>
             <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Čerstvost" />

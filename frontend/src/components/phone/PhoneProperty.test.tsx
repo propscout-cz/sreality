@@ -31,7 +31,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listCollections: vi.fn(empty),
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
-    listManualEstimates: vi.fn(empty),
     /* Poloha: the location JSON and the static map's bytes. */
     apiGet: vi.fn(async (path: string) =>
       path.endsWith('/location')

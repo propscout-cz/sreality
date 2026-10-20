@@ -767,82 +767,16 @@ map, no stats, no price bounds on top.
   carries the availability and fail-open contract.
 - Next: dropping `properties_with_tags` once this SPA build has rolled out.
 
-### Phase U-ME: Manual rental estimates (next)
+### Phase U-ME: Manual rental estimates (retired 2026-10-19)
 
-Capture operator-judgement rent figures as first-class data and
-make them visible to both humans (a panel on Listing Detail) and
-the agent (a new toolkit tool, consulted by
-`rental_estimator_v1` before `record_estimate`). Bridges the gap
-between an operator's broker quote / portfolio benchmark / gut
-number and the agent's defensible distribution — today that
-private signal only lives in `listing_notes` free text where
-neither side can use it as a number.
-
-Shape locked with the operator:
-- Point estimate (`rent_czk` integer, CHECK 1000–1000000), not
-  a range. Simpler than mirroring the estimator's p25/p75 and
-  matches how operators actually write the number down.
-- One row per estimate; many per listing. Mutable rows with
-  full audit history on UPDATE and DELETE via a trigger (same
-  pattern as `app_settings_history` in migration 020).
-- Free-text `author` + `source_kind` CHECK ∈
-  `broker / gut / external_comp / portfolio / other` + optional
-  `notes` (≤4000 chars).
-
-Scope:
-- Migration 046: `manual_rental_estimates` (FK
-  `sreality_id`, the fields above, `created_at`, `updated_at`,
-  `updated_by`) + `manual_rental_estimates_history` (append-only,
-  `change_kind` ∈ `update / delete`) + BEFORE UPDATE / AFTER
-  DELETE trigger. `manual_rental_estimates_public` view with
-  anon select grant (same pattern as `listing_notes_public` in
-  migration 025). (Originally drafted as 043; renumbered after
-  main's Phase AI slice A claimed slot 043 with
-  `043_estimation_trace_payloads.sql`.)
-- API: new `api/manual_estimates.py` exposing CRUD over
-  `/listings/{id}/manual_estimates` (GET + POST) and
-  `/manual_estimates/{id}` (PATCH + DELETE). All bearer-gated
-  per CLAUDE.md toolkit rule #8 (since 2026-10-04 the three writes
-  take `require_admin` — `roadmap/public-release-track.md` item 11). Pydantic schemas appended to
-  `api/schemas.py`.
-- Toolkit: `toolkit/manual_estimates.py:get_manual_rental_estimates(conn,
-  sreality_id)` returns the standard `{data, metadata}` envelope
-  with `data.estimates` (empty list when none exist).
-  POST `/tools/get_manual_rental_estimates` route in
-  `api/main.py`.
-- Agent: handler + `_ToolDef` entry registered in
-  `api/agent.py:_build_tool_registry()` so the tool is callable
-  by name from the agent loop. Provider-agnostic — no changes
-  needed in `api/providers/`.
-- Migration 047: `UPDATE skills` for `rental_estimator_v1` *and*
-  `rental_estimator_full_v1` (the sibling skill added by main's
-  PR #77 — both want the new tool). Appends
-  `get_manual_rental_estimates` to `allowed_tools` (idempotent
-  guard via `not (allowed_tools @> ...)`), same shape as
-  migration 045's `read_floor_plan` add. The `system_prompt`
-  update that inserts the "CONSULT MANUAL ESTIMATES" step into
-  each skill's instructions is *not* part of this migration —
-  per migration 045's precedent, prompt edits are an operator
-  action via the Settings UI so we never overwrite hand-edits.
-  The on-disk `SKILL.md` files carry the inline numbered step
-  as canonical documentation. (Originally drafted as 046; bumped
-  alongside the 043 → 046 rename above.)
-- Frontend: `ManualEstimatesBlock` slotted into
-  `frontend/src/pages/ListingDetail.tsx` after `CurationBlock`
-  (manual estimates are operator-curated like tags/notes;
-  same shelf is the natural home). Reads via
-  `manual_rental_estimates_public` with the anon key; writes go
-  through the bearer-gated API endpoints. Wrappers in
-  `frontend/src/lib/api.ts` (`listManualEstimates`,
-  `createManualEstimate`, `updateManualEstimate`,
-  `deleteManualEstimate`). No design-token changes.
-
-Out of scope for this phase:
-- Manual estimates on sales / commercial listings (the field
-  is named `rent_czk` and CHECK-bounded; a future migration
-  generalises).
-- The agent's ad-hoc Python code execution capability — that's
-  Phase 7d above, deferred.
+Shipped as migrations 046/047: operator-recorded point rents per listing (`manual_rental_estimates` +
+`_history`, the "Ruční odhady" block on the property page and phone, four API routes, the agent tool
+`get_manual_rental_estimates` in both rental estimator skills). **Retired 2026-10-19** by operator ruling
+(Valuo sprint, ruling 7) as part of the line payment for the Valuo section: neither table ever held a row.
+Removed end to end in `cleanup/retire-manual-estimates`: the code, the tool (migration 638 takes it out of
+`skills.allowed_tools` and drops the verbatim "Consult manual estimates" bullet from
+`rental_estimator_full_v1`; apply it BEFORE the code deploys), and the storage (migration 639, destructive:
+backup + the operator's OK, applied after the code is gone). The original spec is in git history.
 
 ### Phase U2.7: New-listing notifications — in-app slice (shipped)
 
