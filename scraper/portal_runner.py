@@ -62,7 +62,7 @@ DRAIN_CLAIM_CHUNK = 500
 PROBE_LEASE_N = 5
 
 # The by_category key of a walk's declared total, for every portal: the first portal's name for
-# it, kept because the live health matviews (migrations 233, 354) read it until wave 9.
+# it, kept because scripts/checks/scraping.py reads it and every stored walk carries it.
 DECLARED_TOTAL_KEY = "sreality_result_size"
 
 
@@ -477,8 +477,8 @@ def run_index_walk(
             total_enqueued += cat_counts.get("enqueued", 0)
 
             # The numeric verdict is still computed every walk -- it just does
-            # not gate any more. It is logged as an alarm below and recorded in
-            # scrape_runs.by_category so the coverage rail keeps its input.
+            # not gate any more. It is logged as an alarm below and never stored;
+            # by_category keeps the two counts it is computed from.
             coverage = walk_coverage(len(seen_ids), cat_result_size)
 
             to_verify = deferred = 0
@@ -489,7 +489,7 @@ def run_index_walk(
                     # total, which includes listings filed under no kraj at all) would
                     # trip this on every category of every walk, and an alarm that is
                     # on by construction is not an alarm. Those portals emit their own
-                    # scoped one; the number is recorded in by_category either way.
+                    # scoped one; declared and collected are recorded in by_category either way.
                     emit = LOG.info if upper_bound else LOG.warning
                     emit(
                         "COVERAGE cm=%s ct=%s: the walk reached the portal's end but "
@@ -545,9 +545,7 @@ def run_index_walk(
                 "images_stored":        0,
                 DECLARED_TOTAL_KEY:     cat_result_size,
                 "collected":            len(seen_ids),
-                "active_db":            active_db,
                 "walk_reached_end":     bool(reached_end),
-                "walk_coverage":        coverage,
                 "total_is_count":       total_is_count,
                 "declared_is_upper_bound": upper_bound,
             })
@@ -1154,7 +1152,9 @@ def run_phase(
 
     The contract is now explicit: **`ended_at` means the phase completed.** A
     crash bumps `errors` and deliberately leaves `ended_at` NULL before
-    re-raising, so a crashed run lights up both arms instead of neither.
+    re-raising, so a crashed index walk never reads as a finished walk to the
+    `scraping` or `delisting` check (its walk cells keep aging). No check reads
+    `errors`.
     """
     run_id: int | None = None
     if not dry_run:
