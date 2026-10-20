@@ -428,20 +428,29 @@ def test_the_next_pass_re_claims_what_the_reconcile_handed_it(
     assert out["counts"]["redecided"] >= 1
 
 
-def test_the_re_claim_has_its_own_floor_whatever_the_share(
-        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pass the clock or the claim cap cut to one advert (a share of 1) still re-claims up to
-    `STALE_FLOOR` adverts of the groups handed on, whole groups, oldest wait first."""
-    from autodedup import incremental_lane, reconcile
+def _queued_one_advert_groups(world: FakePg) -> list[int]:
+    """Every advert of the world handed on as a group of its own, the last id waiting longest."""
+    from autodedup import reconcile
 
-    world = _seeded_reject_world_for_floor(tmp_path)
-    _open_scope(monkeypatch)
     ids = sorted(i for _g, i in world.rt_fp)
     for hours, listing_id in enumerate(ids, start=13):
         world.rt_fp[(GEN, listing_id)]["updated_at"] = world.now - timedelta(hours=hours)
     world.settings[reconcile.redecide_key(GEN)] = [[i] for i in ids]
-    world.settings[incremental_lane.claim_cap_key(GEN)] = {"cap": 1, "reason": "test"}
+    return ids
+
+
+def test_the_re_claim_has_its_own_floor_whatever_the_share(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pass the clock cut to one advert (a share of 1) still re-claims up to `STALE_FLOOR`
+    adverts of the groups handed on, whole groups, oldest wait first."""
+    from autodedup import incremental_lane, reconcile
+
+    world = _seeded_reject_world_for_floor(tmp_path)
+    _open_scope(monkeypatch)
+    ids = _queued_one_advert_groups(world)
+    world.settings[incremental_lane.pass_rate_key(GEN)] = 1e-6
     out = incremental_lane.run_incremental(lambda: world)
+    assert out["claim_bound"]["bound_by"] == "time"
     share = max(1, out["claim_bound"]["limit"] // 5)
     assert share < len(ids) <= reconcile.STALE_FLOOR
     assert out["feeds"].get("stale") == len(ids) == out["evidence"]["stale_claimed"]
@@ -449,6 +458,28 @@ def test_the_re_claim_has_its_own_floor_whatever_the_share(
     assert reconcile.claims([[4007], [4005], [4006]], {
         4005: (1, True), 4006: (2, True), 4007: (3, True)}, 2) == [4005, 4006], (
         "oldest wait first, whole groups, up to the budget")
+
+
+def test_the_claim_cap_a_death_halves_bounds_the_re_claims_too(
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The E971 review: the re-claims are most of a pass (200 beside the feeds' ~30), so the cap
+    a death halves (E948) bounds them as it bounds the feeds' limit. Else every death walked
+    only the feeds' share down to the floor while the 200 that grew the pass stayed, and the
+    lane died every third pass. Whole groups, oldest wait first; only those are stamped tried."""
+    from autodedup import incremental_lane, reconcile
+
+    world = _seeded_reject_world_for_floor(tmp_path)
+    _open_scope(monkeypatch)
+    ids = _queued_one_advert_groups(world)
+    monkeypatch.setattr(incremental_lane, "CLAIM_CAP_FLOOR", 1)
+    world.settings[incremental_lane.claim_cap_key(GEN)] = {"cap": 3, "reason": "test"}
+    out = incremental_lane.run_incremental(lambda: world)
+    assert not out["aborted"] and len(ids) > 3
+    assert out["feeds"].get("stale") == 3 == out["evidence"]["stale_claimed"]
+    assert out["evidence"]["stale_budget"] == 3 == out["claim_bound"]["cap"]
+    assert set(world.settings[reconcile.tried_key(GEN)]) == {str(i) for i in ids[-3:]}
+    assert world.settings[reconcile.budget_key(GEN)] == {"budget": reconcile.STALE_FLOOR}, (
+        "the stored budget stays whole: the cap, not the record, holds the death's lesson")
 
 
 def _built_world(path):

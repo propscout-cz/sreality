@@ -96,8 +96,9 @@ REDECIDE_CAP: int = 5000
 # (a pass of 9 adverts) would leave a backlog of thousands for days. They ride ON TOP of the
 # feeds' limit, so this is what the worker's memory leaves beside the feeds (E971): ~6 GB plus
 # ~4.5 GB a hundred claimed adverts against its 22,888 MB holds a pass to ~300 adverts, and the
-# feeds brought 16-39 a pass on 2026-10-20. A pass the feeds overfill dies, and E948b's cap and
-# this arm's own pause and halving below answer the death.
+# feeds brought 16-39 a pass on 2026-10-20. A pass the feeds overfill dies (the first after a
+# long brake is the likeliest), and E948's cap, which bounds this budget too, and this arm's
+# own pause and halving below answer the death.
 STALE_FLOOR: int = 200
 # A group the lane tried to re-claim is not tried again for this long, whatever came of it: a
 # re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
@@ -106,7 +107,8 @@ TRIED_BACKOFF_HOURS: float = 6.0
 # The re-claim's own budget, kept like the rate (E941): `{budget, inflight}`, the count a pass
 # re-claims written AHEAD of it; a pass that finds a count still in flight (the last pass that
 # carried re-claims died: its deadline, a kill, a raise) offers none and halves the budget, and
-# a pass that commits with re-claims restores `STALE_FLOOR`.
+# a pass that commits with re-claims restores `STALE_FLOOR`; a pass takes at most the claim cap
+# of it, which only a seed or a bigger container raises (E948b), so a death's lesson stays.
 BUDGET_SETTING: str = "rt_redecide_budget"
 QUARANTINED = "quarantined"
 SUMMARY_CAP: int = 50

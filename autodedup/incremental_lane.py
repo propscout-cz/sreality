@@ -402,7 +402,9 @@ BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # release: most likely the kernel's OOM killer) took on more than its container could hold, so
 # the next process of the same container, which releases that lease before its take
 # (`rt_lease.release_predecessor`), halves `rt_claim_cap:<generation>` in the same commit, and
-# the limit every feed's share is cut from is min(max_listings, cap, the time budget's). The
+# the limit every feed's share is cut from is min(max_listings, cap, the time budget's); the
+# re-claims riding on top of it (E960) take at most the cap as well, since they are most of a
+# pass (E971) and a death that could not shrink them would recur at every pass they ride. The
 # death is the signal; no memory reading decides a halving. Nothing raises the cap again but a
 # seed or a bigger container (E948b): the store keeps growing under a generation (inactive
 # adverts stay in it), so a size that died in this container dies again, and doubling back to
@@ -419,11 +421,12 @@ BOOTSTRAP_BUDGET_FRACTION: float = 0.75
 # proves its dead predecessor ran under the smaller limit: that boot releases the lease and
 # halves nothing, since the death was the smaller container's.
 #
-# Below it a pass's memory is its neighbourhood read, not its claim: a smaller claim would only
-# slow the build. So at the floor a death is no claim's to cure — the neighbourhood read, a
-# re-cut under the same lease, one bad advert — and its lease is left to its TTL, as before
-# E948: releasing it at every boot would restart the whole worker as fast as it can boot, and
-# the TTL holds that to one death a lease.
+# Below it a pass's memory is its neighbourhood read, not its claim (the feeds' limit and the
+# re-claims each at most the floor): a smaller claim would only slow the build. So at the floor
+# a death is no claim's to cure — the neighbourhood read, a re-cut under the same lease, one
+# bad advert — and its lease is left to its TTL, as before E948: releasing it at every boot
+# would restart the whole worker as fast as it can boot, and the TTL holds that to one death a
+# lease.
 CLAIM_CAP_FLOOR: int = 25
 # E948b: the share a container's memory limit must grow by, over the `limit_mb` its cap was
 # halved under, to reset the cap to `max_listings`; a limit that merely jitters must not.
@@ -2495,7 +2498,7 @@ def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: st
 
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
                   handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
-                  engine_since: str) -> tuple[list[int], int, int]:
+                  engine_since: str, cap: int) -> tuple[list[int], int, int]:
     """What this pass re-claims for the groups the reconcile handed on (E960), chosen BEFORE the
     pass and stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
     refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
@@ -2504,11 +2507,13 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     store's key (after a deploy that moved it, every neighbour's reject would be re-scored).
     The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
     pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
-    one offers none and halves the budget. Returns the adverts, how many of the queue's adverts
-    are stale, and the budget."""
+    one offers none and halves the budget. A pass takes at most the claim cap of it (E948): the
+    re-claims are most of a pass, so the death that halved the cap must shrink them, and a pass
+    that commits restores the record, never past the cap. Returns the adverts, how many of the
+    queue's adverts are stale, and the budget."""
     record = control.get(reconcile.budget_key(generation))
     record = dict(record) if isinstance(record, Mapping) else {}
-    budget = max(1, int(record.get("budget") or reconcile.STALE_FLOOR))
+    budget = max(1, min(int(record.get("budget") or reconcile.STALE_FLOOR), int(cap)))
     if record.get("inflight"):
         budget = max(1, int(record["inflight"]) // 2)
         _stale_budget(conn, generation, {"budget": budget}, "redecide_halved")
@@ -2862,7 +2867,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                      store.engine_digest)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
         stale_claims, stale_waiting, stale_budget = _stale_claims(
-            conn, generation, control, handed, bootstrap, store, engine_since)
+            conn, generation, control, handed, bootstrap, store, engine_since, int(cap["cap"]))
         work = SqlWork(conn, scope, generation, parents=parents, bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
                                       else PASS_BUDGET_S),
