@@ -456,7 +456,7 @@ def test_the_re_claim_has_its_own_floor_whatever_the_share(
     assert out["feeds"].get("stale") == len(ids) == out["evidence"]["stale_claimed"]
     assert out["claim_bound"]["stale"] == len(ids), "on top of the limit (E971)"
     assert reconcile.claims([[4007], [4005], [4006]], {
-        4005: (1, True), 4006: (2, True), 4007: (3, True)}, 2) == [4005, 4006], (
+        4005: (1, True, 0), 4006: (2, True, 0), 4007: (3, True, 0)}, 2) == [4005, 4006], (
         "oldest wait first, whole groups, up to the budget")
 
 

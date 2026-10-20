@@ -29,10 +29,11 @@ What it adds is WHICH groups and WHEN:
     more than `FRESH_DECISION_HOURS` ago, under another engine, or never (E960): a pass reads a
     neighbour as its row stored it, so a stored merge can rest on facts a sighting, a location
     correction or a reparse has since moved. Every group owed a merge and not merged this pass
-    (waiting, past the run cap, out of time) is handed on (`rt_redecide`), oldest moved member
-    first; the next pass re-claims whole groups of it, `STALE_FLOOR` adverts on top of its
-    feeds, and the reconcile re-plans every group handed on, so a group refreshed whole merges
-    at once.
+    (waiting, past the run cap, out of time) is handed on (`rt_redecide`) in `CLAIM_ORDER` —
+    flats for sale, flats for rent, the rest (E972) — oldest moved member first within each;
+    the next pass re-claims whole groups of it in that order, `STALE_FLOOR` adverts on top of
+    its feeds, and the reconcile re-plans every group handed on, so a group refreshed whole
+    merges at once.
 
 The rollout control is unchanged until W6: `app_settings.autodedup_apply_scope` must admit the
 group, and the WHOLE row is re-read before every group (blocks, deal types) and handed to the
@@ -104,6 +105,13 @@ STALE_FLOOR: int = 200
 # re-claim the pair budget refused or the deadline cut must not hold the head of the queue.
 TRIED_SETTING: str = "rt_redecide_tried"
 TRIED_BACKOFF_HOURS: float = 6.0
+# E972, the operator's Prague priority of 2026-10-20: the waiting groups are handed on and
+# re-claimed flats for sale first, flats for rent second, the rest third, the oldest wait first
+# within each. An order only: the same groups are re-read, none is re-decided.
+CLAIM_ORDER: tuple[tuple[str, str], ...] = (("byt", "prodej"), ("byt", "pronajem"))
+# Per advert, as `refreshed` reads it: its last refresh, whether a merge may NOT rest on it, and
+# its place in `CLAIM_ORDER`.
+Refresh = tuple[Any, bool, int]
 # The re-claim's own budget, kept like the rate (E941): `{budget, inflight}`, the count a pass
 # re-claims written AHEAD of it; a pass that finds a count still in flight (the last pass that
 # carried re-claims died: its deadline, a kill, a raise) offers none and halves the budget, and
@@ -171,54 +179,64 @@ def tried_key(generation: str) -> str:
 
 
 def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_hours: float,
-              engine_since: str | None) -> dict[int, tuple[Any, bool]]:
-    """Each advert's last refresh and whether a merge may NOT rest on it (E960): refreshed longer
-    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed)."""
+              engine_since: str | None) -> dict[int, Refresh]:
+    """Each advert's last refresh, whether a merge may NOT rest on it (E960): refreshed longer
+    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed), and its place
+    in `CLAIM_ORDER` by its row's categories (E972)."""
     if not listing_ids:
         return {}
-    return {int(row[0]): (row[1], bool(row[2])) for row in _rows(conn, RT_STALE_SQL, {
-        "generation": generation, "listing_ids": sorted({int(i) for i in listing_ids}),
-        "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since})}
+    return {int(lid): (at, bool(stale), _claim_class(main, kind))
+            for lid, at, stale, main, kind in _rows(conn, RT_STALE_SQL, {
+                "generation": generation, "listing_ids": sorted({int(i) for i in listing_ids}),
+                "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since})}
 
 
 def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
                   fresh_hours: float, engine_since: str | None) -> set[int]:
     """The adverts among `listing_ids` a merge may not rest on (E960)."""
-    return {listing_id for listing_id, (_at, stale) in refreshed(
+    return {listing_id for listing_id, (_at, stale, _class) in refreshed(
         conn, generation, listing_ids, fresh_hours=fresh_hours,
         engine_since=engine_since).items() if stale}
 
 
-def _oldest(members: Sequence[int], ages: Mapping[int, tuple[Any, bool]]) -> tuple[int, Any]:
-    """A group's place in the queue: the oldest refresh first; a group holding an advert with no
-    row (no claim can refresh it) last."""
-    stamps = [ages[i][0] for i in members if i in ages]
-    if not stamps or any(at is None for at in stamps):
-        return (2, "")
-    return (1, min(stamps))
+def _claim_class(category_main: str | None, category_type: str | None) -> int:
+    """An advert's place in `CLAIM_ORDER`; every other category after it."""
+    pair = (category_main, category_type)
+    return CLAIM_ORDER.index(pair) if pair in CLAIM_ORDER else len(CLAIM_ORDER)
 
 
-def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]],
+def _rank(members: Sequence[int], ages: Mapping[int, Refresh]) -> tuple[int, int, Any]:
+    """A group's place in the queue: its lowest-id advert's place in `CLAIM_ORDER` (E972), then
+    the oldest refresh first; a group holding an advert with no row (no claim can refresh it)
+    last of all."""
+    known = [i for i in members if i in ages]
+    if not known or any(ages[i][0] is None for i in known):
+        return (1, 0, "")
+    return (0, ages[min(known)][2], min(ages[i][0] for i in known))
+
+
+def claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
            budget: int) -> list[int]:
     """The adverts a pass re-claims for the groups handed on (E960): WHOLE groups — every stale
-    member a claim can refresh (it has a row) — oldest wait first, until `budget` adverts; the
-    first group is taken whatever its size, so no group is ever cut across passes."""
+    member a claim can refresh (it has a row) — in `CLAIM_ORDER`, oldest wait first within each
+    (E972), until `budget` adverts; the first group is taken whatever its size, so no group is
+    ever cut across passes."""
     queue = []
     for members in groups:
         stale = sorted({int(i) for i in members if int(i) in ages and ages[int(i)][1]
                         and ages[int(i)][0] is not None})
         if stale:
-            queue.append((_oldest(stale, ages), stale))
+            queue.append((_rank(stale, ages), stale))
     queue.sort()
     out: list[int] = []
-    for _rank, stale in queue:
+    for _place, stale in queue:
         if out and len(out) + len(stale) > budget:
             break
         out.extend(i for i in stale if i not in out)
     return out
 
 
-def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, tuple[Any, bool]],
+def select_claims(groups: Sequence[Sequence[int]], ages: Mapping[int, Refresh],
                   tried: Mapping[str, str], now: datetime, budget: int = STALE_FLOOR
                   ) -> tuple[list[int], dict[str, str]]:
     """The adverts the next pass re-claims (`claims` at `budget`) over the groups not tried
@@ -437,13 +455,14 @@ def run(
 
 
 def _hand_on(conn: Any, generation: str, run_id: str, groups: Sequence[Sequence[int]],
-             ages: Mapping[int, tuple[Any, bool]]) -> tuple[int, int]:
+             ages: Mapping[int, Refresh]) -> tuple[int, int]:
     """Every group owed a merge and not attempted (waiting, past the run cap, out of time), as its
-    moved members, oldest wait first, whole groups up to `REDECIDE_CAP` adverts (E960). It
-    REPLACES the list: every group on it was re-planned this pass, so what stays owed is here."""
+    moved members, in the re-claim's order (`_rank`), whole groups up to `REDECIDE_CAP` adverts
+    (E960); a full list drops the rest's newest waits before any flat's (E972). It REPLACES the
+    list: every group on it was re-planned this pass, so what stays owed is here."""
     kept: list[list[int]] = []
     total = 0
-    for _rank, members in sorted((_oldest(m, ages), list(m)) for m in groups):
+    for _place, members in sorted((_rank(m, ages), list(m)) for m in groups):
         if total + len(members) > REDECIDE_CAP:
             break
         kept.append(members)

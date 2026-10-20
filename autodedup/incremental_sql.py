@@ -825,13 +825,15 @@ update autodedup.rt_fp f
 # E960: every given advert's last refresh and whether a merge may rest on it — not when it was
 # refreshed longer ago than `fresh_s`, before the engine the lane runs now (`engine_since`; NULL:
 # no bound), or not at all (no row: fail closed). `updated_at` moves only on a refresh:
-# `RT_FP_DD_SQL` leaves it alone.
+# `RT_FP_DD_SQL` leaves it alone. The row's categories place its group in the re-claim's order
+# (E972: `reconcile.CLAIM_ORDER`).
 RT_STALE_SQL = """
 select w.listing_id, f.updated_at,
        (f.listing_id is null
         or f.updated_at < now() - make_interval(secs => %(fresh_s)s::double precision)
         or f.updated_at < coalesce(%(engine_since)s::timestamptz, '-infinity'::timestamptz))
-           as stale
+           as stale,
+       f.category_main, f.category_type
   from unnest(%(listing_ids)s::bigint[]) as w(listing_id)
   left join autodedup.rt_fp f
          on f.generation = %(generation)s::text and f.listing_id = w.listing_id

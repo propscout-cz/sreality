@@ -2499,8 +2499,9 @@ def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: st
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
                   handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
                   engine_since: str, cap: int) -> tuple[list[int], int, int]:
-    """What this pass re-claims for the groups the reconcile handed on (E960), chosen BEFORE the
-    pass and stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
+    """What this pass re-claims for the groups the reconcile handed on (E960), flats for sale,
+    flats for rent, then the rest (E972: `reconcile.CLAIM_ORDER`), chosen BEFORE the pass and
+    stamped in a commit of its own (`rt_redecide_tried`), so a re-claim the pair budget
     refuses or the deadline cuts is not tried again for `TRIED_BACKOFF_HOURS` and never holds
     the head of the queue. None while no reconcile follows the pass (the build, a seed of
     another version, a closed apply scope) or while the reject ledger holds no row under this
@@ -2535,7 +2536,7 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     if taken:
         _stale_budget(conn, generation, {"budget": budget, "inflight": len(taken)},
                       "redecide_ahead")
-    return taken, sum(1 for _at, stale in ages.values() if stale), budget
+    return taken, sum(1 for _at, stale, _class in ages.values() if stale), budget
 
 
 def _write_rate(conn: Any, generation: str, rate: float, why: str) -> None:

@@ -501,6 +501,8 @@ class LaneDb(FakeDb):
         # E960: each member's last refresh (absent: refreshed now) and what the reconcile handed
         # the next pass to re-claim.
         self.refreshed: dict[int, datetime] = {}
+        # E972: each member's (category_main, category_type) as its row holds them (absent: none).
+        self.categories: dict[int, tuple[str, str]] = {}
         self.lane_settings: dict[str, Any] = {}
 
     def dispatch(self, sql: str, p: dict) -> list[tuple]:  # noqa: C901
@@ -555,7 +557,8 @@ class LaneDb(FakeDb):
             for lid in sorted(set(p["listing_ids"])):
                 at = self.refreshed.get(lid, self.now)
                 out.append((lid, at, at is None or at < bound
-                            or (since is not None and at < since)))
+                            or (since is not None and at < since),
+                            *self.categories.get(lid, (None, None))))
             return out
         if sql == RT_SETTING_WRITE_SQL:
             self.lane_settings[p["key"]] = json.loads(p["value"])
@@ -795,13 +798,13 @@ def test_a_group_tried_lately_is_not_offered_again_and_old_stamps_expire() -> No
     now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
     old, recent = (now - timedelta(hours=reconcile.TRIED_BACKOFF_HOURS + 1)).isoformat(), (
         now - timedelta(hours=1)).isoformat()
-    ages = {1: (now - timedelta(hours=30), True), 2: (now - timedelta(hours=20), True),
-            3: (now - timedelta(hours=15), True)}
+    ages = {1: (now - timedelta(hours=30), True, 0), 2: (now - timedelta(hours=20), True, 0),
+            3: (now - timedelta(hours=15), True, 0)}
     taken, stamps = reconcile.select_claims([[1], [2], [3]], ages,
                                             {"1": recent, "2": old, "9": recent}, now)
     assert taken == [2, 3], "1 backed off; 2's stamp expired; oldest first"
     assert set(stamps) == {"1", "2", "3"} and stamps["2"] == now.isoformat()
-    assert reconcile._oldest([5], {5: (None, True)}) > reconcile._oldest([1], ages), (
+    assert reconcile._rank([5], {5: (None, True, 0)}) > reconcile._rank([1], ages), (
         "a group no claim can refresh sorts last")
 
 
@@ -813,12 +816,47 @@ def test_the_re_claim_budget_is_what_the_worker_s_memory_leaves_beside_the_feeds
     assert reconcile.STALE_FLOOR == 200
     now = datetime(2026, 10, 20, 6, 0, tzinfo=timezone.utc)
     groups = [[2 * k, 2 * k + 1] for k in range(125)]
-    ages = {i: (now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1 + i), True)
+    ages = {i: (now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1 + i), True, 0)
             for group in groups for i in group}
     taken, stamps = reconcile.select_claims(groups, ages, {}, now)
     assert len(taken) == reconcile.STALE_FLOOR == 200
     assert set(taken) == set(range(50, 250)), "the oldest hundred groups, whole"
     assert len(stamps) == 100, "only the groups taken are stamped tried"
+
+
+def test_the_re_claim_serves_flats_for_sale_then_flats_for_rent_then_the_rest(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """E972, the operator's Prague priority of 2026-10-20: the waiting groups are re-claimed
+    flats for sale first, flats for rent second, the rest third, the oldest wait first within
+    each, however the ages interleave across classes. A budget smaller than the flats for sale
+    takes only them, and a full hand-on list drops the rest before any flat. A mixed group (a
+    flat with its komerční twin is a sanctioned pair) ranks by its lowest-id advert."""
+    db = LaneDb()
+    sale, rent, rest = ("byt", "prodej"), ("byt", "pronajem"), ("komercni", "prodej")
+    hours = {1: 20, 2: 20, 3: 26, 4: 15, 5: 15, 10: 30, 11: 18, 12: 18, 20: 40, 21: 16, 22: 16}
+    db.refreshed = {i: db.now - timedelta(hours=h) for i, h in hours.items()}
+    db.categories = {**dict.fromkeys([1, 2, 3, 4, 5], sale),
+                     **dict.fromkeys([10, 11, 12], rent), **dict.fromkeys([20, 21, 22], rest)}
+    groups = [[20], [10], [21, 22], [1, 2], [11, 12], [3], [4, 5]]
+    ages = reconcile.refreshed(db, RT, sorted(hours),
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+
+    taken, _stamps = reconcile.select_claims(groups, ages, {}, db.now)
+    assert taken == [3, 1, 2, 4, 5, 10, 11, 12, 20, 21, 22], (
+        "flats for sale oldest first, then flats for rent, then the rest")
+    taken, stamps = reconcile.select_claims(groups, ages, {}, db.now, budget=4)
+    assert taken == [3, 1, 2] and set(stamps) == {"3", "1"}, (
+        "the budget goes to flats for sale; the older rent flat that would fit waits its turn")
+
+    monkeypatch.setattr(reconcile, "REDECIDE_CAP", 6)
+    assert reconcile._hand_on(db, RT, "rt:e972", groups, ages) == (4, 3)
+    assert db.lane_settings[reconcile.redecide_key(RT)] == [[3], [1, 2], [4, 5], [10]], (
+        "the cap cuts the same order: oldest first would have kept [20] and dropped [4, 5]")
+
+    at = db.now - timedelta(hours=20)
+    sale_class, rest_class = reconcile._claim_class(*sale), reconcile._claim_class(*rest)
+    assert reconcile._rank([6, 30], {6: (at, True, sale_class), 30: (at, True, rest_class)}) < (
+        reconcile._rank([23, 24], {23: (at, True, rest_class), 24: (at, True, sale_class)}))
 
 
 def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(
