@@ -7,6 +7,19 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, not started)
+
+The operator merged one flat with about 26 others (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč)
+and later read Browse as if the merge had come undone: the property detail lists the merged ads, yet the
+grid still shows a wall of Lužická cards. Facts captured read-only on 2026-10-19: 26 `property_merge_events`
+at 15:15:29Z into one survivor (property 813505, now 27 ads), none undone; `browse_list` still held 25
+Lužická byt/prodej 2+1 properties (17 active cards, 6 multi-ad) — the 24 besides 813505 are DIFFERENT
+properties, never retired. To investigate: were they outside the merge-mode selection, born afterwards
+(straggler singletons for new ads), or seen during the ≤15-minute patch race that ONE PIN W1 (migration
+630) has since closed? Then decide whether Browse should say "merged into …" on a retired card's
+successor, and whether merge mode needs a "select all identical" affordance. Ids and the SQL: memory note
+`one-pin-sprint-2026-10-19` (operator machine).
+
 ### Phase U-VALUO: a Valuo valuation on the property page (in progress, 2026-10-19)
 - **Done (W2, backend):** migration 637 `valuo_valuations` (one row per paid call, service-role only, keyed by ad),
   `GET`/`POST /properties/{id}/valuo` for every signed-in user (the caller's own account; save-before-call, same-request
