@@ -1865,7 +1865,7 @@ export const submitEstimation = (input: CreateEstimationIn) =>
 const fetchMemberSet = async <K extends string>(
   relation: 'collection_properties_public' | 'property_tags_public',
   member: K,
-  signal?: AbortSignal,
+  { signal, actAs }: PgReadOptions,
 ): Promise<Map<number, number[]>> => {
   const rows = await fetchAllRows<{ property_id: number } & Record<K, number>>({
     relation,
@@ -1875,6 +1875,7 @@ const fetchMemberSet = async <K extends string>(
     key: ['property_id', member],
     expectMax: 100_000,
     signal,
+    actAs,
   });
   const map = new Map<number, number[]>();
   for (const r of rows) {
@@ -1886,14 +1887,14 @@ const fetchMemberSet = async <K extends string>(
 };
 
 export const fetchPropertyCollectionMemberSet = (
-  { signal }: PgReadOptions = {},
+  opts: PgReadOptions = {},
 ): Promise<Map<number, number[]>> =>
-  fetchMemberSet('collection_properties_public', 'collection_id', signal);
+  fetchMemberSet('collection_properties_public', 'collection_id', opts);
 
 export const fetchPropertyTagMemberSet = (
-  { signal }: PgReadOptions = {},
+  opts: PgReadOptions = {},
 ): Promise<Map<number, number[]>> =>
-  fetchMemberSet('property_tags_public', 'tag_id', signal);
+  fetchMemberSet('property_tags_public', 'tag_id', opts);
 
 /* How many notes the caller can READ on each property (MS16): the note mark on
  * every Browse row, from ONE whole-set read rather than one per row.
@@ -1968,6 +1969,12 @@ export const pipelineKeys = {
   members: ['pipeline', 'members'] as const,
 };
 
+/* Both of the caller's pipeline-share lists (GET /pipeline/shares). Never
+ * acting-prefixed: sharing is always the caller's own (lib/acting). */
+export const pipelineShareKeys = {
+  all: ['pipeline-shares'] as const,
+};
+
 export const dismissalKeys = {
   all: ['dismissals'] as const,
   count: ['dismissals', 'count'] as const,
@@ -1977,14 +1984,16 @@ export const dismissalKeys = {
 /* Is this property dismissed by the caller? One entry per property, but never
  * one request per property: every call made in the same task (a page of cards
  * mounting, say) is answered by ONE read of the view per DISMISSAL_BATCH ids.
- * Never a whole-set read — the dismissed set only grows. */
+ * Never a whole-set read — the dismissed set only grows. A batch is per acting
+ * identity (lib/acting): the owner's dismissals and the caller's never share a
+ * read. '' keys the caller's own batch. */
 const DISMISSAL_BATCH = 200;
 type DismissalWaiter = { resolve: (dismissed: boolean) => void; reject: (e: unknown) => void };
-let dismissalWaiters: Map<number, DismissalWaiter[]> | null = null;
+const dismissalWaiters = new Map<string, Map<number, DismissalWaiter[]>>();
 
-async function flushDismissalBatch(): Promise<void> {
-  const batch = dismissalWaiters ?? new Map<number, DismissalWaiter[]>();
-  dismissalWaiters = null;
+async function flushDismissalBatch(as: string): Promise<void> {
+  const batch = dismissalWaiters.get(as) ?? new Map<number, DismissalWaiter[]>();
+  dismissalWaiters.delete(as);
   const ids = [...batch.keys()];
   for (let i = 0; i < ids.length; i += DISMISSAL_BATCH) {
     const chunk = ids.slice(i, i + DISMISSAL_BATCH);
@@ -1995,6 +2004,7 @@ async function flushDismissalBatch(): Promise<void> {
        * observer's cancel must not fail the others. The deadline still holds. */
       const { data } = await pgRead<Array<{ property_id: number }> | null>(
         supabase.from('property_dismissals_public').select('property_id').in('property_id', chunk),
+        { actAs: as || null },
       );
       const hit = new Set((data ?? []).map((r) => r.property_id));
       settle((w, id) => w.resolve(hit.has(id)));
@@ -2004,15 +2014,21 @@ async function flushDismissalBatch(): Promise<void> {
   }
 }
 
-export const fetchIsDismissed = (property_id: number): Promise<boolean> =>
+export const fetchIsDismissed = (
+  property_id: number,
+  { actAs }: PgReadOptions = {},
+): Promise<boolean> =>
   new Promise((resolve, reject) => {
-    if (dismissalWaiters == null) {
-      dismissalWaiters = new Map();
-      setTimeout(() => void flushDismissalBatch(), 0);
+    const as = actAs ?? '';
+    let batch = dismissalWaiters.get(as);
+    if (batch == null) {
+      batch = new Map();
+      dismissalWaiters.set(as, batch);
+      setTimeout(() => void flushDismissalBatch(as), 0);
     }
-    const waiters = dismissalWaiters.get(property_id) ?? [];
+    const waiters = batch.get(property_id) ?? [];
     waiters.push({ resolve, reject });
-    dismissalWaiters.set(property_id, waiters);
+    batch.set(property_id, waiters);
   });
 
 /* How many properties the caller has dismissed (migration 536). Only a gate —
@@ -2053,7 +2069,7 @@ export interface PipelineMembership {
 export type PipelineMembers = Map<number, PipelineMembership>;
 
 export const fetchPipelineMembers = async (
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PipelineMembers> => {
   const rows = await fetchAllRows<PipelineMembership>({
     relation: 'property_pipeline_public',
@@ -2068,12 +2084,13 @@ export const fetchPipelineMembers = async (
     key: ['property_id'],
     expectMax: 100_000,
     signal,
+    actAs,
   });
   return new Map(rows.map((r) => [r.property_id, r]));
 };
 
 export const fetchPipelineStages = async (
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PipelineStage[]> => {
   const { data } = await pgRead<PipelineStage[] | null>(
     supabase
@@ -2082,9 +2099,13 @@ export const fetchPipelineStages = async (
        * list, and the stage editor pre-fills its code box from it — omitting the
        * column rendered every existing code as blank, inviting the operator to
        * overwrite intentional badges (several closed stages share a code). */
-      .select('id, key, label, position, color, is_terminal, is_entry, code')
+      .select(
+        'id, key, label, position, color, is_terminal, is_entry, code, ' +
+          /* The stage's delegated stamp (migration 641), for the stage editor. */
+          'edited_by_account_id, edited_at',
+      )
       .order('position'),
-    { signal },
+    { signal, actAs },
   );
   return data ?? [];
 };
@@ -2106,7 +2127,7 @@ export const fetchPipelineStages = async (
  * decoration until proven structural: if the board cannot filter, sort or
  * place a card without it, it does not belong in this queryFn. */
 export const fetchPipelineBoard = async (
-  { signal }: PgReadOptions = {},
+  { signal, actAs }: PgReadOptions = {},
 ): Promise<PipelineBoardCard[]> => {
   /* board_position is the MANUAL order and stays the default sort, but it is
    * not unique — it is assigned max+1 within the entry stage at bookmark time
@@ -2122,6 +2143,7 @@ export const fetchPipelineBoard = async (
     key: ['property_id'],
     expectMax: 100_000,
     signal,
+    actAs,
   });
   return composePipelineCards(rows);
 };

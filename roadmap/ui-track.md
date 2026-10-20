@@ -7,6 +7,14 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
+- **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and
+  boards shared with me (per device, `lib/acting`), a shared board renders inside `<ActingAs>` (read:
+  board only; edit: drag, stages, trash as the owner; the phone moves cards through the stage sheet),
+  one `ShareBlock` serves the pipeline and collection pages, the desktop property page offers "Upravit
+  jako {email}" with an in-page banner, and delegated edits carry one stamp
+  (`lib/delegatedStamp`). Detail: `roadmap/operator-workflow-track.md` U-PIPE-SHARE.
+
 ### Stats dashboard (2026-10-19, migration 626)
 - **Shipped: Browse › Stats is a dashboard the user composes** (`docs/design/stats-dashboard.md`,
   operator rulings 2026-10-19). Charts = rows (up to six nested dimensions) × one column × a measure

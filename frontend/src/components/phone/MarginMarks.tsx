@@ -16,17 +16,11 @@
  * membership read is a retry, never the "add" verb (MS16). */
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
 import CollectionMark from '@/components/CollectionMark';
 import { readFailed } from '@/components/ReadFailedMark';
 import { AlertIcon, EyeOffIcon, FunnelIcon } from '@/components/icons';
 import { useCollectionMembership } from '@/lib/collectionCache';
-import {
-  fetchPipelineMembers,
-  fetchPipelineStages,
-  pipelineKeys,
-} from '@/lib/queries';
+import { usePipelineMembers, usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { useDismissal } from '@/lib/useDismissal';
 import { usePipelineCard } from '@/lib/usePipelineCard';
@@ -61,16 +55,8 @@ function RetryMark({ what, onRetry }: { what: string; onRetry: () => void }) {
  * stages reads (deduped across every card), the badge and the accent. The card
  * uses it for the stage wash, the margin for the funnel. */
 export function usePipelineLook(property_id: number) {
-  const membersQ = useQuery({
-    queryKey: pipelineKeys.members,
-    queryFn: fetchPipelineMembers,
-    staleTime: 30_000,
-  });
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+  const membersQ = usePipelineMembers();
+  const stagesQ = usePipelineStages();
   const member = membersQ.data?.get(property_id) ?? null;
   const look = member ? { id: member.stage_id, color: member.stage_color, code: member.stage_code } : null;
   return {

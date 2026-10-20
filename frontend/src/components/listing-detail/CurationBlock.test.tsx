@@ -54,6 +54,7 @@ import {
   fetchPropertyCollectionMemberSet,
   fetchPropertyTagMemberSet,
 } from '@/lib/queries';
+import { ActingAs, actingKey } from '@/lib/acting';
 import CurationBlock, { PhoneTagsAndNotes } from './CurationBlock';
 
 const TAG: Tag = {
@@ -325,6 +326,28 @@ describe('<CurationBlock> artifact link', () => {
     expect(anchor).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
+  it('inside <ActingAs> saves the owner\'s link as the owner, under the owner\'s key', async () => {
+    const user = userEvent.setup();
+    mockReads();
+    vi.mocked(setPropertyArtifactLink).mockResolvedValue(LINK);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActingAs share={{ account_id: 'owner-1', email: 'jana@example.cz', mode: 'edit' }}>
+            <CurationBlock property_id={42} listing_id={900} />
+          </ActingAs>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await user.type(await screen.findByRole('textbox', { name: 'Artifact link' }), 'https://claude.ai/artifact/abc123');
+    await user.click(screen.getByRole('button', { name: 'Save link' }));
+    await waitFor(() =>
+      expect(setPropertyArtifactLink).toHaveBeenCalledWith(42, 'https://claude.ai/artifact/abc123', { actAs: 'owner-1' }));
+    expect(fetchArtifactLinks).toHaveBeenCalledWith({ actAs: 'owner-1' });
+    expect(qc.getQueryData(curationKeys.artifactLinks)).toBeUndefined();
+  });
+
   it('refuses a value that is not an http(s) address without calling the API', async () => {
     const user = userEvent.setup();
     mockReads();
@@ -565,6 +588,43 @@ describe('<CurationBlock> shared notes', () => {
     expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
   });
 
+  it('acting as the owner never claims "nobody": the owner\'s audience is unknown under the header (§3.6)', async () => {
+    mockReads();
+    /* Under X-Act-As the owner's share rows are invisible: the collection reads
+     * as shared with nobody although the owner shares it. */
+    vi.mocked(listCollections).mockResolvedValue({ data: [{ ...SHARED_COLLECTION, shared_with: [] }], total: 1 });
+    vi.mocked(fetchPropertyCollectionMemberSet).mockResolvedValue(new Map([[42, [7]]]));
+    vi.mocked(listPropertyNotes).mockResolvedValue({ data: [{ ...NOTE, shared: true }] } as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    vi.mocked(deletePropertyNote).mockResolvedValue({ deleted: true } as never);
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActingAs share={{ account_id: 'owner-1', email: 'jana@example.cz', mode: 'edit' }}>
+            <CurationBlock property_id={42} listing_id={900} />
+          </ActingAs>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const note = await noteGroup();
+    expect(listPropertyNotes).toHaveBeenCalledWith(42, { actAs: 'owner-1' });
+    expect(within(note).getByText('Shared')).toBeInTheDocument();
+    expect(within(note).queryByText(/nobody/)).toBeNull();
+    expect(within(note).getByRole('button', { name: 'Make private' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+
+    // A note deleted as the owner re-reads the owner's notes, never Browse's note marks.
+    fireEvent.click(within(note).getByRole('button', { name: 'Delete note' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(deletePropertyNote).toHaveBeenCalledWith(42, 11, { actAs: 'owner-1' }));
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: actingKey('owner-1', curationKeys.propertyNotes(42)) }),
+    );
+    expect(invalidate.mock.calls.some(([f]) => f?.queryKey === curationKeys.noteCounts)).toBe(false);
+  });
+
   it('speaks Czech on the phone: Sdílet s …, Sdíleno', async () => {
     mockReads();
     withAudience();
@@ -597,5 +657,37 @@ describe('<CurationBlock> shared notes', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(updatePropertyNote).toHaveBeenCalledWith(42, 11, { body: 'Nový text.' }));
+  });
+});
+
+/* Ruling 5: a note last written by someone acting as its owner says who and
+ * when, in the page's language; the owner's own notes say nothing more. */
+describe('<CurationBlock> delegated stamp', () => {
+  it('names the delegate on a stamped note and nothing on an unstamped one', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [
+        { ...NOTE, edited_by_email: 'c@example.cz', edited_at: '2026-10-20T10:00:00Z' },
+        { ...NOTE, id: 12, body: 'Moje vlastní.', edited_by_email: null, edited_at: null },
+      ],
+    } as never);
+    renderWithReads();
+    expect(await screen.findByText(/^edited by c@example\.cz · /)).toBeInTheDocument();
+    expect(screen.getAllByText(/^edited by /)).toHaveLength(1);
+  });
+
+  it('speaks Czech on the phone', async () => {
+    mockReads();
+    vi.mocked(listPropertyNotes).mockResolvedValue({
+      data: [{ ...NOTE, edited_by_email: 'c@example.cz', edited_at: '2026-10-20T10:00:00Z' }],
+    } as never);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <PhoneTagsAndNotes property_id={42} listing_id={900} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/^upravil c@example\.cz · /)).toBeInTheDocument();
   });
 });

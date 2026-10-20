@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent } from 'react';
+import { actOpts, useActAs } from '@/lib/acting';
 import { ApiError, deleteNoteAttachment, fetchNoteAttachmentBlob } from '@/lib/api';
 import type { NoteAttachment } from '@/lib/types';
 import {
@@ -233,12 +234,13 @@ export function NoteAttachmentList({
   const [confirming, setConfirming] = useState<NoteAttachment | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const actAs = useActAs();
   if (attachments.length === 0 && uploading.length === 0) return null;
 
   const remove = (a: NoteAttachment) => {
     setBusy(true);
     setError(null);
-    deleteNoteAttachment(propertyId, noteId, a.id)
+    deleteNoteAttachment(propertyId, noteId, a.id, ...actOpts(actAs))
       .then(() => onRemoved?.())
       .then(() => setConfirming(null))
       .catch((err: ApiError | Error) => setError(err.message || 'Failed to remove the file'))
@@ -304,6 +306,7 @@ function SavedAttachment({
   onRemove?: () => void;
 }) {
   const image = isPreviewableImage(attachment.mime_type);
+  const actAs = useActAs();
   const thumb = useAttachmentUrl(propertyId, noteId, attachment.id, image);
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -323,7 +326,7 @@ function SavedAttachment({
   const download = () => {
     setSaving(true);
     setFailed(false);
-    fetchNoteAttachmentBlob(propertyId, noteId, attachment.id)
+    fetchNoteAttachmentBlob(propertyId, noteId, attachment.id, ...actOpts(actAs))
       .then((blob) => saveBlob(blob, attachment.filename))
       .catch(() => setFailed(true))
       .finally(() => setSaving(false));
@@ -352,11 +355,12 @@ function useAttachmentUrl(
     url: null,
     failed: false,
   });
+  const actAs = useActAs();
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     let url: string | null = null;
-    fetchNoteAttachmentBlob(propertyId, noteId, attachmentId)
+    fetchNoteAttachmentBlob(propertyId, noteId, attachmentId, ...actOpts(actAs))
       .then((blob) => {
         if (cancelled) return;
         url = URL.createObjectURL(blob);
@@ -369,7 +373,7 @@ function useAttachmentUrl(
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [propertyId, noteId, attachmentId, enabled]);
+  }, [propertyId, noteId, attachmentId, enabled, actAs]);
   return state;
 }
 

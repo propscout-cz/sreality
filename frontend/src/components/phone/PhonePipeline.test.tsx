@@ -15,6 +15,7 @@ import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import { createMutationCache } from '@/lib/mutationCache';
 import { PHONE_PIPELINE_STAGE_KEY } from '@/lib/phonePipeline';
+import { reloadActingStore, resetActiveBoard, setActiveBoard } from '@/lib/acting';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import * as pinAudit from '@/lib/pinAudit';
 import * as queries from '@/lib/queries';
@@ -32,6 +33,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   removePipelineCard: vi.fn(),
   listTags: vi.fn(),
   fetchArtifactLinks: vi.fn(),
+  listPipelineShares: vi.fn(),
 }));
 vi.mock('@/lib/queries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/queries')>()),
@@ -134,12 +136,14 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-12T08:00:00Z'));
   localStorage.clear();
+  reloadActingStore();
   setNarrow(true);
+  vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({
     watchdog: 0,
     collection_monitor: 0,
-    collection_share: 0,
+    share: 0,
     system_health: 0,
     total: 0,
     unread_count: 0,
@@ -168,6 +172,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetActiveBoard();
   vi.useRealTimers();
   window.matchMedia = originalMatchMedia;
   vi.clearAllMocks();
@@ -344,5 +349,68 @@ describe('phone pipeline', () => {
     const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
     expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
     expect(button).toHaveAttribute('target', '_blank');
+  });
+});
+
+/* Shared boards on the phone (migration 641, ruling 6): the same per-device
+ * active board, switched in a strip above the stages; a read board is
+ * read-only, an edit board moves cards through the stage sheet as the owner. */
+describe('phone pipeline, shared boards', () => {
+  const READ = { account_id: 'owner-r', email: 'petr@example.cz', mode: 'read' as const };
+  const EDIT = { account_id: 'owner-e', email: 'jana@example.cz', mode: 'edit' as const };
+
+  beforeEach(() => {
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [READ, EDIT] });
+  });
+
+  it('switches boards from the strip above the stages', async () => {
+    renderPipeline();
+    const strip = await screen.findByRole('group', { name: 'Zobrazený pipeline' });
+    fireEvent.click(within(strip).getByRole('button', { name: 'petr@example.cz · jen ke čtení' }));
+    await waitFor(() =>
+      expect(queries.fetchPipelineBoard).toHaveBeenLastCalledWith(expect.objectContaining({ actAs: 'owner-r' })),
+    );
+  });
+
+  it('shows a read board without the stage sheet, tags or artifact link', async () => {
+    setActiveBoard(READ);
+    renderPipeline();
+    const interest = await waitFor(() => panel(/^Zájem/));
+    expect(within(interest).getAllByText('Fáze Zájem').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Fáze Zájem, změnit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Štítky:/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /^Artifact:/ })).toBeNull();
+    /* The owner's tags are not readable under a read share: never asked for. */
+    expect(api.listTags).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
+  });
+
+  it('moves a card on an edit board through the stage sheet, as the owner', async () => {
+    setActiveBoard(EDIT);
+    renderPipeline();
+    const interest = await waitFor(() => panel(/^Zájem/));
+    fireEvent.click(within(interest).getAllByRole('button', { name: 'Fáze Zájem, změnit' })[0]);
+    const sheet = await screen.findByRole('dialog', { name: 'Přesunout do fáze' });
+    fireEvent.click(within(sheet).getByRole('menuitemradio', { name: /Prohlídka/ }));
+    await waitFor(() =>
+      expect(api.movePipelineCard).toHaveBeenCalledWith(42, 2, undefined, { actAs: 'owner-e' }),
+    );
+  });
+
+  it('stamps a card a delegate moved, with the time alone on a shared board', async () => {
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(
+      CARDS.map((c) => (c.property_id === 42 ? { ...c, edited_by_account_id: 'acc-x', edited_at: '2026-10-11T09:00:00Z' } : c)),
+    );
+    setActiveBoard(EDIT);
+    renderPipeline();
+    const interest = await waitFor(() => panel(/^Zájem/));
+    expect(await within(interest).findByText(/^upraveno · /)).toBeInTheDocument();
+  });
+
+  it('remembers the stage per board', async () => {
+    setActiveBoard(EDIT);
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('tab', { name: /^Prohlídka/ }));
+    expect(localStorage.getItem(`${PHONE_PIPELINE_STAGE_KEY}:owner-e`)).toBe('2');
+    expect(localStorage.getItem(PHONE_PIPELINE_STAGE_KEY)).toBeNull();
   });
 });

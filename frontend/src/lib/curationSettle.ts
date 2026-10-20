@@ -19,6 +19,7 @@
 
 import { hashKey, type InfiniteData, type Query, type QueryClient, type QueryKey } from '@tanstack/react-query';
 
+import { actingKey } from '@/lib/acting';
 import { browseKeys } from '@/lib/browseKeys';
 import type { ListingFilters } from '@/lib/filters';
 import { curationKeys, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
@@ -106,9 +107,20 @@ const dropRow = (propertyId: number) => (data: InfiniteData<ListPage> | undefine
     })),
   };
 
+/** Browse never acts (lib/acting): a write made as a pipeline's owner (`actAs`)
+ * settles, patches and re-reads no Browse read. The one place that rule lives. */
+export const browseReads = (actAs: string | null | undefined, keys: readonly QueryKey[]): QueryKey[] =>
+  actAs ? [] : [...keys];
+
 /** The in-place half: drop the property from every loaded page of a cohort it no
  * longer belongs to, and take one off that cohort's exact count. */
-export function settlePatches(qc: QueryClient, propertyId: number, lens: CurationLens): CachePatch[] {
+export function settlePatches(
+  qc: QueryClient,
+  propertyId: number,
+  lens: CurationLens,
+  actAs: string | null = null,
+): CachePatch[] {
+  if (actAs) return [];
   const patches: CachePatch[] = [];
   for (const { f, queries } of cohorts(qc, lens)) {
     const lists = queries.filter((q) => isList(q) && holds(q.state.data, propertyId));
@@ -138,8 +150,10 @@ export function settleRereads(
   propertyId: number,
   lens: CurationLens,
   failed = false,
+  actAs: string | null = null,
 ): QueryKey[] {
-  if (failed) return [...browseKeys.all];
+  if (failed) return browseReads(actAs, browseKeys.all);
+  if (actAs) return [];
   const keys: QueryKey[] = [];
   for (const { f, queries } of cohorts(qc, lens)) {
     const v = verdict(qc, propertyId, f);
@@ -151,16 +165,19 @@ export function settleRereads(
 }
 
 /** Settle a landed tag / collection write: judged before, put into its member
- * map (so the settle sees it before the map's own re-read lands), judged after. */
+ * map (so the settle sees it before the map's own re-read lands), judged after.
+ * Acting as an owner (`actAs`, lib/acting) only the owner's map moves: Browse
+ * never acts, so no Browse cohort is judged on the owner's sets. */
 export async function settleMemberWrite(
   qc: QueryClient,
   set: 'tags' | 'collections',
   propertyId: number,
   elementId: number,
   member: boolean,
+  actAs: string | null = null,
 ): Promise<void> {
-  const patches = settlePatches(qc, propertyId, set);
-  qc.setQueryData<Map<number, number[]>>(MEMBERS[set].key, (prev) => {
+  const patches = settlePatches(qc, propertyId, set, actAs);
+  qc.setQueryData<Map<number, number[]>>(actingKey(actAs, MEMBERS[set].key), (prev) => {
     if (!prev) return prev;
     const next = new Map(prev);
     const ids = (prev.get(propertyId) ?? []).filter((id) => id !== elementId);
@@ -169,6 +186,7 @@ export async function settleMemberWrite(
     else next.delete(propertyId);
     return next;
   });
+  if (actAs) return;
   await Promise.all(patches.map((p) => qc.cancelQueries(p.filters)));
   for (const p of patches) qc.setQueriesData(p.filters, p.update);
   for (const queryKey of settleRereads(qc, propertyId, set)) void qc.invalidateQueries({ queryKey });

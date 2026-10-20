@@ -13,13 +13,8 @@ import PipelineMark from '@/components/PipelineMark';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { useCollectionMembership } from '@/lib/collectionCache';
-import {
-  dismissalKeys,
-  fetchIsDismissed,
-  fetchPipelineMembers,
-  fetchPipelineStages,
-  pipelineKeys,
-} from '@/lib/queries';
+import { dismissalKeys, fetchIsDismissed } from '@/lib/queries';
+import { usePipelineMembers, usePipelineStages } from '@/lib/pipelineReads';
 
 const MARK =
   'flex h-6 items-center rounded-[var(--radius-xs)] border bg-[var(--color-paper-3)]/90 px-1 backdrop-blur';
@@ -39,16 +34,8 @@ function Mark({ label, tone = '', style, children }: {
 }
 
 export default function CurationMarks({ property_id }: { property_id: number }) {
-  const membersQ = useQuery({
-    queryKey: pipelineKeys.members,
-    queryFn: fetchPipelineMembers,
-    staleTime: 30_000,
-  });
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+  const membersQ = usePipelineMembers();
+  const stagesQ = usePipelineStages();
   /* Mine only: a property held only by someone else's shared collection is not saved. */
   const { mine: myCollections, query: collectionsQ } = useCollectionMembership(property_id);
   const dismissedQ = useQuery({

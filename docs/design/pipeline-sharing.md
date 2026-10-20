@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **APPROVED 2026-10-20 (v1.2, rulings 1–11 in, §8; 12 is a W1 deviation awaiting the operator); W1–W2 run on this text; every merge waits for the autodedup session's window. W1 (database + API + doctrine) in PR #TBD.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
+Status: **APPROVED 2026-10-20 (v1.2, rulings 1–11 in, §8; 12 is a W1 deviation awaiting the operator); W1–W2 run on this text; every merge waits for the autodedup session's window. W1 (database + API + doctrine) in PR #1906; W2 (the SPA) in PR #1908.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
@@ -223,7 +223,8 @@ the database). Everything else answers as the caller. Without the header nothing
   `pipeline_stages_public` gain the stamp from ONE SQL definition, `latest_delegated_edit()`: the row's
   latest `delegated_edits` entry, null when the row changed after it (the owner did it themselves).
   The API projections carry `edited_by_email`; the views carry `edited_by_account_id`, which the SPA
-  labels through `share_party_emails()` (a counterparty, or a former delegate in the owner's ledger).
+  names only from `GET /pipeline/shares` (never through the `share_party_emails()` RPC: a POST sees no
+  curation under a read share) and otherwise shows the time alone — §3.5 "Stamps (as shipped)".
 - **Unchanged:** the dismissal invariant SQL (correct under replace
   semantics), merge carriers (per card account), `POST /listings/lookup` (no header → own board),
   Browse RPCs, Watchdog, collection monitor.
@@ -245,11 +246,16 @@ the database). Everything else answers as the caller. Without the header nothing
 - **Pipeline tab:** the switcher above the kanban lists "Můj pipeline" plus every board shared with me,
   labelled `email · jen ke čtení | úpravy`; the choice is the active board. A shared board renders inside
   `<ActingAs>`: the columns are the owner's stages, the cards the owner's; read mode disables drag, the
-  stage menu, the trash and the manage button; edit mode enables drag, the stage menu and the manage button (stages are created, renamed,
+  stage menu, the trash and the manage button, and draws the cards WITHOUT tag chips or the artifact
+  button (the owner's tags, collections and links are not readable under a read share, so those reads
+  are not even made); edit mode enables drag, the stage menu and the manage button (stages are created, renamed,
   reordered and archived as the owner). The owner's own board gets a **Sharing** block (email, mode, recipients with mode
-  and a two-step "Stop sharing") — the collection page's `SharingBlock` generalised into one
-  `ShareBlock`. A viewer gets the `ViewerLine` with a two-step "Remove from my list" (which also resets
-  the active board to own). A revoked active board reads empty and resets to own with a toast.
+  and a two-step "Stop sharing"), opened from a "Sdílení" header toggle that shows the recipient count —
+  the collection page's `SharingBlock` generalised into one `ShareBlock`; a recipient's mode changes by
+  sharing the same email again (the API upserts). A viewer gets the `ViewerLine` with a two-step "Remove from my list" (which also resets
+  the active board to own). A revoked active board reads empty and resets to own with a toast. Any
+  change of board (the switcher, a revoke, a leave) drops the URL's collection and tag scopes: their ids
+  name one account's sets.
 - **Property page:** while the active board is an EDIT share, the header shows "Upravit jako {email}"
   on every property page (§8-4: the board need not hold the property, so a property can be ADDED to the
   owner's board from here). Switching it on wraps the header's curation controls (pipeline, save to
@@ -257,19 +263,36 @@ the database). Everything else answers as the caller. Without the header nothing
   "Upravujete jako {email} · Ukončit" sits on the page, not in the 3.5 rem top bar. Everything inside
   reads and writes as the owner through the same components; nothing outside changes (estimations,
   Valuo, the map). The mode is sticky per device (§8-10): it stays on across property pages until
-  "Ukončit", or until the active board changes back to "Můj pipeline" (which clears it).
+  "Ukončit", or until the active board changes **in any way** (as shipped: back to "Můj pipeline", to
+  another owner's board, or a mode/email change the server reports) — stricter than ruling 10's wording,
+  so switching between two owners never keeps acting as the first; for the operator to confirm. Nothing
+  is offered or acted on until `GET /pipeline/shares` confirms the remembered board, and a change of
+  signed-in account resets the active board (the device may remember another sign-in's pick).
 - **Notifications page:** the `share` row renders for both kinds (one renderer; "Open collection" /
   "Open pipeline" link).
-- **Phone:** the same per-device active board; a read board is read-only, an edit board moves cards
-  through the stage sheet as the owner (ruling 6); no "Upravit jako" on the phone property page.
-- **Stamps:** a note, card or stage last changed by a delegate shows "upravil {email} · {time}" (desktop
-  "edited by") from the projection; the owner's own edits show nothing. **Extension:** unchanged (no header; its lookup and writes stay the caller's own).
+- **Phone:** the same per-device active board, picked from a switcher strip above the stage tabs; a
+  read board is read-only (no stage sheet, no tag chips), an edit board moves cards through the stage
+  sheet as the owner (ruling 6); the remembered stage is per board; sharing, leaving and "Upravit jako"
+  stay on the desktop.
+- **Stamps (as shipped):** a note, card or stage last changed by a delegate shows "upravil {email} ·
+  {time}" (the English desktop property page: "edited by"); the owner's own edits show nothing. ONE
+  helper, `lib/delegatedStamp`, holds the rule: the API's notes carry `edited_by_email`, shown as is; the
+  board views carry only `edited_by_account_id` — the board is read straight from PostgREST, and an RPC
+  (`share_party_emails()`) is a POST that sees no curation under a read share — so the SPA names that
+  account only from `GET /pipeline/shares` (called without the header): on my own board my recipients
+  name my delegates; on a board shared with me only my own grant is known, so the stamp is the time
+  alone ("upraveno · {time}"), as it is for a former delegate. Saying "vámi" on a delegate's own stamps
+  needs the caller's account id, which the SPA does not have yet (owed: an `own_account_id` on
+  `GET /pipeline/shares`). Stamps show on note rows, on board and phone cards, and on each stage in
+  the stage editor. **Extension:** unchanged (no header; its lookup and writes stay the caller's own).
 
 ### 3.6 Notes while acting
 
 A note written while acting is the owner's note (owner's account, `owner_email` null to the owner).
 The consent mark (`shared`) is the owner's; the audience (the owner's collection shares) is not shown
-while acting, because share rows are invisible under the header (§3.1, §3.3 "shares — never"). Notes
+while acting, because share rows are invisible under the header (§3.1, §3.3 "shares — never"): the
+SPA treats the audience as unknown (never "nobody can see it"), so a shared note still offers "make
+private" and no new note offers sharing. Notes
 third parties shared with the DELEGATE do not appear while acting (`collection_shares` is invisible
 under the header), so a page in acting mode shows exactly what the owner would see of their own
 curation and nothing of the delegate's. Every delegated write is recorded in `delegated_edits` (who, as whom, which row, when; ruling 5): the
@@ -386,6 +409,7 @@ word). Migration numbers: #1898 holds 638/639 and #1902 took 640 on main → 641
    "who else" / list them.
 10. **The mode is sticky per device:** once on, it stays on across property pages until "Ukončit" or
     until the active board goes back to "Můj pipeline" / it ends when you leave the property page.
+    *(As shipped in W2: any change of the active board ends it — §3.5; for the operator to confirm.)*
 11. **The active board is remembered per device** (like the desktop-view setting; survives reloads; the
     extension and other devices are unaffected) / per tab only.
 12. *(W1 deviation, awaiting the operator)* **`DELETE /pipeline/shares/{account_id}` names a side**
