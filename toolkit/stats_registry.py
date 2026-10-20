@@ -8,7 +8,7 @@ read it and none restates it by hand:
   for byte; tests/test_626_stats_dashboard.py pins the effective migration to this module.
 - scripts/generate_filter_registry.py emits frontend/src/lib/statsRegistry.generated.ts from
   `registry_json()` (labels, order, availability, band steps, limits); CI `--check`s the drift.
-- api/saved_sets.py validates every saved board through `validate_board` (`Charts`: the working board and every dashboard).
+- api/schemas.py validates every saved board through `validate_board` (`Charts`: the working board and every dashboard).
 
 A dimension KEY is the raw value the SQL groups on: the canonical enum value, `ano`/`ne` for a
 boolean, the RÚIAN code (as text) for a place, the band's lower bound as an integer string. Labels and

@@ -107,9 +107,11 @@ the predicate: `ON CONFLICT (property_id, account_id) WHERE lifted_at IS NULL`.
 shape as `collection_shares`, written by the API on the service role; the ledger is the delegation section below.
 
 **Migration 647 — `stats_dashboard_shares`**, the third kind, 610's shape over one named Stats dashboard:
-owner-stamped by `sync_account_id_from_dashboard()` (which also refuses the unnamed working board), one
-`stats_dashboards_shared_read` `FOR SELECT` arm, the party policy with `not acting()`, created by
-`POST /stats/dashboards/{id}/shares` (tenant gate, then the service role); `share_party_emails()` reads all three.
+owner-stamped by `sync_account_id_from_dashboard()` (insert or a re-pointed `dashboard_id`; it also refuses the
+unnamed working board), one `stats_dashboards_shared_read` `FOR SELECT` arm (named rows only), the party policy with
+`not acting()`, created by `POST /stats/dashboards/{id}/shares` (tenant gate, then the service role);
+`share_party_emails()` reads all three. A dashboard's name never crosses NULL (`stats_dashboards_name_guard` /
+`guard_stats_dashboard_name()`), so a direct PostgREST UPDATE cannot turn a shared dashboard into a working board.
 
 ## Delegation (migration 641)
 

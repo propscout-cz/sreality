@@ -18,6 +18,9 @@ PRESETS = saved_sets.SavedSetKind(
     blob_columns=("filter_spec",),
     create_in=s.CreatePresetIn,
     update_in=s.UpdatePresetIn,
+    # PostgREST can write a JSON null or other non-object here (the column is only NOT NULL), and the SPA reads
+    # `spec.filters`: such a blob reads as `{}`, as the old reader answered.
+    empty_on_read=frozenset({"filter_spec"}),
 )
 # Every statement the kind runs, for the CI PREPARE sweep (tests/sql_corpus import-resolves `*_SQL`).
 PRESET_SQL = saved_sets.statements(PRESETS)

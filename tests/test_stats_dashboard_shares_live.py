@@ -174,14 +174,21 @@ def test_the_recipient_cannot_update_reorder_or_delete_the_dashboard(
     from api import saved_sets
     from api.routes.stats_dashboards import DASHBOARDS
 
-    b = tenants["b"]
+    a, b = tenants["a"], tenants["b"]
+    with svc.cursor() as cur:
+        cur.execute("SELECT updated_at FROM stats_dashboards WHERE id = %s", (world.named,))
+        before = cur.fetchone()[0]
     with scoped(b.user, method="PUT") as conn:
         assert saved_sets.update(conn, DASHBOARDS, str(world.named), {"name": "taken"}) is None
+        # A PUT that changes nothing is locked FOR UPDATE, which applies the UPDATE policy: the same 404.
+        assert saved_sets.update(conn, DASHBOARDS, str(world.named), {}) is None
         saved_sets.reorder(conn, DASHBOARDS, [str(world.named)])
         assert saved_sets.delete(conn, DASHBOARDS, str(world.named)) is False
+    with scoped(a.user, method="PUT") as conn:
+        assert saved_sets.update(conn, DASHBOARDS, str(world.named), {})["name"] == "Praha byty"
     with svc.cursor() as cur:
-        cur.execute("SELECT name, position FROM stats_dashboards WHERE id = %s", (world.named,))
-        assert cur.fetchone() == ("Praha byty", 0)
+        cur.execute("SELECT name, position, updated_at FROM stats_dashboards WHERE id = %s", (world.named,))
+        assert cur.fetchone() == ("Praha byty", 0, before)
 
 
 def test_the_working_board_is_never_the_recipients_and_never_a_saved_dashboard(
@@ -256,6 +263,59 @@ def test_a_second_save_replaces_the_working_board_in_place(
     with svc.cursor() as cur:
         cur.execute("SELECT id, charts FROM stats_dashboards WHERE account_id = %s AND name IS NULL", (a.acc,))
         assert cur.fetchall() == [(world.working, [{"id": "w2"}])]
+
+
+def test_the_share_gate_refuses_a_recipient_a_bystander_and_the_working_board(
+    tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    """The API's own gate against the database: only the owner's NAMED dashboard passes, and the service
+    role is never opened for a refusal."""
+    from fastapi import HTTPException
+
+    from api import schemas as s
+    from api.routes.stats_dashboards import share_dashboard
+
+    def never() -> Any:
+        raise AssertionError("the service role opened before the gate passed")
+
+    body = s.ShareDashboardIn(email=tenants["c"].email)
+    for who, dashboard in (("b", world.named), ("c", world.named), ("a", world.working)):
+        with scoped(tenants[who].user, method="POST") as conn, pytest.raises(HTTPException) as exc:
+            share_dashboard(conn, never, dashboard, body)
+        assert exc.value.status_code == 404, who
+
+
+def test_an_unshared_dashboard_stays_the_owners_and_own_dashboards_list_first(
+    tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    from api import saved_sets
+    from api.routes.stats_dashboards import DASHBOARDS
+
+    a, b = tenants["a"], tenants["b"]
+    blank = {"charts": [], "filter_spec": None, "color": None}
+    with scoped(a.user, method="POST") as conn:
+        private = saved_sets.create(conn, DASHBOARDS, {"name": "Soukromá", **blank}, account_id=a.acc)
+    with scoped(b.user, method="POST") as conn:
+        mine = saved_sets.create(conn, DASHBOARDS, {"name": "Moje", **blank}, account_id=b.acc)
+    assert private["id"] not in _listed(b)
+    assert _rows(b, "SELECT id FROM stats_dashboards WHERE account_id = %s", (a.acc,)) == [(world.named,)]
+    # B's own dashboard comes first although the shared one sits at an earlier position.
+    assert mine["position"] > 0
+    assert list(_listed(b)) == [mine["id"], str(world.named)]
+
+
+def test_co_recipients_never_learn_each_other(
+    svc: Any, tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    a, b, c = tenants["a"], tenants["b"], tenants["c"]
+    _share(svc, world.named, c)
+    labels = "SELECT account_id, email FROM share_party_emails()"
+    assert set(_rows(b, labels)) == {(a.acc, a.email)}
+    assert set(_rows(c, labels)) == {(a.acc, a.email)}
+    assert _listed(b)[str(world.named)]["shared_with"] == [{"account_id": str(b.acc), "email": None}]
+    assert _listed(c)[str(world.named)]["shared_with"] == [{"account_id": str(c.acc), "email": None}]
+    assert _listed(a)[str(world.named)]["shared_with"] == [
+        {"account_id": str(b.acc), "email": b.email}, {"account_id": str(c.acc), "email": c.email}]
 
 
 def test_no_browser_role_can_create_a_share(tenants: dict[str, _Tenant], world: _World) -> None:

@@ -1,8 +1,9 @@
 """Browse › Stats dashboards (migration 647, docs/design/saved-dashboards.md): the saved-set instance over
 `stats_dashboards`, its read-only shares, and the account's working board.
 
-A NAMED dashboard is a saved set (api/saved_sets.py): `/stats/dashboards` lists the caller's own and those shared
-with them, told apart by `owner_email` (null iff the caller's own). The WORKING board is the account's one
+A NAMED dashboard is a saved set (api/saved_sets.py): `/stats/dashboards` lists the caller's own and then those
+shared with them (the SPA splits them the same way), told apart by `owner_email` (null iff the caller's own),
+each group in its saved order. The WORKING board is the account's one
 unnamed row: no `/stats/dashboards` route reaches it (`row_scope`), the database never lets it be shared, and
 `GET`/`PUT /stats/dashboard` read and write it by the account `require_account_id` resolves, so the read and the
 write name the same row (the working board is keyed by its account, the partial unique index; RLS still scopes).
@@ -27,6 +28,9 @@ from api import schemas as s
 from api import shares
 from api import tenant_pool
 
+# The one "is this row the caller's own" predicate: dashboards never act (pipeline-sharing.md §3.7).
+_MINE = "t.account_id IN (SELECT current_account_ids())"
+
 DASHBOARDS = saved_sets.SavedSetKind(
     table="stats_dashboards",
     noun="dashboard",
@@ -36,14 +40,14 @@ DASHBOARDS = saved_sets.SavedSetKind(
     update_in=s.UpdateStatsDashboardIn,
     nullable=frozenset({"filter_spec", "color"}),
     projection_extra=(
-        ("owner_email", "CASE WHEN t.account_id IN (SELECT current_account_ids()) THEN NULL "
-                        f"ELSE {shares.party_label('t.account_id')} END"),
+        ("owner_email", f"CASE WHEN {_MINE} THEN NULL ELSE {shares.party_label('t.account_id')} END"),
         ("shared_with", "(SELECT coalesce(json_agg(json_build_object("
                         "'account_id', s.recipient_account_id, "
                         f"'email', {shares.party_label('s.recipient_account_id')}) ORDER BY s.created_at), "
                         "'[]'::json) FROM stats_dashboard_shares s WHERE s.dashboard_id = t.id)"),
     ),
     row_scope="name IS NOT NULL",
+    order_by=f"({_MINE}) DESC, t.position ASC, t.created_at DESC",
 )
 # Every statement the kind runs, for the CI PREPARE sweep (tests/sql_corpus import-resolves `*_SQL`).
 DASHBOARD_SQL = saved_sets.statements(DASHBOARDS)

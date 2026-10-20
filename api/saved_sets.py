@@ -4,9 +4,10 @@ are its two instances, each a `SavedSetKind`; this module is their one implement
 
 Every route rides the caller's tenant connection, so the table's RLS policy is the boundary: reads, the reorder
 and an UPDATE/DELETE by id take no account (a row that is not the caller's matches nothing: 404, never a SELECT
-probe), and POST is the one insert, naming its one owner via `tenant_pool.require_account_id` (doctrine:
-.claude/skills/database/references/tenancy.md). A blob is stored verbatim once the validator its type carries
-passed: `PresetSpec` (every place chip coded), `Charts` (the stats registry).
+probe; a PUT that changes nothing locks the row FOR UPDATE, which applies the UPDATE policy), and POST is the one
+insert, naming its one owner via `tenant_pool.require_account_id` (doctrine:
+.claude/skills/database/references/tenancy.md). A blob is stored verbatim once the validator its body type
+carries passed (api/schemas.py: `PresetSpec`, `Charts`).
 """
 
 # No `from __future__ import annotations`: the factory's routes annotate their bodies with the kind's models,
@@ -14,45 +15,15 @@ passed: `PresetSpec` (every place chip coded), `Charts` (the stats registry).
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Any
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Path
-from pydantic import AfterValidator, BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field
 
 from api import tenant_pool
-from api.location_filter import DistrictChip
-from toolkit import stats_registry as sr
-
-_CHIPS = TypeAdapter(list[DistrictChip])
-
-
-# The blob is stored VERBATIM, so its chips are checked strictly (a "582786" or a
-# `true` id would be stored as written), where the SPA reads them (`readPresetSpec`:
-# `spec.filters`, else a legacy bare filter set). `strict=` at validation time: a
-# `ConfigDict(strict=True)` on the adapter does not reach the nested model.
-def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
-    """Every place chip in the blob is a level plus a RÚIAN code, or the write is a 422."""
-    filters = spec["filters"] if spec.get("filters") is not None else spec
-    if isinstance(filters, dict) and filters.get("districts") is not None:
-        _CHIPS.validate_python(filters["districts"], strict=True)
-    return spec
-
-
-def _valid_board(charts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The board as the stats registry normalises it: the only specs the pivot accepts.
-
-    A refusal is an HTTPException, not a ValueError: pydantic re-raises it unwrapped, so the 422's detail is the
-    registry's reason naming the chart, as PUT /stats/dashboard has always answered."""
-    try:
-        return sr.validate_board(charts)
-    except sr.SpecError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-PresetSpec = Annotated[dict[str, Any], AfterValidator(_coded_chips)]
-Charts = Annotated[list[dict[str, Any]], AfterValidator(_valid_board)]
 
 
 @dataclass(frozen=True)
@@ -67,9 +38,12 @@ class SavedSetKind:
     update_in: type[BaseModel]
     # A PUT's explicit null clears these; on every other field a null keeps the stored value.
     nullable: frozenset[str] = frozenset({"color"})
+    # Blob columns a falsy stored value reads as `{}` from (a preset's filter, as its old reader did).
+    empty_on_read: frozenset[str] = frozenset()
     projection_extra: tuple[tuple[str, str], ...] = ()  # (field, SQL over the row alias `t`)
     # Which of the table's rows are this kind's, on EVERY statement (the working board is no saved dashboard).
     row_scope: str = ""
+    order_by: str = "t.position ASC, t.created_at DESC"
 
 
 def _projection(kind: SavedSetKind) -> str:
@@ -84,12 +58,17 @@ def _where(kind: SavedSetKind, *conds: str) -> str:
 
 
 def _list_sql(kind: SavedSetKind) -> str:
-    return (f"SELECT {_projection(kind)} FROM {kind.table} t{_where(kind)} "
-            "ORDER BY t.position ASC, t.created_at DESC")
+    return f"SELECT {_projection(kind)} FROM {kind.table} t{_where(kind)} ORDER BY {kind.order_by}"
 
 
 def _get_sql(kind: SavedSetKind) -> str:
     return f"SELECT {_projection(kind)} FROM {kind.table} t{_where(kind, 't.id = %s')}"
+
+
+def _get_for_update_sql(kind: SavedSetKind) -> str:
+    # A PUT that changes nothing still answers only for a row the caller may UPDATE (FOR UPDATE applies the
+    # UPDATE policy): a shared dashboard's recipient gets the 404 a real change would, and nothing is bumped.
+    return f"{_get_sql(kind)} FOR UPDATE OF t"
 
 
 def _insert_sql(kind: SavedSetKind) -> str:
@@ -117,11 +96,14 @@ def _reorder_sql(kind: SavedSetKind) -> str:
             f"{_where(kind, 't.id = v.id')}")
 
 
+def _fields(kind: SavedSetKind) -> tuple[str, ...]:
+    return ("name", *kind.blob_columns, "color")
+
+
 def statements(kind: SavedSetKind) -> tuple[str, ...]:
     """Every statement the kind runs (its update with every field set), for the CI PREPARE sweep."""
-    every = ("name", *kind.blob_columns, "color")
-    return (_list_sql(kind), _get_sql(kind), _insert_sql(kind), _update_sql(kind, every),
-            _delete_sql(kind), _reorder_sql(kind))
+    return (_list_sql(kind), _get_sql(kind), _get_for_update_sql(kind), _insert_sql(kind),
+            _update_sql(kind, _fields(kind)), _delete_sql(kind), _reorder_sql(kind))
 
 
 def _jsonb(value: Any) -> str | None:
@@ -135,7 +117,16 @@ def _row(kind: SavedSetKind, row: tuple[Any, ...]) -> dict[str, Any]:
     out["id"] = str(out["id"])
     for at in ("created_at", "updated_at"):
         out[at] = out[at].isoformat() if out[at] else ""
+    for blob in kind.empty_on_read:
+        out[blob] = out[blob] or {}
     return out
+
+
+def _one(conn: psycopg.Connection, kind: SavedSetKind, sql: str, params: Any) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+    return None if row is None else _row(kind, row)
 
 
 def list_rows(conn: psycopg.Connection, kind: SavedSetKind) -> list[dict[str, Any]]:
@@ -145,10 +136,7 @@ def list_rows(conn: psycopg.Connection, kind: SavedSetKind) -> list[dict[str, An
 
 
 def get(conn: psycopg.Connection, kind: SavedSetKind, set_id: str) -> dict[str, Any] | None:
-    with conn.cursor() as cur:
-        cur.execute(_get_sql(kind), (set_id,))
-        row = cur.fetchone()
-    return None if row is None else _row(kind, row)
+    return _one(conn, kind, _get_sql(kind), (set_id,))
 
 
 def create(
@@ -156,17 +144,15 @@ def create(
 ) -> dict[str, Any]:
     """Insert one row at the end of the list; `account_id` is REQUIRED (a dropped one is a TypeError, never NULL)."""
     params = [values["name"], *(_jsonb(values[c]) for c in kind.blob_columns), values.get("color"), account_id]
-    with conn.cursor() as cur:
-        cur.execute(_insert_sql(kind), params)
-        row = cur.fetchone()
+    row = _one(conn, kind, _insert_sql(kind), params)
     assert row is not None
-    return _row(kind, row)
+    return row
 
 
 def changes(kind: SavedSetKind, body: BaseModel) -> dict[str, Any]:
     """What a PUT changes: every field it sent, except a null where null means "keep" (outside `nullable`)."""
     return {
-        f: getattr(body, f) for f in ("name", *kind.blob_columns, "color")
+        f: getattr(body, f) for f in _fields(kind)
         if f in body.model_fields_set and (getattr(body, f) is not None or f in kind.nullable)
     }
 
@@ -174,14 +160,12 @@ def changes(kind: SavedSetKind, body: BaseModel) -> dict[str, Any]:
 def update(
     conn: psycopg.Connection, kind: SavedSetKind, set_id: str, fields: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Apply `fields` to one row; None when no row of the caller's matched (the write is the gate)."""
+    """Apply `fields` to one row; None when no row the caller may update matched (the write is the gate)."""
+    assert set(fields) <= set(_fields(kind)), f"not a {kind.noun} field: {sorted(set(fields) - set(_fields(kind)))}"
     if not fields:
-        return get(conn, kind, set_id)
+        return _one(conn, kind, _get_for_update_sql(kind), (set_id,))
     params = [_jsonb(v) if f in kind.blob_columns else v for f, v in fields.items()]
-    with conn.cursor() as cur:
-        cur.execute(_update_sql(kind, tuple(fields)), [*params, set_id])
-        row = cur.fetchone()
-    return None if row is None else _row(kind, row)
+    return _one(conn, kind, _update_sql(kind, tuple(fields)), [*params, set_id])
 
 
 def delete(conn: psycopg.Connection, kind: SavedSetKind, set_id: str) -> bool:
@@ -205,22 +189,32 @@ def found(kind: SavedSetKind, row: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class ReorderIn(BaseModel):
-    # `str`, not `UUID`: every route here types the id as a plain string and lets the DB's uuid cast be the
-    # format guard (a malformed id is a cast error, not a real client scenario: the SPA sends stored ids).
-    ids: list[str] = Field(..., min_length=1)
+    ids: list[uuid.UUID] = Field(..., min_length=1)
+
+
+def _runs(*sql: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Tag an endpoint with the SQL it runs: built from the kind, it is no literal that
+    tests/api/test_acting_routes_census.py could read off the source."""
+    def tag(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+        endpoint.runs_sql = sql  # type: ignore[attr-defined]
+        return endpoint
+    return tag
 
 
 def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
-    """The kind's six CRUD routes, every one on the tenant connection; POST names its one owner."""
+    """The kind's six CRUD routes, every one on the tenant connection; POST names its one owner. An id is a
+    uuid at the edge, so a malformed one (a hand-edited link) is a 422, never a cast error."""
     router = APIRouter(prefix=prefix, tags=[prefix.strip("/").replace("/", "-")])
     one = f"/{{{kind.id_param}}}"
 
     @router.get("")
+    @_runs(_list_sql(kind))
     def list_route(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
         rows = list_rows(conn, kind)
         return {"data": rows, "total": len(rows)}
 
     @router.post("")
+    @_runs(_insert_sql(kind))
     def create_route(
         body: kind.create_in,  # type: ignore[name-defined]
         conn: Any = Depends(tenant_pool.tenant_conn),
@@ -230,29 +224,33 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
 
     # Declared before the `/{id}` routes so PUT <prefix>/reorder is matched here, not captured by `/{id}`.
     @router.put("/reorder")
+    @_runs(_reorder_sql(kind), _list_sql(kind))
     def reorder_route(body: ReorderIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
-        rows = reorder(conn, kind, body.ids)
+        rows = reorder(conn, kind, [str(i) for i in body.ids])
         return {"data": rows, "total": len(rows)}
 
     @router.get(one)
+    @_runs(_get_sql(kind))
     def get_route(
-        set_id: str = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
+        set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
-        return found(kind, get(conn, kind, set_id))
+        return found(kind, get(conn, kind, str(set_id)))
 
     @router.put(one)
+    @_runs(_update_sql(kind, _fields(kind)), _get_for_update_sql(kind))
     def update_route(
         body: kind.update_in,  # type: ignore[name-defined]
-        set_id: str = Path(alias=kind.id_param),
+        set_id: uuid.UUID = Path(alias=kind.id_param),
         conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
-        return found(kind, update(conn, kind, set_id, changes(kind, body)))
+        return found(kind, update(conn, kind, str(set_id), changes(kind, body)))
 
     @router.delete(one)
+    @_runs(_delete_sql(kind))
     def delete_route(
-        set_id: str = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
+        set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
-        if not delete(conn, kind, set_id):
+        if not delete(conn, kind, str(set_id)):
             raise HTTPException(status_code=404, detail=f"{kind.noun} not found")
         return {"deleted": True}
 

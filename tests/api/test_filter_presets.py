@@ -30,6 +30,11 @@ _SUB = "11111111-1111-1111-1111-111111111111"
 _ACCT = "33333333-3333-3333-3333-333333333333"
 
 
+def _id(n: int) -> str:
+    """The n-th preset the fake store mints: ids are uuids at the route edge (a malformed one is a 422)."""
+    return f"00000000-0000-0000-0000-{n:012d}"
+
+
 @pytest.fixture()
 def client(monkeypatch):
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
@@ -52,15 +57,16 @@ def store(monkeypatch):
     def fake_create_preset(conn, kind, values, *, account_id):
         assert kind is PRESETS
         name, filter_spec, color = values["name"], values["filter_spec"], values["color"]
-        pid = str(state["next_id"])
+        n = state["next_id"]
+        pid = _id(n)
         state["next_id"] += 1
         state["owners"][pid] = account_id
         state["presets"][pid] = {
             "id": pid,
             "name": name,
             "filter_spec": filter_spec,
-            "created_at": f"2026-06-03T00:00:0{pid}+00:00",
-            "updated_at": f"2026-06-03T00:00:0{pid}+00:00",
+            "created_at": f"2026-06-03T00:00:0{n}+00:00",
+            "updated_at": f"2026-06-03T00:00:0{n}+00:00",
             # Append at end: one past the current max position.
             "position": max(
                 (p["position"] for p in state["presets"].values()), default=-1
@@ -112,7 +118,7 @@ def test_create_preset_returns_row(client, store):
     res = client.post("/filter-presets", json={"name": "Praha pod 6M", "filter_spec": SPEC})
     assert res.status_code == 200
     body = res.json()
-    assert body["id"] == "1"
+    assert body["id"] == _id(1)
     assert body["name"] == "Praha pod 6M"
     assert body["filter_spec"] == SPEC
 
@@ -144,9 +150,9 @@ def test_update_preset_sets_and_clears_color(client, store):
         "/filter-presets", json={"name": "p", "filter_spec": SPEC, "color": "sage"}
     )
     # Recolour.
-    assert client.put("/filter-presets/1", json={"color": "teal"}).json()["color"] == "teal"
+    assert client.put(f"/filter-presets/{_id(1)}", json={"color": "teal"}).json()["color"] == "teal"
     # Explicit null clears it.
-    assert client.put("/filter-presets/1", json={"color": None}).json()["color"] is None
+    assert client.put(f"/filter-presets/{_id(1)}", json={"color": None}).json()["color"] is None
 
 
 def test_update_preset_omitting_color_leaves_it(client, store):
@@ -154,7 +160,7 @@ def test_update_preset_omitting_color_leaves_it(client, store):
         "/filter-presets", json={"name": "p", "filter_spec": SPEC, "color": "brick"}
     )
     # A name-only update must not wipe the colour (omitted != cleared).
-    body = client.put("/filter-presets/1", json={"name": "renamed"}).json()
+    body = client.put(f"/filter-presets/{_id(1)}", json={"name": "renamed"}).json()
     assert body["name"] == "renamed"
     assert body["color"] == "brick"
 
@@ -183,7 +189,7 @@ def test_reorder_presets_rewrites_order(client, store):
     for name in ("a", "b", "c"):
         client.post("/filter-presets", json={"name": name, "filter_spec": SPEC})
     # Move "c" (id 3) to the front, then "a" (id 1), then "b" (id 2).
-    res = client.put("/filter-presets/reorder", json={"ids": ["3", "1", "2"]})
+    res = client.put("/filter-presets/reorder", json={"ids": [_id(3), _id(1), _id(2)]})
     assert res.status_code == 200
     body = res.json()
     assert body["total"] == 3
@@ -199,7 +205,7 @@ def test_reorder_presets_rewrites_order(client, store):
 
 def test_reorder_unknown_id_is_noop_for_missing(client, store):
     client.post("/filter-presets", json={"name": "a", "filter_spec": SPEC})
-    res = client.put("/filter-presets/reorder", json={"ids": ["999", "1"]})
+    res = client.put("/filter-presets/reorder", json={"ids": [_id(999), _id(1)]})
     assert res.status_code == 200
     # The one real preset still resolves; the unknown id is ignored.
     assert [r["name"] for r in res.json()["data"]] == ["a"]
@@ -210,12 +216,12 @@ def test_reorder_presets_empty_422(client, store):
 
 
 def test_get_preset_404_when_missing(client, store):
-    assert client.get("/filter-presets/999").status_code == 404
+    assert client.get(f"/filter-presets/{_id(999)}").status_code == 404
 
 
 def test_update_preset_renames_without_touching_spec(client, store):
     client.post("/filter-presets", json={"name": "old", "filter_spec": SPEC})
-    res = client.put("/filter-presets/1", json={"name": "new"})
+    res = client.put(f"/filter-presets/{_id(1)}", json={"name": "new"})
     assert res.status_code == 200
     body = res.json()
     assert body["name"] == "new"
@@ -225,7 +231,7 @@ def test_update_preset_renames_without_touching_spec(client, store):
 def test_update_preset_replaces_spec(client, store):
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
     new_spec = {"categoryMain": "dum", "categoryType": "prodej"}
-    res = client.put("/filter-presets/1", json={"filter_spec": new_spec})
+    res = client.put(f"/filter-presets/{_id(1)}", json={"filter_spec": new_spec})
     assert res.status_code == 200
     assert res.json()["filter_spec"] == new_spec
 
@@ -251,8 +257,8 @@ def test_a_preset_holding_a_chip_without_a_code_is_a_422_and_writes_nothing(clie
     assert client.post("/filter-presets", json={"name": "p", "filter_spec": spec}).status_code == 422
     assert store["presets"] == {}
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
-    assert client.put("/filter-presets/1", json={"filter_spec": spec}).status_code == 422
-    assert store["presets"]["1"]["filter_spec"] == SPEC
+    assert client.put(f"/filter-presets/{_id(1)}", json={"filter_spec": spec}).status_code == 422
+    assert store["presets"][_id(1)]["filter_spec"] == SPEC
 
 
 def test_a_preset_with_coded_chips_is_stored_unchanged(client, store):
@@ -261,7 +267,7 @@ def test_a_preset_with_coded_chips_is_stored_unchanged(client, store):
     res = client.post("/filter-presets", json={"name": "p", "filter_spec": spec})
     assert res.status_code == 200
     assert res.json()["filter_spec"] == spec
-    assert client.put("/filter-presets/1", json={"filter_spec": spec}).json()["filter_spec"] == spec
+    assert client.put(f"/filter-presets/{_id(1)}", json={"filter_spec": spec}).json()["filter_spec"] == spec
 
 
 @pytest.mark.parametrize("spec", [SPEC, {"filters": SPEC, "sort": None},
@@ -273,13 +279,31 @@ def test_a_preset_without_chips_is_untouched(client, store, spec):
 
 
 def test_update_preset_404_when_missing(client, store):
-    assert client.put("/filter-presets/999", json={"name": "x"}).status_code == 404
+    assert client.put(f"/filter-presets/{_id(999)}", json={"name": "x"}).status_code == 404
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [
+    ("get", "/filter-presets/1", None),
+    ("put", "/filter-presets/not-a-uuid", {"name": "x"}),
+    ("delete", "/filter-presets/1", None),
+    ("put", "/filter-presets/reorder", {"ids": ["1"]}),
+])
+def test_a_malformed_id_is_a_422_not_a_cast_error(client, store, method, path, body):
+    """A hand-edited link must not reach the database's uuid cast (a 500)."""
+    call = getattr(client, method)
+    assert (call(path, json=body) if body is not None else call(path)).status_code == 422
+
+
+def test_a_stored_blob_that_is_not_an_object_reads_as_empty():
+    """PostgREST can write a JSON null into the NOT NULL column; the SPA reads `spec.filters`."""
+    row = (_id(1), "p", None, None, None, 0, None)
+    assert ss._row(PRESETS, row)["filter_spec"] == {}
 
 
 def test_delete_preset(client, store):
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
-    assert client.delete("/filter-presets/1").json() == {"deleted": True}
-    assert client.delete("/filter-presets/1").status_code == 404
+    assert client.delete(f"/filter-presets/{_id(1)}").json() == {"deleted": True}
+    assert client.delete(f"/filter-presets/{_id(1)}").status_code == 404
 
 
 # --- per account (ticket #1761) ---------------------------------------------
@@ -390,6 +414,6 @@ def test_reads_and_writes_by_id_carry_no_account_predicate():
 
     for fn in (ss.list_rows, ss.get, ss.update, ss.delete, ss.reorder, ss.changes):
         assert "account_id" not in inspect.getsource(fn), fn.__name__
-    for sql in (ss._list_sql(PRESETS), ss._get_sql(PRESETS), ss._delete_sql(PRESETS),
+    for sql in (ss._list_sql(PRESETS), ss._get_sql(PRESETS), ss._get_for_update_sql(PRESETS), ss._delete_sql(PRESETS),
                 ss._update_sql(PRESETS, ("name", "filter_spec", "color")), ss._reorder_sql(PRESETS)):
         assert "account_id" not in sql, sql

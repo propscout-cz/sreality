@@ -384,7 +384,7 @@ def _jwt_gated_calls() -> list:
         ("POST",   "/filter-presets", {"name": "p", "filter_spec": {}}),
         ("GET",    "/stats/dashboards", None),
         ("POST",   "/stats/dashboards", {"name": "n", "charts": []}),
-        ("PUT",    "/stats/dashboards/reorder", {"ids": ["d1"]}),
+        ("PUT",    "/stats/dashboards/reorder", {"ids": [_DASHBOARD]}),
         ("GET",    f"/stats/dashboards/{_DASHBOARD}", None),
         ("PUT",    f"/stats/dashboards/{_DASHBOARD}", {"name": "m"}),
         ("DELETE", f"/stats/dashboards/{_DASHBOARD}", None),
