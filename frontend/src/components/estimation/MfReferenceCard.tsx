@@ -5,7 +5,7 @@
  * SHAPE (lib/mfReference): a value's breakdown, the published range with its
  * note behind an (i), or the note alone — and nothing when there is no result.
  * It holds no reason text of its own; the notes come from the SQL. */
-import EstimateCard, { CardRow as Row } from '@/components/estimation/EstimateCard';
+import EstimateCard, { CardRow as Row, PerMonth } from '@/components/estimation/EstimateCard';
 import { InfoHint } from '@/components/settings/SectionChrome';
 import { fmtCount, fmtCzk, fmtMeasuredPricePerM2, fmtPct } from '@/lib/format';
 import {
@@ -58,7 +58,7 @@ export function MfReferenceCard({
           <span className="inline-flex items-baseline gap-1.5 text-lg font-medium tabular-nums">
             <span>
               {fmtCount(range.rent_min_czk)}–{fmtCzk(range.rent_max_czk)}
-              <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>
+              <PerMonth />
             </span>
             {note && <InfoHint text={note} className="self-center" />}
           </span>
@@ -89,7 +89,7 @@ export function MfReferenceCard({
       <div className="mt-1 flex items-baseline justify-between gap-3">
         <span className="text-lg font-medium tabular-nums">
           {fmtCzk(ref.monthly_rent_czk)}
-          <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>
+          <PerMonth />
         </span>
         {yieldPct != null && <YieldFigure>{fmtPct(yieldPct, { digits: 2 })}</YieldFigure>}
       </div>

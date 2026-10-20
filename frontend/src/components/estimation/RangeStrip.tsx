@@ -47,14 +47,9 @@ export default function RangeStrip({ label, range, caption, format, marks = [] }
         ))}
         <div className={`${marks.length > 0 ? 'mt-1 ' : ''}relative h-2`}>
           <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-[var(--color-rule-strong)]" />
-          <span
-            className="absolute top-0 left-0 w-px h-2 bg-[var(--color-ink-3)]"
-            aria-hidden
-          />
-          <span
-            className="absolute top-0 right-0 w-px h-2 bg-[var(--color-ink-3)]"
-            aria-hidden
-          />
+          {['left-0', 'right-0'].map((end) => (
+            <span key={end} className={`absolute top-0 ${end} w-px h-2 bg-[var(--color-ink-3)]`} aria-hidden />
+          ))}
           <span
             className="absolute top-[-1px] w-[2px] h-3 bg-[var(--color-copper)]"
             style={{ left: `calc(${midPct}% - 1px)` }}

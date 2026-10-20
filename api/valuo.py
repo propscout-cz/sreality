@@ -21,9 +21,7 @@ from psycopg.types.json import Jsonb
 
 from api import valuo_client
 from api.routes.property_location import load_location
-from toolkit.filter_registry import (
-    CATEGORY_MAIN_NOUN_CS, DISPOSITION_OPTIONS, SUBTYPE_OPTIONS, label_cs, type_label_cs,
-)
+from toolkit.filter_registry import CATEGORY_MAIN_NOUN_CS, DISPOSITION_OPTIONS, label_cs, type_label_cs
 from toolkit.measures import ppm2_basis
 
 LOG = logging.getLogger(__name__)
@@ -47,32 +45,23 @@ class Field:
 
     name: str
     label: str
-    type: str  # enum | number | integer | boolean | date | text
+    type: str  # enum | number (every v3 number is an area, m²) | integer | boolean | date | text
     options: tuple[tuple[str, str], ...] = ()
     applies: tuple[str, ...] = ALL
     required: tuple[str, ...] = ()
     recommended: tuple[str, ...] = ()
-    unit: str | None = None
     minimum: int = 0
     fixed: bool = False
 
     def spec(self, ptype: str) -> dict[str, Any]:
         return {
-            "name": self.name, "label": self.label, "type": self.type, "unit": self.unit,
+            "name": self.name, "label": self.label, "type": self.type, "unit": "m²" if self.type == "number" else None,
             "options": [{"value": v, "label": lab} for v, lab in self.options],
             "required": ptype in self.required,
             "group": "basic" if ptype in self.required or ptype in self.recommended else "more",
             "fixed": self.fixed,
             "max_length": _TEXT_MAX if self.type == "text" else None,
         }
-
-
-def _area(name: str, label: str, applies: tuple[str, ...], **kw: Any) -> Field:
-    return Field(name, label, "number", applies=applies, unit="m²", **kw)
-
-
-def _count(name: str, label: str, applies: tuple[str, ...], minimum: int = 0) -> Field:
-    return Field(name, label, "integer", applies=applies, minimum=minimum)
 
 
 # The production engine rejects any other local_type (the sandbox accepts anything, so only the docs say so).
@@ -85,8 +74,8 @@ FIELDS: tuple[Field, ...] = (
     ), required=ALL, fixed=True),
     Field("place", "Poloha (adresa nebo souřadnice)", "text", required=ALL),
     Field("kind", "Typ obchodu", "enum", (("sale", "Prodej"), ("lease", "Pronájem")), required=ALL),
-    _area("floor_area", "Plocha", BUILT, required=BUILT),
-    _area("lot_area", "Plocha pozemku", (HOUSE, LAND, COMMERCIAL), required=(LAND,)),
+    Field("floor_area", "Plocha", "number", applies=BUILT, required=BUILT),
+    Field("lot_area", "Plocha pozemku", "number", applies=(HOUSE, LAND, COMMERCIAL), required=(LAND,)),
     Field("rating", "Stav", "enum", (
         ("bad", "Neobyvatelný"), ("nothing_much", "Před rekonstrukcí"), ("good", "Průměrný"),
         ("very_good", "Velmi dobrý"), ("excellent", "Luxusní"),
@@ -116,14 +105,14 @@ FIELDS: tuple[Field, ...] = (
         ("brick", "Cihlová"), ("panel", "Panelová"), ("mixed", "Smíšená"), ("wood", "Dřevěná"),
         ("stone", "Kamenná"), ("montage", "Montovaná"), ("low_energy", "Nízkoenergetická"), ("other", "Jiná"),
     ), applies=(FLAT, HOUSE)),
-    _count("floor", "Podlaží", (FLAT,), minimum=-3),  # scraper/floor.py's own bound; the ad's underground floor waits
-    _count("total_floors", "Počet podlaží", (FLAT,), minimum=1),
+    Field("floor", "Podlaží", "integer", applies=(FLAT,), minimum=-3),  # scraper/floor.py's bound; a basement waits
+    Field("total_floors", "Počet podlaží", "integer", applies=(FLAT,), minimum=1),
     Field("energy_performance", "Energetická třída", "enum", tuple((c, c) for c in "ABCDEFG"), applies=(HOUSE,)),
-    _area("balcony_area", "Balkon", (FLAT,)),
-    _area("cellar_area", "Sklep", (FLAT, HOUSE)),
-    _area("garden_area", "Zahrada", (FLAT,)),
-    _count("garages", "Garáže", (FLAT, HOUSE)),
-    _count("parking_spaces", "Parkovací místa", (FLAT, HOUSE)),
+    Field("balcony_area", "Balkon", "number", applies=(FLAT,)),
+    Field("cellar_area", "Sklep", "number", applies=(FLAT, HOUSE)),
+    Field("garden_area", "Zahrada", "number", applies=(FLAT,)),
+    Field("garages", "Garáže", "integer", applies=(FLAT, HOUSE)),
+    Field("parking_spaces", "Parkovací místa", "integer", applies=(FLAT, HOUSE)),
 )
 _BY_NAME: dict[str, Field] = {f.name: f for f in FIELDS}
 
@@ -168,10 +157,8 @@ MAPS: dict[str, tuple[str | dict[str, str], dict[str, tuple[Any, str]]]] = {
         "ordinace": ("medical_office", _DIRECT), "ostatni": ("other", _DIRECT),
         "virtualni_kancelar": (None, MISSING),  # an address service, not premises Valuo could compare
     }),
-    "disposition": ("local_type", {
-        **{o.value: (o.value, _DIRECT) if o.value in LOCAL_TYPES else ("jiné", INFERRED)
-           for o in DISPOSITION_OPTIONS},
-    }),
+    "disposition": ("local_type", {o.value: (o.value, _DIRECT) if o.value in LOCAL_TYPES else ("jiné", INFERRED)
+                                   for o in DISPOSITION_OPTIONS}),
     "ownership": ("ownership", {
         "osobni": ("private", _DIRECT), "druzstevni": ("cooperative", _DIRECT),
         "statni": ("council", _DIRECT), "jine": ("other", _DIRECT),
@@ -190,9 +177,7 @@ _SOURCE: dict[str, str] = {
 # Columns sent as they stand, through the gate a user's value passes: one Valuo cannot take is not sent.
 _COPIED = (("total_floors", "total_floors", AD), ("garden_area", "garden_area", PROPERTY),
            ("parking_lots", "parking_spaces", PROPERTY))
-_NOT_SENT_NOTES: dict[tuple[str, str], str] = {
-    ("energy_rating", "G"): "Třídu G uvádějí i inzeráty bez průkazu PENB, proto se neposílá.",
-}
+_NOT_SENT_NOTES = {("energy_rating", "G"): "Třídu G uvádějí i inzeráty bez průkazu PENB, proto se neposílá."}
 LAND_RATING_NOTE = "Valuo vyžaduje stav i u pozemku."
 _PTYPE_CATEGORY = {v[0]: k for k, v in MAPS["category_main"][1].items() if v[0]}
 _KIND_CATEGORY = {"sale": "prodej", "lease": "pronajem"}
@@ -462,12 +447,6 @@ def _records(result: dict[str, Any], adverts: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _record_ids(response: dict[str, Any]) -> list[Any]:
-    records = (response.get("result") or {}).get("records")
-    ids = [r.get("id") for r in records if isinstance(r, dict)] if isinstance(records, list) else []
-    return [i for i in ids if i is not None][:ADVERT_LIMIT]
-
-
 def _summary(response: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
     """What the answer rests on, for the reader to judge: Valuo grades nothing, so neither do we."""
     keep, flags = response.get("keep_ids"), result.get("flags")
@@ -512,9 +491,7 @@ def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
         "environment": cred.environment if cred else None,
         "refusal": refused or (None if cred else {"code": "unconfigured", "message": REFUSALS["unconfigured"]}),
         "subject": {
-            "listing_id": subject["listing_id"],
-            "category_main": subject["category_main"],
-            "category_type": subject["category_type"],
+            **{k: subject[k] for k in ("listing_id", "category_main", "category_type")},
             "label": " · ".join(p for p in (type_label_cs(subject["category_main"], subject["subtype"]),
                                             subject["disposition"]) if p),
             "location": None if location is None else {
@@ -568,7 +545,7 @@ def run(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: u
     except valuo_client.ValuoError as exc:
         response = exc.response
         error = {"code": exc.code, "http_status": exc.http_status, "message": exc.message, "detail": exc.detail}
-    ids = _record_ids(response) if error is None else []
+    ids = [] if error else [r["id"] for r in _records(response["result"], None) if r["id"] is not None][:ADVERT_LIMIT]
     if ids:  # the photos are a garnish: their failure never fails the valuation it would decorate
         try:
             adverts = valuo_client.advert_details(cred, ids)

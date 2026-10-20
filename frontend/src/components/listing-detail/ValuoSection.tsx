@@ -9,7 +9,7 @@ import ErrorBanner from '@/components/ErrorBanner';
 import Skeleton from '@/components/Skeleton';
 import Spinner from '@/components/Spinner';
 import { CollapsibleGroup, DecimalField, Field, Segmented } from '@/components/controls';
-import EstimateCard, { CardRow } from '@/components/estimation/EstimateCard';
+import EstimateCard, { CardRow, PerMonth } from '@/components/estimation/EstimateCard';
 import RangeStrip from '@/components/estimation/RangeStrip';
 import RunHistory, { type HistoryColumn } from '@/components/estimation/RunHistory';
 import { RunStatusChip } from '@/components/estimation/RunPanel';
@@ -18,17 +18,18 @@ import { InfoHint } from '@/components/settings/SectionChrome';
 import { Hairline, SectionLabel } from '@/components/section';
 import { Th } from '@/components/table';
 import { ApiError } from '@/lib/api';
+import { sortedIds } from '@/lib/hydration/keys';
 import {
   czPlural, fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24, fmtTomDays,
 } from '@/lib/format';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { mfShape } from '@/lib/mfReference';
-import { estimationKeys, fetchEstimationsForListings, propertyRunIds, type PropertyPublic } from '@/lib/queries';
-import type { EstimationRun, ImagePublic } from '@/lib/types';
+import { estimationKeys, fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
+import { bareImage, type EstimationRun } from '@/lib/types';
 import {
-  LEASE_PERIOD, band, formErrors, missingRequired, optionLabel, reliability, shownPrice, useRunValuo, useValuoPage,
-  withEdit, type Provenance, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoPhoto,
+  band, formErrors, missingRequired, optionLabel, reliability, shownPrice, useRunValuo, useValuoPage, withEdit,
+  type Provenance, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoPhoto, type ValuoRecord,
   type ValuoRun, type ValuoValue, type ValuoValues,
 } from '@/lib/valuo';
 
@@ -40,11 +41,10 @@ const QUIET = 'px-2 py-1 text-[0.8rem] text-[var(--color-ink-2)] hover:text-[var
 const LINK = 'text-[0.8rem] text-[var(--color-copper)] hover:underline underline-offset-2';
 const GRID = 'grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]';
 const ABSENT = '[&_input]:border-dashed [&_select]:border-dashed [&_button]:border-dashed'; // dashed = nothing sent
-const Period = ({ on }: { on: boolean }) => (on ? <span className={`ml-1 text-[0.7rem] ${INK3}`}>{LEASE_PERIOD}</span> : null);
-/* Valuo's average, rounded as shown; the exact figure rides in the title. */
+/* Valuo's average, rounded as shown, the exact figure in the title; a lease reads as monthly (unverified until P1). */
 const Price = ({ value, lease, className }: { value: number | null; lease: boolean; className?: string }) => (
   <span className={className} title={value == null ? undefined : fmtCzk(value)}>
-    {fmtCzk(value == null ? null : shownPrice(value, lease))}<Period on={lease} />
+    {fmtCzk(value == null ? null : shownPrice(value, lease))}{lease && <PerMonth />}
   </span>
 );
 const isLease = (v: Valuation) => ppm2BasisFromToken(v.ppm2_basis) === 'rent';
@@ -58,7 +58,7 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
   bare?: boolean;
 }) {
   const pageQ = useValuoPage(property.property_id);
-  const runIds = useMemo(() => propertyRunIds(listingIds), [listingIds]);
+  const runIds = useMemo(() => sortedIds(listingIds), [listingIds]);
   // Our runs as the estimations block above holds them: a cache read, never a fetch of ours.
   const runsQ = useQuery({
     queryKey: estimationKeys.byListing(runIds), queryFn: () => fetchEstimationsForListings(runIds), enabled: false,
@@ -81,13 +81,6 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
     setReusedAt(reused);
   };
   const done = ({ reused, valuation: v }: ValuoRun) => pick(v.id, reused ? v.created_at : null);
-  const card = (v: Valuation) => (
-    <>
-      <ValuoCard valuation={v} page={page} property={property} runs={runsQ.data?.data ?? []}
-        onEdit={canRun ? () => setEditing(true) : undefined} />
-      {!readOnly && <Comparables key={v.id} valuation={v} fields={page?.fields ?? []} />}
-    </>
-  );
 
   let body: ReactNode = null;
   const err = pageQ.error;
@@ -108,7 +101,13 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
         {open ? (
           <ValuoEditor propertyId={property.property_id} page={page} refused={formErrors(shown)}
             onCancel={() => setEditing(false)} onDone={done} />
-        ) : shown ? card(shown) : !page.refusal && (
+        ) : shown ? (
+          <>
+            <ValuoCard valuation={shown} page={page} property={property} runs={runsQ.data?.data ?? []}
+              onEdit={canRun ? () => setEditing(true) : undefined} />
+            {!readOnly && <Comparables key={shown.id} valuation={shown} fields={page.fields} />}
+          </>
+        ) : !page.refusal && (
           <EstimateCard tone="absent" eyebrow="Ocenění Valuo" className="flex flex-col items-start gap-2">
             <p className={`text-sm ${INK3}`}>Zatím bez ocenění</p>
             {canRun && <button type="button" onClick={() => setEditing(true)} className={LINK}>Ocenit přes Valuo →</button>}
@@ -241,14 +240,14 @@ const HISTORY_COLUMNS: HistoryColumn<Valuation>[] = [
   { header: 'Prostředí', className: `text-[0.65rem] tracking-[0.14em] uppercase ${INK3}`, cell: (v) => ENVIRONMENT[v.environment] },
 ];
 
-/* The app's one lightbox shows a photo with no stored copy from its own URL, which sits in `sreality_url`. */
-const asImage = (p: ValuoPhoto, i: number): ImagePublic => ({
-  id: i, sreality_id: 0, sequence: i, sreality_url: p.full, storage_path: null, clip_fine_tag: null,
-  clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
-});
 /* Only a web address becomes a link: the URL is Valuo's, not ours. */
 const webUrl = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u) ? u : null);
 const NO_PHOTO = 'block h-[3.375rem] w-[4.5rem] rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)]';
+const NUM = 'text-right font-mono tabular-nums whitespace-nowrap';
+const SOLD = (
+  <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)"
+    className={`mr-1.5 font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
+);
 
 /* Valuo's comparables under its card, in Valuo's order; every per-m² cell names its own unit (rule 23).
  * The phone card leaves them out. */
@@ -259,7 +258,32 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
   if (records.length === 0) return null;
   const basis = ppm2BasisFromToken(v.ppm2_basis);
   const lease = basis === 'rent';
-  const num = 'px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap';
+  const czk = (n: number | null) => <>{fmtCzk(n)}{lease && n != null && <PerMonth />}</>;
+  // The advert detail's shape is unseen in production yet: only a string reads as an address.
+  const address = (r: ValuoRecord) => (typeof r.address === 'string' && r.address !== '' ? r.address : r.place);
+  const columns: [string, string, (r: ValuoRecord, i: number) => ReactNode][] = [
+    ['Foto', '', (r, i) => (r.photos?.[0] && !broken.has(i) ? (
+      <button type="button" onClick={() => setPhotos(r.photos ?? null)}
+        aria-label={`Fotografie (${r.photos?.length ?? 0}): ${address(r) ?? 'srovnání'}`}
+        className="block h-[3.375rem] w-[4.5rem] overflow-hidden rounded-[var(--radius-xs)] bg-[var(--color-inset)]">
+        <img src={r.photos[0].thumb} alt={address(r) ?? 'Fotka srovnání'} loading="lazy" decoding="async"
+          onError={() => setBroken((b) => new Set(b).add(i))} className="block h-full w-full object-cover" />
+      </button>
+    ) : <span aria-hidden className={NO_PHOTO} />)],
+    ['Adresa', 'min-w-[10rem] text-[var(--color-ink)]', (r) => {
+      const href = webUrl(r.advert_url);
+      return href ? <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">{address(r) ?? 'Inzerát'}</a>
+        : (address(r) ?? '—');
+    }],
+    ['Dispozice', 'whitespace-nowrap text-[var(--color-ink-2)]', (r) => optionLabel(fields, 'local_type', r.local_type)],
+    ['Plocha', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtArea(r.calc_area)],
+    ['Cena', `${NUM} text-[var(--color-ink)]`, (r) => <>{r.sale_price && SOLD}{czk(r.price)}</>],
+    ['Za m²', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtMeasuredPricePerM2(r.price_m2, basis)],
+    ['Upravená cena', `${NUM} text-[var(--color-ink)]`, (r) => czk(r.adjusted_price)],
+    ['Vzdálenost', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtDistanceM(r.distance)],
+    ['Shoda', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtPct(r.score_prct, { digits: 0 })],
+    ['V inzerci', `${NUM} text-[var(--color-ink-2)]`, (r) => fmtTomDays(r.days)],
+  ];
   return (
     <div className="pt-3">
       <SectionLabel>
@@ -268,67 +292,20 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
       <div className="mt-3 min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)]">
         <table aria-label="Srovnávací nemovitosti Valuo" className="w-full text-sm">
           <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">
-            <tr>
-              <Th size="xs">Foto</Th>
-              <Th size="xs">Adresa</Th>
-              <Th size="xs">Dispozice</Th>
-              <Th size="xs" align="right">Plocha</Th>
-              <Th size="xs" align="right">Cena</Th>
-              <Th size="xs" align="right">Za m²</Th>
-              <Th size="xs" align="right">Upravená cena</Th>
-              <Th size="xs" align="right">Vzdálenost</Th>
-              <Th size="xs" align="right">Shoda</Th>
-              <Th size="xs" align="right">V inzerci</Th>
-            </tr>
+            <tr>{columns.map(([h, cls]) => <Th key={h} size="xs" align={cls.startsWith(NUM) ? 'right' : 'left'}>{h}</Th>)}</tr>
           </thead>
           <tbody>
-            {records.map((r, i) => {
-              // The advert detail's shape is unseen in production yet: only a string reads as an address.
-              const address = typeof r.address === 'string' && r.address !== '' ? r.address : r.place;
-              const first = r.photos?.[0];
-              const href = webUrl(r.advert_url);
-              return (
-                <tr key={`${r.id}:${i}`} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
-                  <td className="px-3 py-2">
-                    {first && !broken.has(i) ? (
-                      <button type="button" onClick={() => setPhotos(r.photos ?? null)}
-                        aria-label={`Fotografie (${r.photos?.length ?? 0}): ${address ?? 'srovnání'}`}
-                        className="block h-[3.375rem] w-[4.5rem] overflow-hidden rounded-[var(--radius-xs)] bg-[var(--color-inset)]">
-                        <img src={first.thumb} alt={address ?? 'Fotka srovnání'} loading="lazy" decoding="async"
-                          onError={() => setBroken((b) => new Set(b).add(i))} className="block h-full w-full object-cover" />
-                      </button>
-                    ) : <span aria-hidden className={NO_PHOTO} />}
-                  </td>
-                  <td className="px-3 py-2 min-w-[10rem] text-[var(--color-ink)]">
-                    {href ? (
-                      <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">
-                        {address ?? 'Inzerát'}
-                      </a>
-                    ) : (address ?? '—')}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-[var(--color-ink-2)]">{optionLabel(fields, 'local_type', r.local_type)}</td>
-                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtArea(r.calc_area)}</td>
-                  <td className={`${num} text-[var(--color-ink)]`}>
-                    {r.sale_price && (
-                      <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)"
-                        className={`mr-1.5 font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
-                    )}
-                    {fmtCzk(r.price)}<Period on={lease && r.price != null} />
-                  </td>
-                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</td>
-                  <td className={`${num} text-[var(--color-ink)]`}>{fmtCzk(r.adjusted_price)}<Period on={lease && r.adjusted_price != null} /></td>
-                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtDistanceM(r.distance)}</td>
-                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtPct(r.score_prct, { digits: 0 })}</td>
-                  <td className={`${num} text-[var(--color-ink-2)]`}>{fmtTomDays(r.days)}</td>
-                </tr>
-              );
-            })}
+            {records.map((r, i) => (
+              <tr key={`${r.id}:${i}`} className="border-b border-[var(--color-rule-soft)] last:border-b-0">
+                {columns.map(([h, cls, cell]) => <td key={h} className={`px-3 py-2 ${cls}`.trim()}>{cell(r, i)}</td>)}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
       {photos && photos.length > 0 && (
         <Suspense fallback={null}>
-          <ImageLightbox images={photos.map(asImage)} startIndex={0} onClose={() => setPhotos(null)} />
+          <ImageLightbox images={photos.map((p, i) => bareImage(i, null, p.full))} startIndex={0} onClose={() => setPhotos(null)} />
         </Suspense>
       )}
     </div>
@@ -427,21 +404,20 @@ function Param({ field: f, value, provenance, issues, onChange }: {
   const text = value == null ? null : String(value);
   const issuesId = useId();
   const invalid = issues.length > 0 ? { 'aria-invalid': true, 'aria-describedby': issuesId } : {};
-  const aria = issues.length > 0 ? { ariaInvalid: true, ariaDescribedBy: issuesId } : {};
   const control =
     f.fixed ? (
-      <p className="py-1.5 text-sm text-[var(--color-ink-2)]">{f.type === 'enum' ? optionLabel([f], f.name, value) : (text ?? '—')}</p>
+      <p className="py-1.5 text-sm text-[var(--color-ink-2)]">{optionLabel([f], f.name, value)}</p>
     ) : f.type === 'text' ? (
       // An empty box is no value: a required one then holds the call.
       <input type="text" aria-label={f.label} value={text ?? ''} maxLength={f.max_length ?? undefined} className={INPUT} {...invalid}
         onChange={(e) => onChange(e.target.value.trim() === '' ? null : e.target.value)} />
     ) : f.type === 'enum' && f.options.length <= 3 ? (
-      <Segmented label={f.label} value={text} onChange={onChange} {...aria}
+      <Segmented label={f.label} value={text} onChange={onChange} aria={invalid}
         options={f.required ? f.options : [{ value: null, label: NONE }, ...f.options]} />
     ) : f.type === 'enum' ? (
-      <SingleSelectDropdown label={f.label} value={text} options={f.options} onChange={onChange} placeholder={NONE} {...aria} />
+      <SingleSelectDropdown label={f.label} value={text} options={f.options} onChange={onChange} placeholder={NONE} aria={invalid} />
     ) : f.type === 'boolean' ? (
-      <Segmented label={f.label} options={BOOL} value={value == null ? null : value ? 'ano' : 'ne'} {...aria}
+      <Segmented label={f.label} options={BOOL} value={value == null ? null : value ? 'ano' : 'ne'} aria={invalid}
         onChange={(v) => onChange(v == null ? null : v === 'ano')} />
     ) : f.type === 'date' ? (
       // Never cleared: a request without its date would meet another day's answer in the dedupe.
@@ -449,16 +425,15 @@ function Param({ field: f, value, provenance, issues, onChange }: {
         className={INPUT} {...invalid} />
     ) : (
       <DecimalField label={f.label} value={typeof value === 'number' ? value : null} onChange={onChange}
-        suffix={f.unit ?? undefined} integer={f.type === 'integer'} {...aria} />
+        suffix={f.unit ?? undefined} integer={f.type === 'integer'} aria={invalid} />
     );
-  const tag = (
-    <span className="inline-flex items-center gap-1.5 text-[0.58rem] tracking-[0.16em] uppercase">
-      <span className={tone}>{word}</span>
-      {provenance?.note && <InfoHint text={provenance.note} className="[&>svg]:h-3 [&>svg]:w-3" />}
-    </span>
-  );
   return (
-    <Field label={f.label} aside={tag}>
+    <Field label={f.label} aside={
+      <span className="inline-flex items-center gap-1.5 text-[0.58rem] tracking-[0.16em] uppercase">
+        <span className={tone}>{word}</span>
+        {provenance?.note && <InfoHint text={provenance.note} className="[&>svg]:h-3 [&>svg]:w-3" />}
+      </span>
+    }>
       <div className={value == null && !f.fixed ? ABSENT : undefined}>{control}</div>
       {issues.length > 0 && <div id={issuesId}>{issues.map((m, k) => <p key={k} className={`mt-1 ${BRICK}`}>{m}</p>)}</div>}
     </Field>

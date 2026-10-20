@@ -40,7 +40,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
 - **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
   exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
-  confirms the lease basis (`lib/valuo.ts` `LEASE_PERIOD`) and whether a house's plot is sent; a per-plan monthly
+  confirms the lease basis (a lease reads as monthly: `ValuoSection` `Price`) and whether a house's plot is sent; a per-plan monthly
   quota counted from the rows before the production token.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)

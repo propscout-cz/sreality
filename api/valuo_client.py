@@ -25,10 +25,7 @@ LOG = logging.getLogger(__name__)
 BASE_URL = "https://api.valuo.com/v1"
 TIMEOUT = (5, 20)  # connect, read — seconds
 COUNTRY_CODE = "cs"  # Valuo's code for Czechia; api/valuo.py refuses every other country before a request exists
-TOKEN_ENV: tuple[tuple[str, str], ...] = (
-    ("VALUO_API_TOKEN", "production"),
-    ("VALUO_SANDBOX_API_TOKEN", "sandbox"),
-)
+TOKEN_ENV = (("VALUO_API_TOKEN", "production"), ("VALUO_SANDBOX_API_TOKEN", "sandbox"))
 DETAIL_LIMIT = 300
 
 # The closed set of ways a call can fail, each with the one sentence the page shows.
@@ -131,7 +128,7 @@ def calculate(cred: Credential, request: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise _failed("invalid_response", 200)
     result = body.get("result")
-    if not isinstance(result, dict) or not _is_number(result.get("avg_price")):
+    if not isinstance(result, dict) or type(result.get("avg_price")) not in (int, float):  # a bool is no price
         raise _failed("no_price", 200, body)
     return body
 
@@ -142,10 +139,6 @@ def advert_details(cred: Credential, ids: list[Any]) -> list[Any]:
     if not isinstance(body, list):
         raise _failed("invalid_response", 200)
     return body
-
-
-def _is_number(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _failed(code: str, status: int | None, response: Any = None) -> ValuoError:

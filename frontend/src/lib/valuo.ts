@@ -52,9 +52,6 @@ export type ValuoPage = {
 };
 export type ValuoRun = { reused: boolean; valuation: Valuation };
 
-/* UNVERIFIED until the sandbox probe (P1): a lease price reads as MONTHLY, as the server's lease basis does. */
-export const LEASE_PERIOD = '/měs';
-
 /* The overrides a POST sends: only the user's changes from the defaults, null where one was cleared. */
 export function withEdit(edits: ValuoValues, defaults: ValuoValues, name: string, value: ValuoValue): ValuoValues {
   const rest = { ...edits };

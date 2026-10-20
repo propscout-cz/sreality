@@ -170,6 +170,12 @@ export interface ImagePublic {
    * cover); NULL when the active model has not scored the photo. */
   tag_head_scores?: Record<string, number> | null;
 }
+/* A photo for the shared lightbox without an image row's CLIP/pHash facts (its badges self-guard on null):
+ * a stored copy by `storage_path`, or an outside photo by its own URL. */
+export const bareImage = (id: number, storage_path: string | null, sreality_url = ''): ImagePublic => ({
+  id, sreality_id: 0, sequence: null, sreality_url, storage_path,
+  clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
+});
 
 /* Distributional shape — drawn by components/estimation/RangeStrip. */
 

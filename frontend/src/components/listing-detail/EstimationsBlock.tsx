@@ -15,13 +15,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   estimationKeys,
   fetchEstimationsForListings,
-  propertyRunIds,
   submitEstimation,
 } from '@/lib/queries';
+import { sortedIds } from '@/lib/hydration/keys';
 import { ApiError } from '@/lib/api';
 import { buildRerunPayload, type RerunInput } from '@/lib/rerun';
 import { fmtCzk, fmtPct, fmtRelative } from '@/lib/format';
-import EstimateCard from '@/components/estimation/EstimateCard';
+import EstimateCard, { PerMonth } from '@/components/estimation/EstimateCard';
 import { MfReferenceCard, YieldFigure } from '@/components/estimation/MfReferenceCard';
 import RunHistory, { type HistoryColumn } from '@/components/estimation/RunHistory';
 import { mfShape } from '@/lib/mfReference';
@@ -63,7 +63,7 @@ export default function EstimationsBlock({
   bare?: boolean;
   label?: string;
 }) {
-  const ids = useMemo(() => propertyRunIds(listingIds), [listingIds]);
+  const ids = useMemo(() => sortedIds(listingIds), [listingIds]);
 
   const runsQ = useQuery<EstimationListResponse, Error>({
     queryKey: estimationKeys.byListing(ids),
@@ -210,6 +210,7 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
   const kind = run.estimate_kind ?? 'rent';
   const isSale = kind === 'sale';
   const value = isSale ? run.estimated_sale_price_czk : run.estimated_monthly_rent_czk;
+  const [p25, p75] = isSale ? [run.sale_p25_czk, run.sale_p75_czk] : [run.rent_p25_czk, run.rent_p75_czk];
   const inFlight = run.status === 'pending' || run.status === 'running';
 
   return (
@@ -225,9 +226,7 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
           ) : value != null ? (
             <>
               {fmtCzk(value)}
-              {!isSale && (
-                <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>
-              )}
+              {!isSale && <PerMonth />}
             </>
           ) : (
             <span className="text-[var(--color-ink-3)]">—</span>
@@ -237,14 +236,9 @@ function RunSummaryCard({ run }: { run: EstimationRun }) {
           <YieldFigure>{fmtPct(run.gross_yield_pct, { digits: 2 })}</YieldFigure>
         )}
       </div>
-      {(run.rent_p25_czk != null && run.rent_p75_czk != null && !isSale) && (
+      {p25 != null && p75 != null && (
         <p className="mt-1.5 text-[0.72rem] text-[var(--color-ink-3)] tabular-nums">
-          rozpětí {fmtCzk(run.rent_p25_czk)} – {fmtCzk(run.rent_p75_czk)}
-        </p>
-      )}
-      {(run.sale_p25_czk != null && run.sale_p75_czk != null && isSale) && (
-        <p className="mt-1.5 text-[0.72rem] text-[var(--color-ink-3)] tabular-nums">
-          rozpětí {fmtCzk(run.sale_p25_czk)} – {fmtCzk(run.sale_p75_czk)}
+          rozpětí {fmtCzk(p25)} – {fmtCzk(p75)}
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">

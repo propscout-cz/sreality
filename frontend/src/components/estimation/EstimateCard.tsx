@@ -25,6 +25,9 @@ export default function EstimateCard({ eyebrow, aside, tone = 'plain', className
   );
 }
 
+/* A monthly figure's unit, muted after its number. */
+export const PerMonth = () => <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>;
+
 /* One label/value line of a card's breakdown; `strong` is its total, over a rule. */
 export function CardRow({ label, strong = false, children }: { label: string; strong?: boolean; children: ReactNode }) {
   return (
