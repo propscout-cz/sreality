@@ -26,6 +26,7 @@ import { MemoryRouter } from 'react-router-dom';
 import NewDedupDashboard from './NewDedupDashboard';
 import * as api from '@/lib/api';
 import { LOCATION_STEPS } from '@/lib/locationSteps';
+import { expectNoNestedInteractive } from '@/test/a11y';
 import type * as waterfall from '@/lib/locationWaterfall';
 import type {
   NewDedupCandidateOverview,
@@ -173,6 +174,7 @@ describe('<NewDedupDashboard>', () => {
     /* The loss comes from the payload, never from a subtraction here. */
     expect(step('with_verdict')).toHaveTextContent('Lost at this step: 100');
     expect(step('located_town')).toHaveTextContent('Lost at this step: 30');
+    expectNoNestedInteractive(document.body);
   });
 
   it('prints abroad as an answer under "has a location", never as a loss', async () => {

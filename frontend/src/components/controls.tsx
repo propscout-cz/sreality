@@ -37,10 +37,10 @@ export function CollapsibleGroup({
           aria-expanded={open}
           aria-controls={panelId}
           aria-describedby={showActive ? activeHintId : undefined}
-          className="group flex w-full items-center gap-2.5 py-4 text-left"
+          className="group flex w-full items-center gap-2.5 pt-5 pb-4 text-left"
         >
           <span
-            className="text-[0.85rem] tracking-[0.15em] uppercase font-semibold text-[var(--color-ink)]"
+            className="text-[1.125rem] leading-tight tracking-[-0.005em] font-semibold text-[var(--color-ink)]"
             style={{ fontFamily: 'var(--font-display)' }}
           >
             {title}

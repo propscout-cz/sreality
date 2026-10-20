@@ -58,7 +58,7 @@ import type { FilterPreset } from '@/lib/types';
 import BottomSheet from './BottomSheet';
 import DayRule from './DayRule';
 import { NO_FOCUS_ZOOM } from './chips';
-import { filtersBeyond, sheetBands, type SheetGroup, type SheetRow } from './filterRows';
+import { filtersBeyond, sheetBands, type SheetRow } from './filterRows';
 import { rowWords } from './filterSummary';
 import { ChevronDownIcon, ChevronIcon } from './phoneIcons';
 
@@ -237,11 +237,8 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
         {sheetBands(draft).map((band) => (
           <section key={band.title} aria-label={band.title}>
             <DayRule label={band.title} />
-            {band.groups.map((g) => (
-              <div key={g.title} role="group" aria-label={g.title}>
-                {captioned(g) && (
-                  <p className="px-4 pb-1 pt-2 text-[12px] text-[var(--color-ink-3)]">{g.title}</p>
-                )}
+            {band.groups.map((g, gi) => (
+              <div key={gi}>
                 {g.rows.map((row) =>
                   row.kind === 'custom' && row.block.key === 'districts' ? (
                     <Row
@@ -281,10 +278,10 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
       {/* The place typeahead in a tall sheet of its own, field at the top, so
         * its suggestions open above the keyboard (the brokers' place sheet). */}
       {placeOpen && (
-        <BottomSheet label="District" onClose={() => setPlaceOpen(false)}>
+        <BottomSheet label="Location" onClose={() => setPlaceOpen(false)}>
           <div className={`min-h-[70dvh] px-4 pt-3 ${NO_FOCUS_ZOOM}`}>
             <LocationTypeahead
-              label="District"
+              label="Location"
               value={draft.districts}
               onChange={(next) => merge({ districts: next ?? [] })}
             />
@@ -304,9 +301,6 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
     </BottomSheet>
   );
 }
-
-/* A group's own caption, unless its one row already says the same words. */
-const captioned = (g: SheetGroup): boolean => !(g.rows.length === 1 && g.rows[0].label === g.title);
 
 function Row({
   rowKey,

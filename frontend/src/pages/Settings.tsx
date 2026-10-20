@@ -54,6 +54,7 @@ import { fmtAbsolute } from '@/lib/format';
 import { cachePatch, useOptimisticWrite } from '@/lib/useOptimisticWrite';
 import { useTheme, type ThemeMode } from '@/lib/theme';
 import { PickButton, Switch, Field } from '@/components/controls';
+import ErrorBanner from '@/components/ErrorBanner';
 import TiersSection from '@/components/TiersSection';
 import { useWorkflowDocs, type WorkflowDoc } from '@/lib/workflowDocs';
 import {
@@ -62,7 +63,6 @@ import {
   InfoHint,
   InfoModeToggle,
   useInfoMode,
-  ErrorBanner,
 } from '@/components/settings/SectionChrome';
 
 export default function Settings() {
@@ -282,10 +282,10 @@ function SkillsSection({ infoExpanded }: { infoExpanded: boolean }) {
   const toolsQ = useQuery({ queryKey: ['admin', 'tools'], queryFn: listAgentTools });
 
   if (skillsQ.error) {
-    return <ErrorBanner message={skillsQ.error.message} />;
+    return <ErrorBanner message={skillsQ.error.message} flush />;
   }
   if (toolsQ.error) {
-    return <ErrorBanner message={toolsQ.error.message} />;
+    return <ErrorBanner message={toolsQ.error.message} flush />;
   }
   if (!skillsQ.data || !toolsQ.data) {
     return <p className="text-sm text-[var(--color-ink-3)]">Loading skills…</p>;
@@ -547,7 +547,7 @@ function LimitInput({
 
 function DeliverySection({ infoExpanded }: { infoExpanded: boolean }) {
   const q = useQuery({ queryKey: ['admin', 'app_settings'], queryFn: listAppSettings });
-  if (q.error) return <ErrorBanner message={q.error.message} />;
+  if (q.error) return <ErrorBanner message={q.error.message} flush />;
   if (!q.data)
     return <p className="text-sm text-[var(--color-ink-3)]">Loading…</p>;
   const val = (key: string) => {
@@ -667,7 +667,7 @@ function RecipientField({
 
 function AppSettingsSection({ infoExpanded }: { infoExpanded: boolean }) {
   const q = useQuery({ queryKey: ['admin', 'app_settings'], queryFn: listAppSettings });
-  if (q.error) return <ErrorBanner message={q.error.message} />;
+  if (q.error) return <ErrorBanner message={q.error.message} flush />;
   if (!q.data) return <p className="text-sm text-[var(--color-ink-3)]">Loading app settings…</p>;
   return (
     <div className="space-y-2">
@@ -867,7 +867,7 @@ function ConditionRegionsSection() {
     onError: (err) => setError(err.message),
   });
 
-  if (q.error) return <ErrorBanner message={q.error.message} />;
+  if (q.error) return <ErrorBanner message={q.error.message} flush />;
   if (!q.data) {
     return <p className="text-sm text-[var(--color-ink-3)]">Loading kraje…</p>;
   }
@@ -932,7 +932,7 @@ function ClipRegionsSection() {
     onError: (err) => setError(err.message),
   });
 
-  if (q.error) return <ErrorBanner message={q.error.message} />;
+  if (q.error) return <ErrorBanner message={q.error.message} flush />;
   if (!q.data) {
     return <p className="text-sm text-[var(--color-ink-3)]">Loading kraje…</p>;
   }
@@ -1395,7 +1395,7 @@ function FilterVisibilitySection({ infoExpanded }: { infoExpanded: boolean }) {
     pendingKey: ({ agenda, filterId }) => `${agenda}|${filterId}`,
   });
 
-  if (schemaQ.error) return <ErrorBanner message={schemaQ.error.message} />;
+  if (schemaQ.error) return <ErrorBanner message={schemaQ.error.message} flush />;
   if (!schemaQ.data) {
     return <p className="text-sm text-[var(--color-ink-3)]">Loading filter registry…</p>;
   }
@@ -1519,8 +1519,3 @@ function FilterCategoryRows({
     </>
   );
 }
-
-/* -------------------------------------------------------------------- */
-/* Shared                                                                */
-/* -------------------------------------------------------------------- */
-

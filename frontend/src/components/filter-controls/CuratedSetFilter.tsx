@@ -10,16 +10,14 @@
  * yet" (MS16). What a choice MEANS is lib/setScope + migration 629. */
 
 import type { ReactElement, ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 
 import { PickButton } from '@/components/controls';
 import PipelineMark from '@/components/PipelineMark';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
-import { listTags } from '@/lib/api';
+import { useTagReads } from '@/lib/useCardTags';
 import { collectionLabel, isMine, useCollections } from '@/lib/collectionCache';
 import { usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
-import { curationKeys } from '@/lib/queries';
 import {
   CURATED_SETS,
   cycleSet,
@@ -210,7 +208,7 @@ interface AccountProps {
 }
 
 function AccountTags(p: AccountProps) {
-  const q = useQuery({ queryKey: curationKeys.tags, queryFn: listTags, staleTime: 60_000 });
+  const { tagsQ: q } = useTagReads({ members: false });
   return <CuratedSetFilter set="tags" elements={(q.data?.data ?? []).map(tagElement)} query={q} {...p} />;
 }
 

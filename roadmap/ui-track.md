@@ -7,6 +7,27 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Browse filter layout (2026-10-20, no migration)
+- **Shipped: the sidebar the operator arranged** (drag-and-drop draft, 2026-10-20). Four bands —
+  Essentials, Curation, Velocity & price activity, Advanced — with one heading level (the group
+  captions are gone on desktop and phone; `lib/filterLayout` rows), bigger band titles, and the
+  header (Reset, fold arrow) pinned while the filters scroll. Status and "Seen at birth" (was
+  "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
+  defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
+  own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+- **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
+  model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
+  entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
+  rule 14).
+
+### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
+- **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and
+  boards shared with me (per device, `lib/acting`), a shared board renders inside `<ActingAs>` (read:
+  board only; edit: drag, stages, trash as the owner; the phone moves cards through the stage sheet),
+  one `ShareBlock` serves the pipeline and collection pages, the desktop property page offers "Upravit
+  jako {email}" with an in-page banner, and delegated edits carry one stamp
+  (`lib/delegatedStamp`). Detail: `roadmap/operator-workflow-track.md` U-PIPE-SHARE.
+
 ### Stats dashboard (2026-10-19, migration 626)
 - **Shipped: Browse › Stats is a dashboard the user composes** (`docs/design/stats-dashboard.md`,
   operator rulings 2026-10-19). Charts = rows (up to six nested dimensions) × one column × a measure
@@ -485,6 +506,9 @@ End-to-end browser flow over the U1b backend.
   notifications, the estimation subject and comparables, the extension
   label; a CHECK keeps both pointers NULL together (migration 636). Pin
   and card name one place: ~10.8k rings become dots.
+- ONE PIN follow-up (ruled 2026-10-20): the Browse tab, its empty state
+  and the filter summary say "properties" — the count was always
+  properties, only the map pill had been renamed by W1.
 
 ### Chart axis unification (done)
 

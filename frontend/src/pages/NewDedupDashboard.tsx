@@ -18,7 +18,6 @@
  * would read as "we ran it and it was free".
  */
 
-import { type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 
@@ -29,6 +28,7 @@ import {
 } from '@/lib/api';
 import CandidateFunnel from '@/components/new-dedup/CandidateFunnel';
 import ErrorBanner from '@/components/ErrorBanner';
+import Panel from '@/components/Panel';
 import Spinner from '@/components/Spinner';
 import { ROUTES } from '@/lib/routes';
 import { fmtAbsolute, fmtCount, fmtUsd } from '@/lib/format';
@@ -43,20 +43,6 @@ const ROW = 'border-t border-[var(--color-rule-soft)]';
 /* The one phrase this page uses for "we have not measured this yet". Never a
  * zero, never a dash that could be read as "none". */
 const NOT_YET = 'not yet';
-
-function Card({ title, lede, children }: { title: string; lede: string; children: ReactNode }) {
-  return (
-    <section className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-5 py-4">
-      <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-        {title}
-      </h2>
-      <p className="mt-2 text-[0.78rem] leading-relaxed text-[var(--color-ink-2)] max-w-[52rem]">
-        {lede}
-      </p>
-      <div className="mt-3">{children}</div>
-    </section>
-  );
-}
 
 /* ------------------------------------------------------------- wave strip */
 
@@ -202,14 +188,14 @@ export default function NewDedupDashboard() {
       </header>
 
       <div className="mt-5 space-y-4">
-        <Card
+        <Panel
           title="Where the program is"
           lede="The program is built in waves, each one ending at a gate you either accept or refuse. A wave is not started until the wave before it has been signed off."
         >
           <WaveStrip />
-        </Card>
+        </Panel>
 
-        <Card
+        <Panel
           title="What the program can see"
           lede="How many listings survive each narrowing on the way to becoming a candidate — a pair of listings worth comparing. This is the same readout the Candidates page opens with, over the newest finished candidate run."
         >
@@ -245,9 +231,9 @@ export default function NewDedupDashboard() {
               </p>
             </>
           )}
-        </Card>
+        </Panel>
 
-        <Card
+        <Panel
           title="What it will cost"
           lede="The two spend knobs that are set today, beside what has actually been spent. Levels 3 and 4 have not run, so both amounts say “not yet” rather than showing a zero — a zero would read as a measured result."
         >
@@ -267,7 +253,7 @@ export default function NewDedupDashboard() {
             </span>
             .
           </p>
-        </Card>
+        </Panel>
       </div>
     </div>
   );

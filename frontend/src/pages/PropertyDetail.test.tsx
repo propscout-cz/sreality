@@ -16,6 +16,10 @@ import * as auth from '@/lib/auth';
 import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtCzk } from '@/lib/format';
+import { act } from '@testing-library/react';
+import { getActiveBoard, resetActiveBoard, setActiveBoard, setEditAsOwner } from '@/lib/acting';
+import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
+import type { PipelineShare } from '@/lib/types';
 import type { ListingPublic, PropertySource } from '@/lib/types';
 
 /* The curation reads (header controls, curation block) answer empty, so every
@@ -30,6 +34,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     listCollections: vi.fn(empty),
     listTags: vi.fn(empty),
     listPropertyNotes: vi.fn(empty),
+    listPipelineShares: vi.fn(async () => ({ shared_with: [], shared_with_me: [] })),
+    fetchArtifactLinks: vi.fn(async () => new Map()),
+    addPipelineCard: vi.fn(async () => ({ property_id: 774, stage_key: 'review', added: true })),
   };
 });
 
@@ -160,6 +167,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPropertyCollectionMemberSet: vi.fn(async () => new Map()),
     fetchPropertyTagIds: vi.fn(async () => []),
     fetchIsDismissed: vi.fn(async () => false),
+    fetchPropertyTagMemberSet: vi.fn(async () => new Map()),
   };
 });
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -571,5 +579,184 @@ describe('<BrokerList>', () => {
     renderListing();
     expect(await screen.findByText('z neaktivních inzerátů')).toBeInTheDocument();
     expect(screen.getByText('Eva Malá')).toBeInTheDocument();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Upravit jako {email} (design §3.5, §8-4, §8-10)                            */
+/* -------------------------------------------------------------------------- */
+
+const EDIT_BOARD: PipelineShare = { account_id: 'owner-1', email: 'owner@x.cz', mode: 'edit' };
+const READ_BOARD: PipelineShare = { account_id: 'owner-2', email: 'reader@x.cz', mode: 'read' };
+
+describe('<PropertyDetail> edit as the pipeline owner', () => {
+  beforeEach(() => {
+    resetActiveBoard();
+    vi.mocked(api.listPipelineShares).mockReset().mockResolvedValue({
+      shared_with: [],
+      shared_with_me: [EDIT_BOARD, READ_BOARD],
+    });
+    for (const fn of [
+      queries.fetchPipelineMembers,
+      queries.fetchIsDismissed,
+      queries.fetchPropertyTagMemberSet,
+      queries.fetchPropertyCollectionMemberSet,
+      api.listPropertyNotes,
+      api.listCollections,
+      api.listTags,
+      api.fetchArtifactLinks,
+      api.addPipelineCard,
+    ]) {
+      vi.mocked(fn).mockClear();
+    }
+  });
+
+  const toggle = () => screen.queryByRole('button', { name: 'Upravit jako owner@x.cz' });
+  const banner = () => screen.queryByText(/^Upravujete jako/);
+  const actedAs = (owner: string) =>
+    vi.mocked(queries.fetchPipelineMembers).mock.calls.some(([o]) => o?.actAs === owner);
+
+  it('offers nothing on my own board, and reads no share list', async () => {
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+    expect(toggle()).toBeNull();
+    expect(api.listPipelineShares).not.toHaveBeenCalled();
+  });
+
+  it('offers nothing while the active board is a read share', async () => {
+    act(() => setActiveBoard(READ_BOARD));
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+    await waitFor(() => expect(api.listPipelineShares).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /^Upravit jako/ })).toBeNull();
+  });
+
+  it('acts as the owner only once switched on, with the banner under the header', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    const button = await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    expect(banner()).toBeNull();
+    await waitFor(() => expect(queries.fetchPipelineMembers).toHaveBeenCalled());
+    expect(actedAs('owner-1')).toBe(false);
+
+    fireEvent.click(button);
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(banner()).toHaveTextContent('Upravujete jako owner@x.cz');
+    // The header's pipeline control and the curation block read as the owner.
+    await waitFor(() => expect(actedAs('owner-1')).toBe(true));
+    await waitFor(() =>
+      expect(api.listPropertyNotes).toHaveBeenCalledWith(774, { actAs: 'owner-1' }));
+    // Every curation control is inside the wrapper: save, dismiss, tags, link.
+    const OWNER = { actAs: 'owner-1' };
+    await waitFor(() => expect(api.listCollections).toHaveBeenCalledWith(OWNER));
+    await waitFor(() => expect(queries.fetchIsDismissed).toHaveBeenCalledWith(774, OWNER));
+    await waitFor(() => expect(api.listTags).toHaveBeenCalledWith(OWNER));
+    await waitFor(() =>
+      expect(queries.fetchPropertyTagMemberSet).toHaveBeenCalledWith(expect.objectContaining(OWNER)));
+    await waitFor(() => expect(api.fetchArtifactLinks).toHaveBeenCalledWith(OWNER));
+    // Ruling 4: the property is added to the OWNER's board from here.
+    fireEvent.click(await screen.findByRole('button', { name: /Přidat do pipeline/ }));
+    await waitFor(() => expect(api.addPipelineCard).toHaveBeenCalledWith(774, OWNER));
+  });
+
+  it('stays on across property pages until Ukončit', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    const first = renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    first.unmount();
+
+    // Another property page, a fresh mount: still acting.
+    renderAt('/property/775');
+    expect(await screen.findByText(/^Upravujete jako/)).toBeInTheDocument();
+    await waitFor(() => expect(api.listPropertyNotes).toHaveBeenCalledWith(775, { actAs: 'owner-1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ukončit' }));
+    expect(banner()).toBeNull();
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('ends when the active board goes back to my own', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    expect(banner()).not.toBeNull();
+    act(() => resetActiveBoard());
+    expect(banner()).toBeNull();
+    expect(toggle()).toBeNull();
+  });
+
+  it('ends on a switch to another owner\'s edit board — never acts as the first one there', async () => {
+    const OTHER: PipelineShare = { account_id: 'owner-3', email: 'other@x.cz', mode: 'edit' };
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [EDIT_BOARD, OTHER] });
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    expect(banner()).not.toBeNull();
+    act(() => setActiveBoard(OTHER));
+    expect(banner()).toBeNull();
+    expect(await screen.findByRole('button', { name: 'Upravit jako other@x.cz' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('ends, and offers nothing, once the owner lowers the share to read', async () => {
+    act(() => setActiveBoard(EDIT_BOARD));
+    const view = renderAt('/property/774');
+    fireEvent.click(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' }));
+    view.unmount();
+    vi.mocked(api.listPipelineShares).mockResolvedValue({
+      shared_with: [],
+      shared_with_me: [{ ...EDIT_BOARD, mode: 'read' }],
+    });
+    renderAt('/property/774');
+    await waitFor(() => expect(getActiveBoard()?.mode).toBe('read'));
+    expect(banner()).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Upravit jako/ })).toBeNull();
+  });
+
+  it('offers nothing before the server confirms the remembered board', async () => {
+    let answer!: (v: { shared_with: PipelineShare[]; shared_with_me: PipelineShare[] }) => void;
+    vi.mocked(api.listPipelineShares).mockReturnValue(new Promise((r) => (answer = r)));
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    await screen.findByRole('heading', { level: 1 });
+    expect(toggle()).toBeNull();
+    act(() => answer({ shared_with: [], shared_with_me: [EDIT_BOARD] }));
+    expect(await screen.findByRole('button', { name: 'Upravit jako owner@x.cz' })).toBeInTheDocument();
+  });
+
+  it('offers nothing on the phone, and reads no share list there (ruling 6)', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === PHONE_SHELL_QUERY,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      act(() => setActiveBoard(EDIT_BOARD));
+      act(() => setEditAsOwner(true));
+      renderAt('/property/774');
+      await waitFor(() => expect(queries.fetchProperty).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.queryByRole('button', { name: /^Upravit jako/ })).toBeNull();
+      expect(banner()).toBeNull();
+      expect(api.listPipelineShares).not.toHaveBeenCalled();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('drops a revoked board instead of offering to act on it', async () => {
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
+    act(() => setActiveBoard(EDIT_BOARD));
+    renderAt('/property/774');
+    await waitFor(() => expect(getActiveBoard()).toBeNull());
+    expect(toggle()).toBeNull();
   });
 });

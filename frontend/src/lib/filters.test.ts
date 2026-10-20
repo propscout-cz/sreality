@@ -334,11 +334,14 @@ describe('nullable deal type', () => {
     expect(fromSearchParams(toSearchParams(f)).categoryType).toBeNull();
   });
 
-  it('keeps an ABSENT param meaning the pronajem default', () => {
-    // The empty URL must stay byte-identical to DEFAULT_FILTERS — a bare
-    // /browse link is unchanged by making the field nullable.
-    expect(fromSearchParams(new URLSearchParams()).categoryType).toBe('pronajem');
+  it('reads an ABSENT param as the prodej default, and writes pronajem out', () => {
+    // The empty URL stays byte-identical to DEFAULT_FILTERS; since 2026-10-20
+    // that default is Prodej, so a rent cohort names its deal in the link.
+    expect(fromSearchParams(new URLSearchParams()).categoryType).toBe('prodej');
     expect(toSearchParams(DEFAULT_FILTERS).has('deal')).toBe(false);
+    const rent = toSearchParams({ ...DEFAULT_FILTERS, categoryType: 'pronajem' });
+    expect(rent.get('deal')).toBe('pronajem');
+    expect(fromSearchParams(rent).categoryType).toBe('pronajem');
   });
 
   it('drops the deal phrase from the headline instead of printing null', () => {
@@ -821,7 +824,7 @@ describe('watchdogNameSuggestion', () => {
   });
 
   it('falls back to just the category when nothing else is set', () => {
-    expect(watchdogNameSuggestion(DEFAULT_FILTERS)).toBe('byt pronajem');
+    expect(watchdogNameSuggestion(DEFAULT_FILTERS)).toBe('byt prodej');
   });
 });
 

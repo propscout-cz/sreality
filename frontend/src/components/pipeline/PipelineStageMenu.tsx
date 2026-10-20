@@ -25,11 +25,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-
 import AnchoredPopover from '@/components/AnchoredPopover';
 import { CheckIcon } from '@/components/phone/phoneIcons';
-import { fetchPipelineStages, pipelineKeys } from '@/lib/queries';
+import { usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 import type { PipelineStage } from '@/lib/types';
@@ -127,11 +125,7 @@ export function PipelineStageMenuBody({
 }: PipelineStageMenuBodyProps) {
   const cls = SIZES[size];
   const sheet = size === 'sheet';
-  const stagesQ = useQuery({
-    queryKey: pipelineKeys.stages,
-    queryFn: fetchPipelineStages,
-    staleTime: 60_000,
-  });
+  const stagesQ = usePipelineStages();
   const stages = useMemo(() => stagesQ.data ?? [], [stagesQ.data]);
   const { move, remove, pending: pendingFor } = usePipelineCard();
   const pending = pendingFor(property_id);

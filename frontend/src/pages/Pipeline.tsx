@@ -1,5 +1,5 @@
-import { Suspense, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
   DragOverlay,
@@ -14,17 +14,30 @@ import {
 import {
   archivePipelineStage,
   createPipelineStage,
-  listTags,
   reorderPipelineStages,
+  sharePipeline,
+  unsharePipeline,
   updatePipelineStage,
 } from '@/lib/api';
-import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import {
-  curationKeys,
-  fetchPropertyTagMemberSet,
-  matchesDistricts,
-  pipelineKeys,
-} from '@/lib/queries';
+  ActingAs,
+  actingKey,
+  actOpts,
+  resetActiveBoard,
+  SHARE_MODE_LABEL,
+  shareOwnerName,
+  useActAs,
+  useActingReadOnly,
+  type ActiveBoard,
+} from '@/lib/acting';
+import { revalidatePipelineShares, useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
+import { useTagReads } from '@/lib/useCardTags';
+import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import ShareBlock from '@/components/ShareBlock';
+import { TwoStep } from '@/components/TwoStep';
+import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
+import DelegatedStamp from '@/components/DelegatedStamp';
 import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
 import {
@@ -72,6 +85,8 @@ import { usePipelineViewState } from '@/lib/pipelineState';
 import { useCityQuality, type CityQualityByObec } from '@/lib/useCityQuality';
 import {
   type PipelineBoardCard,
+  type PipelineShare,
+  type PipelineShares,
   type PipelineStage,
   type TagColor,
 } from '@/lib/types';
@@ -113,8 +128,37 @@ export default function Pipeline() {
   );
 }
 
+/* The active board (lib/acting, design §3.5): "Můj pipeline", or a board
+ * shared with me rendered inside <ActingAs> — every read and write below is
+ * then the owner's. Keyed by the board, so a switch starts the page afresh (no
+ * stage editor left open over someone else's board). */
 function PipelineBoardPage() {
+  const { active, sharesQ } = useBoardSelection();
+  /* A collection / tag scope names one account's set ids: on another board
+   * they would match the owner's sets by accident, or empty every column. Any
+   * change of board (the switcher, a revoke, a leave) drops both. */
+  const { clearScopes } = usePipelineViewState();
+  const board = active?.account_id ?? null;
+  const shownBoard = useRef(board);
+  useEffect(() => {
+    if (shownBoard.current === board) return;
+    shownBoard.current = board;
+    clearScopes();
+  }, [board, clearScopes]);
+  return (
+    <ActingAs share={active}>
+      <BoardPage key={active?.account_id ?? 'own'} active={active} shares={sharesQ.data ?? null} />
+    </ActingAs>
+  );
+}
+
+function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineShares | null }) {
+  /* A read share sees the board only (ruling 2): no drag, stage menu, trash or
+   * stage editor, and no tag / collection decorations — the owner's curation is
+   * not readable under it, so those reads are not even made. */
+  const readOnly = useActingReadOnly();
   const [manage, setManage] = useState(false);
+  const [sharing, setSharing] = useState(false);
   /* Filters AND sort live in the URL (lib/pipelineState) using Browse's own
    * param vocabulary, so a filtered/sorted board is linkable and survives a
    * reload. `manage` stays local — it's a transient editor toggle, not a view. */
@@ -140,18 +184,11 @@ function PipelineBoardPage() {
 
   /* The two curation lenses (rule #18), on the keys the rest of the app
    * already shares — the board pays for them only on a cold visit. */
-  const { collections, query: collectionsQ } = useCollections();
-  const membersQ = useCollectionMembers();
-  const tagsQ = useQuery({
-    queryKey: curationKeys.tags,
-    queryFn: listTags,
-    staleTime: 60_000,
-  });
-  const tagMembersQ = useQuery({
-    queryKey: curationKeys.propertyTagMembers,
-    queryFn: fetchPropertyTagMemberSet,
-    staleTime: 30_000,
-  });
+  const { collections, query: collectionsQ } = useCollections({ enabled: !readOnly });
+  const membersQ = useCollectionMembers({ enabled: !readOnly });
+  const { tagsQ, membersQ: tagMembersQ } = useTagReads({ enabled: !readOnly });
+
+  useSharedBoardGuard(active, stagesQ.data);
   /* Undefined while loading or errored — NOT an empty map (the fail-open
    * contract, docs/architecture.md rule #22). */
   const members = membersQ.data;
@@ -254,6 +291,7 @@ function PipelineBoardPage() {
           >
             Pipeline obchodů
           </h1>
+          {active != null && <ViewerLine share={active} />}
         </div>
         <div className="flex items-center gap-4">
           <p className="text-[0.75rem] tracking-wide text-[var(--color-ink-3)] font-mono tabular-nums">
@@ -277,18 +315,44 @@ function PipelineBoardPage() {
               Reset
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setManage((v) => !v)}
-            aria-pressed={manage}
-            className="text-[0.72rem] tracking-[0.1em] uppercase px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)]"
-          >
-            {manage ? 'Hotovo' : 'Spravovat fáze'}
-          </button>
+          {/* Sharing is always my own board's (never delegated): not on a shared one. */}
+          {active == null && (
+            <button
+              type="button"
+              onClick={() => setSharing((v) => !v)}
+              aria-pressed={sharing}
+              className={HEADER_BUTTON}
+            >
+              {sharing
+                ? 'Hotovo'
+                : shares && shares.shared_with.length > 0
+                  ? `Sdílení · ${shares.shared_with.length}`
+                  : 'Sdílení'}
+            </button>
+          )}
+          {/* An edit share manages the owner's stages as the owner (ruling 3). */}
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setManage((v) => !v)}
+              aria-pressed={manage}
+              className={HEADER_BUTTON}
+            >
+              {manage ? 'Hotovo' : 'Spravovat fáze'}
+            </button>
+          )}
         </div>
       </header>
 
-      {manage && stages.length > 0 && <StageManager stages={stages} />}
+      <BoardSwitcher boards={shares?.shared_with_me ?? []} active={active} />
+
+      {sharing && active == null && (
+        <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
+          <PipelineSharing shares={shares} />
+        </section>
+      )}
+
+      {manage && !readOnly && stages.length > 0 && <StageManager stages={stages} />}
 
       <div className="mt-5 flex flex-col gap-3">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
@@ -418,6 +482,67 @@ function PipelineBoardPage() {
         </CardHydrationProvider>
       )}
     </div>
+  );
+}
+
+const HEADER_BUTTON =
+  'text-[0.72rem] tracking-[0.1em] uppercase px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)]';
+
+/* A board shared with me: whose it is, in which mode, and the one write a
+ * recipient has on it — leaving (its own grant), which also puts this device
+ * back on my own board. Never acts: the leave is the caller's own. */
+function ViewerLine({ share }: { share: PipelineShare }) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const leave = useMutation({
+    mutationFn: () => unsharePipeline(share.account_id, 'shared_with_me'),
+    onSuccess: () => {
+      void revalidatePipelineShares(qc);
+      resetActiveBoard();
+    },
+    /* Its failure shows under the line; an onError keeps the global toast off it. */
+    onError: () => {},
+  });
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+      <p className="text-[0.8rem] text-[var(--color-ink-2)]">
+        sdílí <span className="text-[var(--color-ink)]">{shareOwnerName(share)}</span>
+        <span className="text-[var(--color-ink-4)]"> · {SHARE_MODE_LABEL[share.mode]}</span>
+      </p>
+      <TwoStep
+        idle="Odebrat z mého seznamu"
+        confirm={leave.isPending ? 'Odebírám…' : 'Odebrat'}
+        cancel="Zrušit"
+        confirming={confirming}
+        setConfirming={setConfirming}
+        pending={leave.isPending}
+        onConfirm={() => leave.mutate()}
+      />
+      {leave.error && (
+        <p className="w-full text-[0.75rem] text-[var(--color-brick)]">{leave.error.message}</p>
+      )}
+    </div>
+  );
+}
+
+/* My board's Sharing block: the one ShareBlock, with a mode per share. A POST
+ * answers both lists, so it lands in the cache as is. */
+function PipelineSharing({ shares }: { shares: PipelineShares | null }) {
+  const qc = useQueryClient();
+  return (
+    <ShareBlock
+      title="Sdílení"
+      lang="cs"
+      modes
+      description="Komu pipeline nasdílíte, uvidí jeho fáze a karty. S přístupem Úpravy může karty přesouvat a fáze spravovat, a na stránce nemovitosti upravovat jako vy štítky, kolekce, poznámky a odkaz. Odhady, hlídače, předvolby a vyúčtování zůstávají vaše."
+      recipients={shares?.shared_with ?? []}
+      onShare={(email, mode) =>
+        sharePipeline(email, mode ?? 'read').then((next) => qc.setQueryData(pipelineShareKeys.all, next))
+      }
+      onRevoke={(account_id) =>
+        unsharePipeline(account_id, 'shared_with').then(() => revalidatePipelineShares(qc))
+      }
+    />
   );
 }
 
@@ -575,6 +700,9 @@ export function planMove(
   return { propertyId, stageId };
 }
 
+/* No sensor, no drag: a read-only board's DndContext never starts one. */
+const NO_SENSORS: ReturnType<typeof useSensors> = [];
+
 function Board({
   stages,
   cards,
@@ -588,6 +716,7 @@ function Board({
   cityQuality: CityQualityByObec;
   size: PipelineCardSize;
 }) {
+  const readOnly = useActingReadOnly();
   const [activeId, setActiveId] = useState<string | null>(null);
   const sensors = useSensors(
     // distance:6 so a click on the card's link/select doesn't start a drag.
@@ -607,7 +736,7 @@ function Board({
 
   return (
     <DndContext
-      sensors={sensors}
+      sensors={readOnly ? NO_SENSORS : sensors}
       onDragStart={(e: DragStartEvent) => setActiveId(String(e.active.id))}
       onDragCancel={() => setActiveId(null)}
       onDragEnd={(e: DragEndEvent) => {
@@ -660,6 +789,8 @@ function Board({
 
 function StageManager({ stages }: { stages: PipelineStage[] }) {
   const qc = useQueryClient();
+  /* On an edit share the owner's stages, managed as the owner (ruling 3). */
+  const actAs = useActAs();
   const [err, setErr] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState('');
 
@@ -672,19 +803,19 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
    * the sweep was still wider than the fact that changed. */
   const invalidate = () => {
     setErr(null);
-    void qc.invalidateQueries({ queryKey: pipelineKeys.stages });
-    void qc.invalidateQueries({ queryKey: pipelineKeys.board });
+    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.stages) });
+    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.board) });
   };
   const onError = (e: unknown) =>
     setErr(e instanceof Error ? e.message : 'Akce selhala.');
 
   const reorder = useMutation({
-    mutationFn: (ids: number[]) => reorderPipelineStages(ids),
+    mutationFn: (ids: number[]) => reorderPipelineStages(ids, ...actOpts(actAs)),
     onSuccess: invalidate,
     onError,
   });
   const create = useMutation({
-    mutationFn: (label: string) => createPipelineStage({ label }),
+    mutationFn: (label: string) => createPipelineStage({ label }, ...actOpts(actAs)),
     onSuccess: () => {
       setNewLabel('');
       invalidate();
@@ -773,6 +904,7 @@ function StageEditorRow({
 }) {
   const [label, setLabel] = useState(stage.label);
   const [code, setCode] = useState(stage.code ?? '');
+  const actAs = useActAs();
 
   const update = useMutation({
     mutationFn: (patch: {
@@ -781,12 +913,12 @@ function StageEditorRow({
       is_terminal?: boolean;
       is_entry?: boolean;
       code?: string | null;
-    }) => updatePipelineStage(stage.id, patch),
+    }) => updatePipelineStage(stage.id, patch, ...actOpts(actAs)),
     onSuccess: invalidate,
     onError,
   });
   const archive = useMutation({
-    mutationFn: () => archivePipelineStage(stage.id),
+    mutationFn: () => archivePipelineStage(stage.id, ...actOpts(actAs)),
     onSuccess: invalidate,
     onError,
   });
@@ -906,6 +1038,8 @@ function StageEditorRow({
           size="sm"
         />
       </div>
+      {/* Who last changed it acting as the board's owner (ruling 5). */}
+      <DelegatedStamp stamp={stage} className="pl-[1.4rem]" />
     </li>
   );
 }

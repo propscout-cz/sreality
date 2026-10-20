@@ -36,6 +36,9 @@ import type {
   CollectionWithProperties,
 } from '@/lib/types';
 import { Hairline, SectionLabel } from '@/components/section';
+import ShareBlock from '@/components/ShareBlock';
+import { TwoStep } from '@/components/TwoStep';
+import { useActing } from '@/lib/acting';
 import { Th } from '@/components/table';
 import { usePhoneShell } from '@/lib/phoneShell';
 import { PhoneSuspense } from '@/components/phone/RollParts';
@@ -65,6 +68,9 @@ function CollectionDetailDesktop() {
   });
 
   usePageTitle(q.data ? q.data.collection.name : null);
+  /* Acting as a pipeline's owner (lib/acting) the API refuses monitoring (403):
+   * the alerts are the owner's, never a delegate's to change. */
+  const acting = useActing() != null;
 
   if (id == null) {
     return <NotFoundState reason="invalid" id={idParam ?? null} />;
@@ -109,8 +115,12 @@ function CollectionDetailDesktop() {
         <>
           <EditBlock collection={collection} />
           <Hairline />
-          <MonitoringBlock collection={collection} />
-          <Hairline />
+          {!acting && (
+            <>
+              <MonitoringBlock collection={collection} />
+              <Hairline />
+            </>
+          )}
           <SharingBlock collection={collection} />
           <Hairline />
         </>
@@ -210,64 +220,6 @@ function ViewerLine({ collection }: { collection: Collection }) {
       {leave.error && (
         <p className="w-full text-[0.75rem] text-[var(--color-brick)]">{leave.error.message}</p>
       )}
-    </div>
-  );
-}
-
-/* The page's quiet two-step destructive control: a text button, then a brick
- * confirm beside Cancel (Delete collection, Stop sharing, Remove from my list).
- * The confirm ignores the second click of a double-click (`detail > 1`): it
- * appears under the cursor, and leaving or deleting cannot be undone here. */
-function TwoStep({
-  idle,
-  confirm,
-  confirming,
-  setConfirming,
-  pending,
-  onConfirm,
-  label,
-}: {
-  idle: string;
-  confirm: string;
-  confirming: boolean;
-  setConfirming: (next: boolean) => void;
-  pending: boolean;
-  onConfirm: () => void;
-  /* Accessible name of the idle button when its text alone is ambiguous in a list. */
-  label?: string;
-}) {
-  if (!confirming) {
-    return (
-      <button
-        type="button"
-        onClick={() => setConfirming(true)}
-        aria-label={label}
-        className="text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-brick)] transition-colors"
-      >
-        {idle}
-      </button>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={(e) => {
-          if (e.detail > 1) return;
-          onConfirm();
-        }}
-        disabled={pending}
-        className="px-3 py-1 text-[0.75rem] tracking-wide rounded-[var(--radius-sm)] bg-[var(--color-brick-soft)] text-[var(--color-brick)] hover:bg-[var(--color-brick)]/15 disabled:opacity-50"
-      >
-        {confirm}
-      </button>
-      <button
-        type="button"
-        onClick={() => setConfirming(false)}
-        className="px-2.5 py-1 text-[0.7rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]"
-      >
-        Cancel
-      </button>
     </div>
   );
 }
@@ -460,122 +412,19 @@ function MonitoringBlock({ collection }: { collection: Collection }) {
 /* Sharing (owner only)                                                       */
 /* -------------------------------------------------------------------------- */
 
-/* Share by email, read-only (migration 610). A refusal (no such account, your
- * own address) is a sentence about the field, so it sits under the field. */
+/* Share by email, read-only (migration 610) — the one ShareBlock, without modes. */
 function SharingBlock({ collection }: { collection: Collection }) {
   const qc = useQueryClient();
-  const [email, setEmail] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const share = useMutation({
-    mutationFn: (address: string) => shareCollection(collection.id, address),
-    onSuccess: () => {
-      setEmail('');
-      setError(null);
-      revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
-    },
-    onError: (err: Error) => setError(err.message || 'Failed to share'),
-  });
-
-  const trimmed = email.trim();
-  const recipients = collection.shared_with;
-
+  const changed = () =>
+    revalidateCollections(qc, { collection_id: collection.id, shareChanged: true });
   return (
-    <div>
-      <SectionLabel>Sharing</SectionLabel>
-      <p className="mt-2 text-[0.78rem] text-[var(--color-ink-4)] max-w-2xl">
-        People you share with see this collection and its properties, and read the
-        notes you mark shared. They can't change it, and alerts stay yours.
-      </p>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (trimmed === '' || share.isPending) return;
-          share.mutate(trimmed);
-        }}
-        className="mt-3 flex items-end gap-3 max-w-2xl"
-      >
-        <Field label="Email" as="control" className="flex-1 min-w-0">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setError(null);
-            }}
-            placeholder="name@example.com"
-            maxLength={320}
-            autoComplete="off"
-            aria-invalid={error != null || undefined}
-            className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
-          />
-        </Field>
-        <button
-          type="submit"
-          disabled={trimmed === '' || share.isPending}
-          className="shrink-0 px-4 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] bg-[var(--color-paper-2)] text-[var(--color-ink)] hover:border-[var(--color-ink-3)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          {share.isPending ? 'Sharing…' : 'Share'}
-        </button>
-      </form>
-      {error && (
-        <p role="alert" className="mt-2 text-[0.75rem] text-[var(--color-brick)]">
-          {error}
-        </p>
-      )}
-      {recipients.length === 0 ? (
-        <p className="mt-3 text-[0.78rem] text-[var(--color-ink-3)]">Not shared with anyone.</p>
-      ) : (
-        <ul
-          aria-label="Shared with"
-          className="mt-4 max-w-2xl divide-y divide-[var(--color-rule-soft)] border-y border-[var(--color-rule-soft)]"
-        >
-          {recipients.map((r) => (
-            <RecipientRow
-              key={r.account_id}
-              collectionId={collection.id}
-              account_id={r.account_id}
-              email={r.email}
-            />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function RecipientRow({
-  collectionId,
-  account_id,
-  email,
-}: {
-  collectionId: number;
-  account_id: string;
-  email: string | null;
-}) {
-  const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
-  const revoke = useMutation({
-    mutationFn: () => unshareCollection(collectionId, account_id),
-    onSuccess: () => revalidateCollections(qc, { collection_id: collectionId, shareChanged: true }),
-  });
-  const who = email ?? 'an account without an email';
-  return (
-    <li className="py-2.5 flex items-center gap-3">
-      <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-ink-2)]">{who}</span>
-      {revoke.error && (
-        <span className="text-[0.72rem] text-[var(--color-brick)]">{revoke.error.message}</span>
-      )}
-      <TwoStep
-        idle="Stop sharing"
-        label={`Stop sharing with ${who}`}
-        confirm={revoke.isPending ? 'Stopping…' : 'Stop sharing'}
-        confirming={confirming}
-        setConfirming={setConfirming}
-        pending={revoke.isPending}
-        onConfirm={() => revoke.mutate()}
-      />
-    </li>
+    <ShareBlock
+      title="Sharing"
+      description="People you share with see this collection and its properties, and read the notes you mark shared. They can't change it, and alerts stay yours."
+      recipients={collection.shared_with}
+      onShare={(email) => shareCollection(collection.id, email).then(changed)}
+      onRevoke={(account_id) => unshareCollection(collection.id, account_id).then(changed)}
+    />
   );
 }
 

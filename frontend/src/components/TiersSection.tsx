@@ -15,7 +15,7 @@ import {
  * per-account plan assignment (manual comps). Admin routes; the tenant nav
  * reads the same plans.agendas map via supabase RLS. */
 
-export const AGENDA_KEYS = [
+const AGENDA_KEYS = [
   'browse',
   'pipeline',
   'estimations',

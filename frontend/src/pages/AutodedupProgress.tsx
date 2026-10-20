@@ -38,6 +38,7 @@ import Notice, { StoreNotReady } from '@/components/autodedup/Notice';
 import ErrorBanner from '@/components/ErrorBanner';
 import { ROUTES, withHash, withQuery } from '@/lib/routes';
 import Spinner from '@/components/Spinner';
+import Stat from '@/components/Stat';
 import { Chevron, useCollapsed } from '@/components/settings/SectionChrome';
 import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtUsd } from '@/lib/format';
@@ -81,20 +82,6 @@ function StatusBadge({ status }: { status: IterationStatus }) {
     >
       {status}
     </span>
-  );
-}
-
-/* --------------------------------------------------------------- KPI tiles */
-
-function Tile({ label, value, hint }: { label: string; value: string; hint: string }) {
-  return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-4 py-3">
-      <div className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        {label}
-      </div>
-      <div className="mt-1 text-xl font-mono tabular-nums text-[var(--color-ink)]">{value}</div>
-      <div className="mt-1 text-[0.68rem] leading-relaxed text-[var(--color-ink-3)]">{hint}</div>
-    </div>
   );
 }
 
@@ -173,7 +160,7 @@ function KeyValues({
 const ACTIONS_RUN_RE = /^https?:\/\/(www\.)?github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+/i;
 const ACTIONS_ARTIFACT_RE = /^https?:\/\/(www\.)?github\.com\/.*\/artifacts\/\d+/i;
 
-export function artifactLabel(key: string, url: string): string {
+function artifactLabel(key: string, url: string): string {
   if (ACTIONS_ARTIFACT_RE.test(url)) return 'Artifact download';
   if (ACTIONS_RUN_RE.test(url)) return 'Actions run';
   return key;
@@ -182,7 +169,7 @@ export function artifactLabel(key: string, url: string): string {
 /* Two jsonb blobs are "the same" when they carry the same keys with the same
  * values — compared on SORTED keys, because the lane builds the two dicts in
  * different places and a key order is not a difference. */
-export function sameBlob(
+function sameBlob(
   a: Record<string, unknown> | null | undefined,
   b: Record<string, unknown> | null | undefined,
 ): boolean {
@@ -388,12 +375,12 @@ export default function AutodedupProgress() {
       </header>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile
+        <Stat
           label="Iterations"
           value={pending ? '…' : s == null ? NOT_YET : fmtCount(s.n_iterations)}
           hint="Entries written to the program log so far."
         />
-        <Tile
+        <Stat
           label="Spent so far"
           value={
             pending
@@ -406,14 +393,14 @@ export default function AutodedupProgress() {
             RUN_CAP_USD,
           )} is the hard cap on any single run.`}
         />
-        <Tile
+        <Stat
           label="Waves closed"
           value={
             pending ? '…' : s == null ? NOT_YET : `${wavesClosed} of ${s.waves.length}`
           }
           hint="Waves whose newest iteration finished; the rest are still open."
         />
-        <Tile
+        <Stat
           label="Current wave"
           value={pending ? '…' : currentWave == null ? NOT_YET : currentWave}
           hint="The wave the newest iteration belongs to."

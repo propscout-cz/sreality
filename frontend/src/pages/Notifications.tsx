@@ -54,7 +54,7 @@ const SOURCE_TABS: ReadonlyArray<{ key: SourceFilter; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'collection_monitor', label: 'Monitoring' },
   { key: 'watchdog', label: 'Watchdogs' },
-  { key: 'collection_share', label: 'Shared' },
+  { key: 'share', label: 'Shared' },
   { key: 'system_health', label: 'System' },
 ];
 
@@ -220,7 +220,7 @@ function Tabs<T extends string>({
  * unconditionally (rules-of-hooks) — the dispatcher itself uses none. */
 function NotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   if (d.source_kind === 'system_health') return <SystemNotificationRow dispatch={d} />;
-  if (d.source_kind === 'collection_share') return <ShareNotificationRow dispatch={d} />;
+  if (d.source_kind === 'share') return <ShareNotificationRow dispatch={d} />;
   return <StandardNotificationRow dispatch={d} />;
 }
 
@@ -364,10 +364,12 @@ function SystemNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) 
   );
 }
 
-/* collection_share: someone shared a collection with me. A text row like the
- * system alert (the API's `message` names the owner and the collection);
- * pressing the text marks it read, "Open collection" marks it read and goes
- * to the collection. Two sibling controls, never a link inside a button. */
+/* share: someone shared a collection or their pipeline with me (migration 641:
+ * one kind, one renderer). A text row like the system alert (the API's
+ * `message` names the owner and what was shared); pressing the text marks it
+ * read, the link marks it read and opens the thing — "Open collection" when the
+ * row names a collection, else "Open pipeline" (the board is then picked in the
+ * Pipeline tab's switcher). Two sibling controls, never a link inside a button. */
 function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
@@ -388,18 +390,20 @@ function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
           {meta.label}
         </span>
         <span className="min-w-0 flex-1 text-sm text-[var(--color-ink)] break-words">
-          {d.message ?? 'A collection was shared with you.'}
+          {d.message ?? (d.collection_id != null ? 'A collection was shared with you.' : 'A pipeline was shared with you.')}
         </span>
       </button>
-      {d.collection_id != null && (
-        <Link
-          to={ROUTES.collectionDetail.build({ id: d.collection_id })}
-          onClick={markSeen}
-          className="shrink-0 mt-0.5 text-[0.78rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-ink)] hover:decoration-[var(--color-ink-3)] transition-colors"
-        >
-          Open collection
-        </Link>
-      )}
+      <Link
+        to={
+          d.collection_id != null
+            ? ROUTES.collectionDetail.build({ id: d.collection_id })
+            : ROUTES.pipeline.build()
+        }
+        onClick={markSeen}
+        className="shrink-0 mt-0.5 text-[0.78rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-ink)] hover:decoration-[var(--color-ink-3)] transition-colors"
+      >
+        {d.collection_id != null ? 'Open collection' : 'Open pipeline'}
+      </Link>
       <span
         className="shrink-0 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help mt-0.5"
         title={fmtAbsolute(d.dispatched_at)}

@@ -9,7 +9,7 @@ import {
 } from '@/lib/persistedFlag';
 
 /* Persisted layout preferences for the Browse page. The three columns are the
- * filter sidebar (column 1) and, on the Listings/map tab, the cards list
+ * filter sidebar (column 1) and, on the Properties/map tab, the cards list
  * (column 2) and the map (column 3). The operator can drag the two dividers
  * between them, and collapse the sidebar or the map away entirely; we remember the result
  * per-browser in localStorage so the layout survives a reload. The card
@@ -134,7 +134,7 @@ export { readFlag, type PersistedFlag } from '@/lib/persistedFlag';
 export const useSidebarCollapsed = (): PersistedFlag =>
   usePersistedFlag(SIDEBAR_COLLAPSED_KEY, false);
 
-/* Whether the operator has folded the map panel away on the Listings tab,
+/* Whether the operator has folded the map panel away on the Properties tab,
  * giving the cards the full width. Default false (the map shows). */
 export const useMapCollapsed = (): PersistedFlag =>
   usePersistedFlag(MAP_COLLAPSED_KEY, false);

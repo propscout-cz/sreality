@@ -62,15 +62,23 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   aggregate RPCs on the operator's word (revert shipped unapplied under `migrations/reverts/`).
 - **Next:** whole-collection / tag DELETEs and merges still revalidate broadly instead of settling.
 
-### Phase U-PIPE-SHARE: Pipeline sharing — view or edit another account's board, act as its owner (in progress, 2026-10-20)
+### Phase U-PIPE-SHARE: Pipeline sharing — view or edit another account's board, act as its owner (built, 2026-10-20; merges in the window)
 - **Approved (v1.2):** a share row (owner, recipient, mode read|edit); the recipient switches to the owner's
   board in the Pipeline tab and, under an edit share, acts as the owner on curation ("Upravit jako
   {email}"); a read share sees the board only. One identity function for curation, `acting_account_ids()`,
   driven by an `x-act-as` header the database validates; nothing else widens; every delegated edit is
   stamped in `delegated_edits`. Spec + rulings: `docs/design/pipeline-sharing.md`. Two waves.
-- **In review:** W1 (migration 641 + API + doctrine) in PR #1906. **Next:** W2, the SPA (§3.5). W1 and W2
-  merge together inside the autodedup session's window, 641 applied immediately before (the
-  `collection_share` → `share` rename couples them). Ruling 12 (`DELETE …?side=`) awaits the operator.
+- **Built:** the spec in #1903; W1 (migration 641 + API + doctrine) in PR #1906; W2 (the SPA, §3.5) in
+  PR #1908 — the Pipeline tab's board switcher (desktop + phone), read boards without drag / stage menu /
+  trash / stage editor / tags, edit boards acting as the owner (the phone through the stage sheet), the
+  one `ShareBlock` on the pipeline and collection pages, the viewer's two-step leave, a revoked board
+  resetting with a toast, "Upravit jako {email}" + the in-page banner on the desktop property page
+  (sticky per device), the `share` notification row, and the delegated stamps on notes, cards and
+  stages (`lib/delegatedStamp`). W1 and W2 merge together inside the autodedup session's window, 641
+  applied immediately before (the `collection_share` → `share` rename couples them). Ruling 12
+  (`DELETE …?side=`) awaits the operator. **Owed:** the board cannot say "vámi" on a delegate's own
+  stamps — the SPA has no source for its own account id (an `own_account_id` on `GET /pipeline/shares`
+  would give it one); until then a delegate sees the time alone.
 
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:

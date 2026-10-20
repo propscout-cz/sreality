@@ -1,7 +1,7 @@
-/* The admin card (wave 8, contract D3; wave 10 moves the local Card copies onto it). Pins:
- * - a region named by its title; the Costs card classes, the title row and the body spacing,
- *   as class strings (the wave-10 "no visual change" pin);
- * - the title is a heading (h2 by default, h3 for the Costs cards), in the small-caps style;
+/* The admin card (wave 8, contract D3; wave 10 moved the four local Card copies onto it). Pins:
+ * - a region named by its title; the panel classes, the title row and the body spacing, as
+ *   class strings (the "no visual change" pin of every page that draws it);
+ * - the title is an h2, in the small-caps style;
  * - the optional lede and accessory; an id makes it an anchor target. */
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -26,16 +26,6 @@ describe('<Panel>', () => {
     );
     expect(heading.parentElement?.getAttribute('class')).toBe('flex items-center justify-between gap-3');
     expect(screen.getByText('matrix').parentElement?.getAttribute('class')).toBe('mt-3');
-  });
-
-  it('titles with an h3 where the page asks (the Costs cards)', () => {
-    render(
-      <Panel as="h3" title="Daily spend">
-        <p>chart</p>
-      </Panel>,
-    );
-    expect(screen.getByRole('heading', { level: 3, name: 'Daily spend' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
   });
 
   it('sets the lede under the title and the accessory at its right', () => {

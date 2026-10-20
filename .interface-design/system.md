@@ -64,6 +64,11 @@ above for status and adds no token.
   status hues are too close for colour-blind readers (sage and brick for deuteranopia).
 - **Hollow ring = Not measured**: a 1.5 px `--color-ink-3` ring with no fill, never a green or a filled
   `ink-4` dot, so a check nobody measured can never look healthy. Stale reads the same.
-- **Shared admin primitives**: `Panel` (Costs' card: paper-2, rule border, small-caps title), `Stat` (label,
-  mono value, ink-3 hint, an optional dot; never a coloured number) and `StatusDot`. Acknowledge is an
-  outlined copper button: the operator's own act. Wave 10 moves the other admin pages onto them.
+- **Shared admin primitives**: `Panel` (paper-2, rule border, small-caps title) is the card of Health, Costs,
+  LocationQuality, LocationPinAudit and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
+  dot; never a coloured number) the tile of Health, Costs, LocationQuality and AutodedupProgress; `StatusDot`;
+  `Skeleton`, the loading block (static: no pulse); `ErrorBanner`, the one failure banner (`flush` under a
+  settings heading). A tile's trouble count is never a brick number (Costs' by-feature errors column, a table cell, awaits its own ruling): the page passes `status='fail'` only
+  while its own condition holds (a count above zero; a share above the page's bound) and the tile draws a brick
+  dot beside its label, the word Problem sr-only. Copper stays "chosen or central", never a number's emphasis.
+  Acknowledge is an outlined copper button: the operator's own act.

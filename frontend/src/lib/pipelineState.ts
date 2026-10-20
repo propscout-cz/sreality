@@ -56,6 +56,8 @@ export interface PipelineViewState {
   setTypes: (next: string[]) => void;
   setDistricts: (next: DistrictChip[]) => void;
   setScope: (name: BoardSet, next: SetScope | null) => void;
+  /* Both curated-set scopes off — their ids belong to one account's sets. */
+  clearScopes: () => void;
   setSort: (next: PipelineSort) => void;
   reset: () => void;
 }
@@ -139,6 +141,14 @@ export function usePipelineViewState(): PipelineViewState {
     [patch],
   );
 
+  const clearScopes = useCallback(
+    () =>
+      patch((sp) => {
+        for (const name of BOARD_SETS) setScopeToParams(sp, name, null);
+      }),
+    [patch],
+  );
+
   const setDistricts = useCallback(
     (next: DistrictChip[]) =>
       patch((sp) => {
@@ -194,6 +204,7 @@ export function usePipelineViewState(): PipelineViewState {
     setTypes,
     setDistricts,
     setScope,
+    clearScopes,
     setSort,
     reset,
   };

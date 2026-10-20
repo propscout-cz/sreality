@@ -33,6 +33,8 @@ import type {
   Note,
   NoteAttachment,
   ParseResult,
+  PipelineShareMode,
+  PipelineShares,
   PipelineStage,
   SkillRefinement,
   Tag,
@@ -103,7 +105,15 @@ export type QueryScalar = string | number | boolean;
  * arrive server-side as one unparseable value, so callers must not hand-roll it. */
 export type QueryValue = QueryScalar | readonly QueryScalar[] | undefined | null;
 
-interface RequestOptions extends Omit<RequestInit, 'body'> {
+/* The trailing option of every wrapper that may act (`{ actAs }`, lib/acting):
+ * the owner a pipeline share lets the caller act for (migration 641), sent as
+ * `X-Act-As`. Only the curation and pipeline wrappers take it; every other
+ * route answers as the caller and never sees it. */
+interface Acting {
+  actAs?: string | null;
+}
+
+interface RequestOptions extends Omit<RequestInit, 'body'>, Acting {
   query?: Record<string, QueryValue>;
   json?: unknown;
   /* Multipart body (file uploads). Mutually exclusive with `json`; no
@@ -194,7 +204,7 @@ async function send(
     );
   }
 
-  const { query, json, form, headers, signal, ...rest } = opts;
+  const { query, json, form, headers, signal, actAs, ...rest } = opts;
   const url = new URL(BASE_URL + path);
   if (query) {
     for (const [k, v] of Object.entries(query)) {
@@ -216,6 +226,7 @@ async function send(
     Accept: 'application/json',
     ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}),
     ...(await authHeader()),
+    ...(actAs ? { 'X-Act-As': actAs } : {}),
     ...((headers as Record<string, string> | undefined) ?? {}),
   };
 
@@ -2391,8 +2402,10 @@ export const setFilterVisibility = (
 
 /* Collections */
 
-export const listCollections = (): Promise<{ data: Collection[]; total: number }> =>
-  request<{ data: Collection[]; total: number }>('/collections');
+export const listCollections = (
+  { actAs }: Acting = {},
+): Promise<{ data: Collection[]; total: number }> =>
+  request<{ data: Collection[]; total: number }>('/collections', { actAs });
 
 export const getCollection = (id: number): Promise<CollectionWithProperties> =>
   request<CollectionWithProperties>(`/collections/${id}`);
@@ -2439,62 +2452,73 @@ export const unshareCollection = (
 export const addPropertiesToCollection = (
   id: number,
   property_ids: number[],
+  { actAs }: Acting = {},
 ): Promise<{ added: number; skipped: number }> =>
   request<{ added: number; skipped: number }>(`/collections/${id}/properties`, {
     method: 'POST',
     json: { property_ids },
+    actAs,
   });
 
 export const removePropertyFromCollection = (
   id: number,
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ removed: boolean }> =>
   request<{ removed: boolean }>(
     `/collections/${id}/properties/${property_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
 /* Tags */
 
-export const listTags = (): Promise<{ data: Tag[] }> =>
-  request<{ data: Tag[] }>('/tags');
+export const listTags = ({ actAs }: Acting = {}): Promise<{ data: Tag[] }> =>
+  request<{ data: Tag[] }>('/tags', { actAs });
 
-export const createTag = (input: { name: string; color: TagColor }): Promise<Tag> =>
-  request<Tag>('/tags', { method: 'POST', json: input });
+export const createTag = (
+  input: { name: string; color: TagColor },
+  { actAs }: Acting = {},
+): Promise<Tag> =>
+  request<Tag>('/tags', { method: 'POST', json: input, actAs });
 
 export const updateTag = (
   id: number,
   patch: { name?: string | null; color?: TagColor | null },
+  { actAs }: Acting = {},
 ): Promise<Tag> =>
-  request<Tag>(`/tags/${id}`, { method: 'PATCH', json: patch });
+  request<Tag>(`/tags/${id}`, { method: 'PATCH', json: patch, actAs });
 
-export const deleteTag = (id: number): Promise<{ deleted: true }> =>
-  request<{ deleted: true }>(`/tags/${id}`, { method: 'DELETE' });
+export const deleteTag = (id: number, { actAs }: Acting = {}): Promise<{ deleted: true }> =>
+  request<{ deleted: true }>(`/tags/${id}`, { method: 'DELETE', actAs });
 
 export const attachTag = (
   property_id: number,
   tag_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ attached: boolean }> =>
   request<{ attached: boolean }>(`/properties/${property_id}/tags`, {
     method: 'POST',
     json: { tag_id },
+    actAs,
   });
 
 export const detachTag = (
   property_id: number,
   tag_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ detached: boolean }> =>
   request<{ detached: boolean }>(
     `/properties/${property_id}/tags/${tag_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
 /* Notes (per-property journal) */
 
 export const listPropertyNotes = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ data: Note[] }> =>
-  request<{ data: Note[] }>(`/properties/${property_id}/notes`);
+  request<{ data: Note[] }>(`/properties/${property_id}/notes`, { actAs });
 
 export const createPropertyNote = (
   property_id: number,
@@ -2503,6 +2527,7 @@ export const createPropertyNote = (
   origin_listing_ref_id?: number,
   // The author's share mark; private when omitted.
   shared?: boolean,
+  { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes`, {
     method: 'POST',
@@ -2511,6 +2536,7 @@ export const createPropertyNote = (
       ...(shared != null ? { shared } : {}),
       ...(origin_listing_ref_id != null ? { origin_listing_ref_id } : {}),
     },
+    actAs,
   });
 
 /* At least one field; marking shared leaves updated_at alone (API). */
@@ -2518,18 +2544,22 @@ export const updatePropertyNote = (
   property_id: number,
   note_id: number,
   patch: { body?: string; shared?: boolean },
+  { actAs }: Acting = {},
 ): Promise<Note> =>
   request<Note>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'PATCH',
     json: patch,
+    actAs,
   });
 
 export const deletePropertyNote = (
   property_id: number,
   note_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(`/properties/${property_id}/notes/${note_id}`, {
     method: 'DELETE',
+    actAs,
   });
 
 /* Artifact link (migration 599): one http(s) URL per property; PUT sets or replaces it.
@@ -2537,25 +2567,31 @@ export const deletePropertyNote = (
  * curation fact is read in — tags, collections, note counts), so a board of cards costs one
  * request, not one per card, and the property page reads the same entry. */
 
-export const fetchArtifactLinks = async (): Promise<Map<number, ArtifactLink>> => {
-  const { data } = await request<{ data: ArtifactLink[] }>('/artifact-links');
+export const fetchArtifactLinks = async (
+  { actAs }: Acting = {},
+): Promise<Map<number, ArtifactLink>> => {
+  const { data } = await request<{ data: ArtifactLink[] }>('/artifact-links', { actAs });
   return new Map(data.map((l) => [l.property_id, l]));
 };
 
 export const setPropertyArtifactLink = (
   property_id: number,
   url: string,
+  { actAs }: Acting = {},
 ): Promise<ArtifactLink> =>
   request<ArtifactLink>(`/properties/${property_id}/artifact-link`, {
     method: 'PUT',
     json: { url },
+    actAs,
   });
 
 export const deletePropertyArtifactLink = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ deleted: boolean }> =>
   request<{ deleted: boolean }>(`/properties/${property_id}/artifact-link`, {
     method: 'DELETE',
+    actAs,
   });
 
 /* A note's files (migration 592): one file per request; the bytes come back through the API
@@ -2564,12 +2600,14 @@ export const uploadNoteAttachment = (
   property_id: number,
   note_id: number,
   file: File,
+  { actAs }: Acting = {},
 ): Promise<NoteAttachment> => {
   const form = new FormData();
   form.append('file', file, file.name);
   return request<NoteAttachment>(`/properties/${property_id}/notes/${note_id}/attachments`, {
     method: 'POST',
     form,
+    actAs,
   });
 };
 
@@ -2577,17 +2615,21 @@ export const fetchNoteAttachmentBlob = (
   property_id: number,
   note_id: number,
   attachment_id: number,
+  { actAs }: Acting = {},
 ): Promise<Blob> =>
-  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`);
+  requestBlob(`/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`, {
+    actAs,
+  });
 
 export const deleteNoteAttachment = (
   property_id: number,
   note_id: number,
   attachment_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ deleted: true }> =>
   request<{ deleted: true }>(
     `/properties/${property_id}/notes/${note_id}/attachments/${attachment_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
 
 /* Dismissals (migration 536) — "never show me this property again", and its
@@ -2595,17 +2637,21 @@ export const deleteNoteAttachment = (
 
 export const dismissProperty = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; added: boolean }> =>
   request<{ property_id: number; added: boolean }>('/dismissals', {
     method: 'POST',
     json: { property_id },
+    actAs,
   });
 
 export const undismissProperty = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; removed: boolean }> =>
   request<{ property_id: number; removed: boolean }>(`/dismissals/${property_id}`, {
     method: 'DELETE',
+    actAs,
   });
 
 /* Deal pipeline (migration 205) — bookmark a property into the pipeline
@@ -2613,43 +2659,51 @@ export const undismissProperty = (
 
 export const addPipelineCard = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; stage_key: string; added: boolean }> =>
   request<{ property_id: number; stage_key: string; added: boolean }>(
     '/pipeline/cards',
-    { method: 'POST', json: { property_id } },
+    { method: 'POST', json: { property_id }, actAs },
   );
 
 export const removePipelineCard = (
   property_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ removed: boolean }> =>
   request<{ removed: boolean }>(`/pipeline/cards/${property_id}`, {
     method: 'DELETE',
+    actAs,
   });
 
 export const movePipelineCard = (
   property_id: number,
   stage_id: number,
   board_position?: number,
+  { actAs }: Acting = {},
 ): Promise<{ property_id: number; stage_id: number; stage_key: string }> =>
   request<{ property_id: number; stage_id: number; stage_key: string }>(
     `/pipeline/cards/${property_id}`,
     {
       method: 'PATCH',
       json: board_position != null ? { stage_id, board_position } : { stage_id },
+      actAs,
     },
   );
 
 /* Stage management — operator-curated kanban columns (rename / recolor / add /
  * reorder / archive). The `key` slug is derived server-side from the label. */
 
-export const createPipelineStage = (input: {
-  label: string;
-  color?: TagColor | null;
-  is_terminal?: boolean;
-  /* Short funnel badge (migration 377); omit to fall back to the ordinal. */
-  code?: string | null;
-}): Promise<PipelineStage> =>
-  request<PipelineStage>('/pipeline/stages', { method: 'POST', json: input });
+export const createPipelineStage = (
+  input: {
+    label: string;
+    color?: TagColor | null;
+    is_terminal?: boolean;
+    /* Short funnel badge (migration 377); omit to fall back to the ordinal. */
+    code?: string | null;
+  },
+  { actAs }: Acting = {},
+): Promise<PipelineStage> =>
+  request<PipelineStage>('/pipeline/stages', { method: 'POST', json: input, actAs });
 
 export const updatePipelineStage = (
   stage_id: number,
@@ -2661,27 +2715,53 @@ export const updatePipelineStage = (
     /* Explicit null clears the badge back to the ordinal fallback. */
     code?: string | null;
   },
+  { actAs }: Acting = {},
 ): Promise<PipelineStage> =>
   request<PipelineStage>(`/pipeline/stages/${stage_id}`, {
     method: 'PATCH',
     json: patch,
+    actAs,
   });
 
 export const reorderPipelineStages = (
   ordered_ids: number[],
+  { actAs }: Acting = {},
 ): Promise<{ data: PipelineStage[] }> =>
   request<{ data: PipelineStage[] }>('/pipeline/stages/reorder', {
     method: 'POST',
     json: { ordered_ids },
+    actAs,
   });
 
 export const archivePipelineStage = (
   stage_id: number,
+  { actAs }: Acting = {},
 ): Promise<{ archived: boolean; stage_id: number }> =>
   request<{ archived: boolean; stage_id: number }>(
     `/pipeline/stages/${stage_id}`,
-    { method: 'DELETE' },
+    { method: 'DELETE', actAs },
   );
+
+/* Pipeline sharing (migration 641). Sharing never acts: these three are always
+ * the caller's own, so they take no `actAs` (and the API 403s one). GET lists
+ * both sides; POST shares (or changes the mode — 422 "No account uses this
+ * email." / own address); DELETE revokes a recipient (side=shared_with) or
+ * leaves an owner's board (side=shared_with_me). */
+
+export const listPipelineShares = (): Promise<PipelineShares> =>
+  request<PipelineShares>('/pipeline/shares');
+
+export const sharePipeline = (email: string, mode: PipelineShareMode): Promise<PipelineShares> =>
+  request<PipelineShares>('/pipeline/shares', { method: 'POST', json: { email, mode } });
+
+export const unsharePipeline = (
+  account_id: string,
+  side: 'shared_with' | 'shared_with_me',
+): Promise<{ deleted: boolean }> =>
+  request<{ deleted: boolean }>(`/pipeline/shares/${encodeURIComponent(account_id)}`, {
+    method: 'DELETE',
+    query: { side },
+  });
 
 /* ----- Watchdog notifications (Phase U2.7) ------------------------------- */
 

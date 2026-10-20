@@ -501,6 +501,10 @@ class LaneDb(FakeDb):
         # E960: each member's last refresh (absent: refreshed now) and what the reconcile handed
         # the next pass to re-claim.
         self.refreshed: dict[int, datetime] = {}
+        # E972: each member's (category_main, category_type) as its row holds them (absent: none).
+        self.categories: dict[int, tuple[str, str]] = {}
+        # E973: the active listings; a member's cluster is active when it holds one.
+        self.active: set[int] = set()
         self.lane_settings: dict[str, Any] = {}
 
     def dispatch(self, sql: str, p: dict) -> list[tuple]:  # noqa: C901
@@ -554,8 +558,12 @@ class LaneDb(FakeDb):
             out = []
             for lid in sorted(set(p["listing_ids"])):
                 at = self.refreshed.get(lid, self.now)
+                keys = {k for g, k, i in self.members if g == p["generation"] and i == lid}
                 out.append((lid, at, at is None or at < bound
-                            or (since is not None and at < since)))
+                            or (since is not None and at < since),
+                            *self.categories.get(lid, (None, None)),
+                            any(i in self.active for g, k, i in self.members
+                                if g == p["generation"] and k in keys)))
             return out
         if sql == RT_SETTING_WRITE_SQL:
             self.lane_settings[p["key"]] = json.loads(p["value"])
@@ -795,13 +803,14 @@ def test_a_group_tried_lately_is_not_offered_again_and_old_stamps_expire() -> No
     now = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
     old, recent = (now - timedelta(hours=reconcile.TRIED_BACKOFF_HOURS + 1)).isoformat(), (
         now - timedelta(hours=1)).isoformat()
-    ages = {1: (now - timedelta(hours=30), True), 2: (now - timedelta(hours=20), True),
-            3: (now - timedelta(hours=15), True)}
+    ages = {i: reconcile.Refresh(now - timedelta(hours=h), True, 0, True)
+            for i, h in ((1, 30), (2, 20), (3, 15))}
     taken, stamps = reconcile.select_claims([[1], [2], [3]], ages,
                                             {"1": recent, "2": old, "9": recent}, now)
     assert taken == [2, 3], "1 backed off; 2's stamp expired; oldest first"
     assert set(stamps) == {"1", "2", "3"} and stamps["2"] == now.isoformat()
-    assert reconcile._oldest([5], {5: (None, True)}) > reconcile._oldest([1], ages), (
+    assert reconcile._rank([5], {5: reconcile.Refresh(None, True, 0, True)}) > reconcile._rank(
+        [1], ages), (
         "a group no claim can refresh sorts last")
 
 
@@ -813,12 +822,119 @@ def test_the_re_claim_budget_is_what_the_worker_s_memory_leaves_beside_the_feeds
     assert reconcile.STALE_FLOOR == 200
     now = datetime(2026, 10, 20, 6, 0, tzinfo=timezone.utc)
     groups = [[2 * k, 2 * k + 1] for k in range(125)]
-    ages = {i: (now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1 + i), True)
+    ages = {i: reconcile.Refresh(now - timedelta(hours=reconcile.FRESH_DECISION_HOURS + 1 + i),
+                                 True, 0, True)
             for group in groups for i in group}
     taken, stamps = reconcile.select_claims(groups, ages, {}, now)
     assert len(taken) == reconcile.STALE_FLOOR == 200
     assert set(taken) == set(range(50, 250)), "the oldest hundred groups, whole"
     assert len(stamps) == 100, "only the groups taken are stamped tried"
+
+
+def test_the_re_claim_serves_flats_for_sale_then_flats_for_rent_then_the_rest(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """E972, the operator's Prague priority of 2026-10-20: the waiting groups are re-claimed
+    flats for sale first, flats for rent second, the rest third, the oldest wait first within
+    each, however the ages interleave across classes. A budget smaller than the flats for sale
+    takes only them, and a full hand-on list drops the rest before any flat. A mixed group (a
+    flat with its komerční twin is a sanctioned pair) goes as its flat, whichever member has the
+    lower id or is stale, in the re-claim and the hand-on's cap alike."""
+    db = LaneDb()
+    sale, rent, rest = ("byt", "prodej"), ("byt", "pronajem"), ("komercni", "prodej")
+    hours = {1: 20, 2: 20, 3: 26, 4: 15, 5: 15, 10: 30, 11: 18, 12: 18, 20: 40, 21: 16, 22: 16}
+    db.refreshed = {i: db.now - timedelta(hours=h) for i, h in hours.items()}
+    db.categories = {**dict.fromkeys([1, 2, 3, 4, 5], sale),
+                     **dict.fromkeys([10, 11, 12], rent), **dict.fromkeys([20, 21, 22], rest)}
+    groups = [[20], [10], [21, 22], [1, 2], [11, 12], [3], [4, 5]]
+    ages = reconcile.refreshed(db, RT, sorted(hours),
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+
+    taken, _stamps = reconcile.select_claims(groups, ages, {}, db.now)
+    assert taken == [3, 1, 2, 4, 5, 10, 11, 12, 20, 21, 22], (
+        "flats for sale oldest first, then flats for rent, then the rest")
+    taken, stamps = reconcile.select_claims(groups, ages, {}, db.now, budget=4)
+    assert taken == [3, 1, 2, 10] and set(stamps) == {"3", "1", "10"}, (
+        "the budget goes to flats for sale; the sale group that does not fit is skipped and the "
+        "rent flat that does fills it (E973)")
+
+    monkeypatch.setattr(reconcile, "REDECIDE_CAP", 6)
+    assert reconcile._hand_on(db, RT, "rt:e972", groups, ages) == (4, 3)
+    assert db.lane_settings[reconcile.redecide_key(RT)] == [[3], [1, 2], [4, 5], [10]], (
+        "the cap cuts the same order: oldest first would have kept [20] and dropped [4, 5]")
+
+    fresh, at, older = (db.now - timedelta(hours=h) for h in (1, 20, 30))
+    sale_class, rent_class, rest_class = (reconcile._claim_class(*c) for c in (sale, rent, rest))
+    mixed = {lid: reconcile.Refresh(when, stale, place, False) for lid, when, stale, place in (
+        (30, fresh, False, rest_class), (31, at, True, sale_class),
+        (40, fresh, False, sale_class), (41, at, True, rest_class),
+        (50, older, True, rent_class))}
+    groups = [[50], [30, 31], [40, 41]]
+    assert reconcile.claims(groups, mixed, 2) == [31, 41], (
+        "a flat for sale goes first whether its fresh twin or its own fresh row has the lower id")
+    monkeypatch.setattr(reconcile, "REDECIDE_CAP", 4)
+    assert reconcile._hand_on(db, RT, "rt:e972", groups, mixed) == (2, 1)
+    assert db.lane_settings[reconcile.redecide_key(RT)] == [[30, 31], [40, 41]], (
+        "the cap ranks them as the re-claim does: the older rent flat is the one dropped")
+
+
+def test_a_group_whose_cluster_holds_an_active_advert_goes_before_every_group_without_one(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """E973: the count watched while Prague merges is the groups with an active advert, and no
+    feed refreshes an inactive one, so all-inactive groups held the oldest stamps and most of
+    the budget. A group whose cluster holds an active advert now goes first, E972's classes and
+    the oldest wait after that, in the re-claim and the hand-on's cap alike. The activity is
+    read over the whole cluster: a group whose only active advert is the one its merge keeps
+    (not handed on) still goes first. An all-inactive group waits, it is not dropped."""
+    db = LaneDb()
+    sale, rent, rest = ("byt", "prodej"), ("byt", "pronajem"), ("komercni", "prodej")
+    for key, lids in ((10, [10, 11]), (20, [20, 21]), (30, [30, 31, 32])):
+        db.group(key, lids, gen=RT)
+    db.active = {21, 30}
+    hours = {10: 40, 11: 40, 20: 14, 21: 14, 31: 20, 32: 20}
+    db.refreshed = {i: db.now - timedelta(hours=h) for i, h in hours.items()}
+    db.categories = {10: sale, 11: sale, 20: rest, 21: rest, 31: rent, 32: rent}
+    groups = [[10, 11], [20, 21], [31, 32]]
+    ages = reconcile.refreshed(db, RT, sorted(hours),
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+    assert ages[31].active and ages[32].active, "30, the advert the merge keeps, is active"
+    assert not ages[10].active and not ages[11].active
+
+    taken, _stamps = reconcile.select_claims(groups, ages, {}, db.now)
+    assert taken == [31, 32, 20, 21, 10, 11], (
+        "active first (a rent flat before the rest), the oldest sale flat, all inactive, last")
+    taken, stamps = reconcile.select_claims(groups, ages, {}, db.now, budget=4)
+    assert taken == [31, 32, 20, 21] and set(stamps) == {"31", "20"}
+
+    monkeypatch.setattr(reconcile, "REDECIDE_CAP", 4)
+    assert reconcile._hand_on(db, RT, "rt:e973", groups, ages) == (2, 1)
+    assert db.lane_settings[reconcile.redecide_key(RT)] == [[31, 32], [20, 21]], (
+        "the cap cuts the same order: the all-inactive group is the one left to the sweep")
+    db.active = set()
+    ages = reconcile.refreshed(db, RT, sorted(hours),
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+    assert reconcile.claims(groups, ages, 100) == [10, 11, 31, 32, 20, 21], (
+        "with no active group left, E972's order: the inactive groups still merge")
+
+
+def test_a_group_that_does_not_fit_the_budget_is_skipped_and_the_next_ones_tried() -> None:
+    """E973: `claims` stopped at the first group that did not fit, so the 12:40Z pass of
+    2026-10-20 re-claimed 188 of its 200. A group that does not fit is skipped and the next
+    ones are tried; the first group is still taken whole whatever its size, so a group bigger
+    than the budget is re-claimed alone, never cut, and the others wait for the next pass."""
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    sizes = {100: 3, 200: 4, 300: 1, 400: 2, 500: 2}
+    groups = [[head + k for k in range(size)] for head, size in sizes.items()]
+    ages = {i: reconcile.Refresh(now - timedelta(hours=40 - n), True, 0, True)
+            for n, group in enumerate(groups) for i in group}
+    assert reconcile.claims(groups, ages, 6) == [100, 101, 102, 300, 400, 401], (
+        "the four-advert group does not fit after the first three: skipped, the next fit")
+    assert reconcile.claims(groups, ages, 12) == [i for g in groups for i in g]
+    big = {i: row._replace(at=now - timedelta(hours=50)) for i, row in ages.items()
+           if i in groups[1]}
+    assert reconcile.claims(groups, {**ages, **big}, 3) == [200, 201, 202, 203], (
+        "a head bigger than the budget is taken whole, and alone")
+    taken, stamps = reconcile.select_claims(groups, ages, {}, now, budget=6)
+    assert set(stamps) == {"100", "300", "400"}, "a skipped group is not stamped tried"
 
 
 def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(
