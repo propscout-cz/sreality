@@ -34,8 +34,10 @@ The operator chose to replace them with charts the user builds, which deletes th
    Nesting up to **six** row levels (table, box).
 8. A NULL on any chosen dimension (or the measure) excludes the property and is counted as "excluded for
    missing data"; it is never shown as "ne" or "neuvedeno".
-9. The legacy-vocabulary heal (89 condition spellings, 766 dispositions) is a separate PR; land rent keeps the
-   rent basis until its own ruling.
+9. The legacy-vocabulary heal is migration 642 (2026-10-20): the 31 off-canon condition spellings on 105 bazos
+   listings read as the canon or NULL, the 28 digit pairs outside the N+kk / N+1 grammar on 812 listings read
+   NULL (871 properties; the re-parse seam never blanks, so a data migration under its rules, 554's shape, with
+   the mapping pinned to `scraper/vocabulary.py`); land rent keeps the rent basis until its own ruling.
 10. Design: a sample ledger on every chart; edit in place with shelves Řádky / Sloupce and a Hodnota well;
     the filter sidebar's own chips; copper for the first series, ink tints for the rest.
 
