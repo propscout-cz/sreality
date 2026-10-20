@@ -325,7 +325,7 @@ foreign hosts: 3 → 1. URL rule sets: 5 → 1 canon + 1 pinned mirror. Paste su
 `scraper/geocoding.geocode` STAYS (`scripts/seed_curated_cities.py` uses it); `fetch_and_anonymize_
 fixtures.py` stays (`--scrub-contacts`).
 
-## 6. Waves (one PR each; one merge window a day, e9's green light per PR)
+## 6. Waves (one PR each; merges only in a window the operator opens ad hoc — e9 announces it and gives the green light per PR)
 
 Migration numbers: 641 merged, 642 (#1911) and 643 (#1910, destructive, gated ≥ 2026-10-21 23:50Z) are
 claimed — this sprint starts at **644**, re-checked at merge. #1910 edits `scraper/portal.py`,
