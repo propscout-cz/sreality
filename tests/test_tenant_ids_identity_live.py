@@ -8,14 +8,14 @@ tests/test_tenant_isolation_live.py; the tenant signs up through the real auth.u
 
 from __future__ import annotations
 
-import contextlib
-import json
 import os
 import uuid
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+
+from tests._tenant_scope import scoped
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -77,25 +77,6 @@ def tenant(svc: Any) -> "Iterator[dict[str, uuid.UUID]]":
             cur.execute("DELETE FROM auth.users WHERE id = %s", (user,))
 
 
-@contextlib.contextmanager
-def _scoped(sub: uuid.UUID) -> "Iterator[Any]":
-    """One transaction scoped the way tenant_conn scopes it: SET LOCAL ROLE + JWT claims."""
-    import psycopg
-
-    conn = psycopg.connect(_DB_URL, autocommit=False)
-    try:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                cur.execute("SET LOCAL ROLE authenticated")
-                cur.execute(
-                    "SELECT set_config('request.jwt.claims', %s, true)",
-                    (json.dumps({"sub": str(sub), "role": "authenticated"}),),
-                )
-            yield conn
-    finally:
-        conn.close()
-
-
 def test_browser_writable_keys_are_generated_always(svc: Any) -> None:
     with svc.cursor() as cur:
         cur.execute(_BROWSER_WRITABLE_KEYS_SQL)
@@ -112,7 +93,7 @@ def test_tenant_cannot_choose_an_id(svc: Any, tenant: dict[str, uuid.UUID]) -> N
         cur.execute("SELECT coalesce(max(id), 0) + 1000 FROM tags")
         claimed = cur.fetchone()[0]
     name = f"ids-{uuid.uuid4().hex[:12]}"
-    with _scoped(tenant["user"]) as conn, conn.cursor() as cur:
+    with scoped(tenant["user"]) as conn, conn.cursor() as cur:
         # The signup seeded a board with an entry stage: add a non-entry stage after it.
         cur.execute(
             "INSERT INTO pipeline_stages (account_id, key, label, position, is_entry) "

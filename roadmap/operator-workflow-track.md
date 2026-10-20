@@ -51,12 +51,15 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   aggregate RPCs on the operator's word (revert shipped unapplied under `migrations/reverts/`).
 - **Next:** whole-collection / tag DELETEs and merges still revalidate broadly instead of settling.
 
-### Phase U-PIPE-SHARE: Pipeline sharing — view or edit another account's board, act as its owner (proposal, 2026-10-20)
-- **Proposed:** a share row (owner, recipient, mode read|edit); the recipient switches to the owner's board
-  in the Pipeline tab and, under an edit share, acts as the owner on a shared property's curation
-  ("Upravit jako {email}"). One identity function for curation, `acting_account_ids()`, driven by an
-  `x-act-as` header the database validates; nothing else widens. Spec + rulings:
-  `docs/design/pipeline-sharing.md`. Three waves; merges wait for the autodedup session's green light.
+### Phase U-PIPE-SHARE: Pipeline sharing — view or edit another account's board, act as its owner (in progress, 2026-10-20)
+- **Approved (v1.2):** a share row (owner, recipient, mode read|edit); the recipient switches to the owner's
+  board in the Pipeline tab and, under an edit share, acts as the owner on curation ("Upravit jako
+  {email}"); a read share sees the board only. One identity function for curation, `acting_account_ids()`,
+  driven by an `x-act-as` header the database validates; nothing else widens; every delegated edit is
+  stamped in `delegated_edits`. Spec + rulings: `docs/design/pipeline-sharing.md`. Two waves.
+- **In review:** W1 (migration 641 + API + doctrine) in PR #1906. **Next:** W2, the SPA (§3.5). W1 and W2
+  merge together inside the autodedup session's window, 641 applied immediately before (the
+  `collection_share` → `share` rename couples them). Ruling 12 (`DELETE …?side=`) awaits the operator.
 
 ### Phase U-SHARE: Collection sharing, view-only (done, 2026-10-17)
 - **Done:** share a collection with another account by email, read-only (spec + rulings:
@@ -80,7 +83,7 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
     attributes the one pre-tenancy NULL row); a follow-up migration numbered past 613; the split live test's bare (NULL-account) note must be
     re-modelled first (`tests/test_property_split_live.py`).
   - `WatchdogDispatch.sreality_id` is typed `number` but is null on rows that carry no listing,
-    a `collection_share` row among them — widen the type with its readers.
+    a `share` row among them — widen the type with its readers.
   - pytest order pollution met in W1: `tests/api/test_curation.py`, then
     `tests/test_curation_account_stamping.py`, then `tests/api/test_auth.py` gives 15 × 503 "Auth is
     not configured"; each file passes alone and CI's path order (tests/api first) never hits it —

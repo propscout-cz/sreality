@@ -23,6 +23,7 @@ from api import curation
 from api import note_attachments
 from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
+from api import shares as shares_module
 from api import price_stats as price_stats_module
 from api import stats_dashboard as stats_dashboard_module
 from api import dependencies as deps
@@ -992,7 +993,7 @@ def post_estimation_feedback(
     admin = deps.is_admin(claims)
     refine = body.kick_off_refinement and admin
     gate = estimation_run_visible if admin else estimation_run_owned
-    with tenant_pool.tenant_transaction(claims) as conn:
+    with tenant_pool.tenant_transaction(claims, act_as=None, method="POST") as conn:
         if not gate(conn, run_id):
             raise HTTPException(status_code=404, detail="estimation run not found")
         row = feedback_module.insert_feedback(
@@ -1384,8 +1385,10 @@ def post_estimate_yield(
 def post_create_collection(
     body: s.CreateCollectionIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
+    act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled, body.notify_channels)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
@@ -1409,7 +1412,11 @@ def patch_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
+    act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
+    curation.refuse_monitoring_while_acting(
+        act_as, body.monitoring_enabled is not None, body.notify_channels is not None,
+    )
     return curation.update_collection(conn, collection_id, body)
 
 
@@ -1444,11 +1451,13 @@ def delete_collection_property(
 # The second "tenant gate, then a service-role write" (tenancy.md): browser roles hold no INSERT on
 # collection_shares or notification_dispatches, so the share lands on the service role, opened in
 # the handler only after the gate passed (never a dependency: a refused caller costs no connection).
+# Sharing never delegates: require_account_id 403s under X-Act-As.
 @app.post("/collections/{collection_id}/shares")
 def post_collection_share(
     collection_id: int,
     body: s.ShareCollectionIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
+    _own: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     return curation.create_share(conn, deps.open_background_conn, collection_id, body)
 
@@ -1556,7 +1565,7 @@ def post_property_note(
     property_id: int,
     body: s.CreateNoteIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_note(conn, property_id, body, account_id=str(account_id))
 
@@ -1592,7 +1601,7 @@ def put_property_artifact_link(
     property_id: int,
     body: s.SetArtifactLinkIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.set_artifact_link(conn, property_id, body, account_id=str(account_id))
 
@@ -1659,7 +1668,7 @@ def get_tags(
 def post_tag(
     body: s.CreateTagIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_tag(conn, body, account_id=str(account_id))
 
@@ -1715,7 +1724,7 @@ def get_pipeline_stages(
 def post_pipeline_stage(
     body: s.CreateStageIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.create_stage(conn, body, account_id=account_id)
 
@@ -1724,7 +1733,7 @@ def post_pipeline_stage(
 def post_pipeline_stages_reorder(
     body: s.ReorderStagesIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.reorder_stages(conn, body, account_id=account_id)
 
@@ -1734,7 +1743,7 @@ def patch_pipeline_stage(
     stage_id: int,
     body: s.UpdateStageIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.update_stage(conn, stage_id, body, account_id=account_id)
 
@@ -1743,7 +1752,7 @@ def patch_pipeline_stage(
 def delete_pipeline_stage(
     stage_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.archive_stage(conn, stage_id, account_id=account_id)
 
@@ -1752,7 +1761,7 @@ def delete_pipeline_stage(
 def post_pipeline_card(
     body: s.AddPipelineCardIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.add_card(conn, body, account_id=account_id)
 
@@ -1762,7 +1771,7 @@ def patch_pipeline_card(
     property_id: int,
     body: s.MoveCardIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.move_card(conn, property_id, body, account_id=account_id)
 
@@ -1771,9 +1780,43 @@ def patch_pipeline_card(
 def delete_pipeline_card(
     property_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.remove_card(conn, property_id, account_id=account_id)
+
+
+# --- pipeline sharing (migration 641) ----------------------------------------
+# A share lets its recipient act as the owner on curation (X-Act-As). Sharing is never delegated:
+# the owner is the caller's own account (require_account_id 403s under the header); the grant and
+# its notification are api/shares.py's service-role write, opened only after that gate.
+
+@app.get("/pipeline/shares")
+def get_pipeline_shares(
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    return shares_module.list_pipeline_shares(conn)
+
+
+@app.post("/pipeline/shares")
+def post_pipeline_share(
+    body: s.SharePipelineIn,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+) -> dict[str, Any]:
+    shares_module.grant(
+        deps.open_background_conn, body.email, shares_module.PipelineShare(account_id, body.mode),
+    )
+    return shares_module.list_pipeline_shares(conn)
+
+
+@app.delete("/pipeline/shares/{account_id}")
+def delete_pipeline_share(
+    account_id: uuid.UUID,
+    side: s.ShareSide,
+    conn: Any = Depends(tenant_pool.tenant_conn),
+) -> dict[str, Any]:
+    """Stop sharing my board with `account_id` (side=shared_with) or leave theirs (shared_with_me)."""
+    return shares_module.revoke_pipeline(conn, str(account_id), side)
 
 
 # --- Browse > Stats dashboard (migration 626) --------------------------------
@@ -1797,7 +1840,7 @@ def put_stats_dashboard(
 def post_dismissal(
     body: s.DismissPropertyIn,
     conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return dismissals_module.dismiss(conn, body, account_id=account_id)
 
@@ -1807,8 +1850,8 @@ def delete_dismissal(
     property_id: int,
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
-    """RLS-only: "dismissed" is read under the plural current_account_ids(), so
-    undo lifts every active row the caller can see, not one account's."""
+    """RLS-only: "dismissed" is read under the plural acting_account_ids() (the caller's
+    accounts without X-Act-As), so undo lifts every active row the caller can see."""
     return dismissals_module.undismiss(conn, property_id)
 
 

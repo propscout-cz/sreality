@@ -516,7 +516,13 @@ class CreateNoteIn(BaseModel):
     shared: bool = False
 
 
-class ShareCollectionIn(BaseModel):
+ShareMode = Literal["read", "edit"]
+ShareSide = Literal["shared_with", "shared_with_me"]
+
+
+class ShareIn(BaseModel):
+    """The one email rule for both share kinds (migrations 610 + 641)."""
+
     email: str
 
     @field_validator("email", mode="before")
@@ -527,6 +533,15 @@ class ShareCollectionIn(BaseModel):
             if not 3 <= len(v) <= 320 or v.count("@") != 1:
                 raise ValueError("must be one email address")
         return v
+
+
+ShareCollectionIn = ShareIn
+
+
+class SharePipelineIn(ShareIn):
+    """Share my board (migration 641); re-sharing changes the mode."""
+
+    mode: ShareMode
 
 
 class SetArtifactLinkIn(BaseModel):

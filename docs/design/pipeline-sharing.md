@@ -1,6 +1,6 @@
 # Pipeline sharing — view or edit another account's board, and act as its owner
 
-Status: **APPROVED 2026-10-20 (v1.2, all rulings in, §8); W1–W2 run on this text; every merge waits for the autodedup session's window.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
+Status: **APPROVED 2026-10-20 (v1.2, rulings 1–11 in, §8; 12 is a W1 deviation awaiting the operator); W1–W2 run on this text; every merge waits for the autodedup session's window. W1 (database + API + doctrine) in PR #TBD.** Delegates may manage stages; every delegated edit is stamped (actor + time) in one ledger; the phone may move cards on edit boards; `account_members.role` stays. Written from three code maps
 (pipeline model + API, SPA surfaces, tenancy mechanics; Opus readers) and verified against the live
 database (46 stages across 6 accounts, 180 cards, 1 collection share, 5 users). Sibling of
 `docs/design/collection-sharing.md` (migrations 610/613, live since 2026-10-17).
@@ -80,25 +80,28 @@ create function acting() returns boolean language sql stable set search_path = '
   select coalesce(current_setting('request.headers', true)::json ->> 'x-act-as', '') <> '' $$;
 
 -- Who the caller acts FOR on curation: membership, or the owner named by the header when that owner
--- shared their pipeline with the caller (edit: always; read: reads only), or NOBODY when the header
--- names anyone else — a stale or forged header shows nothing, never the caller's own rows.
-create function acting_account_ids() returns setof uuid language sql stable security definer set search_path = public as $$
+-- shared their pipeline with the caller (edit: always; read: reads only, and only where for_board —
+-- the three pipeline tables, ruling 2), or NOBODY when the header names anyone else — a stale or
+-- forged header shows nothing, never the caller's own rows. As shipped in 641 (RETURNS TABLE, `union`).
+create function acting_account_ids(for_board boolean default false) returns table (account_id uuid)
+language sql stable security definer set search_path = public as $$
   with me as (select am.account_id from account_members am
-               where am.user_id = nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid),
-       asked as (select nullif(current_setting('request.headers', true)::json ->> 'x-act-as', '')::uuid as id)
+               where am.user_id = nullif(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub', '')::uuid),
+       asked as (select nullif(nullif(current_setting('request.headers', true), '')::json ->> 'x-act-as', '')::uuid as id)
   select me.account_id from me, asked where asked.id is null
-  union all
+  union
   select s.account_id from pipeline_shares s, asked
-   where s.account_id = asked.id and s.recipient_account_id in (select account_id from me)
-     and (s.mode = 'edit' or coalesce(current_setting('request.method', true), '') in ('GET', 'HEAD')) $$;
-revoke execute on function acting(), acting_account_ids() from public, anon;
-grant execute on function acting(), acting_account_ids() to authenticated;
+   where s.account_id = asked.id and s.recipient_account_id in (select me.account_id from me)
+     and (s.mode = 'edit'
+          or (for_board and coalesce(current_setting('request.method', true), '') in ('GET', 'HEAD'))) $$;
+-- grants: acting() and acting_account_ids(boolean) to authenticated only.
 
 -- The eleven curation policies switch identity function; nothing else does (ALTER, never drop: no window).
 alter policy collections_tenant_rw on collections
   using (account_id in (select acting_account_ids())) with check (account_id in (select acting_account_ids()));
 -- … tags, property_notes, collection_properties, property_tags, property_note_attachments,
---   property_artifact_links, property_dismissals, property_pipeline, pipeline_stages, property_pipeline_events
+--   property_artifact_links, property_dismissals the same; property_pipeline, pipeline_stages and
+--   property_pipeline_events read acting_account_ids(true): the only tables a READ share reaches.
 -- The collection share rows are the caller's OWN consent: invisible while acting (so the four
 -- *_shared_read arms add nothing to an owner's view, and a delegate can neither see nor revoke the
 -- owner's shares).
@@ -112,7 +115,7 @@ create table delegated_edits (
   id               bigint generated always as identity primary key,
   at               timestamptz not null default now(),
   actor_user_id    uuid not null,                                        -- the JWT sub
-  actor_account_id uuid not null references accounts(id) on delete cascade,
+  actor_account_id uuid references accounts(id) on delete set null,      -- deleting the actor keeps the history
   owner_account_id uuid not null references accounts(id) on delete cascade,
   relation         text not null,                                        -- 'property_notes', 'property_pipeline', …
   row_key          text not null,                                        -- the row's primary key, text
@@ -125,21 +128,21 @@ revoke all on delegated_edits from anon, authenticated;
 grant select on delegated_edits to authenticated;                         -- written by the trigger only
 create policy delegated_edits_owner_read on delegated_edits for select to authenticated
   using (owner_account_id in (select current_account_ids()));            -- the OWNER reads what was done as them
-create function stamp_delegated_edit() returns trigger language plpgsql security definer set search_path = public as $$
-begin
-  if acting() then
-    insert into delegated_edits (actor_user_id, actor_account_id, owner_account_id, relation, row_key, op)
-    select (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid,
-           (select account_id from current_account_ids() limit 1),
-           (select account_id from acting_account_ids() limit 1),
-           tg_table_name, coalesce(new, old)::text /* the PK, built per table */, lower(tg_op);
-  end if;
-  return coalesce(new, old);
-end $$;
--- one AFTER INSERT OR UPDATE OR DELETE trigger per curation table (eleven), each handing its PK as row_key.
+-- As shipped: ONE function; the trigger's WHEN (acting()) gates it; the PK column names arrive as
+-- trigger arguments and row_key is their values joined by ':'; actor_account_id = the share's
+-- recipient account (oldest share first), the account share_party_emails() labels for the owner.
+create function stamp_delegated_edit() returns trigger language plpgsql security definer set search_path = public as $$ … $$;
+-- one AFTER INSERT OR UPDATE OR DELETE … FOR EACH ROW WHEN (acting()) trigger per curation table (eleven).
 
--- One label door for both share kinds (counterparties of every share the caller is party to).
-create or replace function share_party_emails() … from collection_shares … union … from pipeline_shares … ;
+-- A row's stamp, defined once (invoker: the ledger's owner-read policy decides who sees it): the
+-- latest delegated edit, or nothing when the row changed after it (the owner's own later write).
+create function latest_delegated_edit(of_relation text, of_row text, changed_at timestamptz)
+  returns table (actor_account_id uuid, at timestamptz) …;
+
+-- One label door for both share kinds (counterparties of every share the caller is party to), plus,
+-- to an owner, every actor in their own ledger (a revoked delegate stays named on their stamps).
+create or replace function share_party_emails() … from collection_shares … union … from pipeline_shares
+  … union … from delegated_edits where owner_account_id in (select current_account_ids()) … ;
 
 -- One notification kind for both share kinds: 'share' (collection_id set for a collection, NULL for a pipeline).
 alter table notification_dispatches drop constraint notification_dispatches_source_ck;  -- 'collection_share' arm → 'share'
@@ -168,8 +171,10 @@ commit;
 ### 3.2 The delegation rule, stated once
 
 A caller with a pipeline share from owner O may send `x-act-as: O`. On that request, and only on the
-eleven curation tables, the caller is O: reads under either mode, writes under `edit`. Everything else
-answers as the caller. Without the header nothing changes.
+eleven curation tables, the caller is O: under `edit`, reads and writes on all eleven; under `read`,
+reads (GET/HEAD) of the board only — the three pipeline tables (ruling 2: nothing on the property
+page; the owner's notes, files, tags, collections, dismissals and links stay unreadable, enforced by
+the database). Everything else answers as the caller. Without the header nothing changes.
 
 ### 3.3 Who can do what
 
@@ -203,17 +208,22 @@ answers as the caller. Without the header nothing changes.
 - **One share module:** `api/shares.py` holds what the collection share route does today — resolve the
   confirmed email, the service-role grant write, the notification — parameterised by kind.
   `POST /pipeline/shares {email, mode}` upserts the grant (re-sharing changes the mode; a mode change
-  notifies again only when it widens to edit); `DELETE /pipeline/shares/{account_id}` revokes or leaves
-  (the party policy decides); `GET /pipeline/shares` → `{shared_with: [{account_id, email, mode}],
+  notifies again only when it widens to edit); `DELETE /pipeline/shares/{account_id}?side=shared_with|shared_with_me` revokes or leaves
+  (the party policy decides; W1's `side` names which, so a mutual pair loses one grant, not both); `GET /pipeline/shares` → `{shared_with: [{account_id, email, mode}],
   shared_with_me: [{account_id, email, mode}]}` labelled through `share_party_emails()`.
-  `POST /collections/{id}/shares` moves onto the same module (no behaviour change).
+  `POST /collections/{id}/shares` moves onto the same module and, like `POST /pipeline/shares`,
+  declares `require_account_id` (sharing never delegates: 403 under the header; its ownership gate
+  names `current_account_ids()`). A delegate also may not set the owner's collection monitoring
+  (`monitoring_enabled` / `notify_channels`: 403 under the header; §3.8). The `side` query
+  parameter is a W1 deviation awaiting the operator's confirmation (§8-12).
 - **Notifications:** `SourceKind` value `collection_share` becomes `share` (one kind, one renderer);
   the message says what was shared: `'<owner> shared the collection "<name>" with you'` /
   `'<owner> shared their pipeline with you (view only|edit)'`.
 - **Projections carry the stamp:** `_NOTE_PROJECTION`, the card read and `pipeline_board_public` /
-  `pipeline_stages_public` gain `edited_by_email` + `edited_at` from the row's latest `delegated_edits`
-  entry (null when the owner did it themselves), labelled through `share_party_emails()` (the actor's
-  account is the owner's counterparty).
+  `pipeline_stages_public` gain the stamp from ONE SQL definition, `latest_delegated_edit()`: the row's
+  latest `delegated_edits` entry, null when the row changed after it (the owner did it themselves).
+  The API projections carry `edited_by_email`; the views carry `edited_by_account_id`, which the SPA
+  labels through `share_party_emails()` (a counterparty, or a former delegate in the owner's ledger).
 - **Unchanged:** the dismissal invariant SQL (correct under replace
   semantics), merge carriers (per card account), `POST /listings/lookup` (no header → own board),
   Browse RPCs, Watchdog, collection monitor.
@@ -258,7 +268,8 @@ answers as the caller. Without the header nothing changes.
 ### 3.6 Notes while acting
 
 A note written while acting is the owner's note (owner's account, `owner_email` null to the owner).
-The consent mark (`shared`) and the audience are the owner's, computed from the owner's shares. Notes
+The consent mark (`shared`) is the owner's; the audience (the owner's collection shares) is not shown
+while acting, because share rows are invisible under the header (§3.1, §3.3 "shares — never"). Notes
 third parties shared with the DELEGATE do not appear while acting (`collection_shares` is invisible
 under the header), so a page in acting mode shows exactly what the owner would see of their own
 curation and nothing of the delegate's. Every delegated write is recorded in `delegated_edits` (who, as whom, which row, when; ruling 5): the
@@ -277,7 +288,7 @@ and paid calls are never spent by a delegate.
 
 Cards and curation stay owned by exactly one account, so the carriers, the sold-comps worker and merge
 receipts are untouched. `delegated_edits.row_key` names rows, not properties, so it needs no carrier
-entry; a merge that moves a note keeps the note's id and therefore its stamps. A split routes only the acting account's items (unchanged: a delegate on a
+entry; a merge that moves a note keeps the note's id and therefore its stamps. A split routes only the caller's account's items (unchanged: a delegate on a
 split route acts as the caller, not the owner — the merge routes are admin-only and never carry the
 header). Collection monitoring and watchdog never act. The extension never acts.
 
@@ -315,9 +326,9 @@ structural — nothing in the app learns a second way to read or write curation.
 ## 6. Waves
 
 Merges wait for the autodedup session's green light (`autodedup.settings rt_bootstrap:rt` false and its
-word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 — next free at merge.
+word). Migration numbers: #1898 holds 638/639 and #1902 took 640 on main → 641 — re-check at merge.
 
-- **W1 `feature/pipeline-shares-acting`** (database + API + doctrine). Migration 640; `tenant_transaction`
+- **W1 `feature/pipeline-shares-acting`** (database + API + doctrine). Migration 641; `tenant_transaction`
   GUCs; `tenant_conn` header; `require_acting_account_id` on the curation, pipeline-card and stage writes, the `delegated_edits` ledger + trigger + the stamp columns in the projections and the two board views (security_invoker restated),
   `require_account_id` refusing the header; `_is_mine`; `api/shares.py` with both kinds; `SourceKind`
   `share`; `tests/_tenant_scope.py` (one `_scoped`); `tests/test_pipeline_shares_live.py` (owner A,
@@ -331,9 +342,12 @@ word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 — next f
   `test_migration_rls_grants.py` policy pin for the new policy + the eleven ALTERs. Docs: tenancy.md
   (the delegation paragraph: identity vs acting, the eleven tables, the header, fail-closed), database +
   toolkit-api skills, architecture.md rules 16/18/22, GLOSSARY ("Pipeline share", "Acting as"), CLAUDE.md
-  rules 18 + 22 one clause each. Verify: apply 640 before merge (nothing can create a share until the
-  route deploys; the function equals today's behaviour without the header), one `execute_sql` check,
-  merge, API status.
+  rules 18 + 22 one clause each. Verify: **W1 and W2 merge together, inside the window, with 641
+  applied immediately before** (641 renames `collection_share` → `share`, so main's API cannot write a
+  collection share after the apply, and W1's API cannot read curation before it: `acting_account_ids()`);
+  one `execute_sql` check; then ONE PostgREST smoke as a test user: `GET /rest/v1/pipeline_stages_public`
+  with `x-act-as: <an account that shared nothing>` reads 0 rows and without the header reads the
+  caller's own (proves `request.headers` + `request.method` on the live gateway, §7); merge; API status.
 - **W2 `feature/pipeline-sharing-surfaces`** (SPA). §3.5 desktop + phone + Notifications; vitest for the
   switcher gating (drag/menu/trash/manage per mode), the key segment (own caches untouched while a
   shared board is open), the active-board selection (per device, reset on revoke/leave), the property-page button + sticky mode + banner, `ShareBlock`, the share row. Verify: vite
@@ -374,3 +388,6 @@ word). Migration numbers: 637 is on main, #1898 holds 638/639 → 640 — next f
     until the active board goes back to "Můj pipeline" / it ends when you leave the property page.
 11. **The active board is remembered per device** (like the desktop-view setting; survives reloads; the
     extension and other devices are unaffected) / per tab only.
+12. *(W1 deviation, awaiting the operator)* **`DELETE /pipeline/shares/{account_id}` names a side**
+    (`?side=shared_with` revokes, `shared_with_me` leaves), so a mutual pair loses one grant, not both
+    / one call removes every grant between the two accounts.

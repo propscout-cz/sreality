@@ -3,23 +3,22 @@
 # Two tenants and seven properties, each listed in `browse_list` (minimum columns, as
 # tests/test_stats_pivot_live.py seeds it): card (A's pipeline card + A's PRIVATE collection),
 # shared (A's collection SHARED with B, migration 610), t12 / t1 / t2 (A's tags), plain, gone
-# (dismissed by A, migration 536). Every read runs under `_scoped` (the tenant_conn shape) through
+# (dismissed by A, migration 536). Every read runs under `scoped` (the tenant_conn shape) through
 # BOTH the SRF (`browse_list_visible`) and the stats RPC, whose `filtered` must match, so the two
 # clause blocks are proven to agree. Seeding runs as the owner login inside one rolled-back
 # transaction; the migrations lane sets DB_RAILS_REQUIRED=1, so a lost TEST_DATABASE_URL goes red.
 
 from __future__ import annotations
 
-import contextlib
 import itertools
 import json
 import uuid
-from collections.abc import Iterator
 from typing import Any, NamedTuple
 
 import pytest
 
 from tests._live_property import REQUIRED_DB, _collection, _stage, _tag, cur  # noqa: F401
+from tests._tenant_scope import scoped
 
 pytestmark = REQUIRED_DB
 
@@ -52,20 +51,6 @@ class _World(NamedTuple):
 
     def ids(self, *names: str) -> set[int]:
         return {self.props[n] for n in names}
-
-
-@contextlib.contextmanager
-def _scoped(cur: Any, t: _Tenant) -> Iterator[None]:
-    """SET LOCAL ROLE authenticated + the caller's JWT claims, inside the test's transaction."""
-    cur.execute("SET LOCAL ROLE authenticated")
-    cur.execute(
-        "SELECT set_config('request.jwt.claims', %s, true)",
-        (json.dumps({"sub": str(t.user), "role": "authenticated"}),),
-    )
-    yield
-    # Not in a `finally`: after a failed statement the transaction is aborted and the
-    # fixture's rollback ends the role with it; a RESET there would mask the real error.
-    cur.execute("RESET ROLE")
 
 
 def _tenant(cur: Any) -> _Tenant:
@@ -144,7 +129,7 @@ def _visible(cur: Any, w: _World, t: _Tenant, **args: Any) -> set[int]:
     `hide_dismissed` is passed to both (the SRF defaults it on, the RPC off)."""
     args = {"hide_dismissed": True} | args
     params = args | {"universe": sorted(w.everything), "spec": _SPEC}
-    with _scoped(cur, t):
+    with scoped(t.user, cur=cur):
         cur.execute(
             f"SELECT property_id FROM public.browse_list_visible({_named(args)[2:]}) "
             "WHERE property_id = ANY(%(universe)s::bigint[])",
@@ -210,7 +195,7 @@ def test_an_empty_element_list_constrains_nothing(cur: Any, world: _World, side:
 
 def test_hide_dismissed_is_the_default_and_per_account(cur: Any, world: _World) -> None:
     w = world
-    with _scoped(cur, w.a):
+    with scoped(w.a.user, cur=cur):
         cur.execute(
             "SELECT property_id FROM public.browse_list_visible() WHERE property_id = ANY(%s)",
             (sorted(w.everything),),

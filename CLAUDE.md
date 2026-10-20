@@ -188,7 +188,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
     **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
     per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `collection_share` (not property-grain; recipient-stamped by the share route, in-app only, mig 610). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `share` (not property-grain; recipient-stamped by `api/shares.py`, in-app only; collection mig 610 + pipeline mig 641). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
@@ -198,7 +198,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     transaction, so no such row orphans onto `merged_away`; every other column naming a property sits in `NOT_CARRIED` with its reason, and a census (offline
     over migrations, live over the replayed schema) fails on a column in neither. A SET/APPEND table = one `CurationTable(...)` line; any other shape = one
     adapter. Each merge writes one `property_merge_carries` row per curation row it moved or folded (alerts none); a detach routes it back (`route_curation`: a note with its ad, the rest by its carry rows, folds re-created; a split's user picks per item, copies allowed).
-    Collections carry monitoring (`monitoring_enabled` + `notify_channels`); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never). Writes go through the API.
+    Collections carry monitoring (`monitoring_enabled` + `notify_channels`); a collection may be SHARED read-only (`collection_shares` + notes the author marks `shared`, mig 610: reads widen, writes never); a PIPELINE share lets its recipient ACT AS the owner on the eleven curation tables (a read share: the board only; `X-Act-As` → `acting_account_ids()`, mig 641: the identity is replaced, never unioned; every delegated write stamped in `delegated_edits`). Writes go through the API.
 19. **The scrape is cadence-split: a fast index-walk feeds an async batched detail-drain via `listing_detail_queue`** (migration 105).
     Index-walk (`--index-only`) walks the full index, `portal_runner.reconcile_sightings` (touch + enqueue) + end-gated nomination (rule #3); detail-drain
     (`--drain-only`) claims a bounded slice (`FOR UPDATE SKIP LOCKED`) and writes each flush in ONE `listing_write.write_listings` call.
@@ -223,7 +223,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
     one thing: out → a click adds at the entry stage; in → move, or remove behind a two-step confirm. **Never a remove toggle** — close deals into a terminal
-    stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API. The badge is
+    stage. Stages are per account: signup seeds the default board (migration 612), the account curates it via the API; a board is shared by account (`pipeline_shares`, mig 641: read or edit, an edit delegate manages cards AND stages as the owner, `require_acting_account_id`; sharing itself never delegates). The badge is
     `pipeline_stages.code` (migration 377), never derived from `position` or the label. Browse's pipeline scope (`?pipeline[_excluded]=any|<stage ids>`) is a
     curated-set scope judged in the database under the caller's RLS (migration 629, rule #18) and OUTSIDE preset identity; the chip LOADS
     A VIEW, the sidebar's Curation → Pipeline control modifies. That needs `category_type` nullable

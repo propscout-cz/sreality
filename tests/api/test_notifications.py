@@ -861,7 +861,7 @@ def test_get_unread_count_breaks_down_by_source() -> None:
     conn = _FakeConn(script)
     out = get_unread_count(conn)  # type: ignore[arg-type]
     assert out == {
-        "watchdog": 4, "collection_monitor": 3, "collection_share": 0, "system_health": 0,
+        "watchdog": 4, "collection_monitor": 3, "share": 0, "system_health": 0,
         "total": 7, "unread_count": 7,
     }
     scoped = get_unread_count(conn, source_kind="collection_monitor")  # type: ignore[arg-type]
@@ -888,12 +888,14 @@ def test_get_unread_count_sums_system_health_into_total() -> None:
 
 
 def test_get_unread_count_names_the_share_kind() -> None:
-    # Every SourceKind gets its own count from the ONE alias (migration 610's fourth producer).
+    # Every SourceKind gets its own count from the ONE alias; both share kinds are one 'share'
+    # producer (migrations 610 + 641).
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "GROUP BY d.source_kind" in s, [("collection_share", 2)], 0),
+        (lambda s: "GROUP BY d.source_kind" in s, [("share", 2)], 0),
     ]
     out = get_unread_count(_FakeConn(script))  # type: ignore[arg-type]
-    assert out["collection_share"] == 2 and out["total"] == 2
+    assert out["share"] == 2 and out["total"] == 2
+    assert "collection_share" not in out
 
 
 def test_dispatch_select_projects_message() -> None:
