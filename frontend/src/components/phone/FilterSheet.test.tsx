@@ -47,10 +47,6 @@ const NOT_ON_SHEET: Record<string, string> = {
   category_sub_cb: 'dropped from the sidebar in #300: the registry entry has no options',
   min_garden_area: 'not placed on the desktop sidebar either',
   max_garden_area: 'not placed on the desktop sidebar either',
-  building_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  building_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  apartment_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  apartment_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
 };
 
 /* Every cohort-conditional group open: a house cohort shows Subtype, Prodej shows Yield. */

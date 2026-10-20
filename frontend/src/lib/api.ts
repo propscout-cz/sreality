@@ -2279,7 +2279,8 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
  * GET returns every kraj (admin_boundaries level='kraj') with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
- * same payload. The scheduled batch job reads the same key. */
+ * same payload. Condition scoring is parked (rule 14): its workflows are
+ * dispatch-only, so the key only scopes a manually dispatched run. */
 
 export interface ConditionScoringRegion {
   id: number;
