@@ -39,11 +39,14 @@ toolkit work.
   and status any, so the status fact stays the property's and "broker + Neaktivní" can still read mixed
   (2,169 of 355,514 broker-property pairs) — closing it needs the broker prefilter to carry per-property
   broker-ad status.
-- **Next:** (1) the legacy-vocabulary heal as its own PR — 89 condition spellings and 766
-  dispositions outside the canonical vocabulary are charted under their raw spellings, sorted after
-  the canonical members, until the heal lands (ruling 9);
-  (2) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
-  the operator rules; (3) the legacy heal (1) also empties the raw-spelling cells; nothing else is owed on places.
+- **Legacy vocabulary healed (2026-10-20, migration 642):** the 31 off-canon condition spellings (105 bazos
+  listings) and 28 impossible dispositions (812 listings) that charted as raw-spelled "pod 5" rows now read
+  as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the
+  old values — drop it after a clean week.
+- **Next:** (1) the land-rent basis ruling — rented land keeps the rent basis and its 25 / 50 bands until
+  the operator rules; (2) optionally `reparse --source bazos --fields disposition --missing --write
+  --allow-snapshot-deferral` (dry run first), which may fill a NULL disposition the page states grammatically;
+  nothing else is owed on places.
 
 ### Negative portal filters (2026-10-13, migration 597)
 - **Shipped: the portal filter is two-sided** — "on idnes, not on sreality". One chip per portal
