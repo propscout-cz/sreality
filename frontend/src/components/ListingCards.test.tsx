@@ -35,7 +35,7 @@ import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtShortDate } from '@/lib/format';
-import type { CardRow } from '@/lib/queries';
+import type { CardRow, SortSpec } from '@/lib/queries';
 import type { ImagePublic, ListingEstimate } from '@/lib/types';
 import type { CoverTag } from '@/lib/imageTags';
 
@@ -140,6 +140,7 @@ function renderGrid(
     estimates?: Record<number, ListingEstimate>;
     row?: CardRow;
     orderPortal?: string | null;
+    sort?: SortSpec;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
   } = {},
@@ -155,7 +156,7 @@ function renderGrid(
           <ListingCards
             rows={[opts.row ?? ROW]}
             total={1}
-            sort={{ field: 'last_seen_at', dir: 'desc' } as never}
+            sort={opts.sort ?? queries.DEFAULT_SORT}
             orderPortal={opts.orderPortal}
             imageLarge={false}
             coverTag={opts.coverTag ?? 'default'}
@@ -707,5 +708,13 @@ describe('<ListingCards> the portal badge and the order date', () => {
   it('shows no portal date without the one-portal order', () => {
     renderGrid({ row: { ...ROW, newest_ad_at_idnes: '2026-03-05T10:00:00Z' } as CardRow });
     expect(lifespan()).not.toContain('iDNES');
+  });
+
+  it('dates an active card by last seen under the last-seen sort, by first seen otherwise', () => {
+    const { unmount } = renderGrid({ sort: { field: 'last_seen_at', direction: 'desc' } });
+    expect(lifespan()).toMatch(new RegExp(`^viděno${fmtShortDate(ROW.last_seen_at)}`));
+    unmount();
+    renderGrid();
+    expect(lifespan()).toMatch(new RegExp(`^od${fmtShortDate(ROW.first_seen_at)}`));
   });
 });

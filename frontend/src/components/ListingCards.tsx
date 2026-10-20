@@ -243,6 +243,7 @@ export default function ListingCards({
                     estimating={r.sreality_id != null && estimatingIds.has(r.sreality_id)}
                     onEstimate={onEstimate}
                     orderPortal={orderPortal}
+                    lastSeenSort={sort.field === 'last_seen_at'}
                   />
                 </li>
               ))}
@@ -335,6 +336,7 @@ function Card({
   estimating,
   onEstimate,
   orderPortal,
+  lastSeenSort,
 }: {
   r: CardRow;
   coverTag: CoverTag;
@@ -353,6 +355,8 @@ function Card({
   estimating: boolean;
   onEstimate: (srealityId: number) => void;
   orderPortal: string | null;
+  /* Ordered by last seen: an active card dates itself by that key, not first seen. */
+  lastSeenSort: boolean;
 }) {
   /* The card element itself, for the map-origin scrollIntoView below. Both
    * modes now render the SAME non-interactive wrapper, so this no longer has
@@ -403,7 +407,8 @@ function Card({
     : '';
 
   /* One lifespan badge replaces the old status / od / viděno / TOM stack.
-   * Active cards show the open run "od <date> · <N dní>"; inactive cards
+   * Active cards show the open run "od <date> · <N dní>" ("viděno <date>"
+   * under the last-seen sort, so the order shows its key); inactive cards
    * show the closed run "<from> – <to> · <N dní>". The day count — the
    * operator's headline time-on-market metric — stays the copper accent,
    * folded inline. The Aktivní/Neaktivní word survives in the title. */
@@ -523,6 +528,11 @@ function Card({
               <>
                 {fmtShortDate(r.first_seen_at)}
                 <span className="opacity-50 mx-1">–</span>
+                {fmtShortDate(r.last_seen_at)}
+              </>
+            ) : lastSeenSort ? (
+              <>
+                <span className="opacity-60 mr-1">viděno</span>
                 {fmtShortDate(r.last_seen_at)}
               </>
             ) : (

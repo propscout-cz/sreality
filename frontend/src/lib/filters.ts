@@ -14,6 +14,7 @@ import { fmtArea } from './format';
  * this file, and the level list and the chip guard must have ONE definition. */
 import { isDistrictChip, type LocationLevel } from './districtCodes';
 import { portalScopeLabel } from './portals';
+import { parseSort, sortToParam } from './browseSort';
 import {
   CURATED_SET_NAMES,
   normalizeScope,
@@ -1037,8 +1038,8 @@ export const isDefault = (f: ListingFilters): boolean =>
 
 /** Persisted preset payload. The opaque `filter_spec` blob the API stores
  *  verbatim. `sort` is the serialized sort param (`sortToParam` form, e.g.
- *  "-price_czk") — kept as a plain string so this module needn't depend on
- *  the queries sort types. `null`/absent means the default sort. */
+ *  "-price_czk"), stored as a plain string. `null`/absent means the default
+ *  sort. */
 export interface PresetSpec {
   filters: ListingFilters;
   sort?: string | null;
@@ -1164,17 +1165,20 @@ function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope 
 /** Read a stored preset blob, tolerating the legacy bare-`ListingFilters`
  *  shape (presets saved before sort was captured) and fields whose type drifted
  *  after the preset was saved. Always returns a complete, shape-safe filter set
- *  merged onto DEFAULT_FILTERS, plus the saved sort (or null for the default). */
+ *  merged onto DEFAULT_FILTERS, plus the saved sort NORMALISED through
+ *  parseSort: absent, or naming a sort Browse no longer offers (the Table's
+ *  header-only sorts, 2026-10-20), it reads as the default, so such a preset
+ *  loads clean instead of dirty. */
 export const readPresetSpec = (
   spec: PresetSpec | ListingFilters,
-): { filters: ListingFilters; sort: string | null } => {
+): { filters: ListingFilters; sort: string } => {
   const wrapped =
     spec != null && (spec as PresetSpec).filters != null;
   const filters = wrapped
     ? (spec as PresetSpec).filters
     : (spec as ListingFilters);
   const sort = wrapped ? (spec as PresetSpec).sort ?? null : null;
-  return { filters: coerceStoredFilters(filters), sort };
+  return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
 const canonicalParams = (sp: URLSearchParams): string =>

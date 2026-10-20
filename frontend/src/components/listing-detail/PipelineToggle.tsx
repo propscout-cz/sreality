@@ -24,7 +24,7 @@ import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import { usePipelineCard } from '@/lib/usePipelineCard';
 
 export default function PipelineToggle({ property_id }: { property_id: number }) {
-  // W3: the shared members map (also what every Browse/Table funnel reads),
+  // W3: the shared members map (also what every Browse card funnel reads),
   // not a separate per-property fetch — one query answers "is this property
   // in the pipeline, at which stage" for every surface.
   const membersQ = usePipelineMembers();

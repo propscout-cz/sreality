@@ -148,81 +148,19 @@ export const BROWSE_SELECT_COLUMNS = {
   cards: CARD_COLS,
 } as const;
 
-export type SortField =
-  | 'sreality_id' | 'display_label' | 'disposition'
-  | 'area_m2' | 'price_czk' | 'price_per_m2'
-  | 'first_seen_at' | 'last_seen_at' | 'is_active'
-  | 'usable_area' | 'parking_lots'
-  | 'mf_gross_yield_pct'
-  /* One portal's "Newest first" (MS19), never user-selectable and never in a URL —
-   * derived by effectiveSort() below. */
-  | `newest_ad_at_${string}`;
-
-export type SortDirection = 'asc' | 'desc';
-
-export interface SortSpec {
-  field: SortField;
-  direction: SortDirection;
-}
-
-/* first_seen_at DESC = "newest listings first" (operator decision 2026-07-07,
- * with the browse_list read model): meaningful (genuinely new listings, not
- * "whichever portal the scraper touched last" — touch_listings bumps
- * last_seen_at market-wide every cycle) and IMMUTABLE, so keyset cursors stay
- * valid across snapshot rebuilds. last_seen_at remains a selectable option. */
-export const DEFAULT_SORT: SortSpec = { field: 'first_seen_at', direction: 'desc' };
-
-/* sreality_id stays in SortField (it's still a selected/displayed column) but
- * is intentionally absent here: it mixes real positive ids with synthetic
- * negative ones, so sorting by it is meaningless. Saved presets / URLs that
- * still carry sort=sreality_id fall back to DEFAULT_SORT via parseSort.
- * So does sort=estate_area (deleted 2026-10-20 with the Table tab): the raw
- * column is not the plot measure (rule 23), and nothing on Browse shows it. */
-const SORTABLE_FIELDS: ReadonlyArray<SortField> = [
-  /* W3: the place sort orders on what the row SHOWS (display_label). It used to
-   * sort on `district` (the okres text) while printing the town-or-locality
-   * -- two different strings, so the order looked arbitrary. An old
-   * `?sort=district` URL falls back to DEFAULT_SORT through parseSort. */
-  'display_label', 'disposition',
-  'area_m2', 'price_czk', 'price_per_m2',
-  'first_seen_at', 'last_seen_at', 'is_active',
-  'usable_area', 'parking_lots',
-  'mf_gross_yield_pct',
-];
-
-export const parseSort = (raw: string | null): SortSpec => {
-  if (!raw) return DEFAULT_SORT;
-  const direction: SortDirection = raw.startsWith('-') ? 'desc' : 'asc';
-  const field = (raw.startsWith('-') ? raw.slice(1) : raw) as SortField;
-  if (!(SORTABLE_FIELDS as ReadonlyArray<string>).includes(field)) return DEFAULT_SORT;
-  return { field, direction };
-};
-
-export const sortToParam = (s: SortSpec): string =>
-  `${s.direction === 'desc' ? '-' : ''}${s.field}`;
-
-/* The cards lane's sort menu — Browse's card view and the phone feed's Řazení
- * row offer exactly these (the only sort control Browse has since the Table tab
- * went, 2026-10-20). Two bookend the file by date (first_seen_at — when the
- * listing entered our archive), one by when a portal last showed it
- * (last_seen_at, most recent first), two by price, two by price/m², two by area
- * (area_m2, the headline area: floor area, or the PLOT for pozemek — rule 23),
- * two by MF gross yield. area_m2 and mf_gross_yield_pct are nullable (the yield
- * is only populated for sale apartments); the query orders nullsFirst:false so
- * every row without one sorts to the end either way. */
-export const CARD_SORTS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
-  { label: 'Newest first',      spec: { field: 'first_seen_at', direction: 'desc' } },
-  { label: 'Oldest first',      spec: { field: 'first_seen_at', direction: 'asc'  } },
-  { label: 'Naposledy viděno',  spec: { field: 'last_seen_at',  direction: 'desc' } },
-  { label: 'Price: low → high', spec: { field: 'price_czk',     direction: 'asc'  } },
-  { label: 'Price: high → low', spec: { field: 'price_czk',     direction: 'desc' } },
-  { label: 'Price/m²: low → high', spec: { field: 'price_per_m2', direction: 'asc'  } },
-  { label: 'Price/m²: high → low', spec: { field: 'price_per_m2', direction: 'desc' } },
-  { label: 'Plocha: low → high', spec: { field: 'area_m2',      direction: 'asc'  } },
-  { label: 'Plocha: high → low', spec: { field: 'area_m2',      direction: 'desc' } },
-  { label: 'Výnos MF: high → low', spec: { field: 'mf_gross_yield_pct', direction: 'desc' } },
-  { label: 'Výnos MF: low → high', spec: { field: 'mf_gross_yield_pct', direction: 'asc'  } },
-];
+/* Browse's sort (the field union, the URL token, the one menu) lives in a leaf
+ * module so filters.ts can read a stored sort without importing this file; it
+ * is re-exported here so every existing import site keeps working. */
+import type { SortSpec } from './browseSort';
+export {
+  CARD_SORTS,
+  DEFAULT_SORT,
+  parseSort,
+  sortToParam,
+  type SortDirection,
+  type SortField,
+  type SortSpec,
+} from './browseSort';
 
 /* -------------------------------------------------------------------------- */
 /* THE PORTAL RULE (MS19, migration 590; two-sided since 597): portal and     */

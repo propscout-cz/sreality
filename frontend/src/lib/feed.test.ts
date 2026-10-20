@@ -14,6 +14,7 @@ import {
   feedSearch,
   feedViewOf,
   isNewestFirst,
+  sortLabel,
 } from './feed';
 import { DEFAULT_SORT, type CardRow } from './queries';
 import type { FilterPreset } from './types';
@@ -113,6 +114,10 @@ describe("the view in the URL — Browse's contract", () => {
     expect(isNewestFirst(DEFAULT_SORT)).toBe(true);
     expect(isNewestFirst({ field: 'first_seen_at', direction: 'asc' })).toBe(false);
     expect(isNewestFirst({ field: 'price_czk', direction: 'desc' })).toBe(false);
+  });
+
+  it('names the last-seen order by its menu label', () => {
+    expect(sortLabel({ field: 'last_seen_at', direction: 'desc' })).toBe('Last seen first');
   });
 });
 

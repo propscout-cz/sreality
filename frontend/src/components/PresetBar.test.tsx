@@ -18,8 +18,9 @@ import type { FilterPreset } from '@/lib/types';
 const preset: FilterPreset = {
   id: 'p1',
   name: 'Praha 2+kk',
-  // A sort that can never equal the current one → the chip renders dirty.
-  filter_spec: { filters: {} as ListingFilters, sort: 'not-the-current-sort' },
+  // A real sort other than the current one → the chip renders dirty (an unknown
+  // one would read as the default, readPresetSpec, and the chip would be clean).
+  filter_spec: { filters: {} as ListingFilters, sort: '-price_czk' },
   created_at: '2026-05-12T10:00:00+00:00',
   updated_at: '2026-05-12T10:00:00+00:00',
   position: 0,

@@ -138,7 +138,7 @@ const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
     type: 'Feature' as const,
     /* Stable feature id lets maplibre's setFeatureState target this
      * point even after the source data is replaced — that's what
-     * powers the cross-source hover highlight (cards / table → map).
+     * powers the cross-source hover highlight (cards → map).
      * The surrogate listing_id (never null), NOT sreality_id — a null
      * feature id would make setFeatureState a no-op post-Gate-2. */
     id: r.listing_id,

@@ -38,6 +38,7 @@ import {
   watchdogNameSuggestion,
 } from './filters';
 import { districtsFilterClause } from './districtCodes';
+import { DEFAULT_SORT, parseSort, sortToParam } from './browseSort';
 import { BUILDING_MATERIAL_BUCKETS, filterById } from './filterRegistry.generated';
 import type { Disposition } from './types';
 
@@ -994,11 +995,11 @@ describe('filter presets', () => {
     expect(got.sort).toBe('-price_czk');
   });
 
-  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (sort null)', () => {
+  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (the default sort)', () => {
     const legacy: ListingFilters = { ...DEFAULT_FILTERS, areaMin: 50 };
     const got = readPresetSpec(legacy);
     expect(got.filters.areaMin).toBe(50);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
     // And it still round-trips through the URL serializer.
     expect(fromSearchParams(toSearchParams(got.filters)).areaMin).toBe(50);
   });
@@ -1010,7 +1011,21 @@ describe('filter presets', () => {
     // Missing fields fall back to defaults, so toSearchParams won't throw.
     expect(got.filters.categoryMain).toEqual(['byt']);
     expect(got.filters.priceMin).toBe(1000);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+  });
+
+  /* The Table's header-only sorts went 2026-10-20. A preset saved under one
+   * would load the default order while still holding the old token, so it read
+   * dirty and offered "Update preset" before the user touched anything. */
+  it('readPresetSpec reads a sort Browse no longer offers as the default, so the preset loads clean', () => {
+    const got = readPresetSpec({ filters: { ...DEFAULT_FILTERS, areaMin: 50 }, sort: '-estate_area' });
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+    // What Browse holds once the preset is loaded: its filters through the URL,
+    // and the sort the URL parses to. Both halves of PresetBar's dirty check agree.
+    const loadedFilters = fromSearchParams(toSearchParams(got.filters));
+    const loadedSort = sortToParam(parseSort(got.sort));
+    expect(filtersEqualForPreset(loadedFilters, got.filters)).toBe(true);
+    expect(loadedSort).toBe(got.sort);
   });
 
   it('readPresetSpec coerces stale scalar fields that became arrays (the load crash)', () => {

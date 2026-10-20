@@ -246,9 +246,8 @@ export function useUrlBrowseState(): BrowseViewState {
     (p: FilterPreset) => {
       const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
       const sp = preserveExtras(toSearchParams(pf));
-      const presetSort = ps ?? sortToParam(DEFAULT_SORT);
-      if (presetSort === sortToParam(DEFAULT_SORT)) sp.delete('sort');
-      else sp.set('sort', presetSort);
+      if (ps === sortToParam(DEFAULT_SORT)) sp.delete('sort');
+      else sp.set('sort', ps);
       sp.set('preset', p.id);
       setSearchParams(sp, { replace: false });
     },
@@ -304,7 +303,7 @@ export function useMemoryBrowseState(init: {
       loadPreset: (p) => {
         const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
         setFiltersState(pf);
-        if (ps) setSortState(parseSort(ps));
+        setSortState(parseSort(ps));
       },
       loadPipelineView: () => {
         setFiltersState(pipelineViewFilters());

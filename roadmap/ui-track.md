@@ -16,8 +16,9 @@ toolkit work.
   defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
   own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
 - **Done: Table tab removed 2026-10-20** (operator ruling; ~490 lines net; cards sort menu gains
-  Plocha + Naposledy viděno; `estate_area` sort deleted). An old `?tab=table` link opens the
-  Properties tab, and a one-tab strip (the broker modal) is not drawn.
+  area both ways + Last seen first, whose cards date by last seen; the header-only sorts and
+  `estate_area` deleted, a stored or linked one reads as the default). An old `?tab=table` link
+  opens the Properties tab, and a one-tab strip (the broker modal) is not drawn.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,

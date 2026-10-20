@@ -479,7 +479,7 @@ describe('the one-portal order', () => {
 
   it('passes every other sort straight through', () => {
     for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'last_seen_at',
-                         'display_label', 'mf_gross_yield_pct'] as const) {
+                         'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -523,13 +523,13 @@ describe('the one-portal order', () => {
 
 /* The cards' sort menu is Browse's only sort control since the Table tab went
  * (operator ruling 2026-10-20): it gained area both ways and last seen, and the
- * raw `estate_area` sort the table offered is gone. */
+ * sorts only the table's column headers offered are gone. */
 describe('the cards sort menu', () => {
-  it('offers Plocha both ways and Naposledy viděno, most recent first', () => {
+  it('offers area both ways and last seen, most recent first', () => {
     const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
-    expect(byLabel.get('Plocha: low → high')).toEqual({ field: 'area_m2', direction: 'asc' });
-    expect(byLabel.get('Plocha: high → low')).toEqual({ field: 'area_m2', direction: 'desc' });
-    expect(byLabel.get('Naposledy viděno')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+    expect(byLabel.get('Area: low → high')).toEqual({ field: 'area_m2', direction: 'asc' });
+    expect(byLabel.get('Area: high → low')).toEqual({ field: 'area_m2', direction: 'desc' });
+    expect(byLabel.get('Last seen first')).toEqual({ field: 'last_seen_at', direction: 'desc' });
   });
 
   it('round-trips every entry through the URL, one entry per order', () => {
@@ -542,6 +542,14 @@ describe('the cards sort menu', () => {
     expect(parseSort('estate_area')).toEqual(DEFAULT_SORT);
     expect(parseSort('-estate_area')).toEqual(DEFAULT_SORT);
     expect(CARD_SORTS.map((o) => o.spec.field)).not.toContain('estate_area');
+  });
+
+  it('reads every header-only sort the Table offered as the default', () => {
+    for (const field of ['display_label', 'disposition', 'is_active', 'usable_area',
+                         'parking_lots', 'sreality_id']) {
+      expect(parseSort(field)).toEqual(DEFAULT_SORT);
+      expect(parseSort(`-${field}`)).toEqual(DEFAULT_SORT);
+    }
   });
 
   it('pages the cards by area with the rows that have none last', async () => {
