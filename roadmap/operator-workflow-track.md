@@ -16,7 +16,8 @@ merge's patch, so the 26 retired cards reappeared until the 15:30 rebuild — th
 closed (migration 630 re-patches identity changes inside the rebuild). The detail page was right all
 along. The other "Lužická" cards are at least twelve different flats (prices 2.5–14.5 M, areas 50–88 m²);
 the only unmerged twin of the operator's flat is property 983290, one active sreality ad hidden by the
-status=inactive filter at merge time — the operator's merge to make with status=any, or AUTODEDUP's.
+status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 28 ads sit in one rt group
+(cluster 18836145) and its lane folds 983290 into 813505 at the next re-read under the 12 h freshness rule.
 - Open idea (not started): merge mode could name twins outside the current status/portal filter
   ("3 more properties share this address") so a merge made under a narrow filter is not read as broken.
 
