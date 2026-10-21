@@ -164,8 +164,9 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   `collection_share`); `api/shares.py` writes all three with `change_kind` `shared_<collection|pipeline|dashboard>`
   (652), the sharer as `actor_account_id` and the dashboard id or the mode as `event_ref`, conflicting on the
   one event identity (`EVENT_IDENTITY`, migration 653; no `dedupe_key` since W3), so a share notifies once per
-  (recipient, thing, actor) ever. In-app now, also pushed from W4 (collection-sharing ruling 5(e) superseded
-  2026-10-21).
+  identity: (recipient, collection or dashboard, actor), and for a pipeline (recipient, owner, mode) — a
+  widening to edit is a second notification. In-app now, also pushed from W4 (collection-sharing ruling 5(e)
+  superseded 2026-10-21).
 - **The API declares, per write route, which account it writes.** `tenant_conn` carries the header
   and the method into the transaction (`tenant_pool.tenant_transaction(claims, act_as=, method=)`,
   both required); `require_acting_account_id` (curation writes: own account, or the owner the
