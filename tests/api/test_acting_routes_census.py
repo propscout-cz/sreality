@@ -58,11 +58,11 @@ _OWN_ACCOUNT_CURATION_WRITES: dict[str, str] = {
 _SERVICE_ROLE = frozenset({"open_background_conn", "get_db_conn"})
 
 # Routes that must never act: identity-scoped tables (docs/design/pipeline-sharing.md §3.7) and
-# sharing itself (only the owner shares their own board).
+# sharing itself (only the owner shares their own board). A READ of an identity-scoped table is no
+# member: under the header its policy answers the caller's own rows (`GET /stats/dashboard`).
 _NEVER_ACTS: frozenset[str] = frozenset({
     "POST /notifications/subscriptions",
     "POST /filter-presets",
-    "GET /stats/dashboard",
     "PUT /stats/dashboard",
     "POST /stats/dashboards",
     "POST /pipeline/shares",

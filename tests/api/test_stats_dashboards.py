@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 import uuid
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,6 +30,7 @@ from api import main as api_main  # noqa: E402
 from api import saved_sets as ss  # noqa: E402
 from api import shares  # noqa: E402
 from api import tenant_pool  # noqa: E402
+from api.routes.filter_presets import PRESETS  # noqa: E402
 from api.routes.stats_dashboards import DASHBOARDS  # noqa: E402
 from tests.api._script_conn import ScriptConn  # noqa: E402
 
@@ -54,7 +56,7 @@ _OWN_PAYLOAD = {
 }
 
 
-def _starts(prefix: str):
+def _starts(prefix: str) -> Callable[[str], bool]:
     return lambda q: q.startswith(prefix)
 
 
@@ -64,7 +66,7 @@ def conn() -> ScriptConn:
 
 
 @pytest.fixture()
-def client(monkeypatch, conn: ScriptConn):
+def client(monkeypatch: pytest.MonkeyPatch, conn: ScriptConn) -> Iterator[Any]:
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: conn
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
     monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda c, claims: _ACCT)
@@ -85,12 +87,23 @@ def test_save_as_dashboard_inserts_one_named_row_for_the_callers_account(client,
     assert sql.startswith(
         "INSERT INTO stats_dashboards AS t (name, charts, filter_spec, color, position, account_id) "
         "VALUES (%s, %s::jsonb, %s::jsonb, %s, "
-        "(SELECT COALESCE(MAX(position), -1) + 1 FROM stats_dashboards WHERE name IS NOT NULL), %s) "
+        "(SELECT COALESCE(MAX(t.position), -1) + 1 FROM stats_dashboards t "
+        "WHERE t.account_id IN (SELECT current_account_ids()) AND name IS NOT NULL), %s) "
         "RETURNING t.id, t.name, t.charts, t.filter_spec,")
     name, charts, spec, color, owner = params
     # The charts are the registry's normalised board; the filter is the preset blob, verbatim.
     assert (name, json.loads(charts), json.loads(spec), color) == ("Praha byty", [_NORMAL], _SPEC, "sage")
     assert owner == _ACCT
+
+
+def test_a_new_dashboard_goes_last_among_the_callers_own_never_after_a_shared_one() -> None:
+    """RLS shows a recipient the dashboards shared with them; the new row's position counts only their own.
+    A preset is never shared, so its insert keeps the plain RLS-scoped MAX."""
+    dash, preset = ss._insert_sql(DASHBOARDS), ss._insert_sql(PRESETS)
+    assert ("(SELECT COALESCE(MAX(t.position), -1) + 1 FROM stats_dashboards t "
+            "WHERE t.account_id IN (SELECT current_account_ids()) AND name IS NOT NULL)") in dash
+    assert "(SELECT COALESCE(MAX(t.position), -1) + 1 FROM filter_presets t), %s)" in preset
+    assert "current_account_ids" not in preset
 
 
 def test_a_dashboard_without_a_filter_stores_sql_null_not_json_null(client, conn) -> None:
@@ -427,8 +440,8 @@ def test_every_dashboard_route_rides_the_tenant_connection_and_the_writes_that_i
         "DELETE /stats/dashboards/{dashboard_id}/shares/{account_id}",
         "GET /stats/dashboard", "PUT /stats/dashboard",
     }
-    own = {"POST /stats/dashboards", "POST /stats/dashboards/{dashboard_id}/shares",
-           "GET /stats/dashboard", "PUT /stats/dashboard"}
+    # The working-board GET is a tenant read (shape 1): RLS alone, no account.
+    own = {"POST /stats/dashboards", "POST /stats/dashboards/{dashboard_id}/shares", "PUT /stats/dashboard"}
     for key, route in routes.items():
         calls = _calls(route)
         assert tenant_pool.tenant_conn in calls, f"{key} left the tenant connection"

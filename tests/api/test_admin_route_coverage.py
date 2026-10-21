@@ -255,6 +255,11 @@ _RLS_ONLY_ALLOWLIST: dict[str, str] = {
         "RLS-only read — migration 626's tenant policy (own) plus 647's shared-read arm "
         "(dashboards shared with the caller); labels through share_party_emails()"
     ),
+    "GET /stats/dashboard": (
+        "RLS-only read of the working board — migration 626's tenant policy (current_account_ids(), "
+        "the caller's own even under X-Act-As); 647's shared arm reads named rows only, so `name IS NULL` "
+        "is the caller's one unnamed row"
+    ),
     "GET /stats/dashboards/{dashboard_id}": "RLS-only read (migrations 626 + 647, as above)",
     "PUT /stats/dashboards/{dashboard_id}": (
         "UPDATE by id — migration 626's USING clause; a shared row is visible, never updatable (404)"

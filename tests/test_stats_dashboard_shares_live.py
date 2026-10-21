@@ -98,7 +98,7 @@ def world(svc: Any, tenants: dict[str, _Tenant]) -> Iterator[_World]:
     a = tenants["a"]
     with scoped(a.user) as conn:
         save_working_board(conn, [{"id": "w1"}], account_id=a.acc)
-        working = uuid.UUID(working_board(conn, account_id=a.acc)["id"])
+        working = uuid.UUID(working_board(conn)["id"])
         named = saved_sets.create(conn, DASHBOARDS, {
             "name": "Praha byty", "charts": [{"id": "c1"}],
             "filter_spec": {"filters": {"categoryMain": "byt"}}, "color": "sage",
@@ -200,9 +200,23 @@ def test_the_working_board_is_never_the_recipients_and_never_a_saved_dashboard(
     assert _rows(b, "SELECT id FROM stats_dashboards WHERE id = %s", (world.working,)) == []
     assert str(world.working) not in _listed(a), "the working board is listed as a saved dashboard"
     with scoped(b.user) as conn:
-        assert working_board(conn, account_id=b.acc) is None
+        assert working_board(conn) is None
     with scoped(a.user) as conn:
-        assert working_board(conn, account_id=a.acc)["charts"] == [{"id": "w1"}]
+        assert working_board(conn)["charts"] == [{"id": "w1"}]
+
+
+def test_the_working_board_read_under_x_act_as_is_the_callers_own(
+    tenants: dict[str, _Tenant], world: _World,
+) -> None:
+    """The table is identity-scoped (pipeline-sharing §3.7): acting as A, B reads no board of A's, and A
+    acting as anyone still reads A's own."""
+    from api.routes.stats_dashboards import working_board
+
+    a, b = tenants["a"], tenants["b"]
+    with scoped(b.user, act_as=a.acc) as conn:
+        assert working_board(conn) is None
+    with scoped(a.user, act_as=b.acc) as conn:
+        assert working_board(conn)["id"] == str(world.working)
 
 
 def test_the_working_board_cannot_be_shared(
@@ -296,12 +310,14 @@ def test_an_unshared_dashboard_stays_the_owners_and_own_dashboards_list_first(
     with scoped(a.user, method="POST") as conn:
         private = saved_sets.create(conn, DASHBOARDS, {"name": "Soukromá", **blank}, account_id=a.acc)
     with scoped(b.user, method="POST") as conn:
-        mine = saved_sets.create(conn, DASHBOARDS, {"name": "Moje", **blank}, account_id=b.acc)
+        first = saved_sets.create(conn, DASHBOARDS, {"name": "Moje", **blank}, account_id=b.acc)
+        second = saved_sets.create(conn, DASHBOARDS, {"name": "Druhá", **blank}, account_id=b.acc)
     assert private["id"] not in _listed(b)
     assert _rows(b, "SELECT id FROM stats_dashboards WHERE account_id = %s", (a.acc,)) == [(world.named,)]
-    # B's own dashboard comes first although the shared one sits at an earlier position.
-    assert mine["position"] > 0
-    assert list(_listed(b)) == [mine["id"], str(world.named)]
+    # B's positions count B's own rows only: the shared one (position 0) is no slot of B's list.
+    assert (first["position"], second["position"]) == (0, 1)
+    # B's own dashboards come first although the shared one sits at an earlier position than the second.
+    assert list(_listed(b)) == [first["id"], second["id"], str(world.named)]
 
 
 def test_co_recipients_never_learn_each_other(

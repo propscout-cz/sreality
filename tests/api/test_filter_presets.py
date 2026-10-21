@@ -11,6 +11,7 @@ resolver is stubbed to a distinctive sentinel, never to None (tenancy.md's
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -36,7 +37,7 @@ def _id(n: int) -> str:
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
     monkeypatch.setattr(
@@ -47,14 +48,16 @@ def client(monkeypatch):
 
 
 @pytest.fixture()
-def store(monkeypatch):
+def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """In-memory replacement for the saved-set persistence functions, presets kind only."""
     state: dict[str, Any] = {"presets": {}, "owners": {}, "next_id": 1}
 
     def _to_dict(pid: str) -> dict[str, Any]:
         return dict(state["presets"][pid])
 
-    def fake_create_preset(conn, kind, values, *, account_id):
+    def fake_create_preset(
+        conn: Any, kind: ss.SavedSetKind, values: dict[str, Any], *, account_id: str,
+    ) -> dict[str, Any]:
         assert kind is PRESETS
         name, filter_spec, color = values["name"], values["filter_spec"], values["color"]
         n = state["next_id"]
@@ -76,26 +79,28 @@ def store(monkeypatch):
         }
         return _to_dict(pid)
 
-    def fake_list_presets(conn, kind):
+    def fake_list_presets(conn: Any, kind: ss.SavedSetKind) -> list[dict[str, Any]]:
         assert kind is PRESETS
         rows = [_to_dict(pid) for pid in state["presets"]]
         rows.sort(key=lambda r: (r["position"], r["created_at"]))
         return rows
 
-    def fake_get_preset(conn, kind, pid):
+    def fake_get_preset(conn: Any, kind: ss.SavedSetKind, pid: str) -> dict[str, Any] | None:
         return _to_dict(pid) if pid in state["presets"] else None
 
-    def fake_update_preset(conn, kind, pid, fields):
+    def fake_update_preset(
+        conn: Any, kind: ss.SavedSetKind, pid: str, fields: dict[str, Any],
+    ) -> dict[str, Any] | None:
         # The route hands over only what changes (saved_sets.changes), so the fake applies it whole.
         if pid not in state["presets"]:
             return None
         state["presets"][pid].update(fields)
         return _to_dict(pid)
 
-    def fake_delete_preset(conn, kind, pid):
+    def fake_delete_preset(conn: Any, kind: ss.SavedSetKind, pid: str) -> bool:
         return state["presets"].pop(pid, None) is not None
 
-    def fake_reorder_presets(conn, kind, ids):
+    def fake_reorder_presets(conn: Any, kind: ss.SavedSetKind, ids: list[str]) -> list[dict[str, Any]]:
         for pos, pid in enumerate(ids):
             if pid in state["presets"]:
                 state["presets"][pid]["position"] = pos
@@ -288,7 +293,9 @@ def test_update_preset_404_when_missing(client, store):
     ("delete", "/filter-presets/1", None),
     ("put", "/filter-presets/reorder", {"ids": ["1"]}),
 ])
-def test_a_malformed_id_is_a_422_not_a_cast_error(client, store, method, path, body):
+def test_a_malformed_id_is_a_422_not_a_cast_error(
+    client: Any, store: dict[str, Any], method: str, path: str, body: dict[str, Any] | None,
+) -> None:
     """A hand-edited link must not reach the database's uuid cast (a 500)."""
     call = getattr(client, method)
     assert (call(path, json=body) if body is not None else call(path)).status_code == 422

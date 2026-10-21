@@ -8,7 +8,7 @@ read it and none restates it by hand:
   for byte; tests/test_626_stats_dashboard.py pins the effective migration to this module.
 - scripts/generate_filter_registry.py emits frontend/src/lib/statsRegistry.generated.ts from
   `registry_json()` (labels, order, availability, band steps, limits); CI `--check`s the drift.
-- api/schemas.py validates every saved board through `validate_board` (`Charts`: the working board and every dashboard).
+- api/schemas.py validates every board through `validate_board` (`Charts`: the working board and every dashboard).
 
 A dimension KEY is the raw value the SQL groups on: the canonical enum value, `ano`/`ne` for a
 boolean, the RÚIAN code (as text) for a place, the band's lower bound as an integer string. Labels and
@@ -32,7 +32,7 @@ MIN_N = 5           # a cell with fewer properties shows n and no statistics (op
 MAX_ROWS = 6        # nested row levels
 MAX_COLS = 1        # one column dimension (series)
 MAX_CELLS = 2000    # above this the RPC refuses rather than ship a payload nobody can read
-MAX_CHARTS = 50     # charts on one saved board (PUT /stats/dashboard); a size guard, not a ruling
+MAX_CHARTS = 50     # charts on one board (the working board or a dashboard); a size guard, not a ruling
 
 STATS: tuple[str, ...] = ("n", "mean", "median", "p10", "p25", "p75", "p90")
 CHART_STATS: tuple[str, ...] = ("mean", "median", "p10", "p25", "p75", "p90")  # one per line/bar
@@ -309,7 +309,7 @@ def validate_chart(chart: Any) -> dict[str, Any]:
 
 
 def validate_board(charts: list[Any]) -> list[dict[str, Any]]:
-    """A saved board: at most MAX_CHARTS charts, each valid, ids unique; a refusal names the chart."""
+    """A board (working or dashboard): at most MAX_CHARTS charts, each valid, ids unique; a refusal names the chart."""
     if len(charts) > MAX_CHARTS:
         raise SpecError(f"at most {MAX_CHARTS} charts on a board")
     out: list[dict[str, Any]] = []

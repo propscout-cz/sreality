@@ -1,14 +1,4 @@
-"""Saved sets (docs/design/saved-dashboards.md): ONE primitive for a named row an account owns, lists, loads,
-updates and reorders. Filter presets (`filter_presets`) and Stats dashboards (`stats_dashboards`, migration 647)
-are its two instances, each a `SavedSetKind`; this module is their one implementation and one router factory.
-
-Every route rides the caller's tenant connection, so the table's RLS policy is the boundary: reads, the reorder
-and an UPDATE/DELETE by id take no account (a row that is not the caller's matches nothing: 404, never a SELECT
-probe; a PUT that changes nothing locks the row FOR UPDATE, which applies the UPDATE policy), and POST is the one
-insert, naming its one owner via `tenant_pool.require_account_id` (doctrine:
-.claude/skills/database/references/tenancy.md). A blob is stored verbatim once the validator its body type
-carries passed (api/schemas.py: `PresetSpec`, `Charts`).
-"""
+"""Saved sets (docs/design/saved-dashboards.md): one implementation and router factory for presets and dashboards."""
 
 # No `from __future__ import annotations`: the factory's routes annotate their bodies with the kind's models,
 # which FastAPI must read as classes, not as strings it would resolve against this module's globals.
@@ -44,6 +34,8 @@ class SavedSetKind:
     # Which of the table's rows are this kind's, on EVERY statement (the working board is no saved dashboard).
     row_scope: str = ""
     order_by: str = "t.position ASC, t.created_at DESC"
+    # The caller's own rows, where RLS also shows rows shared with them: a new row's position counts only these.
+    own_rows: str = ""
 
 
 def _projection(kind: SavedSetKind) -> str:
@@ -72,11 +64,12 @@ def _get_for_update_sql(kind: SavedSetKind) -> str:
 
 
 def _insert_sql(kind: SavedSetKind) -> str:
-    # The MAX(position) subquery sees only rows the caller may read (RLS), so a new row appends to their list.
+    # A new row goes last among the caller's OWN rows (RLS scopes MAX; own_rows drops the ones shared with them).
     cols = ", ".join(["name", *kind.blob_columns, "color", "position", "account_id"])
     blobs = "".join(", %s::jsonb" for _ in kind.blob_columns)
+    own = (kind.own_rows,) if kind.own_rows else ()
     return (f"INSERT INTO {kind.table} AS t ({cols}) VALUES (%s{blobs}, %s, "
-            f"(SELECT COALESCE(MAX(position), -1) + 1 FROM {kind.table}{_where(kind)}), %s) "
+            f"(SELECT COALESCE(MAX(t.position), -1) + 1 FROM {kind.table} t{_where(kind, *own)}), %s) "
             f"RETURNING {_projection(kind)}")
 
 
@@ -181,7 +174,7 @@ def reorder(conn: psycopg.Connection, kind: SavedSetKind, ids: list[str]) -> lis
     return list_rows(conn, kind)
 
 
-def found(kind: SavedSetKind, row: dict[str, Any] | None) -> dict[str, Any]:
+def row_or_404(kind: SavedSetKind, row: dict[str, Any] | None) -> dict[str, Any]:
     """The row, or the kind's 404."""
     if row is None:
         raise HTTPException(status_code=404, detail=f"{kind.noun} not found")
@@ -234,7 +227,7 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
     def get_route(
         set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
-        return found(kind, get(conn, kind, str(set_id)))
+        return row_or_404(kind, get(conn, kind, str(set_id)))
 
     @router.put(one)
     @_runs(_update_sql(kind, _fields(kind)), _get_for_update_sql(kind))
@@ -243,7 +236,7 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
         set_id: uuid.UUID = Path(alias=kind.id_param),
         conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
-        return found(kind, update(conn, kind, str(set_id), changes(kind, body)))
+        return row_or_404(kind, update(conn, kind, str(set_id), changes(kind, body)))
 
     @router.delete(one)
     @_runs(_delete_sql(kind))

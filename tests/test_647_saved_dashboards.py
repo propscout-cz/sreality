@@ -158,7 +158,8 @@ def test_the_working_board_upsert_infers_the_partial_index() -> None:
     from api.routes import stats_dashboards as sd
 
     assert "ON CONFLICT (account_id) WHERE name IS NULL DO UPDATE" in sd._SAVE_WORKING_BOARD_SQL
-    assert sd._WORKING_BOARD_SQL.endswith("WHERE account_id = %s AND name IS NULL")
+    assert sd._WORKING_BOARD_SQL.endswith("WHERE name IS NULL ORDER BY updated_at DESC LIMIT 1")
+    assert "account_id" not in sd._WORKING_BOARD_SQL
     assert sd.DASHBOARDS.row_scope == "name IS NOT NULL"
 
 

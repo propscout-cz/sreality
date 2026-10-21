@@ -117,6 +117,16 @@ def resolve_recipient(identity_conn: "psycopg.Connection", email: str) -> uuid.U
     return recipient
 
 
+def owner_gate(conn: "psycopg.Connection", gate_sql: str, key: Any, noun: str) -> str:
+    """The owner's tenant gate (an UPDATE): the shared thing's name, or a 404 before the service role opens."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(gate_sql, (key,))
+        gate = cur.fetchone()
+    if gate is None:
+        raise HTTPException(404, f"{noun} not found")
+    return gate[0]
+
+
 def grant(
     open_identity_conn: Callable[[], ContextManager["psycopg.Connection"]],
     email: str,
