@@ -295,6 +295,12 @@ describe('districtsFilterClause, re-exported by queries.ts', () => {
     expect(args.districts_ids).toEqual([666742, 490067]);
     expect(args.districts_excluded_filter).toEqual([false, true]);
   });
+
+  it('ships the energy rating letters to the Stats/map RPCs, and no constraint when none is picked', () => {
+    expect(buildBrowseStatsArgs({ ...DEFAULT_FILTERS, energyRatingMatch: ['A', 'B'] }, NO_PREFILTERS)
+      .energy_rating_filter).toEqual(['A', 'B']);
+    expect(buildBrowseStatsArgs(DEFAULT_FILTERS, NO_PREFILTERS).energy_rating_filter).toBeNull();
+  });
 });
 
 describe('matchesDistricts, re-exported by queries.ts', () => {

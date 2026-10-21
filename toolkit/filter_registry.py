@@ -1176,11 +1176,18 @@ def _build_registry() -> dict[str, FilterDef]:
             description=(
                 "Restrict to energy ratings in this list (single "
                 "capital letters A through G). New constructions "
-                "trend A/B; pre-renovation panel buildings often G."
+                "trend A/B; pre-renovation panel buildings often G. "
+                "G is also the legal placeholder for 'no certificate', "
+                "which no portal marks apart. A property's rating is the "
+                "first non-null one across its ads in canonical order; "
+                "an unrated property never matches."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({
+                Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY,
+                Agenda.BROWSE, Agenda.WATCHDOG,
+            }),
             enum_values=ENERGY_RATING_OPTIONS,
         ),
         FilterDef(

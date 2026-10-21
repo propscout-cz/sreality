@@ -37,6 +37,10 @@ toolkit work.
   floor area ("180 m² · 850 m² pozemku"; a pozemek's area already is its plot). Same plan and cost as
   the price sort (~90 ms, houses for sale). Owed: the phone property page's line has no lot until
   `properties_public` carries the measure.
+- **Shipped (2026-10-21): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
+  property's rating is the first non-null across its ads; G is also the legal "no certificate"
+  placeholder (~2/3 of rated ads), which no portal marks apart.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Condition scoring is PARKED, not removed (operator 2026-10-20: keep the engine,

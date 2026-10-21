@@ -1481,13 +1481,15 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "energy_rating",
       "default": null,
-      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G.",
+      "description": "Restrict to energy ratings in this list (single capital letters A through G). New constructions trend A/B; pre-renovation panel buildings often G. G is also the legal placeholder for 'no certificate', which no portal marks apart. A property's rating is the first non-null one across its ads in canonical order; an unrated property never matches.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
+        "browse",
         "comparables",
         "estimation",
-        "velocity"
+        "velocity",
+        "watchdog"
       ],
       "constraints": null,
       "unit": null,
