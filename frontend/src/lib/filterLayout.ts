@@ -52,8 +52,9 @@ export type FilterBlock = FormBlock | CustomBlock;
 export interface FilterRow {
   /* 'stack' (default): one filter per line. 'grid': side by side, in `cols`
    * equal columns, or as many ~11rem columns as the sidebar's width allows.
-   * 'line': the pill groups and on/off toggles of its form blocks as ONE strip
-   * of buttons on the desktop; the phone keeps a row per filter. */
+   * 'line': each of its filters as one segmented control, side by side while
+   * the sidebar is wide enough, under the first filter's caption (desktop); the
+   * phone keeps a row per filter. */
   layout?: 'grid' | 'line';
   cols?: 2 | 3;
   /* Drawn only while the cohort gives the row a meaning. */
@@ -99,7 +100,7 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     title: 'Essentials',
     defaultOpen: true,
     keys: [
-      'categoryType', 'status', 'tomObservedOnly', 'categoryMain', 'subtype', 'districts',
+      'categoryType', 'status', 'tomObservedOnly', 'showDismissed', 'categoryMain', 'subtype', 'districts',
       'priceMin', 'priceMax', 'pricePerM2Min', 'pricePerM2Max',
       'recentlyAddedDays', 'recentlyChangedDays', 'ownership', 'includeNoPrice', 'dispositions',
       'areaMin', 'areaMax', 'estateAreaMin', 'estateAreaMax', 'usableAreaMin', 'usableAreaMax',
@@ -108,10 +109,14 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
     ],
     rows: [
       { blocks: [form({ category_type: 'Listing for' })] },
-      /* "Which ads count" on one line: the status buttons, then the toggle. */
+      /* "Which properties count", together: status, seen at birth, dismissed. */
       {
         layout: 'line',
-        blocks: [form({ status: 'Status' }), form({ tom_observed_only: 'Seen at birth' })],
+        blocks: [
+          form({ status: 'Status' }),
+          form({ tom_observed_only: 'Seen at birth' }),
+          { kind: 'custom', key: 'show_dismissed', label: 'Show dismissed' },
+        ],
       },
       { blocks: [form({ category_main_in: 'Type' })] },
       /* Directly under Type: it refines the chosen category. Cleared with the
@@ -160,11 +165,10 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
   {
     title: 'Curation',
     keys: [
-      'showDismissed', 'pipeline', 'collections', 'tags',
+      'pipeline', 'collections', 'tags',
       'portals', 'portalsExcluded', 'portalsExcludedActiveOnly', 'withEstimates',
     ],
     rows: [
-      { blocks: [{ kind: 'custom', key: 'show_dismissed', label: 'Show dismissed' }] },
       { blocks: [form({ pipeline: 'Pipeline' })] },
       { blocks: [form({ collections: 'Collections' })] },
       { blocks: [form({ tags: 'Tags' })] },

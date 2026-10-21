@@ -207,6 +207,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_collection_shares_live.py -q
 
+      # Dashboard sharing (migration 647) is the same shape over a third table: a FOR SELECT arm, a
+      # party policy that hides while acting, and a trigger that stamps the owner and refuses the
+      # unnamed working board. The test drives the API's own SQL under each tenant's RLS.
+      - name: Dashboard sharing is read-only and never the working board (migration 647)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_stats_dashboard_shares_live.py -q
+
       # Curated membership (migration 629): tags, collections and the pipeline are judged
       # inside browse_list_visible / browse_stats_properties through the *_public views, so
       # only a real schema under the `authenticated` role can show that one tenant's card or

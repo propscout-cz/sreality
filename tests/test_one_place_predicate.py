@@ -421,8 +421,7 @@ def test_the_two_filters_are_gone_from_the_spa_filter_types() -> None:
 def test_the_two_portal_ids_are_gone_from_every_payload() -> None:
     """W4-a. They were SREALITY's portal ids, carried along in five projections
     and rendered by nothing: the comparable row, the transit-corridor row, the
-    freshness snapshot, the URL-parse `listing` sidecar and the SPA's detail
-    select. A filter that no longer exists does not get to keep a column in every
+    freshness snapshot and the SPA's detail select. A filter that no longer exists does not get to keep a column in every
     payload on the way out. The `listings` columns themselves are W4-c's.
 
     Rule 12 is intact: an estimation trace already written keeps its keys, and the
@@ -430,11 +429,8 @@ def test_the_two_portal_ids_are_gone_from_every_payload() -> None:
     nothing, not as a crash)."""
     from toolkit.freshness import _LISTING_COLS
 
-    from api.estimation_runs import _LISTING_FIELDS
-
     for gone in _DELETED:
         assert gone not in _LISTING_COLS
-        assert gone not in _LISTING_FIELDS
         for rel in (
             "toolkit/comparables.py",
             "toolkit/transit_axis.py",

@@ -8,6 +8,7 @@ check's own rules are tested beside its module (tests/scripts/test_checks_*.py).
 from __future__ import annotations
 
 import contextlib
+from collections import Counter
 import datetime as _dt
 import json
 import re
@@ -1480,8 +1481,12 @@ def test_migration_drift_only_warns_when_a_migration_is_half_present() -> None:
     """Half-applied is ambiguous — a partial apply, or the parser mis-read the
     file. Ambiguity warns; it must not page anyone at 3am."""
     migs = load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-    multi = next(m for m in migs if len(m.objects) >= 2)
-    conn = _DriftConn({(multi.objects[0].kind, multi.objects[0].ident): False}, default=True)
+    # The missing object must be declared by no other file in the window: a function that a later
+    # migration restates (health_liveness: 620, 621, 633) would make those files fully absent.
+    declared = Counter((o.kind, o.ident) for m in migs for o in m.objects)
+    multi, gone = next((m, o) for m in migs if len(m.objects) >= 2
+                       for o in m.objects if declared[(o.kind, o.ident)] == 1)
+    conn = _DriftConn({(gone.kind, gone.ident): False}, default=True)
     out = check_migration_drift(conn, T)
     cells = _file_cells(out)
     assert out["status"] == "warn"

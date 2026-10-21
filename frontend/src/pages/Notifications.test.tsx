@@ -30,6 +30,8 @@ const baseDispatch: WatchdogDispatch = {
   change_kind: 'new',
   message: null,
   check_key: null,
+  share_kind: null,
+  share_ref: null,
   dispatched_at: '2026-05-12T10:00:00+00:00',
   seen_at: null,
   trigger_price_czk: null,
@@ -192,6 +194,39 @@ describe('<Notifications> collection share row', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open pipeline' })).toHaveAttribute('href', '/pipeline');
     expect(screen.queryByRole('link', { name: 'Open collection' })).toBeNull();
+  });
+
+  /* A dashboard share (migration 647) names its kind and the dashboard's uuid;
+   * the link opens Browse › Stats, which loads the dashboard from the URL. */
+  it('renders a dashboard share with the one renderer, linking to the Stats tab', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, id: 'd6', seen_at: '2026-05-12T12:00:00+00:00' });
+    const dashboardShare = {
+      ...feed.data[3],
+      id: 'd6',
+      message: 'owner@example.com shared the dashboard "Ceny Praha" with you',
+      collection_id: null,
+      collection_name: null,
+      share_kind: 'dashboard' as const,
+      share_ref: '6f1c2d3e-0000-4000-8000-000000000001',
+    };
+    renderPage({ ...feed, data: [dashboardShare], total: 1 });
+    expect(
+      screen.getByRole('button', { name: /^Shared owner@example\.com shared the dashboard "Ceny Praha" with you/ }),
+    ).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'Open dashboard' });
+    expect(link).toHaveAttribute('href', '/browse?tab=stats&dashboard=6f1c2d3e-0000-4000-8000-000000000001');
+    expect(screen.queryByRole('link', { name: 'Open pipeline' })).toBeNull();
+    fireEvent.click(link);
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledWith('d6'));
+  });
+
+  it('keeps a collection share on its collection when the API names the kind', () => {
+    renderPage({
+      ...feed,
+      data: [{ ...feed.data[3], share_kind: 'collection', share_ref: '42' }],
+      total: 1,
+    });
+    expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('href', '/collection/42');
   });
 
   it('offers a Shared source tab that asks for the share kind', async () => {

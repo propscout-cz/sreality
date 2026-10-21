@@ -84,6 +84,6 @@ describe('usePipelineCard settles Browse', () => {
 
     act(() => result.current.add.mutate(99));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['cards'] }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['table'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['map'] });
   });
 });

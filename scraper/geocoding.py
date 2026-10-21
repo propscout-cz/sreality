@@ -1,8 +1,8 @@
 """Mapy.cz geocoding wrapper.
 
-Used by the source-kind dispatcher when a non-sreality listing's HTML
-gives a locality string but no coordinates. Uses Mapy.cz over Google /
-OSM for first-party Czech address coverage.
+`geocode()` serves scripts/seed_curated_cities.py; the Mapy key-failover
+helpers are shared by api/maps.py and api/routes/property_location.py. Uses
+Mapy.cz over Google / OSM for first-party Czech address coverage.
 
 # Schema (confirmed against a live api.mapy.com response)
 

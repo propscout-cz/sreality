@@ -1,7 +1,7 @@
 """FastAPI service exposing the analytical toolkit + estimate_yield.
 
 Tool routes return the standard toolkit envelope verbatim for the agent
-layer; non-tool routes (e.g. GET /estimations/preview) shape their own.
+layer; non-tool routes (e.g. GET /estimations) shape their own.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
 from api import shares as shares_module
 from api import price_stats as price_stats_module
-from api import stats_dashboard as stats_dashboard_module
 from api import dependencies as deps
 from api import maps
 from api import sreality_price_map
@@ -39,7 +38,6 @@ from api.building_runs import (
     assert_editable_for_attachments,
     confirm_units,
     create_building_run,
-    create_building_run_from_url,
     get_building_run,
     list_building_runs,
     re_extract,
@@ -57,7 +55,6 @@ from api.estimation_runs import (
     get_trace_payload,
     latest_rent_estimations_by_listing,
     list_estimation_runs,
-    preview_estimation,
     sweep_stuck_runs,
     update_scenario,
 )
@@ -74,6 +71,7 @@ from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
 from api.routes.filter_presets import router as filter_presets_router
+from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
 from api.routes.property_location import router as property_location_router
@@ -89,7 +87,6 @@ from api.routes.new_dedup_candidates import router as new_dedup_candidates_route
 from api.routes.notifications import router as notifications_router
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
-from scraper.source_dispatcher import ParseError
 from toolkit import (
     ComparableFilters,
     TargetSpec,
@@ -330,6 +327,9 @@ app.include_router(broker_review_router)
 # /filter-presets/* (named Browse filter presets: CRUD) — per-account content on
 # the JWT + tenant pool (RLS). Decoupled from /notifications (a preset never fires).
 app.include_router(filter_presets_router)
+# /stats/dashboards/* (named Stats dashboards: the same saved-set CRUD, plus read-only shares)
+# and /stats/dashboard (the account's working board) — tenant pool (RLS), migration 647.
+app.include_router(stats_dashboards_router)
 # /images/* redirects a listing-photo key to a presigned R2 URL. Public (like
 # /health) — an <img> tag can't send a bearer header and these are public
 # photos; the key regex keeps it scoped to listing images only.
@@ -618,10 +618,6 @@ def post_compute_market_velocity(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
     )
     return compute_market_velocity(
         conn, target, filters,
@@ -777,24 +773,6 @@ def post_compute_listing_velocity(
     )
 
 
-@app.post("/estimations/preview")
-def post_estimations_preview(
-    body: s.PreviewEstimationIn,
-    conn: Any = Depends(deps.get_db_conn),
-    client: Any = Depends(deps.get_sreality_client),
-    llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    try:
-        return preview_estimation(conn, client, llm_client, body)
-    except ParseError as exc:
-        raise HTTPException(status_code=502, detail=f"parse failed: {exc}")
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"upstream error: {type(exc).__name__}: {exc}",
-        )
-
-
 @app.post("/estimations")
 def post_estimations(
     body: s.CreateEstimationIn,
@@ -815,64 +793,6 @@ def post_estimations(
         conn, client, llm_client, body, background_tasks=background_tasks,
         account_id=str(account_id), claims=claims,
     )
-
-
-@app.get("/estimations/preview")
-def get_estimation_preview(
-    url: str = Query(..., description="A sreality.cz detail URL"),
-    conn: Any = Depends(deps.get_db_conn),
-    client: Any = Depends(deps.get_sreality_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    """Scrape a sreality URL and return its parsed spec without persisting.
-
-    Read-only. Lets the UI present the scraped fields for review/edit
-    before the user commits to POST /estimations.
-    """
-    import requests
-
-    from scraper.url_parser import parse_sreality_url
-
-    try:
-        parsed = parse_sreality_url(url, client=client, conn=conn)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except requests.HTTPError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not fetch listing from sreality.cz: {exc}",
-        ) from exc
-
-    spec = parsed["spec"]
-    return {
-        "url":         parsed["source_url"],
-        "sreality_id": int(parsed["sreality_id"]),
-        "in_database": bool(parsed["in_database"]),
-        "fetched_at":  parsed["fetched_at"],
-        "spec": {
-            "lat":         spec.get("lat"),
-            "lng":         spec.get("lon"),
-            "area_m2":     spec.get("area_m2"),
-            "disposition": spec.get("disposition"),
-            "floor":       spec.get("floor"),
-        },
-        "listing": {
-            "price_czk":            spec.get("price_czk"),
-            "price_unit":           spec.get("price_unit"),
-            "category_main":        spec.get("category_main"),
-            "category_type":        spec.get("category_type"),
-            "locality":             spec.get("locality"),
-            "district":             spec.get("district"),
-            "total_floors":         spec.get("total_floors"),
-            "has_balcony":          spec.get("has_balcony"),
-            "has_lift":             spec.get("has_lift"),
-            "has_parking":          spec.get("has_parking"),
-            "building_type":        spec.get("building_type"),
-            "condition":            spec.get("condition"),
-            "energy_rating":        spec.get("energy_rating"),
-            "image_count":          len(parsed.get("images") or []),
-        },
-    }
 
 
 @app.get("/estimations/latest-by-listing")
@@ -1037,9 +957,6 @@ def list_estimations(
         ),
     ),
     sreality_ids: str | None = Query(default=None, include_in_schema=False),
-    source_kind: Literal[
-        "sreality", "bezrealitky", "idnes_reality", "remax", "unsupported"
-    ] | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     cursor: str | None = Query(default=None, description="Keyset cursor (next_cursor)"),
@@ -1091,7 +1008,6 @@ def list_estimations(
             status=status,
             sreality_id=sreality_id,
             listing_ids=ids,
-            source_kind=source_kind,
             limit=limit,
             offset=offset,
             cursor=cursor,
@@ -1150,21 +1066,6 @@ def post_buildings(
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
     return create_building_run(conn, body)
-
-
-@app.post("/buildings/from_url")
-def post_buildings_from_url(
-    body: s.CreateBuildingFromUrlIn,
-    background_tasks: BackgroundTasks,
-    conn: Any = Depends(deps.get_db_conn),
-    sreality_client: Any = Depends(deps.get_sreality_client),
-    llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return create_building_run_from_url(
-        conn, sreality_client, llm_client, body,
-        background_tasks=background_tasks,
-    )
 
 
 @app.post("/buildings/{building_id}/confirm_units")
@@ -1357,10 +1258,6 @@ def post_estimate_yield(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
     )
     try:
         result = estimate_yield(
@@ -1842,19 +1739,6 @@ def delete_pipeline_share(
     return shares_module.revoke_pipeline(conn, str(account_id), side)
 
 
-# --- Browse > Stats dashboard (migration 626) --------------------------------
-# One board per account, written whole; the SPA reads it through RLS itself.
-
-@app.put("/stats/dashboard")
-def put_stats_dashboard(
-    body: s.StatsDashboardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
-) -> dict[str, Any]:
-    """Replace the caller's board; every chart is validated by the stats registry (422)."""
-    return stats_dashboard_module.save_dashboard(conn, body.charts, account_id=account_id)
-
-
 # --- dismissals (migration 536) ---------------------------------------------
 # "Never show me this property again." Reads go through
 # property_dismissals_public; a dismissal names the one account it is written for.
@@ -1960,9 +1844,5 @@ def _build_comparables_inputs(
         min_usable_area=body.min_usable_area,
         max_usable_area=body.max_usable_area,
         min_parking_lots=body.min_parking_lots,
-        building_condition_level_min=body.building_condition_level_min,
-        building_condition_level_max=body.building_condition_level_max,
-        apartment_condition_level_min=body.apartment_condition_level_min,
-        apartment_condition_level_max=body.apartment_condition_level_max,
     )
     return target, filters

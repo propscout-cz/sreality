@@ -1,6 +1,6 @@
 /* One definition of how a deal-pipeline stage LOOKS, shared by every surface
- * that renders the funnel (rule #22): Browse cards, the Table, the listing
- * header, the kanban board and its stage editor.
+ * that renders the funnel (rule #22): Browse cards, the listing header, the
+ * kanban board and its stage editor.
  *
  * Before this module the accent had two answers — Pipeline.tsx fell back to
  * `--color-rule-strong` for an uncoloured stage while PipelineToggle.tsx fell

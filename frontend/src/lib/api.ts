@@ -20,7 +20,6 @@ import type {
   Collection,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
-  CreateBuildingFromUrlIn,
   UpdateBuildingInputsIn,
   CreateEstimationIn,
   EstimationFeedback,
@@ -33,7 +32,6 @@ import type {
   ArtifactLink,
   Note,
   NoteAttachment,
-  ParseResult,
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
@@ -319,6 +317,9 @@ export const apiPut = <T>(
   signal?: AbortSignal,
 ): Promise<T> => request<T>(path, { method: 'PUT', json: body, signal });
 
+export const apiDelete = <T>(path: string, signal?: AbortSignal): Promise<T> =>
+  request<T>(path, { method: 'DELETE', signal });
+
 /* GET for bytes (an image an <img> cannot fetch itself, since it sends no JWT). */
 export const apiGetBlob = (
   path: string,
@@ -350,20 +351,6 @@ export const ingestState = (
   );
 
 /* ----- estimations ------------------------------------------------------- */
-
-/* POST /estimations/preview — generic URL parser (sreality fast path
- * + LLM-driven per-source parser for everything else, dispatched on
- * the backend). When force_refresh is true the 7-day URL cache is
- * bypassed and a fresh parse is performed (the cache row is also
- * upserted on success). */
-export const previewListingUrl = (
-  url: string,
-  options: { force_refresh?: boolean } = {},
-): Promise<ParseResult> =>
-  request<ParseResult>('/estimations/preview', {
-    method: 'POST',
-    json: { url, force_refresh: options.force_refresh ?? false },
-  });
 
 export const createEstimation = (
   input: CreateEstimationIn,
@@ -526,14 +513,6 @@ export const verifyListingFreshness = (
   });
 
 /* ----- buildings (Phase B1) ---------------------------------------------- */
-
-export const createBuildingFromUrl = (
-  input: CreateBuildingFromUrlIn,
-): Promise<BuildingRun> =>
-  request<BuildingRun>('/buildings/from_url', {
-    method: 'POST',
-    json: input,
-  });
 
 export const getBuilding = (id: number): Promise<BuildingRun> =>
   request<BuildingRun>(`/buildings/${id}`);
@@ -2303,7 +2282,8 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
  * GET returns every kraj (admin_boundaries level='kraj') with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
- * same payload. The scheduled batch job reads the same key. */
+ * same payload. Condition scoring is parked (rule 14): its workflows are
+ * dispatch-only, so the key only scopes a manually dispatched run. */
 
 export interface ConditionScoringRegion {
   id: number;

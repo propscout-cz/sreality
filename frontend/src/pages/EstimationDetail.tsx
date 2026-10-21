@@ -1,12 +1,11 @@
 /* The standalone estimation page is a FALLBACK surface, not a primary one.
  *
- * A run whose subject is a listing we have in the DB (input_sreality_id set)
- * lives on that listing's page — this route immediately redirects there
- * (runSurfaceUrl), so old /estimation/:id links keep working. What renders
- * here is only the ORPHAN case: a run on a pasted URL of a listing we never
- * scraped. Its subject is synthesized from the parsed spec + the stored
- * subject_attributes, and the run body is the same shared RunBody the
- * listing page embeds. */
+ * A run of an ad we hold — on any portal — lives on that ad's page, so this
+ * route immediately redirects there (runSurfaceUrl), and old /estimation/:id
+ * links keep working. What renders here is only a run that never had an ad:
+ * the historic pasted-URL and spec runs (an estimation is of an ad since
+ * 2026-10-20). Its subject is synthesized from the stored spec, and the run
+ * body is the same shared RunBody the listing page embeds. */
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -14,7 +13,7 @@ import { estimationKeys, fetchEstimation, submitEstimation } from '@/lib/queries
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import { usePageTitle } from '@/lib/pageTitle';
 import { ApiError } from '@/lib/api';
-import { runSurfaceUrl } from '@/lib/runLinks';
+import { hasListingSurface, runSurfaceUrl } from '@/lib/runLinks';
 import { buildRerunPayload, type RerunInput } from '@/lib/rerun';
 import { ListingOverview } from '@/components/listing-detail/ListingOverview';
 import { ConfidencePill, RunBody, SourceBadge } from '@/components/estimation/RunPanel';
@@ -78,9 +77,9 @@ export default function EstimationDetail() {
 
   const run = runQ.data!;
 
-  // Linked runs live on their listing's page — redirect, preserving a
-  // #feedback deep-link so the section opens the detail popup there.
-  if (run.input_sreality_id != null) {
+  // A run of an ad lives on the ad's page — redirect, preserving a #feedback
+  // deep-link so the section opens the detail popup there.
+  if (hasListingSurface(run)) {
     const hash = location.hash === '#feedback' ? '#feedback' : '#estimations';
     return <Navigate to={runSurfaceUrl(run, hash)} replace />;
   }
@@ -130,45 +129,23 @@ export default function EstimationDetail() {
   );
 }
 
-/* The orphan subject as a ListingPublic: a synthetic row built from the
- * parsed spec + subject_attributes, so a pasted-URL subject renders through
- * the shared overview. (Runs with a real listings row never reach this —
- * they redirect to the listing page above.) */
+/* The adless subject as a ListingPublic: a synthetic row built from the stored
+ * spec, so it renders through the shared overview. (A run of an ad never
+ * reaches this — it redirects to the ad's page above.) */
 function subjectAsListing(run: EstimationRun): ListingPublic | null {
   const spec = run.input_spec;
-  const a = run.subject_attributes ?? {};
-  if (!spec && !run.subject_attributes) return null;
-  const str = (v: unknown): string | null =>
-    typeof v === 'string' && v.length > 0 ? v : null;
-  const num = (v: unknown): number | null =>
-    typeof v === 'number' ? v : null;
-  const bool = (v: unknown): boolean | null =>
-    typeof v === 'boolean' ? v : null;
+  if (!spec) return null;
   return {
     sreality_id: run.input_sreality_id ?? 0,
     is_active: true,
     last_seen_at: run.created_at,
-    area_m2: spec?.area_m2 ?? num(a.area_m2),
-    disposition: (spec?.disposition ?? str(a.disposition)) as ListingPublic['disposition'],
-    /* The subject of an estimation is a spec, not a resolved listing, so there
-       is no listing_location row to label it from: keep the estimate's own
-       stored place text and present it under the one field every consumer of a
-       ListingPublic now reads. */
-    display_label: str(a.locality) ?? str(a.district),
-    lat: spec?.lat ?? null,
-    lng: spec?.lng ?? null,
-    floor: spec?.floor ?? num(a.floor),
-    building_type: str(a.building_type),
-    condition: str(a.condition),
-    energy_rating: str(a.energy_rating),
-    ownership: str(a.ownership) as ListingPublic['ownership'],
-    furnished: str(a.furnished) as ListingPublic['furnished'],
-    has_balcony: bool(a.has_balcony),
-    terrace: bool(a.terrace),
-    has_lift: bool(a.has_lift),
-    cellar: bool(a.cellar),
-    garage: bool(a.garage),
-    has_parking: bool(a.has_parking),
+    area_m2: spec.area_m2,
+    disposition: spec.disposition,
+    /* No ad, so no listing_location row to label it from. */
+    display_label: null,
+    lat: spec.lat,
+    lng: spec.lng,
+    floor: spec.floor,
   } as unknown as ListingPublic;
 }
 

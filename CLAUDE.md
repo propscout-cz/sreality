@@ -157,17 +157,17 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 12. **`estimation_runs` is the single source of truth for every estimation; every run must be created through `create_estimation_run`** (owed forks:
     the Watchdog kickoff, `scripts/smoke_agent.py`). The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
     UPDATEs its terminal `status` in place; failed runs still persist a row (HTTP 200 + `status='failed'`); re-runs INSERT with `parent_run_id`; a
-    run's RESULT is immutable (its yield `scenario` and late-bound `input_listing_id` are not). Sources: `ui`/`api`/`clickup`/`extension`.
+    run's RESULT is immutable (its yield `scenario` is not; `input_listing_id` is set at submit, never late-bound; an ad we do not hold or cannot place is a 422 before any row). Sources: `ui`/`api`/`clickup`/`extension`.
     A paid outside valuation (Valuo) is not our estimate: one row per call in `valuo_valuations`, written only by `api/valuo.py`.
 13. **`building_runs` is the paste-a-building parent.** Children are `estimation_runs` linked via
     `building_run_id` + `building_unit_id`; the unit list is operator-curated JSONB. Status:
     `pending → extracting → awaiting_input → estimating → success|failed`; `awaiting_input` is the
     human-in-the-loop gate; `units_proposal` (agent) vs `units` (confirmed) are kept separate.
-14. **Condition scoring is two-axis (building + apartment).** Raw `listings.condition` stays the source;
-    the two derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the
-    `listing_condition_scores` cache (keyed `(sreality_id, snapshot_id)`) are written together by
-    `score_listing_condition` in one latest-wins transaction. Filter on the derived columns, not the
-    coarse `condition_assessment`.
+14. **Condition scoring is two-axis (building + apartment) and PARKED** (last level 2026-06-18; operator ruling 2026-10-20: code,
+    tables, columns, data kept, workflows dispatch-only, and NO surface reads the levels — no filter, agent fact or estimate; resuming
+    is a ruling, blockers on `roadmap/scraper-track.md`). Raw `listings.condition` (11-value canon) is the source and `condition_match`
+    the condition filter; the derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the `listing_condition_scores`
+    cache (keyed `(sreality_id, snapshot_id)`) are written together by `score_listing_condition` in one latest-wins transaction.
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091); grouping is out-of-band, never inline at insert (new rows land
     `property_id` NULL; straggler-attach births a singleton — the worker lane every 30 s, and inside the daily sweep's loop).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
     two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,
@@ -188,7 +188,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     P matches when any ad is on P (`all_sources`), status judged on those ads; a broker likewise, both = one ad; estimation cohorts stay per-ad. `notification_dispatches` = the append-only event table,
     **four producers**: `watchdog` + `collection_monitor` (property-grain; `dedupe_key` `:new:` once-ever / `:price_drop:{snapshot_id}`
     per-snapshot; a `monitor_since` anchor so a pre-membership change never fires) + `system_health` (**NOT** property-grain;
-    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `share` (not property-grain; recipient-stamped by `api/shares.py`, in-app only; collection mig 610 + pipeline mig 641). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
+    the health ladder's per-cell `ops_incidents`, mig 619; the signature engine retired, mig 621) + `share` (not property-grain; recipient-stamped by `api/shares.py`, in-app only; collection mig 610 + pipeline mig 641 + dashboard mig 647). **Delivery is separate from detection**: in-app = the row; external = `channel_sends`. A merge re-points them (#18), collapsing a twin (the merge's one delete) once its `channel_sends` move to the kept row.
 17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
     + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog only** (the estimation agent never sees them, preserving deterministic estimates).
@@ -218,7 +218,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property per account at one
     `pipeline_stages` stage (a TABLE, not an enum); "bookmark" == presence of a row at the entry stage. It has its OWN carrier in `PROPERTY_CARRIERS` (over
     `toolkit/pipeline_identity.py`; TERMINAL-AWARE — a live stage always beats a closed one); the losing card is folded into the carry record (rule #18).
-    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards/rows, listing header, kanban drag + trash) is ONE hook,
+    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards, listing header, kanban drag + trash) is ONE hook,
     `lib/usePipelineCard` (id per call), over ONE write policy, `lib/useOptimisticWrite` (`lib/pipelineCache`: patches + re-read list). `<PipelineMark>` +
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
@@ -291,7 +291,7 @@ nor are the email/Telegram channels (rule #16). Don't start out-of-scope work wi
 | --- | --- |
 | SQL, migrations, connection modes, Supabase MCP, schema conventions | `.claude/skills/database` |
 | Toolkit tools, FastAPI, auth, versioned trace, env-vars & secrets | `.claude/skills/toolkit-api` |
-| LLM URL parsing, cached vision/text tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
+| Cached vision/text tools, the text lane, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running / debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Dashboards, admin panels, apps, tools — interface/UI design craft | `.claude/skills/interface-design` |
 | Full rule rationale, per-portal data sources, territory deep-dives | `docs/architecture.md` |

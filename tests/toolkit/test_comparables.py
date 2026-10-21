@@ -528,49 +528,6 @@ def test_garden_area_bounds_render_on_listings_and_echo_in_the_trace():
     assert used["max_garden_area"] == 800
 
 
-def test_condition_level_min_filters_add_where_branches():
-    """Both new condition-level filters should add `>= N` branches and
-    bind the parameters. Absent (None) filters add no clauses — important
-    because NULL rows would otherwise be excluded by an unconditional
-    `IS NOT NULL` check."""
-    sql, params = build_query(
-        TargetSpec(lat=50.0, lng=14.0),
-        ComparableFilters(
-            building_condition_level_min=4,
-            apartment_condition_level_min=3,
-        ),
-    )
-    assert "l.building_condition_level >= %(building_condition_level_min)s" in sql
-    assert "l.apartment_condition_level >= %(apartment_condition_level_min)s" in sql
-    assert params["building_condition_level_min"] == 4
-    assert params["apartment_condition_level_min"] == 3
-
-
-def test_condition_level_max_filters_add_where_branches():
-    sql, params = build_query(
-        TargetSpec(lat=50.0, lng=14.0),
-        ComparableFilters(
-            building_condition_level_max=3,
-            apartment_condition_level_max=2,
-        ),
-    )
-    assert "l.building_condition_level <= %(building_condition_level_max)s" in sql
-    assert "l.apartment_condition_level <= %(apartment_condition_level_max)s" in sql
-    assert params["building_condition_level_max"] == 3
-    assert params["apartment_condition_level_max"] == 2
-
-
-def test_condition_level_filters_absent_when_none():
-    sql, params = build_query(
-        TargetSpec(lat=50.0, lng=14.0),
-        ComparableFilters(),
-    )
-    assert "building_condition_level" not in sql
-    assert "apartment_condition_level" not in sql
-    assert "building_condition_level_min" not in params
-    assert "apartment_condition_level_min" not in params
-
-
 def test_a_property_counts_once_as_its_canonical_advert_at_its_location_advert():
     """Decision 13 + ruling R8: an advert is a comparable only as its property's canonical
     advert, so a property on two portals is weighted once, and it stands at its property's

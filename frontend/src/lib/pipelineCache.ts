@@ -2,7 +2,7 @@
  * by every surface that writes a card (rule #22).
  *
  * Two caches hold "where is this property in the pipeline": `members` (the map
- * every funnel — Browse cards/table AND the listing-detail toggle, since W3 —
+ * every funnel — Browse cards AND the listing-detail toggle, since W3 —
  * renders from) and `board` (the kanban array, which also carries the
  * STRUCTURAL display fields `members` doesn't: price, place, area, is_active).
  * NOT the photo, and not the broker: those are decorations, they live in the

@@ -38,6 +38,7 @@ describe('hydration key namespace', () => {
     hydrationKeys.brokers([1, 2, 3]),
     hydrationKeys.propertyBrokers([{ property_id: 1, listing_id: 2 }]),
     hydrationKeys.photos([1, 2, 3], 6),
+    hydrationKeys.floors([1, 2, 3]),
   ];
 
   it('is disjoint from every write sweep prefix', () => {
@@ -115,6 +116,13 @@ describe('hydration key namespace', () => {
       hydrationKeys.photos([1, 2, 3, 3], 6),
     );
   });
+
+  it('keys floors on the id set, apart from every other decoration', () => {
+    expect(hydrationKeys.floors([3, 1, 2])).toEqual(hydrationKeys.floors([1, 2, 3, 3]));
+    expect(hydrationKeys.floors([1])).not.toEqual(hydrationKeys.covers([1]));
+    expect(hydrationKeys.floors([1])).not.toEqual(hydrationKeys.brokers([1]));
+    expect(hydrationKeys.floors([1])[0]).toBe(HYDRATION_NAMESPACE);
+  });
 });
 
 describe('makeHydration lookup', () => {
@@ -180,6 +188,22 @@ describe('makeHydration lookup', () => {
     expect(h.photosFor(999)).toEqual([]);
     expect(h.photosFor(null)).toEqual([]);
     expect(h.photosFor(999)).toBe(h.photosFor(null));
+  });
+
+  /* The storey keeps its two columns apart: fmtFloor spells the podlaží count out,
+     and a null floor with a known total must stay a null floor, not a "0". */
+  it('resolves a storey by listing id, and answers null for the rest', () => {
+    const floors = new Map([
+      [7, { floor: 4, total_floors: 5 }],
+      [8, { floor: null, total_floors: 5 }],
+    ]);
+    const h = makeHydration(covers, brokers, photos, {}, floors);
+    expect(h.floorFor(7)).toEqual({ floor: 4, total_floors: 5 });
+    expect(h.floorFor(8)?.floor).toBeNull();
+    expect(h.floorFor(999)).toBeNull();
+    expect(h.floorFor(null)).toBeNull();
+    expect(h.floorFor(undefined)).toBeNull();
+    expect(makeHydration(covers, brokers).floorFor(7)).toBeNull();
   });
 
   it('projects raw rows to the carousel shape without losing the CLIP tag', () => {

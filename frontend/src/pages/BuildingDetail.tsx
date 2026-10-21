@@ -484,9 +484,8 @@ function UnitEstimateBlock({
           </p>
         </div>
       )}
-      {/* Not runSurfaceUrl: BuildingChildRun carries no input_sreality_id, so
-        * there is no subject to resolve a listing surface from. Routing this
-        * through the run helper needs the wire type widened first. */}
+      {/* Not runSurfaceUrl: BuildingChildRun carries no subject ad, so the
+        * link is the run's own address, which redirects to its surface. */}
       <Link
         to={ROUTES.estimationDetail.build({ id: child.id })}
         className="mt-2 inline-block text-[0.75rem] text-[var(--color-copper)] hover:text-[var(--color-copper-2)]"

@@ -21,7 +21,7 @@ import {
 } from '@/lib/api';
 import { notificationKeys } from '@/lib/queries';
 import { listingPath } from '@/lib/listingUrl';
-import { ROUTES, withHash } from '@/lib/routes';
+import { ROUTES, withHash, withQuery } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
@@ -364,17 +364,38 @@ function SystemNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) 
   );
 }
 
-/* share: someone shared a collection or their pipeline with me (migration 641:
- * one kind, one renderer). A text row like the system alert (the API's
- * `message` names the owner and what was shared); pressing the text marks it
- * read, the link marks it read and opens the thing — "Open collection" when the
- * row names a collection, else "Open pipeline" (the board is then picked in the
- * Pipeline tab's switcher). Two sibling controls, never a link inside a button. */
+/* Where a share opens, by what it shares (`share_kind`). A row from before the
+ * API named the kind falls back to the collection id, else the pipeline. */
+function shareTarget(d: WatchdogDispatch): { to: string; label: string; fallback: string } {
+  if (d.share_kind === 'dashboard' && d.share_ref != null) {
+    return {
+      to: withQuery(ROUTES.browse.build(), { tab: 'stats', dashboard: d.share_ref }),
+      label: 'Open dashboard',
+      fallback: 'A dashboard was shared with you.',
+    };
+  }
+  return d.collection_id != null
+    ? {
+        to: ROUTES.collectionDetail.build({ id: d.collection_id }),
+        label: 'Open collection',
+        fallback: 'A collection was shared with you.',
+      }
+    : { to: ROUTES.pipeline.build(), label: 'Open pipeline', fallback: 'A pipeline was shared with you.' };
+}
+
+/* share: someone shared a collection, their pipeline or a Stats dashboard with
+ * me (migrations 610, 641, 647: one kind, one renderer). A text row like the
+ * system alert (the API's `message` names the owner and what was shared);
+ * pressing the text marks it read, the link marks it read and opens the thing —
+ * "Open collection", "Open pipeline" (the board is then picked in the Pipeline
+ * tab's switcher) or "Open dashboard" (Browse › Stats loads it from the URL,
+ * stats/DashboardBar). Two sibling controls, never a link inside a button. */
 function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
   const unreadId = useId();
   const meta = CHANGE_META.shared;
+  const target = shareTarget(d);
 
   return (
     <div className="flex items-start gap-3 py-3.5">
@@ -390,19 +411,15 @@ function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
           {meta.label}
         </span>
         <span className="min-w-0 flex-1 text-sm text-[var(--color-ink)] break-words">
-          {d.message ?? (d.collection_id != null ? 'A collection was shared with you.' : 'A pipeline was shared with you.')}
+          {d.message ?? target.fallback}
         </span>
       </button>
       <Link
-        to={
-          d.collection_id != null
-            ? ROUTES.collectionDetail.build({ id: d.collection_id })
-            : ROUTES.pipeline.build()
-        }
+        to={target.to}
         onClick={markSeen}
         className="shrink-0 mt-0.5 text-[0.78rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-ink)] hover:decoration-[var(--color-ink-3)] transition-colors"
       >
-        {d.collection_id != null ? 'Open collection' : 'Open pipeline'}
+        {target.label}
       </Link>
       <span
         className="shrink-0 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help mt-0.5"
@@ -422,7 +439,8 @@ function EmptyState({ seen }: { seen: WatchdogSeenFilter }) {
       </p>
       <p className="mt-2 text-sm text-[var(--color-ink-2)]">
         Turn on monitoring for a collection, or save a watchdog, and changes show
-        up here. Collections someone shares with you are announced here too.
+        up here. A collection, a pipeline or a dashboard someone shares with you
+        is announced here too.
       </p>
     </div>
   );

@@ -3,7 +3,8 @@ import { useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
-import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
+import type { HaloPoint } from '@/lib/hoverSync';
+import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
   COUNTS,
   COUNT_INK,
@@ -120,17 +121,26 @@ const formatPriceLabel = (r: MapRow, metric: PriceMetric): string => {
   return `${czPriceCompact.format(r.price_per_m2)}\u00a0${PPM2_UNIT[basis]}`;
 };
 
-/* `pin_exact` picks the pin's face (lib/uncertaintyCircle.isPinExact): a solid
- * dot for a pin placed on a building, an open ring for anything coarser. Baked
- * per feature so the rule stays in TypeScript, where it is tested, and the paint
- * expression only reads a boolean. */
+/* `pin_exact` picks the pin's black outer contour (lib/uncertaintyCircle.isPinExact):
+ * present for a pin placed on a building, absent for anything coarser. Baked per
+ * feature so the rule stays in TypeScript, where it is tested, and the paint
+ * expression only reads a boolean. `is_active` picks the fill: green, or white and
+ * transparent. */
 type MapFeatureProps = MapRow & { price_label: string; pin_exact: boolean };
 type FC = GeoJSON.FeatureCollection<GeoJSON.Point, MapFeatureProps>;
 
 /* The pin's paint, shared with the legend swatches so the two cannot drift. The
  * basemap is not themed, so these are the map's literals, not theme tokens. */
 const PIN_COLOR = '#3c6e63';
-const PIN_RING_FILL = '#ffffff';
+const PIN_WHITE = '#ffffff';
+const PIN_CONTOUR = '#000000';
+/* An inactive pin keeps its shape and fades: white transparent fill, dimmed contours. */
+const PIN_INACTIVE_OPACITY = 0.55;
+const PIN_RADIUS = 5;
+const PIN_RADIUS_HOVER = 8;
+const PIN_STROKE = 1.5;
+const PIN_STROKE_HOVER = 3;
+const PIN_CONTOUR_WIDTH = 1;
 
 const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
   type: 'FeatureCollection',
@@ -138,7 +148,7 @@ const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
     type: 'Feature' as const,
     /* Stable feature id lets maplibre's setFeatureState target this
      * point even after the source data is replaced — that's what
-     * powers the cross-source hover highlight (cards / table → map).
+     * powers the cross-source hover highlight (cards → map).
      * The surrogate listing_id (never null), NOT sreality_id — a null
      * feature id would make setFeatureState a no-op post-Gate-2. */
     id: r.listing_id,
@@ -277,11 +287,9 @@ interface Props {
    * mouseenter/mouseleave events outward through onHover. */
   hoveredIds: ReadonlySet<number>;
   onHover: (ids: ReadonlyArray<number> | null) => void;
-  /* Which pane originated the current hover. The locator halo renders
-   * only for 'list' hovers — echoing a map-origin hover back onto the
-   * map would just redraw under the cursor (and a count-mark hover would
-   * drop dozens of halos at once). */
-  hoverOrigin?: 'map' | 'list' | null;
+  /* The locator halo's points: the hovered cards' own rows (HoverTarget), so the
+   * halo lands even when the map holds no row for the property. */
+  haloPoints: ReadonlyArray<HaloPoint>;
   /* When set (i.e. the operator chose centre+radius mode in the
    * sidebar) the map renders a dashed copper circle around the
    * point so the cohort's geographic scope is visible. The circle
@@ -379,7 +387,7 @@ export default function ListingMap({
   onBoundsChange,
   hoveredIds,
   onHover,
-  hoverOrigin = null,
+  haloPoints,
   centerCircle,
   flyTo,
   anchor = null,
@@ -471,8 +479,12 @@ export default function ListingMap({
    * placed" for the whole view at once. */
   const pinFaces = useMemo(() => {
     let exact = 0;
-    for (const r of rows) if (isPinExact(r)) exact += 1;
-    return { exact, approx: rows.length - exact };
+    let inactive = 0;
+    for (const r of rows) {
+      if (isPinExact(r)) exact += 1;
+      if (!r.is_active) inactive += 1;
+    }
+    return { exact, approx: rows.length - exact, inactive };
   }, [rows]);
   /* Same ref trick for the hover emitter — the maplibre listeners
    * are registered once at mount and must keep reading the latest
@@ -727,6 +739,32 @@ export default function ListingMap({
         },
       });
 
+      /* The black outer contour of an exact pin (building / address). A layer of
+       * its own because a circle has ONE stroke, and the white (active) or green
+       * (inactive) one is taken. A stroke is drawn OUTSIDE the radius, so this
+       * circle's radius is the pin's radius plus that stroke's width. Added before
+       * `point` so the pin sits on top; never a hit target. */
+      map.addLayer({
+        id: 'point-contour',
+        type: 'circle',
+        source: 'listings',
+        filter: ['==', ['get', 'pin_exact'], true],
+        paint: {
+          'circle-radius': [
+            'case',
+            ['boolean', ['feature-state', 'hovered'], false], PIN_RADIUS_HOVER + PIN_STROKE_HOVER,
+            PIN_RADIUS + PIN_STROKE,
+          ],
+          'circle-opacity': 0,
+          'circle-stroke-color': PIN_CONTOUR,
+          'circle-stroke-width': PIN_CONTOUR_WIDTH,
+          'circle-stroke-opacity': [
+            'case',
+            ['get', 'is_active'], 1, PIN_INACTIVE_OPACITY,
+          ],
+        },
+      });
+
       map.addLayer({
         id: 'point',
         type: 'circle',
@@ -734,40 +772,38 @@ export default function ListingMap({
         paint: {
           /* feature-state.hovered drives the bumped radius / ochre
            * stroke — the highlight reads as "selected", not "different
-           * kind of pin". The kind is `pin_exact`: a solid dot for a pin
-           * placed on a building, an open ring (same size, green edge)
-           * for one placed only to a street, a quarter or a town. */
+           * kind of pin". The kind is `is_active`: a green dot with a white
+           * contour, or a white transparent one with a green contour. */
           'circle-radius': [
             'case',
-            ['boolean', ['feature-state', 'hovered'], false], 8,
-            5,
+            ['boolean', ['feature-state', 'hovered'], false], PIN_RADIUS_HOVER,
+            PIN_RADIUS,
           ],
           'circle-color': [
             'case',
-            ['boolean', ['get', 'pin_exact'], false], PIN_COLOR,
-            PIN_RING_FILL,
+            ['get', 'is_active'], PIN_COLOR,
+            PIN_WHITE,
           ],
           'circle-stroke-color': [
             'case',
             ['boolean', ['feature-state', 'hovered'], false], '#b58438',
-            ['boolean', ['get', 'pin_exact'], false], '#ffffff',
+            ['get', 'is_active'], PIN_WHITE,
             PIN_COLOR,
           ],
           'circle-stroke-width': [
             'case',
-            ['boolean', ['feature-state', 'hovered'], false], 3,
-            ['boolean', ['get', 'pin_exact'], false], 1.5,
-            2,
+            ['boolean', ['feature-state', 'hovered'], false], PIN_STROKE_HOVER,
+            PIN_STROKE,
           ],
-          /* Stroke fades with the fill: a ring IS its stroke, so dimming only
-             the fill would leave an inactive ring looking active. */
+          /* Stroke fades with the fill: the inactive pin IS its contours, so
+             dimming only the fill would leave an inactive pin looking active. */
           'circle-opacity': [
             'case',
-            ['get', 'is_active'], 1, 0.55,
+            ['get', 'is_active'], 1, PIN_INACTIVE_OPACITY,
           ],
           'circle-stroke-opacity': [
             'case',
-            ['get', 'is_active'], 1, 0.55,
+            ['get', 'is_active'], 1, PIN_INACTIVE_OPACITY,
           ],
         },
       });
@@ -1328,26 +1364,14 @@ export default function ListingMap({
     };
   }, [ready, overlayRegistry]);
 
-  /* Locator halo data: list-origin hovers project the hovered rows'
-   * coordinates into the halo source; everything else clears it (a
-   * map-origin hover means the cursor is already on the spot). */
+  /* Locator halo data: the hovered rows' own points, whatever the map holds. */
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
     const src = map.getSource('hover-halo') as GeoJSONSource | undefined;
     if (!src) return;
-    const features: GeoJSON.Feature<GeoJSON.Point>[] =
-      hoverOrigin === 'list' && hoveredIds.size > 0
-        ? rows
-            .filter((r) => hoveredIds.has(r.listing_id))
-            .map((r) => ({
-              type: 'Feature',
-              geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
-              properties: {},
-            }))
-        : [];
-    src.setData({ type: 'FeatureCollection', features });
-  }, [hoveredIds, hoverOrigin, rows, ready]);
+    src.setData(haloFeatures(haloPoints));
+  }, [haloPoints, ready]);
 
   /* Origin anchor data. Writes ONLY the `anchor` source — never `listings` —
    * so no filter change can reach it (the structural decoupling). `anchor` is
@@ -1448,7 +1472,7 @@ export default function ListingMap({
               </span>
             )}
           </Pill>
-          {rows.length > 0 && <PinPrecisionLegend exact={pinFaces.exact} approx={pinFaces.approx} />}
+          {rows.length > 0 && <PinPrecisionLegend exact={pinFaces.exact} approx={pinFaces.approx} inactive={pinFaces.inactive} />}
           <MapViewControls
             pinLimit={pinLimit}
             onPinLimitChange={onPinLimitChange}
@@ -1833,41 +1857,50 @@ function Pill({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* The key to the pin's two faces. Without it the ring is a code nobody was told;
+/* The key to the pin's faces. Without it the contour is a code nobody was told;
  * the tooltip also says where the circle went — onto the pin you click. */
-function PinPrecisionLegend({ exact, approx }: { exact: number; approx: number }) {
+function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
   return (
     <span
       className="pointer-events-auto inline-flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums cursor-help"
       title={
-        'Plný bod: poloha ověřená na budovu nebo adresu. Kroužek: poloha jen přibližná '
-        + '(ulice, část obce, obec…). Klikněte na pin: mapa ukáže okruh, ve kterém '
+        'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
+        + '(ulice, část obce, obec…). Zelený bod je aktivní nabídka, průhledný bílý se zeleným '
+        + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
         + 'nemovitost leží, a popisek řekne, jak je velký.'
       }
     >
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact />
+        <PinSwatch exact active />
         Přesná poloha <span className="text-[var(--color-ink-2)]">{exact.toLocaleString('cs-CZ')}</span>
       </span>
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-        <PinSwatch exact={false} />
+        <PinSwatch exact={false} active />
         Přibližná <span className="text-[var(--color-ink-2)]">{approx.toLocaleString('cs-CZ')}</span>
+      </span>
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+        <PinSwatch exact={false} active={false} />
+        Neaktivní <span className="text-[var(--color-ink-2)]">{inactive.toLocaleString('cs-CZ')}</span>
       </span>
     </span>
   );
 }
 
-/* The pin in miniature, from the same paint constants as the `point` layer. */
-function PinSwatch({ exact }: { exact: boolean }) {
+/* The pin in miniature, from the same paint constants as the `point` layers. The
+ * rings are box-shadows, which draw outside the box exactly as a circle stroke
+ * does, so the margin keeps them off the label. */
+function PinSwatch({ exact, active }: { exact: boolean; active: boolean }) {
+  const rings = [`0 0 0 ${PIN_STROKE}px ${active ? PIN_WHITE : PIN_COLOR}`];
+  if (exact) rings.push(`0 0 0 ${PIN_STROKE + PIN_CONTOUR_WIDTH}px ${PIN_CONTOUR}`);
   return (
     <span
       aria-hidden="true"
-      className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
-      style={
-        exact
-          ? { background: PIN_COLOR, boxShadow: `0 0 0 1.5px ${PIN_RING_FILL}` }
-          : { background: PIN_RING_FILL, border: `2px solid ${PIN_COLOR}` }
-      }
+      className="inline-block w-2.5 h-2.5 rounded-full shrink-0 mx-[3px]"
+      style={{
+        background: active ? PIN_COLOR : PIN_WHITE,
+        boxShadow: rings.join(', '),
+        opacity: active ? 1 : PIN_INACTIVE_OPACITY,
+      }}
     />
   );
 }

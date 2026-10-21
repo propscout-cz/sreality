@@ -1,29 +1,18 @@
-/* Compact popup for kicking off a new estimation OR a new building decomposition.
+/* Compact popup that starts an estimation of ONE ad we hold.
  *
- * Both POST endpoints return a 'pending' row immediately and run the
- * heavy work as a FastAPI BackgroundTask — the modal closes and
- * navigates to the detail page in ~1 s. The detail page polls until
- * status reaches a terminal value.
+ * Opened from the property page (its header button, its estimations section),
+ * always with the canonical ad's `listing_id`: an estimation is always of an
+ * ad we hold, so there is no URL field — a pasted link becomes an ad first
+ * through "Nová nemovitost" (docs/design/new-property-from-link.md §3.5).
  *
- * Apartment kind (default):
- *   Paste a listing URL → POST /estimations/preview to extract spec →
- *   POST /estimations to enqueue the run → navigate to the run's surface
- *   (runSurfaceUrl: the listing page's estimations section when the
- *   subject is in our DB, /estimation/:id only for orphan-URL runs).
+ * POST /estimations returns a 'pending' row immediately and runs the heavy
+ * work as a FastAPI BackgroundTask — the modal closes and navigates to the
+ * run's surface (runSurfaceUrl: the ad's page, estimations section) in ~1 s,
+ * where the section polls until the status is terminal.
  *
- * Building kind (Phase B1):
- *   Paste a `dum` / `komercni` URL → POST /buildings/from_url enqueues
- *   extraction → navigate to /building/:id where the operator reviews
- *   the unit proposal once extraction lands. When the operator
- *   uploaded attachments in the modal we additionally wait for the
- *   first extraction pass to finish ('awaiting_input') and then
- *   re-extract so the attachments are folded in.
- *
- * Estimate kind (rent vs sale) for the apartment path is operator-
- * chosen via a segmented control, defaulted to rent. The toggle always
- * wins — pasting a `prodej` URL while the toggle is on Rent still
- * submits a rent estimate. Provider and lifecycle fall back to the
- * same defaults the form used to ship with (Claude + active).
+ * The estimate kind (rent vs sale) and the property type are operator-chosen,
+ * seeded from the ad; the toggle always wins. Provider and lifecycle fall back
+ * to the same defaults the form used to ship with (Claude + active).
  */
 
 import { Suspense, createContext, useContext, useMemo, useState, type ReactNode } from 'react';
@@ -36,15 +25,13 @@ export type EstimateKind = 'rent' | 'sale';
 export type CategoryMain = 'byt' | 'dum' | 'komercni';
 
 export interface NewEstimationPrefill {
-  url?: string;
+  listingId: number;
   categoryMain?: CategoryMain;
   estimateKind?: EstimateKind;
 }
 
 interface ModalCtx {
-  open: (prefill?: NewEstimationPrefill) => void;
-  close: () => void;
-  isOpen: boolean;
+  open: (prefill: NewEstimationPrefill) => void;
 }
 
 const ctx = createContext<ModalCtx | null>(null);
@@ -58,31 +45,20 @@ export function useNewEstimationModal(): ModalCtx {
 }
 
 export function NewEstimationProvider({ children }: { children: ReactNode }) {
-  const [isOpen, setOpen] = useState(false);
   const [prefill, setPrefill] = useState<NewEstimationPrefill | null>(null);
   /* This provider mounts above <Outlet> in Shell, so without this a navigation
    * started from inside the modal — a submit that navigates to the run's
    * surface, or anything a future body renders — would change the page BEHIND
    * the open modal and leave the body scroll lock on. See
    * lib/useCloseOnNavigation.ts. */
-  useCloseOnNavigation(() => setOpen(false));
-  const value = useMemo<ModalCtx>(
-    () => ({
-      open: (p?: NewEstimationPrefill) => {
-        setPrefill(p ?? null);
-        setOpen(true);
-      },
-      close: () => setOpen(false),
-      isOpen,
-    }),
-    [isOpen],
-  );
+  useCloseOnNavigation(() => setPrefill(null));
+  const value = useMemo<ModalCtx>(() => ({ open: setPrefill }), []);
   return (
     <ctx.Provider value={value}>
       {children}
-      {isOpen && (
+      {prefill && (
         <Suspense fallback={null}>
-          <NewEstimationModalBody onClose={() => setOpen(false)} prefill={prefill} />
+          <NewEstimationModalBody onClose={() => setPrefill(null)} prefill={prefill} />
         </Suspense>
       )}
     </ctx.Provider>

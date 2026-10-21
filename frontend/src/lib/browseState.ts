@@ -1,6 +1,6 @@
 /* The Browse "view state" contract + its two adapters.
  *
- * `<BrowseExperience>` (the filter sidebar + Map/Table/Stats + map overlays)
+ * `<BrowseExperience>` (the filter sidebar + Map/Stats + map overlays)
  * is driven by this contract instead of reading the URL directly, so the SAME
  * experience powers both the Browse page (URL-backed, shareable links) and the
  * "Explore area" modal (in-memory, seeded from a listing). The two adapters are
@@ -24,6 +24,7 @@ import {
   toSearchParams,
   type ListingFilters,
   type MapBounds,
+  type PresetSpec,
 } from '@/lib/filters';
 import {
   DEFAULT_SORT,
@@ -39,9 +40,12 @@ import {
   useRememberedLayers,
   writeRememberedLayers,
 } from '@/lib/mapOverlays';
-import type { Disposition, FilterPreset, ListingPublic } from '@/lib/types';
+import type { Disposition, FilterPreset, ListingPublic, SavedDashboard } from '@/lib/types';
 
-export type TabKey = 'map' | 'table' | 'stats';
+export type TabKey = 'map' | 'stats';
+
+/* `?tab=` as a TabKey; anything else (an old `?tab=table` link) opens the map, never a blank page. */
+export const parseTab = (raw: string | null): TabKey => (raw === 'stats' ? 'stats' : 'map');
 
 /* Map-overlay UI knobs. NOT part of the cohort filter spec — they paint
  * layers (city pins, the price-growth choropleth, reference overlays).
@@ -122,6 +126,16 @@ export interface BrowseViewState {
    * active after replacing its filters would render it dirty and pop the
    * "Update preset" button, which this chip must never do. */
   loadPipelineView: () => void;
+  /* The Stats dashboard the board was loaded from (URL key `dashboard`), the
+   * preset's twin: a view knob, carried through filtering, outside preset
+   * identity. `loadDashboard` writes a dashboard's filter exactly as
+   * `loadPreset` writes a preset's (applySavedFilter) — the preset is deselected,
+   * you have left its view — or, for a dashboard without one, only the id.
+   * Pushed like a preset; `replace` when the URL already asked for it (an
+   * arrival from a link must not leave a second, filterless entry behind). */
+  activeDashboardId: string | null;
+  setActiveDashboardId: (id: string | null) => void;
+  loadDashboard: (d: SavedDashboard, opts?: { replace?: boolean }) => void;
 }
 
 /* The legacy spellings of a `layers` selection — `kraje` and the rent map's
@@ -130,7 +144,28 @@ export interface BrowseViewState {
 const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
+  'dashboard',
 ];
+
+/* A saved filter (a preset's, a dashboard's: the preset blob, lib/filters
+ * readPresetSpec) as the next Browse URL: its filters and its sort (the default
+ * deletes the key), the view knobs of `current` carried. ONE body for both
+ * loaders; each then names what it loaded. */
+export function applySavedFilter(
+  spec: PresetSpec | ListingFilters,
+  current: URLSearchParams,
+): URLSearchParams {
+  const { filters, sort } = readPresetSpec(spec);
+  const sp = toSearchParams(filters);
+  for (const key of OVERLAY_URL_KEYS) {
+    const v = current.get(key);
+    if (v != null) sp.set(key, v);
+  }
+  const saved = sort ?? sortToParam(DEFAULT_SORT);
+  if (saved === sortToParam(DEFAULT_SORT)) sp.delete('sort');
+  else sp.set('sort', saved);
+  return sp;
+}
 
 /* The Browse page adapter. Lifted verbatim from the page so its behaviour —
  * the dual serialization (filters via toSearchParams + overlay knobs carried by
@@ -139,7 +174,7 @@ export function useUrlBrowseState(): BrowseViewState {
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => fromSearchParams(searchParams), [searchParams]);
   const sort = useMemo(() => parseSort(searchParams.get('sort')), [searchParams]);
-  const tab = (searchParams.get('tab') ?? 'map') as TabKey;
+  const tab = parseTab(searchParams.get('tab'));
   /* The live remembered selection: a bare /browse shows what the operator last
    * chose on any map, and this page's own writes survive a navigation that drops
    * the `layers` key. */
@@ -155,6 +190,7 @@ export function useUrlBrowseState(): BrowseViewState {
     };
   }, [searchParams, rememberedLayers]);
   const activePresetId = searchParams.get('preset');
+  const activeDashboardId = searchParams.get('dashboard');
 
   const preserveExtras = useCallback(
     (sp: URLSearchParams): URLSearchParams => {
@@ -240,15 +276,38 @@ export function useUrlBrowseState(): BrowseViewState {
 
   const loadPreset = useCallback(
     (p: FilterPreset) => {
-      const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
-      const sp = preserveExtras(toSearchParams(pf));
-      const presetSort = ps ?? sortToParam(DEFAULT_SORT);
-      if (presetSort === sortToParam(DEFAULT_SORT)) sp.delete('sort');
-      else sp.set('sort', presetSort);
+      const sp = applySavedFilter(p.filter_spec, searchParams);
       sp.set('preset', p.id);
       setSearchParams(sp, { replace: false });
     },
-    [preserveExtras, setSearchParams],
+    [searchParams, setSearchParams],
+  );
+
+  const setActiveDashboardId = useCallback(
+    (id: string | null) => {
+      const sp = new URLSearchParams(searchParams);
+      if (id) sp.set('dashboard', id);
+      else sp.delete('dashboard');
+      setSearchParams(sp, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+
+  /* With a filter: pushed, like a preset (Back undoes it), unless `replace`.
+   * Without one the filters stay and only the id moves, replaced like the
+   * preset id is. */
+  const loadDashboard = useCallback(
+    (d: SavedDashboard, { replace = false }: { replace?: boolean } = {}) => {
+      if (d.filter_spec == null) {
+        setActiveDashboardId(d.id);
+        return;
+      }
+      const sp = applySavedFilter(d.filter_spec, searchParams);
+      sp.delete('preset');
+      sp.set('dashboard', d.id);
+      setSearchParams(sp, { replace });
+    },
+    [searchParams, setSearchParams, setActiveDashboardId],
   );
 
   const loadPipelineView = useCallback(() => {
@@ -264,6 +323,7 @@ export function useUrlBrowseState(): BrowseViewState {
     filters, sort, tab, overlay, activePresetId,
     setFilters, setBounds, setSort, setTab, setOverlay, setActivePresetId, loadPreset,
     loadPipelineView,
+    activeDashboardId, setActiveDashboardId, loadDashboard,
   };
 }
 
@@ -300,12 +360,16 @@ export function useMemoryBrowseState(init: {
       loadPreset: (p) => {
         const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
         setFiltersState(pf);
-        if (ps) setSortState(parseSort(ps));
+        setSortState(parseSort(ps));
       },
       loadPipelineView: () => {
         setFiltersState(pipelineViewFilters());
         setActivePresetId(null);
       },
+      /* The modals mount no dashboard bar: nothing to remember, nothing to load. */
+      activeDashboardId: null,
+      setActiveDashboardId: () => {},
+      loadDashboard: () => {},
     }),
     [filters, sort, tab, overlay, activePresetId],
   );

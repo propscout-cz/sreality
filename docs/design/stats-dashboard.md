@@ -17,7 +17,8 @@ The operator chose to replace them with charts the user builds, which deletes th
 1. The builder REPLACES the Stats tab; the default dashboard is four seed charts; the fixed RPC body, both chart
    files and the LLM "annotations" feature are deleted.
 2. ONE dashboard per account, independent of the filter (the filter only picks the sample); several charts,
-   add / remove / reorder. Stored whole.
+   add / remove / reorder. Stored whole. **Amended 2026-10-20** (`saved-dashboards.md`): ONE *working board* per
+   account; named dashboards are many, may embed the filter, and may be shared read-only.
 3. A turnover chart requires ONE status in the sample (active or delisted) — the same refusal as mixed property
    types. Plain percentiles over the picked sample; no survival estimator. (Migration 634: a row's status is
    judged by the cohort's own portal rule, and a property delisted on the chosen portal but live elsewhere
@@ -99,19 +100,21 @@ payload still carries the counts and the cohort facts; `cells` and `places` are 
 cohort is read: `{refused, reason, cells: []}`.) `places` is read from the view on the ≤ 2,000 result cells only; `name` is
 null when the register has no live name for the code.
 
-### Saved board — `public.stats_dashboards(account_id pk, charts jsonb, updated_at)`
+### Working board and dashboards — `public.stats_dashboards` (626, re-keyed by 647)
 
-One row per account. Read by the SPA through RLS (`current_account_ids()`); written only by
-`PUT /stats/dashboard {charts: [...]}` (tenant connection, `require_account_id`, whole-document upsert). A chart
-is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics, in the order the
-user picked them, the first leading; default `['median']`) is read by line, bar and a table with a column
-dimension; the title is derived, never stored. (Migration 628 rewrote the first shape's single `stat` into
-`stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒
-the SPA shows `DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one
-status, and no byty-only dimension) and the first save persists the whole list. A board holds at most
-`MAX_CHARTS` charts (registry); the SPA offers no "Přidat graf" at the cap. Single-membership assumption: the
-RLS read spans every account the user belongs to while the write names the first one; a second membership (out
-of scope) needs a `GET /stats/dashboard` on `require_account_id` in place of the RLS read.
+Since migration 647 the table holds saved sets (`docs/design/saved-dashboards.md`): `id` is the key, every NAMED
+row is a dashboard the account lists, loads, reorders and may share read-only (`/stats/dashboards`), and the
+account's ONE unnamed row is its working board, the charts the Stats tab shows. `PUT /stats/dashboard {charts:
+[...]}` replaces it whole (`ON CONFLICT (account_id) WHERE name IS NULL`, the account `require_account_id`
+resolves); `GET /stats/dashboard` reads it (`{id, charts, updated_at}` or null) by RLS alone, a tenant read
+(one membership per user makes it the PUT's row; a second membership would need the write's account resolution
+there). A chart is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics,
+in the order the user picked them, the first leading; default `['median']`) is read by line, bar and a table with
+a column dimension; the title is derived, never stored. (Migration 628 rewrote the first shape's single `stat`
+into `stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒ the SPA shows
+`DEFAULT_CHARTS` (four seeds that answer on the default filter: no turnover, which needs one status, and no
+byty-only dimension) and the first save persists the whole list. A board holds at most `MAX_CHARTS` charts
+(registry, validated as `Charts` in `api/schemas.py`); the SPA offers no "Přidat graf" at the cap.
 
 ### SPA — `frontend/src/lib/stats.ts` + `frontend/src/components/stats/`
 
@@ -190,7 +193,8 @@ deleted files are replaced by rows for the files that now carry the unit strings
   from seeded register rows (null for a retired unit), every place level read as `authenticated` through the
   view's grant.
 - `tests/api/test_stats_dashboard.py`: PUT validates through the registry's `validate_board` (422 on a bad
-  chart or an oversized / duplicate-id board, with the registry's reason), upserts, scopes to the caller's account.
+  chart or an oversized / duplicate-id board, with the registry's reason), upserts the working board, and GET
+  reads the same account's (647). Named dashboards and their shares: `tests/api/test_stats_dashboards.py`.
 - Updated: `test_browse_map_read_contract` (`_STATS_ONLY_PARAMS`), `test_one_place_predicate` (latest = 626,
   the parameter order), the two per-migration pins (602, 598 files), `test_measure_price_per_m2` (the stats arm
   reads the pivot or is dropped in favour of the one-measure census), `test_portal_rule` (live call shape),

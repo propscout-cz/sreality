@@ -5,6 +5,30 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
+- **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
+  not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
+  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the four
+  scripts, the six dispatch-only workflows, `listing_condition_scores`, the two
+  `listings.*_condition_level` columns, their data, the Settings per-kraj toggle (a toggle alone
+  runs nothing) and the engine's tests. Retired from every surface: the four
+  `*_condition_level_min/_max` registry filters (Browse sidebar + URL `bld_cond_*`/`apt_cond_*`,
+  Browse RPC args, Watchdog spec + labels + summary chips, comparables, the API request models,
+  the agent's tunables and tool schema; a stored Watchdog spec still deserialises and any value
+  raises via `filter_compiler.RETIRED_FILTERS`), the agent's `target.*_condition_level` facts
+  (`target.condition` stays), and the estimator prompt's level guidance (migration 645, applied
+  BEFORE the code deploy). Saved state changed: none (0 watchdogs, 0 of 7 presets carried them).
+- **Owed:** drop the four dead level parameters from `browse_stats_properties` /
+  `browse_map_cells` after this deploys (597's order: the SPA stopped sending them first).
+- **Done by #1924 (2026-10-21):** `_load_subject_condition` reads the subject by `listings.id`, so a
+  subject from any portal reaches the agent with its `target.condition`.
+- **Resume blockers** (an operator ruling first: which surface may read the levels again): the
+  engine keys on `sreality_id` (cache, selector, propagation), builds its text input from
+  sreality's `raw_json` shape (`text` / `items`, `_build_text_payload`), runs on Anthropic only
+  (`build_batch_request_params`), selects by a full scan of
+  unscored active listings, and every stored level is from 2026-06-18 or earlier (stale against
+  today's snapshots).
+
 ### Health wave 4 — portal checks on the worker; the coverage gate and two slice writers retired (2026-10-19, done)
 - **Done:** the portal alarms move from GitHub to the worker as the `scraping`, `publishing` and
   `delisting` checks and the `coverage` gauge (`docs/design/health-dashboard.md` § 6, wave 4;
@@ -161,8 +185,8 @@ Independent of the analytical, UI, and map tracks.
   the UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
   36995661138): 0×403, 5/5 pages, errors=0 → `portal_rate_state` reset, both `app_settings` kill switches
   lifted, both workflows re-enabled, full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
-- **Next:** the on-demand URL parser (`source_parsers/common.py`, honest bot UA) and
-  `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403 on ceskereality — pre-existing exposure;
+- **Next:** `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403s on ceskereality (the on-demand
+  URL parser that shared the exposure was deleted 2026-10-20) — pre-existing exposure;
   new ceskereality rows/day fell 800→2 on 09-26..09-29 BEFORE the wall, unexplained; a fully blocked walk
   ends green (`errors=0`, `walk_coverage='complete'` with collected=0) and the drain budget is not enforced
   inside a chunk — observability follow-ups from the 10-02 review.
@@ -423,11 +447,11 @@ Independent of the analytical, UI, and map tracks.
   attempt (street held under a NULL provenance stamp → #1406) and passed 40/40 after. Rails seeded:
   coverage ok (20 active sreality rows without a URL, warn at 50), conformance ok 2.27 % (1/44 = an
   mmreality page answering 403 to HEAD — a portal quirk, not a URL defect; a crawler-portal HEAD
-  refusal is a known soft spot of the probe). **Filed, not built:**
-  the SPA's `api.ts` source registry is missing ceskereality/realitymix, BUT `estimation_runs.
-  source_kind`'s CHECK (mig 020) lists neither either — a URL of those portals pasted into the
-  estimation flow may violate the constraint; needs its own investigation (inbound URL→portal
-  registries, four copies), not a 4-line SPA patch.
+  refusal is a known soft spot of the probe). **Resolved 2026-10-20:** the filed gap (the SPA's
+  `api.ts` source registry and `estimation_runs.source_kind`'s CHECK both missing ceskereality /
+  realitymix) is gone with its cause — W1 of `docs/design/new-property-from-link.md` gave every
+  inbound URL one identity canon (`scraper/portal_identity.py` + its pinned SPA mirror), and W2
+  deleted the estimation URL arm that wrote `source_kind`.
 
 ### The nomination gate went STRUCTURAL — counts stopped vetoing (2026-09-08, done)
 - The 5th element of `walk_category` now means **"the walk reached the portal's end"**
@@ -750,8 +774,8 @@ already existed in the database.
 > property foundation + property-grain read/notification slices). The
 > scope notes below are background; the doc is the source of truth.
 
-Today's non-sreality flow is *parse on demand* via
-`source_dispatcher` (LLM call per URL, cached 7 days). To make
+The non-sreality flow was then *parse on demand* via
+`source_dispatcher` (LLM call per URL, cached 7 days; deleted 2026-10-20). To make
 bezrealitky / idnes / remax / maxima comparables (and other portals
 as the operator opens them) show up in `find_comparables`, those
 portals need to land in the `listings` table itself. **Hard
