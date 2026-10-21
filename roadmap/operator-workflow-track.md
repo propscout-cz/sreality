@@ -20,7 +20,7 @@ we do not crawl are the tenth portal `web`.
       the LLM URL parser, both previews, `url_parser`, the orphan machinery and the sreality-only late-binder go.
 - [ ] **W3 `feature/web-portal`** (PR #1936, migration 649) — the tenth portal (deterministic parser, text-lane reading, `indexless`
       presence seam, daily walk, contract, broker row, chip "Web"); after #1910.
-- [ ] **W4 `cleanup/estimation-four-schema`** — migration 650 drops `parsed_url_cache`, nine parse columns, two
+- [ ] **W4 `cleanup/estimation-four-schema`** (PR #1939) — migration 650 drops `parsed_url_cache`, nine parse columns, two
       settings, the `idnes_reality` portals row (destructive, OK given 2026-10-20). Written, not applied; applies
       after 643 + backup (`backup_before_drop.yml`, recipe in the file header); merges after #1910.
 - [ ] **Next (subtraction, after W4):** no `portals` row has kind `'parser'` once 650 drops `idnes_reality` (it was
