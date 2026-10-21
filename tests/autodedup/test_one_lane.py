@@ -555,19 +555,16 @@ class LaneDb(FakeDb):
             # `refreshed` absent: refreshed now; None: no fingerprint row (fail closed).
             bound = self.now - timedelta(seconds=float(p["fresh_s"]))
             since = datetime.fromisoformat(p["engine_since"]) if p["engine_since"] else None
-            blocks = (self.settings.get(p["scope_setting"]) or {}).get("blocks")
-            towns = set(blocks) if isinstance(blocks, list) else set()
             out = []
             for lid in sorted(set(p["listing_ids"])):
                 at = self.refreshed.get(lid, self.now)
                 keys = {k for g, k, i in self.members if g == p["generation"] and i == lid}
-                obec = self.location.get(lid, (None, None))[0]
                 out.append((lid, at, at is None or at < bound
                             or (since is not None and at < since),
                             *self.categories.get(lid, (None, None)),
                             any(i in self.active for g, k, i in self.members
                                 if g == p["generation"] and k in keys),
-                            obec, obec is not None and f"town:{obec}" in towns))
+                            self.location.get(lid, (None, None))[0]))
             return out
         if sql == RT_SETTING_WRITE_SQL:
             self.lane_settings[p["key"]] = json.loads(p["value"])
@@ -797,7 +794,8 @@ def test_a_member_with_no_fingerprint_row_holds_its_group_and_is_never_claimed()
     assert out["counts"][reconcile.STALE] == 1 and out["counts"]["applied"] == 0
     handed = db.lane_settings[reconcile.redecide_key(RT)]
     ages = reconcile.refreshed(db, RT, [i for g in handed for i in g],
-                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None,
+                               towns=())
     assert handed and reconcile.claims(handed, ages, 100) == []
 
 
@@ -851,7 +849,8 @@ def test_the_re_claim_serves_flats_for_sale_then_flats_for_rent_then_the_rest(
                      **dict.fromkeys([10, 11, 12], rent), **dict.fromkeys([20, 21, 22], rest)}
     groups = [[20], [10], [21, 22], [1, 2], [11, 12], [3], [4, 5]]
     ages = reconcile.refreshed(db, RT, sorted(hours),
-                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None,
+                               towns=())
 
     taken, _stamps = reconcile.select_claims(groups, ages, {}, db.now)
     assert taken == [3, 1, 2, 4, 5, 10, 11, 12, 20, 21, 22], (
@@ -899,7 +898,8 @@ def test_a_group_whose_cluster_holds_an_active_advert_goes_before_every_group_wi
     db.categories = {10: sale, 11: sale, 20: rest, 21: rest, 31: rent, 32: rent}
     groups = [[10, 11], [20, 21], [31, 32]]
     ages = reconcile.refreshed(db, RT, sorted(hours),
-                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None,
+                               towns=())
     assert ages[31].active and ages[32].active, "30, the advert the merge keeps, is active"
     assert not ages[10].active and not ages[11].active
 
@@ -915,7 +915,8 @@ def test_a_group_whose_cluster_holds_an_active_advert_goes_before_every_group_wi
         "the cap cuts the same order: the all-inactive group is the one left to the sweep")
     db.active = set()
     ages = reconcile.refreshed(db, RT, sorted(hours),
-                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None,
+                               towns=())
     assert reconcile.claims(groups, ages, 100) == [10, 11, 31, 32, 20, 21], (
         "with no active group left, E972's order: the inactive groups still merge")
 
@@ -928,15 +929,44 @@ def test_the_claim_tiers_and_regions_are_the_operators_order_of_2026_10_21() -> 
         ("byt", "prodej"), ("byt", "pronajem"), ("dum", "prodej"), ("komercni", "prodej"),
         ("pozemek", "prodej"), ("dum", "pronajem"), ("komercni", "pronajem"),
         ("ostatni", "prodej"), (None, None))] == [0, 1, 2, 2, 3, 3, 3, 3, 3]
-    assert reconcile._region(554782, False) == reconcile._region(554782, True) == (
+    assert reconcile._region(554782, ()) == reconcile._region(554782, {554782}) == (
         reconcile.REGION_PRAHA)
-    assert reconcile._region(563510, True) == reconcile.REGION_TOWN
-    assert reconcile._region(563510, False) == reconcile._region(None, False) == (
+    assert reconcile._region(563510, {563510}) == reconcile.REGION_TOWN
+    assert reconcile._region(563510, ()) == reconcile._region(None, {563510}) == (
         reconcile.REGION_REST)
     assert reconcile.REGION_PRAHA < reconcile.REGION_TOWN < reconcile.REGION_REST
     # The freshness read must still answer for every advert asked: the location join is LEFT.
     assert ("left join public.listing_location ll on ll.listing_id = w.listing_id"
             in " ".join(RT_STALE_SQL.split()))
+
+
+def test_the_region_s_towns_come_from_the_one_reader_of_the_scope(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The E974 review: the freshness read decided a scope town by re-reading the raw scope
+    row, which a scope saved as a string or spelt `Town:` would not match (every town ranked
+    with the rest) while the apply, through `scope_fields`, still merged there. The towns come
+    from `read_scope`'s normalised Scope, handed in by the reconcile and the lane's re-claim."""
+    from autodedup import incremental_lane
+    from autodedup.incremental import SEED_VERSION, seed_version_key
+
+    db = LaneDb()
+    db.live_scope(blocks="Town:563510  town:531057 quarter:490245")
+    assert reconcile.scope_towns(reconcile.read_scope(db)[0]) == [531057, 563510]
+    assert "app_settings" not in RT_STALE_SQL and "scope_setting" not in RT_STALE_SQL
+    seen: list[list[int]] = []
+    real = reconcile.refreshed
+
+    def spy(*args: Any, **kwargs: Any) -> dict[int, reconcile.Refresh]:
+        seen.append(sorted(kwargs["towns"]))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reconcile, "refreshed", spy)
+    _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
+    _read(db, 10, 11)
+    _lane(db)
+    incremental_lane._stale_claims(db, RT, {seed_version_key(RT): SEED_VERSION}, [[10, 11]],
+                                   False, SimpleNamespace(ledger_keyed=lambda: True), None, 200)
+    assert seen == [[531057, 563510], [531057, 563510]], "the reconcile, then the re-claim"
 
 
 def test_the_re_claim_serves_praha_then_the_scope_towns_then_the_rest_e973_above_it(
@@ -972,8 +1002,11 @@ def test_the_re_claim_serves_praha_then_the_scope_towns_then_the_rest_e973_above
         db.refreshed[lid] = None if hours is None else db.now - timedelta(hours=hours)
         if active:
             db.active.add(lid)
+    towns = reconcile.scope_towns(reconcile.read_scope(db)[0])
+    assert towns == [563510]
     ages = reconcile.refreshed(db, RT, sorted(adverts),
-                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None)
+                               fresh_hours=reconcile.FRESH_DECISION_HOURS, engine_since=None,
+                               towns=towns)
     assert [ages[i].region for i in (10, 50, 60, 61)] == [
         reconcile.REGION_PRAHA, reconcile.REGION_TOWN, reconcile.REGION_REST,
         reconcile.REGION_REST], "a town outside the scope and no location row are the rest"
@@ -1050,7 +1083,7 @@ def test_a_backlog_of_two_mover_groups_drains_whole_groups_oldest_first(
     for n in range(240):                                    # 48 h of passes
         ages = reconcile.refreshed(db, RT, [i for g in handed for i in g],
                                    fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                                   engine_since=None)
+                                   engine_since=None, towns=())
         taken = reconcile.claims(handed, ages, max(1, reconcile.STALE_FLOOR))
         assert not taken or any(set(taken) == set(i for i in g if ages[i][1])
                                 for g in handed), "a whole group a pass"

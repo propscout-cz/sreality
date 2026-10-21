@@ -474,7 +474,7 @@ def test_the_claim_cap_a_death_halves_bounds_the_re_claims_too(
     _open_scope(monkeypatch)
     ids = _queued_one_advert_groups(world)
     ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=None)
+                               engine_since=None, towns=())
     first = reconcile.claims([[i] for i in ids], ages, 3)
     assert len(first) == 3 and all(ages[i].active for i in first)
     monkeypatch.setattr(incremental_lane, "CLAIM_CAP_FLOOR", 1)
@@ -614,7 +614,7 @@ def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
     world.settings[reconcile.redecide_key(GEN)] = [[i] for i in ids]
     world.settings[reconcile.budget_key(GEN)] = {"budget": 4}
     ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=None)
+                               engine_since=None, towns=())
     taken = reconcile.claims([[i] for i in ids], ages, 4)
     assert len(taken) == 4
     real = incremental_lane.run_pass_bounded

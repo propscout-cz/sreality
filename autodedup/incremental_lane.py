@@ -2526,11 +2526,12 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
         return [], 0, budget, {}
     if not handed or bootstrap or not seed_current(control, generation):
         return [], 0, budget, {}
-    if reconcile.read_scope(conn)[0] is None or not store.ledger_keyed():
+    scope = reconcile.read_scope(conn)[0]
+    if scope is None or not store.ledger_keyed():
         return [], 0, budget, {}
     ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
                                fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=engine_since)
+                               engine_since=engine_since, towns=reconcile.scope_towns(scope))
     tried = control.get(reconcile.tried_key(generation))
     taken, stamps = reconcile.select_claims(handed, ages,
                                             tried if isinstance(tried, Mapping) else {},

@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, NamedTuple, Sequence
+from typing import Any, Callable, Collection, Mapping, NamedTuple, Sequence
 
 from autodedup import apply as A
 from autodedup import apply_sql as S
@@ -208,30 +208,38 @@ def tried_key(generation: str) -> str:
     return f"{TRIED_SETTING}:{generation}"
 
 
+def scope_towns(scope: A.Scope) -> list[int]:
+    """The town codes the scope names with a `town:` block (E974), as `read_scope` normalised
+    them: the region's one source, so no second reader of the row can disagree with the apply."""
+    return sorted(int(block.partition(":")[2]) for block in scope.blocks or ()
+                  if block.startswith("town:"))
+
+
 def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_hours: float,
-              engine_since: str | None) -> dict[int, Refresh]:
+              engine_since: str | None, towns: Collection[int]) -> dict[int, Refresh]:
     """Each advert's last refresh, whether a merge may NOT rest on it (E960): refreshed longer
     ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed), its tier in
     `CLAIM_ORDER` by its row's categories (E972), whether its cluster holds an active advert
     (E973) — read over the whole cluster, since a group's only active advert may sit on the
     property it merges onto and so is not among the members handed on — and its region by its
-    live location row and the scope's `town:` blocks (E974)."""
+    live location row's town against `towns`, the scope's (`scope_towns`, E974)."""
     if not listing_ids:
         return {}
+    named = frozenset(int(code) for code in towns)
     return {int(lid): Refresh(at, bool(stale), _claim_class(main, kind), bool(active),
-                              _region(obec_kod, bool(town)))
-            for lid, at, stale, main, kind, active, obec_kod, town in _rows(conn, RT_STALE_SQL, {
+                              _region(obec_kod, named))
+            for lid, at, stale, main, kind, active, obec_kod in _rows(conn, RT_STALE_SQL, {
                 "generation": generation, "listing_ids": sorted({int(i) for i in listing_ids}),
-                "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since,
-                "scope_setting": A.SCOPE_SETTING})}
+                "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since})}
 
 
 def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
                   fresh_hours: float, engine_since: str | None) -> set[int]:
-    """The adverts among `listing_ids` a merge may not rest on (E960)."""
+    """The adverts among `listing_ids` a merge may not rest on (E960); staleness reads no
+    region, so no towns."""
     return {listing_id for listing_id, row in refreshed(
         conn, generation, listing_ids, fresh_hours=fresh_hours,
-        engine_since=engine_since).items() if row.stale}
+        engine_since=engine_since, towns=()).items() if row.stale}
 
 
 def _claim_class(category_main: str | None, category_type: str | None) -> int:
@@ -241,12 +249,14 @@ def _claim_class(category_main: str | None, category_type: str | None) -> int:
                 len(CLAIM_ORDER))
 
 
-def _region(obec_kod: int | None, in_town_block: bool) -> int:
-    """An advert's region (E974): Praha, a town the scope names with a `town:` block, the rest
-    (no location row included)."""
-    if obec_kod is not None and int(obec_kod) == PRAHA_OBEC_KOD:
+def _region(obec_kod: int | None, towns: Collection[int]) -> int:
+    """An advert's region (E974): Praha, a town among the scope's `towns`, the rest (no
+    location row included)."""
+    if obec_kod is None:
+        return REGION_REST
+    if int(obec_kod) == PRAHA_OBEC_KOD:
         return REGION_PRAHA
-    return REGION_TOWN if in_town_block else REGION_REST
+    return REGION_TOWN if int(obec_kod) in towns else REGION_REST
 
 
 def _rank(members: Sequence[int], ages: Mapping[int, Refresh]
@@ -440,7 +450,8 @@ def run(
                                       if m.property_id != group.survivor_id)
             for group in plan.to_apply}
     ages = refreshed(conn, generation, sorted({i for ids in owed.values() for i in ids}),
-                     fresh_hours=fresh_hours, engine_since=engine_since)
+                     fresh_hours=fresh_hours, engine_since=engine_since,
+                     towns=scope_towns(scope))
     fresh = [group for group in plan.to_apply
              if not any(ages.get(i, (None, True))[1] for i in owed[group.cluster_key])]
     counts[STALE] = len(plan.to_apply) - len(fresh)
