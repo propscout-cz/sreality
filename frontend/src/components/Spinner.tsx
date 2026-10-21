@@ -1,7 +1,7 @@
 /* Shared inline spinner. `currentColor` + Tailwind's built-in animate-spin,
  * so the caller controls colour and size via the surrounding text styles.
- * Extracted from ListingCards so every loading affordance (cards, table,
- * the infinite-scroll sentinel, API feeds) reads the same. */
+ * Extracted from ListingCards so every loading affordance (cards, the
+ * infinite-scroll sentinel, API feeds) reads the same. */
 export default function Spinner({
   size = 11,
   className = '',

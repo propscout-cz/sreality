@@ -497,7 +497,7 @@ def test_sql_kind_snapshot() -> None:
     from collections import Counter
 
     counts = Counter(fr.sql_kind(f) for f in fr.all_filters())
-    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 7, "enum_or_unknown": 2, None: 32}
+    assert counts == {"gte": 19, "lte": 11, "eq": 9, "any": 6, "enum_or_unknown": 3, None: 32}
     numeric_eq = {
         f.id for f in fr.all_filters()
         if f.type in (fr.FilterType.INT, fr.FilterType.FLOAT) and fr.sql_kind(f) == "eq"
@@ -505,6 +505,19 @@ def test_sql_kind_snapshot() -> None:
     assert numeric_eq == {"category_sub_cb"}
     column_backed = {f.id for f in fr.all_filters() if f.pg_column is not None}
     assert fr.COMPILED_BY_HOOK <= column_backed
+
+
+def test_the_condition_chip_is_the_filters_and_never_the_canons() -> None:
+    """"Neuvedeno" is a chip on the condition_match filter, as on furnished and ownership.
+    RED by: the sentinel reaching the canon (a stored value, a Stats key, the scraper's
+    vocabulary) or the chip leaving the filter."""
+    canon = fr.COLUMN_CANONICAL_VALUES["condition"]
+    chips = [o.value for o in fr.REGISTRY["condition_match"].enum_values or ()]
+    assert chips == [*canon, fr.UNKNOWN_FILTER_VALUE]
+    assert fr.sql_kind(fr.REGISTRY["condition_match"]) == "enum_or_unknown"
+    assert fr.UNKNOWN_FILTER_VALUE not in canon
+    assert all(o.value != fr.UNKNOWN_FILTER_VALUE for o in fr.CONDITION_OPTIONS)
+    assert fr.label_cs("condition", fr.UNKNOWN_FILTER_VALUE) is None
 
 
 def test_filter_to_json_carries_sql_kind() -> None:

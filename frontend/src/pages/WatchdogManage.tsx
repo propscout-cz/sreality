@@ -12,6 +12,7 @@ import {
   updateWatchdogSubscription,
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
+import { enumLabel } from '@/lib/enums';
 import { fmtAbsolute, fmtCount, fmtRelative } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import { portalScopeLabel } from '@/lib/portals';
@@ -337,6 +338,9 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
   }
   if (spec.ownership?.length) {
     bits.push(spec.ownership.map((v) => OWNERSHIP_TEXT[v] ?? v).join(', '));
+  }
+  if (spec.condition_match?.length) {
+    bits.push(`condition: ${spec.condition_match.map((v) => enumLabel('condition', v) ?? v).join(', ')}`);
   }
   if (spec.min_parking_lots != null) bits.push(`≥${spec.min_parking_lots} parking`);
   if (spec.building_condition_level_min != null) bits.push(`bld≥${spec.building_condition_level_min}`);

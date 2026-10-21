@@ -266,12 +266,30 @@ export interface PortalLookupItem {
   source_id: string;
 }
 
+/* POST /listings/ingest and GET /listings/ingest/{source}/{native_id} answer
+ * this ONE shape (docs/design/new-property-from-link.md §3.2): market data
+ * only, no per-account field. `message_cs` is the one Czech sentence of a
+ * refused / gone / failed state; null otherwise. */
+export interface IngestState {
+  state: 'refused' | 'held' | 'queued' | 'gone' | 'failed';
+  message_cs: string | null;
+  source: string | null;
+  source_id_native: string | null;
+  listing_id: number | null;
+  is_active: boolean | null;
+  /* Null while the ad we hold is still unborn (the maintenance lane's birth). */
+  property_id: number | null;
+  queue: { attempts: number; claimed_at: string | null; given_up: boolean } | null;
+}
+
 /* Message protocol between content script and background worker.
  * The background worker is the only context allowed to make API
  * fetches — host_permissions covers it without CORS getting in the
  * way. Content scripts post messages, get the typed result back. */
 export type ApiMessage =
   | { type: 'lookup_listings'; items: PortalLookupItem[] }
+  | { type: 'ingest_listing'; url: string }
+  | { type: 'ingest_state'; source: string; native_id: string }
   | { type: 'patch_scenario'; run_id: number; body: YieldScenarioUpdate }
   /* `estimate_kind` + `category_main` are OPTIONAL and additive: an older
    * content bundle that sends neither still lands on the server's historical

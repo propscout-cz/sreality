@@ -41,6 +41,7 @@ from scraper import street, vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.scraped_listing import ScrapedListing
 
@@ -67,8 +68,6 @@ CATEGORY_MAIN: dict[str, str] = {
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-# The numeric listing id is the trailing "-1234567.html" of the detail URL.
-_ID_RE = re.compile(r"-(\d{4,})\.html\b")
 _INT_RE = re.compile(r"(-?\d+)")
 _PRICE_RUN_RE = re.compile(r"\d[\d\s  ​]*")
 _PRICE_MAX = 2_147_483_647  # listings.price_czk is a Postgres integer
@@ -144,13 +143,6 @@ def _text(node: Node | None) -> str | None:
 
 def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
-
-
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
 
 
 def index_price(text: str | None) -> int | None:
@@ -398,7 +390,7 @@ def parse_index(html: str) -> IndexPage:
     for card in tree.css(".advert-item"):
         link = card.css_first('a[href*="/detail/"]')
         href = link.attributes.get("href") if link else None
-        source_id = _id_from_href(href)
+        source_id = native_id(SOURCE, href)
         if not source_id or not href or source_id in seen:
             continue
         seen.add(source_id)
@@ -472,7 +464,7 @@ def areas_from_params(
 
 def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id(SOURCE, source_url) or ""
     category_main, category_type = resolve_category(html, source_url)
     params = _detail_params(tree)
     read = partial(source_value, SOURCE, params=params)

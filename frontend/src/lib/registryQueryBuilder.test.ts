@@ -164,11 +164,11 @@ describe('auto-dispatch', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
-      conditionMatch: ['po_rekonstrukci', 'velmi_dobry'],
+      subtype: ['vila', 'chata'],
       dispositions: ['2+kk', '3+kk'],
     });
     const ins = r.calls.filter((c) => c.op === 'in');
-    expect(ins).toContainEqual({ op: 'in', col: 'condition', value: ['po_rekonstrukci', 'velmi_dobry'] });
+    expect(ins).toContainEqual({ op: 'in', col: 'subtype', value: ['vila', 'chata'] });
     expect(ins).toContainEqual({ op: 'in', col: 'disposition', value: ['2+kk', '3+kk'] });
   });
 
@@ -176,10 +176,10 @@ describe('auto-dispatch', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
-      conditionMatch: [],
+      subtype: [],
       dispositions: [],
     });
-    expect(r.calls.find((c) => c.col === 'condition')).toBeUndefined();
+    expect(r.calls.find((c) => c.col === 'subtype')).toBeUndefined();
     expect(r.calls.find((c) => c.col === 'disposition')).toBeUndefined();
   });
 
@@ -302,17 +302,19 @@ describe('hand-coded skip set', () => {
     expect(r.calls.find((c) => c.col === 'building_type')).toBeUndefined();
   });
 
-  it('does not auto-dispatch furnished / ownership (unknown-sentinel enums)', () => {
+  it('does not auto-dispatch furnished / ownership / condition (unknown-sentinel enums)', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
       furnished: ['ano', '__unknown__'],
       ownership: ['osobni'],
+      conditionMatch: ['__unknown__'],
     });
-    // furnished / ownership → `.or(in.(…),is.null,not.in.(…))` is handled in
-    // queries.ts:applyFilters, NOT here.
+    // furnished / ownership / condition → `.or(in.(…),is.null,not.in.(…))` is
+    // handled in queries.ts:applyFilters, NOT here.
     expect(r.calls.find((c) => c.col === 'furnished')).toBeUndefined();
     expect(r.calls.find((c) => c.col === 'ownership')).toBeUndefined();
+    expect(r.calls.find((c) => c.col === 'condition')).toBeUndefined();
   });
 
   it('does not auto-dispatch last_seen / first_seen days-ago filters', () => {

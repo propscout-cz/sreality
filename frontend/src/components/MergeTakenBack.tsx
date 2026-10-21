@@ -35,7 +35,8 @@ export default function MergeTakenBack({
       </span>
     );
   }
-  const n = preview.data.rulings_taken_back;
+  /* One count over the statement: what every letter together takes back. */
+  const n = Object.values(preview.data.letters).reduce((sum, l) => sum + l.rulings_taken_back, 0);
   return n > 0 ? (
     <span className={`text-[var(--color-ink-2)] ${className}`}>Vezme zpět {n} rozhodnutí „Různé“.</span>
   ) : null;

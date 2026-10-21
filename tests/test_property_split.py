@@ -505,15 +505,15 @@ def test_a_lock_timeout_or_deadlock_is_busy():
 
 
 def test_the_split_writes_only_through_the_chokepoint_and_the_preview_writes_nothing():
-    """Rule 15: the split moves adverts through `detach_listings` / `merge_property_set` and rules
-    through `record_rulings`, and holds no write statement of its own; the preview runs in a
-    read-only transaction that is rolled back."""
+    """Rule 15: the split moves adverts through `detach_listings` / `merge_letters` (the one
+    merge per letter) and rules through `record_rulings`, and holds no write statement of its
+    own; the preview runs in a read-only transaction that is rolled back."""
     src = inspect.getsource(ps)
     for statement in ("UPDATE listings", "UPDATE properties", "INSERT INTO property_merge_events",
                       "INSERT INTO autodedup", "DELETE FROM", "INSERT INTO properties",
                       "SELECT id, property_id FROM listings WHERE id"):
         assert statement not in src, statement
-    for writer in ("detach_listings(", "merge_property_set(", "record_rulings("):
+    for writer in ("detach_listings(", "merge_letters(", "record_rulings("):
         assert writer in inspect.getsource(ps.split_property) + inspect.getsource(ps._join)
     assert src.count("detach_listings(") == 1, "the split detaches its movers as ONE set"
     for gone in ("undo_split", "keep_together", "restore_must_not_link", "detach_outcomes"):

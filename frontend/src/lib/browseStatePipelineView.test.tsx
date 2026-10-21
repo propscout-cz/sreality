@@ -70,12 +70,12 @@ describe('loadPipelineView (URL adapter)', () => {
   });
 
   it('keeps the map-overlay knobs (they are not cohort filters)', () => {
-    const h = mount('/browse?cat=byt&rentmap=1&colorby=overall&tab=table');
+    const h = mount('/browse?cat=byt&rentmap=1&colorby=overall&tab=stats');
     act(() => h.state.loadPipelineView());
     const sp = new URLSearchParams(h.search);
     expect(sp.get('rentmap')).toBe('1');
     expect(sp.get('colorby')).toBe('overall');
-    expect(sp.get('tab')).toBe('table');
+    expect(sp.get('tab')).toBe('stats');
   });
 
   it('is undoable — the load pushes a history entry rather than replacing', () => {

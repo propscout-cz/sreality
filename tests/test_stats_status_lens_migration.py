@@ -68,7 +68,7 @@ def _expected() -> str:
 
 
 def test_it_is_the_effective_definition_and_the_only_one_in_the_file() -> None:
-    assert latest_definition(FN).name == "640_drop_property_ids_excluded.sql"  # 640 restated it minus the denylist parameter
+    assert latest_definition(FN).name == "644_condition_unknown_filter.sql"  # 640 dropped the denylist, 644 swapped the condition conjunct
     assert SQL.count(f"create or replace function public.{FN}(") == 1
 
 

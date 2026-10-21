@@ -513,10 +513,10 @@
  * absolutely-positioned ::after. Every control is a SIBLING of the anchor,
  * raised over the ::after with `.card-action` — or, when it is already
  * absolutely positioned and must stay that way, with
- * `z-[var(--z-card-action)]`. Three surfaces in this app already keep their
+ * `z-[var(--z-card-action)]`. Two other surfaces in this app keep their
  * controls as SIBLINGS of one scoped link (pipeline/BoardCard,
- * tag-definitions/TagContentsGallery, ListingTable); none of them stretches
- * that link over the whole surface — this utility is the first to.
+ * tag-definitions/TagContentsGallery); neither stretches that link over the
+ * whole surface — this utility is the first to.
  *
  * UNLAYERED ON PURPOSE. This file opens with `@import "tailwindcss"`, which
  * declares Tailwind's cascade layers; an UNLAYERED bare rule outranks every

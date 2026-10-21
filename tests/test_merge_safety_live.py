@@ -73,9 +73,9 @@ def _snapshot(cur: Any, listing_id: int, price: int | None, hours_ago: float) ->
 
 
 def _recompute(cur: Any, pid: int) -> None:
-    from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+    from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 
-    cur.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
 
 
 def _seen(cur: Any, listing_id: int, first_days_ago: float, last_days_ago: float = 0) -> None:
@@ -334,8 +334,8 @@ def test_an_operator_merge_takes_back_every_different_between_what_it_joins(cur)
     _set_ruling(cur, 9_000_003, [s1, r1], "same")         # its newest word: nothing to take back
     outside = _advert(cur, _property(cur), source="bazos")
     _set_ruling(cur, 9_000_004, [s1, r1, outside], "different")   # not wholly in the merge
-    assert merge_preview(cur.connection, [absorbed, survivor]) == {
-        "property_ids": sorted([survivor, absorbed]), "rulings_taken_back": 2}
+    assert merge_preview(cur.connection, {absorbed: "A", survivor: "A"}) == {"letters": {"A": {
+        "property_ids": sorted([survivor, absorbed]), "rulings_taken_back": 2}}}
 
     merged = _merge(cur, [survivor, absorbed])
     note = f"operator merge {merged['merge_group_id']}"

@@ -171,6 +171,8 @@ def test_attach_stragglers_births_and_recomputes_them_in_one_transaction() -> No
     assert order[birth] == " ".join(NEW_SINGLETONS_SQL.split())
     assert conn.executed[birth][1] == {"ids": [11, 12]}
     assert conn.executed[recompute][1] == {"ids": [101, 102]}
+    mirror = next(i for i, s in enumerate(order) if "INSERT INTO dirty_broker_listings" in s)
+    assert recompute < mirror and conn.executed[mirror][1] == {"ids": [101, 102]}
     assert not any("ST_DWithin" in s or "INSERT INTO dirty_properties" in s
                    or "source_id_native" in s or "lock_timeout" in s for s in order)
 
@@ -201,6 +203,32 @@ def test_attach_is_bounded_and_browse_syncs_its_births(monkeypatch: Any) -> None
     assert "ORDER BY" not in select[0]
     assert synced == [[101]]
     assert rps.STRAGGLER_BATCH == 2000
+
+
+def test_attach_brings_its_births_current_through_properties_changed(monkeypatch: Any) -> None:
+    """A birth's after-step is THE after-step of the drain and the identity writers (recompute,
+    Browse patch, broker queue), never a hand-rolled copy: it runs once over the born ids, inside
+    the birth's transaction and under the batch ceiling the attach has always had."""
+    import scripts.recompute_property_stats as rps
+
+    calls: list[list[int]] = []
+
+    def after_step(c: Any, ids: Any) -> None:
+        calls.append(list(ids))
+        c.executed.append(("AFTER-STEP", None))
+
+    monkeypatch.setattr(rps, "properties_changed", after_step)
+    conn = _TxnMarkingConn([_STRAGGLERS, _BORN])
+
+    assert _attach_stragglers(conn) == 2
+
+    order = _sqls(conn)
+    assert calls == [[101, 102]]
+    birth = next(i for i, s in enumerate(order) if "INSERT INTO properties" in s)
+    ceiling = order.index(f"SET LOCAL statement_timeout = '{rps._BATCH_STATEMENT_TIMEOUT}'")
+    assert order[0] == "BEGIN" and birth < ceiling < order.index("AFTER-STEP")
+    assert order[-1] == "COMMIT"
+    assert not any("WITH batch AS" in s or "browse_list" in s for s in order)
 
 
 class _DrainCur:
@@ -393,17 +421,17 @@ def test_every_resolved_sql_constant_has_valid_placeholders():
 
     The fakes above record SQL without parsing it (which is why a prose `~2%` in
     `_RECOMPUTE_BATCH_SQL` once shipped green and broke property maintenance +
-    every merge). This module is uniquely exposed: `_RECOMPUTE_ONE_SQL` and
-    `_RECOMPUTE_SCOPED_SQL` are derived from `_RECOMPUTE_BATCH_SQL` at import
-    time, so they can't be statically inspected — only validated after they
-    resolve. The repo-wide AST guard (tests/test_sql_placeholders.py) covers the
+    every merge). This module is uniquely exposed: `_RECOMPUTE_SCOPED_SQL` is
+    derived from `_RECOMPUTE_BATCH_SQL` at import time, so it can't be
+    statically inspected — only validated after it resolves. The repo-wide AST guard (tests/test_sql_placeholders.py) covers the
     base constants; this covers the derived family that actually executes.
     """
     import scripts.recompute_property_stats as rps
 
     split = pytest.importorskip("psycopg._queries")._split_query
     names = [n for n in dir(rps) if n.endswith("_SQL") and isinstance(getattr(rps, n), str)]
-    assert {"_RECOMPUTE_BATCH_SQL", "_RECOMPUTE_ONE_SQL", "_RECOMPUTE_SCOPED_SQL"} <= set(names)
+    assert {"_RECOMPUTE_BATCH_SQL", "_RECOMPUTE_SCOPED_SQL"} <= set(names)
+    assert not hasattr(rps, "_RECOMPUTE_ONE_SQL") and not hasattr(rps, "recompute_one")
     for name in names:
         split(getattr(rps, name).encode())  # raises ProgrammingError on a bad `%`
 
@@ -588,8 +616,8 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
     assert _run_sweep(monkeypatch, conn, []) == 0
     grants = [s for s, _ in conn.executed
               if "property_maintenance_lease" in s and "RETURNING" in s]
-    # initial acquisition + one renewal per batch
-    assert len(grants) == 1 + 2
+    # initial acquisition + one renewal per batch + one before each batch's straggler attach
+    assert len(grants) == 1 + 2 + 2
     # complete walk → the swept-range clear over its whole range
     assert _dirty_clears(conn) == [{"cutoff": "CUTOFF", "lo": 1, "hi": 4001}]
     # ...and the property_sweep artifact stamp the jobs check reads (O(1) liveness signal),
@@ -607,10 +635,86 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
 
 def test_the_full_sweep_patches_no_browse_row(monkeypatch: Any) -> None:
     """It recomputes every property, and the */15 wholesale rebuild is already that job's
-    read-model half: only the dirty drain and the identity writers patch Browse."""
+    read-model half: only births (the attach), the dirty drain and the identity writers patch
+    Browse."""
     conn = _SweepConn(max_id=4000)
     assert _run_sweep(monkeypatch, conn, []) == 0
     assert not any("browse_list" in s for s in _sqls(conn))
+
+
+def test_the_full_sweep_births_stragglers_after_every_batch(monkeypatch: Any, caplog: Any) -> None:
+    """The sweep holds the maintenance lease for its whole run (13-59 min a day) and the worker's
+    lane skips meanwhile, so an ad written during it waited for its property until the sweep let
+    go (10 min median, 16 max, measured 2026-10-20). Each batch is now followed by one attach on
+    the lease the sweep already holds, renewed first; the run's births are counted in its log."""
+    import scripts.recompute_property_stats as rps
+
+    def attach(c: Any, **_: Any) -> int:
+        c.executed.append(("ATTACH", None))
+        return 1
+
+    monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    conn = _SweepConn(max_id=6000)  # 3 batches at the default size
+    with caplog.at_level("INFO", logger="recompute_property_stats"):
+        assert _run_sweep(monkeypatch, conn, []) == 0
+
+    def kind(s: str) -> str | None:
+        if "property_maintenance_lease" in s and "RETURNING" in s:
+            return "lease"
+        if "WITH batch AS" in s:
+            return "batch"
+        return "attach" if s == "ATTACH" else None
+
+    steps = [k for k in (kind(s) for s in _sqls(conn)) if k]
+    assert steps == ["lease", "attach",
+                     "lease", "batch", "lease", "attach",
+                     "lease", "batch", "lease", "attach",
+                     "lease", "batch", "lease", "attach"]
+    assert "attached=4 " in caplog.text
+
+
+def test_a_failed_birth_never_stops_the_backstop_sweep(monkeypatch: Any, caplog: Any) -> None:
+    """A per-batch attach that fails (a lock or deadlock against the broker lane, say) only
+    delays births the worker's lane makes once the lease is free; the sweep logs it and goes on
+    to finish and stamp its cycle instead of dying mid-cycle without a cursor."""
+    import scripts.recompute_property_stats as rps
+
+    calls = {"n": 0}
+
+    def attach(c: Any, **_: Any) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("deadlock detected")
+        return 0
+
+    monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    conn = _SweepConn(max_id=6000)  # 3 batches at the default size
+    with caplog.at_level("WARNING", logger="recompute_property_stats"):
+        assert _run_sweep(monkeypatch, conn, []) == 0
+
+    assert len([s for s in _sqls(conn) if "WITH batch AS" in s]) == 3
+    assert calls["n"] == 4
+    assert "RECOMPUTE sweep.attach failed after batch=1-2001: deadlock detected" in caplog.text
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
+
+
+def test_a_lost_lease_during_a_birth_still_stops_the_sweep(monkeypatch: Any) -> None:
+    import scripts.recompute_property_stats as rps
+
+    calls = {"n": 0}
+
+    def attach(c: Any, **_: Any) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise rps._LeaseLost("maintenance lease lost mid-work")
+        return 0
+
+    monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    conn = _SweepConn(max_id=6000)
+    with pytest.raises(rps._LeaseLost):
+        _run_sweep(monkeypatch, conn, [])
+    assert len([s for s in _sqls(conn) if "WITH batch AS" in s]) == 1
+    assert _stamps(conn) == []
 
 
 # monotonic: started_at, _wait_lease entry anchor, batch-1 deadline check, batch-1 per-batch
@@ -991,12 +1095,13 @@ def test_batch_retry_renews_the_lease_on_every_attempt(monkeypatch: Any) -> None
     grants = [i for i, s in enumerate(order)
               if "property_maintenance_lease" in s and "RETURNING" in s]
     recomputes = [i for i, s in enumerate(order) if "WITH batch AS" in s]
-    # acquisition + one renewal per ATTEMPT (2), not per loop iteration (1)
-    assert len(grants) == 3
+    # acquisition + one renewal per ATTEMPT (2), not per loop iteration (1), then
+    # the batch's straggler attach renews once after it
+    assert len(grants) == 4
     # the failed attempt never recorded its statement; the replay did, and its
     # own renewal came first
     assert len(recomputes) == 1
-    assert grants[-1] < recomputes[-1]
+    assert len([g for g in grants if g < recomputes[-1]]) == 3
     # the sweep still completed normally on the replay
     assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
 
@@ -1441,12 +1546,11 @@ def test_the_reconcile_counts_the_properties_it_reset():
 
 
 def test_every_recompute_variant_carries_the_whole_statement():
-    """The one/scoped variants are derived from the batch SQL by narrowing the
-    batch CTE; if that ever becomes a copy, they must not lose a rule."""
+    """The scoped variant is derived from the batch SQL by narrowing the batch
+    CTE; if that ever becomes a copy, it must not lose a rule."""
     import scripts.recompute_property_stats as rps
 
-    for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_ONE_SQL,
-                rps._RECOMPUTE_SCOPED_SQL):
+    for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_SCOPED_SQL):
         for rule in ("property_canonical_listings", "lineage AS (", "city_proximity_computed_at",
                      "newest_ad_at_", "active_sources"):
             assert rule in sql

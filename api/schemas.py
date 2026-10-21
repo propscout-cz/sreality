@@ -9,6 +9,7 @@ out.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import HTTPException
@@ -881,9 +882,33 @@ class PortalLookupItem(BaseModel):
     """One portal listing keyed by its native id. For sreality, source_id is the
     numeric id as a string (matches listings.source_id_native)."""
     source: str = Field(min_length=1, max_length=40)
-    source_id: str = Field(min_length=1, max_length=128)
+    source_id: str = Field(min_length=1, max_length=512)
 
 
 class PortalLookupIn(BaseModel):
     """Batch lookup for the Chrome extension's detail panel + index-card overlay."""
     items: list[PortalLookupItem] = Field(min_length=1, max_length=50)
+
+
+class IngestIn(BaseModel):
+    """POST /listings/ingest: pasted text or a URL; the first link in it is the ad."""
+    url: str = Field(max_length=4096)
+
+
+class IngestQueue(BaseModel):
+    attempts: int
+    claimed_at: datetime | None
+    given_up: bool
+
+
+class IngestState(BaseModel):
+    """The ONE answer of POST /listings/ingest and GET /listings/ingest/{source}/{native_id}.
+    Market data only: no per-account field may ever join it."""
+    state: Literal["refused", "held", "queued", "gone", "failed"]
+    message_cs: str | None
+    source: str | None
+    source_id_native: str | None
+    listing_id: int | None
+    is_active: bool | None
+    property_id: int | None
+    queue: IngestQueue | None

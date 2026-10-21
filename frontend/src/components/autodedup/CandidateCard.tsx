@@ -33,6 +33,7 @@
  * payload has none — and the drill-down carries the mode on the URL.
  */
 
+import { LETTERS } from '@/lib/api';
 import type {
   AutodedupCandidate,
   AutodedupCandidateMember,
@@ -42,15 +43,7 @@ import type {
 import { fmtCount } from '@/lib/format';
 import { Chip, fmtScore } from '@/components/autodedup/EvidenceChips';
 import MemberGrid from '@/components/autodedup/MemberGrid';
-import {
-  SplitRow,
-  UNIT_LETTERS,
-  UnitSelect,
-  unitOf,
-  type SplitControls,
-  type SplitState,
-  type UnitMap,
-} from '@/components/autodedup/UnitSplit';
+import { SplitRow, UnitSelect, unitOf, type SplitControls, type SplitState, type UnitMap } from '@/components/autodedup/UnitSplit';
 
 /* THE CARD'S OPENING ASSIGNMENT: one letter per unit, in the order the server
  * packed them. Not all-A (the engine did not merge these) and not one letter per
@@ -58,7 +51,7 @@ import {
 export function candidateDefaultSplit(units: ReadonlyArray<AutodedupCandidateUnit>): SplitState {
   const map: UnitMap = {};
   units.forEach((unit, index) => {
-    const letter = UNIT_LETTERS[index] ?? UNIT_LETTERS[UNIT_LETTERS.length - 1];
+    const letter = LETTERS[index] ?? LETTERS[LETTERS.length - 1];
     for (const listingId of unit.listing_ids) map[listingId] = letter;
   });
   return { units: map };

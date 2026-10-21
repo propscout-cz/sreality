@@ -1,9 +1,10 @@
-"""valuo_valuations (migration 637) and api/valuo.py's statements, against the replayed schema: the row is
+"""valuo_valuations (migrations 637 + 646) and api/valuo.py's statements, against the replayed schema: the row is
 saved `pending` before the paid call and finished once, an identical request reuses its answer or meets
 its running twin (the double submit pays once), a refusal writes nothing, the CHECKs refuse a priceless
-success and an unexplained failure, history is the caller's own across every ad of the property, and no
-browser role can read the table. Valuo is a fake. Runs in CI's migrations job (`TEST_DATABASE_URL`,
-DB_RAILS_REQUIRED=1); every test rolls back.
+success and an unexplained failure, the comparables' photos land beside the answer, a sandbox answer is
+stored as sandbox whatever the token's name (and meets its stored twin through the real index), history is
+the caller's own across every ad of the property, and no browser role can read the table. Valuo is a fake.
+Runs in CI's migrations job (`TEST_DATABASE_URL`, DB_RAILS_REQUIRED=1); every test rolls back.
 """
 
 from __future__ import annotations
@@ -43,10 +44,12 @@ def flat(cur: Any) -> dict[str, Any]:
 
 
 class _Valuo:
-    """The fake: `answer` is returned (or raised); `pending_at_call` counts the pending rows each call saw."""
+    """The fake: `answer` is returned (or raised); `pending_at_call` counts the pending rows each call saw;
+    `adverts` answers the photo call."""
 
     def __init__(self) -> None:
         self.answer: Any = PRICED
+        self.adverts: Any = []
         self.pending_at_call: list[int] = []
 
 
@@ -62,6 +65,7 @@ def fake_valuo(monkeypatch, cur: Any) -> _Valuo:
         return fake.answer
 
     monkeypatch.setattr(valuo_client, "calculate", calculate)
+    monkeypatch.setattr(valuo_client, "advert_details", lambda cred, ids: fake.adverts)
     return fake
 
 
@@ -149,8 +153,29 @@ def test_a_valuo_failure_is_a_failed_row_with_valuos_answer(cur, flat, fake_valu
     assert status == "failed" and response == body and error["http_status"] == 200
 
 
+def test_the_comparables_photos_land_beside_the_answer(cur, flat, fake_valuo):
+    fake_valuo.answer = PRICED | {"result": PRICED["result"] | {"records": [{"id": 7, "price": 1}]}}
+    fake_valuo.adverts = [{"id": 7, "images": ["a/b.jpg"]}]
+    [record] = _run(flat)["valuation"]["records"]
+    assert record["photos"] == [{"thumb": "https://pics.valuo.cz/pt/a/b.jpg",
+                                 "full": "https://pics.valuo.cz/p/a/b.jpg"}]
+    cur.execute("SELECT adverts FROM valuo_valuations WHERE account_id = %s", (flat["account"],))
+    assert cur.fetchone()[0] == fake_valuo.adverts
+
+
+def test_a_sandbox_answer_is_sandbox_whatever_the_tokens_name(cur, flat, fake_valuo):
+    fake_valuo.answer = PRICED | {"ver": "3.0.0-sandbox"}
+    first = _run(flat)["valuation"]
+    assert first["environment"] == "sandbox"
+    named = valuo_client.Credential("production", "live-test-token")
+    again = valuo.run(flat["conn"], flat["pid"], {}, account_id=flat["account"], cred=named)
+    assert again["reused"] is True and again["valuation"]["id"] == first["id"]
+    assert [(r[0], r[1], (r[5] or {}).get("code")) for r in _rows(cur, flat["account"])] == [
+        ("success", "sandbox", None), ("failed", "sandbox", "duplicate")]
+
+
 def test_a_refusal_writes_no_row(cur, flat, fake_valuo):
-    cur.execute("UPDATE listings SET category_main = 'komercni' WHERE id = %s", (flat["lid"],))
+    cur.execute("UPDATE listings SET category_main = 'ostatni' WHERE id = %s", (flat["lid"],))
     _recompute(cur, flat["pid"])
     with pytest.raises(HTTPException) as err:
         _run(flat)

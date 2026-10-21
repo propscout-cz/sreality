@@ -2035,6 +2035,71 @@ def enqueue_detail(
     return total
 
 
+def rearm_given_up(conn: psycopg.Connection, source: str, native_ids: Sequence[str]) -> int:
+    """Give given-up queue rows five more tries at no less than acquisition priority: a
+    re-pasted link (POST /listings/ingest) is the operator asking again, so the row the
+    drain gave up on (rule #5) comes back instead of answering `failed` forever."""
+    ids = [str(n) for n in native_ids]
+    if not ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE listing_detail_queue SET given_up = false, attempts = 0, last_error = NULL, "
+            "priority = GREATEST(priority, %s) "
+            "WHERE source = %s AND native_id = ANY(%s::text[]) AND given_up",
+            (QUEUE_PRIORITY_NEW, source, ids),
+        )
+        return cur.rowcount or 0
+
+
+def raise_unclaimed_priority(
+    conn: psycopg.Connection, source: str, native_ids: Sequence[str], priority: int,
+) -> int:
+    """Lift live, unclaimed queue rows to at least `priority`, touching nothing else (unlike
+    enqueue_detail, which also overwrites detail_ref and index_price_czk): a re-pasted link is
+    served at acquisition priority even when a presence check queued it at VERIFY."""
+    ids = [str(n) for n in native_ids]
+    if not ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE listing_detail_queue SET priority = %s "
+            "WHERE source = %s AND native_id = ANY(%s::text[]) "
+            "AND claimed_at IS NULL AND NOT given_up AND priority < %s",
+            (priority, source, ids, priority),
+        )
+        return cur.rowcount or 0
+
+
+def queue_state(conn: psycopg.Connection, source: str, native_id: str) -> dict[str, Any] | None:
+    """One queue row's (attempts, claimed_at, given_up), or None when nothing is queued."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT attempts, claimed_at, given_up FROM listing_detail_queue "
+            "WHERE source = %s AND native_id = %s",
+            (source, str(native_id)),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    attempts, claimed_at, given_up = row
+    return {"attempts": int(attempts or 0), "claimed_at": claimed_at, "given_up": bool(given_up)}
+
+
+def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: str) -> str | None:
+    """What the drain last DID with this ad (a `complete_detail` / `fail_detail` outcome), or
+    None when the ledger (7-day retention) holds no completion for it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT outcome FROM detail_queue_completions "
+            "WHERE source = %s AND native_id = %s "
+            "ORDER BY completed_at DESC, id DESC LIMIT 1",
+            (source, str(native_id)),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 # --- W8: a page that carried no location gets a second look -----------------
 #
 # ceskereality and realitymix GEOCODE AN AD AFTER IT IS PUBLISHED. Measured

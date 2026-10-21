@@ -17,11 +17,12 @@ vi.mock('./brokers', async (importOriginal) => ({
   fetchBrokerPropertyIds: vi.fn(async () => [1]),
 }));
 
-import { DEFAULT_FILTERS } from './filters';
+import { CONDITION_CANONICAL, DEFAULT_FILTERS, FURNISHED_CANONICAL } from './filters';
 import { ApiError } from './api';
 import { supabase } from './supabase';
 import {
   BROWSE_SELECT_COLUMNS,
+  CARD_SORTS,
   adScope,
   applyPortalRule,
   applyPrefilters,
@@ -32,7 +33,6 @@ import {
   fetchPropertySourcesByPropertyIds,
   fetchListingsForCards,
   fetchListingsForMap,
-  fetchListingsForTable,
   districtsFilterClause,
   effectiveBbox,
   effectiveSort,
@@ -40,6 +40,7 @@ import {
   orderPortal,
   parseSort,
   priceNullTolerantOr,
+  sortToParam,
   DEFAULT_SORT,
   type BrowsePrefilters,
   type DistrictMatchRow,
@@ -119,7 +120,7 @@ describe('priceNullTolerantOr', () => {
 /* Gate-2: the city-quality allowlist must be AND'd onto the cohort via the
  * surrogate `listing_id`, NOT `sreality_id`. A post-Gate-2 non-sreality repr has
  * a NULL sreality_id (IN never matches NULL → the listing silently vanishes from
- * Map/Table/Cards/Count while browse_stats still counts it), and — worse — the
+ * Map/Cards/Count while browse_stats still counts it), and — worse — the
  * id-spaces overlap by ~435, so a sreality_id passed into an `IN listing_id`
  * predicate would match a DIFFERENT listing. Pin the filter column here. */
 describe('applyPrefilters (prefilter id-spaces)', () => {
@@ -478,7 +479,7 @@ describe('the one-portal order', () => {
 
   it('passes every other sort straight through', () => {
     for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'last_seen_at',
-                         'display_label', 'mf_gross_yield_pct'] as const) {
+                         'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -516,6 +517,52 @@ describe('the one-portal order', () => {
     expect(s.calls).toContainEqual(['overlaps', ['active_sources', ['idnes']]]);
     expect(s.calls).toContainEqual(['not', ['newest_ad_at_idnes', 'is', null]]);
     expect(s.calls.some(([m, a]) => m === 'eq' && a[0] === 'is_active')).toBe(false);
+    vi.restoreAllMocks();
+  });
+});
+
+/* The cards' sort menu is Browse's only sort control (operator ruling, Plocha
+ * both ways and Naposledy viděno); a sort field without a control reads as the default. */
+describe('the cards sort menu', () => {
+  it('offers area both ways and last seen, most recent first', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Plocha: od nejmenší')).toEqual({ field: 'area_m2', direction: 'asc' });
+    expect(byLabel.get('Plocha: od největší')).toEqual({ field: 'area_m2', direction: 'desc' });
+    expect(byLabel.get('Naposledy viděno')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+  });
+
+  it('reads last seen either way round as the one last-seen order the menu offers', () => {
+    expect(parseSort('last_seen_at')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+    expect(parseSort('-last_seen_at')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+  });
+
+  it('round-trips every entry through the URL, one entry per order', () => {
+    for (const { spec } of CARD_SORTS) expect(parseSort(sortToParam(spec))).toEqual(spec);
+    const params = CARD_SORTS.map((o) => sortToParam(o.spec));
+    expect(new Set(params).size).toBe(params.length);
+  });
+
+  it('reads a saved estate_area sort as the default, either way round', () => {
+    expect(parseSort('estate_area')).toEqual(DEFAULT_SORT);
+    expect(parseSort('-estate_area')).toEqual(DEFAULT_SORT);
+    expect(CARD_SORTS.map((o) => o.spec.field)).not.toContain('estate_area');
+  });
+
+  it('reads every sort field without a control as the default', () => {
+    for (const field of ['display_label', 'disposition', 'is_active', 'usable_area',
+                         'parking_lots']) {
+      expect(parseSort(field)).toEqual(DEFAULT_SORT);
+      expect(parseSort(`-${field}`)).toEqual(DEFAULT_SORT);
+    }
+  });
+
+  it('pages the cards by area with the rows that have none last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(DEFAULT_FILTERS, { field: 'area_m2', direction: 'desc' }, null);
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['area_m2', { ascending: false, nullsFirst: false }],
+      ['property_id', { ascending: false }],
+    ]);
     vi.restoreAllMocks();
   });
 });
@@ -672,16 +719,15 @@ describe('dismissed properties and curated sets are judged at the source', () =>
   const revealed = { ...DEFAULT_FILTERS, showDismissed: true };
   const onePortal = { ...DEFAULT_FILTERS, portals: ['bazos'] };
 
-  it('reads the source function by default, for cards, table and count', async () => {
+  it('reads the source function by default, for cards and count', async () => {
     const s = stubReads();
     await fetchListingsForCards(DEFAULT_FILTERS, DEFAULT_SORT, null);
-    await fetchListingsForTable(DEFAULT_FILTERS, DEFAULT_SORT, null);
     await fetchBrowseCount(DEFAULT_FILTERS);
     expect(s.rpc.mock.calls.map((c) => c[0])).toEqual([
-      'browse_list_visible', 'browse_list_visible', 'browse_list_visible',
+      'browse_list_visible', 'browse_list_visible',
     ]);
     expect(s.rpc.mock.calls[0].slice(1)).toEqual([{ hide_dismissed: true }, { get: true }]);
-    expect(s.rpc.mock.calls[2].slice(1)).toEqual([
+    expect(s.rpc.mock.calls[1].slice(1)).toEqual([
       { hide_dismissed: true }, { get: true, count: 'exact', head: true },
     ]);
     expect(s.from).not.toHaveBeenCalled();
@@ -985,7 +1031,6 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
       };
       await fetchListingsForMap(f, 200);
       await fetchListingsForCards(f, DEFAULT_SORT, null);
-      await fetchListingsForTable(f, DEFAULT_SORT, null);
       const [pins, ...lists] = urls.filter((u) => !u.pathname.endsWith('/browse_map_cells'));
       if (!showDismissed) expect(pins.pathname).toBe('/rest/v1/rpc/browse_list_visible');
       expect(filters(pins)).toEqual(expect.arrayContaining([
@@ -993,12 +1038,62 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
         'lat=gte.49.94', 'lat=lte.50.18', 'lng=gte.14.22', 'lng=lte.14.71',
       ]));
       expect(pins.searchParams.has('order') || pins.searchParams.has('limit')).toBe(false);
-      expect(lists).toHaveLength(2);
+      expect(lists).toHaveLength(1);
       for (const list of lists) {
         expect(list.pathname, `showDismissed=${showDismissed}`).toBe(pins.pathname);
         expect(filters(pins)).toEqual([...filters(list), 'lat=not.is.null', 'lng=not.is.null'].sort());
         expect(list.searchParams.has('order') && list.searchParams.has('limit')).toBe(true);
       }
     }
+  });
+});
+
+/* The '__unknown__' chip ("Neuvedeno") on furnished, ownership and condition: NULL or a
+ * value outside the canon (toolkit.filter_compiler._enum_or_unknown_clause, the RPCs'
+ * own arrays). Without it a selection keeps the auto path's shape: one value is `eq`. */
+describe('the Neuvedeno chip reaches the list as NULL or off-canon', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const sent = async (patch: Partial<ListingFilters>): Promise<URLSearchParams> => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Range': '*/1' }),
+      text: async () => '',
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', fetch);
+    await fetchBrowseCount({ ...DEFAULT_FILTERS, ...patch });
+    return new URL(String(fetch.mock.calls.at(-1)![0])).searchParams;
+  };
+  const conditionCanon = CONDITION_CANONICAL.join(',');
+
+  it('keeps one stated condition an equality and several an IN', async () => {
+    expect((await sent({ conditionMatch: ['novostavba'] })).get('condition')).toBe('eq.novostavba');
+    expect((await sent({ conditionMatch: ['novostavba', 'dobry'] })).get('condition'))
+      .toBe('in.(novostavba,dobry)');
+  });
+
+  it('sends Neuvedeno alone in the shape furnished sends it', async () => {
+    const condition = await sent({ conditionMatch: ['__unknown__'] });
+    expect(condition.get('condition')).toBeNull();
+    expect(condition.getAll('or')).toContain(`(condition.is.null,condition.not.in.(${conditionCanon}))`);
+    const furnished = await sent({ furnished: ['__unknown__'] });
+    expect(furnished.getAll('or'))
+      .toContain(`(furnished.is.null,furnished.not.in.(${FURNISHED_CANONICAL.join(',')}))`);
+  });
+
+  it('ORs stated conditions with Neuvedeno', async () => {
+    const q = await sent({ conditionMatch: ['novostavba', '__unknown__'] });
+    expect(q.getAll('or'))
+      .toContain(`(condition.in.(novostavba),condition.is.null,condition.not.in.(${conditionCanon}))`);
+  });
+
+  it('sends the selection to the aggregates as it stands, the sentinel included', () => {
+    const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, conditionMatch: ['__unknown__'] }, NO_PREFILTERS);
+    expect(args.condition_match_filter).toEqual(['__unknown__']);
   });
 });

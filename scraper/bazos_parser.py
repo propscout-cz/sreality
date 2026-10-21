@@ -24,6 +24,7 @@ from selectolax.parser import HTMLParser, Node
 from scraper import vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.floor import floor_from_text
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.published import bazos_posted_date
 from scraper.scraped_listing import ScrapedListing
@@ -66,7 +67,6 @@ SUBTYPE: dict[str, str] = {
     "garaz": "garaz",              # collapses onto ostatni
 }
 
-_ID_RE = re.compile(r"/inzerat/(\d+)/")
 _PSC_RE = re.compile(r"\b(\d{3})\s?(\d{2})\b")
 _MAP_LABEL_RE = re.compile(r"(?i)\bzobrazit na map[ěe]\b")
 _COORD_RE = re.compile(r"(-?\d{1,3}\.\d{3,}),\s*(-?\d{1,3}\.\d{3,})")
@@ -228,13 +228,6 @@ def _resolve_coords(
     return (link_lat, link_lon, prov) if present else (None, None, prov)
 
 
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
-
-
 def parse_index(html: str) -> IndexPage:
     tree = HTMLParser(html)
     total = _parse_total(_page_text(tree))
@@ -243,7 +236,7 @@ def parse_index(html: str) -> IndexPage:
     for block in tree.css("div.inzeraty.inzeratyflex"):
         link = block.css_first('a[href*="/inzerat/"]')
         href = link.attributes.get("href") if link else None
-        source_id = _id_from_href(href)
+        source_id = native_id("bazos", href)
         if not source_id or not href:
             continue
         items.append(
@@ -391,7 +384,7 @@ def parse_detail(
     category_type: str | None,
 ) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id("bazos", source_url) or ""
 
     # The page's own breadcrumb is authoritative for the category (sale vs rent);
     # the passed-in values are only a fallback when it's missing/unrecognised.

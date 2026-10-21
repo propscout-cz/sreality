@@ -613,7 +613,7 @@ rules. Identify which one a task belongs to before you start.
   two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as a separate
   service alongside the API.
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
-  trusting a list here, which rots). Today it spans **Browse** (filters → Map / Table /
+  trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
   signature visual element), **Region**, **Health** (operator dashboard),
   **Estimations** + **Estimation Detail**, **Building Detail**, **Collections** +
@@ -886,9 +886,9 @@ rules. Identify which one a task belongs to before you start.
 - Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
   listing pages. The content script matches **every scraped portal's host** (sreality,
   bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
-  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) is the single source of
-  truth for the host list, shared with the SPA's paste-a-link (`parsePortalUrl` →
-  `/listing/:source/:nativeId`) and imported cross-tree exactly like `lib/brand.ts` (it lives under
+  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) mirrors the canon,
+  `scraper/portal_identity.py`, held to it by `tests/fixtures/portal_url_probes.json`; the phone's quick
+  path (`parsePortalUrl`; an admin paste is `POST /listings/ingest`) imports it cross-tree like `lib/brand.ts` (it lives under
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
@@ -970,8 +970,8 @@ rules. Identify which one a task belongs to before you start.
   once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
   excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
   one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
-  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
-  truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
+  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` mirrors
+  `scraper/portal_identity.py` (the canon); `tests/fixtures/portal_url_probes.json` holds both. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
@@ -1427,7 +1427,21 @@ renumber.** Navigate by area:
     not-yet-scraped case above and turn a working degraded path into a 500 on submit.
 
     **A paid outside valuation is not our estimate (Valuo, operator ruling 2026-10-19).** The
-    property page's Valuo section buys a valuation from valuo.cz; each call is one row in
+    property page's Valuo section buys a valuation from Valuo's API v3 (docs.valuo.com; `POST
+    https://api.valuo.com/v1/market-value/{flat|house|land|commercial}`, one endpoint per type, the
+    one host for both tokens; the retired `api.valuo.cz/v1/calculation` 401s them). Each type is offered
+    EXACTLY its endpoint's request schema (`api/valuo.py` FIELDS; Valuo silently drops any other field, so
+    no lift, furnishing, rooms or terrace is sent; house's `garage_area`/`other_area` wait for a column of
+    ours), `rating` is required even for land (`good`, `assumed`), and `local_type` is only ever one of
+    Valuo's listed dispositions or `jiné`. v3 has NO parameter to exclude or add comparables (`ignored_ids`
+    is an engine echo, always [], kept in the stored answer and never shown); the band shown is
+    `range_price`, not `min/max_price`. After a success with comparables ONE `POST /v1/advert/detail`
+    for the first ten stores their photos verbatim in `adverts` (migration 646; a failure leaves it
+    NULL and never fails the valuation), shown from `pics.valuo.cz`. `environment` is the environment
+    that ANSWERED: a body whose `ver` ends `-sandbox` is stored `sandbox` whatever the token's variable
+    is named. A sandbox token saved as production therefore repeats an identical request's call (the
+    dedupe looks under the variable's environment) before the row settles `failed`/`duplicate` and the
+    stored sandbox answer is shown: sandbox volume only, accepted for a misconfiguration. Each call is one row in
     `valuo_valuations` (migration 637), written only by `api/valuo.py`, never an `estimation_runs`
     row. Three reasons, each sufficient: browser roles hold INSERT/UPDATE on `estimation_runs`
     (291), so anyone could forge a "production" Valuo row; a row with no account falls back to
@@ -1445,14 +1459,21 @@ renumber.** Navigate by area:
     reuse is always a row this property's history shows), and there is no automatic retry. A
     pending row older than two minutes is settled `failed`/`abandoned` by the next GET or POST of
     its account. A Valuo-side failure is a stored `failed` row answered with HTTP 200, as for our
-    runs; a refusal (komerční/ostatní, no point, a point coarser than a town, a country that is not
+    runs (an issue list in `message` on any 4xx/5xx — HTTP 500 today — is `form_errors`, each issue shown
+    under its parameter; a 400 is the engine's own refusal, `calculation`, shown with Valuo's reason); a refusal (ostatní, no point, a point coarser than a town, a country that is not
     determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
-    `velmi_dobry` is sent as Valuo's `good` (`assumed`), energy class G is not sent (`assumed` —
-    Czech ads without a PENB certificate must state G too).
+    `velmi_dobry` is Valuo's `very_good` "Velmi dobrý" (operator ruling 2026-10-20, superseding `good`),
+    `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true`, a house's
+    energy class G is not sent (`assumed` —
+    Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
+    when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
+    lift), so a no stays `missing` with its reason.
 
     Calibration — how a Valuo number is judged — reads production rows only, drops every row that
-    leaned on an assumption for a required parameter (a success never lacks one: the POST refuses)
+    leaned on an assumption for a required parameter (a success never lacks one: the POST refuses;
+    so a new build, sent `very_good` assumed, is never calibrated, while land's assumed `good` is
+    exempt — the same constant on every land row, Valuo's demand rather than a guess about the plot)
     or was sent from a point coarser than a street, and judges each row by what was SENT — the
     request's point, area and type, never the ad or its pin as they read today — setting Valuo's
     `avg_price` against the registered sales in the same building around `as_of` and against our
@@ -1467,7 +1488,7 @@ renumber.** Navigate by area:
                                        split_part(v.request->>'place', ',', 1)::float8), 4326)::geography as pt,
                coalesce(v.request->>'floor_area', v.request->>'lot_area')::numeric as area,
                case v.request->>'property_type' when 'flat' then 'byt' when 'house' then 'dum'
-                    else 'pozemek' end as category_main) q
+                    when 'commercial' then 'komercni' else 'pozemek' end as category_main) q
       left join lateral (                      -- same building, same kind of unit, +-90 days of as_of
         select percentile_cont(0.5) within group (order by s.price_czk) as median_czk, count(*) as n
           from sold_transactions s
@@ -1482,10 +1503,11 @@ renumber.** Navigate by area:
            and er.estimate_kind = case v.request->>'kind' when 'lease' then 'rent' else 'sale' end
          order by er.created_at desc limit 1) ours on true
      where v.environment = 'production' and v.status = 'success'
-       and v.provenance->'place'->>'class' = 'ad'     -- `ad` = street precision or finer when sent
+       and v.provenance->'place'->>'class' = 'ad'     -- street precision or finer; a typed place is `user`
        and not exists (select 1 from jsonb_each(v.provenance) p
                         where p.key in ('kind', 'floor_area', 'lot_area', 'rating', 'land_type')
-                          and p.value->>'class' = 'assumed');
+                          and p.value->>'class' = 'assumed'
+                          and not (p.key = 'rating' and v.request->>'property_type' = 'land'));
     ```
 13. **`building_runs` is the parent grouping for the paste-a-building workflow.** One row
     per pasted house listing (typically `category_main='dum'`). Children are normal
@@ -1683,7 +1705,8 @@ renumber.** Navigate by area:
     ruling is negative go through `record_rulings` under the note `operator merge <group>` (a
     negative inside one member is not between what it joins and stays), each negative set
     ruling spanning two members gets its cluster `same`, and `rulings_taken_back` counts what it
-    took back (`merge_preview`, `GET /properties/merge`, reads the same count before the click);
+    took back (`merge_preview`, `GET /properties/merge?letters=`, reads the same count per
+    letter before the click);
     an engine merge rules nothing. Then
     `properties_changed` (`scripts/recompute_property_stats.py`, the dirty drain's own
     after-step: the scoped rollup, the Browse row, the broker queue) runs ONCE over the survivor
@@ -1764,10 +1787,18 @@ renumber.** Navigate by area:
     This guard is deliberately *at the merge*, not in the caller, so no future decision layer
     can route around it.
     **Who orders a merge today.** The operator — and, only inside the area its scope row
-    names, the AUTODEDUP apply path below. The operator's path: Browse's `mergeMode` (checkbox
-    multi-select → merge; every card keeps its pipeline, collection, dismissal and note marks,
-    read-only, and the bar lists each ticked property with its marks, MS16) posts to
-    `POST /properties/merge`; **`POST /properties/{id}/split`** (MS18,
+    names, the AUTODEDUP apply path below. The operator's path: Browse's merge mode, ONE
+    statement of letters over the cards (`lib/useMergeMode`: a letter key marks the focused
+    card — the pointer focuses the card it is over, Tab moves card to card — a click writes the
+    active letter; every card keeps its pipeline, collection, dismissal and note marks,
+    read-only, and the bar lists each letter's properties with their marks, MS16) posts
+    `{letters: {property_id: "A"}}` to `POST /properties/merge`, the split's statement shape and
+    codec (`letter_tokens`); `property_identity.merge_letters` merges each letter held by two or
+    more properties through `merge_property_set` under its own group, all in ONE transaction
+    under ONE up-front row lock over every property of the statement in id order (the order
+    every writer locks in, so no statement meets another merge in the opposite order), a
+    refusal writing nothing and naming the letter; no ruling crosses letters; the answer is one
+    receipt per letter. The split's join of a letter is the same call. **`POST /properties/{id}/split`** (MS18,
     `toolkit.property_split.split_property`) is the operator's ONE split, by letters:
     `{letters, choices?, reason?, expect}`. `letters` names every advert of the property with a
     letter A–Z (a newcomer the lane merged in since is a 409 `stale`); one letter keeps the
@@ -1798,10 +1829,12 @@ renumber.** Navigate by area:
     and the `same` and taken-back counts of its joins). It has no undo: one merge takes a split
     back (MS12). `GET
     /properties/{id}/origins` names each advert's origin (`api/property_merge.py`). The merge
-    route answers with its receipt (MS15): the acting account's MOVED items from the carry
-    record (notes counted, the stage, collections and tags by name) and `hidden_for_you`
-    (MS13), both null when that read fails after the merge committed (the account is read
-    before it); a category clash is a 409 `{code, message, ids}` in Czech (`MERGE_ENDING`).
+    route answers with one receipt per letter (MS15): the acting account's MOVED items from
+    the carry record (notes counted, the stage, collections and tags by name) and
+    `hidden_for_you` (MS13), both null when that read fails after the merge committed (the
+    account is read before it); a category clash is a 409 `{code, message, ids}` in Czech
+    (`LETTER_ENDING`, the split's own sentence, prefixed with the letter when the statement
+    has several).
     Browse merges through `lib/useMergeProperties` (the receipt toast, the refresh, no
     `onError`, so a refusal is the app MutationCache's one toast). **Every operator merge and split is a ruling (decision 8)**
     (`toolkit.property_identity.record_rulings`, same transaction, only for `source='operator'`:
@@ -1873,10 +1906,15 @@ renumber.** Navigate by area:
     claim as its row stored it (E960), so a merge is applied only when every advert it moves was
     refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
     engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
-    pass re-claims waiting groups whole, oldest first, 200 adverts on top of its feeds (E971:
-    the worker's memory holds a pass to ~300 adverts), never more than the claim cap a death
-    halves (E948), on its first attempt, each group at most once in 6 h, and none while the
-    apply scope is closed or the reject ledger is inert. It
+    pass re-claims waiting groups whole — a group whose cluster holds an active advert first
+    (E973), then flats for sale, flats for rent, the rest (E972, the operator's Prague
+    priority), oldest first within each — 200 adverts on top of its feeds (E971: the worker's
+    memory holds a pass to ~300 adverts; a group that does not fit is skipped for the next
+    ones, the first taken whole whatever its size, E973), never more than the
+    claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
+    (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
+    shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is
+    closed or the reject ledger is inert. It
     reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) whose build
     phase ended, and review pages default to `rt` under the same condition (else the newest batch
@@ -2021,7 +2059,10 @@ renumber.** Navigate by area:
     Browse is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
-    `curated_cities_matching()`, served predicate). Open divergences: center+radius is a circle
+    `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
+    `furnished` / `ownership` / `condition_match`: NULL or a value outside the column's canon,
+    `COLUMN_CANONICAL_VALUES`, which the canon itself never joins; the RPCs spell each canon out,
+    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). Open divergences: center+radius is a circle
     in Python and a bounding square in Browse (M3); the six amenities are the property's union
     (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
     estimation cohort, until MS20
@@ -2629,9 +2670,8 @@ renumber.** Navigate by area:
     reachable by id. The outbox drain (service-role) skips a dispatch whose own account dismissed
     its property, on both the new and the retry pass: it gets no `channel_sends` row and ages out
     of the 7-day window unless the dismissal is lifted first.
-    **One control.** `<DismissButton>` (`overlay` on the Browse card, `inline` in the Table's
-    action cell beside the funnel, `header` on the listing page) over one hook,
-    `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
+    **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
+    `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
     sticky "Vrátit" toast (each new dismissal replaces the last) restores; it keeps working after
     the dismissed card has unmounted. The dismissal leaves every cached Browse list that hides
     dismissed properties at once and those lists are NOT refetched (a triage run must not re-read
@@ -2767,8 +2807,8 @@ renumber.** Navigate by area:
     new stragglers (singletons only — the old geo Tier-1 matcher was removed; grouping is
     out-of-band, rule #15) and recomputes **only the queued properties** (the full
     recompute SQL scoped to
-    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~2 on
-    the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
+    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~30 s
+    on the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
@@ -2781,8 +2821,9 @@ renumber.** Navigate by area:
     237 s against a 900 s cadence). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
     since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
-    New listings (`property_id` NULL) are born + recomputed by straggler-attach, not the queue
-    (bounded at 2000 per pass; it patches `browse_list` for the births). The
+    New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
+    brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
+    of the daily full sweep, under the lease that sweep already holds. The
     **daily full sweep** (`recompute_property_stats.yml`, no `--incremental`, 04:15 UTC) is the
     reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:
@@ -2969,9 +3010,8 @@ renumber.** Navigate by area:
     `GET /pipeline/stages`). **The "Přidat do pipeline" affordance is the shared `<PipelineMark>`
     (`<FunnelIcon>` — a funnel with three arrows, filled body = in-pipeline — plus the stage
     badge), rendered by the listing-detail header (`PipelineToggle`, in the top action bar next to
-    "New estimation", NOT buried in CurationBlock), every Browse card AND every Browse **table
-    row** (`PipelineFunnelButton`, a leading unsortable column) and the Pipeline scope chip + its
-    sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
+    "New estimation", NOT buried in CurationBlock), every Browse card (`PipelineFunnelButton`)
+    and the Pipeline scope chip + its sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
     (`is_entry` — filled = the entry stage) — so the "into the pipeline" concept reads as one
     icon everywhere.** Two surfaces carry their own versions today. The kanban card has no mark
     (its column IS the stage): it moves by drag and removes through its own trash + two-step
@@ -3017,7 +3057,7 @@ renumber.** Navigate by area:
     overflow the viewport, reposition on scroll, close when the anchor scrolls out of sight.
     **Every pipeline write shares one cache patch** (`lib/pipelineCache`): TWO caches hold "where
     is this property" — `members` (the account's whole card set, keyed by `property_id`; read by
-    the Browse funnels, the table rows, the listing header and the pipeline scope alike) and
+    the Browse funnels, the listing header and the pipeline scope alike) and
     `board` (the kanban's own ordered array) — and each surface used to patch only the one it
     could see, so a kanban drag left every Browse funnel badging the pre-drag stage. It was three
     until W3: a per-property `card(id)` cache duplicated a single row of `members`, so every
@@ -3081,7 +3121,7 @@ renumber.** Navigate by area:
     column headers and stage-editor swatch still use their own `stageColor`
     (`pages/Pipeline.tsx`), which falls back to grey. The stage editor exposes `code` as a 4-char
     box whose placeholder IS the ordinal, so "empty = automatic" is visible. Card writes
-    (add/remove/move) from EVERY surface — the Browse funnels, the table rows, the listing header
+    (add/remove/move) from EVERY surface — the Browse funnels, the listing header
     and the kanban's drag and trash — go through one hook, `lib/usePipelineCard.ts`; the property
     id travels with each call, so one instance serves a whole board. It writes over
     `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches and the re-read list.
@@ -3469,16 +3509,14 @@ renumber.** Navigate by area:
     2026-10-17 by pointing `pg_column` at the published `tom_days`, and the escape set the
     test had grown for it was deleted.
 
-    **Known residue, named.** Browse's table still SELECTS and SORTS the raw `estate_area`
-    column while it now FILTERS the measure, so a bazos/realitymix/mmreality/remax land row can
-    match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell — the fix is three lines but
-    `estate_area` is a `SortField`, so a saved `?sort=estate_area` would silently fall back to
-    the default sort, which makes it a Browse-cohort decision rather than an area one. And
-    `browse_stats_properties`, `browse_list`'s own RPCs and
-    `browse_map_cells` still compare `l.estate_area` in SQL. They are inert from the SPA today
-    (`frontend/src/lib/queries.ts` sends them no `estate_area_min_filter`), and moving them
-    means re-creating three large `SECURITY DEFINER` bodies — its own wave, with its own drift
-    hazard (migrations 371/376).
+    **The residue is gone.** Browse's Table tab SELECTED and SORTED the raw `estate_area`
+    column while the cohort FILTERED the measure, so a bazos/realitymix/mmreality/remax land row
+    could match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell. The tab and the
+    `estate_area` sort were deleted together on 2026-10-20 (operator ruling): a saved
+    `?sort=estate_area` now reads as the default sort through `parseSort`, and Browse reads the
+    raw column nowhere (it stays on `browse_projection` / `browse_list`, unread by Browse). The
+    two aggregate RPCs that compared `l.estate_area` in SQL, `browse_stats_properties` and
+    `browse_map_cells`, narrow `plot_area_m2` since migration 547.
 
     **The plausibility view gained the arm that would have caught the sum** (migration 534
     appends two columns to `measure_plausibility_by_source`). `estate_sum_share` is the share of

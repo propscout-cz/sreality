@@ -16,14 +16,13 @@ describe('browse invalidation contract', () => {
     expect(roots(browseKeys.all)).toContain('browse-count');
   });
 
-  it('covers exactly the six Browse read surfaces', () => {
+  it('covers exactly the five Browse read surfaces', () => {
     expect([...roots(browseKeys.all)].sort()).toEqual([
       'browse-count',
       'cards',
       'map',
       'no-price-count',
       'stats',
-      'table',
     ]);
   });
 
@@ -43,7 +42,6 @@ describe('browse key factories', () => {
   const f = DEFAULT_FILTERS;
   const readers: QueryKey[] = [
     browseKeys.cards(f, DEFAULT_SORT),
-    browseKeys.table(f, DEFAULT_SORT),
     browseKeys.map(f, 200),
     browseKeys.stats(f, { rows: [], cols: [], measure: 'ppm2' }),
     browseKeys.statsPrefilters(f),
@@ -63,8 +61,7 @@ describe('browse key factories', () => {
     );
   });
 
-  it('keeps the filters in slot 1 of the paged lists, where the dismissal predicate reads them', () => {
+  it('keeps the filters in slot 1 of the paged list, where the dismissal predicate reads them', () => {
     expect(browseKeys.cards(f, DEFAULT_SORT)[1]).toBe(f);
-    expect(browseKeys.table(f, DEFAULT_SORT)[1]).toBe(f);
   });
 });

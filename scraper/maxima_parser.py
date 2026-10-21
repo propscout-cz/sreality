@@ -39,6 +39,7 @@ from scraper import vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.scraped_listing import ScrapedListing
 from scraper.street import street_from_locality
@@ -73,8 +74,8 @@ CATEGORY_BY_TITLE: tuple[tuple[str, str], ...] = (
 # idnes/sreality building-construction labels -> the canonical codes the sreality
 # parser emits, so a cross-portal "panel" filter matches every source.
 
-# The detail-URL slug is the source_id_native, e.g. /nemovitosti/b50087758/.
-_ID_RE = re.compile(r"/nemovitosti/([a-z]\d+)/?(?:[?#]|$)")
+# An index card counts only when its href ENDS at the listing slug: a query or
+# fragment link to the same ad (a gallery, a contact anchor) is not the card.
 _LISTING_HREF_RE = re.compile(r"/nemovitosti/[a-z]\d+/?$")
 _PAGE_RE = re.compile(r"/page/(\d+)/?")
 # Price runs are Czech "18 878 000" (groups split by ordinary / no-break / thin /
@@ -132,13 +133,6 @@ def _page_text(tree: HTMLParser) -> str:
         return body.text(separator=" ", strip=False)
     root = tree.root
     return root.text(separator=" ", strip=False) if root is not None else ""
-
-
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
 
 
 def category_from_id(native_id: str | None) -> str | None:
@@ -244,7 +238,7 @@ def parse_index(html: str) -> IndexPage:
         href = link.attributes.get("href")
         if not href or not _LISTING_HREF_RE.search(href):
             continue
-        source_id = _id_from_href(href)
+        source_id = native_id(SOURCE, href)
         if not source_id or source_id in seen:
             continue
         seen.add(source_id)
@@ -342,7 +336,7 @@ def parse_detail(
     category_type: str | None = None,
 ) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id(SOURCE, source_url) or ""
 
     title = _text(tree.css_first("h3")) or _text(tree.css_first("title")) or ""
     description = _text(tree.css_first("#collapse-inzerat-text"))
