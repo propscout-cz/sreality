@@ -1,4 +1,4 @@
-import type { ChangeEvent, ReactNode } from 'react';
+import type { AriaAttributes, ChangeEvent, ReactNode } from 'react';
 import { useId, useState } from 'react';
 
 export type TriValue = 'any' | 'yes' | 'no';
@@ -187,12 +187,15 @@ export function ControlGroup({
 export function Field({
   label,
   help,
+  aside,
   as = 'group',
   className = '',
   children,
 }: {
   label: string;
   help?: string;
+  /* A tag after the caption (the group form only): beside it, never part of the name. */
+  aside?: ReactNode;
   as?: 'group' | 'control';
   className?: string;
   children: ReactNode;
@@ -227,7 +230,7 @@ export function Field({
       aria-describedby={help ? helpId : undefined}
       className={className}
     >
-      {caption}
+      {aside ? <div className="flex flex-wrap items-center gap-x-2">{caption}{aside}</div> : caption}
       {helpEl}
       <div className="mt-2">{children}</div>
     </div>
@@ -258,6 +261,7 @@ export function Segmented<T extends string | number | null>({
   onChange,
   variant = 'soft',
   label,
+  aria,
 }: {
   options: ReadonlyArray<{ value: T; label: string }>;
   value: T;
@@ -265,9 +269,10 @@ export function Segmented<T extends string | number | null>({
   variant?: 'soft' | 'solid';
   /* Names the choice when no Field caption does. */
   label?: string;
+  aria?: AriaAttributes;
 }) {
   return (
-    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label}>
+    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label} {...aria}>
       {options.map((o) => (
         <PickButton
           key={String(o.value)}
@@ -444,6 +449,7 @@ export function DecimalField({
   integer,
   cell,
   className = '',
+  aria,
 }: {
   label: string;
   value: number | null;
@@ -455,6 +461,8 @@ export function DecimalField({
   integer?: boolean;
   cell?: boolean;
   className?: string;
+  /* The boxed input only; `cell` has no use for it yet. */
+  aria?: AriaAttributes;
 }) {
   const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
   const [buf, setBuf] = useState({ text: shown(value), value });
@@ -480,7 +488,8 @@ export function DecimalField({
       <input
         type="text"
         aria-label={label}
-        inputMode="decimal"
+        {...aria}
+        inputMode={integer ? 'numeric' : 'decimal'}
         readOnly={readOnly}
         value={buf.text}
         placeholder={placeholder}

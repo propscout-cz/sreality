@@ -82,6 +82,7 @@ const EstimationsBlock = lazyChunk(
   () => import('@/components/listing-detail/EstimationsBlock'),
 );
 const AdvertNotFoundBody = lazyChunk(() => import('@/components/listing-detail/AdvertNotFound'));
+const ValuoSection = lazyChunk(() => import('@/components/listing-detail/ValuoSection'));
 
 /* The phone layout is its own chunk: the desktop never downloads it, and the
  * first visit stays inside scripts/bundle-budget.mjs. */
@@ -317,14 +318,16 @@ export default function PropertyDetail() {
         estimatesSlot={
           /* The estimation chapter: MF reference + our runs, side by side —
              in the prime slot after the curation. Renders nothing for a
-             property with no estimable data. */
-          <Suspense fallback={<Skeleton height={180} />}>
-            <EstimationsBlock
-              listing={property}
-              listingIds={advertIds}
-              prefill={newEstimationPrefill}
-            />
-          </Suspense>
+             property with no estimable data. Valuo's paid outside valuation
+             follows as its own section, never inside ours (rule 12). */
+          <>
+            <Suspense fallback={<Skeleton height={180} />}>
+              <EstimationsBlock listing={property} listingIds={advertIds} prefill={newEstimationPrefill} />
+            </Suspense>
+            <Suspense fallback={<Skeleton height={140} />}>
+              <ValuoSection property={property} listingIds={advertIds} />
+            </Suspense>
+          </>
         }
       />
       <BrokerList

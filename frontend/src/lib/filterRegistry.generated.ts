@@ -1272,7 +1272,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string_list",
       "pg_column": "condition",
       "default": null,
-      "description": "Restrict cohort to listings whose `condition` is in this list. Czech values without diacritics, best to worst: projekt, ve_vystavbe, novostavba, po_rekonstrukci, velmi_dobry, dobry, udrzovany, v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici.",
+      "description": "Restrict cohort to listings whose `condition` is in this list. Czech values without diacritics, best to worst: projekt, ve_vystavbe, novostavba, po_rekonstrukci, velmi_dobry, dobry, udrzovany, v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici. The special `__unknown__` value matches listings whose condition is not specified (NULL) or stored under a non-canonical label. Empty list / null = no constraint.",
       "category": "Property",
       "ui_control": "multiselect",
       "agendas": [
@@ -1342,11 +1342,16 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
           "value": "k_demolici",
           "label_cs": "K demolici",
           "label_en": "For demolition"
+        },
+        {
+          "value": "__unknown__",
+          "label_cs": "Neuvedeno",
+          "label_en": "Unknown / not specified"
         }
       ],
       "aliases": [],
       "nullable": false,
-      "sql_kind": "any"
+      "sql_kind": "enum_or_unknown"
     },
     {
       "id": "building_type_match",
@@ -2885,6 +2890,7 @@ export const UI_CONTROLS = FILTER_REGISTRY.ui_controls;
  * Generated from toolkit.filter_registry; do not hand-edit. */
 export const FURNISHED_CANONICAL = ["ano", "ne", "castecne"] as const;
 export const OWNERSHIP_CANONICAL = ["osobni", "druzstevni", "statni", "jine"] as const;
+export const CONDITION_CANONICAL = ["projekt", "ve_vystavbe", "novostavba", "po_rekonstrukci", "velmi_dobry", "dobry", "udrzovany", "v_rekonstrukci", "pred_rekonstrukci", "spatny", "k_demolici"] as const;
 
 /* `listings.price_unit` constrains no filter, so it is not in the payload
  * above — but every listing surface renders it after the price, and the

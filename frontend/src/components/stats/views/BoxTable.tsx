@@ -19,6 +19,9 @@ const isDrawn = (c: StatsCell | undefined): c is Drawn =>
   c != null && c.p10 != null && c.p25 != null && c.median != null && c.p75 != null && c.p90 != null;
 
 const QUANTILES = ['p10', 'p25', 'median', 'p75', 'p90'] as const;
+/* The columns: the mean first (not drawn — the box has no mean mark), then
+ * the five quantiles in the order the box draws them, left to right. */
+const COLUMNS = ['mean', ...QUANTILES] as const;
 
 /* The axis every box in the table shares: the drawn rows' p10..p90, through
  * valueAxisSpec. Built from the whiskers, never from a raw min/max, so one
@@ -39,9 +42,10 @@ interface Tick {
 }
 
 /* THE box primitive. One row per pivot row, nested rows indented under their
- * rollup, n per row, the box on one shared axis, and the five numbers it draws
- * as columns of the same table — no tooltip, the numbers are right there. A row
- * under the minimum shows its n and the dashed mark, never a box. */
+ * rollup, n per row, the box on one shared axis, and the mean plus the five
+ * numbers it draws as columns of the same table — no tooltip, the numbers are
+ * right there. A row under the minimum shows its n and the dashed mark, never
+ * a box. */
 function BoxTable({ pivot }: { pivot: StatsPivot }) {
   const { spec, basis } = pivot;
   const rows = useMemo(() => pivotRows(pivot), [pivot]);
@@ -84,7 +88,7 @@ function BoxTable({ pivot }: { pivot: StatsPivot }) {
                 ))}
               </span>
             </th>
-            {QUANTILES.map((q) => (
+            {COLUMNS.map((q) => (
               <th key={q} scope="col" className={NUM_TH}>
                 {STAT_LABEL[q]}
               </th>
@@ -102,14 +106,14 @@ function BoxTable({ pivot }: { pivot: StatsPivot }) {
                     <td className="px-3 py-1.5">
                       <Box cell={cell} ticks={scale.ticks} pos={scale.pos} />
                     </td>
-                    {QUANTILES.map((q) => (
+                    {COLUMNS.map((q) => (
                       <td key={q} className={statTd(q)}>
-                        {fmt(cell[q])}
+                        {cell[q] == null ? '—' : fmt(cell[q])}
                       </td>
                     ))}
                   </>
                 ) : (
-                  <td colSpan={1 + QUANTILES.length} className="px-3 py-1.5">
+                  <td colSpan={1 + COLUMNS.length} className="px-3 py-1.5">
                     <TooFew minN={pivot.min_n} />
                   </td>
                 )}

@@ -27,7 +27,7 @@ import {
 } from '@/lib/queries';
 import type { ImagePublic } from '@/lib/types';
 
-import { hydrationKeys, type BrokerSubject } from './keys';
+import { hydrationKeys, sortedIds, type BrokerSubject } from './keys';
 
 /* Decorations are worth re-reading far less often than the cards themselves: a
  * listing's cover photo and its attributed broker change on the scrape's
@@ -53,10 +53,7 @@ export function useListingCovers(listingIds: readonly number[]): {
   covers: CoverByListingId;
   isPending: boolean;
 } {
-  const ids = useMemo(
-    () => [...new Set(listingIds)].sort((a, b) => a - b),
-    [listingIds],
-  );
+  const ids = useMemo(() => sortedIds(listingIds), [listingIds]);
   const q = useQuery({
     queryKey: hydrationKeys.covers(ids),
     queryFn: async ({ signal }) => {
@@ -87,10 +84,7 @@ export function useListingBrokers(listingIds: readonly number[]): {
   isError: boolean;
   refetch: () => void;
 } {
-  const ids = useMemo(
-    () => [...new Set(listingIds)].sort((a, b) => a - b),
-    [listingIds],
-  );
+  const ids = useMemo(() => sortedIds(listingIds), [listingIds]);
   const q = useQuery({
     queryKey: hydrationKeys.brokers(ids),
     queryFn: () => fetchListingBrokersByIds(ids) as Promise<BrokerByListingId>,
