@@ -1249,6 +1249,28 @@ export const fetchListingsForListingIds = async (
   return out;
 };
 
+/* A card's storey, for the Browse card's title. browse_list carries no floor
+ * column (and the card read model is not widened for one attribute), so the
+ * visible cards' canonical ads are read here, keyed on listings_public.id, three
+ * columns wide. The scale is listings.floor's: ground = 0, below ground < 0. */
+export type ListingFloor = Pick<ListingPublic, 'floor' | 'total_floors'>;
+
+export const fetchListingFloors = async (
+  ids: ReadonlyArray<number>,
+  { signal }: PgReadOptions = {},
+): Promise<Map<number, ListingFloor>> => {
+  if (ids.length === 0) return new Map();
+  const { data } = await pgRead<Array<ListingFloor & { id: number }> | null>(
+    supabase.from('listings_public').select('id,floor,total_floors').in('id', ids as number[]),
+    { signal },
+  );
+  const out = new Map<number, ListingFloor>();
+  for (const row of data ?? []) {
+    out.set(row.id, { floor: row.floor, total_floors: row.total_floors });
+  }
+  return out;
+};
+
 /* Batch image fetch for the comparables modal — first three per id is
  * enough for the modal's thumbnail strip; the Listing Detail page
  * still pulls the full set independently. */

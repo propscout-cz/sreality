@@ -55,4 +55,7 @@ export const hydrationKeys = {
    * surface asked first silently truncate the other's carousel. */
   photos: (ids: readonly number[], perId: number) =>
     [HYDRATION_NAMESPACE, 'photos', idsKey(ids), perId] as const,
+  /* The Browse card's storey, per page-sized bucket like `photos`. */
+  floors: (ids: readonly number[]) =>
+    [HYDRATION_NAMESPACE, 'floors', idsKey(ids)] as const,
 };
