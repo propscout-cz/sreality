@@ -10,10 +10,11 @@
 --
 -- WHAT CHANGES. Non-destructive: one transaction of fills, marks and two plain indexes, then the identity index.
 --   0. The event columns, filled since 652 ("fill event_ref since A"): rows the pre-W2a matcher wrote between 652's
---      apply and W2a's deploy carry no event_ref, actor or share kind, and the identity would tell their repeat apart
---      from them. 652's three backfills run again, unchanged and guarded, so they touch only such rows. And system
---      history takes its old key as its event_ref, opaque (program § 3.2): 652 left it NULL, which would make the 904
---      system rows ONE identity (dry run 2026-10-21: 903 would be marked repeats; with the fill, 0).
+--      apply and W2a's deploy carry no event_ref, actor or share kind ('shared'), and the identity would tell their
+--      repeat apart from them. 652's three backfills run again, verbatim and guarded, so they touch only such rows,
+--      whether or not 652 was re-run after the deploy as its header asks; the relabel leaves no 'shared' row. Its
+--      system arm keys system history on its old key, opaque (program § 3.2): with a NULL event_ref the 904 system
+--      rows would be ONE identity (dry run 2026-10-21: 903 would be marked repeats; keyed, 0).
 --   1. (a) Exact repeats are marked: among the rows not yet marked, every row that shares the identity tuple with an
 --      earlier one (dispatched_at, id) gets duplicate_of = the earliest. 0 expected (dry run 2026-10-21, 41 tenant
 --      rows): the old carrier deleted its twins and dedupe_key kept the rest apart.
@@ -46,7 +47,7 @@ set statement_timeout = '120s';
 
 begin;
 
--- 0. The event columns since 652, verbatim from 652 (each guarded on the column it fills).
+-- 0. The event columns since 652, verbatim from 652 (each guarded on the column it fills or relabels).
 update public.notification_dispatches d
    set event_ref = case
          when d.change_kind in ('price_drop', 'price_rise') then d.trigger_snapshot_id::text
@@ -61,10 +62,12 @@ update public.notification_dispatches d
            then split_part(d.dedupe_key, ':', 3)
          when d.source_kind = 'share' and split_part(d.dedupe_key, ':', 2) = 'pipeline'
            then split_part(d.dedupe_key, ':', 5)
+         when d.source_kind = 'system_health' then d.dedupe_key
        end
  where d.event_ref is null
    and (d.change_kind in ('price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source')
-        or (d.source_kind = 'share' and split_part(d.dedupe_key, ':', 2) in ('dashboard', 'pipeline')));
+        or (d.source_kind = 'share' and split_part(d.dedupe_key, ':', 2) in ('dashboard', 'pipeline'))
+        or d.source_kind = 'system_health');
 
 update public.notification_dispatches d
    set actor_account_id = case split_part(d.dedupe_key, ':', 2)
@@ -80,10 +83,6 @@ update public.notification_dispatches d
    set change_kind = 'shared_' || split_part(d.dedupe_key, ':', 2)
  where d.source_kind = 'share' and d.change_kind = 'shared'
    and split_part(d.dedupe_key, ':', 2) in ('collection', 'dashboard', 'pipeline');
-
-update public.notification_dispatches
-   set event_ref = dedupe_key
- where source_kind = 'system_health' and event_ref is null and dedupe_key is not null;
 
 -- 1. (a) Exact repeats: the earliest unmarked row of each identity stands, every later one is marked.
 do $repeats$
