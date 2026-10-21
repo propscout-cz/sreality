@@ -838,7 +838,10 @@ export default function BrowseExperience({
         {tab === 'stats' && (
           <div className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}>
             <Suspense fallback={<Skeleton height={320} className="my-8" />}>
-              <StatsDashboard filters={filters} />
+              <StatsDashboard
+                filters={filters}
+                onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
+              />
             </Suspense>
           </div>
         )}

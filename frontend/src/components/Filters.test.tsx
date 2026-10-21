@@ -42,6 +42,46 @@ const renderPicker = (ui: React.ReactElement) =>
     </QueryClientProvider>,
   );
 
+describe('<FilterSidebar> status line', () => {
+  it('draws status, seen at birth and dismissed as segmented controls that edit the filters', async () => {
+    vi.mocked(api.listCollections).mockImplementation(never);
+    vi.mocked(api.listTags).mockImplementation(never);
+    let latest: ListingFilters = DEFAULT_FILTERS;
+    function Host() {
+      const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
+      return (
+        <FilterSidebar
+          filters={filters}
+          onChange={(next) => {
+            latest = next;
+            setFilters(next);
+          }}
+        />
+      );
+    }
+    renderPicker(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup();
+    const status = screen.getByRole('group', { name: 'Status' });
+    expect(within(status).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(status).getByRole('button', { name: 'Aktivní' }));
+    expect(latest.status).toBe('active');
+
+    const born = screen.getByRole('group', { name: 'Seen at birth' });
+    expect(within(born).getByRole('button', { name: 'All ads' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(born).getByRole('button', { name: 'Seen at birth' }));
+    expect(latest.tomObservedOnly).toBe(true);
+
+    const dismissed = screen.getByRole('group', { name: 'Dismissed properties' });
+    expect(within(dismissed).getByRole('button', { name: 'Hide dismissed' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(dismissed).getByRole('button', { name: 'Show dismissed' }));
+    expect(latest.showDismissed).toBe(true);
+  });
+});
+
 describe('<FilterSidebar> location pick', () => {
   it('keeps a sidebar change made while the pick was resolving', async () => {
     vi.mocked(api.listCollections).mockImplementation(never);
