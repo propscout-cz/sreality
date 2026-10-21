@@ -11,7 +11,6 @@ import re
 from datetime import timedelta
 from pathlib import Path
 
-import psycopg
 import pytest
 
 import toolkit.property_identity as pi
@@ -348,99 +347,83 @@ def test_an_engine_merge_takes_back_nothing():
 
 
 def _alerted() -> _Ledger:
-    """3 survives 7. Collection 5 alerted 'new' on both (twins, subscription and snapshot NULL)
-    and a price drop on 7; collection 6 (another account's) 'new' on 7 only; a watchdog
-    subscription 'new' on each, different subscriptions. Every alert on 7 was delivered."""
+    """3 survives 7. Account A's collection 5 alerted 'new' on both (one identity but the
+    property), a price drop on 7, and 'inactive' on each at its own epoch; account B's
+    collection 6 'new' on 7 only; a watchdog 'new' on each, different subscriptions."""
+    a, b = "acc-a", "acc-b"
+    cm = {"account_id": a, "source_kind": "collection_monitor", "collection_id": 5}
+    wd = {"account_id": a, "source_kind": "watchdog", "change_kind": "new"}
     return _Ledger(
         {1: 3, 2: 7},
         dispatches={
-            "s-new": {"property_id": 3, "collection_id": 5, "change_kind": "new"},
-            "r-new": {"property_id": 7, "collection_id": 5, "change_kind": "new"},
-            "r-drop": {"property_id": 7, "collection_id": 5, "change_kind": "price_drop",
-                       "trigger_snapshot_id": 99},
-            "b-new": {"property_id": 7, "collection_id": 6, "change_kind": "new"},
-            "s-sub": {"property_id": 3, "subscription_id": "sub-1", "change_kind": "new"},
-            "r-sub": {"property_id": 7, "subscription_id": "sub-2", "change_kind": "new"},
-        },
-        sends={
-            1: {"consumer": "collection_monitor", "notification_id": "r-new"},
-            2: {"consumer": "collection_monitor", "notification_id": "r-drop"},
-            3: {"consumer": "collection_monitor", "notification_id": "b-new"},
-            4: {"consumer": "watchdog", "notification_id": "r-sub"},
-            5: {"consumer": "collection_monitor", "notification_id": "s-new"},
-            6: {"consumer": "outreach", "notification_id": None},
+            "s-new": {"property_id": 3, **cm, "change_kind": "new"},
+            "r-new": {"property_id": 7, **cm, "change_kind": "new"},
+            "r-drop": {"property_id": 7, **cm, "change_kind": "price_drop", "event_ref": "99"},
+            "s-gone": {"property_id": 3, **cm, "change_kind": "inactive", "event_ref": "1760000500"},
+            "r-gone": {"property_id": 7, **cm, "change_kind": "inactive", "event_ref": "1760000100"},
+            "b-new": {"property_id": 7, "account_id": b, "source_kind": "collection_monitor",
+                      "collection_id": 6, "change_kind": "new"},
+            "s-sub": {"property_id": 3, **wd, "subscription_id": "sub-1"},
+            "r-sub": {"property_id": 7, **wd, "subscription_id": "sub-2"},
         },
     )
 
 
-def test_a_delivered_alert_moves_to_the_kept_twin_and_the_merge_commits(monkeypatch):
-    """The collapse would null a send's event (ON DELETE SET NULL), which channel_sends_check
-    refuses: the send moves to the survivor's twin first. Only a twin pairs, every key equal
-    (NULL with NULL), so another collection's or subscription's alert moves with its row."""
+def test_a_merge_marks_the_alert_the_survivor_holds_and_deletes_none(monkeypatch):
+    """F6, F13, F21: every alert of 7 moves to 3 in ONE statement and none is deleted. Only an
+    exact twin, the survivor's row of the same identity, is marked its duplicate; another
+    epoch's 'inactive' (which the old collapse deleted as a 'twin'), another account's or
+    another watchdog's alert moves as itself."""
     keep_real(monkeypatch, carriers.Dispatches())
     db = _alerted()
     _merge(db, [3, 7], source="operator", decided_by=OP)
-    assert {nid: row["property_id"] for nid, row in db.dispatches.items()} == {
-        "s-new": 3, "r-drop": 3, "b-new": 3, "s-sub": 3, "r-sub": 3}
-    assert {sid: send["notification_id"] for sid, send in db.sends.items()} == {
-        1: "s-new", 2: "r-drop", 3: "b-new", 4: "r-sub", 5: "s-new", 6: None}
-    order = [s for s, _p in db.log]
-    resend = order.index(next(s for s in order if s.startswith("UPDATE channel_sends")))
-    assert resend < order.index(next(s for s in order
-                                     if s.startswith("DELETE FROM notification_dispatches")))
-    assert db.sql("UPDATE channel_sends") == [{"retired": 7, "survivor": 3}]
+    assert {nid: (row["property_id"], row["duplicate_of"]) for nid, row in db.dispatches.items()} == {
+        "s-new": (3, None), "r-new": (3, "s-new"), "r-drop": (3, None), "s-gone": (3, None),
+        "r-gone": (3, None), "b-new": (3, None), "s-sub": (3, None), "r-sub": (3, None)}
+    statements = [s for s, _p in db.log if "notification_dispatches" in s]
+    assert statements == [" ".join(carriers.Dispatches.REPOINT_SQL.split())]
+    assert db.sql("UPDATE notification_dispatches r") == [{"retired": 7, "survivor": 3}]
+    assert not db.sql("DELETE FROM notification_dispatches")
 
 
-def test_without_the_resend_the_collapse_strands_a_send_and_the_set_rolls_back(monkeypatch):
-    """The defect the resend fixes, modelled: the plain SET collapse aborts the whole merge."""
-    keep_real(monkeypatch, carriers.CurationTable("notification_dispatches",
-                                                  carriers.Dispatches().keys))
-    db = _alerted()
-    before = ({k: dict(v) for k, v in db.dispatches.items()},
-              {k: dict(v) for k, v in db.sends.items()})
-    with pytest.raises(psycopg.errors.CheckViolation, match="channel_sends_check"):
-        _merge(db, [3, 7], source="operator", decided_by=OP)
-    assert (db.dispatches, db.sends) == before
-    assert db.listings == {1: 3, 2: 7} and db.events == [] and db.props == {3: "active",
-                                                                           7: "active"}
+def test_a_second_new_after_two_fresh_properties_merge_is_closed():
+    """The case push could not take back: a watchdog alerted 'new' on two fresh properties that
+    are one flat. After the merge the survivor's row stands and the retired one is its marked
+    duplicate (VISIBLE hides it); where only the retired property had alerted, its re-pointed
+    row now holds the SURVIVOR's 'new' identity, unmarked, so the producer's next pass over the
+    survivor (still under a day old) conflicts on it instead of telling it again."""
+    from api.notifications import EVENT_IDENTITY
+
+    wd = {"account_id": "acc-a", "source_kind": "watchdog", "subscription_id": "sub-1",
+          "change_kind": "new"}
+    both = _Ledger({1: 3, 2: 7}, dispatches={"s": {"property_id": 3, **wd},
+                                             "r": {"property_id": 7, **wd}})
+    with pytest.MonkeyPatch.context() as mp:
+        keep_real(mp, carriers.Dispatches())
+        _merge(both, [3, 7], source="operator", decided_by=OP)
+        retired_only = _Ledger({1: 3, 2: 7}, dispatches={"r": {"property_id": 7, **wd}})
+        _merge(retired_only, [3, 7], source="operator", decided_by=OP)
+    assert [(r["property_id"], r["duplicate_of"]) for r in both.dispatches.values()] == [
+        (3, None), (3, "s")]
+    [held] = retired_only.dispatches.values()
+    assert (held["property_id"], held["duplicate_of"]) == (3, None)
+    survivor_new = {"account_id": "acc-a", "source_kind": "watchdog", "subscription_id": "sub-1",
+                    "collection_id": None, "change_kind": "new", "property_id": 3,
+                    "event_ref": None, "actor_account_id": None}
+    assert {c: held[c] for c in EVENT_IDENTITY} == survivor_new
 
 
-def _claimed() -> _Ledger:
-    """3 survives 7, collection 5 alerted 'new' on both; nothing delivered yet, but the outbox
-    is claiming the send for 7's alert (its insert not yet committed) as the merge runs."""
-    return _Ledger(
-        {1: 3, 2: 7},
-        dispatches={"s-new": {"property_id": 3, "collection_id": 5, "change_kind": "new"},
-                    "r-new": {"property_id": 7, "collection_id": 5, "change_kind": "new"}},
-        claiming={1: {"consumer": "collection_monitor", "notification_id": "r-new"}},
-    )
-
-
-def test_a_send_the_outbox_claims_mid_merge_waits_for_the_lock_and_moves_too(monkeypatch):
-    """The lock on the retired rows runs as its own statement before the resend: it waits for
-    the in-flight claim to commit, so the resend sees that send and the collapse strands none."""
+def test_a_set_marks_against_what_an_earlier_step_moved(monkeypatch):
+    """Each retired property is its own step, so 9's alert finds the twin 7's step just put on
+    the survivor (3 held none), and the earlier step's row is the one that stands."""
     keep_real(monkeypatch, carriers.Dispatches())
-    db = _claimed()
-    _merge(db, [3, 7], source="operator", decided_by=OP)
-    assert db.claiming == {} and db.sends == {
-        1: {"consumer": "collection_monitor", "notification_id": "s-new"}}
-    assert set(db.dispatches) == {"s-new"}
-    order = [s for s, _p in db.log]
-    lock = order.index(next(s for s in order if s.endswith("FOR UPDATE")
-                            and "notification_dispatches" in s))
-    resend = order.index(next(s for s in order if s.startswith("UPDATE channel_sends")))
-    assert lock < resend
-    assert db.log[lock][1] == {"retired": 7, "survivor": 3}
-
-
-def test_without_the_lock_a_claim_lands_after_the_resend_and_the_set_rolls_back(monkeypatch):
-    """The window the lock closes, modelled: an unserialized claim commits between the resend
-    and the collapse, whose SET NULL then trips channel_sends_check."""
-    unlocked = carriers.Dispatches()
-    unlocked.sql = tuple(s for s in unlocked.sql if s != carriers.Dispatches.LOCK_SQL)
-    keep_real(monkeypatch, unlocked)
-    with pytest.raises(psycopg.errors.CheckViolation, match="channel_sends_check"):
-        _merge(_claimed(), [3, 7], source="operator", decided_by=OP)
+    cm = {"account_id": "acc-a", "source_kind": "collection_monitor", "collection_id": 5,
+          "change_kind": "new"}
+    db = _Ledger({1: 3, 2: 7, 4: 9}, dispatches={"r7": {"property_id": 7, **cm},
+                                                 "r9": {"property_id": 9, **cm}})
+    _merge(db, [3, 7, 9], source="operator", decided_by=OP)
+    assert {nid: (row["property_id"], row["duplicate_of"]) for nid, row in db.dispatches.items()} == {
+        "r7": (3, None), "r9": (3, "r7")}
 
 
 def _code() -> str:
