@@ -40,9 +40,9 @@ const LABEL = 'Oznámení na tomto iPhonu';
 let fakes: PushFakes;
 const originalMatchMedia = window.matchMedia;
 
-function signIn(agendas: Record<string, boolean> | null = { notifications: true }) {
+function signIn(agendas: Record<string, boolean> | null = { notifications: true }, isAdmin = false) {
   vi.mocked(auth.useAuth).mockReturnValue({
-    isAdmin: false,
+    isAdmin,
     session: null,
     user: { id: 'user-1', email: 'operator@example.cz' },
     loading: false,
@@ -101,14 +101,17 @@ async function openSheet() {
 }
 
 describe('the push switch in the account sheet', () => {
-  it('sits first among the rows, a whole 44 px row', async () => {
+  it('sits first among the rows, a whole 44 px row, before Health and the desktop view', async () => {
     fakes = installPushFakes();
+    signIn({ notifications: true }, true);
     const row = await openSheet();
     expect(row).toHaveClass('min-h-11', 'w-full');
     const sheet = screen.getByRole('dialog', { name: 'Účet' });
-    expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
-    expect(row.compareDocumentPosition(within(sheet).getByRole('button', { name: 'Odhlásit' })))
-      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const follows = (el: Element) =>
+      expect(row.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    follows(within(sheet).getByRole('link', { name: 'Health' }));
+    follows(within(sheet).getByRole('button', { name: /Desktopová verze/ }));
+    follows(within(sheet).getByRole('button', { name: 'Odhlásit' }));
   });
 
   it('is off, and usable, with no subscription', async () => {
@@ -138,6 +141,7 @@ describe('the push switch in the account sheet', () => {
     ['in a Safari tab', { installed: false, push: false }, 'Přidejte aplikaci na plochu'],
     ['after notifications were refused', { permission: 'denied' as const }, 'Povolte oznámení v Nastavení'],
     ['without Web Push', { push: false }, 'Oznámení zatím fungují jen na iPhonu'],
+    ['on another phone', { apple: false }, 'Oznámení zatím fungují jen na iPhonu'],
   ])('is disabled %s, and says what would help', async (_name, platform, hint) => {
     fakes = installPushFakes(platform);
     const row = await openSheet();

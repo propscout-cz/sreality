@@ -143,7 +143,7 @@ describe('phone frame', () => {
     const sheet = await screen.findByRole('dialog', { name: 'Účet' });
     expect(within(sheet).getByText('operator@example.cz')).toBeInTheDocument();
     expect(within(sheet).getByRole('radio', { name: 'Světlý' })).toBeInTheDocument();
-    /* A browser tab here (jsdom): the switch says to install the app (PushSwitch.test). */
+    /* jsdom is no iPhone: the switch is drawn, disabled (PushSwitch.test has the states). */
     expect(await within(sheet).findByRole('switch', { name: 'Oznámení na tomto iPhonu' })).toBeDisabled();
     expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();

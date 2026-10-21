@@ -1,7 +1,8 @@
 /* The account sheet's push row, "Oznámení na tomto iPhonu" (notifications push
- * program § 3.6, W5b; the logic is lib/usePush). A lazy chunk: it loads when
- * the sheet opens, which is also when usePush does its reading, so a tap only
- * asks for permission and subscribes.
+ * program § 3.6, W5b; the logic is lib/usePush). It mounts when the sheet
+ * opens, which is when usePush does its reading, so a tap only asks for
+ * permission and subscribes. Imported eagerly: the sheet must open offline,
+ * where a chunk that cannot load would end in the app's last-resort boundary.
  *
  * One row, the sheet's idiom (15 px label, a 12 px line under it), the whole
  * row the switch and at least 44 px tall. Copper means on, as everywhere. A

@@ -28,7 +28,8 @@ import {
 import { isInstalledApp } from './serviceWorker';
 
 export type PushState =
-  /* Installed, but this engine has no Web Push (iOS before 16.4, others). */
+  /* Not an Apple device, or an installed app whose engine has no Web Push
+   * (iOS before 16.4). */
   | 'unsupported'
   /* A browser tab: iOS offers push only to an app on the Home Screen. */
   | 'not_installed'
@@ -48,10 +49,19 @@ export interface PushSwitch {
   disable: () => void;
 }
 
-/* What the platform allows before anything is read. "Not installed" comes
- * first: an iPhone's Safari tab has no PushManager at all, and must hear
- * "install the app", not "unsupported". */
+/* An iPhone or iPad: by its UA, or by `navigator.standalone`, which only
+ * Apple's mobile WebKit has (iPadOS Safari reports a Mac UA). The server takes
+ * Apple's push service only, so nothing else is ever asked for permission. */
+function isAppleMobile(): boolean {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) || 'standalone' in navigator;
+}
+
+/* What the platform allows before anything is read. Another platform first
+ * (an Android phone is never prompted), then "not installed": an iPhone's
+ * Safari tab has no PushManager at all, and must hear "install the app", not
+ * "unsupported". */
 function platformGate(): PushState | null {
+  if (!isAppleMobile()) return 'unsupported';
   if (!isInstalledApp()) return 'not_installed';
   if (
     !('serviceWorker' in navigator) ||

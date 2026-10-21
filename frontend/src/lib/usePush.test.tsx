@@ -55,6 +55,17 @@ describe('usePush: the state', () => {
     expect(api.getPushKey).not.toHaveBeenCalled();
   });
 
+  it('is unsupported on a phone that is not Apple\'s, which is never prompted', async () => {
+    fakes = installPushFakes({ apple: false });
+    const { result } = renderHook(() => usePush());
+    expect(result.current.state).toBe('unsupported');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.getPushKey).not.toHaveBeenCalled();
+    act(() => result.current.enable());
+    expect(fakes.requestPermission).not.toHaveBeenCalled();
+    expect(fakes.subscribe).not.toHaveBeenCalled();
+  });
+
   it('is unsupported in an installed app without Web Push', () => {
     fakes = installPushFakes({ push: false });
     const { result } = renderHook(() => usePush());

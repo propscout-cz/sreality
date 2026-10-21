@@ -1,5 +1,5 @@
-/* A fake Web Push platform for jsdom (which has none): an installed app (or a
- * tab), `navigator.serviceWorker` with one registration and its PushManager,
+/* A fake Web Push platform for jsdom (which has none): an iPhone (or another
+ * phone), an installed app (or a tab), `navigator.serviceWorker` with one registration and its PushManager,
  * `window.Notification` with a settable permission. Every call is recorded in
  * one ordered log, so a test can pin the ORDER of requestPermission, subscribe
  * and the PUT (Apple's gesture rule). `uninstall()` puts jsdom back. */
@@ -49,12 +49,15 @@ export function fakeSubscription(log: string[], endpoint = 'https://web.push.app
 let fakes: PushFakes | null = null;
 
 export function installPushFakes({
+  apple = true,
   installed = true,
   push = true,
   registered = true,
   subscribed = false,
   permission = 'default' as NotificationPermission,
 }: {
+  /* An iPhone (`navigator.standalone` exists) or, false, any other phone. */
+  apple?: boolean;
   installed?: boolean;
   push?: boolean;
   registered?: boolean;
@@ -117,7 +120,8 @@ export function installPushFakes({
   };
   fakes = state;
 
-  Object.defineProperty(navigator, 'standalone', { configurable: true, value: installed });
+  if (apple) Object.defineProperty(navigator, 'standalone', { configurable: true, value: installed });
+  else delete (navigator as unknown as Record<string, unknown>).standalone;
   if (push) {
     Object.defineProperty(navigator, 'serviceWorker', {
       configurable: true,

@@ -1,8 +1,7 @@
 /* Push on this device (notifications push program, docs/design/notifications-push
  * PROGRAM.md § 3.4-3.6): the small pieces every caller shares. The account
- * sheet's switch is lib/usePush (a lazy chunk); this file is what the eager
- * callers need: the landing's open report, the re-sync and the identity
- * binding.
+ * sheet's switch is lib/usePush; this file is what the other callers need:
+ * the landing's open report, the re-sync and the identity binding.
  *
  * A subscription belongs to the service-worker registration, not to a user,
  * so this device remembers which account switched it on (OWNER_KEY): a

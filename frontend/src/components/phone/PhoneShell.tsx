@@ -11,7 +11,7 @@
  * `calc(100dvh-3.5rem)`, and those desktop pages still render inside this
  * frame on the phone. */
 
-import { Suspense, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 
 import CollectionMark from '@/components/CollectionMark';
@@ -19,7 +19,6 @@ import SkipLink from '@/components/SkipLink';
 import { FunnelIcon } from '@/components/icons';
 import { useAuth } from '@/lib/auth';
 import { APP_SHORT } from '@/lib/brand';
-import { lazyChunk } from '@/lib/lazyChunk';
 import { czPlural } from '@/lib/format';
 import { useTitleSegment } from '@/lib/pageTitle';
 import {
@@ -39,9 +38,7 @@ import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
 import { BackIcon, BellIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
-
-/* The account sheet's push row (W5b): loaded when the sheet opens. */
-const PushSwitch = lazyChunk(() => import('./PushSwitch'));
+import PushSwitch from './PushSwitch';
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
@@ -318,13 +315,7 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
-        {notifications && (
-          <Suspense
-            fallback={<div aria-hidden className="h-11 border-b border-[var(--color-rule-soft)]" />}
-          >
-            <PushSwitch />
-          </Suspense>
-        )}
+        {notifications && <PushSwitch />}
         {/* The phone has no Admin menu, and system alerts never reach the bell
           * (ruling R2b), so this row is its one way to Health; admin-only, as
           * the page is. */}
