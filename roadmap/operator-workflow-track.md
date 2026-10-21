@@ -8,7 +8,7 @@ per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
 ### Phase U-MERGE-LETTERS: merge mode as one statement of letters (built 2026-10-21; merges in the window)
-- **Done (no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
+- **Done (PR #1926, no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
   card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
   a click writes the active letter (A at first, so click-click-merge still makes one group), the same
   letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
