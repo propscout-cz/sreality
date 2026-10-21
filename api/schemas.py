@@ -641,7 +641,7 @@ class StatsDashboardIn(BaseModel):
     charts: list[dict[str, Any]]
 
 
-class ValuoRunIn(BaseModel):
+class ValuoValuationIn(BaseModel):
     """A Valuo valuation (api/valuo.py): parameter -> the user's value, or null to send none."""
     overrides: dict[str, Any] = Field(default_factory=dict)
 

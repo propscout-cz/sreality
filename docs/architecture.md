@@ -1431,8 +1431,8 @@ renumber.** Navigate by area:
     https://api.valuo.com/v1/market-value/{flat|house|land|commercial}`, one endpoint per type, the
     one host for both tokens; the retired `api.valuo.cz/v1/calculation` 401s them). Each type is offered
     EXACTLY its endpoint's request schema (`api/valuo.py` FIELDS; Valuo silently drops any other field, so
-    no lift, furnishing, rooms or terrace is sent; house's `garage_area`/`other_area` wait for a column of
-    ours), `rating` is required even for land (`good`, `assumed`), and `local_type` is only ever one of
+    no lift, furnishing, rooms or terrace is sent; a house's `garage_area`/`other_area` are offered with no
+    default, as no column of ours holds either area), `rating` is required even for land (`good`, `assumed`), and `local_type` is only ever one of
     Valuo's listed dispositions or `jiné`. v3 has NO parameter to exclude or add comparables (`ignored_ids`
     is an engine echo, always [], kept in the stored answer and never shown); the band shown is
     `range_price`, not `min/max_price`. After a success with comparables ONE `POST /v1/advert/detail`
@@ -1452,7 +1452,8 @@ renumber.** Navigate by area:
     It holds the exact request sent, the provenance of every parameter (`ad`, `property`,
     `inferred`, `assumed`, `missing`, `user`, each with `from: {column, value}` and a Czech rule
     note), Valuo's answer verbatim (its min/max/std keep Valuo's names; nothing calls them
-    quartiles), the environment and the token's 12-hex sha. The POST saves the row `pending`
+    quartiles; a lease's figures are MONTHLY, verified 2026-10-21 on property 1012847: ≈50 m² flats
+    at 17 500–20 000 Kč), the environment and the token's 12-hex sha. The POST saves the row `pending`
     BEFORE the paid call and UPDATEs it once; the unique index on `(account_id, environment,
     listing_id, md5(request::text))` over pending/success rows turns an identical request for the
     same ad into a reuse or a 409, so a double click cannot pay twice (the ad is in the key, so a
@@ -1461,7 +1462,7 @@ renumber.** Navigate by area:
     its account. A Valuo-side failure is a stored `failed` row answered with HTTP 200, as for our
     runs (an issue list in `message` on any 4xx/5xx — HTTP 500 today — is `form_errors`, each issue shown
     under its parameter; a 400 is the engine's own refusal, `calculation`, shown with Valuo's reason); a refusal (ostatní, no point, a point coarser than a town, a country that is not
-    determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
+    determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may value a property (`verify_jwt`; tenancy shape 3); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
     `velmi_dobry` is Valuo's `very_good` "Velmi dobrý" (operator ruling 2026-10-20, superseding `good`),
     `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true`, a house's
@@ -3280,7 +3281,10 @@ renumber.** Navigate by area:
     published range or a reason (six codes, notes only in that migration), rendered by its shape.
     Estimations call it; after 567 applies the serving views call it too, with the stored
     `katastr_kod`; until then they read the stored, writer-less `mf_*` columns. Rules: the
-    `llm-pipelines` skill.
+    `llm-pipelines` skill. **Valuo's own per-m² figures** (`avg_price_m2`, `range_price_m2`,
+    `std_price_m2`, each comparable's `price_m2` / `adjusted_price_m2`) are the other outside
+    authority's numbers, over Valuo's `calc_area` and never this measure, shown verbatim under the
+    request's basis label (`api/valuo.result_basis`, a `REGISTERED_SITES` entry; rule 12).
 
     **The headline area has ONE rule, and every portal feeds it the same way** (W17,
     2026-09-15). `scraper/area.derive_headline_area(category_main, usable, floor, total, plot,

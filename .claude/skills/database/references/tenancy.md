@@ -271,10 +271,15 @@ or through a key one account owns, as a `CurationTable`'s collection/tag/subscri
 routing inside `detach_listings`, whose carry-row identity, twins and conflicts all name the account), the
 merge's receipt (`api/property_merge.merge_receipt`: the caller's account's own carry rows), the split's preview
 and receipt (`toolkit/property_split`: the caller's account's own items only, nothing of another's), `api/estimation_runs.py`
-(service-role child runs from `building_runs`), and the Stripe webhook (no caller identity at
-all — the HMAC over the raw body is the auth). On a tenant connection the same predicate is the
-#917 bug: `POST /listings/lookup` bound `NULL` into three `account_id IS NOT DISTINCT FROM %s`
-predicates for seven weeks and answered "not in pipeline" for every caller.
+(service-role child runs from `building_runs`), the Stripe webhook (no caller identity at
+all — the HMAC over the raw body is the auth), and both Valuo routes (`api/routes/valuo.py` →
+`api/valuo.py`; `valuo_valuations` is RLS-on with zero policies): the account is
+`require_account_id(conn, claims, None)` called on the service-role connection — the one no-account 400,
+with no tenant transaction left open across the POST's two paid calls (`market-value`, then
+`advert/detail`), each bounded by `valuo_client.TIMEOUT` (5 s connect + 20 s read), ~50 s in all.
+On a tenant connection the same predicate is the #917 bug: `POST /listings/lookup` bound `NULL`
+into three `account_id IS NOT DISTINCT FROM %s` predicates for seven weeks and answered "not in
+pipeline" for every caller.
 
 **4. `deps.account_scope` returns `[account_id, SYSTEM]`** — the fourth shape, named here so
 nobody rediscovers it as a divergence and "fixes" it. The `/estimations` read family

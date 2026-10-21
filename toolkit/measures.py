@@ -571,6 +571,17 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "DWELLING, and offering the rate on a 905 m² parcel would subtract "
         "~9 050 CZK/month from a yield numerator.",
     ),
+    RegisteredSite(
+        path="api/valuo.py",
+        arm="unit",
+        hits=2,
+        measure="ppm2",
+        kind=KIND_LABELS,
+        why="Rule 23's named outside exception: Valuo's own per-m² figures "
+        "(avg/range/std_price_m2, each comparable's price_m2 and adjusted_price_m2) "
+        "over its calc_area, forwarded verbatim; `result_basis` labels them with "
+        "the REQUEST's basis and its docstring names both units. Nothing divides.",
+    ),
     # -- Frontend + extension: the label half --------------------------------
     RegisteredSite(
         path="frontend/src/lib/measure.ts",
