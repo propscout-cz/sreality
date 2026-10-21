@@ -27,11 +27,14 @@
 -- NOT HERE. VISIBLE, the producers' conflict target, retire-on-delete and the one-UPDATE carrier are W3's code. The
 -- old dedupe_key UNIQUE, the dead columns and the replaced indexes are W6's drops.
 --
--- APPLY through apply_migration.yml (--ref feature/notifications-w3) BEFORE merging W3: its producers name this
--- index in ON CONFLICT and write no dedupe_key. Never through the MCP: CREATE INDEX CONCURRENTLY cannot run in a
--- transaction block, and every MCP path wraps its payload in one. Safe against the deployed W2a code: its target-less
--- ON CONFLICT DO NOTHING absorbs this index as it does the old key, and its carrier deletes every identity twin
--- before its move (its twin key is coarser), so neither can trip the index.
+-- APPLY through apply_migration.yml (--ref feature/notifications-w3) BEFORE merging W3 (its producers name this
+-- index in ON CONFLICT and write no dedupe_key) and only AFTER W2a's code is deployed (the program: after W2b).
+-- Never through the MCP: CREATE INDEX CONCURRENTLY cannot run in a transaction block, and every MCP path wraps its
+-- payload in one. Safe against the deployed W2a code: its producers write event_ref and end in a target-less
+-- ON CONFLICT DO NOTHING, which absorbs this index as it does the old key, and its carrier deletes every identity
+-- twin before its move (its twin key is coarser), so neither can trip the index. NOT safe against pre-W2a code: its
+-- producers write no event_ref and conflict on (dedupe_key) only, so a property's second price step (or 'inactive')
+-- would share the first's NULL event_ref and fail its whole statement here.
 -- RECOVERY. A repeat written between (a) and (d) fails the build ("could not create unique index ... is duplicated")
 -- and leaves an INVALID index. Re-run the file: it moves the INVALID leftover aside and drops it, re-marks the
 -- repeats (a) and builds again. By hand: DROP INDEX CONCURRENTLY public.notification_dispatches_identity_uq; then
