@@ -249,8 +249,7 @@ describe('pin limit and price labels on the map overlay', () => {
   });
 });
 
-/* The Table tab went 2026-10-20: `?tab=` names the stats tab or nothing, and an
- * old `?tab=table` bookmark opens the Properties tab rather than a blank page. */
+/* `?tab=` names the stats tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
 describe('the tab in the URL', () => {
   const tabOf = (initial: string) =>
     renderHook(() => useUrlBrowseState(), {

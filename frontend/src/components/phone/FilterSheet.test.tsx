@@ -278,15 +278,14 @@ describe('the footer', () => {
     expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'price_czk', direction: 'asc' });
   });
 
-  /* One menu on every surface: the Řazení row is CARD_SORTS, so the orders the
-   * Table's going added to Browse reach the phone too. */
+  /* One menu on every surface: the Řazení row is CARD_SORTS. */
   it('offers area both ways and last seen, and applies the one picked', async () => {
     const user = userEvent.setup();
     const { onApply } = renderSheet();
     await user.click(within(sheet()).getByRole('button', { name: /^Řazení/ }));
-    expect(within(sheet()).getByRole('button', { name: 'Area: low → high' })).toBeInTheDocument();
-    expect(within(sheet()).getByRole('button', { name: 'Area: high → low' })).toBeInTheDocument();
-    await user.click(within(sheet()).getByRole('button', { name: 'Last seen first' }));
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od nejmenší' })).toBeInTheDocument();
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od největší' })).toBeInTheDocument();
+    await user.click(within(sheet()).getByRole('button', { name: 'Naposledy viděno' }));
     await user.click(await within(sheet()).findByRole('button', { name: /^Zobrazit/ }));
     expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'last_seen_at', direction: 'desc' });
   });

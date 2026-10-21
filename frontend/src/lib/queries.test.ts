@@ -120,7 +120,7 @@ describe('priceNullTolerantOr', () => {
 /* Gate-2: the city-quality allowlist must be AND'd onto the cohort via the
  * surrogate `listing_id`, NOT `sreality_id`. A post-Gate-2 non-sreality repr has
  * a NULL sreality_id (IN never matches NULL → the listing silently vanishes from
- * Map/Table/Cards/Count while browse_stats still counts it), and — worse — the
+ * Map/Cards/Count while browse_stats still counts it), and — worse — the
  * id-spaces overlap by ~435, so a sreality_id passed into an `IN listing_id`
  * predicate would match a DIFFERENT listing. Pin the filter column here. */
 describe('applyPrefilters (prefilter id-spaces)', () => {
@@ -521,15 +521,19 @@ describe('the one-portal order', () => {
   });
 });
 
-/* The cards' sort menu is Browse's only sort control since the Table tab went
- * (operator ruling 2026-10-20): it gained area both ways and last seen, and the
- * sorts only the table's column headers offered are gone. */
+/* The cards' sort menu is Browse's only sort control (operator ruling, Plocha
+ * both ways and Naposledy viděno); a sort field without a control reads as the default. */
 describe('the cards sort menu', () => {
   it('offers area both ways and last seen, most recent first', () => {
     const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
-    expect(byLabel.get('Area: low → high')).toEqual({ field: 'area_m2', direction: 'asc' });
-    expect(byLabel.get('Area: high → low')).toEqual({ field: 'area_m2', direction: 'desc' });
-    expect(byLabel.get('Last seen first')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+    expect(byLabel.get('Plocha: od nejmenší')).toEqual({ field: 'area_m2', direction: 'asc' });
+    expect(byLabel.get('Plocha: od největší')).toEqual({ field: 'area_m2', direction: 'desc' });
+    expect(byLabel.get('Naposledy viděno')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+  });
+
+  it('reads last seen either way round as the one last-seen order the menu offers', () => {
+    expect(parseSort('last_seen_at')).toEqual({ field: 'last_seen_at', direction: 'desc' });
+    expect(parseSort('-last_seen_at')).toEqual({ field: 'last_seen_at', direction: 'desc' });
   });
 
   it('round-trips every entry through the URL, one entry per order', () => {
@@ -544,9 +548,9 @@ describe('the cards sort menu', () => {
     expect(CARD_SORTS.map((o) => o.spec.field)).not.toContain('estate_area');
   });
 
-  it('reads every header-only sort the Table offered as the default', () => {
+  it('reads every sort field without a control as the default', () => {
     for (const field of ['display_label', 'disposition', 'is_active', 'usable_area',
-                         'parking_lots', 'sreality_id']) {
+                         'parking_lots']) {
       expect(parseSort(field)).toEqual(DEFAULT_SORT);
       expect(parseSort(`-${field}`)).toEqual(DEFAULT_SORT);
     }

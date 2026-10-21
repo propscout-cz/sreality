@@ -531,8 +531,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   `property_pipeline.note` is a separate column with no writer.)
 - **One menu, three surfaces.** `PipelineStageMenu` (stage list badged from
   `code`, current stage checked, terminal stages under their own divider, then
-  a two-step remove) is opened by the Browse cards, the Browse table rows AND
-  the listing header — which drops its own `<select>` + bare ✕. Adding stays
+  a two-step remove) is opened by the Browse cards, the Browse table rows (gone
+  with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
   keeps its `<select>` and gains the same confirm on ✕ via a generic

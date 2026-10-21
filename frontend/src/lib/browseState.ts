@@ -43,8 +43,7 @@ import type { Disposition, FilterPreset, ListingPublic } from '@/lib/types';
 
 export type TabKey = 'map' | 'stats';
 
-/* `?tab=` as a TabKey. Anything else is the map: an old `?tab=table` bookmark
- * (the Table tab went 2026-10-20) opens the Properties tab, never a blank page. */
+/* `?tab=` as a TabKey; anything else (an old `?tab=table` link) opens the map, never a blank page. */
 export const parseTab = (raw: string | null): TabKey => (raw === 'stats' ? 'stats' : 'map');
 
 /* Map-overlay UI knobs. NOT part of the cohort filter spec — they paint

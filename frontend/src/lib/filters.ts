@@ -1165,10 +1165,8 @@ function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope 
 /** Read a stored preset blob, tolerating the legacy bare-`ListingFilters`
  *  shape (presets saved before sort was captured) and fields whose type drifted
  *  after the preset was saved. Always returns a complete, shape-safe filter set
- *  merged onto DEFAULT_FILTERS, plus the saved sort NORMALISED through
- *  parseSort: absent, or naming a sort Browse no longer offers (the Table's
- *  header-only sorts, 2026-10-20), it reads as the default, so such a preset
- *  loads clean instead of dirty. */
+ *  merged onto DEFAULT_FILTERS, plus the saved sort as parseSort reads it, so a
+ *  preset whose sort has no control loads clean, not dirty. */
 export const readPresetSpec = (
   spec: PresetSpec | ListingFilters,
 ): { filters: ListingFilters; sort: string } => {

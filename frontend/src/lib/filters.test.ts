@@ -1014,9 +1014,8 @@ describe('filter presets', () => {
     expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
   });
 
-  /* The Table's header-only sorts went 2026-10-20. A preset saved under one
-   * would load the default order while still holding the old token, so it read
-   * dirty and offered "Update preset" before the user touched anything. */
+  /* A preset saved under a sort with no control would load the default order while
+   * holding the old token, and read dirty before the user touched anything. */
   it('readPresetSpec reads a sort Browse no longer offers as the default, so the preset loads clean', () => {
     const got = readPresetSpec({ filters: { ...DEFAULT_FILTERS, areaMin: 50 }, sort: '-estate_area' });
     expect(got.sort).toBe(sortToParam(DEFAULT_SORT));

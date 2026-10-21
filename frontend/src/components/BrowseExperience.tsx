@@ -682,7 +682,7 @@ export default function BrowseExperience({
           <div className="mt-4 flex items-center justify-between gap-3">
             <Tabs tabs={tabs} active={tab} onChange={view.setTab} />
             {tab === 'map' && (
-              <div className="ml-auto flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 <MapViewToggle
                   collapsed={mapCollapsed.value}
                   onChange={mapCollapsed.set}
