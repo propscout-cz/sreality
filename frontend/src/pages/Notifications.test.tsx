@@ -37,7 +37,6 @@ const baseDispatch: WatchdogDispatch = {
   seen_at: null,
   trigger_price_czk: null,
   prev_price_czk: null,
-  trigger_snapshot_id: null,
   category_main: 'byty',
   category_type: 'prodej',
   price_czk: 8_900_000,

@@ -1155,11 +1155,10 @@ export interface WatchdogDispatch {
   share_ref: string | null;
   dispatched_at: string;
   seen_at: string | null;
-  /* Change provenance — collection-monitor price events carry these so "why was
-   * I pinged" survives latest-wins: the trigger snapshot + new/previous price. */
+  /* Change provenance — price events carry these so "why was I pinged" survives
+   * latest-wins: the new and the previous price. */
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
-  trigger_snapshot_id: number | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */

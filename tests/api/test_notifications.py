@@ -16,6 +16,7 @@ pytest.importorskip("pydantic")
 from pydantic import ValidationError
 
 from api.notifications import (
+    ON_EVENT_CONFLICT,
     WatchdogFilterSpec,
     _build_match_clauses,
 )
@@ -739,7 +740,7 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
     assert params["category_type"] == "pronajem"
     assert params["district_codes_obec"] == [554782]
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql
-    assert "'watchdog'" in sql and sql.endswith("ON CONFLICT DO NOTHING")
+    assert "'watchdog'" in sql and sql.endswith(ON_EVENT_CONFLICT)
     # Committed on its own under the bound: the INSERT's locks never outlive it.
     at = [s for s, _ in conn.executed].index(sql)
     assert conn.executed[at - 1] == ("SET LOCAL statement_timeout = '120s'", None)
@@ -781,8 +782,8 @@ def test_collection_monitor_noop_when_nothing_monitored() -> None:
 def test_collection_monitor_emits_the_five_clean_kinds() -> None:
     """One set-based INSERT per detector across all monitored collections — inactive,
     reactivated and new_source in step monitor, price_drop / price_rise (one CASE) in
-    step price; every dispatch is source_kind='collection_monitor', collection-scoped
-    dedupe, idempotent. broker_change is reserved, not emitted."""
+    step price; every dispatch is source_kind='collection_monitor', idempotent on the one
+    identity. broker_change is reserved, not emitted."""
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(2,)], 0),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
@@ -802,32 +803,22 @@ def test_collection_monitor_emits_the_five_clean_kinds() -> None:
     assert "'collection_monitor'" in joined
     for kind in ("'price_drop'", "'price_rise'", "'inactive'", "'reactivated'", "'new_source'"):
         assert kind in joined
-    assert "'cm:'" in joined                       # collection-scoped dedupe prefix
-    assert joined.count("ON CONFLICT DO NOTHING") == 4
+    assert "'cm:'" not in joined                   # no key grammar since W3
+    assert joined.count(ON_EVENT_CONFLICT) == 4
     assert "'broker_change'" not in joined          # reserved, no clean signal yet
 
 
-def test_collection_monitor_dedupe_keys_survive_a_null_sreality_id() -> None:
-    """No dedupe_key may concatenate a bare `sreality_id` (R2/Gate 2).
-
-    `dedupe_key` is NOT NULL and `||` yields NULL if ANY operand is NULL, so a
-    post-Gate-2 listing (sreality_id NULL) would make the whole key NULL and abort
-    the ENTIRE collection-monitor pass with a not-null violation — every collection
-    silently stops notifying, not just the one row. The `new_source` detector was
-    the one keyed this way; it now COALESCEs onto the surrogate. This test pins the
-    invariant for every detector so a future one can't reintroduce it."""
+def test_new_source_names_one_introducing_ad_on_every_pass() -> None:
+    """`new_source`'s event_ref is the introducing ad's id, so the ad the window picks must not
+    change between passes or the identity would, and the same portal arrival would be told twice.
+    The legacy handle breaks a first-seen tie as the pre-W3 key did; the surrogate breaks the
+    rest (a non-sreality ad has no handle)."""
     from api import notifications as nf
 
-    for sql in (nf._MONITOR_PRICE_SQL, nf._MONITOR_INACTIVE_SQL, nf._MONITOR_REACTIVATED_SQL,
-                nf._MONITOR_NEW_SOURCE_SQL, nf._WATCHDOG_NEW_SQL, nf._WATCHDOG_PRICE_SQL):
-        sql = " ".join(sql.split())
-        # The dedupe_key expression is the tail of the SELECT list; any bare
-        # sreality_id concatenated into it is the bug.
-        assert "|| src.sreality_id::text" not in sql
-        assert "|| st.sreality_id::text" not in sql
-        assert "|| l.sreality_id::text" not in sql
     new_source = " ".join(nf._MONITOR_NEW_SOURCE_SQL.split())
-    assert "coalesce(src.sreality_id::text, 'l' || src.listing_id::text)" in new_source
+    assert ("row_number() OVER (PARTITION BY m.collection_id, l.property_id, l.source "
+            "ORDER BY l.first_seen_at, l.sreality_id, l.id) AS rn") in new_source
+    assert "src.listing_id::text" in new_source
 
 
 def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
@@ -1317,7 +1308,7 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
     for sql, params in (watchdog, collection):
         assert sql.startswith(f"WITH {fragment}")
         assert params["price_window"] == "7 days"
-        assert sql.endswith("ON CONFLICT DO NOTHING")
+        assert sql.endswith(ON_EVENT_CONFLICT)
     sql, params = watchdog
     assert "'price_drop'" in sql and "'price_rise'" not in sql
     assert "st.price_czk < st.prev_price_czk AND st.scraped_at > %(active_since)s" in sql
@@ -1340,13 +1331,14 @@ def test_match_changes_once_with_no_live_watchdog_runs_only_the_collection_half(
 
 
 
-# --- the dedupe_key grammar is pinned (notifications W2a) -------------------------------
+# --- one event identity, continuous with history (notifications W3) ----------------------
 #
-# W2a runs the producers on the worker beside the API's matcher for 48 h. The overlap is a
-# union only while every key is byte-identical to the one written before W2 (the UNIQUE on
-# dedupe_key is still the one identity until W3), so each producer statement's key, kind and
-# event_ref expressions are RENDERED against fixture rows by the small evaluator below and
-# compared with the pre-W2 grammar, spelled out in Python.
+# From W3 the identity index (EVENT_IDENTITY, migration 653) is the one "same event?", and
+# nothing writes dedupe_key. A row written before W3 carries the identity migration 652
+# backfilled from its key; a producer re-running over the same event must render the SAME
+# identity, or the event would be told twice. So each producer statement's columns are
+# RENDERED against fixture rows by the small evaluator below and compared with what 652 reads
+# off the pre-W3 key grammar, spelled out in Python.
 
 import math as _math
 
@@ -1471,8 +1463,8 @@ _GONE_AT = datetime(2026, 10, 19, 8, 30, 15, 999_000, tzinfo=timezone.utc)
 _FLAGGED_AT = datetime(2026, 10, 20, 9, 0, 0, tzinfo=timezone.utc)
 
 
-def _pre_w2(kind: str, r: dict[str, Any]) -> str:
-    """The dedupe_key grammar every row written before W2 carries (migration 206, Sprint C)."""
+def _pre_w3(kind: str, r: dict[str, Any]) -> str:
+    """The dedupe_key grammar every row written before W3 carries (migration 206, Sprint C)."""
     if kind == "new":
         return f"wd:{_SUB}:new:{r['property_id']}"
     if kind == "wd_price":
@@ -1518,29 +1510,79 @@ _PRICE_ROW = {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000,
      "402678"),
 ], ids=["new", "wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
         "new-source-no-sreality", "new-source-legacy-handle"])
-def test_every_producer_key_is_byte_identical_to_the_pre_w2_grammar(
+def _backfilled_652(kind: str, key: str, row: dict[str, Any]) -> str | None:
+    """event_ref as migration 652 (and 653's re-run of it) fills it from a pre-W3 key."""
+    seg = key.split(":")
+    if kind in ("wd_price", "cm_price"):
+        return seg[3]  # 652 reads trigger_snapshot_id, which every price key ends in
+    if kind in ("inactive", "reactivated"):
+        return seg[4]
+    if kind == "new_source":
+        # 'l<id>' is the listing id; a legacy handle maps once through listings.sreality_id.
+        return seg[3][1:] if seg[3].startswith("l") else str(row["listing_id"])
+    return None
+
+
+@pytest.mark.parametrize(("statement", "kind", "row", "event_ref"), [
+    ("_WATCHDOG_NEW_SQL", "new", {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000},
+     None),
+    ("_WATCHDOG_PRICE_SQL", "wd_price", _PRICE_ROW, "5001"),
+    ("_MONITOR_PRICE_SQL", "cm_price", _PRICE_ROW, "5001"),
+    ("_MONITOR_PRICE_SQL", "cm_price",
+     {**_PRICE_ROW, "price_czk": 5_100_000, "snapshot_id": 5002}, "5002"),
+    ("_MONITOR_INACTIVE_SQL", "inactive",
+     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
+      "inactive_at": _GONE_AT}, str(int(_GONE_AT.timestamp()))),
+    # event_ref = the epoch of the inactive dispatch it answers, as the key always was (it
+    # supersedes the program's "the id of the inactive dispatch": production's grammar wins).
+    ("_MONITOR_REACTIVATED_SQL", "reactivated",
+     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
+      "inactive_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
+    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
+     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
+     "402678"),
+    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
+     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
+     "402678"),
+    # A legacy handle is signed (2026-10-21: the one live new_source row keys on -248427).
+    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
+     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
+     "402678"),
+], ids=["new", "wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
+        "new-source-no-sreality", "new-source-legacy-handle"])
+def test_every_producer_renders_the_identity_its_pre_w3_row_carries(
     statement: str, kind: str, row: dict[str, Any], event_ref: str | None,
 ) -> None:
     from api import notifications as nf
 
     out = _rendered(getattr(nf, statement), row, {"subscription_id": _SUB})
-    assert out["dedupe_key"] == _pre_w2(kind, row)
-    # event_ref is what migration 652 backfills from the same key: the snapshot segment, the
-    # epoch segment, the introducing listing.
-    assert out["event_ref"] == event_ref
-    key = out["dedupe_key"].split(":")
-    if kind in ("wd_price", "cm_price"):
-        assert out["event_ref"] == key[3] == str(out["trigger_snapshot_id"])
-        assert out["change_kind"] == key[2]
-    elif kind in ("inactive", "reactivated"):
-        assert out["event_ref"] == key[4] and out["change_kind"] == kind
-    elif kind == "new_source":
-        assert out["listing_id"] == row["listing_id"]
+    key = _pre_w3(kind, row)
+    seg = key.split(":")
+    assert out["event_ref"] == event_ref == _backfilled_652(kind, key, row)
+    if seg[0] == "wd":
+        assert (out["source_kind"], out["subscription_id"]) == ("watchdog", seg[1])
+    else:
+        assert (out["source_kind"], str(out["collection_id"])) == ("collection_monitor", seg[1])
+    assert out["change_kind"] == seg[2]
+    assert out["property_id"] == row["property_id"]
+    if kind in ("new", "inactive", "reactivated"):
+        assert str(out["property_id"]) == seg[3], "the key's property is the row's"
+    # The rest of the identity is the trigger's (account_id) or NULL: a detector has no actor,
+    # and a row has one source, so the other source column is NULL (source_ck).
+    other = "collection_id" if seg[0] == "wd" else "subscription_id"
+    assert {c for c in nf.EVENT_IDENTITY if c not in out} == {"account_id", "actor_account_id", other}
 
 
-def test_every_producer_insert_writes_event_ref_with_a_targetless_on_conflict() -> None:
-    """Until W3 the dedupe_key UNIQUE decides identity; a target-less ON CONFLICT DO NOTHING
-    also absorbs W3's identity index the day it lands, and every row states its event_ref."""
+def _conflict_target(sql: str) -> tuple[str, ...]:
+    m = re.search(r"ON CONFLICT \(([^)]*)\) WHERE duplicate_of IS NULL DO NOTHING$", sql)
+    assert m, sql[-200:]
+    return tuple(c.strip() for c in m.group(1).split(","))
+
+
+def test_every_insert_conflicts_on_the_one_identity_and_writes_no_key() -> None:
+    """Each producer statement and the share grant end in ON CONFLICT (EVENT_IDENTITY) WHERE
+    duplicate_of IS NULL DO NOTHING, the partial unique index migration 653 builds, and none
+    writes the retired key or the snapshot column (a price row's snapshot is its event_ref)."""
     from api import notifications as nf
     from api import shares
 
@@ -1550,9 +1592,34 @@ def test_every_producer_insert_writes_event_ref_with_a_targetless_on_conflict() 
     for sql in statements:
         sql = " ".join(sql.split())
         head = sql.split("INSERT INTO notification_dispatches (", 1)[1].split(")", 1)[0]
-        assert "event_ref" in {c.strip() for c in head.split(",")}, sql
-        assert sql.endswith("ON CONFLICT DO NOTHING") and "ON CONFLICT (" not in sql, sql
+        columns = {c.strip() for c in head.split(",")}
+        assert "event_ref" in columns, sql
+        assert not columns & {"dedupe_key", "trigger_snapshot_id"}, sql
+        assert "dedupe_key" not in sql and "trigger_snapshot_id" not in sql, sql
+        assert _conflict_target(sql) == nf.EVENT_IDENTITY
+        assert sql.count("ON CONFLICT") == 1
     assert "actor_account_id" in " ".join(shares._INSERT_SHARE_DISPATCH_SQL.split())
+
+
+def test_event_identity_is_the_index_migration_653_builds() -> None:
+    """EVENT_IDENTITY, in index order, is notification_dispatches_identity_uq: NULLS NOT DISTINCT
+    (a NULL source, property or event_ref is one value) and partial on the unmarked rows."""
+    from api import notifications as nf
+    from tests.migration_defs import MIGRATIONS
+
+    sql = " ".join((MIGRATIONS / "653_notifications_w3_event_identity.sql").read_text().split())
+    m = re.search(r"create unique index concurrently if not exists notification_dispatches_identity_uq "
+                  r"on public\.notification_dispatches \(([^)]*)\) nulls not distinct "
+                  r"where duplicate_of is null;", sql)
+    assert m, "653 no longer builds the identity index this test reads"
+    assert tuple(c.strip() for c in m.group(1).split(",")) == nf.EVENT_IDENTITY
+    # The repeat marking (a) partitions on the same eight columns, so it marks exactly what the
+    # index would refuse.
+    part = re.search(r"partition by ([^)]*?) order by dispatched_at, id\)", sql)
+    assert part and tuple(c.strip() for c in part.group(1).split(",")) == nf.EVENT_IDENTITY
+    # And the $post$ check names them in the same order.
+    post = re.search(r"v_cols is distinct from array\[([^\]]*)\]", sql)
+    assert post and tuple(c.strip(" '") for c in post.group(1).split(",")) == nf.EVENT_IDENTITY
 
 
 def test_the_change_kinds_the_producers_write_are_the_check_652_allows() -> None:
