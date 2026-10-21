@@ -327,7 +327,8 @@ def list_subscriptions(
     *,
     include_inactive: bool = True,
 ) -> list[dict[str, Any]]:
-    where = "" if include_inactive else "WHERE is_active = true"
+    # A retired watchdog (deleted, F21) leaves the list; its rows stay, hidden by VISIBLE_SQL.
+    where = "WHERE retired_at IS NULL" + ("" if include_inactive else " AND is_active = true")
     sql = (
         f"SELECT {_SUB_COLS}, "
         "  (SELECT count(*) FROM notification_dispatches d "
@@ -351,7 +352,7 @@ def get_subscription(
             f"SELECT {_SUB_COLS}, "
             "  (SELECT count(*) FROM notification_dispatches d "
             f"    WHERE d.subscription_id = %s AND {VISIBLE_SQL}) AS dispatch_count "
-            "FROM notification_subscriptions WHERE id = %s",
+            "FROM notification_subscriptions WHERE id = %s AND retired_at IS NULL",
             (subscription_id, subscription_id),
         )
         row = cur.fetchone()
@@ -413,7 +414,7 @@ def update_subscription(
     with conn.cursor() as cur:
         cur.execute(
             f"UPDATE notification_subscriptions SET {', '.join(sets)} "
-            "WHERE id = %s",
+            "WHERE id = %s AND retired_at IS NULL",
             params,
         )
         if cur.rowcount == 0:
@@ -424,10 +425,14 @@ def update_subscription(
 def delete_subscription(
     conn: "psycopg.Connection", subscription_id: str,
 ) -> bool:
-    """Hard delete. Cascade drops the dispatches via the FK."""
+    """Retire, never delete (F21; program § 3.2): the watchdog stops matching (the producers
+    read `retired_at IS NULL`), leaves list and get, and its alerts leave every read through
+    VISIBLE_SQL while the rows stay for analysis — the FK's cascade no longer erases them. True
+    when a live watchdog was retired; a missing or already retired one is the route's 404."""
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM notification_subscriptions WHERE id = %s",
+            "UPDATE notification_subscriptions SET retired_at = now(), is_active = false "
+            "WHERE id = %s AND retired_at IS NULL",
             (subscription_id,),
         )
         return cur.rowcount > 0
@@ -810,8 +815,8 @@ def _load_image_gate_settings(conn: "psycopg.Connection") -> ImageGateSettings:
     )
 
 
-# The watchdogs a producer serves: switched on and not retired (migration 652; nothing
-# retires one before W3, when deleting a watchdog becomes retiring it).
+# The watchdogs a producer serves: switched on and not retired (migration 652; deleting a
+# watchdog retires it, `delete_subscription`).
 _LIVE_WATCHDOGS_SQL = (
     "SELECT id, filter_spec, active_since FROM notification_subscriptions "
     "WHERE is_active = true AND retired_at IS NULL"

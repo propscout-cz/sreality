@@ -122,6 +122,7 @@ def delete_subscription(
     subscription_id: str,
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
+    """Retire the watchdog (F21): it stops matching and leaves the list, its alerts stay as hidden history."""
     if not nf.delete_subscription(conn, subscription_id):
         raise HTTPException(status_code=404, detail="subscription not found")
     return {"deleted": True}

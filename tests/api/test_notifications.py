@@ -652,6 +652,52 @@ def test_create_subscription_stamps_account_id() -> None:
     assert acct in insert_params
 
 
+def test_deleting_a_watchdog_retires_it_and_keeps_its_alerts() -> None:
+    """F21: a delete is an UPDATE that stamps retired_at and switches it off — no DELETE, so the
+    FK's cascade never takes the watchdog's alerts with it; a missing or already retired one
+    changes nothing (the route's 404). List, get and update see live watchdogs only, and the
+    producers read none that is retired."""
+    from api import notifications as nf
+
+    conn = _FakeConn([(lambda s: s.startswith("UPDATE notification_subscriptions"), [], 1)])
+    assert nf.delete_subscription(conn, "s-1") is True  # type: ignore[arg-type]
+    [(sql, params)] = conn.executed
+    assert sql == ("UPDATE notification_subscriptions SET retired_at = now(), is_active = false "
+                   "WHERE id = %s AND retired_at IS NULL") and params == ("s-1",)
+    assert nf.delete_subscription(_FakeConn([]), "gone") is False  # type: ignore[arg-type]
+
+    conn = _FakeConn([])
+    nf.list_subscriptions(conn)  # type: ignore[arg-type]
+    nf.list_subscriptions(conn, include_inactive=False)  # type: ignore[arg-type]
+    nf.get_subscription(conn, "s-1")  # type: ignore[arg-type]
+    nf.update_subscription(conn, "s-1", name="x")  # type: ignore[arg-type]
+    listed, active, got, updated = (s for s, _ in conn.executed)
+    assert listed.endswith("FROM notification_subscriptions WHERE retired_at IS NULL ORDER BY created_at DESC")
+    assert "WHERE retired_at IS NULL AND is_active = true ORDER BY" in active
+    assert got.endswith("FROM notification_subscriptions WHERE id = %s AND retired_at IS NULL")
+    assert updated.endswith("WHERE id = %s AND retired_at IS NULL")
+    assert nf._LIVE_WATCHDOGS_SQL.endswith("WHERE is_active = true AND retired_at IS NULL")
+
+
+def test_the_delete_route_keeps_its_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from api import notifications as nf
+    from api import tenant_pool
+    from api.main import app
+
+    retired: list[str] = []
+    monkeypatch.setattr(nf, "delete_subscription", lambda _c, sid: retired.append(sid) or sid == "s-1")
+    app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
+    try:
+        client = TestClient(app)
+        assert client.delete("/notifications/subscriptions/s-1").json() == {"deleted": True}
+        assert client.delete("/notifications/subscriptions/s-2").status_code == 404
+    finally:
+        app.dependency_overrides.pop(tenant_pool.tenant_conn, None)
+    assert retired == ["s-1", "s-2"]
+
+
 def test_matcher_lease_cas_acquires_and_yields() -> None:
     """The single-runner lease (migration 366) is a mig-279-shape CAS
     UPDATE ... RETURNING: a returned row means we hold it, no row means another
