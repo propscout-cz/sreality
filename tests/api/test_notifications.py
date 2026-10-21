@@ -994,19 +994,34 @@ def test_mark_all_seen_scoped_filters_by_source() -> None:
     assert "AND d.source_kind = %s" in scoped_sql
 
 
-# --- dismissed properties are invisible, never undetected (migration 536) ---
-
-_HIDDEN = (
-    "NOT EXISTS (SELECT 1 FROM property_dismissals_public pd "
-    "WHERE pd.property_id = d.property_id)"
-)
+# --- VISIBLE: one fragment for every in-app read, count and update (program § 3.6) ---
 
 
-def test_every_in_app_read_and_count_hides_dismissed_properties() -> None:
-    """The badge, the feed, its total, mark-all-seen and each watchdog's dispatch
-    count must agree on what is visible — a count that includes rows the list
-    hides is the badge-vs-list divergence migrations 351/378 exist to close."""
-    from api.notifications import get_subscription, list_dispatches, list_subscriptions
+def test_visible_is_one_fragment_whose_three_arms_hold_on_the_service_role() -> None:
+    """Not a marked repeat, not dismissed by the event's OWN account, not from a retired watchdog.
+    The account is named, never left to the caller's policy: W4's fan-out reads on the service
+    role, which bypasses RLS, so `property_dismissals_public` (no account column) would there
+    hide every account's alert once anyone dismissed the property."""
+    from api.notifications import VISIBLE_SQL
+
+    arms = [a.strip() for a in VISIBLE_SQL.split(" AND ", 1)]
+    assert arms[0] == "d.duplicate_of IS NULL"
+    assert ("NOT EXISTS (SELECT 1 FROM property_dismissals pd WHERE pd.property_id = d.property_id "
+            "AND pd.account_id = d.account_id AND pd.lifted_at IS NULL)") in VISIBLE_SQL
+    assert VISIBLE_SQL.endswith(
+        "AND (d.subscription_id IS NULL OR EXISTS (SELECT 1 FROM notification_subscriptions ws "
+        "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))")
+    assert "property_dismissals_public" not in VISIBLE_SQL
+
+
+def test_every_in_app_read_count_and_update_carries_visible() -> None:
+    """The badge, the feed, its total, mark-all-seen, mark-seen and each watchdog's dispatch
+    count must agree on what is visible — a count that includes rows the list hides is the
+    badge-vs-list divergence migrations 351/378 exist to close, and a bell that counts a merge's
+    marked repeat or a retired watchdog's alert would count an alert the feed never shows."""
+    from api.notifications import (
+        VISIBLE_SQL, get_subscription, list_dispatches, list_subscriptions, mark_dispatch_seen,
+    )
 
     conn = _FakeConn([])
     get_unread_count(conn)  # type: ignore[arg-type]
@@ -1016,25 +1031,44 @@ def test_every_in_app_read_and_count_hides_dismissed_properties() -> None:
     list_dispatches(conn, subscription_id="s-1", seen="unseen")  # type: ignore[arg-type]
     get_subscription(conn, "s-1")  # type: ignore[arg-type]
     list_subscriptions(conn)  # type: ignore[arg-type]
+    mark_dispatch_seen(conn, "d-1")  # type: ignore[arg-type]
     reads = [s for s, _ in conn.executed if "notification_dispatches" in s]
-    assert len(reads) == 9
+    assert len(reads) == 11
     for sql in reads:
-        assert _HIDDEN in sql, sql
+        assert VISIBLE_SQL in sql, sql
     totals = [s for s in reads if s.startswith("SELECT count(*) FROM notification_dispatches d")]
     assert len(totals) == 3  # the badge, and the two feed reads' first-page totals
+    updates = [s for s in reads if s.startswith("UPDATE notification_dispatches d SET seen_at")]
+    assert len(updates) == 3  # mark-all-seen twice, mark-seen once
 
 
-def test_a_dispatch_is_still_reachable_by_id() -> None:
-    """Detail-by-id stays reachable (a deep link from an already-sent message)."""
-    from api.notifications import mark_dispatch_seen
+def test_a_hidden_dispatch_is_a_404_on_mark_seen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repeat, a dismissed property's or a retired watchdog's dispatch is not visible, so
+    marking it seen changes nothing and finds nothing: the route answers 404 (program § 3.5:
+    the tap then lands on /notifications)."""
+    from fastapi.testclient import TestClient
 
-    conn = _FakeConn([])
-    mark_dispatch_seen(conn, "d-1")  # type: ignore[arg-type]
-    assert all("property_dismissals" not in s for s, _ in conn.executed)
+    from api import tenant_pool
+    from api.main import app
+    from api.notifications import VISIBLE_SQL, mark_dispatch_seen
+
+    conn = _FakeConn([(lambda s: s.startswith("UPDATE notification_dispatches d"), [], 0)])
+    assert mark_dispatch_seen(conn, "d-1") is None  # type: ignore[arg-type]
+    update, fetch = (s for s, _ in conn.executed)
+    assert update == ("UPDATE notification_dispatches d SET seen_at = now() "
+                      f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}")
+    assert fetch.endswith(f"WHERE d.id = %s AND {VISIBLE_SQL}")
+
+    app.dependency_overrides[tenant_pool.tenant_conn] = lambda: _FakeConn([])
+    try:
+        res = TestClient(app).post("/notifications/dispatches/d-1/mark-seen")
+    finally:
+        app.dependency_overrides.pop(tenant_pool.tenant_conn, None)
+    assert res.status_code == 404 and res.json() == {"detail": "dispatch not found"}
 
 
 def test_detection_never_consults_dismissals() -> None:
-    """Suppressing an INSERT would lose the event for good on undo: `:new:` dedupe keys are
+    """Suppressing an INSERT would lose the event for good on undo: a 'new' identity is
     once-ever and the `reactivated` detector keys off a prior `inactive` dispatch, so no
     producer statement reads a dismissal."""
     import inspect

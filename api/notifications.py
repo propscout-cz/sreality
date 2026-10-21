@@ -301,14 +301,24 @@ def _row_to_sub(row: tuple[Any, ...], dispatch_count: int) -> SubscriptionRow:
     )
 
 
-# Every in-app read and count of `notification_dispatches d` hides a dispatch
-# about a property the caller dismissed (migration 536). Detection still writes
-# it — the matcher's cursor and the `reactivated` detector depend on every row
-# existing — so an undo brings it back intact. RLS-scoped: the view is the
-# caller's own; a system_health row (property_id NULL) never matches.
-_NOT_DISMISSED = (
-    "NOT EXISTS (SELECT 1 FROM property_dismissals_public pd "
-    "WHERE pd.property_id = d.property_id)"
+# VISIBLE (program § 3.6): what an account sees of its alerts, ONE fragment over
+# `notification_dispatches d`, carried by every in-app read, count and update (the feed and its
+# total, the unread count, mark-all-seen, mark-seen, each watchdog's count) and by W4's push
+# fan-out. Three arms, each answering the same under RLS and on the service role:
+#   - not a marked repeat (`duplicate_of`, written by a merge since migration 653);
+#   - not about a property the EVENT'S OWN account dismissed (migration 536's active row, probed
+#     on its (property_id, account_id) index: the service role bypasses RLS, so the account is
+#     named, never left to the caller's policy);
+#   - not from a retired watchdog (a delete retires it, F21; its rows stay for analysis).
+# Detection still writes every row — the `reactivated` detector reads prior ones — so an undo
+# brings it back intact; a system_health row (property_id NULL) is never dismissed.
+VISIBLE_SQL = (
+    "d.duplicate_of IS NULL "
+    "AND NOT EXISTS (SELECT 1 FROM property_dismissals pd "
+    "WHERE pd.property_id = d.property_id AND pd.account_id = d.account_id "
+    "AND pd.lifted_at IS NULL) "
+    "AND (d.subscription_id IS NULL OR EXISTS (SELECT 1 FROM notification_subscriptions ws "
+    "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))"
 )
 
 
@@ -322,7 +332,7 @@ def list_subscriptions(
         f"SELECT {_SUB_COLS}, "
         "  (SELECT count(*) FROM notification_dispatches d "
         "     WHERE d.subscription_id = notification_subscriptions.id "
-        f"    AND {_NOT_DISMISSED}) AS dispatch_count "
+        f"    AND {VISIBLE_SQL}) AS dispatch_count "
         "FROM notification_subscriptions "
         f"{where} "
         "ORDER BY created_at DESC"
@@ -340,7 +350,7 @@ def get_subscription(
         cur.execute(
             f"SELECT {_SUB_COLS}, "
             "  (SELECT count(*) FROM notification_dispatches d "
-            f"    WHERE d.subscription_id = %s AND {_NOT_DISMISSED}) AS dispatch_count "
+            f"    WHERE d.subscription_id = %s AND {VISIBLE_SQL}) AS dispatch_count "
             "FROM notification_subscriptions WHERE id = %s",
             (subscription_id, subscription_id),
         )
@@ -519,7 +529,7 @@ def list_dispatches(
     shift as new dispatches prepend). `id` is a uuid — fine as a
     deterministic tiebreaker. `total` is computed once, on the first page.
     """
-    where: list[str] = [_NOT_DISMISSED]
+    where: list[str] = [VISIBLE_SQL]
     params: dict[str, Any] = {}
     if subscription_id is not None:
         where.append("d.subscription_id = %(subscription_id)s")
@@ -607,10 +617,11 @@ def _dispatch_row_to_dict(cols: list[str], row: tuple[Any, ...]) -> dict[str, An
 def mark_dispatch_seen(
     conn: "psycopg.Connection", dispatch_id: str,
 ) -> dict[str, Any] | None:
+    """Mark one visible dispatch seen and return it; None (the route's 404) for a hidden one."""
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE notification_dispatches SET seen_at = now() "
-            "WHERE id = %s AND seen_at IS NULL",
+            "UPDATE notification_dispatches d SET seen_at = now() "
+            f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}",
             (dispatch_id,),
         )
     return _fetch_dispatch(conn, dispatch_id)
@@ -622,7 +633,7 @@ def _fetch_dispatch(
     sql = (
         f"SELECT {_DISPATCH_SELECT} "
         f"{_DISPATCH_FROM}"
-        "WHERE d.id = %s"
+        f"WHERE d.id = %s AND {VISIBLE_SQL}"
     )
     with conn.cursor() as cur:
         cur.execute(sql, (dispatch_id,))
@@ -638,7 +649,7 @@ def get_unread_count(conn: "psycopg.Connection") -> dict[str, int]:
     with conn.cursor() as cur:
         cur.execute(
             "SELECT count(*) FROM notification_dispatches d "
-            f"WHERE d.seen_at IS NULL AND {_NOT_DISMISSED}"
+            f"WHERE d.seen_at IS NULL AND {VISIBLE_SQL}"
         )
         row = cur.fetchone()
     return {"unread_count": int(row[0]) if row else 0}
@@ -651,12 +662,12 @@ def mark_all_seen(
 ) -> int:
     """Mark every visible unseen dispatch (optionally scoped to a source) as seen.
 
-    A dismissed property's dispatches are not visible, so they keep their unseen
-    state for when the dismissal is undone.
+    A hidden dispatch (VISIBLE_SQL: a repeat, a dismissed property's, a retired watchdog's) keeps
+    its unseen state, so a dismissal undone brings it back unread.
     """
     sql = (
         "UPDATE notification_dispatches d SET seen_at = now() "
-        f"WHERE d.seen_at IS NULL AND {_NOT_DISMISSED}"
+        f"WHERE d.seen_at IS NULL AND {VISIBLE_SQL}"
     )
     with conn.cursor() as cur:
         if source_kind == "all":
