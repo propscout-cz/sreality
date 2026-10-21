@@ -8,11 +8,14 @@ import { act, render, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AuthRetryableFetchError } from '@supabase/supabase-js';
+
 import { installPushFakes, type PushFakes } from '@/test/pushFakes';
 
 const h = vi.hoisted(() => ({
   listeners: [] as Array<(event: string, session: unknown) => void>,
   session: null as unknown,
+  error: null as unknown,
   log: null as string[] | null,
 }));
 
@@ -43,7 +46,8 @@ vi.mock('./supabase', () => {
     supabase: {
       from: table,
       auth: {
-        getSession: () => Promise.resolve({ data: { session: h.session }, error: null }),
+        getSession: () =>
+          Promise.resolve({ data: { session: h.session }, error: h.session ? null : h.error }),
         onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
           h.listeners.push(cb);
           return { data: { subscription: { unsubscribe: () => {} } } };
@@ -103,6 +107,7 @@ const emit = (event: string, session: unknown) =>
 beforeEach(() => {
   localStorage.clear();
   h.listeners = [];
+  h.error = null;
   fakes = installPushFakes({ subscribed: true, permission: 'granted' });
   h.log = fakes.log;
   writePushOwner('operator');
@@ -159,6 +164,18 @@ describe('push binding follows identity', () => {
     await waitFor(() => expect(fakes.subscription).toBeNull());
     expect(fakes.log).toEqual(['unsubscribe']);
     expect(api.putPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('a launch that could not refresh its session keeps the subscription for the refresh that works', async () => {
+    h.error = new AuthRetryableFetchError('Failed to fetch', 0);
+    renderSignedIn(null);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(fakes.subscription).not.toBeNull();
+    expect(fakes.log).toEqual([]);
+
+    emit('TOKEN_REFRESHED', sessionFor('operator'));
+    await waitFor(() => expect(fakes.log).toEqual(['PUT']));
+    expect(fakes.subscription).not.toBeNull();
   });
 
   it("a colleague's session found at launch never inherits the operator's subscription", async () => {

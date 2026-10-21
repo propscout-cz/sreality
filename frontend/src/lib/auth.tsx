@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Session, User } from '@supabase/supabase-js';
+import { isAuthRetryableFetchError, type Session, type User } from '@supabase/supabase-js';
 import { resetActiveBoard } from './acting';
 import { supabase } from './supabase';
 import { isTransientApiError } from './api';
@@ -50,15 +50,22 @@ export const sessionAgendasKey = (userId: string | null) =>
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  /* No session, but not certainly nobody: a launch whose token refresh failed in
+   * transit (offline, a captive Wi-Fi, an Auth 5xx) is answered without a
+   * session while the stored one is kept for the next try. Cleared by any
+   * session or a SIGNED_OUT, the two certain answers. */
+  const [sessionUncertain, setSessionUncertain] = useState(false);
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data, error }) => {
       setSession(data.session);
+      setSessionUncertain(data.session == null && isAuthRetryableFetchError(error));
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       setSession(next);
+      if (next || event === 'SIGNED_OUT') setSessionUncertain(false);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -131,12 +138,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * happens through a token change rather than an explicit sign-out.
    *
    * Push follows identity the same way (AUDIT F18): on any change of user,
-   * sign-out included, and on a launch with nobody signed in, this device's
-   * subscription ends locally (no JWT needed) and the icon badge clears, so no
-   * subscription outlives its user. Identity BECOMING a user (the launch, a
-   * sign-in) re-sends it instead (lib/push `resyncPush`; idempotent, never
-   * prompts). None of it runs before the stored session is read (`loading`):
-   * the null it starts from is not yet anyone. */
+   * sign-out included, and on a launch with CERTAINLY nobody signed in, this
+   * device's subscription ends locally (no JWT needed) and the icon badge
+   * clears, so no subscription outlives its user. A launch that could not
+   * refresh its session (`sessionUncertain`) ends nothing: its user is most
+   * likely still there. Identity BECOMING a user (the launch, a sign-in)
+   * re-sends it instead (lib/push `resyncPush`; idempotent, never prompts).
+   * None of it runs before the stored session is read (`loading`): the null it
+   * starts from is not yet anyone. */
   const prevUserId = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
@@ -151,10 +160,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       void endPushHere();
     } else if (prev === null && userId !== null) {
       void resyncPush();
-    } else if (prev === null) {
+    } else if (prev === null && !sessionUncertain) {
+      syncAppBadge(0);
       void endPushHere();
     }
-  }, [loading, userId, queryClient]);
+  }, [loading, userId, sessionUncertain, queryClient]);
 
   const value = useMemo<AuthState>(
     () => ({

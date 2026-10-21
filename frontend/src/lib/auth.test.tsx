@@ -9,11 +9,13 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, render, waitFor } from '@testing-library/react';
 import { ACTIVE_BOARD_KEY, EDIT_AS_OWNER_KEY, getActiveBoard, setActiveBoard, setEditAsOwner } from './acting';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthRetryableFetchError } from '@supabase/supabase-js';
 
 const h = vi.hoisted(() => ({
   /* Emitted auth-state callbacks, so a test can fire events itself. */
   listeners: [] as Array<(event: string, session: unknown) => void>,
   initialSession: null as unknown,
+  initialError: null as unknown,
   reads: [] as string[],
   /* Per relation, envelopes served (in order) before the real rows. */
   failNext: {} as Record<string, unknown[]>,
@@ -47,7 +49,8 @@ vi.mock('./supabase', () => {
     supabase: {
       from: table,
       auth: {
-        getSession: () => Promise.resolve({ data: { session: h.initialSession } }),
+        getSession: () =>
+          Promise.resolve({ data: { session: h.initialSession }, error: h.initialError }),
         onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
           h.listeners.push(cb);
           return { data: { subscription: { unsubscribe: () => {} } } };
@@ -92,6 +95,7 @@ beforeEach(() => {
   h.listeners = [];
   h.reads = [];
   h.initialSession = null;
+  h.initialError = null;
   h.failNext = {};
   vi.mocked(resyncPush).mockClear();
   vi.mocked(endPushHere).mockClear();
@@ -283,11 +287,29 @@ describe('AuthProvider push binding', () => {
     expect(resyncPush).not.toHaveBeenCalled();
   });
 
-  it('ends a subscription left behind when the app launches signed out', async () => {
+  it('ends a subscription left behind, and clears the badge, when the app launches signed out', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     renderAuth(qc);
     await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
     expect(resyncPush).not.toHaveBeenCalled();
+  });
+
+  /* A launch whose refresh failed in transit answers "no session" with an
+   * error while supabase-js keeps the stored one: not certainly nobody. */
+  it('ends nothing on a launch that could not refresh its session, until it is sure', async () => {
+    h.initialError = new AuthRetryableFetchError('Failed to fetch', 0);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(endPushHere).not.toHaveBeenCalled();
+    expect(syncAppBadge).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_OUT', null);
+    });
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
   });
 
   it('leaves it alone on the events a session emits for the same user', async () => {
