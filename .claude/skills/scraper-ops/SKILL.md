@@ -428,8 +428,8 @@ workflow (`gh/<stem>`, with its reason line), the poller (`gh/poller`), pg_cron 
 sticky reference, check timeouts per host, the oldest open transaction, connections and the worker's memory; `llm`, credit per
 provider, error share and starvation per (provider, `called_for`), 24 h spend. Thresholds: `THRESHOLDS`, no override.
 **Push check (notifications push W4, `scripts/checks/notifications.py`, on the worker; key `notifications`, 5 s budget):**
-`push/stall` (a delivery due > 10 min), `push/recall` (a VISIBLE unseen event < 24 h, an older live device, no ledger row after 5 min;
-not judged while braked), `push/failures` (≥ 3 terminal in 24 h), `push/unconfigured` (Watch: braked while a device waits).
+`push/stall` (a delivery due > 10 min, its device not held), `push/recall` (a VISIBLE unseen event < 24 h, an older live device, no ledger
+row after 5 min; neither judged while braked), `push/failures` (≥ 3 terminal in 24 h), `push/unconfigured` (Watch: braked while a device waits).
 **Portal checks (wave 4, `scripts/checks/{scraping,publishing,delisting}.py`, on the worker; cells `<portal>/<arm>`):**
 `scraping` (walks: hours since a unit's newest end-reached walk against the portal's own walk gap; inflow; fetch errors;
 missing), `publishing` (queue age, Browse visibility of new ads and of the stock, photos, `fleet/dirty`), `delisting`

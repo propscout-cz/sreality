@@ -6,7 +6,7 @@ Four cells over the push ledger (migration 654):
                      before it, and no delivery row for that pair 5 min after the event (fan-out lost a push).
   push/failures      Problem: 3 or more deliveries failed for good in 24 h (Apple's reason words in the message).
   push/unconfigured  Watch: the push lane is braked (no VAPID_PRIVATE_KEY on the worker) while a live device waits.
-While the lane is braked, recall is not judged: the brake is the cell that says so. The three-strike rule (iOS drops
+While the lane is braked, stall and recall are not judged: the brake is the cell that says so. The three-strike rule (iOS drops
 an origin's subscriptions after silent pushes) has no server signal; it is prevented in sw.js, never measured here.
 The statements live beside the pass they judge (api/push_delivery.py) and are imported when the check runs: the
 worker has the api extra, while GitHub's canary imports this registry with the base dependencies alone.
@@ -51,17 +51,21 @@ def check_notifications(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]
     not_measured: dict[str, str] = {}
     cells: list[dict[str, Any]] = []
 
-    stalled, oldest = fetchone(conn, pd.STALL_SQL, {"stall_min": stall_min})
-    stalled = int(stalled or 0)
-    cells.append(cell(
-        "push/stall", "fail" if stalled else "ok",
-        f"{stalled} deliveries due for over {stall_min} min (the oldest {ago(float(oldest))})" if stalled
-        else f"no delivery due for over {stall_min} min", value=stalled, unit="rows",
-        facts={"devices_live": devices}))
+    braked_cell = "not judged while the lane is braked (push/unconfigured)"
+    if braked:
+        # Braked, nothing is claimed, so every row is due by design: the brake is told once, by its own cell.
+        cells.append(cell("push/stall", "ok", braked_cell, facts={"braked": True, "devices_live": devices}))
+    else:
+        stalled, oldest = fetchone(conn, pd.STALL_SQL, {"stall_min": stall_min})
+        stalled = int(stalled or 0)
+        cells.append(cell(
+            "push/stall", "fail" if stalled else "ok",
+            f"{stalled} deliveries due for over {stall_min} min (the oldest {ago(float(oldest))})" if stalled
+            else f"no delivery due for over {stall_min} min", value=stalled, unit="rows",
+            facts={"devices_live": devices}))
 
     if braked:
-        cells.append(cell("push/recall", "ok", "not judged while the lane is braked (push/unconfigured)",
-                          facts={"braked": True}))
+        cells.append(cell("push/recall", "ok", braked_cell, facts={"braked": True}))
     else:
         missing, first = fetchone(conn, pd.RECALL_SQL, {"grace_min": grace_min})
         missing = int(missing or 0)

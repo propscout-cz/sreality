@@ -64,14 +64,19 @@ def test_three_terminal_failures_a_day_are_a_problem(failed: int, status: str) -
     assert _cells(out)["push/failures"] == (status, f"{failed} pushes failed for good in 24 h (400, BadDeviceToken)")
 
 
-def test_the_brake_with_a_device_waiting_is_watch_and_recall_is_not_judged() -> None:
-    conn = _Conn(_answers(last={"unconfigured": True}, devices=2, recall=(7, 600.0)))
+def test_the_brake_with_a_device_waiting_is_watch_and_neither_stall_nor_recall_is_judged() -> None:
+    """Braked, nothing is claimed, so rows sit due and events have no ledger row by design: one Watch says so."""
+    conn = _Conn(_answers(last={"unconfigured": True}, devices=2, recall=(7, 600.0), stall=(12, 3_600.0)))
     out = nc.check_notifications(conn, T)
     cells = _cells(out)
-    assert out["status"] == "warn"
+    assert out["status"] == "warn" and out["value"] == 1
     assert cells["push/unconfigured"][0] == "warn" and "2 devices are registered" in cells["push/unconfigured"][1]
-    assert cells["push/recall"] == ("ok", "not judged while the lane is braked (push/unconfigured)")
-    assert pd.RECALL_SQL not in [sql for sql, _p, _a in conn.sent]
+    for subject in ("push/stall", "push/recall"):
+        assert cells[subject] == ("ok", "not judged while the lane is braked (push/unconfigured)"), subject
+        [facts] = [c["facts"] for c in out["details"]["cells"] if c["subject"] == subject]
+        assert facts["braked"] is True
+    sent = [sql for sql, _p, _a in conn.sent]
+    assert pd.RECALL_SQL not in sent and pd.STALL_SQL not in sent
 
 
 def test_the_brake_with_no_device_is_ok() -> None:
