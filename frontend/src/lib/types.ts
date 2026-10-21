@@ -138,14 +138,6 @@ export interface ListingFreshnessCheckPublic {
   outcome: string;
 }
 
-export interface ListingFetchFailurePublic {
-  sreality_id: number;
-  attempts: number;
-  first_failure_at: string;
-  last_failure_at: string;
-  given_up: boolean;
-}
-
 export interface ImagePublic {
   id: number;
   sreality_id: number;
