@@ -79,8 +79,11 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
   a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
   ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's
-  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) and the API's
-  `no account for caller` stay English until it.
+  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) stay English until
+  it. **Not ruled, the operator's OK owed:** the Valuo routes now answer a caller without an account with the one
+  shared 400, English `no account for caller`, where the section said „Přihlášený uživatel nemá účet, ocenění nelze
+  uložit.“ (no one reaches it: signup seeds an account, 0 of 5 users lack one on 2026-10-21); declined → Valuo keeps a
+  hand-resolved Czech 400, named in `tenancy.md` shape 3.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
