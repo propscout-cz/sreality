@@ -201,7 +201,7 @@ def test_the_broker_lookup_judges_the_brokers_own_ads(conn, case: dict[str, Any]
 def test_the_rebuild_builds_one_partial_index_per_portal(conn) -> None:
     """The one-portal "Newest first" page and count read these (migration 590). A tenth
     portal is offered only with its line here (tests/test_recompute_property_stats.py).
-    Live, they exist once `rebuild_browse_list()` has run since the portal's migration (648
+    Live, they exist once `rebuild_browse_list()` has run since the portal's migration (649
     forces no rebuild); in CI's migrations lane test_browse_map_cells_plan.py's fixture
     commits one earlier in the same job."""
     with conn.cursor() as cur:
@@ -235,7 +235,7 @@ def test_the_projection_and_the_read_model_have_one_shape(conn) -> None:
     assert "asset_id" not in names
     # 590's twelve are one contiguous block in portal order; later columns may follow it (584's
     # recipe appends every new projection column LAST, so the block is not pinned to the end),
-    # and a portal since 590 (`web`, migration 648) has its date among them, in portal order.
+    # and a portal since 590 (`web`, migration 649) has its date among them, in portal order.
     at = names.index("all_sources")
     assert names[at:at + 12] == ["all_sources", "active_sources", "source_count",
                                  *(f"newest_ad_at_{p}" for p in _PORTALS[:9])]

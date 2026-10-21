@@ -1385,7 +1385,7 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
     """MS19 (migration 590): a PORTAL_OPTIONS code is a portal Browse can order by only when
     the latest browse_projection projects its date and the latest rebuild_browse_list builds
     and renames its partial index. With the properties column above, a portal needs all three
-    before it can be offered — the tenth (`web`) got them from migration 648."""
+    before it can be offered — the tenth (`web`) got them from migration 649."""
     from tests.migration_defs import latest_definition
     from tests.test_browse_read_path_guardrail import _latest_migration_defining
     from tests.test_location_w3_projection import _columns, _sql
@@ -1405,7 +1405,7 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
     after = columns[at + len(first) + 3:]
     assert [c for c in after if c.startswith("newest_ad_at_")] == [
         f"newest_ad_at_{c}" for c in later]
-    # The function's own body: a migration's gates may name the index too (648's do).
+    # The function's own body: a migration's gates may name the index too (649's do).
     text = " ".join(latest_definition("rebuild_browse_list").read_text(encoding="utf-8").split())
     at = text.lower().index("create or replace function public.rebuild_browse_list(")
     rebuild = text[at:text.index("$function$;", at)]

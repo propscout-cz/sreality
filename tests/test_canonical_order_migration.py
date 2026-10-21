@@ -1,7 +1,7 @@
 """Migration 588: an inlinable order function with 561's ACL; nine dates in one catalog-only ALTER.
 
 588 cannot be edited (rule 1), so it is pinned to the nine portals it shipped with: the first nine
-PORTAL_OPTIONS, in order. A later portal's date arrives in its own migration (web's in 648), and
+PORTAL_OPTIONS, in order. A later portal's date arrives in its own migration (web's in 649), and
 tests/test_recompute_property_stats.py checks every code's column against the whole history."""
 
 from __future__ import annotations

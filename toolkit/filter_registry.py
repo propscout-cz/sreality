@@ -462,7 +462,7 @@ PRICE_CHANGE_WINDOW_OPTIONS: tuple[EnumOption, ...] = (
 
 # Source portals: one per ingesting portal, values = `listings.source` (pinned to
 # PORTAL_CLASSES by tests/toolkit/test_filter_registry.py). Append-only: the order is the
-# `newest_ad_at_<portal>` column order of the read model (migrations 588/590, then 648).
+# `newest_ad_at_<portal>` column order of the read model (migrations 588/590, then 649).
 PORTAL_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("sreality", "Sreality", "Sreality"),
     EnumOption("bazos", "Bazoš", "Bazoš"),

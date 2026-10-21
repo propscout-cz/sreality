@@ -63,7 +63,7 @@ begin
      and not exists (select 1 from pg_attribute
                       where attrelid = 'public.browse_projection'::regclass
                         and attname = 'newest_ad_at_web' and not attisdropped) then
-    raise exception '648 refused: browse_projection is not 636''s body nor this file''s (md5 %)',
+    raise exception '649 refused: browse_projection is not 636''s body nor this file''s (md5 %)',
       md5(pg_get_viewdef('public.browse_projection'::regclass));
   end if;
   if coalesce((select string_agg(md5(p.prosrc), ',') from pg_proc p
@@ -72,7 +72,7 @@ begin
      and coalesce((select p.prosrc from pg_proc p
                     where p.oid = to_regprocedure('public.rebuild_browse_list()')), '')
          not like '%browse_list_next_newest_ad_at_web_idx%' then
-    raise exception '648 refused: rebuild_browse_list() is not 630''s body nor this file''s, or has two overloads';
+    raise exception '649 refused: rebuild_browse_list() is not 630''s body nor this file''s, or has two overloads';
   end if;
 end
 $pre$;
@@ -93,7 +93,7 @@ on conflict (source) do nothing;
 alter table public.properties
   add column if not exists newest_ad_at_web timestamptz;
 
-comment on column public.properties.newest_ad_at_web is 'MS19 (migration 648): first sighting of this property''s newest web ad (any other site, a pasted advert), active or not; NULL with none. Written by the rollup.';
+comment on column public.properties.newest_ad_at_web is 'MS19 (migration 649): first sighting of this property''s newest web ad (any other site, a pasted advert), active or not; NULL with none. Written by the rollup.';
 
 commit;
 
@@ -110,9 +110,9 @@ begin
   if not exists (select 1 from pg_attribute
                   where attrelid = 'public.properties'::regclass
                     and attname = 'newest_ad_at_web' and not attisdropped) then
-    raise exception '648 refused: properties.newest_ad_at_web is missing (TX1 did not commit)';
+    raise exception '649 refused: properties.newest_ad_at_web is missing (TX1 did not commit)';
   end if;
-  perform set_config('web648.pre', jsonb_build_object(
+  perform set_config('web649.pre', jsonb_build_object(
       'bp_acl', (select coalesce(c.relacl::text, '-') || ' ' || coalesce(c.reloptions::text, '-')
                    from pg_class c where c.oid = 'public.browse_projection'::regclass),
       'bl_acl', (select coalesce(c.relacl::text, '-')
@@ -335,7 +335,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 do $post$
 declare
-  v_pre jsonb := current_setting('web648.pre')::jsonb;
+  v_pre jsonb := current_setting('web649.pre')::jsonb;
   v_rebuild oid := to_regprocedure('public.rebuild_browse_list()');
   rel text;
   v_bp text;
@@ -344,7 +344,7 @@ begin
   foreach rel in array array['public.properties', 'public.browse_list', 'public.browse_projection'] loop
     if not exists (select 1 from pg_attribute
                     where attrelid = rel::regclass and attname = 'newest_ad_at_web' and not attisdropped) then
-      raise exception '648 did not land: % lacks newest_ad_at_web', rel;
+      raise exception '649 did not land: % lacks newest_ad_at_web', rel;
     end if;
   end loop;
   select string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod), ', ' order by a.attnum)
@@ -354,7 +354,7 @@ begin
     into v_bl from pg_attribute a
    where a.attrelid = 'public.browse_list'::regclass and a.attnum > 0 and not a.attisdropped;
   if v_bp is distinct from v_bl or v_bp not like '%, newest_ad_at_web timestamp with time zone' then
-    raise exception '648 did not land: browse_list and browse_projection differ, or the date is not last';
+    raise exception '649 did not land: browse_list and browse_projection differ, or the date is not last';
   end if;
   if (select coalesce(c.relacl::text, '-') || ' ' || coalesce(c.reloptions::text, '-')
         from pg_class c where c.oid = 'public.browse_projection'::regclass) is distinct from v_pre ->> 'bp_acl'
@@ -363,22 +363,22 @@ begin
      or (select p.prosecdef::text || ' ' || coalesce(p.proconfig::text, '-') || ' '
                 || coalesce(p.proacl::text, '-')
            from pg_proc p where p.oid = v_rebuild) is distinct from v_pre ->> 'fn' then
-    raise exception '648 did not land: an ACL, a reloption or the rebuild''s posture changed';
+    raise exception '649 did not land: an ACL, a reloption or the rebuild''s posture changed';
   end if;
   if not (select prosecdef from pg_proc where oid = v_rebuild)
      or has_function_privilege('authenticated', v_rebuild, 'execute')
      or has_function_privilege('anon', v_rebuild, 'execute') then
-    raise exception '648 did not land: rebuild_browse_list() is callable by a browser role';
+    raise exception '649 did not land: rebuild_browse_list() is callable by a browser role';
   end if;
   if (select prosrc from pg_proc where oid = v_rebuild)
        not like '%create index browse_list_next_newest_ad_at_web_idx on browse_list_next (category_main, category_type, newest_ad_at_web desc, property_id desc) where newest_ad_at_web is not null%'
      or (select prosrc from pg_proc where oid = v_rebuild)
        not like '%alter index browse_list_next_newest_ad_at_web_idx rename to browse_list_newest_ad_at_web_idx%' then
-    raise exception '648 did not land: rebuild_browse_list() does not build the web index';
+    raise exception '649 did not land: rebuild_browse_list() does not build the web index';
   end if;
   if not exists (select 1 from public.portals
                   where source = 'web' and kind = 'scraper' and supports_complete_walk) then
-    raise exception '648 did not land: no web scraper row in portals';
+    raise exception '649 did not land: no web scraper row in portals';
   end if;
 end
 $post$;
