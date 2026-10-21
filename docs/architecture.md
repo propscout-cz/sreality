@@ -1705,7 +1705,8 @@ renumber.** Navigate by area:
     ruling is negative go through `record_rulings` under the note `operator merge <group>` (a
     negative inside one member is not between what it joins and stays), each negative set
     ruling spanning two members gets its cluster `same`, and `rulings_taken_back` counts what it
-    took back (`merge_preview`, `GET /properties/merge`, reads the same count before the click);
+    took back (`merge_preview`, `GET /properties/merge?letters=`, reads the same count per
+    letter before the click);
     an engine merge rules nothing. Then
     `properties_changed` (`scripts/recompute_property_stats.py`, the dirty drain's own
     after-step: the scoped rollup, the Browse row, the broker queue) runs ONCE over the survivor
@@ -1786,10 +1787,18 @@ renumber.** Navigate by area:
     This guard is deliberately *at the merge*, not in the caller, so no future decision layer
     can route around it.
     **Who orders a merge today.** The operator — and, only inside the area its scope row
-    names, the AUTODEDUP apply path below. The operator's path: Browse's `mergeMode` (checkbox
-    multi-select → merge; every card keeps its pipeline, collection, dismissal and note marks,
-    read-only, and the bar lists each ticked property with its marks, MS16) posts to
-    `POST /properties/merge`; **`POST /properties/{id}/split`** (MS18,
+    names, the AUTODEDUP apply path below. The operator's path: Browse's merge mode, ONE
+    statement of letters over the cards (`lib/useMergeMode`: a letter key marks the focused
+    card — the pointer focuses the card it is over, Tab moves card to card — a click writes the
+    active letter; every card keeps its pipeline, collection, dismissal and note marks,
+    read-only, and the bar lists each letter's properties with their marks, MS16) posts
+    `{letters: {property_id: "A"}}` to `POST /properties/merge`, the split's statement shape and
+    codec (`letter_tokens`); `property_identity.merge_letters` merges each letter held by two or
+    more properties through `merge_property_set` under its own group, all in ONE transaction
+    under ONE up-front row lock over every property of the statement in id order (the order
+    every writer locks in, so no statement meets another merge in the opposite order), a
+    refusal writing nothing and naming the letter; no ruling crosses letters; the answer is one
+    receipt per letter. The split's join of a letter is the same call. **`POST /properties/{id}/split`** (MS18,
     `toolkit.property_split.split_property`) is the operator's ONE split, by letters:
     `{letters, choices?, reason?, expect}`. `letters` names every advert of the property with a
     letter A–Z (a newcomer the lane merged in since is a 409 `stale`); one letter keeps the
@@ -1820,10 +1829,12 @@ renumber.** Navigate by area:
     and the `same` and taken-back counts of its joins). It has no undo: one merge takes a split
     back (MS12). `GET
     /properties/{id}/origins` names each advert's origin (`api/property_merge.py`). The merge
-    route answers with its receipt (MS15): the acting account's MOVED items from the carry
-    record (notes counted, the stage, collections and tags by name) and `hidden_for_you`
-    (MS13), both null when that read fails after the merge committed (the account is read
-    before it); a category clash is a 409 `{code, message, ids}` in Czech (`MERGE_ENDING`).
+    route answers with one receipt per letter (MS15): the acting account's MOVED items from
+    the carry record (notes counted, the stage, collections and tags by name) and
+    `hidden_for_you` (MS13), both null when that read fails after the merge committed (the
+    account is read before it); a category clash is a 409 `{code, message, ids}` in Czech
+    (`LETTER_ENDING`, the split's own sentence, prefixed with the letter when the statement
+    has several).
     Browse merges through `lib/useMergeProperties` (the receipt toast, the refresh, no
     `onError`, so a refusal is the app MutationCache's one toast). **Every operator merge and split is a ruling (decision 8)**
     (`toolkit.property_identity.record_rulings`, same transaction, only for `source='operator'`:
