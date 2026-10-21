@@ -1,15 +1,17 @@
 /* The phone frame around the routes (#1766, design #1762): a 3.5 rem header with
  * the page's title, a back affordance off the tab roots, the bell (the unread
  * count, opening Notifications; notifications push W5a, ruling R4) and the
- * account button; a bottom tab bar for the five areas (W1's four and Odkaz, W2 #1767). Shell.tsx picks this frame or the
- * desktop one by `usePhoneShell()`; the route body is the same either way.
+ * account button, whose sheet holds the theme, this iPhone's push switch (W5b),
+ * the desktop view and sign-out; a bottom tab bar for the five areas (W1's four
+ * and Odkaz, W2 #1767). Shell.tsx picks this frame or the desktop one by
+ * `usePhoneShell()`; the route body is the same either way.
  *
  * THE HEADER IS EXACTLY `h-14`, as the desktop TopBar is (Shell.tsx explains
  * why): Filters, BrowseExperience and Pipeline pin panes at `top-14` /
  * `calc(100dvh-3.5rem)`, and those desktop pages still render inside this
  * frame on the phone. */
 
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 
 import CollectionMark from '@/components/CollectionMark';
@@ -17,6 +19,7 @@ import SkipLink from '@/components/SkipLink';
 import { FunnelIcon } from '@/components/icons';
 import { useAuth } from '@/lib/auth';
 import { APP_SHORT } from '@/lib/brand';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { czPlural } from '@/lib/format';
 import { useTitleSegment } from '@/lib/pageTitle';
 import {
@@ -36,6 +39,9 @@ import { MAIN_ID } from '@/lib/useRouteFocus';
 
 import BottomSheet, { SheetContext } from './BottomSheet';
 import { BackIcon, BellIcon, LinkIcon, PersonIcon, RollIcon } from './phoneIcons';
+
+/* The account sheet's push row (W5b): loaded when the sheet opens. */
+const PushSwitch = lazyChunk(() => import('./PushSwitch'));
 
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
@@ -274,6 +280,8 @@ const THEMES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
 function AccountSheet({ onClose }: { onClose: () => void }) {
   const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
+  /* Push is the bell's other half: where the plan hides the feed, no switch. */
+  const { visible: notifications } = useUnreadCount();
   return (
     <BottomSheet
       label="Účet"
@@ -310,6 +318,13 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       <div className="mt-3 border-t border-[var(--color-rule-soft)]">
+        {notifications && (
+          <Suspense
+            fallback={<div aria-hidden className="h-11 border-b border-[var(--color-rule-soft)]" />}
+          >
+            <PushSwitch />
+          </Suspense>
+        )}
         {/* The phone has no Admin menu, and system alerts never reach the bell
           * (ruling R2b), so this row is its one way to Health; admin-only, as
           * the page is. */}
