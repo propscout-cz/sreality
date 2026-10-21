@@ -807,7 +807,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the twelve worker budgets (675 s) outgrow one pass inside the watcher's 600 s
+    # Wave 6: the thirteen worker budgets (680 s) outgrow one pass inside the watcher's 600 s
     # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
     alarms = [c for c in hosted if c.cls == "alarm"]

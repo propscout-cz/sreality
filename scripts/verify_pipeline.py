@@ -50,6 +50,7 @@ from scripts.checks.clock import (
 )
 from scripts.checks.dedup import check_dedup
 from scripts.checks.delisting import check_delisting
+from scripts.checks.notifications import check_notifications
 from scripts.checks.platform import (
     check_capacity,
     check_jobs,
@@ -379,6 +380,14 @@ THRESHOLDS: dict[str, Any] = {
     # Stock: Watch past an ETA of 14 d, waiting / readings in 24 h (4.3 d on 10-19: 55,285 waiting
     # at 12,790 a day; the 10-03 credit outage read 324 d).
     "text_extraction_eta_warn_d": 14,
+    # --- notifications (platform alarm, on the worker): does every push leave ----------------
+    # A delivery due longer than this is a lane that stopped claiming (it ticks every 15 s and a lease
+    # is 2 min, so a healthy row is never due past ~2.5 min).
+    "notifications_stall_min": 10,
+    # Fan-out runs every 15 s: an event 5 min old with an older live device and no ledger row was lost.
+    "notifications_recall_grace_min": 5,
+    # Problem at 3 terminal failures in 24 h (a single BadDeviceToken is one device's churn).
+    "notifications_failures_fail": 3,
     # --- migration_drift (platform alarm, on GitHub): is every merged migration applied -------
     # The newest 25 files span several weeks of this repo's cadence, so a drift is caught long
     # before the window rolls past it, with a few hundred catalog lookups.
@@ -426,6 +435,9 @@ _OUTBOUND_BUDGET_S = PROBE_BUDGET_S
 # warm) and the payload, churn and baseline reads (about 5 s together cold on 10-19: 2.1 s,
 # 2.8 s and 29 ms). Four default budgets.
 _PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
+# The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s; it is
+# also what keeps every worker alarm due at once inside the 500 s pass (7 x 45 + 180 + 5).
+_NOTIFICATIONS_BUDGET_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -469,8 +481,8 @@ CHECKS: tuple[Check, ...] = (
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
           _WORKER, _SIX_HOURLY, "Location coverage", unit="cells",
           owner_path="/location-quality"),
-    # The worker's health lane measures these twelve (scripts/checks/: platform, the portal checks,
-    # dedup, then parsing and the quality gauges). GitHub keeps what needs it: migration_drift
+    # The worker's health lane measures these thirteen (scripts/checks/: platform, the portal checks,
+    # dedup, push notifications, then parsing and the quality gauges). GitHub keeps what needs it: migration_drift
     # reads a checkout, the outbound probe an address that is not the scrapers'.
     Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
           unit="cells", owner_path="/settings"),  # Settings › GitHub Actions
@@ -489,6 +501,10 @@ CHECKS: tuple[Check, ...] = (
           unit="cells", owner_path="/scrapers"),
     Check("dedup", check_dedup, "dedup", "alarm", _WORKER, _TEN_MINUTES, "Engine",
           unit="cells", owner_path="/autodedup/progress"),
+    # The push ledger (notifications push W4): stall, recall, failures, and the brake shown.
+    Check("notifications", check_notifications, "platform", "alarm", _WORKER, _TEN_MINUTES,
+          "Push notifications", unit="cells", owner_path="/notifications",
+          budget_s=_NOTIFICATIONS_BUDGET_S),
     # LAST of the worker's alarms: the expensive reads. data_quality shares its measure read
     # through the pass memo whenever both are due in one pass.
     Check("parsing", check_parsing, "portals", "alarm", _WORKER, _SIX_HOURLY, "Parsing",

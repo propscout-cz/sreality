@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
+from psycopg.types.json import Jsonb
 
 from api import push, push_devices
 from api import push_delivery as pd
@@ -342,3 +343,34 @@ def test_an_open_is_stamped_once_on_the_callers_own_delivery(cur: Any) -> None:
     assert rows[fresh].total_seconds() == 0, "stamped"
     assert rows[mine].total_seconds() == 3600, "once: the first open stands"
     assert rows[theirs] is None, "another account's delivery is not mine to open"
+
+
+# --- the notifications Health check ------------------------------------------------------------
+
+
+def test_the_health_checks_reads_judge_the_real_ledger(cur: Any) -> None:
+    """A stalled row, a lost push and three terminal failures, each read by the check's own statements."""
+    from scripts.checks import notifications as nc
+    from scripts.verify_pipeline import THRESHOLDS
+
+    cur.execute("INSERT INTO worker_heartbeats (worker, beat_at, started_at, details) "
+                "VALUES ('realtime-worker', now(), now(), %s) "
+                "ON CONFLICT (worker) DO UPDATE SET beat_at = now(), details = EXCLUDED.details",
+                (Jsonb({"push": {"last": {"live_devices": 1}}}),))
+    me = _account(cur)
+    device = _device(cur, me)
+    _share(cur, me, _account(cur), ago="10 minutes")                  # no ledger row: lost
+    _share(cur, me, _account(cur), ago="2 minutes")                   # inside the grace: not yet
+    stuck = _delivery(cur, _share(cur, me, _account(cur)), device)
+    cur.execute("UPDATE notification_deliveries SET next_attempt_at = now() - interval '11 minutes' "
+                "WHERE id = %s", (stuck,))
+    for reason in ("BadDeviceToken", "BadDeviceToken", "400"):
+        row = _delivery(cur, _share(cur, me, _account(cur)), device)
+        cur.execute("UPDATE notification_deliveries SET status = 'failed', reason = %s, "
+                    "next_attempt_at = 'infinity' WHERE id = %s", (reason, row))
+    out = nc.check_notifications(cur.connection, THRESHOLDS)
+    cells = {c["subject"]: (c["status"], c["value"]) for c in out["details"]["cells"]}
+    assert cells == {"push/stall": ("fail", 1), "push/recall": ("fail", 1), "push/failures": ("fail", 3),
+                     "push/unconfigured": ("ok", 1)}
+    failures = next(c for c in out["details"]["cells"] if c["subject"] == "push/failures")
+    assert failures["facts"]["reasons"] == ["400", "BadDeviceToken"]
