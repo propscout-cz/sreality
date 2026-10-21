@@ -1787,9 +1787,11 @@ import {
   listEstimations,
   type TracePayload,
 } from './api';
+import { sortedIds } from './hydration/keys';
 import type {
   CreateEstimationIn,
   EstimationListParams,
+  EstimationListResponse,
   PipelineBoardCard,
   PipelineStage,
   TagColor,
@@ -1831,6 +1833,21 @@ export const fetchEstimationsList = (params: EstimationListParams) =>
  * renders the selected run without a second per-run request. */
 export const fetchEstimationsForListings = (ids: ReadonlyArray<number>) =>
   listEstimations({ listing_ids: ids.join(','), limit: 100 });
+/* That fetch as ONE query, for the estimations block and the Valuo card's
+ * "náš odhad" mark alike: polled while a run is pending or running. A
+ * non-empty array of junk ids never reaches the wire, where it would
+ * serialize to an empty value rather than a filter. */
+export const useEstimationRuns = (listingIds: readonly number[]) => {
+  const ids = sortedIds(listingIds);
+  return useQuery<EstimationListResponse, Error>({
+    queryKey: estimationKeys.byListing(ids),
+    queryFn: () => fetchEstimationsForListings(ids),
+    enabled: ids.length > 0 && ids.every((n) => Number.isFinite(n)),
+    staleTime: 15_000,
+    refetchInterval: (q) =>
+      (q.state.data?.data ?? []).some((r) => r.status === 'pending' || r.status === 'running') ? 3000 : false,
+  });
+};
 export const submitEstimation = (input: CreateEstimationIn) =>
   createEstimation(input);
 

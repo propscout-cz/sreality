@@ -54,13 +54,17 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   17 500–20 000 Kč, avg 18 850 Kč, 377 Kč/m²), so a lease shows `/měs` and the rent basis.
 - **Done (review fixes):** Valuo is a named shape-3 site in `tenancy.md` on the one no-account 400; its per-m² figures
   are rule 23's named outside exception (`REGISTERED_SITES`); one error shape (`code`, one `unconfigured`), the location
-  reader out of the route module (`api/property_location.py`); a house's `garage_area` / `other_area` are user-set.
+  reader out of the route module (`api/property_location.py`); a house's `garage_area` / `other_area` are user-set. SPA:
+  the editor's controls are `controls.tsx`'s form box (`box=`: one 34 px height, dashed absent, brick refused, the unit
+  inside), no local patches; one `useEstimationRuns` query for Odhady and the Valuo mark; both ledgers are `table.tsx`
+  `Column`s under `SectionLabel`/`Th`, their data ink-3; Valuo's failures in Czech.
 - **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
   exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
   confirms whether a house's plot is sent; a per-plan monthly
   quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
   a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
-  ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`) and the API's
+  ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's
+  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) and the API's
   `no account for caller` stay English until it.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)

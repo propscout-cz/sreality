@@ -50,7 +50,7 @@ export type ValuoPage = {
   subject: { label: string; location: { label: string; note: string | null } | null };
   fields: ValuoField[]; defaults: ValuoValues; provenance: Record<string, Provenance>; blocking: string[]; history: Valuation[];
 };
-export type ValuoRun = { reused: boolean; valuation: Valuation };
+export type NewValuation = { reused: boolean; valuation: Valuation };
 
 /* The overrides a POST sends: only the user's changes from the defaults, null where one was cleared. */
 export function withEdit(edits: ValuoValues, defaults: ValuoValues, name: string, value: ValuoValue): ValuoValues {
@@ -103,10 +103,10 @@ export const useValuoPage = (propertyId: number) =>
 
 /* One paid call, never retried (a retry is a second payment); a new row lands on top of the cached
  * history, a reused one stays where it sits. */
-export function useRunValuo(propertyId: number) {
+export function useNewValuation(propertyId: number) {
   const qc = useQueryClient();
-  return useMutation<ValuoRun, ApiError, ValuoValues>({
-    mutationFn: (overrides) => apiPost<ValuoRun>(`/properties/${propertyId}/valuo`, { overrides }),
+  return useMutation<NewValuation, ApiError, ValuoValues>({
+    mutationFn: (overrides) => apiPost<NewValuation>(`/properties/${propertyId}/valuo`, { overrides }),
     retry: false,
     onSuccess: ({ valuation: v }) =>
       qc.setQueryData<ValuoPage | null>(pageKey(propertyId), (p) => p && {
