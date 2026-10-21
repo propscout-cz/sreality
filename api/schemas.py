@@ -12,7 +12,13 @@ import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
+from fastapi import HTTPException
+from pydantic import (
+    AfterValidator, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator, model_validator,
+)
+
+from api.location_filter import DistrictChip
+from toolkit import stats_registry as sr
 
 
 def _as_str_list(v: Any) -> Any:
@@ -520,7 +526,7 @@ ShareSide = Literal["shared_with", "shared_with_me"]
 
 
 class ShareIn(BaseModel):
-    """The one email rule for both share kinds (migrations 610 + 641)."""
+    """The one email rule for every share kind (migrations 610, 641, 647)."""
 
     email: str
 
@@ -630,14 +636,74 @@ class ReorderStagesIn(BaseModel):
     ordered_ids: list[int]
 
 
-# --- Browse > Stats dashboard (migration 626) ------------------------------
-# The whole board, stored whole. The board and each chart are validated by
-# toolkit.stats_registry in api/stats_dashboard.py (a refusal is a 422 naming the
-# chart and the reason), so the shape is checked once, there.
+# --- saved sets: filter presets + Browse > Stats dashboards (api/saved_sets.py) ---
+# Both instances' bodies (migrations 151, 626, 647). Each blob carries its one validator in
+# its type: PresetSpec (every place chip coded), Charts (toolkit.stats_registry; a refusal is
+# a 422 naming the chart and the reason).
+
+_CHIPS = TypeAdapter(list[DistrictChip])
+
+
+# The blob is stored VERBATIM, so its chips are checked strictly (a "582786" or a
+# `true` id would be stored as written), where the SPA reads them (`readPresetSpec`:
+# `spec.filters`, else a legacy bare filter set). `strict=` at validation time: a
+# `ConfigDict(strict=True)` on the adapter does not reach the nested model.
+def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
+    """Every place chip in the blob is a level plus a RÚIAN code, or the write is a 422."""
+    filters = spec["filters"] if spec.get("filters") is not None else spec
+    if isinstance(filters, dict) and filters.get("districts") is not None:
+        _CHIPS.validate_python(filters["districts"], strict=True)
+    return spec
+
+
+def _valid_board(charts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The board as the stats registry normalises it: the only specs the pivot accepts."""
+    try:
+        return sr.validate_board(charts)
+    except sr.SpecError as exc:
+        # Not a ValueError: pydantic re-raises an HTTPException unwrapped, so the 422 names the chart.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+PresetSpec = Annotated[dict[str, Any], AfterValidator(_coded_chips)]
+Charts = Annotated[list[dict[str, Any]], AfterValidator(_valid_board)]
+
+
+class CreatePresetIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    filter_spec: PresetSpec
+    # Shared tag palette (TagColor); None = neutral default chip.
+    color: TagColor | None = None
+
+
+class UpdatePresetIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    filter_spec: PresetSpec | None = None
+    color: TagColor | None = None
 
 
 class StatsDashboardIn(BaseModel):
-    charts: list[dict[str, Any]]
+    """The account's working board, stored whole (PUT /stats/dashboard)."""
+    charts: Charts
+
+
+class CreateStatsDashboardIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    charts: Charts
+    # The preset blob, embedded (ruling 2, never a linked preset); None = the dashboard carries no filter.
+    filter_spec: PresetSpec | None = None
+    color: TagColor | None = None
+
+
+class UpdateStatsDashboardIn(BaseModel):
+    # An absent field keeps its value; an explicit null clears `filter_spec` or `color`, nothing else.
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    charts: Charts | None = None
+    filter_spec: PresetSpec | None = None
+    color: TagColor | None = None
+
+
+ShareDashboardIn = ShareIn
 
 
 class ValuoRunIn(BaseModel):
