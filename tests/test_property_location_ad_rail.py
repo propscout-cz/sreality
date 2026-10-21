@@ -471,7 +471,6 @@ R7_SUBJECT_SITES: dict[tuple[str, str], str] = {
     ("api/estimation_runs.py", "_MATCH_BY_ID_SQL"): "an estimate's subject by listing id",
     ("api/estimation_runs.py", "_LIST_FROM"): "the /estimations list's place label (location only; facts diverge)",
     ("api/estimation_runs.py", "_SUBJECT_MF_FACTS_SQL"): "the subject's MF reference-rent facts",
-    ("api/notifications.py", "_RESOLVE_FOR_ESTIMATE_SQL"): "the watchdog kickoff's estimate subject",
     ("toolkit/velocity.py", "_fetch_listing_for_velocity"): "the velocity subject",
     ("scripts/smoke_agent.py", "_pick_target"): "the smoke agent's subject",
 }

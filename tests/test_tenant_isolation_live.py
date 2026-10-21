@@ -1466,6 +1466,7 @@ def test_a_platform_admin_cannot_rewrite_a_system_alert(
                 "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
                 "UPDATE notification_dispatches SET target_channels = '{telegram}' WHERE id = %s",
                 "UPDATE notification_dispatches SET dedupe_key = 'sys:forged' WHERE id = %s",
+                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
             ):
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
@@ -1486,8 +1487,10 @@ def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
     policies alone; with a WHERE the read policy, which hides SYSTEM rows from tenants,
     would mask a broken admin arm. So the blanket statement is the probe of the arm's gate.
 
-    RED by: an admin arm without its gate, or a column grant missing seen_at or
-    estimation_run_id (the estimate kickoff from a notification writes it)."""
+    RED by: an admin arm without its gate, a column grant missing seen_at, or one that still
+    carries estimation_run_id (migration 651: its one writer, "Estimate rent", is deleted)."""
+    import psycopg
+
     seen_at = "SELECT seen_at FROM notification_dispatches WHERE id = %s"
     with svc.cursor() as cur:
         cur.execute(seen_at, (seeded_dispatches["system"],))
@@ -1505,11 +1508,13 @@ def test_a_tenant_cannot_touch_a_system_alert_and_still_marks_its_own_read(
                 (seeded_dispatches["own"],),
             )
             assert cur.rowcount == 1, "a tenant can no longer mark its own notification read"
-            cur.execute(
-                "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
-                (seeded_dispatches["own"],),
-            )
-            assert cur.rowcount == 1, "a tenant can no longer link an estimate to its notification"
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():  # a SAVEPOINT, so the refusal cannot poison the txn
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
+                        (seeded_dispatches["own"],),
+                    )
     with svc.cursor() as cur:
         cur.execute(seen_at, (seeded_dispatches["system"],))
         assert cur.fetchone()[0] == before, "a tenant's blanket update reached a system alert"
