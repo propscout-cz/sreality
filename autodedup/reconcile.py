@@ -30,8 +30,9 @@ What it adds is WHICH groups and WHEN:
     neighbour as its row stored it, so a stored merge can rest on facts a sighting, a location
     correction or a reparse has since moved. Every group owed a merge and not merged this pass
     (waiting, past the run cap, out of time) is handed on (`rt_redecide`) in `_rank`'s order —
-    a group whose cluster holds an active advert before one that holds none (E973), then flats
-    for sale, flats for rent, the rest (E972), the oldest moved member first within each; the
+    a group whose cluster holds an active advert before one that holds none (E973), then Praha,
+    the towns the scope names, the rest (E974), then flats for sale, flats for rent, houses and
+    commercial for sale, the rest (E972, E974), the oldest moved member first within each; the
     next pass re-claims whole groups of it in that order, `STALE_FLOOR` adverts on top of its
     feeds, and the reconcile re-plans every group handed on, so a group refreshed whole merges
     at once.
@@ -52,6 +53,7 @@ from typing import Any, Callable, Mapping, NamedTuple, Sequence
 from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import rt_lease
+from autodedup.cohort import PRAHA_OBEC_KOD
 from autodedup.incremental_sql import (
     RT_SETTING_WRITE_SQL,
     RT_STALE_SQL,
@@ -120,7 +122,14 @@ TRIED_BACKOFF_HOURS: float = 6.0
 # groups held the oldest stamps and took ~60% of the budget while the count that is watched
 # (groups with an active advert) fell ~115-155/h; they wait now, and still merge once no active
 # group is waiting.
-CLAIM_ORDER: tuple[tuple[str, str], ...] = (("byt", "prodej"), ("byt", "pronajem"))
+# E974, the operator's order of 2026-10-21: Praha first, then the towns the scope names with a
+# `town:` block (eight that day), then the rest (the Středočeský kraj okresy to come, and an
+# advert with no location row); within each region flats for sale, flats for rent, then houses
+# and commercial for sale together, the rest last. E973 still ranks above the region: a town's
+# group with an active advert goes before a Praha group that holds none. An order only, as E972.
+CLAIM_ORDER: tuple[tuple[tuple[str, str], ...], ...] = (
+    (("byt", "prodej"),), (("byt", "pronajem"),), (("dum", "prodej"), ("komercni", "prodej")))
+REGION_PRAHA, REGION_TOWN, REGION_REST = 0, 1, 2
 
 
 class Refresh(NamedTuple):
@@ -128,8 +137,9 @@ class Refresh(NamedTuple):
 
     at: Any                 # its last refresh; None without an rt_fp row
     stale: bool             # a merge may NOT rest on it (E960)
-    place: int              # its place in `CLAIM_ORDER` (E972)
+    place: int              # its tier in `CLAIM_ORDER` (E972, E974)
     active: bool            # its cluster holds an active advert (E973)
+    region: int             # Praha, a scope town, the rest (E974)
 
 
 # The re-claim's own budget, kept like the rate (E941): `{budget, inflight}`, the count a pass
@@ -201,16 +211,19 @@ def tried_key(generation: str) -> str:
 def refreshed(conn: Any, generation: str, listing_ids: Sequence[int], *, fresh_hours: float,
               engine_since: str | None) -> dict[int, Refresh]:
     """Each advert's last refresh, whether a merge may NOT rest on it (E960): refreshed longer
-    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed), its place in
-    `CLAIM_ORDER` by its row's categories (E972), and whether its cluster holds an active advert
+    ago than `fresh_hours`, before `engine_since`, or never (no row: fail closed), its tier in
+    `CLAIM_ORDER` by its row's categories (E972), whether its cluster holds an active advert
     (E973) — read over the whole cluster, since a group's only active advert may sit on the
-    property it merges onto and so is not among the members handed on."""
+    property it merges onto and so is not among the members handed on — and its region by its
+    live location row and the scope's `town:` blocks (E974)."""
     if not listing_ids:
         return {}
-    return {int(lid): Refresh(at, bool(stale), _claim_class(main, kind), bool(active))
-            for lid, at, stale, main, kind, active in _rows(conn, RT_STALE_SQL, {
+    return {int(lid): Refresh(at, bool(stale), _claim_class(main, kind), bool(active),
+                              _region(obec_kod, bool(town)))
+            for lid, at, stale, main, kind, active, obec_kod, town in _rows(conn, RT_STALE_SQL, {
                 "generation": generation, "listing_ids": sorted({int(i) for i in listing_ids}),
-                "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since})}
+                "fresh_s": float(fresh_hours) * 3600.0, "engine_since": engine_since,
+                "scope_setting": A.SCOPE_SETTING})}
 
 
 def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
@@ -222,21 +235,32 @@ def stale_members(conn: Any, generation: str, listing_ids: Sequence[int], *,
 
 
 def _claim_class(category_main: str | None, category_type: str | None) -> int:
-    """An advert's place in `CLAIM_ORDER`; every other category after it."""
+    """An advert's tier in `CLAIM_ORDER`; every other category after it."""
     pair = (category_main, category_type)
-    return CLAIM_ORDER.index(pair) if pair in CLAIM_ORDER else len(CLAIM_ORDER)
+    return next((tier for tier, pairs in enumerate(CLAIM_ORDER) if pair in pairs),
+                len(CLAIM_ORDER))
 
 
-def _rank(members: Sequence[int], ages: Mapping[int, Refresh]) -> tuple[int, int, int, Any]:
+def _region(obec_kod: int | None, in_town_block: bool) -> int:
+    """An advert's region (E974): Praha, a town the scope names with a `town:` block, the rest
+    (no location row included)."""
+    if obec_kod is not None and int(obec_kod) == PRAHA_OBEC_KOD:
+        return REGION_PRAHA
+    return REGION_TOWN if in_town_block else REGION_REST
+
+
+def _rank(members: Sequence[int], ages: Mapping[int, Refresh]
+          ) -> tuple[int, int, int, int, Any]:
     """A group's place in the queue, over its moved members whichever of them are stale, so the
     re-claim and the hand-on's cap rank it alike: a group holding an advert with no row (no
     claim can refresh it) last of all, then a group whose cluster holds an active advert before
-    one that holds none (E973), then its best member's place in `CLAIM_ORDER` (E972), then the
-    oldest refresh first."""
+    one that holds none (E973), then its best member's region (E974) and tier in `CLAIM_ORDER`
+    (E972, E974), then the oldest refresh first."""
     known = [ages[i] for i in members if i in ages]
     if not known or any(row.at is None for row in known):
-        return (1, 0, 0, "")
-    return (0, 0 if any(row.active for row in known) else 1, min(row.place for row in known),
+        return (1, 0, 0, 0, "")
+    region, place = min((row.region, row.place) for row in known)
+    return (0, 0 if any(row.active for row in known) else 1, region, place,
             min(row.at for row in known))
 
 
@@ -485,8 +509,9 @@ def _hand_on(conn: Any, generation: str, run_id: str, groups: Sequence[Sequence[
     """Every group owed a merge and not attempted (waiting, past the run cap, out of time), as its
     moved members, in the re-claim's order (`_rank`), whole groups up to `REDECIDE_CAP` adverts
     (E960); a full list drops the all-inactive groups before any group with an active advert
-    (E973), and within each the rest's newest waits before any flat's (E972). It REPLACES the
-    list: every group on it was re-planned this pass, so what stays owed is here."""
+    (E973), within each the rest's region before any town's and a town's before Praha's (E974),
+    and within a region the last tier's newest waits first (E972, E974). It REPLACES the list:
+    every group on it was re-planned this pass, so what stays owed is here."""
     kept: list[list[int]] = []
     total = 0
     for _place, members in sorted((_rank(m, ages), list(m)) for m in groups):

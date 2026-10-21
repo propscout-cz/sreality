@@ -134,6 +134,10 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   that leaves `clip_tagged_at` alone must empty the ledger; a sighting (`last_seen_at`) re-scores an
   advert's rejects as it does its stored pairs. Next (E943's other half, before Prague): facts only
   for the claim and the scored endpoints, the decision digest stored on `rt_fp`.
+- **E974 (2026-10-21, the operator's region order):** the waiting groups are re-claimed Praha first, then
+  the eight towns the apply scope names with a `town:` block, then the rest (the Středočeský kraj okresy
+  to come); within each, flats for sale, flats for rent, houses and commercial for sale, the rest.
+  E973's active-first stays above the region. An order only: no decision module, digest unchanged.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.

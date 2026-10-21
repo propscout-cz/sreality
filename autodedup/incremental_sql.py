@@ -829,6 +829,9 @@ update autodedup.rt_fp f
 # (E972: `reconcile.CLAIM_ORDER`), and whether its cluster holds an active advert ranks it above
 # that (E973): over the WHOLE cluster, since a group's only active advert may sit on the property
 # it merges onto, so it is not among the adverts asked (29 of 575 such groups on 2026-10-20).
+# Its region ranks between the two (E974): its live `listing_location` town, and whether the
+# apply scope's row names that town with a `town:` block (read once; a row whose blocks are not
+# a list names none). An advert with no location row has neither and goes with the rest.
 RT_STALE_SQL = """
 select w.listing_id, f.updated_at,
        (f.listing_id is null
@@ -842,10 +845,18 @@ select w.listing_id, f.updated_at,
                    on o.generation = m.generation and o.cluster_key = m.cluster_key
                  join public.listings l on l.id = o.listing_id
                 where m.generation = %(generation)s::text and m.listing_id = w.listing_id
-                  and l.is_active) as active
+                  and l.is_active) as active,
+       ll.obec_kod,
+       coalesce(('town:' || ll.obec_kod::text) = any (array(
+                    select jsonb_array_elements_text(a.value -> 'blocks')
+                      from public.app_settings a
+                     where a.key = %(scope_setting)s::text
+                       and jsonb_typeof(a.value -> 'blocks') = 'array')), false)
+           as in_town_block
   from unnest(%(listing_ids)s::bigint[]) as w(listing_id)
   left join autodedup.rt_fp f
          on f.generation = %(generation)s::text and f.listing_id = w.listing_id
+  left join public.listing_location ll on ll.listing_id = w.listing_id
  order by w.listing_id
 """
 
