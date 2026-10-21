@@ -32,9 +32,18 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       watchdog retires it (F21); the carrier is one UPDATE that re-points and marks `duplicate_of`, deleting nothing
       (F6, F13); `share_ref` reads columns, no `split_part`. Gate: CI green; a merged 'new' row is marked and never
       re-fires, 0 deleted; a retired watchdog's alerts hidden, rows kept; 0 identity violations.
-- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W4 push plumbing, dark (VAPID, the push
-      ledger, /push routes; R7, R11) · W5 the phone bell, badge and switch (R4) · W6 the one destructive prune, backup
-      first (R8; drops `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
+- [ ] **W4 backend (built 2026-10-21, stacked on W3; done when merged, migration 654 applied first)** — push plumbing,
+      dark: migration 654 = Migration D (`push_subscriptions`, `notification_deliveries`, service role only);
+      `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID, the RFC vector byte for byte); `GET /push/key`, `PUT`/`DELETE
+      /push/subscription`, `POST /push/opened` (never act); the Czech renderer; the worker's `push` lane (15 s; fan-out
+      with the one-share-a-day cap R11, a 2-min leased claim, one push per device, a 429 holds the device); the
+      `notifications` Health check (stall, recall, failures, unconfigured). **Operator:** generate `VAPID_PRIVATE_KEY`
+      with the toolkit-api one-liner, paste it as a Railway Shared Variable on the API AND the realtime-worker, delete the
+      file. Gate: CI-Postgres lease/claim/429 tests green; lane `unconfigured`, then `live_devices` 0; `/push/key` 503
+      then 200. The SPA half (sw.js, the switch, `/n/:dispatchId`) is #1948.
+- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W5 the phone bell, badge and switch (R4)
+      and the on-device proof (your iPhone, a second account) · W6 the one destructive prune, backup first (R8; drops
+      `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 

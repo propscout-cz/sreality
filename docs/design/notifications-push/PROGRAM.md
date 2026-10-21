@@ -116,7 +116,7 @@ Both tables: RLS on, no browser grant, in `_ADMIN_ONLY_RELATIONS`; neither names
 
 **Routes (four), all in `_NEVER_ACTS`:**
 - `GET /push/key`: `require_token`, no connection; the public key derived from `VAPID_PRIVATE_KEY` (one shared variable, API + worker; no `VITE_`), 503 when unset.
-- `PUT`/`DELETE /push/subscription`, `POST /push/opened`: `require_account_id`, then `deps.open_background_conn` (the share routes' shape and rail, named in tenancy.md). PUT checks host, key lengths and Origin (non-Apple → 422), keeps 5 live devices (oldest 'replaced'), and in one transaction ends another account's live row for the endpoint, then upserts the caller's without touching `created_at`. DELETE ends it (signed_out | switched_off). opened stamps `opened_at` on the caller's tapped push.
+- `PUT`/`DELETE /push/subscription`, `POST /push/opened`: `require_account_id`, then `deps.open_background_conn` (the share routes' shape and rail, named in tenancy.md). PUT checks host, key lengths and Origin (non-Apple → 422), keeps 10 live devices (built: the least recently seen beyond 10 'replaced'; 5 in the plan), and in one transaction ends another account's live row for the endpoint, then upserts the caller's without touching `created_at`. DELETE ends it (signed_out | switched_off). opened stamps `opened_at` on the caller's tapped push.
 
 ### 3.5 Renderer and link
 **Push text:** one Czech renderer by `change_kind`, from frozen columns plus the display label; no current price or per-m² figure (rule 23). Shares read "Sdíleno s vámi" / "Sbírka" | "Dashboard" | "Pipeline": no sender text, no URL (F17). The bell keeps English labels; a test pins both maps to the CHECK.

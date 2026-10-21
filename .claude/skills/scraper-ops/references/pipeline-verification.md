@@ -749,8 +749,9 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   every deploy re-projects the worker's keys and deletes its undeclared ones, touching no other
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
-  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (500 s since Health dashboard sprint wave 6: its seven 45 s alarms
-  and `parsing`'s 180 s, 495 s in all, always fit, and a gauge whose budget no longer fits what is left waits
+  lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (500 s since Health dashboard sprint wave 6: its seven 45 s alarms,
+  `parsing`'s 180 s and, since notifications push W4, `notifications`' 5 s, 500 s in all, always fit — the
+  next worker alarm needs the pass or a budget reworked — and a gauge whose budget no longer fits what is left waits
   for the next pass; 360 s in waves 4-5, 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
 - once per 24 h in each process, the 35-day prune the operator ruled (Q5): `delete from
@@ -855,7 +856,11 @@ A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<
 `portal_errors`, and so does a step failing inside the notifications lane (notifications W2a:
 `portal_errors` keyed by step, `watchdog_new` / `price` / `monitor`, so the cell is
 `lane/notifications/<step>` with the step as its `portal`; red iff a statement raised, never for a
-stored spec the matcher refuses, which `last` counts as `subscriptions_invalid`): Problem once its
+stored spec the matcher refuses, which `last` counts as `subscriptions_invalid`), and inside the push
+lane (notifications push W4: `key` / `fan_out` / `claim` / `send`, each error the exception's CLASS
+name only — `send` reads "N of M devices failed: <classes>" — because a push endpoint is a secret
+capability URL and a psycopg or requests message can carry one; a transport retry is no error, the
+`notifications` check judges outcomes): Problem once its
 `failing_since` is older than max(3 × the lane's interval, 15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
 stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 6 while
 `worker_lane_stall` read OK.
@@ -863,12 +868,12 @@ stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 
 **What the heartbeat carries** (`scraper/realtime_worker.py`, wave 3). `_amain` registers every
 lane from the module constant `LANES` — `probe`, `drain`, `images`, `count_probe`, `maintenance`,
 `broker_maintenance`, `estimation`, `location_resolve`, `location_intake_fast`, `location_refetch`,
-`sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `heartbeat` — seeds each with `interval_s`
+`sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `push`, `heartbeat` — seeds each with `interval_s`
 None before any task starts, and asserts that the names it registers equal `LANES`; nothing imports
 the worker to learn the list. `_lane_loop` writes `interval_s` on every wake, the idle branch
 included, so an off lane reads off, not absent. Per lane: `interval_s`, `passes`, `failed_passes`,
 `last_pass_at`, `last_duration_s`, `started_at`, `in_flight_s`, `last`, `failing_since`,
-`last_error` (at most 300 characters) and, on the probe, drain and notifications lanes,
+`last_error` (at most 300 characters) and, on the probe, drain, notifications and push lanes,
 `portal_errors` (`{portal or step: {failing_since, last_error}}`); `last_failure_at` is gone. A pass fails exactly where it
 failed before — a raise (`last_error` = `<Type>: <message>`), the 1,800 s timeout (`pass exceeded
 1800 s`), `text_extract`'s `fatal`, autodedup's refusal — and nothing new counts as a failure:
@@ -1464,6 +1469,24 @@ To check after the merge: `health_checks` holds the eight `realtime-worker` keys
 the value and the time; the cells render in wave 8); the `broker_merge_suppression` row leaves at the
 canary's first run from `main`; and the engine progress page says "The engine merges in production
 inside the apply scope; live lane health is on Health.", its link landing on the row.
+
+## `notifications` — does every push leave? (notifications push W4, 2026-10-21)
+
+`scripts/checks/notifications.py`, a platform alarm on the worker every 10 minutes, owner page
+`/notifications`, a 5 s budget (four reads over the 24 h event window and the push ledger, a few
+hundred rows). Its statements live beside the pass they judge, in `api/push_delivery.py`, and are
+imported inside the check: the registry must import with the base dependencies on GitHub (test.yml).
+
+| Cell | Problem / Watch | Why this line |
+|---|---|---|
+| `push/stall` | Problem: a `pending` or `failed` delivery whose `next_attempt_at` passed more than 10 min ago (`notifications_stall_min`) | the lane ticks every 15 s and a claim's lease is 2 min, so a healthy row is never due past ~2.5 min; a terminal failure waits at `'infinity'` and never counts; a row a dead process claimed 5 times stays here until `EXHAUSTED_SQL` fails it |
+| `push/recall` | Problem: a VISIBLE unseen event of the last 24 h, more than 5 min old (`notifications_recall_grace_min`), whose account has a live device registered before it, with no `notification_deliveries` row for that pair | fan-out runs every pass (15 s), so a missing row after 5 min is a lost push (the F2/F10 class); not judged while the lane is braked, which `push/unconfigured` says |
+| `push/failures` | Problem: 3 or more terminal failures (`status = 'failed'`, `next_attempt_at = 'infinity'`) created in 24 h (`notifications_failures_fail`); the message names Apple's reason words | one `BadDeviceToken` is one device's churn; three in a day is a key, payload or JWT fault |
+| `push/unconfigured` | Watch: the push lane's newest pass found no `VAPID_PRIVATE_KEY` (`last.unconfigured`) while a live device exists | the brake is deliberate, so never Problem; Not measured when the worker's heartbeat is stale or missing (the watcher's `worker` cell judges that) |
+
+The three-strike rule (iOS removes an origin's subscriptions after silent pushes) has no server
+signal: prevented in `sw.js` (always one notification), never measured here. Gauges (open rate,
+latency, skip mix, churn by `end_reason`) are design-doc SQL, reviewed after 7 days (PROGRAM.md § 3.9).
 
 ## `parsing` — are new ads still read the way they were? (Health dashboard sprint wave 6)
 

@@ -2255,9 +2255,26 @@ renumber.** Navigate by area:
     096 dropped `channel` from the dedup key, so the grain could never carry a second channel —
     which is why delivery gets its own ledger.) The first ledger, `channel_sends` (Sprint N: email and
     Telegram through an outbox draining `target_channels`), never sent a row and lost every writer in
-    W1 (2026-10-21; W6 drops it). Its successor is the W4 push ledger: one row per (event, registered
-    iPhone of the event's account), recipients resolved from `account_id` at send time, never routed
-    by source (`docs/design/notifications-push/PROGRAM.md` § 3). **A SECOND producer is live (Sprint C):
+    W1 (2026-10-21; W6 drops it). **External delivery is `notification_deliveries`** (migration 654,
+    notifications push W4; `docs/design/notifications-push/PROGRAM.md` § 3.2–3.5): ONE row per (event,
+    device), `UNIQUE (notification_id, push_subscription_id)`, ending `sent | skipped | gone | failed` with
+    a one-word `reason` (Apple's, an HTTP status, a transport error's class, or `seen | hidden | stale |
+    device_ended | capped`; a CHECK refuses anything longer). A device is a `push_subscriptions` row: one
+    installed iPhone app per account, one live row per endpoint (another account registering it ends the
+    old row `replaced`), its https `origin` the absolute link base, ending `gone | signed_out |
+    switched_off | replaced` with its three secrets blanked. Recipients come from the event's account at
+    send time through ONE join (`ps.account_id = d.account_id AND ps.ended_at IS NULL`), never from the
+    producer. The worker's `push` lane (15 s; brake: no `VAPID_PRIVATE_KEY`) fans out every VISIBLE unseen
+    event of the last day to the devices registered before it (a share past one per sharer a day is
+    `skipped/capped`), claims due rows by compare-and-set (`next_attempt_at` is a 2-minute lease, `FOR
+    UPDATE SKIP LOCKED`, so a deploy overlap shares no row and a killed send returns), re-checks them,
+    sends ONE declarative Web Push per device (`api/push.py`: RFC 8291 aes128gcm, RFC 8292 VAPID with
+    `sub` = the device's origin; `TTL` ≥ 60 s, `Urgency: high`, a `Topic` per batch) and finalizes it at
+    once (a 429 holds the device, a retry waits 2ⁿ min, the fifth fails for good). Its words are one
+    Czech renderer (`api/notification_render.py`, by `change_kind`, from the frozen prices and the place
+    label; a share says what opens, never who), its link `/n/{id}?d={delivery}` (coalesced:
+    `/notifications?d=`), which `POST /push/opened` stamps. The endpoint is a secret: validated before
+    SQL, never logged, never in an error. **A SECOND producer is live (Sprint C):
     the collection monitor (`match_monitored_collections_once`, its price half in `match_changes_once`,
     both on the lane's 300 s clock over a 7-day window) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
@@ -2378,7 +2395,7 @@ renumber.** Navigate by area:
     (`shared_collection | shared_dashboard | shared_pipeline`, migration 652, which relabelled the old `'shared'` rows; the feed's
     `share_kind` reads it), `actor_account_id` the sharer and `event_ref` the dashboard id or the mode (the feed's `share_ref` is
     the collection id, the actor or the event_ref, never a parsed key), the one stored copy of an email
-    in the sharing model (a snapshot at share time), in-app now and pushed from W4 (collection-sharing
+    in the sharing model (a snapshot at share time), in-app and pushed since W4 (collection-sharing
     ruling 5(e)'s in-app-only superseded 2026-10-21, `docs/design/notifications-push/PROGRAM.md` § 3.1). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
     `sync_notification_dispatches_account_id()` trigger KEEPS the supplied account for this kind
