@@ -5,9 +5,9 @@
  * use plus the next free one, for a session without a keyboard. The merge is
  * held while a letter has one property: that is no merge, and on a page it is a
  * slip. */
+import { LETTERS } from '@/lib/api';
 import CurationMarks from '@/components/CurationMarks';
 import MergeTakenBack from '@/components/MergeTakenBack';
-import { UNIT_LETTERS } from '@/components/autodedup/UnitSplit';
 import type { MergeMode } from '@/lib/useMergeMode';
 import { useMergePreview } from '@/lib/useMergeProperties';
 
@@ -26,7 +26,7 @@ export default function MergeBar({
 }) {
   const preview = useMergePreview(merge.letters);
   const used = merge.groups.map(([letter]) => letter);
-  const next = UNIT_LETTERS.find((letter) => !used.includes(letter));
+  const next = LETTERS.find((letter) => !used.includes(letter));
   const chips = next ? [...used, next] : used;
   return (
     <div className="flex items-center gap-2 shrink-0">

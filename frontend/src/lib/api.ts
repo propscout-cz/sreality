@@ -2977,6 +2977,9 @@ export interface MergeResult {
  * of one property in the split (MS18). `lettersParam` is its one wire form,
  * `94020:A,94492:B`, ids ascending. */
 export type Letters = Record<number, string>;
+export const LETTERS: readonly string[] = Array.from({ length: 26 }, (_, i) =>
+  String.fromCharCode(65 + i),
+);
 
 export function lettersParam(letters: Letters): string {
   return Object.entries(letters)
@@ -3017,7 +3020,6 @@ export const getMergePreview = (letters: Letters): Promise<MergePreview> =>
 export const DETACH_REASON_MAX = 500;
 
 /* listings.id -> letter (A–Z). */
-export type SplitLetters = Letters;
 
 export interface SplitChoice {
   to: string;
@@ -3025,7 +3027,7 @@ export interface SplitChoice {
 }
 
 export interface SplitStatement {
-  letters: SplitLetters;
+  letters: Letters;
   /* Item key (`note:11`, `pipeline`, `collection:5`, `tag:7`, `dismissal`) ->
    * the letter that gets it and its copies; an absent key follows the preview. */
   choices?: Record<string, SplitChoice>;

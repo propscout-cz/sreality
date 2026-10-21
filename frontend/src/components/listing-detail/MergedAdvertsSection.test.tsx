@@ -173,7 +173,7 @@ function setup({
   sources?: PropertySource[];
   openAdvertId?: number | null;
   canonicalListingId?: number;
-  initialLetters?: api.SplitLetters;
+  initialLetters?: api.Letters;
 } = {}) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

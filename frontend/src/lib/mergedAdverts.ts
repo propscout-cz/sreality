@@ -10,16 +10,17 @@
 import type { QueryClient } from '@tanstack/react-query';
 
 import {
+  LETTERS,
   lettersParam,
   type MergeCarried,
   type MergeLettersResult,
   type MergeResult,
   type SplitChoice,
   type SplitItemKind,
-  type SplitLetters,
+  type Letters,
   type SplitResult,
 } from '@/lib/api';
-import { UNIT_LETTERS, distinctUnits, unitOf, type UnitMap } from '@/components/autodedup/UnitSplit';
+import { distinctUnits, unitOf, type UnitMap } from '@/components/autodedup/UnitSplit';
 
 import { invalidateBrowseQueries } from '@/lib/browseInvalidation';
 import { ROUTES, withQuery, type RoutePath } from '@/lib/routes';
@@ -195,16 +196,16 @@ export function choicesParam(choices: Record<string, SplitChoice>): string {
 
 /* The property page's split dialog opened on these letters: the one place the
  * review pages send a split (an advert the link leaves out starts at A). */
-export function splitPath(propertyId: number, letters: SplitLetters): RoutePath {
+export function splitPath(propertyId: number, letters: Letters): RoutePath {
   return withQuery(ROUTES.property.build({ propertyId }), { letters: lettersParam(letters) });
 }
 
 /* A link's `?letters=` back as letters; a part that is not `id:A–Z` is dropped. */
-export function parseLetters(raw: string | null): SplitLetters {
-  const out: SplitLetters = {};
+export function parseLetters(raw: string | null): Letters {
+  const out: Letters = {};
   for (const part of (raw ?? '').split(',')) {
     const m = /^(\d{1,15}):([A-Z])$/.exec(part.trim());
-    if (m && UNIT_LETTERS.includes(m[2])) out[Number(m[1])] = m[2];
+    if (m && LETTERS.includes(m[2])) out[Number(m[1])] = m[2];
   }
   return out;
 }
@@ -232,7 +233,7 @@ export interface PlanGroup {
 
 export interface SplitPlan {
   /* Every advert shown with its letter: the statement's `letters`. */
-  letters: SplitLetters;
+  letters: Letters;
   kept: PlanGroup;
   /* Letter order. */
   leaving: PlanGroup[];

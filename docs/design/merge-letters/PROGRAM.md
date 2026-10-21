@@ -63,8 +63,10 @@ free one, the ledger per letter with the marks, the summed MS12 count, the butto
 has one property), the card's one stretched `<button>` named by its letter (the pointer focuses it,
 Tab moves card to card, ← → page through `ImageCarouselHandle.step`; chevrons `tabIndex=-1` on Browse
 cards), `lib/useMergeProperties` over the statement, the receipt per letter in `lib/mergedAdverts`,
-the Rulings page on the same hook. `lettersParam` moved to `lib/api` (re-exported for the split's
-pages).
+the Rulings page on the same hook. The letters' one home in the SPA is `lib/api`: `Letters` (the
+type the split used to call `SplitLetters`), `LETTERS` (the alphabet `UnitSplit` used to define as
+`UNIT_LETTERS`, which `lib` imported from a component module) and `lettersParam` (re-exported for
+the split's pages).
 
 **Not changed.** What a merge does (survivor, carry record, rulings), the split, the Explore modals
 (merge mode off), rule 15 and MS1–MS23.
