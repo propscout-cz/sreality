@@ -52,6 +52,8 @@ const STAGES: PipelineStage[] = [
 const base: CardRow = {
   property_id: 304388,
   listing_id: 9001,
+  lat: 50.08,
+  lng: 14.43,
   sreality_id: 123,
   display_label: 'Freyova, Praha 9 – Vysočany',
   disposition: '2+kk',
@@ -81,6 +83,8 @@ const rent: CardRow = {
   ...base,
   property_id: 5,
   listing_id: 5005,
+  lat: 50.08,
+  lng: 14.43,
   disposition: '2+1',
   area_m2: 60,
   price_czk: 22_500,

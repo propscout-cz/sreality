@@ -114,6 +114,8 @@ export const CARD_PAGE_SIZE = 24;
 const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
 const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
+  /* The point of the property (its location ad) — the hovered card hands it to the map. */
+  'lat,lng,' +
   /* The Kč/m² figure reads the SERVER measure (migration 425), not price/area:
    * the column is what the sort and the Kč/m² filter already use, so selecting
    * it is what keeps the number on screen identical to the number the cohort
@@ -780,6 +782,8 @@ export interface CardRow {
    * key the card image hydration batches on. `sreality_id` is nullable post-
    * Gate-2 and is only the fast detail link + the (sreality-backed) estimate. */
   listing_id: number;
+  lat: number | null;
+  lng: number | null;
   sreality_id: number | null;
   /* The one server-composed place string (migration 503): the five columns it
    * replaced (district / locality / obec / okres / street) are not selected. */

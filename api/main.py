@@ -26,7 +26,6 @@ from api import dismissals as dismissals_module
 from api import pipeline as pipeline_module
 from api import shares as shares_module
 from api import price_stats as price_stats_module
-from api import stats_dashboard as stats_dashboard_module
 from api import dependencies as deps
 from api import maps
 from api import sreality_price_map
@@ -72,6 +71,7 @@ from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
 from api.routes.outreach import router as outreach_router
 from api.routes.filter_presets import router as filter_presets_router
+from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
 from api.routes.property_location import router as property_location_router
@@ -327,6 +327,9 @@ app.include_router(broker_review_router)
 # /filter-presets/* (named Browse filter presets: CRUD) — per-account content on
 # the JWT + tenant pool (RLS). Decoupled from /notifications (a preset never fires).
 app.include_router(filter_presets_router)
+# /stats/dashboards/* (named Stats dashboards: the same saved-set CRUD, plus read-only shares)
+# and /stats/dashboard (the account's working board) — tenant pool (RLS), migration 647.
+app.include_router(stats_dashboards_router)
 # /images/* redirects a listing-photo key to a presigned R2 URL. Public (like
 # /health) — an <img> tag can't send a bearer header and these are public
 # photos; the key regex keeps it scoped to listing images only.
@@ -1742,19 +1745,6 @@ def delete_pipeline_share(
 ) -> dict[str, Any]:
     """Stop sharing my board with `account_id` (side=shared_with) or leave theirs (shared_with_me)."""
     return shares_module.revoke_pipeline(conn, str(account_id), side)
-
-
-# --- Browse > Stats dashboard (migration 626) --------------------------------
-# One board per account, written whole; the SPA reads it through RLS itself.
-
-@app.put("/stats/dashboard")
-def put_stats_dashboard(
-    body: s.StatsDashboardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
-) -> dict[str, Any]:
-    """Replace the caller's board; every chart is validated by the stats registry (422)."""
-    return stats_dashboard_module.save_dashboard(conn, body.charts, account_id=account_id)
 
 
 # --- dismissals (migration 536) ---------------------------------------------

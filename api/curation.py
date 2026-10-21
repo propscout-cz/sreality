@@ -310,15 +310,9 @@ def create_share(
     collection_id: int,
     body: s.ShareCollectionIn,
 ) -> dict[str, Any]:
-    """Share one collection read-only with the account behind a confirmed email (owner only).
-
-    The service-role connection opens only after the tenant gate passed (tenancy.md)."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_SHARE_GATE_SQL, (collection_id,))
-        gate = cur.fetchone()
-    if gate is None:
-        raise HTTPException(404, "collection not found")
-    shares.grant(open_identity_conn, body.email, shares.CollectionShare(collection_id, gate[0]))
+    """Share one collection read-only with the account behind a confirmed email (owner only)."""
+    name = shares.owner_gate(conn, _SHARE_GATE_SQL, collection_id, "collection")
+    shares.grant(open_identity_conn, body.email, shares.CollectionShare(collection_id, name))
     coll = _fetch_collection(conn, collection_id)
     if coll is None:
         raise HTTPException(404, "collection not found")

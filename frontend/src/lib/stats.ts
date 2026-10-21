@@ -186,7 +186,7 @@ export const statsDashboardKey = ['stats-dashboard'] as const;
  * GET /stats/dashboard on the write's account resolution instead of this read. */
 export async function fetchDashboard({ signal }: PgReadOptions = {}): Promise<ChartSpec[]> {
   const { data } = await pgRead<{ charts: unknown } | null>(
-    supabase.from('stats_dashboards').select('charts').limit(1).maybeSingle(),
+    supabase.from('stats_dashboards').select('charts').is('name', null).limit(1).maybeSingle(),
     { signal },
   );
   if (data == null) return DEFAULT_CHARTS;

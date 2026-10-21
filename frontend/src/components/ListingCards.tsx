@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import type { HoverTarget } from '@/lib/hoverSync';
 import { Link } from 'react-router-dom';
 import CollectionMark from '@/components/CollectionMark';
 import CollectionSaveMenu, {
@@ -107,11 +108,11 @@ interface Props {
   hasBounds: boolean;
   /* Hover-sync set: when a card's listing_id appears here (because the
    * user is hovering the matching pin on the map), the card lights up.
-   * Cards push their own hover state (their listing_id) outward via
-   * onHover. Keyed on the surrogate listing_id, never sreality_id —
+   * Cards push their own hover state (their row: listing_id and point)
+   * outward via onHover. Keyed on the surrogate listing_id, never sreality_id —
    * null-safe past Gate-2. */
   hoveredIds: ReadonlySet<number>;
-  onHover: (ids: ReadonlyArray<number> | null) => void;
+  onHover: (targets: ReadonlyArray<HoverTarget> | null) => void;
   /* Which pane originated the hover. Map-origin hovers get the full
    * "find it in the archive" treatment — non-matching cards recede and
    * the first match scrolls into view. List-origin hovers (the
@@ -345,7 +346,7 @@ function Card({
   /* First match of a map-origin hover: gently pull it into view in
    * case it sits below the fold of the card column. */
   scrollOnHover: boolean;
-  onHover: (ids: ReadonlyArray<number> | null) => void;
+  onHover: (targets: ReadonlyArray<HoverTarget> | null) => void;
   merge: MergeMode | null;
   estimate: ListingEstimate | undefined;
   estimating: boolean;
@@ -461,7 +462,7 @@ function Card({
        * target, the same one Tab moves. On real movement only: a scroll
        * synthesizes an enter under a still pointer, which would rob the card
        * Tab just reached. */
-      onMouseEnter={merge ? undefined : () => onHover([r.listing_id])}
+      onMouseEnter={merge ? undefined : () => onHover([r])}
       onMouseLeave={merge ? undefined : () => onHover(null)}
       onMouseMove={merge ? () => focusFromPointer(selectRef.current) : undefined}
       /* ← → page the photos from wherever focus sits on the card (the title

@@ -3,7 +3,8 @@ import { useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import { createMap } from '@/lib/basemap';
-import { useMapFeatureHover } from '@/lib/useMapFeatureHover';
+import type { HaloPoint } from '@/lib/hoverSync';
+import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
   COUNTS,
   COUNT_INK,
@@ -286,11 +287,9 @@ interface Props {
    * mouseenter/mouseleave events outward through onHover. */
   hoveredIds: ReadonlySet<number>;
   onHover: (ids: ReadonlyArray<number> | null) => void;
-  /* Which pane originated the current hover. The locator halo renders
-   * only for 'list' hovers — echoing a map-origin hover back onto the
-   * map would just redraw under the cursor (and a count-mark hover would
-   * drop dozens of halos at once). */
-  hoverOrigin?: 'map' | 'list' | null;
+  /* The locator halo's points: the hovered cards' own rows (HoverTarget), so the
+   * halo lands even when the map holds no row for the property. */
+  haloPoints: ReadonlyArray<HaloPoint>;
   /* When set (i.e. the operator chose centre+radius mode in the
    * sidebar) the map renders a dashed copper circle around the
    * point so the cohort's geographic scope is visible. The circle
@@ -388,7 +387,7 @@ export default function ListingMap({
   onBoundsChange,
   hoveredIds,
   onHover,
-  hoverOrigin = null,
+  haloPoints,
   centerCircle,
   flyTo,
   anchor = null,
@@ -1365,26 +1364,14 @@ export default function ListingMap({
     };
   }, [ready, overlayRegistry]);
 
-  /* Locator halo data: list-origin hovers project the hovered rows'
-   * coordinates into the halo source; everything else clears it (a
-   * map-origin hover means the cursor is already on the spot). */
+  /* Locator halo data: the hovered rows' own points, whatever the map holds. */
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
     const src = map.getSource('hover-halo') as GeoJSONSource | undefined;
     if (!src) return;
-    const features: GeoJSON.Feature<GeoJSON.Point>[] =
-      hoverOrigin === 'list' && hoveredIds.size > 0
-        ? rows
-            .filter((r) => hoveredIds.has(r.listing_id))
-            .map((r) => ({
-              type: 'Feature',
-              geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
-              properties: {},
-            }))
-        : [];
-    src.setData({ type: 'FeatureCollection', features });
-  }, [hoveredIds, hoverOrigin, rows, ready]);
+    src.setData(haloFeatures(haloPoints));
+  }, [haloPoints, ready]);
 
   /* Origin anchor data. Writes ONLY the `anchor` source — never `listings` —
    * so no filter change can reach it (the structural decoupling). `anchor` is

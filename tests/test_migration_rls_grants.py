@@ -602,11 +602,11 @@ def test_dynamic_ddl_is_annotated():
     )
 
 
-# --- the sharing policies (migrations 610, 641), pinned ---------------------
-# A collection share widens READS only, through exactly these five permissive policies; a
-# pipeline share widens nothing (its recipient ACTS AS the owner, below) and its party policy,
-# like collection_shares_party, hides itself while acting. An `alter policy` that swaps only
-# USING / WITH CHECK keeps the pinned shape for the two PARTY policies alone (641 adds `not acting()`
+# --- the sharing policies (migrations 610, 641, 647), pinned ----------------
+# A collection share widens READS only, through exactly these five permissive policies, and a
+# dashboard share (647) through its one; a pipeline share widens nothing (its recipient ACTS AS
+# the owner, below). Every party policy hides itself while acting. An `alter policy` that swaps only
+# USING / WITH CHECK keeps the pinned shape for the PARTY policies alone (641 adds `not acting()`
 # that way, and test_the_share_rows_are_invisible_while_acting checks their final USING); any alter
 # of a `*_shared_read` still fails here.
 # 610's own assert block checks them once, when 610 applies; this census re-reads EVERY
@@ -616,6 +616,8 @@ def test_dynamic_ddl_is_annotated():
 _SHARE_POLICY_PIN: dict[str, tuple[str, str, frozenset[str]]] = {
     "collection_shares_party": ("collection_shares", "all", frozenset({"authenticated"})),
     "pipeline_shares_party": ("pipeline_shares", "all", frozenset({"authenticated"})),
+    "stats_dashboard_shares_party": ("stats_dashboard_shares", "all", frozenset({"authenticated"})),
+    "stats_dashboards_shared_read": ("stats_dashboards", "select", frozenset({"authenticated"})),
     "collections_shared_read": ("collections", "select", frozenset({"authenticated"})),
     "collection_properties_shared_read": (
         "collection_properties", "select", frozenset({"authenticated"})),
@@ -706,7 +708,7 @@ _ACTING_POLICIES: dict[str, str] = {
 _BOARD_POLICIES = frozenset({
     "property_pipeline_tenant_rw", "pipeline_stages_tenant_rw", "property_pipeline_events_tenant_rw",
 })
-_HIDDEN_WHILE_ACTING = ("collection_shares_party", "pipeline_shares_party")
+_HIDDEN_WHILE_ACTING = ("collection_shares_party", "pipeline_shares_party", "stats_dashboard_shares_party")
 
 
 def _clause(rest: str, keyword: str) -> str | None:
