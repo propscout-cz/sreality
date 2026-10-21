@@ -1206,7 +1206,7 @@ export interface FilterPreset {
 
 /* A named Browse › Stats dashboard (stats_dashboards, migration 647): the
  * filter preset's twin in the one saved-set primitive (docs/design/
- * saved-dashboards.md). `charts` is the stored board — read it through
+ * saved-dashboards.md). `charts` is its stored chart list — read it through
  * lib/stats `sanitizeCharts`; `filter_spec` is the preset blob, null = the
  * dashboard carries no filter. Sharing as a collection's: `owner_email` is null
  * exactly when the caller owns it; the owner sees every recipient, a recipient

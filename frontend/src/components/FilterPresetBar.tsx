@@ -156,7 +156,7 @@ export default function FilterPresetBar({
       }
       onRename={(p, name, color) => update.mutateAsync({ id: p.id, name, color })}
       onDelete={(p) => remove.mutateAsync(p.id)}
-      extra={
+      checkbox={
         filters.bounds != null
           ? {
               label: 'Include the current map area in this preset',

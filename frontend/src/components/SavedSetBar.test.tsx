@@ -92,12 +92,12 @@ describe('<SavedSetBar> dirty', () => {
     expect(screen.queryByRole('button', { name: 'Update preset' })).toBeNull();
   });
 
-  it('updates through the dialog, the extra box starting from the item', async () => {
-    const extraInitial = vi.fn((i: Item | null) => i?.id === 'a');
+  it('updates through the dialog, the checkbox starting from the item', async () => {
+    const checkboxInitial = vi.fn((i: Item | null) => i?.id === 'a');
     const { onUpdate } = renderBar({
       activeId: 'a',
       dirty: true,
-      extra: { label: 'Include the current map area in this preset', initial: extraInitial },
+      checkbox: { label: 'Include the current map area in this preset', initial: checkboxInitial },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
     const dialog = screen.getByRole('dialog', { name: 'Update preset' });
@@ -109,9 +109,9 @@ describe('<SavedSetBar> dirty', () => {
 });
 
 describe('<SavedSetBar> dialogs', () => {
-  it('saves a new set with the extra box off by default', async () => {
+  it('saves a new set with the checkbox off by default', async () => {
     const { onSaveNew } = renderBar({
-      extra: { label: 'Uložit i nastavení filtru', initial: () => false },
+      checkbox: { label: 'Uložit i nastavení filtru', initial: () => false },
     });
     fireEvent.click(screen.getByRole('button', { name: '+ Save preset' }));
     const dialog = screen.getByRole('dialog', { name: 'Save filters as a preset' });
@@ -130,8 +130,8 @@ describe('<SavedSetBar> dialogs', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('renames from the menu without the extra box', async () => {
-    const { onRename } = renderBar({ extra: { label: 'Extra', initial: () => true } });
+  it('renames from the menu without the checkbox', async () => {
+    const { onRename } = renderBar({ checkbox: { label: 'Extra', initial: () => true } });
     openMenu('Beta');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Edit…' }));
     const dialog = screen.getByRole('dialog', { name: 'Edit preset' });

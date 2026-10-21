@@ -22,10 +22,10 @@ import SavedSetSaveModal, { type SavedSetSaveModalProps } from './SavedSetSaveMo
 
 function Host({
   onSubmit = vi.fn(),
-  extra = { label: 'Include the current map area in this preset', initial: false },
+  checkbox = { label: 'Include the current map area in this preset', initial: false },
 }: {
   onSubmit?: SavedSetSaveModalProps['onSubmit'];
-  extra?: SavedSetSaveModalProps['extra'];
+  checkbox?: SavedSetSaveModalProps['checkbox'];
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -39,7 +39,7 @@ function Host({
           words={PRESET_COPY}
           mode="update"
           initial={{ name: '2+kk Praha pod 6M', color: null }}
-          extra={extra}
+          checkbox={checkbox}
           onSubmit={onSubmit}
           onClose={() => setOpen(false)}
         />
@@ -83,7 +83,7 @@ describe('<SavedSetSaveModal> dialog contract', () => {
   });
 });
 
-describe('<SavedSetSaveModal> the extra checkbox', () => {
+describe('<SavedSetSaveModal> the checkbox', () => {
   const open = () => fireEvent.click(screen.getByRole('button', { name: 'Save preset' }));
 
   it('submits the name, the box as ticked and the colour', () => {
@@ -99,14 +99,14 @@ describe('<SavedSetSaveModal> the extra checkbox', () => {
   });
 
   it('starts from the state it is given', () => {
-    render(<Host extra={{ label: 'Uložit i nastavení filtru', initial: true }} />);
+    render(<Host checkbox={{ label: 'Uložit i nastavení filtru', initial: true }} />);
     open();
     expect(screen.getByRole('button', { name: 'Uložit i nastavení filtru' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('offers no box, and submits false, when the flow has none', () => {
     const onSubmit = vi.fn();
-    render(<Host onSubmit={onSubmit} extra={null} />);
+    render(<Host onSubmit={onSubmit} checkbox={null} />);
     open();
     expect(screen.queryByRole('button', { name: /map area/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));

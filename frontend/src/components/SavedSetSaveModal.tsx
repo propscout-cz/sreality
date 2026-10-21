@@ -1,10 +1,10 @@
 /* Name + colour dialog for saving / updating / editing a saved set (a Browse
  * filter preset, a Stats dashboard — components/SavedSetBar), in the instance's
  * words. The swatches are the shared tag palette (TAG_COLORS), so saved sets and
- * tags speak one colour vocabulary. A save or an update may offer ONE checkbox
- * (`extra`): presets ask whether the current map area is part of the preset,
- * dashboards whether the Browse filter is saved with the charts; the
- * metadata-only edit never offers it (the stored blob is untouched). */
+ * tags speak one colour vocabulary. A save or an update may offer ONE checkbox:
+ * presets ask whether the current map area is part of the preset, dashboards
+ * whether the Browse filter is saved with the charts; the metadata-only edit
+ * never offers it (the stored blob is untouched). */
 
 import { useEffect, useId, useRef, useState } from 'react';
 
@@ -26,15 +26,15 @@ export interface SavedSetSaveModalProps {
   /* The set being updated or edited; null on a save. */
   initial: { name: string; color: TagColor | null } | null;
   /* The one checkbox this flow offers, with its starting state; null = none. */
-  extra: { label: string; initial: boolean } | null;
+  checkbox: { label: string; initial: boolean } | null;
   /* The write: the dialog stays open and busy until it settles, and says why it failed. */
-  onSubmit: (name: string, extra: boolean, color: TagColor | null) => Promise<unknown>;
+  onSubmit: (name: string, checked: boolean, color: TagColor | null) => Promise<unknown>;
   onClose: () => void;
 }
 
-export default function SavedSetSaveModal({ words, mode, initial, extra, onSubmit, onClose }: SavedSetSaveModalProps) {
+export default function SavedSetSaveModal({ words, mode, initial, checkbox, onSubmit, onClose }: SavedSetSaveModalProps) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [checked, setChecked] = useState(extra?.initial ?? false);
+  const [checked, setChecked] = useState(checkbox?.initial ?? false);
   const [color, setColor] = useState<TagColor | null>(initial?.color ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export default function SavedSetSaveModal({ words, mode, initial, extra, onSubmi
     setBusy(true);
     setError(null);
     try {
-      await onSubmit(trimmed, extra != null && checked, color);
+      await onSubmit(trimmed, checkbox != null && checked, color);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : words.failed);
     } finally {
@@ -93,7 +93,7 @@ export default function SavedSetSaveModal({ words, mode, initial, extra, onSubmi
         </div>
       </div>
 
-      {extra ? (
+      {checkbox ? (
         <button
           type="button"
           onClick={() => setChecked((v) => !v)}
@@ -111,7 +111,7 @@ export default function SavedSetSaveModal({ words, mode, initial, extra, onSubmi
           >
             ✓
           </span>
-          <span className="text-[0.8rem] text-[var(--color-ink-2)]">{extra.label}</span>
+          <span className="text-[0.8rem] text-[var(--color-ink-2)]">{checkbox.label}</span>
         </button>
       ) : null}
 

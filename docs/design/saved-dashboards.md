@@ -86,17 +86,19 @@ rewritten for the new upsert (`ON CONFLICT (account_id) WHERE name IS NULL`).
 `api/saved_sets.py` replaces `api/filter_presets.py` + the CRUD half of `api/routes/filter_presets.py`:
 
 - A frozen `SavedSetKind(table, noun, id_param, blob_columns, create_in, update_in, nullable, empty_on_read,
-  projection_extra, row_scope, order_by)` descriptor. `blob_columns` names the jsonb columns (`filter_spec` for
-  presets; `charts`, `filter_spec` for dashboards); each is validated by its type on the body models in
-  `api/schemas.py`: `PresetSpec` (`_coded_chips`) and `Charts` (`toolkit.stats_registry.validate_board`, its refusal
-  a plain-string 422). `nullable` is the set a PUT's explicit `null` clears (`color`; a dashboard's `filter_spec`
-  too); every other null keeps the stored value, so the API never writes `name = NULL`. `row_scope` applies to EVERY
+  projection_extra, row_scope, order_by, own_rows)` descriptor. `blob_columns` names the jsonb columns (`filter_spec`
+  for presets; `charts`, `filter_spec` for dashboards); each is validated by its type on the body models in
+  `api/schemas.py`: `PresetSpec` (`_coded_chips`) and `Charts` (`toolkit.stats_registry.validate_board`, its refusal a
+  plain-string 422). `nullable` is the set a PUT's explicit `null` clears (`color`; a dashboard's `filter_spec` too);
+  every other null keeps the stored value, so the API never writes `name = NULL`. `row_scope` applies to EVERY
   statement, not only the list (dashboards: `name IS NOT NULL`, so no by-id route reaches the working board).
-  `order_by` is the list order. `empty_on_read` keeps the preset reader's `filter_spec or {}`.
+  `order_by` is the list order. `empty_on_read` keeps the preset reader's `filter_spec or {}`. `own_rows` names the
+  caller's own rows where RLS also shows shared ones (dashboards: `_IS_MINE_SQL`), for the position below.
 - One implementation of list / get / create / update / delete / reorder, keyed by the descriptor: the same SQL shapes
-  as before (`position = (SELECT COALESCE(MAX(position), -1) + 1 FROM <table>)`, `unnest ... WITH ORDINALITY`
-  reorder, omitted-vs-null colour), the same response rows plus the dashboard projection extras. A PUT that changes
-  nothing locks the row `FOR UPDATE`, which applies the UPDATE policy: a recipient's empty PUT is a 404 too.
+  as before (`position = (SELECT COALESCE(MAX(position), -1) + 1 FROM <table>)`, for dashboards over the caller's own
+  rows only (`own_rows`); `unnest ... WITH ORDINALITY` reorder, omitted-vs-null colour), the same response rows plus
+  the dashboard projection extras. A PUT that changes nothing locks the row `FOR UPDATE`, which applies the UPDATE
+  policy: a recipient's empty PUT is a 404 too.
 - One `saved_set_router(kind, prefix)` factory emitting the six CRUD routes (`GET ""`, `POST ""` with
   `require_account_id`, `PUT /reorder` before `/{id}`, `GET/PUT/DELETE /{id}`), every route on `tenant_conn`, every
   id a uuid at the edge (a malformed one, e.g. from a hand-edited link, is a 422), each endpoint tagged with the SQL
@@ -108,7 +110,7 @@ rewritten for the new upsert (`ON CONFLICT (account_id) WHERE name IS NULL`).
 Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 
 - `GET /stats/dashboards` → `{data: [...], total}`; rows = named rows the caller can read: own (RLS tenant policy)
-  and shared (`shared_read`). Projection extras, `api/curation.py`'s shape: `owner_email` (NULL iff
+  and shared (`stats_dashboards_shared_read`). Projection extras, `api/curation.py`'s shape: `owner_email` (NULL iff
   `account_id in current_account_ids()`, else `party_label`) and `shared_with` (json_agg of
   `{account_id, email}` over `stats_dashboard_shares`). `WHERE name IS NOT NULL`. ORDER: the caller's own
   dashboards first, then those shared with them, each group by `position, created_at desc`
@@ -126,8 +128,11 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
   0 rows → 404.
 - The working board: `GET /stats/dashboard` → `{id, charts, updated_at}` or `null` (the SPA then shows
   `DEFAULT_CHARTS`); `PUT /stats/dashboard {charts}` keeps its contract, upserting
-  `ON CONFLICT (account_id) WHERE name IS NULL`. Both on `require_account_id`, so the read and the write resolve the
-  SAME account — the single-membership caveat in `lib/stats.ts` and the design doc is deleted with the pgRead.
+  `ON CONFLICT (account_id) WHERE name IS NULL`. The GET is a plain tenant read under RLS with no account predicate
+  (tenancy shape 1; under `X-Act-As` it returns the caller's own board, as dashboards never act, pipeline-sharing
+  §3.7); the PUT keeps `require_account_id` (shape 2: a write names its one account). One membership per user makes
+  the read's row the write's; a second membership would need the write's account resolution in the read. The
+  single-membership caveat in `lib/stats.ts` goes with the pgRead.
 
 `api/shares.py` gains `DashboardShare(dashboard_id, name)` beside the two kinds (one more `isinstance` arm in
 `grant`, one delete SQL, one dispatch call); nothing else there changes. `api/notifications.py`'s projection gains
@@ -137,14 +142,14 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 ## SPA
 
 - **`components/SavedSetBar.tsx`** — THE bar, generic: `{items, activeId, dirty, onLoad, onSaveNew, onUpdate,
-  onRename, onDelete, onReorder, leading?, chipMenu?, copy: {empty, save, update, nameLabel, extra?: {label,
+  onRename, onDelete, onReorder, leading?, chipMenu?, copy: {empty, save, update, nameLabel, checkbox?: {label,
   initial}}}`. Drag-reorder (dnd-kit), the active chip, the dirty mark and the copper "update" button, the dashed
   "+ save" button, the save modal. `PresetBar.tsx` becomes `FilterPresetBar.tsx` = SavedSetBar + the preset adapter
   (queries, mutations, `loadPreset`, the Pipeline chip in `leading`). `PresetSaveModal.tsx` becomes
-  `SavedSetSaveModal.tsx` with `extra` in place of `includeMapArea` (presets: "Include map area"; dashboards:
+  `SavedSetSaveModal.tsx` with `checkbox` in place of `includeMapArea` (presets: "Include map area"; dashboards:
   "Uložit i nastavení filtru"). Behaviour of the preset bar is unchanged, pixel for pixel; its tests move with it.
 - **`components/stats/DashboardBar.tsx`** = SavedSetBar + the dashboard adapter, mounted at the top of the Stats tab
-  (the `StatsDashboard` card list below it). Items: `GET /stats/dashboards`. Own chips drag; a shared chip shows the
+  (the `StatsDashboard` charts below it). Items: `GET /stats/dashboards`. Own chips drag; a shared chip shows the
   owner's email as its suffix, does not drag, and its menu offers "Načíst", "Uložit jako vlastní" and
   "Přestat sledovat"; an own chip's menu offers "Přejmenovat", "Sdílet…" (a small modal holding `ShareBlock`, no
   modes, `lang="cs"`) and "Smazat" (two-step).
@@ -157,10 +162,11 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 - **Arrival with `?tab=stats&dashboard=<id>`** (a notification link, a bookmark): the URL is the intent — the Stats
   tab loads that dashboard on mount when the working board's charts differ from it (one PUT), as a click would; a
   dashboard the caller can no longer read clears the param.
-- **Dirty** = the working board's sanitized charts ≠ the active dashboard's, or (the dashboard has a filter and
-  `!filtersEqualForPreset(current, stored)`). "Uložit změny" = `PUT /stats/dashboards/{id} {charts: working,
-  filter_spec: hadFilter ? filtersForPreset(current) : undefined}`. "Uložit jako dashboard" = `POST` with the
-  working charts and, when the checkbox is on, the current filter. Both through `useOptimisticWrite`.
+- **Dirty** = the preset's check: the working board's sanitized charts ≠ the active dashboard's, or (the dashboard
+  has a filter and `!filtersEqualForPreset(current, stored)` or the current sort ≠ the stored one, the default sort
+  when it stored none). "Uložit změny" = `PUT /stats/dashboards/{id} {charts: working, filter_spec: hadFilter ?
+  {filters: filtersForPreset(current), sort: current} : undefined}`. "Uložit jako dashboard" = `POST` with the
+  working charts and, when the checkbox is on, the current filter and sort. Both through `useOptimisticWrite`.
 - **Working board I/O** (`lib/stats.ts`): `fetchDashboard` becomes `apiGet('/stats/dashboard')` (null → defaults);
   the pgRead and its single-membership comment go. `saveDashboard` unchanged.
 - **Notifications**: `ShareNotificationRow` branches on `share_kind`: collection → "Open collection", pipeline →
@@ -169,44 +175,80 @@ Dashboards (`api/routes/stats_dashboards.py`, mounted like the presets router):
 - Bundle: `DashboardBar` ships in the Stats chunk (lazy); the first-visit budget (330 KB gzip) must not grow — the
   Table tab's removal pays for anything the preset bar refactor adds.
 
-**W3 as built** (2026-10-20). Where it differs from the plan above: (1) the named dashboards' clients and their
-list key sit in `lib/stats.ts` beside `fetchDashboard` / `saveDashboard` (the Stats chunk), not in `lib/api.ts` /
-`lib/queries.ts`, which are first-visit code; `lib/api.ts` gains only the generic `apiDelete`. (2) Arrival loads
-the URL's dashboard only when this browser tab has not loaded it already (a marker in memory, read first, and in
-`sessionStorage` for a reload): as planned, every Stats remount (a tab switch, Back) and every reload would have
-copied the stored charts over the working board's unsaved edits. It judges only the list as re-read since the
-mount (`refetchOnMount: 'always'`), so a dashboard shared a minute ago is found, and it REPLACES the link's
-history entry (a click still pushes), so Back leaves Browse instead of landing on a filterless copy of it. (3) "Uložit změny" opens the same dialog as "Update preset"
-(name, colour, "Uložit i nastavení filtru" ticked iff the dashboard carries a filter); left alone it sends the
-planned PUT, unticked it clears the filter (`filter_spec: null`), ticked on a filterless one it adds it.
-(4) "Uložit jako vlastní" is one POST of the shared dashboard's stored charts, filter, name and colour, no dialog;
-the copy becomes active only when the shared one was. (5) Own chips come first in their order, shared ones after
-them (not interleaved by the owner's positions). (6) The bar is Browse-page only: the modals' `presetBar: false`
-gates both saved-set bars, so the memory adapter's three dashboard members are no-ops. (7) The generic bar takes
-`onReorder` with the own items in their new order, `isOwn` (drags, renames, deletes, updates) for the planned
-`reorderable`, `extra` as a prop (the preset's box exists only while a map area is applied) and `suffix`; one hook
-beside it, `useSavedSet`, reads an instance's list and persists a drag (own rows first, shared after) for both.
-Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's Delete… / Confirm delete were.
-(8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it; only the board read left it.
-(9) `fetchDashboard` now goes through the API, so a dev or preview build without `VITE_API_BASE_URL` shows the
-board's error banner on Stats instead of the defaults (production always has the API). (10) "Own" is
-`owner_email == null`, as on a collection; an account with no member email would read as the caller's own, an
-edge no share can reach (a share needs a confirmed email). The fold of the preset bar (757 lines) into the bar,
-its dialog and the preset instance came to 707 (956 as first cut), not ~600: a generic bar carries its words as
-data, a shared chip and instance menu entries.
+## W2 as built (2026-10-20)
+
+Migration 647 and the API, folded into the plan above; what they added beyond the sprint's first contract:
+
+1. A name never crosses NULL: the `BEFORE UPDATE OF name` trigger `stats_dashboards_name_guard`
+   (`guard_stats_dashboard_name()`) refuses a named row becoming the working board and the working board being named
+   in place. The API does neither; the trigger closes a direct PostgREST UPDATE.
+2. Data CHECKs: `charts` a JSON array ≤ 256 KiB, `filter_spec` NULL or a JSON object ≤ 64 KiB, so such a write cannot
+   hand a recipient junk.
+3. `stats_dashboards_shared_read` names `name is not null` beside the share: belt and braces, as the shares trigger
+   already refuses a share of a working board.
+4. The list's ORDER is own first, then shared, each by `position, created_at desc`; the plan ordered by position alone.
+5. A PUT that changes nothing locks the row `FOR UPDATE`, which applies the UPDATE policy: a recipient's empty PUT is
+   the 404 a real change would be, and nothing is bumped.
+6. Every id is a uuid at the edge (a malformed one is a 422, not a 500), and every endpoint carries `runs_sql`, the
+   SQL it runs, for the acting-routes census, which cannot read built SQL off the source.
+7. `SavedSetKind` grew from `(table, blob_columns, projection_extra, list_where)` to carry `row_scope` (on EVERY
+   statement, not only the list, so no by-id route reaches the working board), `nullable` (the fields a PUT's
+   explicit null clears), `empty_on_read` (the preset reader's `filter_spec or {}`), `projection_extra`, `order_by`
+   and `own_rows`, plus `noun`, `id_param`, `create_in`, `update_in`.
+8. The working board's `GET /stats/dashboard` is a tenancy shape-1 read
+   (`.claude/skills/database/references/tenancy.md`): RLS alone picks the row, with no account predicate; the first
+   contract put the read on `require_account_id` beside the PUT.
+9. A new row's `position` is `MAX(position) + 1` over the caller's OWN rows: RLS scopes the MAX and `own_rows`
+   drops the dashboards shared with the caller, so a new one goes last among its own.
+10. The share route's ownership gate is one helper, `shares.owner_gate`, which the collection share runs too; the
+    saved set's 404 helper is `row_or_404()` (it was `found()`).
+
+## W3 as built (2026-10-20)
+
+Where it differs from the plan above: (1) the named dashboards' clients and their list key sit in `lib/stats.ts`
+beside `fetchDashboard` / `saveDashboard` (the Stats chunk), not in `lib/api.ts` / `lib/queries.ts`, which are
+first-visit code; `lib/api.ts` gains only the generic `apiDelete`. (2) Arrival loads the URL's dashboard only when
+this browser tab has not loaded it already (a marker in memory, read first, and in `sessionStorage` for a reload): as
+planned, every Stats remount (a tab switch, Back) and every reload would have copied the stored charts over the
+working board's unsaved edits. It judges only the list as re-read since the mount (`refetchOnMount: 'always'`), so a
+dashboard shared a minute ago is found, and it REPLACES the link's history entry (a click still pushes), so Back
+leaves Browse instead of landing on a filterless copy of it. This changes the plan's meaning: the plan loaded whenever
+the working board differed from the dashboard; as built, arrival loads once per browser tab. The operator may overrule
+it. (3) "Uložit změny" opens the same dialog as "Update preset" (name, colour, "Uložit i nastavení filtru" ticked iff
+the dashboard carries a filter); left alone it sends the planned PUT, unticked it clears the filter
+(`filter_spec: null`), ticked on a filterless one it adds it. (4) "Uložit jako vlastní" is one POST, no dialog, under
+the shared dashboard's name and colour. The active one is saved as shown: the working charts and, when it carries a
+filter, the current filter and sort, as "Uložit změny" captures them (its dirty hint sends the recipient's edits
+there). Any other one is saved as stored. The copy becomes active only when the shared one was. (5) Own chips come
+first in their order, shared ones after them (not interleaved by the owner's positions). (6) The bar is Browse-page
+only: the modals' `presetBar: false` gates both saved-set bars, so the memory adapter's three dashboard members are
+no-ops. (7) The generic bar takes `onReorder` with the own items in their new order, `isOwn` (drags, renames, deletes,
+updates) for the planned `reorderable`, `checkbox` as a prop (the preset's box exists only while a map area is
+applied) and `suffix`; one hook beside it, `useSavedSet`, reads an instance's list and persists a drag (own rows
+first, shared after) for both. Delete and "Přestat sledovat" are the menu's two-step entries, as the preset's Delete…
+/ Confirm delete were. (8) `lib/stats.ts` keeps its `pgRead` import — `fetchStatsPivot` reads through it; only the
+board read left it. (9) `fetchDashboard` now goes through the API, so a dev or preview build without
+`VITE_API_BASE_URL` shows the board's error banner on Stats instead of the defaults (production always has the API).
+(10) "Own" is `owner_email == null`, as on a collection; an account with no member email would read as the caller's
+own, an edge no share can reach (a share needs a confirmed email). The fold of the preset bar (757 lines) into the
+bar, its dialog and the preset instance came to 707 (956 as first cut), not ~600: a generic bar carries its words as
+data, a shared chip and instance menu entries. (11) Inherited from PresetBar: shadows and the 0.65rem caption, against
+system.md; a follow-up design pass may align both bars at once.
 
 ## Subtraction ledger (production lines, tests and docs excluded)
 
 Planned: deleted the Table tab (~575, wave 1); `fetchDashboard`'s pgRead and the single-membership caveat (~20);
 `PresetBar` + `PresetSaveModal` folded into one bar and one modal (757 → ~600, −157); `api/filter_presets.py` +
 the CRUD routes folded into one module (286 → ~260, −26). Added: migration 647 (~250), the dashboards router (~120),
-the shares arm (~40), the dashboard adapter + share modal (~260), notifications (~10). Net production ≈ −100; no flag,
-no per-surface mode, one new table that is the third instance of an existing pattern.
+the shares arm (~40), the dashboard adapter + share modal (~260), notifications (~10). Net production ≈ −100.
 
-Actual W3 (SPA production, after review): +1,212 / −805, net +407 — the bar, its dialog and the preset instance
-are 707 lines where the preset bar and its dialog were 757 (−50, not −157); the dashboard instance with its share
-dialog is 291; browseState, lib/stats, types and Notifications carry the rest. The sprint's net turns on W1's
-Table removal and W2's API fold.
+Actual, production code only: W1 ≈ +353 / −821; W2 ≈ +763 / −354, of which the migration file is 345 added lines;
+W3 ≈ +1,212 / −805. The sprint's net is ≈ +350 lines, and ≈ +0 to +50 without the migration file. **The ≈ −100
+estimate was wrong.** The generic bar has to carry two instances' strings and menus as data (a shared chip, the
+instance's menu entries), so the preset bar and its dialog (757) became a bar, a dialog and the preset instance of
+707: −50, not −157. The API fold saved about 6 lines, not 26. The dashboard instance with its share dialog is 300;
+browseState, lib/stats, types and Notifications carry the rest of W3. What holds: no flag, no per-surface mode, one
+new table that is the third instance of an existing pattern.
 
 ## Waves and merges
 

@@ -11,7 +11,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import type { BrowseViewState } from '@/lib/browseState';
 import { filtersEqualForPreset, filtersForPreset, readPresetSpec, type PresetSpec } from '@/lib/filters';
-import { sortToParam } from '@/lib/queries';
+import { DEFAULT_SORT, sortToParam } from '@/lib/queries';
 import {
   chartsEqual, createStatsDashboard, deleteStatsDashboard, listStatsDashboards, reorderStatsDashboards, sanitizeCharts,
   shareStatsDashboard, statsDashboardKeys, unshareStatsDashboard, updateStatsDashboard, type ChartSpec, type DashboardList,
@@ -60,7 +60,7 @@ const DISPLAY_TITLE = { fontFamily: 'var(--font-display)', fontWeight: 600 };
 const isOwn = (d: SavedDashboard): boolean => d.owner_email == null;
 /* A failed dashboard write, said in the Stats tab's words (StatsDashboard's
  * "Grafy se nepodařilo uložit: …"); declaring it silences the global toast. */
-const failed = (what: string) => (err: Error) => pushToast('err', `${what}: ${err.message}`);
+const toastOnError = (what: string) => (err: Error) => pushToast('err', `${what}: ${err.message}`);
 
 /* The dashboard this browser tab last loaded (a click, an arrival, a save). The
  * URL's `dashboard` asks for a load only when it names ANOTHER one. A tab switch,
@@ -109,7 +109,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   const { enabled, query, bar } = useSavedSet(listKey, listStatsDashboards, reorderStatsDashboards, {
     isOwn,
     refetchOnMount: 'always',
-    onReorderError: failed('Pořadí dashboardů se nepodařilo uložit'),
+    onReorderError: toastOnError('Pořadí dashboardů se nepodařilo uložit'),
   });
   const { items } = bar;
   const [sharingId, setSharingId] = useState<string | null>(null);
@@ -118,20 +118,21 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
   const shareTitleId = useId();
 
   const { filters, sort, activeDashboardId } = view;
+  const sortParam = sortToParam(sort);
   const active = items.find((d) => d.id === activeDashboardId);
-  const dirty = useMemo(
-    () =>
-      active != null &&
-      !loadingBoard &&
-      (!chartsEqual(working, sanitizeCharts(active.charts)) ||
-        (active.filter_spec != null &&
-          !filtersEqualForPreset(filters, readPresetSpec(active.filter_spec).filters))),
-    [active, loadingBoard, working, filters],
-  );
+  /* Dirty as a preset is: the charts drift, or — for a dashboard that carries a
+   * filter — its filters or its sort do. */
+  const dirty = useMemo(() => {
+    if (active == null || loadingBoard) return false;
+    if (!chartsEqual(working, sanitizeCharts(active.charts))) return true;
+    if (active.filter_spec == null) return false;
+    const spec = readPresetSpec(active.filter_spec);
+    return !filtersEqualForPreset(filters, spec.filters) || (spec.sort ?? sortToParam(DEFAULT_SORT)) !== sortParam;
+  }, [active, loadingBoard, working, filters, sortParam]);
 
   /* A dashboard's filter is the preset blob, captured as a preset save captures
    * it — never the map viewport. */
-  const currentSpec = (): PresetSpec => ({ filters: filtersForPreset(filters, false), sort: sortToParam(sort) });
+  const currentSpec = (): PresetSpec => ({ filters: filtersForPreset(filters, false), sort: sortParam });
   const adopt = (saved: SavedDashboard) => qc.setQueryData(listKey, withRow(saved.id, (d) => ({ ...d, ...saved })));
 
   /* ONE load: the stored charts into the working board, then the URL. */
@@ -156,7 +157,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     mutationKey: ['write', 'stats-dashboards', 'create'],
     mutationFn: createStatsDashboard,
     revalidate: [listKey],
-    onError: failed('Dashboard se nepodařilo uložit'),
+    onError: toastOnError('Dashboard se nepodařilo uložit'),
     onSuccess: (created) =>
       qc.setQueryData<DashboardList>(listKey, (prev) =>
         prev && !prev.data.some((d) => d.id === created.id)
@@ -174,7 +175,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     // The PUT answers the row as stored, so only a failure needs a re-read.
     revalidate: (_vars, refused) => (refused ? [listKey] : []),
     onSuccess: adopt,
-    onError: failed('Dashboard se nepodařilo uložit'),
+    onError: toastOnError('Dashboard se nepodařilo uložit'),
   });
 
   /* Off the caller's list: the owner deletes it; a recipient leaves with its own
@@ -190,7 +191,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     ],
     revalidate: [listKey],
     onError: (err, d) =>
-      failed(isOwn(d) ? 'Dashboard se nepodařilo smazat' : 'Sdílený dashboard se nepodařilo odebrat')(err),
+      toastOnError(isOwn(d) ? 'Dashboard se nepodařilo smazat' : 'Sdílený dashboard se nepodařilo odebrat')(err),
   });
 
   /* Arrival: the URL names a dashboard this tab has not loaded — load it as a
@@ -208,13 +209,21 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load and view are re-made each render; these decide.
   }, [activeDashboardId, settled, active, drop.isPending]);
 
-  /* A shared dashboard as the caller's own: its stored charts and filter, its name. */
-  const copyAsOwn = (d: SavedDashboard) =>
-    create
-      .mutateAsync({ name: d.name, charts: sanitizeCharts(d.charts), filter_spec: d.filter_spec ?? undefined, color: d.color })
+  /* A shared dashboard as the caller's own, under its name and colour. The active
+   * one (its load landed) is saved as shown — the working charts and, when it
+   * carries a filter, the current filter and sort, as "Uložit změny" captures
+   * them: the dirty hint sends the recipient's edits here. Any other one is saved
+   * as stored. */
+  const copyAsOwn = (d: SavedDashboard) => {
+    const shown = d.id === activeDashboardId && !loadingBoard;
+    const charts = shown ? working : sanitizeCharts(d.charts);
+    const filter = d.filter_spec == null ? undefined : shown ? currentSpec() : d.filter_spec;
+    return create
+      .mutateAsync({ name: d.name, charts, filter_spec: filter, color: d.color })
       .then((created) => {
         if (d.id === activeDashboardId) activate(created.id);
       });
+  };
 
   const chipMenu = (d: SavedDashboard): SavedSetMenuItem[] => {
     if (isOwn(d)) return [{ label: 'Sdílet…', onSelect: () => setSharingId(d.id) }];
@@ -251,7 +260,7 @@ export default function DashboardBar({ view, working, onLoadCharts }: {
         }}
         onRename={(d, name, color) => update.mutateAsync({ id: d.id, patch: { name, color } })}
         onDelete={(d) => drop.mutateAsync(d)}
-        extra={{
+        checkbox={{
           label: 'Uložit i nastavení filtru',
           initial: (d) => d != null && d.filter_spec != null,
         }}

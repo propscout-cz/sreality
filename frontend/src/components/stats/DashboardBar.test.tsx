@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 
 import { DEFAULT_FILTERS, fromSearchParams } from '@/lib/filters';
-import { useUrlBrowseState } from '@/lib/browseState';
+import { applySavedFilter, useUrlBrowseState } from '@/lib/browseState';
 import type { ChartSpec } from '@/lib/stats';
 import type { SavedDashboard } from '@/lib/types';
 
@@ -386,6 +386,32 @@ describe('<DashboardBar> saving', () => {
     });
   });
 
+  it('marks a sort-only change dirty, as a preset does, and saves the current sort', async () => {
+    loadedBefore('d-filter');
+    vi.mocked(updateStatsDashboard).mockResolvedValue(WITH_FILTER);
+    /* The URL a load of d-filter writes: its filters, the default sort. */
+    const loaded = applySavedFilter(WITH_FILTER.filter_spec!, new URLSearchParams('tab=stats&dashboard=d-filter'));
+    const { unmount } = renderBar(`/browse?${loaded}`, [B]);
+    expect(await chip('Domy')).not.toHaveAccessibleDescription(EDITED);
+    unmount();
+    loaded.set('sort', 'price_czk');
+    renderBar(`/browse?${loaded}`, [B]);
+    expect(await chip('Domy')).toHaveAccessibleDescription(EDITED);
+    submit(await openUpdate());
+    await waitFor(() => expect(updateStatsDashboard).toHaveBeenCalledTimes(1));
+    const [, patch] = vi.mocked(updateStatsDashboard).mock.calls[0];
+    expect(patch.charts).toEqual([B]);
+    expect(patch.filter_spec?.filters.categoryMain).toEqual(['dum']);
+    expect(patch.filter_spec?.sort).toBe('price_czk');
+  });
+
+  it('ignores the sort for a dashboard without a filter', async () => {
+    loadedBefore('d-own');
+    renderBar('/browse?tab=stats&dashboard=d-own&sort=price_czk', [A]);
+    expect(await chip('Ceny')).not.toHaveAccessibleDescription(EDITED);
+    expect(screen.queryByRole('button', { name: 'Uložit změny' })).toBeNull();
+  });
+
   it('adds the current filter to a dashboard without one when the box is ticked', async () => {
     loadedBefore('d-own');
     vi.mocked(updateStatsDashboard).mockResolvedValue(OWN);
@@ -430,13 +456,30 @@ describe('<DashboardBar> saving', () => {
     expect(input.filter_spec?.filters.categoryMain).toEqual(['byt']);
   });
 
-  it('copies the ACTIVE shared dashboard as the caller\'s own, filter included, and selects the copy', async () => {
+  it('copies the ACTIVE shared dashboard as shown — the edited charts, the current filter and sort — and selects the copy', async () => {
     loadedBefore('d-shared');
-    const copy = row({ id: 'd-copy', name: 'Od Jany', charts: [B], filter_spec: SHARED_FILTER });
+    const copy = row({ id: 'd-copy', name: 'Od Jany', charts: [A, B], filter_spec: SHARED_FILTER });
     vi.mocked(createStatsDashboard).mockResolvedValue(copy);
-    renderBar('/browse?tab=stats&dashboard=d-shared&cat=pozemek', [B]);
+    renderBar('/browse?tab=stats&dashboard=d-shared&cat=byt&sort=price_czk', [A, B]);
+    expect(await chip('Od Jany — sdílí jana@example.com')).toHaveAccessibleDescription(EDITED);
     await menuFor('Od Jany — sdílí jana@example.com');
     vi.mocked(listStatsDashboards).mockResolvedValue({ data: [...LIST, copy], total: LIST.length + 1 });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Uložit jako vlastní' }));
+    await waitFor(() => expect(createStatsDashboard).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(createStatsDashboard).mock.calls[0][0];
+    expect(input).toMatchObject({ name: 'Od Jany', charts: [A, B], color: null });
+    expect(input.filter_spec?.filters.categoryMain).toEqual(['byt']);
+    expect(input.filter_spec?.filters.bounds).toBeNull();
+    expect(input.filter_spec?.sort).toBe('price_czk');
+    await waitFor(() => expect(url().get('dashboard')).toBe('d-copy'));
+    expect(log).toEqual([]);
+  });
+
+  it('copies a shared dashboard that is not active as stored, and leaves the active one selected', async () => {
+    loadedBefore('d-own');
+    vi.mocked(createStatsDashboard).mockResolvedValue(row({ id: 'd-copy', name: 'Od Jany', charts: [B] }));
+    renderBar('/browse?tab=stats&dashboard=d-own&cat=byt', [A, B]);
+    await menuFor('Od Jany — sdílí jana@example.com');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Uložit jako vlastní' }));
     await waitFor(() =>
       expect(createStatsDashboard).toHaveBeenCalledWith({
@@ -446,7 +489,8 @@ describe('<DashboardBar> saving', () => {
         color: null,
       }),
     );
-    await waitFor(() => expect(url().get('dashboard')).toBe('d-copy'));
+    await tick();
+    expect(url().get('dashboard')).toBe('d-own');
     expect(log).toEqual([]);
   });
 

@@ -57,8 +57,8 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   copy: SavedSetCopy;
   onLoad: (item: T) => void;
   /* The dialog's writes: it stays open and busy until the promise settles. */
-  onSaveNew: (name: string, extra: boolean, color: TagColor | null) => Promise<unknown>;
-  onUpdate: (item: T, name: string, extra: boolean, color: TagColor | null) => Promise<unknown>;
+  onSaveNew: (name: string, checked: boolean, color: TagColor | null) => Promise<unknown>;
+  onUpdate: (item: T, name: string, checked: boolean, color: TagColor | null) => Promise<unknown>;
   onRename: (item: T, name: string, color: TagColor | null) => Promise<unknown>;
   onDelete: (item: T) => Promise<unknown>;
   /* The account's own chips in their new order. */
@@ -70,7 +70,7 @@ export interface SavedSetBarProps<T extends SavedSetItem> {
   /* Menu entries the instance adds (between Edit… and Delete on an own chip). */
   chipMenu?: (item: T) => SavedSetMenuItem[];
   /* The one checkbox the save and update dialogs offer; `initial(null)` on a save. */
-  extra?: { label: string; initial: (item: T | null) => boolean };
+  checkbox?: { label: string; initial: (item: T | null) => boolean };
   /* Chips that lead the row and are not saved sets (Browse's Pipeline scope). */
   leading?: ReactNode;
 }
@@ -123,7 +123,7 @@ export const chipBase =
 
 export default function SavedSetBar<T extends SavedSetItem>({
   items, loading = false, activeId, dirty, copy, onLoad, onSaveNew, onUpdate, onRename, onDelete, onReorder,
-  isOwn = () => true, suffix, chipMenu, extra, leading,
+  isOwn = () => true, suffix, chipMenu, checkbox, leading,
 }: SavedSetBarProps<T>) {
   const barRef = useRef<HTMLDivElement>(null);
   const dirtyId = useId();
@@ -350,7 +350,7 @@ export default function SavedSetBar<T extends SavedSetItem>({
           words={copy}
           mode={modal.mode}
           initial={modal.item}
-          extra={extra && modal.mode !== 'edit' ? { label: extra.label, initial: extra.initial(modal.item) } : null}
+          checkbox={checkbox && modal.mode !== 'edit' ? { label: checkbox.label, initial: checkbox.initial(modal.item) } : null}
           onSubmit={(name, checked, color) =>
             (modal.mode === 'save'
               ? onSaveNew(name, checked, color)

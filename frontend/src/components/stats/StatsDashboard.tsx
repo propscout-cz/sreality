@@ -21,7 +21,7 @@ import DashboardBar, { type DashboardView } from './DashboardBar';
  * The filter only picks the sample; the board (which charts, in which order) is
  * ONE document per account, read through GET /stats/dashboard and written whole
  * through PUT /stats/dashboard by the one optimistic write (lib/useOptimisticWrite)
- * — the card list's edits and the dashboard bar's loads alike. No saved row ⇒ the
+ * — the chart list's edits and the dashboard bar's loads alike. No saved row ⇒ the
  * four default charts, and the first save persists the whole list. The named
  * dashboards' bar leads the tab where Browse hands over its view state (`view`;
  * the explore modals do not). */
