@@ -432,6 +432,11 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
 @pytest.mark.parametrize("key", [
     ("POST", "/collections/{collection_id}/shares"),
     ("POST", "/pipeline/shares"),
+    # The push device routes (migration 654) have the same shape: the caller's own account at the edge,
+    # then the service role, since browser roles hold nothing on either push table.
+    ("PUT", "/push/subscription"),
+    ("DELETE", "/push/subscription"),
+    ("POST", "/push/opened"),
 ])
 def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:
     # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a

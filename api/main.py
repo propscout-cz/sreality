@@ -83,6 +83,7 @@ from api.routes.location_quality import router as location_quality_router
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.push import router as push_router
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -289,6 +290,10 @@ app.include_router(billing_router)
 # /notifications/* (Watchdog feed + subscription CRUD) goes through
 # the standard bearer gate — operator content, not configuration.
 app.include_router(notifications_router)
+# /push/* (push on this device: the VAPID public key, a device's registration and end, a tapped push's
+# open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
+# for) on the service role, opened in the handler after that gate (api/routes/push.py).
+app.include_router(push_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
