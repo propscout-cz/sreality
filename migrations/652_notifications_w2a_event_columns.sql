@@ -11,11 +11,12 @@
 --
 -- WHAT CHANGES. Additive only: five columns, one trigger, one CHECK widened, backfills.
 --   1. notification_dispatches + event_ref text (the discriminator within source, kind and property), actor_account_id
---      uuid -> accounts ON DELETE SET NULL (the sharer; NULL for a detector), duplicate_of uuid -> notification_dispatches
---      ON DELETE SET NULL (nothing writes it before W3).
+--      uuid -> accounts ON DELETE CASCADE (the sharer; NULL for a detector; why cascade: at the column), duplicate_of
+--      uuid -> notification_dispatches ON DELETE SET NULL (nothing writes it before W3).
 --   2. notification_subscriptions + active_since timestamptz NOT NULL DEFAULT now(), stamped by a BEFORE trigger on
---      every INSERT and on every is_active false -> true flip (migration 230's pattern), backfilled to created_at by the
---      run that adds it (0 watchdogs on 2026-10-21); and
+--      every INSERT, on every is_active false -> true flip (migration 230's pattern) and on every filter_spec change
+--      (ruling R6 (a) extended 2026-10-21: an edited watchdog is a new start, so an edit never backfills a day of
+--      matches the old filter missed), backfilled to created_at by the run that adds it (0 watchdogs on 2026-10-21); and
 --      retired_at timestamptz (nothing writes it before W3, when deleting a watchdog becomes retiring it; the producers
 --      already skip a retired one).
 --   3. notification_dispatches_change_kind_ck gains shared_collection, shared_dashboard and shared_pipeline; every
@@ -26,7 +27,8 @@
 --                     2026-10-21); inactive / reactivated -> the key's trailing epoch segment; new_source -> the
 --                     introducing listing's id (the key's 'l<id>' segment, or its sreality id, signed for a legacy
 --                     handle, mapped once through listings.sreality_id); shared dashboard -> the dashboard id; shared
---                     pipeline -> the mode; new, shared collection and system history -> NULL.
+--                     pipeline -> the mode; system history -> its old key, opaque (program § 3.2: else the 904 rows
+--                     would collide under W3's NULLS NOT DISTINCT identity); new, shared collection -> NULL.
 --        actor_account_id  every share row -> the shared object's owner (collections / stats_dashboards.account_id, or
 --                     the pipeline owner the key names).
 --        change_kind 'shared' -> shared_<the key's second segment> (2 rows on 2026-10-21).
@@ -40,8 +42,10 @@
 --
 -- APPLY through apply_migration.yml (--ref feature/notifications-w2a) BEFORE merging W2a: the producers and
 -- api/shares.py write the new columns and kinds with no fallback. Safe against the deployed code: nothing reads the new
--- columns yet, the old code writes 'shared' (still allowed) and the old feed parses share_kind from the key. A share
--- granted between this apply and the deploy keeps 'shared'; re-running this file after the deploy relabels it.
+-- columns yet, the old code writes 'shared' (still allowed) and the old feed parses share_kind from the key.
+-- RE-RUN THIS FILE AFTER THE W2a DEPLOY: a share granted between the apply and the deploy is still labelled 'shared' (and
+-- carries no actor), and the old matcher's rows of that window no event_ref; the file is idempotent, so the re-run fills
+-- exactly those rows.
 -- ROLLBACK: forward only (rule 1). Every statement is idempotent; a lock-timeout retry re-runs the file.
 
 set lock_timeout = '5s';
@@ -50,17 +54,21 @@ begin;
 
 -- One column per statement, so the migration_drift check probes each (scripts/migration_objects.py).
 alter table public.notification_dispatches add column if not exists event_ref text;
+-- CASCADE, not SET NULL: a share notification cannot outlive the sharer's account (what it shared goes with it), and a
+-- NULLed actor would let two owners' pipeline shares to one recipient collide under W3's identity tuple.
 alter table public.notification_dispatches
-  add column if not exists actor_account_id uuid references public.accounts(id) on delete set null;
+  add column if not exists actor_account_id uuid references public.accounts(id) on delete cascade;
 alter table public.notification_dispatches
   add column if not exists duplicate_of uuid references public.notification_dispatches(id) on delete set null;
 
 comment on column public.notification_dispatches.event_ref is
   'What tells this event apart within (source, kind, property) (migration 652): price = the snapshot id; inactive = the '
   'epoch of inactive_at; reactivated = the epoch of the inactive dispatch it answers; new_source = the introducing '
-  'listing id; shared_dashboard = the dashboard id; shared_pipeline = the mode; NULL for new and shared_collection.';
+  'listing id; shared_dashboard = the dashboard id; shared_pipeline = the mode; system_health history = its old key, '
+  'opaque; NULL for new and shared_collection.';
 comment on column public.notification_dispatches.actor_account_id is
-  'Who caused the event (migration 652): the sharer for a share, NULL for a detector.';
+  'Who caused the event (migration 652): the sharer for a share, NULL for a detector. ON DELETE CASCADE: a share '
+  'notification goes with the sharer''s account, as what it shared does.';
 comment on column public.notification_dispatches.duplicate_of is
   'The row this one duplicates (migration 652; written from W3, when a merge marks rather than deletes).';
 
@@ -79,15 +87,17 @@ $active_since$;
 alter table public.notification_subscriptions add column if not exists retired_at timestamptz;
 
 comment on column public.notification_subscriptions.active_since is
-  'When this watchdog last started matching (migration 652): stamped on insert and on every is_active false -> true '
-  'flip. Its new and price windows start no earlier, so a watchdog alerts only on what appears after it is switched on.';
+  'When this watchdog last started matching (migration 652): stamped on insert, on every is_active false -> true flip '
+  'and on every filter_spec change (an edited watchdog is a new start). Its new and price windows start no earlier, so '
+  'a watchdog alerts only on what appears after it was switched on or last edited.';
 comment on column public.notification_subscriptions.retired_at is
   'When the watchdog was retired (migration 652; written from W3). A retired watchdog matches nothing.';
 
 create or replace function public.notification_subscriptions_stamp_active_since()
 returns trigger language plpgsql set search_path = '' as $$
 begin
-  if TG_OP = 'INSERT' or (new.is_active and old.is_active is distinct from true) then
+  if TG_OP = 'INSERT' or (new.is_active and old.is_active is distinct from true)
+     or new.filter_spec is distinct from old.filter_spec then
     new.active_since := now();
   end if;
   return new;
@@ -97,7 +107,7 @@ revoke all on function public.notification_subscriptions_stamp_active_since() fr
 
 drop trigger if exists notification_subscriptions_active_since on public.notification_subscriptions;
 create trigger notification_subscriptions_active_since
-  before insert or update of is_active on public.notification_subscriptions
+  before insert or update of is_active, filter_spec on public.notification_subscriptions
   for each row execute function public.notification_subscriptions_stamp_active_since();
 
 alter table public.notification_dispatches drop constraint if exists notification_dispatches_change_kind_ck;
@@ -120,10 +130,12 @@ update public.notification_dispatches d
            then split_part(d.dedupe_key, ':', 3)
          when d.source_kind = 'share' and split_part(d.dedupe_key, ':', 2) = 'pipeline'
            then split_part(d.dedupe_key, ':', 5)
+         when d.source_kind = 'system_health' then d.dedupe_key
        end
  where d.event_ref is null
    and (d.change_kind in ('price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source')
-        or (d.source_kind = 'share' and split_part(d.dedupe_key, ':', 2) in ('dashboard', 'pipeline')));
+        or (d.source_kind = 'share' and split_part(d.dedupe_key, ':', 2) in ('dashboard', 'pipeline'))
+        or d.source_kind = 'system_health');
 
 update public.notification_dispatches d
    set actor_account_id = case split_part(d.dedupe_key, ':', 2)
@@ -182,6 +194,7 @@ begin
   if exists (select 1 from public.notification_dispatches
               where event_ref is null
                 and (change_kind in ('inactive', 'reactivated', 'new_source', 'shared_dashboard', 'shared_pipeline')
+                     or source_kind = 'system_health'
                      or (change_kind in ('price_drop', 'price_rise') and trigger_snapshot_id is not null))) then
     raise exception '652 did not land: a row whose key names its event has no event_ref';
   end if;
