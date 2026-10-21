@@ -42,11 +42,10 @@ import json
 import logging
 import time
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import HTTPException
 
@@ -58,7 +57,6 @@ from psycopg.types.json import Jsonb
 from api import maps
 from api import schemas as s
 from location_data.claims_common import SUBJECT_LOCATION_JOIN
-from scraper import source_dispatcher
 from toolkit import ComparableFilters, TargetSpec
 from toolkit.rent_map import compute_reference_rent
 
@@ -352,17 +350,16 @@ _RUN_COLUMNS: tuple[str, ...] = (
     "comparables_used", "comparables_excluded",
     "trace", "warnings", "error_message",
     "parent_run_id", "rerun_reason",
-    "source_kind", "parse_confidence", "parse_confidence_per_field",
-    "source_html",
-    "subject_attributes",
     "special_instructions", "contextual_text",
     "skill_name", "skill_version",
     "scenario",
     "reference_rent",
 )
 
+# input_url is read-only: the historic URL-submitted runs keep showing theirs, and no
+# submit carries one.
 _INSERT_COLUMNS: tuple[str, ...] = tuple(
-    c for c in _RUN_COLUMNS if c not in ("id", "created_at")
+    c for c in _RUN_COLUMNS if c not in ("id", "created_at", "input_url")
 )
 
 _COST_TOTAL_SUBSELECT = (
@@ -378,94 +375,49 @@ _HAS_FEEDBACK_SUBSELECT = (
     "SELECT 1 FROM estimation_feedback WHERE estimation_run_id = er.id"
     ") AS has_feedback"
 )
-# Best-available city/locality string for the /estimations list:
-# - runs with a resolved subject use the resolver's municipality name at the
-#   subject's place (`SUBJECT_LOCATION_JOIN`, ruling R7: its property's location
-#   ad, else its own row; W4-c dropped listings.district, which this used to read)
-#   via LEFT JOIN (matched on the surrogate input_listing_id;
-#   input_sreality_id is only the fallback join key for pre-#914 rows never
-#   stamped with it — Gate 2, a post-Gate-2 non-sreality subject has
-#   input_sreality_id NULL)
-# - subjects with no matched listings row, and subjects the resolver has not
-#   placed, fall back to the locality the LLM parser stored in
-#   parsed_url_cache.parse_result.extraction.locality.value
-# Scalar subquery (not a join) on parsed_url_cache since source_url
-# isn't unique there — pick the freshest row.
-_LOCALITY_DISPLAY_EXPR = (
-    "coalesce("
-    "ll.obec_name, "
-    "(SELECT puc.parse_result->'extraction'->'locality'->>'value' "
-    "FROM parsed_url_cache puc "
-    "WHERE puc.source_url = er.input_url "
-    "ORDER BY puc.parsed_at DESC LIMIT 1)"
-    ") AS locality_display"
+# The /estimations list's place label: the resolver's municipality at the subject's place
+# (`SUBJECT_LOCATION_JOIN`, ruling R7: its property's location ad, else its own row); NULL
+# for a raw-spec run and for an ad the resolver has not placed.
+_LOCALITY_DISPLAY_EXPR = "ll.obec_name AS locality_display"
+# The run's subject ad, by which the SPA routes a run to its ad's page. The detail read runs
+# on the tenant connection, where `listings` (RLS, no policy) returns no row, so it joins
+# the owner view; the list runs on the service-role connection and joins `listings`.
+_SUBJECT_AD_PROJECTION = (
+    "l.source AS subject_source, l.source_id_native AS subject_source_id_native"
 )
 _RUN_PROJECTION = (
     ", ".join(f"er.{c}" for c in _RUN_COLUMNS)
     + ", " + _COST_TOTAL_SUBSELECT
     + ", " + _HAS_FEEDBACK_SUBSELECT
+    + ", " + _SUBJECT_AD_PROJECTION
 )
-# List rows omit source_html (raw page bytes, LLM path only — large and never
-# rendered in a list context; the detail endpoint still returns it).
-_LIST_COLUMNS: tuple[str, ...] = tuple(
-    c for c in _RUN_COLUMNS if c != "source_html"
-)
-_LIST_PROJECTION = (
-    ", ".join(f"er.{c}" for c in _LIST_COLUMNS)
-    + ", " + _COST_TOTAL_SUBSELECT
-    + ", " + _HAS_FEEDBACK_SUBSELECT
-    + ", " + _LOCALITY_DISPLAY_EXPR
-)
+_RUN_FROM = "estimation_runs er LEFT JOIN listings_public l ON l.id = er.input_listing_id"
+_LIST_PROJECTION = _RUN_PROJECTION + ", " + _LOCALITY_DISPLAY_EXPR
 _LIST_FROM = (
     "estimation_runs er "
     "LEFT JOIN listings l ON l.id = er.input_listing_id "
-    "OR (er.input_listing_id IS NULL AND l.sreality_id = er.input_sreality_id) "
     + SUBJECT_LOCATION_JOIN
 )
 _RUN_COLUMNS_OUT: tuple[str, ...] = _RUN_COLUMNS + (
-    "cost_usd_total", "has_feedback",
+    "cost_usd_total", "has_feedback", "subject_source", "subject_source_id_native",
 )
-_LIST_COLUMNS_OUT: tuple[str, ...] = _LIST_COLUMNS + (
-    "cost_usd_total", "has_feedback", "locality_display",
-)
+_LIST_COLUMNS_OUT: tuple[str, ...] = _RUN_COLUMNS_OUT + ("locality_display",)
 
 
 @dataclass
 class _Resolution:
-    """The result of turning a CreateEstimationIn body into a target spec.
-
-    Carries the dispatcher's audit fields (source_kind, parse_confidence,
-    parse_confidence_per_field, source_html) plus the input-side bookkeeping
-    (input_url, input_sreality_id, target_spec). Built once at the top of
-    create_estimation_run and reused by both the success and failed-row
-    persistence paths.
-    """
-    input_url: str | None
-    input_sreality_id: int | None
-    target_spec: dict[str, Any] | None
-    source_kind: str | None
-    parse_confidence: str | None
-    parse_confidence_per_field: dict[str, str] | None
-    source_html: str | None
-    parse_warnings: list[str] = field(default_factory=list)
+    """The subject a CreateEstimationIn body names, resolved once at submit and reused by
+    every persistence path and the job lane's snapshot: the target spec, and for an ad we
+    hold its ids, its (source, native id) and the facts the yield derivation reads."""
+    target_spec: dict[str, Any]
+    input_listing_id: int | None = None
+    input_sreality_id: int | None = None
+    subject_source: str | None = None
+    subject_source_id_native: str | None = None
     subject_listing_price_czk: int | None = None
     subject_listing_category_type: str | None = None
     yield_input_derivation: dict[str, Any] | None = None
-    # Typed subject attributes (building_type / condition / amenities / …) for a
-    # subject with no resolved listings row — lets the UI render the subject like
-    # a listing. None when input_sreality_id is set (the UI reads listings_public).
-    subject_attributes: dict[str, Any] | None = None
-    # Surrogate twin of input_sreality_id (Gate 2): the only handle that can
-    # identify a post-Gate-2 subject listing, which carries sreality_id=NULL.
-    input_listing_id: int | None = None
 
-
-_EMPTY_RESOLUTION = _Resolution(
-    input_url=None, input_sreality_id=None, target_spec=None,
-    source_kind=None, parse_confidence=None,
-    parse_confidence_per_field=None, source_html=None,
-    parse_warnings=[],
-)
 
 JOB_LANE_SETTING = "estimation_job_lane_enabled"
 
@@ -501,13 +453,8 @@ def _job_payload(
 ) -> dict[str, Any]:
     """Snapshot the execution inputs for the worker job lane. The run row IS the
     job (no new table): {body, resolution} is everything _execute_estimation_run
-    needs, captured AFTER yield-input derivation so the worker re-runs nothing.
-    source_html is dropped — it's already persisted as its own column and the
-    execution path never reads resolution.source_html, so this keeps the
-    (transient) payload small."""
-    res = asdict(resolution)
-    res["source_html"] = None
-    return {"body": body.model_dump(mode="json"), "resolution": res}
+    needs, captured AFTER yield-input derivation so the worker re-runs nothing."""
+    return {"body": body.model_dump(mode="json"), "resolution": asdict(resolution)}
 
 
 def execute_pending_run(
@@ -568,19 +515,13 @@ def execute_pending_run(
 # The spine is atomic (A9 — check-then-act is TOCTOU-racy over the tx pooler, the
 # mig-279 lesson): idempotency + single-in-flight ride a UNIQUE partial index +
 # ON CONFLICT (mig 355); the monthly budget + concurrency cap ride an atomic
-# INSERT ... SELECT WHERE (count) < limit. A cheap PRE-parse check short-circuits
-# the common duplicate / over-quota case before the URL parse spends an LLM call
-# (parse cost can't attribute to a not-yet-existing run — llm_client stamps
-# estimation_run_id=NULL — so only a pre-parse gate caps it).
+# INSERT ... SELECT WHERE (count) < limit. A cheap pre-INSERT check short-circuits
+# the common duplicate / over-quota case.
 
 AGENT_ESTIMATION_ACTION = "agent_estimation"
 BUDGET_ENABLED_SETTING = "estimation_budget_enabled"   # absent => enabled (fail-closed)
 CONCURRENCY_CAP_SETTING = "agent_estimation_concurrency_cap"
 CONCURRENCY_CAP_DEFAULT = 3
-_TRACKING_QUERY_PREFIXES = ("utm_",)
-_TRACKING_QUERY_KEYS = {
-    "fbclid", "gclid", "gbraid", "wbraid", "mc_eid", "igshid", "ref", "src",
-}
 
 
 @dataclass
@@ -603,41 +544,14 @@ def _budget_enabled(conn: "psycopg.Connection") -> bool:
     return _setting_bool(_load_app_setting(conn, BUDGET_ENABLED_SETTING, True))
 
 
-def _canonical_url(url: str) -> str:
-    """Canonicalize a portal URL for the idempotency key: https scheme, lower
-    host, no fragment, tracking params dropped, remaining query sorted, no
-    trailing slash — so query-param / scheme / trailing-slash variance across
-    portals doesn't double-charge the same listing."""
-    try:
-        parts = urlsplit(url.strip())
-    except Exception:  # noqa: BLE001 - a weird URL is still a usable raw key
-        return url.strip()
-    netloc = parts.netloc.lower()
-    path = parts.path.rstrip("/") or "/"
-    q = [
-        (k, v)
-        for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if not (
-            k.lower() in _TRACKING_QUERY_KEYS
-            or any(k.lower().startswith(p) for p in _TRACKING_QUERY_PREFIXES)
-        )
-    ]
-    q.sort()
-    return urlunsplit(("https", netloc, path, urlencode(q), ""))
-
-
-def _idempotency_key(body: s.CreateEstimationIn) -> str | None:
-    """A stable per-target key computable BEFORE the URL parse. sreality_id is
-    already clean; a URL is canonicalized; a spec is hashed (spec is blocked for
-    metered callers, so that arm is defensive only)."""
-    if body.sreality_id is not None:
-        return f"sid:{int(body.sreality_id)}"
-    if body.url:
-        return f"url:{_canonical_url(body.url)}"
-    if body.spec is not None:
-        blob = json.dumps(body.spec.model_dump(mode="json"), sort_keys=True)
-        return "spec:" + hashlib.sha256(blob.encode()).hexdigest()[:32]
-    return None
+def _idempotency_key(body: s.CreateEstimationIn, resolution: _Resolution) -> str:
+    """A stable per-subject key: an ad's (source, native id), whichever handle named it; a
+    spec is hashed (spec is blocked for metered callers, so that arm is defensive only)."""
+    if resolution.subject_source is not None:
+        return f"ad:{resolution.subject_source}:{resolution.subject_source_id_native}"
+    assert body.spec is not None
+    blob = json.dumps(body.spec.model_dump(mode="json"), sort_keys=True)
+    return "spec:" + hashlib.sha256(blob.encode()).hexdigest()[:32]
 
 
 def _resolve_entitlement(
@@ -729,13 +643,13 @@ def _prepare_metered_submit(
     claims: dict[str, Any] | None,
     body: s.CreateEstimationIn,
     account_id: str,
+    resolution: _Resolution,
 ) -> _MeterDecision | None:
-    """Pre-parse submit gates for a metered (agent, non-admin) submit. Returns
+    """Pre-INSERT submit gates for a metered (agent, non-admin) submit. Returns
     None for ungated callers; a _MeterDecision (carrying an existing in-flight
     run to short-circuit, or the quota/cap for the atomic INSERT) when cleared;
     raises HTTPException (403 not entitled / raw spec, 429 over quota / too many
-    in flight) otherwise. Runs entirely BEFORE the URL parse, so a reject spends
-    nothing."""
+    in flight) otherwise."""
     if (
         _is_privileged(claims)
         or body.mode != "agent"
@@ -753,14 +667,12 @@ def _prepare_metered_submit(
         raise HTTPException(
             status_code=403, detail="Your plan does not include agent estimations",
         )
-    idem_key = _idempotency_key(body)
-    if idem_key is None:
-        raise HTTPException(status_code=400, detail="A url or sreality_id is required")
+    idem_key = _idempotency_key(body, resolution)
     cap = _concurrency_cap(conn)
     existing = _find_inflight_run(conn, account_id, idem_key)
     if existing is not None:
         # Duplicate submit while one is already in flight — return the existing
-        # run instead of parsing + charging again (and don't re-enqueue).
+        # run instead of charging again (and don't re-enqueue).
         return _MeterDecision(idem_key, quota, cap, short_circuit_run=existing)
     if _count_agent_runs_this_month(conn, account_id) >= quota:
         raise HTTPException(
@@ -818,16 +730,17 @@ def create_estimation_run(
     account_id: str | None = None,
     claims: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """POST /estimations: parse the URL, INSERT a pending row, schedule the
+    """POST /estimations: resolve the subject, INSERT a pending row, schedule the
     heavy work as a BackgroundTask, return the row immediately.
 
-    The handler completes in ~1 s (just URL parse + INSERT) instead of
-    waiting 3–10 s for the full estimate. The browser navigates to the
-    detail page, which polls until the row reaches a terminal status.
+    The handler completes in well under a second (the subject read + INSERT)
+    instead of waiting 3–10 s for the full estimate. The browser navigates to
+    the detail page, which polls until the row reaches a terminal status.
 
-    Hard failures during setup (URL parse, target / filter build, skill
-    lookup) are still persisted inline with `status='failed'` — those
-    rows have no work to background.
+    A body naming an ad we do not hold, or one with no location yet, is a 422
+    before any row. Hard failures during setup (target / filter build, skill
+    lookup) are persisted inline with `status='failed'` — those rows have no
+    work to background.
 
     When `background_tasks` is None (tests that want synchronous
     behaviour, ClickUp / agent callers that want the row populated
@@ -843,30 +756,16 @@ def create_estimation_run(
     """
     account_id = account_id or SYSTEM_ACCOUNT_ID
 
-    # W0 Mapy kill switch (R1): with geocoding disabled, a pasted URL that
-    # can't resolve coordinates any other way is doomed at _build_target —
-    # reject it HERE, before the metered gate consumes quota and the LLM
-    # parse spends money, with an error that names the actual cause.
-    _reject_ungeocodable_submit(conn, body)
+    # The subject first, so a body naming an ad we cannot place is refused before any
+    # gate counts it.
+    resolution = _resolve_input(conn, body)
 
-    # Submit-time gates BEFORE any spend (entitlement + monthly budget +
+    # Submit-time gates BEFORE the INSERT (entitlement + monthly budget +
     # concurrency + idempotency). Ungated for admin/ClickUp/deterministic;
-    # a rejected metered submit raises HTTPException here, before the URL parse.
-    meter = _prepare_metered_submit(conn, claims, body, account_id)
+    # a rejected metered submit raises HTTPException here.
+    meter = _prepare_metered_submit(conn, claims, body, account_id, resolution)
     if meter is not None and meter.short_circuit_run is not None:
         return meter.short_circuit_run
-
-    try:
-        resolution = _resolve_input(conn, sreality_client, llm_client, body)
-    except Exception as exc:
-        LOG.warning("URL parse failed: %s", exc)
-        return _persist_failed_run(
-            conn, body=body, resolution=_resolution_for_parse_failure(body),
-            recorder=TraceRecorder(),
-            error_msg=f"parse failed: {type(exc).__name__}: {exc}"[:1000],
-            extra_warnings=[],
-            account_id=account_id,
-        )
 
     try:
         target = _build_target(resolution.target_spec, resolution.input_listing_id)
@@ -876,7 +775,6 @@ def create_estimation_run(
         return _persist_failed_run(
             conn, body=body, resolution=resolution, recorder=TraceRecorder(),
             error_msg=f"target build failed: {type(exc).__name__}: {exc}"[:1000],
-            extra_warnings=[],
             account_id=account_id,
         )
 
@@ -896,7 +794,6 @@ def create_estimation_run(
                 conn, body=body, resolution=resolution,
                 recorder=TraceRecorder(),
                 error_msg=f"unknown skill: {body.skill!r}",
-                extra_warnings=[],
                 account_id=account_id,
             )
         # Agent runs normally INSERT 'running' so per-turn llm_calls attribute
@@ -914,7 +811,6 @@ def create_estimation_run(
         mode=body.mode,
         status=initial_status,
         estimate_kind=body.estimate_kind,
-        input_url=resolution.input_url,
         input_sreality_id=resolution.input_sreality_id,
         input_listing_id=resolution.input_listing_id,
         input_spec=resolution.target_spec,
@@ -930,15 +826,10 @@ def create_estimation_run(
         comparables_used=None,
         comparables_excluded=None,
         trace=TraceRecorder().to_dict("pending"),
-        warnings=list(resolution.parse_warnings) or None,
+        warnings=None,
         error_message=None,
         parent_run_id=body.parent_run_id,
         rerun_reason=body.rerun_reason,
-        source_kind=resolution.source_kind,
-        parse_confidence=resolution.parse_confidence,
-        parse_confidence_per_field=resolution.parse_confidence_per_field,
-        source_html=resolution.source_html,
-        subject_attributes=resolution.subject_attributes,
         special_instructions=body.special_instructions,
         contextual_text=body.contextual_text,
         skill_name=skill_obj.name if skill_obj is not None else None,
@@ -950,7 +841,7 @@ def create_estimation_run(
 
     if run_id is None:
         # The atomic gate rejected the INSERT (a concurrent submit crossed the
-        # quota / cap between the pre-parse check and here) or an idempotent
+        # quota / cap between the pre-INSERT check and here) or an idempotent
         # duplicate raced in — return the winner if one exists, else 429.
         assert meter is not None
         existing = _find_inflight_run(conn, account_id, meter.idempotency_key)
@@ -1092,7 +983,6 @@ def _execute_estimation_run(
             conn, run_id,
             status="failed",
             trace=trace,
-            warnings=list(resolution.parse_warnings) or None,
             error_message=error_msg,
         )
         flush_trace_payloads(conn, run_id, recorder)
@@ -1102,8 +992,6 @@ def _execute_estimation_run(
     reference_rent = _reference_rent_for_run(conn, recorder, resolution, target, body)
     summary_text = _summary_line(d, filters.radius_m)
     trace = recorder.to_dict(summary_text)
-    merged_warnings = list(resolution.parse_warnings)
-    merged_warnings.extend(d.get("warnings") or [])
     _update_run_terminal(
         conn, run_id,
         status="success",
@@ -1118,7 +1006,7 @@ def _execute_estimation_run(
         confidence=d.get("confidence"),
         comparables_used=d.get("comparables_used"),
         trace=trace,
-        warnings=merged_warnings or None,
+        warnings=d.get("warnings") or None,
     )
     flush_trace_payloads(conn, run_id, recorder)
 
@@ -1276,7 +1164,6 @@ def list_estimation_runs(
     status: str | None = None,
     sreality_id: int | None = None,
     listing_ids: list[int] | None = None,
-    source_kind: str | None = None,
     limit: int = 50,
     offset: int = 0,
     cursor: str | None = None,
@@ -1327,15 +1214,10 @@ def list_estimation_runs(
         # non-sreality subject — migration 311's sign check makes a positive
         # sreality_id impossible off sreality — so keying on it silently dropped
         # those subjects, and an empty id set collapsed to "no filter at all".
-        # A run whose input_listing_id is still NULL belongs to no known listing
-        # and correctly appears under none; the late-binding resolver
-        # (scripts/recompute_property_stats._bind_pending_estimation_listing_ids)
-        # stamps it once its listing is scraped.
+        # A run with input_listing_id NULL (a raw spec, or one of the historic
+        # URL-submitted runs) belongs to no listing and correctly appears under none.
         where.append("er.input_listing_id = ANY(%(listing_ids)s)")
         params["listing_ids"] = listing_ids
-    if source_kind is not None:
-        where.append("er.source_kind = %(source_kind)s")
-        params["source_kind"] = source_kind
 
     filter_sql = "WHERE " + " AND ".join(where) if where else ""
 
@@ -1372,8 +1254,8 @@ def list_estimation_runs(
             total_row = cur.fetchone()
             total = int(total_row[0]) if total_row else 0
 
-    id_idx = _LIST_COLUMNS.index("id")
-    created_idx = _LIST_COLUMNS.index("created_at")
+    id_idx = _RUN_COLUMNS.index("id")
+    created_idx = _RUN_COLUMNS.index("created_at")
     next_cursor: str | None = None
     if len(rows) == limit and rows:
         last = rows[-1]
@@ -1388,228 +1270,53 @@ def list_estimation_runs(
     }
 
 
-_LISTING_FIELDS: tuple[str, ...] = (
-    "price_czk", "price_unit", "category_main", "category_type",
-    "locality", "district",
-    "total_floors", "has_balcony", "has_lift", "has_parking",
-    "building_type", "condition", "energy_rating",
-)
-
-
-def _listing_from_result(
-    result: "source_dispatcher.ParseResult",
-) -> dict[str, Any]:
-    if result.wide_spec is not None:
-        return {f: result.wide_spec.get(f) for f in _LISTING_FIELDS}
-    fx = result.full_extraction
-    if fx is not None:
-        out: dict[str, Any] = {}
-        for f in _LISTING_FIELDS:
-            env = fx.get(f)
-            out[f] = env["value"] if isinstance(env, dict) and "value" in env else None
-        return out
-    return {f: None for f in _LISTING_FIELDS}
-
-
-def _coerce_int(value: Any) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(float(value.replace(",", ".").strip()))
-        except ValueError:
-            return None
-    return None
-
-
-def preview_estimation(
-    conn: "psycopg.Connection",
-    sreality_client: "SrealityClient",
-    llm_client: "LLMClient",
-    body: s.PreviewEstimationIn,
-) -> dict[str, Any]:
-    """POST /estimations/preview: resolve URL, return parsed spec + provenance.
-
-    Does NOT write to estimation_runs. Provenance fields (source_kind,
-    parse_confidence, parse_confidence_per_field, from_cache, fetched_at,
-    cost_usd, warnings) are returned to the caller so the UI can show what
-    was extracted before the user commits to running the estimate.
-    """
-    result = source_dispatcher.parse_listing_url(
-        body.url,
-        sreality_client=sreality_client,
-        llm_client=llm_client,
-        conn=conn,
-        force_refresh=body.force_refresh,
-    )
-    spec = dict(result.spec)
-    if body.spec_overrides:
-        spec = {**spec, **body.spec_overrides}
-    return {
-        "source_kind": result.source_kind,
-        "parse_confidence": result.parse_confidence,
-        "parse_confidence_per_field": result.parse_confidence_per_field,
-        "spec": spec,
-        "listing": _listing_from_result(result),
-        "from_cache": result.from_cache,
-        "fetched_at": result.fetched_at,
-        "cost_usd": result.cost_usd,
-        "warnings": list(result.warnings),
-        "sreality_id": result.sreality_id,
-        "source_url": result.source_url,
-    }
-
-
-# --- _resolve_input + helpers ---------------------------------------------
-
-_SUBJECT_ATTR_FIELDS: tuple[str, ...] = (
-    "building_type", "condition", "energy_rating",
-    "ownership", "furnished",
-    "has_balcony", "terrace", "has_lift", "cellar", "garage", "has_parking",
-    "disposition", "area_m2", "floor", "locality", "district",
-)
-
-
-def _reject_ungeocodable_submit(conn: "psycopg.Connection", body: Any) -> None:
-    """422 for a URL-parse submit that cannot yield coordinates while the W0
-    Mapy kill switch is off (scraper.geocoding, remediation step R1).
-
-    Passes untouched: geocoding enabled; no URL (raw-spec bodies); sreality
-    URLs (the API detail carries gps, no geocode involved); URLs matching a
-    scraped listing with a coordinate; explicit lat+lng spec_overrides. The
-    point is failing BEFORE quota/LLM spend with the real cause — without
-    this, the run bills, then dies in _build_target on spec['lat']=None.
-    """
-    from scraper import geocoding
-
-    if geocoding.geocode_enabled():
-        return
-    url = getattr(body, "url", None)
-    if not url:
-        return
-    overrides = getattr(body, "spec_overrides", None) or {}
-    if overrides.get("lat") is not None and overrides.get("lng") is not None:
-        return
-    if source_dispatcher.classify_url(url) == "sreality":
-        return
-    try:
-        if _match_listing_by_url(conn, url) is not None:
-            return
-    except Exception:  # noqa: BLE001 - probe is best-effort: on any error fall
-        # open to the old path (the run then fails in _build_target with the
-        # explicit no-coordinates message instead of being rejected here).
-        return
-    raise HTTPException(
-        status_code=422,
-        detail=(
-            "Cannot estimate from this URL: it does not match a scraped "
-            "listing with coordinates, and Mapy geocoding is disabled "
-            f"({'MAPY_GEOCODE_ENABLED'} — the licensing kill switch). "
-            "Paste a URL from a scraped portal, supply lat/lng overrides, "
-            "or have the operator re-enable geocoding."
-        ),
-    )
-
-
-_MATCH_BY_URL_SQL = (
-    "SELECT l.sreality_id, l.id AS listing_id, "
-    "ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng, "
-    "l.area_m2, l.disposition, l.floor, l.price_czk, l.category_type "
-    f"FROM listings l {SUBJECT_LOCATION_JOIN} "
-    "WHERE ll.geom IS NOT NULL AND l.source_url IS NOT NULL "
-    "AND (l.source_url = %(url)s OR l.source_url = %(canon)s "
-    "     OR rtrim(l.source_url, '/') = %(canon)s) "
-    "ORDER BY l.last_seen_at DESC NULLS LAST LIMIT 1"
-)
-
-
-def _match_listing_by_url(
-    conn: "psycopg.Connection", url: str,
-) -> dict[str, Any] | None:
-    """Match a pasted URL to an existing scraped `listings` row (any portal we
-    already scrape), so a known-portal subject reuses the scraper's parsed
-    attributes instead of an LLM parse. Coordinates are required (the
-    comparables search is spatial) and are the subject's place (ruling R7: its
-    property's location ad, else its own row); area, layout, floor and price stay
-    the advert's own. Most-recently-seen row wins. Returns None when there's no
-    usable match so the caller falls back to URL parsing.
-    """
-    canon = source_dispatcher.canonical_url(url)
-    with conn.cursor() as cur:
-        cur.execute(_MATCH_BY_URL_SQL, {"url": url, "canon": canon})
-        row = cur.fetchone()
-    if row is None or row[2] is None or row[3] is None:
-        return None
-    return {
-        # NULL for a post-Gate-2 (non-sreality) listing — listing_id is the
-        # handle that always resolves.
-        "sreality_id": int(row[0]) if row[0] is not None else None,
-        "listing_id": int(row[1]),
-        "spec": {
-            "lat": float(row[2]), "lng": float(row[3]),
-            "area_m2": float(row[4]) if row[4] is not None else None,
-            "disposition": row[5], "floor": row[6],
-        },
-        "price_czk": row[7],
-        "category_type": row[8],
-    }
-
-
-def _listing_id_of(conn: "psycopg.Connection", sreality_id: int | None) -> int | None:
-    """The scraped row a sreality-addressed subject already is, if any."""
-    if sreality_id is None:
-        return None
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM listings WHERE sreality_id = %s", (int(sreality_id),))
-        row = cur.fetchone()
-    return int(row[0]) if row else None
-
+# --- _resolve_input: the ad a body names -------------------------------------
 
 _MATCH_BY_ID_SQL = (
-    "SELECT l.sreality_id, "
+    "SELECT l.id, l.source, l.source_id_native, l.sreality_id, "
     "ST_Y(ll.geom) AS lat, ST_X(ll.geom) AS lng, "
     "COALESCE(lp.area_m2, l.area_m2) AS area_m2, "
     "COALESCE(lp.disposition, l.disposition) AS disposition, "
     "l.floor, "
     "COALESCE(lp.current_price_czk, l.price_czk) AS price_czk, "
-    "COALESCE(lp.category_type, l.category_type) AS category_type, l.id "
+    "COALESCE(lp.category_type, l.category_type) AS category_type "
     f"FROM listings l {SUBJECT_LOCATION_JOIN} "
-    "WHERE l.sreality_id = %(id)s LIMIT 1"
+    "WHERE l.id = %(id)s"
 )
 
 
-def _match_listing_by_id(
-    conn: "psycopg.Connection", sreality_id: int,
-) -> dict[str, Any] | None:
-    """Build a target spec from an already-scraped `listings` row by internal id,
-    so a Browse card can estimate a known listing with no URL parse / LLM.
-    Mirrors `_match_listing_by_url`; coordinates are required (the comparables
-    search is spatial). Returns None when the row is missing or has no geom.
-
-    Subject facts (area / disposition / price / category_type) are the listing's PROPERTY's
-    -- its canonical advert's (migration 561) -- and its coordinates the property's location
-    advert's (ruling R7), when it belongs to an active property, so an estimation launched
-    from ANY portal's advert of the same flat resolves the SAME subject; the listing's own row
-    is the fallback. `floor` stays per-advert."""
+def _subject_listing_id(
+    conn: "psycopg.Connection", body: s.CreateEstimationIn,
+) -> int | None:
+    """The listings.id a body names: its listing_id, or the sreality ad its legacy sreality_id keys."""
+    if body.listing_id is not None:
+        return int(body.listing_id)
     with conn.cursor() as cur:
-        cur.execute(_MATCH_BY_ID_SQL, {"id": int(sreality_id)})
+        cur.execute("SELECT id FROM listings WHERE sreality_id = %s", (int(body.sreality_id),))
         row = cur.fetchone()
-    if row is None or row[1] is None or row[2] is None:
+    return int(row[0]) if row else None
+
+
+def _match_listing(conn: "psycopg.Connection", listing_id: int) -> dict[str, Any] | None:
+    """The subject facts of an ad we hold (property-canonical, else its own row), or None."""
+    with conn.cursor() as cur:
+        cur.execute(_MATCH_BY_ID_SQL, {"id": int(listing_id)})
+        row = cur.fetchone()
+    if row is None:
         return None
     return {
-        "sreality_id": int(row[0]),
-        "listing_id": int(row[8]),
+        "listing_id": int(row[0]),
+        "source": row[1],
+        "source_id_native": row[2],
+        "sreality_id": int(row[3]) if row[3] is not None else None,
         "spec": {
-            "lat": float(row[1]), "lng": float(row[2]),
-            "area_m2": float(row[3]) if row[3] is not None else None,
-            "disposition": row[4], "floor": row[5],
+            "lat": float(row[4]) if row[4] is not None else None,
+            "lng": float(row[5]) if row[5] is not None else None,
+            "area_m2": float(row[6]) if row[6] is not None else None,
+            "disposition": row[7], "floor": row[8],
         },
-        "price_czk": row[6],
-        "category_type": row[7],
+        "price_czk": int(row[9]) if row[9] is not None else None,
+        "category_type": row[10],
     }
 
 
@@ -1618,14 +1325,8 @@ def latest_rent_estimations_by_listing(
 ) -> dict[int, dict[str, Any]]:
     """Latest RENT estimation_runs row per listing id (any status), for the
     Browse cards' on-card estimate chip. Returns {sreality_id: {...}}; ids with
-    no rent run are absent.
-
-    Joined through `listings` and matched preferring the surrogate
-    `input_listing_id` (Gate 2's stable handle), falling back to
-    `input_sreality_id` only for rows written before that column was
-    stamped (#914) — a run's input_sreality_id staying unmatched while its
-    input_listing_id correctly resolves would otherwise silently drop it
-    from a sreality-keyed caller's result.
+    no rent run are absent. Joined through `listings` on the surrogate
+    `input_listing_id`, the handle every run of an ad carries.
 
     STILL SREALITY-KEYED ON PURPOSE. Browse's estimate chip is sreality-keyed
     end to end — the cards' id list, the estimate-state map, the pending-poll
@@ -1649,9 +1350,7 @@ def latest_rent_estimations_by_listing(
             "l.sreality_id, er.id, er.status, er.estimate_kind, "
             "er.gross_yield_pct, er.estimated_monthly_rent_czk, er.created_at "
             "FROM listings l "
-            "JOIN estimation_runs er "
-            "  ON er.input_listing_id = l.id "
-            "  OR (er.input_listing_id IS NULL AND er.input_sreality_id = l.sreality_id) "
+            "JOIN estimation_runs er ON er.input_listing_id = l.id "
             "WHERE l.sreality_id = ANY(%(ids)s) AND er.estimate_kind = 'rent' "
             # Scoped before DISTINCT ON picks, so the chip shows the newest run
             # the caller may actually see — never a hidden row blanked after the fact.
@@ -1674,123 +1373,36 @@ def latest_rent_estimations_by_listing(
     return out
 
 
-def _subject_attributes_from_result(
-    result: "source_dispatcher.ParseResult",
-) -> dict[str, Any] | None:
-    """Typed subject attributes (mirroring listings_public field names) for a
-    parsed subject with no resolved listings row — lets the UI render it like a
-    listing. Pulls from the parse result's wide_spec / full_extraction. None
-    when nothing typed was extracted."""
-    listing = _listing_from_result(result)
-    spec = result.spec or {}
-    fx = result.full_extraction or {}
-
-    def from_extraction(name: str) -> Any:
-        env = fx.get(name)
-        return env["value"] if isinstance(env, dict) and "value" in env else None
-
-    attrs: dict[str, Any] = {}
-    for f in _SUBJECT_ATTR_FIELDS:
-        if f in ("disposition", "area_m2", "floor"):
-            attrs[f] = spec.get(f)
-        elif f in listing and listing.get(f) is not None:
-            attrs[f] = listing.get(f)
-        else:
-            attrs[f] = from_extraction(f)
-    if not any(v is not None for v in attrs.values()):
-        return None
-    return attrs
-
-
-def _resolution_from_listing(
-    matched: dict[str, Any], body: s.CreateEstimationIn, input_url: str | None,
-) -> _Resolution:
-    """The subject is an already-scraped listings row (by id or by URL): its spec under the
-    body's overrides, no parse."""
-    return _Resolution(
-        input_url=input_url,
-        input_sreality_id=matched["sreality_id"],
-        target_spec={**matched["spec"], **(body.spec_overrides or {})},
-        source_kind=None, parse_confidence=None, parse_confidence_per_field=None, source_html=None,
-        subject_listing_price_czk=_coerce_int(matched.get("price_czk")),
-        subject_listing_category_type=matched.get("category_type"),
-        input_listing_id=matched.get("listing_id"),
-    )
-
-
 def _resolve_input(
-    conn: "psycopg.Connection",
-    sreality_client: "SrealityClient",
-    llm_client: "LLMClient",
-    body: s.CreateEstimationIn,
+    conn: "psycopg.Connection", body: s.CreateEstimationIn,
 ) -> _Resolution:
-    """Build a _Resolution from the request body.
-
-    URL path: if the link is from a portal we already scrape and the listing is
-    already in our DB, reuse that scraped row (deterministic, no LLM). Otherwise
-    dispatch through scraper.source_dispatcher (sreality → deterministic flow;
-    any other domain → LLM-driven per-source parser), capturing the parsed
-    attributes so the subject can still render like a listing. Spec path: pass
-    through with all parse-* fields None. sreality_id path: build the target
-    from the scraped `listings` row by id (no parse, no LLM).
-    """
-    if body.sreality_id is not None:
-        matched = _match_listing_by_id(conn, body.sreality_id)
-        if matched is None:
-            raise ValueError(
-                f"listing {body.sreality_id} not found or missing coordinates"
-            )
-        return _resolution_from_listing(matched, body, None)
-    if body.url is not None:
-        # Non-sreality portals don't resolve to a listings row through the
-        # dispatcher, but we scrape them — so try the already-scraped row first.
-        # sreality keeps its deterministic re-fetch branch in the dispatcher.
-        if source_dispatcher.classify_url(body.url) != "sreality":
-            matched = _match_listing_by_url(conn, body.url)
-            if matched is not None:
-                return _resolution_from_listing(matched, body, body.url)
-
-        result = source_dispatcher.parse_listing_url(
-            body.url,
-            sreality_client=sreality_client,
-            llm_client=llm_client,
-            conn=conn,
+    """The subject a body names: a raw spec as given, else the ad it names (listing_id or the
+    legacy sreality_id) under the body's spec_overrides. An ad we do not hold, or one with no
+    point to search around, is a 422."""
+    if body.spec is not None:
+        return _Resolution(target_spec=body.spec.model_dump())
+    named = (
+        f"listing {body.listing_id}" if body.listing_id is not None
+        else f"sreality ad {body.sreality_id}"
+    )
+    listing_id = _subject_listing_id(conn, body)
+    matched = _match_listing(conn, listing_id) if listing_id is not None else None
+    if matched is None:
+        raise HTTPException(status_code=422, detail=f"{named} is not in our database")
+    target_spec = {**matched["spec"], **(body.spec_overrides or {})}
+    if target_spec.get("lat") is None or target_spec.get("lng") is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{named} needs a location before it can be estimated",
         )
-        spec = dict(result.spec)
-        if body.spec_overrides:
-            spec = {**spec, **body.spec_overrides}
-        subject_listing = _listing_from_result(result)
-        # When the parse resolved to a real listings row (sreality), the UI reads
-        # listings_public; otherwise carry the parsed attributes for the UI.
-        subject_attributes = (
-            None
-            if result.sreality_id is not None
-            else _subject_attributes_from_result(result)
-        )
-        return _Resolution(
-            input_url=body.url,
-            input_sreality_id=result.sreality_id,
-            target_spec=spec,
-            source_kind=result.source_kind,
-            parse_confidence=result.parse_confidence,
-            parse_confidence_per_field=result.parse_confidence_per_field,
-            source_html=result.source_html,
-            parse_warnings=list(result.warnings),
-            subject_listing_price_czk=_coerce_int(subject_listing.get("price_czk")),
-            subject_listing_category_type=subject_listing.get("category_type"),
-            subject_attributes=subject_attributes,
-            input_listing_id=_listing_id_of(conn, result.sreality_id),
-        )
-    assert body.spec is not None
     return _Resolution(
-        input_url=None,
-        input_sreality_id=None,
-        target_spec=body.spec.model_dump(),
-        source_kind=None,
-        parse_confidence=None,
-        parse_confidence_per_field=None,
-        source_html=None,
-        parse_warnings=[],
+        target_spec=target_spec,
+        input_listing_id=matched["listing_id"],
+        input_sreality_id=matched["sreality_id"],
+        subject_source=matched["source"],
+        subject_source_id_native=matched["source_id_native"],
+        subject_listing_price_czk=matched["price_czk"],
+        subject_listing_category_type=matched["category_type"],
     )
 
 
@@ -1841,27 +1453,6 @@ def _record_yield_input_derivation(
         step.set_summary(dict(derivation))
 
 
-def _resolution_for_parse_failure(
-    body: s.CreateEstimationIn,
-) -> _Resolution:
-    """Best-effort _Resolution shape when the dispatcher itself raised.
-
-    We have the URL but no parsed spec, no source_kind (we may have
-    classified before the failure but we don't try to recover that
-    here — failed runs are diagnostic, not a partial-success record).
-    """
-    return _Resolution(
-        input_url=body.url,
-        input_sreality_id=None,
-        target_spec=None,
-        source_kind=None,
-        parse_confidence=None,
-        parse_confidence_per_field=None,
-        source_html=None,
-        parse_warnings=[],
-    )
-
-
 def _persist_failed_run(
     conn: "psycopg.Connection",
     *,
@@ -1869,13 +1460,11 @@ def _persist_failed_run(
     resolution: _Resolution,
     recorder: TraceRecorder,
     error_msg: str,
-    extra_warnings: list[str],
     # Optional for the same reason as create_estimation_run's: it inherits that
     # caller's account and falls back to SYSTEM below.
     account_id: str | None = None,
 ) -> dict[str, Any]:
     trace = recorder.to_dict(f"failed: {error_msg.split(':', 1)[0]}")
-    merged = list(resolution.parse_warnings) + list(extra_warnings or [])
     run_id = _insert_run(
         conn,
         account_id=account_id or SYSTEM_ACCOUNT_ID,
@@ -1883,7 +1472,6 @@ def _persist_failed_run(
         mode=body.mode,
         status="failed",
         estimate_kind=body.estimate_kind,
-        input_url=resolution.input_url,
         input_sreality_id=resolution.input_sreality_id,
         input_listing_id=resolution.input_listing_id,
         input_spec=resolution.target_spec,
@@ -1899,14 +1487,10 @@ def _persist_failed_run(
         comparables_used=None,
         comparables_excluded=None,
         trace=trace,
-        warnings=merged or None,
+        warnings=None,
         error_message=error_msg,
         parent_run_id=body.parent_run_id,
         rerun_reason=body.rerun_reason,
-        source_kind=resolution.source_kind,
-        parse_confidence=resolution.parse_confidence,
-        parse_confidence_per_field=resolution.parse_confidence_per_field,
-        source_html=resolution.source_html,
         special_instructions=body.special_instructions,
         contextual_text=body.contextual_text,
         skill_name=None,
@@ -1918,23 +1502,23 @@ def _persist_failed_run(
 
 def _load_subject_condition(
     conn: "psycopg.Connection",
-    sreality_id: int | None,
+    listing_id: int | None,
 ) -> dict[str, Any] | None:
-    """Fetch the subject listing's condition fields for the agent prompt.
+    """Fetch the subject ad's condition fields for the agent prompt.
 
-    Returns the sreality `condition` enum plus the two derived 1-5
-    levels (apartment + building). Derived levels are NULL until the
-    scoring phase has run on that snapshot; the agent prompt teaches
-    the LLM to skip the matching level_min filter when its target is
-    NULL on that axis.
+    Returns the `condition` enum plus the two derived 1-5 levels
+    (apartment + building). Derived levels are NULL until the scoring
+    phase has run on that snapshot; the agent prompt teaches the LLM to
+    skip the matching level_min filter when its target is NULL on that
+    axis. None for a raw-spec subject.
     """
-    if sreality_id is None:
+    if listing_id is None:
         return None
     with conn.cursor() as cur:
         cur.execute(
             "SELECT condition, apartment_condition_level, "
-            "building_condition_level FROM listings WHERE sreality_id = %s",
-            (sreality_id,),
+            "building_condition_level FROM listings WHERE id = %s",
+            (listing_id,),
         )
         row = cur.fetchone()
     if row is None:
@@ -1975,8 +1559,8 @@ def _subject_mf_facts(
     body: s.CreateEstimationIn,
 ) -> dict[str, Any]:
     """What mf_reference() needs about the run's subject besides the target's
-    disposition and area. A subject not in our database has no stored location: its
-    obec comes from the one containing-obec statement and it never binds a KÚ."""
+    disposition and area. A raw-spec subject has no stored location: its obec comes
+    from the one containing-obec statement and it never binds a KÚ."""
     if resolution.input_listing_id is not None:
         with conn.cursor() as cur:
             cur.execute(_SUBJECT_MF_FACTS_SQL, {"listing_id": resolution.input_listing_id})
@@ -2034,17 +1618,10 @@ def _reference_rent_for_run(
 
 
 def _build_target(
-    spec: dict[str, Any] | None, input_listing_id: int | None = None,
+    spec: dict[str, Any], input_listing_id: int | None = None,
 ) -> TargetSpec:
-    if spec is None:
-        raise ValueError("target_spec is required to build a TargetSpec")
     if spec.get("lat") is None or spec.get("lng") is None:
-        # Explicit over TypeError-from-float(None): the dominant cause is a
-        # coordinate-less parse under the W0 Mapy geocoding kill switch.
-        raise ValueError(
-            "target has no coordinates — the URL parse could not geocode the "
-            "locality (Mapy geocoding disabled?) and no lat/lng override was given"
-        )
+        raise ValueError("target has no coordinates")
     return TargetSpec(
         lat=float(spec["lat"]),
         lng=float(spec["lng"]),
@@ -2181,7 +1758,7 @@ def _run_agent_path(
             special_instructions=body.special_instructions,
             contextual_text=body.contextual_text,
             subject_condition=_load_subject_condition(
-                conn, resolution.input_sreality_id,
+                conn, resolution.input_listing_id,
             ),
         )
     except Exception as exc:
@@ -2191,7 +1768,6 @@ def _run_agent_path(
             conn, run_id,
             status="failed",
             trace=trace,
-            warnings=list(resolution.parse_warnings) or None,
             error_message=f"{type(exc).__name__}: {exc}"[:1000],
         )
         flush_trace_payloads(conn, run_id, recorder)
@@ -2206,8 +1782,6 @@ def _run_agent_path(
         else None
     )
     trace = recorder.to_dict(_agent_summary_line(d, md))
-    merged_warnings = list(resolution.parse_warnings)
-    merged_warnings.extend(d.get("warnings") or [])
 
     err: str | None = None
     if status == "failed":
@@ -2224,7 +1798,7 @@ def _run_agent_path(
         comparables_used=d.get("comparables_used"),
         comparables_excluded=d.get("comparables_excluded") or None,
         trace=trace,
-        warnings=merged_warnings or None,
+        warnings=d.get("warnings") or None,
         error_message=err,
         reference_rent=reference_rent,
     )
@@ -2280,25 +1854,12 @@ def _insert_run(
     for k in (
         "input_spec", "comparables_used", "comparables_excluded",
         "trace", "warnings",
-        "parse_confidence_per_field", "subject_attributes",
         "scenario", "reference_rent",
     ):
         if fields.get(k) is not None:
             fields[k] = Jsonb(fields[k])
     cols = list(_INSERT_COLUMNS)
     values = [f"%({c})s" for c in cols]
-    # Dual-write (migration 324): stamp the surrogate listings.id alongside the
-    # legacy smart key. Prefer an explicit input_listing_id from the caller's
-    # resolution (Gate 2: the only handle for a NULL-sreality_id subject) and
-    # fall back to the inline subquery for legacy sreality-anchored callers.
-    # input_listing_id now also rides the read surface (_RUN_COLUMNS), so its
-    # placeholder is already in `values` at its natural column position —
-    # only the VALUE expression needs overriding here, not a second column.
-    _lid_at = cols.index("input_listing_id")
-    values[_lid_at] = (
-        "COALESCE(%(input_listing_id)s, "
-        "(SELECT id FROM listings WHERE sreality_id = %(input_sreality_id)s))"
-    )
     # Optional worker-lane execution snapshot (migration 349). Kept out of
     # _RUN_COLUMNS so it never rides the API read surface; only ever present when
     # the job lane is enabled, and cleared to NULL by the lane at terminal.
@@ -2352,7 +1913,7 @@ def _fetch_run(
     try:
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT {_RUN_PROJECTION} FROM estimation_runs er WHERE er.id = %s",
+                f"SELECT {_RUN_PROJECTION} FROM {_RUN_FROM} WHERE er.id = %s",
                 (run_id,),
             )
             row = cur.fetchone()

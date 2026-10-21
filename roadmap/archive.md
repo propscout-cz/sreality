@@ -1046,7 +1046,7 @@ entire run. Two coupled fixes, both validated on live data:
 - **Architecture decision recorded:** the listing stays the URL-addressable object
   (immutable id; `property_id` regroups under the dedup engine), the page carries the
   property context. No stub listings for orphan runs — the listings table stays
-  scrape-only.
+  scrape-only. *(Reversed 2026-10-20 — a pasted URL becomes an ad through the drain.)*
 - **Layout pass (follow-up PR):** the page widened from `max-w-3xl` to `max-w-5xl`
   (matching Estimations / Buildings); the header became two-column — identity + price
   left, the **location map anchored top-right** (the standalone Location section is

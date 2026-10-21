@@ -8,6 +8,7 @@
  * small props — `layout` (sticky full-page vs contained) and `features` (which
  * page-chrome bits to show). Everything cohort-related is identical, so the two
  * surfaces can never drift. */
+import { haloPointsOf, NO_HOVER, nextHover, type HoverState, type HoverTarget } from '@/lib/hoverSync';
 import {
   Suspense,
   useCallback,
@@ -185,39 +186,22 @@ export default function BrowseExperience({
     });
   }, []);
 
-  /* Hover-sync between cards / map. Ephemeral component state. */
-  const [hoverState, setHoverState] = useState<{
-    ids: ReadonlySet<number>;
-    origin: 'map' | 'list' | null;
-  }>({ ids: new Set(), origin: null });
+  /* Hover-sync between cards / map: ephemeral state, one transition
+   * (lib/hoverSync). The cards hand over their rows' points for the map's
+   * locator halo; a map-origin hover carries none (the cursor is already
+   * on the spot). */
+  const [hoverState, setHoverState] = useState<HoverState>(NO_HOVER);
   const hoveredIds = hoverState.ids;
-  const setHovered = useCallback(
-    (ids: ReadonlyArray<number> | null, origin: 'map' | 'list') => {
-      setHoverState((prev) => {
-        if (ids == null || ids.length === 0) {
-          return prev.ids.size === 0
-            ? prev
-            : { ids: new Set<number>(), origin: null };
-        }
-        if (
-          prev.origin === origin &&
-          prev.ids.size === ids.length &&
-          ids.every((id) => prev.ids.has(id))
-        ) {
-          return prev;
-        }
-        return { ids: new Set(ids), origin };
-      });
-    },
+  const setHoveredFromMap = useCallback(
+    (ids: ReadonlyArray<number> | null) => setHoverState((prev) => nextHover(prev, ids, [], 'map')),
     [],
   );
-  const setHoveredFromMap = useCallback(
-    (ids: ReadonlyArray<number> | null) => setHovered(ids, 'map'),
-    [setHovered],
-  );
-  const setHoveredFromList = useCallback(
-    (ids: ReadonlyArray<number> | null) => setHovered(ids, 'list'),
-    [setHovered],
+  const setHoveredFromCards = useCallback(
+    (targets: ReadonlyArray<HoverTarget> | null) =>
+      setHoverState((prev) =>
+        nextHover(prev, targets?.map((t) => t.listing_id) ?? null, haloPointsOf(targets ?? []), 'list'),
+      ),
+    [],
   );
 
   /* Operator-resizable columns + the sidebar/map-collapsed preferences (all per-browser
@@ -429,11 +413,16 @@ export default function BrowseExperience({
   const [estimates, setEstimates] = useState<Record<number, ListingEstimate>>(
     {},
   );
+  /* A submit the API refused (a 422 for an ad it cannot place) creates no run,
+   * so nothing in `estimates` would say it failed — the API's sentence is kept
+   * per card instead, until the next attempt. */
+  const [estimateRefusals, setEstimateRefusals] = useState<Record<number, string>>({});
   const requestedEstIdsRef = useRef<Set<number>>(new Set());
   const estimatesEnabled = tab === 'map' && isApiConfigured();
 
   useEffect(() => {
     setEstimates({});
+    setEstimateRefusals({});
     requestedEstIdsRef.current = new Set();
   }, [cardsRestorationKey]);
 
@@ -483,6 +472,18 @@ export default function BrowseExperience({
       }),
     onMutate: (srealityId) => {
       setEstimatingIds((prev) => new Set(prev).add(srealityId));
+      setEstimateRefusals((prev) => {
+        if (!(srealityId in prev)) return prev;
+        const next = { ...prev };
+        delete next[srealityId];
+        return next;
+      });
+    },
+    onError: (err, srealityId) => {
+      setEstimateRefusals((prev) => ({
+        ...prev,
+        [srealityId]: err instanceof Error ? err.message : 'Odhad se nepodařilo spustit',
+      }));
     },
     onSuccess: (run, srealityId) => {
       setEstimates((prev) => ({
@@ -734,13 +735,14 @@ export default function BrowseExperience({
                 hasBounds={filters.bounds != null}
                 hoveredIds={hoveredIds}
                 hoverOrigin={hoverState.origin}
-                onHover={setHoveredFromList}
+                onHover={setHoveredFromCards}
                 onSort={view.setSort}
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
                 onClearBounds={() => view.setBounds(null)}
                 merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
+                estimateRefusals={estimateRefusals}
                 onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
               />
               </CardHydrationProvider>
@@ -765,7 +767,7 @@ export default function BrowseExperience({
                     bounds={filters.bounds}
                     onBoundsChange={view.setBounds}
                     hoveredIds={hoveredIds}
-                    hoverOrigin={hoverState.origin}
+                    haloPoints={hoverState.points}
                     onHover={setHoveredFromMap}
                     centerCircle={
                       filters.locationMode === 'center_radius'
@@ -820,7 +822,11 @@ export default function BrowseExperience({
         {tab === 'stats' && (
           <div className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}>
             <Suspense fallback={<Skeleton height={320} className="my-8" />}>
-              <StatsDashboard filters={filters} view={f.presetBar ? view : undefined} />
+              <StatsDashboard
+                filters={filters}
+                view={f.presetBar ? view : undefined}
+                onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
+              />
             </Suspense>
           </div>
         )}

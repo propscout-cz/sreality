@@ -14,6 +14,7 @@ import {
   statsDashboardKey,
   type ChartSpec,
 } from '@/lib/stats';
+import DismissedSkewNotice from './DismissedSkewNotice';
 import StatsChart, { type CardFocus } from './StatsChart';
 import DashboardBar, { type DashboardView } from './DashboardBar';
 
@@ -28,9 +29,12 @@ import DashboardBar, { type DashboardView } from './DashboardBar';
 export default function StatsDashboard({
   filters,
   view,
+  onIncludeDismissed,
 }: {
   filters: ListingFilters;
   view?: DashboardView;
+  /* Flips the sidebar to Show dismissed, from the skew warning. */
+  onIncludeDismissed?: () => void;
 }) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<ChartSpec | null>(null);
@@ -116,6 +120,7 @@ export default function StatsDashboard({
   return (
     <div className="space-y-4">
       {view ? <DashboardBar view={view} working={charts} onLoadCharts={(next) => save.mutateAsync(next)} /> : null}
+      <DismissedSkewNotice filters={filters} onInclude={onIncludeDismissed} />
       <p className="text-[0.75rem] text-[var(--color-ink-3)]">
         Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.
       </p>

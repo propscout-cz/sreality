@@ -38,6 +38,7 @@ import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtShortDate } from '@/lib/format';
 import type { CardRow } from '@/lib/queries';
+import type { HoverTarget } from '@/lib/hoverSync';
 import type { ImagePublic, ListingEstimate } from '@/lib/types';
 import type { CoverTag } from '@/lib/imageTags';
 
@@ -160,6 +161,7 @@ function renderGrid(
     estimates?: Record<number, ListingEstimate>;
     row?: CardRow;
     rows?: CardRow[];
+    onHover?: (targets: ReadonlyArray<HoverTarget> | null) => void;
     orderPortal?: string | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
@@ -190,7 +192,7 @@ function renderGrid(
             hasFilters={false}
             hasBounds={false}
             hoveredIds={new Set()}
-            onHover={() => {}}
+            onHover={opts.onHover ?? (() => {})}
             onSort={() => {}}
             onClearFilters={() => {}}
             onClearBounds={() => {}}
@@ -352,6 +354,21 @@ describe('<ListingCards> the cover photo', () => {
   });
 });
 
+describe('<ListingCards> hover-sync', () => {
+  /* The card hands the map its own point, so the locator halo lands on the
+   * property even while the map shows it only inside a count mark. */
+  it('reports the hovered card with its point, and nothing on leave', async () => {
+    const onHover = vi.fn();
+    renderGrid({ row: { ...ROW, lat: 50.08, lng: 14.43 } as CardRow, onHover });
+    const price = await screen.findByText(/5.400.000/);
+    fireEvent.mouseEnter(price);
+    /* The row itself is the target: its key and its point. */
+    expect(onHover).toHaveBeenLastCalledWith([expect.objectContaining({ listing_id: 111, lat: 50.08, lng: 14.43 })]);
+    fireEvent.mouseLeave(price);
+    expect(onHover).toHaveBeenLastCalledWith(null);
+  });
+});
+
 /* How many ads the card's property holds, every ad active or not: read off the
  * row (`source_count`, migration 590), so the badge paints with the card. Two
  * ads or more only — most properties are one ad, and a badge on each would be
@@ -482,10 +499,10 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
     renderGrid({ estimates: { 900: ESTIMATE } });
 
     const link = await screen.findByRole('link', { name: /Výnos/ });
-    expect(link).toHaveAttribute('href', '/listing/900?run=77#estimations');
+    expect(link).toHaveAttribute('href', '/listing/sreality/900?run=77#estimations');
 
     fireEvent.click(link);
-    expect(locationNow()).toBe('/listing/900?run=77#estimations');
+    expect(locationNow()).toBe('/listing/sreality/900?run=77#estimations');
   });
 });
 
@@ -813,6 +830,25 @@ describe('<ListingCards> merge mode with a multi-photo card', () => {
 /* MS19: a card is a property. Its badge names the portals where it has an active ad
  * (or, with none active, every portal it had, marked inactive), and under one
  * portal's "Newest first" a card whose date there is not its own first seen says so. */
+describe('<ListingCards> the title names the lot', () => {
+  const title = () => screen.findByRole('link', { name: /na prodej/ });
+
+  it('adds a house lot after its floor area', async () => {
+    renderGrid({ row: { ...ROW, category_main: 'dum', disposition: '5+1', area_m2: 180, plot_area_m2: 850 } as CardRow });
+    expect(await title()).toHaveAccessibleName(/ na prodej · 5\+1 · 180\sm² · 850\sm²\spozemku$/);
+  });
+
+  it('names a pozemek area once', async () => {
+    renderGrid({ row: { ...ROW, category_main: 'pozemek', disposition: null, area_m2: 1200, plot_area_m2: 1200 } as CardRow });
+    expect(await title()).toHaveAccessibleName(/ na prodej · 1\s200\sm²$/);
+  });
+
+  it('leaves a flat without a lot as it was', async () => {
+    renderGrid({ row: { ...ROW, plot_area_m2: null } as CardRow });
+    expect(await title()).toHaveAccessibleName(TITLE_RE);
+  });
+});
+
 describe('<ListingCards> the portal badge and the order date', () => {
   const badge = () => screen.getByTitle(/^Portály/);
 

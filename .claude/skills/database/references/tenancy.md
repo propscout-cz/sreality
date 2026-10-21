@@ -288,7 +288,7 @@ predicates for seven weeks and answered "not in pipeline" for every caller.
 **4. `deps.account_scope` returns `[account_id, SYSTEM]`** — the fourth shape, named here so
 nobody rediscovers it as a divergence and "fixes" it. The `/estimations` read family
 (`GET /estimations`, `GET /estimations/latest-by-listing`) runs on the SERVICE-ROLE connection
-on purpose: its `LEFT JOIN` onto `listings` + `parsed_url_cache` (RLS-on, zero policies) would
+on purpose: its `LEFT JOIN` onto `listings` (RLS-on, zero policies) would
 silently NULL `locality_display` on a tenant connection. So it scopes with an explicit list,
 and that list mirrors migration 291's three-arm policy (own account OR SYSTEM OR platform
 admin) rather than inventing a second tenancy definition. It never widens and never returns

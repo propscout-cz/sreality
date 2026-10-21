@@ -216,7 +216,7 @@ def _containing_chain(
 def containing_obec_kod(conn: Any, *, lat: float | None, lng: float | None) -> int | None:
     """The RÚIAN code of the obec covering a point, or None (outside every obec / no current
     registry) -- the one containing-obec statement, for subjects with no stored location
-    (an estimation of a URL-parsed advert or a typed point). Any query error raises: read
+    (an estimation of a typed point). Any query error raises: read
     as "no obec" it would become a confident `location_unknown` frozen into a run."""
     if lat is None or lng is None:
         return None

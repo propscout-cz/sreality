@@ -1,8 +1,7 @@
 """Tests for account_id stamping on estimation_runs writes (Wave 1 W1-1).
 
-Hermetic: exercises `_insert_run`'s SQL assembly directly with a fake cursor.
-`create_estimation_run`'s full path needs a live SrealityClient + LLMClient to
-reach `_resolve_input`, well outside this unit; the column list building —
+Hermetic: exercises `_insert_run`'s SQL assembly directly with a fake cursor,
+and `create_estimation_run` with its setup helpers stubbed; the column list building —
 whether `account_id` lands in the INSERT and binds the caller's resolved
 value rather than silently defaulting to NULL — is the actual risk surface
 this PR touches (an explicit NULL bind overrides the column DEFAULT, unlike
@@ -56,7 +55,7 @@ class _FakeConn:
 def _base_fields() -> dict[str, Any]:
     return {
         "source": "extension", "mode": "deterministic", "status": "pending",
-        "estimate_kind": "rent", "input_url": "https://example.test/1",
+        "estimate_kind": "rent", "input_listing_id": 1,
         "input_sreality_id": 1,
     }
 
@@ -85,7 +84,6 @@ def test_insert_run_omitted_account_id_binds_none_not_default() -> None:
 
 
 def test_create_estimation_run_defaults_to_system_account(monkeypatch: Any) -> None:
-    monkeypatch.setenv("MAPY_GEOCODE_ENABLED", "1")  # not a kill-switch test
     """account_id=None (an unclaimed service-role caller) must stamp the platform
     SYSTEM account, not NULL -- preserving pre-Wave-1 behavior (every run
     used to land on the column DEFAULT, which was the SYSTEM account)."""
@@ -93,10 +91,9 @@ def test_create_estimation_run_defaults_to_system_account(monkeypatch: Any) -> N
 
     conn = _FakeConn()
     resolution = er._Resolution(
-        input_url="https://example.test/1", input_sreality_id=1,
-        target_spec={"lat": 50.0, "lon": 14.0, "area_m2": 40, "disposition": "2+kk"},
-        source_kind="sreality", parse_confidence="high",
-        parse_confidence_per_field=None, source_html=None,
+        target_spec={"lat": 50.0, "lng": 14.0, "area_m2": 40, "disposition": "2+kk"},
+        input_listing_id=1, input_sreality_id=1,
+        subject_source="sreality", subject_source_id_native="1",
     )
     # Pin the legacy inline path: with the job lane on, create_estimation_run
     # returns after INSERT without calling _execute_estimation_run, and
@@ -117,7 +114,7 @@ def test_create_estimation_run_defaults_to_system_account(monkeypatch: Any) -> N
     )
     monkeypatch.setattr(er, "_fetch_run", lambda conn, run_id: {"id": run_id})
 
-    body = s.CreateEstimationIn(url="https://example.test/1", source="extension")
+    body = s.CreateEstimationIn(listing_id=1, source="extension")
     er.create_estimation_run(conn, sreality_client=None, llm_client=None, body=body)
 
     insert_sql, insert_params = conn.executed[0]

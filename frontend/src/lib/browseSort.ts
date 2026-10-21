@@ -8,7 +8,7 @@
 export type SortField =
   | 'first_seen_at' | 'last_seen_at'
   | 'price_czk' | 'price_per_m2'
-  | 'area_m2'
+  | 'area_m2' | 'plot_area_m2'
   | 'mf_gross_yield_pct'
   /* One portal's "Newest first" (MS19), never user-selectable and never in a URL —
    * derived by effectiveSort() in queries.ts. */
@@ -32,7 +32,7 @@ export const DEFAULT_SORT: SortSpec = { field: 'first_seen_at', direction: 'desc
 const SORTABLE_FIELDS: ReadonlyArray<SortField> = [
   'first_seen_at', 'last_seen_at',
   'price_czk', 'price_per_m2',
-  'area_m2',
+  'area_m2', 'plot_area_m2',
   'mf_gross_yield_pct',
 ];
 
@@ -52,8 +52,10 @@ export const sortToParam = (s: SortSpec): string =>
  * row offer exactly these. Two bookend the file by date (first_seen_at — when
  * the listing entered our archive), one by when a portal last showed it, two by
  * price, two by price/m², two by area (area_m2: floor area, or the PLOT for
- * pozemek — rule 23), two by MF gross yield. area_m2 and mf_gross_yield_pct are
- * nullable (the yield only for sale apartments); the query orders
+ * pozemek — rule 23), two by lot (plot_area_m2: THE plot measure the Lot area
+ * filter reads, never the bare estate_area, which four portals leave empty on
+ * land), two by MF gross yield. The areas and the yield are nullable (a flat has
+ * no lot, the yield only for sale apartments); the query orders
  * nullsFirst:false so a row without one sorts to the end either way. */
 export const CARD_SORTS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
   { label: 'Newest first',      spec: { field: 'first_seen_at', direction: 'desc' } },
@@ -66,6 +68,8 @@ export const CARD_SORTS: ReadonlyArray<{ label: string; spec: SortSpec }> = [
   { label: 'Price/m²: high → low', spec: { field: 'price_per_m2', direction: 'desc' } },
   { label: 'Plocha: od nejmenší', spec: { field: 'area_m2',     direction: 'asc'  } },
   { label: 'Plocha: od největší', spec: { field: 'area_m2',     direction: 'desc' } },
+  { label: 'Pozemek: od nejmenšího', spec: { field: 'plot_area_m2', direction: 'asc'  } },
+  { label: 'Pozemek: od největšího', spec: { field: 'plot_area_m2', direction: 'desc' } },
   { label: 'Výnos MF: high → low', spec: { field: 'mf_gross_yield_pct', direction: 'desc' } },
   { label: 'Výnos MF: low → high', spec: { field: 'mf_gross_yield_pct', direction: 'asc'  } },
 ];

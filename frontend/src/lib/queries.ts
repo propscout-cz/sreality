@@ -114,6 +114,8 @@ export const CARD_PAGE_SIZE = 24;
 const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
 const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
+  /* The point of the property (its location ad) — the hovered card hands it to the map. */
+  'lat,lng,' +
   /* The Kč/m² figure reads the SERVER measure (migration 425), not price/area:
    * the column is what the sort and the Kč/m² filter already use, so selecting
    * it is what keeps the number on screen identical to the number the cohort
@@ -135,6 +137,9 @@ const CARD_COLS =
    * browse_list (migrations 276/343/363) and simply never selected — they
    * existed only as filter inputs, never as anything displayed. */
   'mf_gross_yield_pct,total_price_change_pct,price_change_count,' +
+  /* The lot the card names after the floor area and the Lot area sort orders by:
+   * THE plot measure (migration 534) and never the bare estate_area column. */
+  'plot_area_m2,' +
   /* The portal badge (MS19, migration 590): the portals with an active ad, else every portal. */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
@@ -777,6 +782,8 @@ export interface CardRow {
    * key the card image hydration batches on. `sreality_id` is nullable post-
    * Gate-2 and is only the fast detail link + the (sreality-backed) estimate. */
   listing_id: number;
+  lat: number | null;
+  lng: number | null;
   sreality_id: number | null;
   /* The one server-composed place string (migration 503): the five columns it
    * replaced (district / locality / obec / okres / street) are not selected. */
@@ -806,6 +813,9 @@ export interface CardRow {
   /* MF gross rental yield % (migration 133). Non-null only on sale
    * apartments that resolved to an MF territory. */
   mf_gross_yield_pct: number | null;
+  /* THE plot measure (migration 534): a house's parcel, a pozemek's own area
+   * (area_m2 already shows it), NULL when the ad states no lot. */
+  plot_area_m2: number | null;
   /* Signed percent across the representative listing's own price series, and
    * the per-child change count. NULL pct = fewer than two observed prices,
    * which <PriceDelta> renders as nothing rather than as "unchanged". */
@@ -1664,8 +1674,6 @@ export const estimationKeys = {
     ['estimations', 'by-listing', ids] as const,
   detail: (id: number) =>
     ['estimations', 'detail', id] as const,
-  preview: (url: string) =>
-    ['estimations', 'preview', url] as const,
   tracePayload: (runId: number, stepN: number) =>
     ['estimations', 'detail', runId, 'trace', stepN, 'payload'] as const,
 };
@@ -1688,7 +1696,7 @@ export const fetchEstimationsList = (params: EstimationListParams) =>
 
 /* Property-grain run fetch for the Listing Detail estimations section:
  * every run on any of the property's child listings, newest first. List
- * rows carry the full run projection (minus source_html), so the section
+ * rows carry the full run projection, so the section
  * renders the selected run without a second per-run request. */
 export const fetchEstimationsForListings = (ids: ReadonlyArray<number>) =>
   listEstimations({ listing_ids: ids.join(','), limit: 100 });

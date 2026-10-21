@@ -28,7 +28,7 @@ export interface RerunInput {
 }
 
 export function canRerun(run: EstimationRun): boolean {
-  return run.input_url != null || run.input_spec != null;
+  return run.input_listing_id != null || run.input_spec != null;
 }
 
 export function buildRerunPayload(
@@ -63,18 +63,22 @@ export function buildRerunPayload(
     ...(overrides?.lifecycle ? { lifecycle: overrides.lifecycle } : {}),
   };
 
-  /* A spec re-run resolves no subject, so it carries the parent's: the subject's
-   * property stays out of the cohort (decision 13). A URL re-run resolves its own. */
-  const exclude = new Set(run.input_spec?.exclude_listing_ids ?? []);
-  if (run.input_listing_id != null) exclude.add(run.input_listing_id);
-  const withSubject = (spec: TargetSpecIn): TargetSpecIn =>
-    exclude.size > 0 ? { ...spec, exclude_listing_ids: [...exclude] } : spec;
+  /* The parent's exclusions ride along (decision 13). A re-run of an ad names the
+   * ad, and the API keeps the ad itself out of the cohort, so it is never listed. */
+  const carried = (run.input_spec?.exclude_listing_ids ?? []).filter(
+    (id) => id !== run.input_listing_id,
+  );
+  const withCarried = <S extends Partial<TargetSpecIn>>(spec: S): S =>
+    carried.length > 0 ? { ...spec, exclude_listing_ids: carried } : spec;
 
-  if (overrides?.spec) {
-    return { ...base, spec: withSubject(overrides.spec) };
+  if (run.input_listing_id != null) {
+    /* Any re-run of an ad stays on the ad's page: same inputs re-read the ad (its
+     * current price and facts); an adjusted one sends its edits as spec_overrides. */
+    if (!overrides?.spec) return { ...base, listing_id: run.input_listing_id };
+    const edits: Partial<TargetSpecIn> = { ...overrides.spec };
+    delete edits.exclude_listing_ids;
+    return { ...base, listing_id: run.input_listing_id, spec_overrides: withCarried(edits) };
   }
-  if (run.input_url) {
-    return { ...base, url: run.input_url };
-  }
-  return { ...base, spec: run.input_spec ? withSubject(run.input_spec) : undefined };
+  const spec = overrides?.spec ?? run.input_spec;
+  return { ...base, spec: spec ? withCarried(spec) : undefined };
 }

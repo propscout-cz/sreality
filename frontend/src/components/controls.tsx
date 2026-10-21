@@ -537,27 +537,59 @@ export function TriRow<T extends TriValue>({
   return (
     <div className="flex items-center justify-between gap-2">
       <span className="text-sm text-[var(--color-ink-2)]">{label}</span>
-      <div className="grid grid-cols-3 gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5">
-        {TRI_OPTS.map((opt) => {
-          const on = value === opt.value;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onChange(opt.value as T)}
-              className={[
-                'px-2.5 py-0.5 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-                on
-                  ? 'bg-[var(--color-copper)] text-white'
-                  : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-              ].join(' ')}
-              aria-pressed={on}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedBar options={TRI_OPTS as ReadonlyArray<{ value: T; label: string }>} value={value} onChange={onChange} />
+    </div>
+  );
+}
+
+/* SegmentedBar — ONE control of adjoining segments, one of them lit: the
+ * amenities' any / yes / no, the Status line's Vše / Aktivní / Neaktivní, the
+ * dismissed and seen-at-birth switches. `fill` stretches it across its container
+ * in equal segments at the sidebar's reading size; otherwise it hugs its labels
+ * at the compact amenity size. */
+export function SegmentedBar<T extends string | number | boolean>({
+  options,
+  value,
+  onChange,
+  label,
+  fill = false,
+}: {
+  options: ReadonlyArray<{ value: T; label: string }>;
+  value: T;
+  onChange: (v: T) => void;
+  label?: string;
+  fill?: boolean;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={[
+        fill ? 'grid w-full' : 'inline-grid',
+        'gap-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-0.5',
+      ].join(' ')}
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+    >
+      {options.map((opt) => {
+        const on = value === opt.value;
+        return (
+          <button
+            key={String(opt.value)}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={[
+              fill ? 'px-2 py-1 text-xs' : 'px-2.5 py-0.5 text-[0.7rem]',
+              'whitespace-nowrap rounded-[var(--radius-xs)] transition-colors',
+              on
+                ? 'bg-[var(--color-copper)] text-white'
+                : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
+            ].join(' ')}
+            aria-pressed={on}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

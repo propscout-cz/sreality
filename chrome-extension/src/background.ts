@@ -104,7 +104,7 @@ async function handleMessage(
     case 'patch_scenario':
       return patchScenario(message.run_id, message.body);
     case 'create_estimation':
-      return createEstimation(message.url, {
+      return createEstimation(message.listing_id, {
         estimate_kind: message.estimate_kind,
         category_main: message.category_main,
       });

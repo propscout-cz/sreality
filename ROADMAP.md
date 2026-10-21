@@ -21,7 +21,8 @@ The analytical backbone runs scraper → real-time properties → dedup → esti
 Map, Operator-workflow, Building-decomposition, Skill-refinement, and Summarize tracks run
 in parallel and are independent within a track. The current front line is in
 `roadmap/next.md` — the real-time hot lane (Wave C, greenlit 2026-07-02), building
-decomposition (Phase B1), and Phase QUAL (qualitative city data) are the live items.
+decomposition (Phase B1; its paste entry retired 2026-10-20, an entry ruling is owed), and Phase QUAL
+(qualitative city data) are the live items.
 Multi-portal ingestion shipped (nine portals on the shared portal framework, Scraper Phase 4). Dedup is
 **split across two programs** since the old decision engine was removed wholesale in the 2026-08
 "NEW DEDUP" cutoff: AUTODEDUP (`docs/design/autodedup/PROGRAM.md`) merges in production, but only
@@ -32,7 +33,7 @@ simulation-first rebuild (see the table below).
 
 | Track | Status | Scope | File |
 | --- | --- | --- | --- |
-| Next | 🟡 in progress | Live front line: real-time Wave C, building B1, Phase QUAL, async agent (7 slice 2 / 7d) | [roadmap/next.md](roadmap/next.md) |
+| Next | 🟡 in progress | Live front line: real-time Wave C, building B1 (no live entry since 2026-10-20; ruling owed), Phase QUAL, async agent (7 slice 2 / 7d) | [roadmap/next.md](roadmap/next.md) |
 | UI | 🟢 mostly done | Browse / estimation / detail SPA; U-Nav next, U3 later | [roadmap/ui-track.md](roadmap/ui-track.md) |
 | Map | 🟡 mixed | Typed locality IDs (map-1); reference overlays (map-2); count marks on world tiles (map-3, built 2026-10-15) | [roadmap/map-track.md](roadmap/map-track.md) |
 | Scraper | 🟢 mostly done | Cadence-split, portal framework, prepared stmts; nine portals live | [roadmap/scraper-track.md](roadmap/scraper-track.md) |
@@ -45,7 +46,7 @@ simulation-first rebuild (see the table below).
 | Hydration sprint | 🟡 active (Lane 0 + W0 done) | One way to load a surface: one read proportional to what renders, decorations streamed, never blocking. Hotfixes shipped — collection/tag CRUD was cross-tenant readable (#1119), Browse's default view was answering HTTP 500 on a single-value `in.()` (#1120, 15,877→6 blocks), browse_list rebuild was at ~83% duty cycle (mig 413). W1 (pipeline progressive hydration) next | [roadmap/hydration-sprint.md](roadmap/hydration-sprint.md) |
 | Measure unification | ✅ shipped (W1–W9; rail live) | One measure, one definition, one label — 64 per-m² sites across 4 territories collapsed onto one named SQL measure + basis label (rule #23), with a **permanent rail**: required-arg signatures, an offline CI census over six source trees + every effective SQL definition, and `FilterDef.basis`. **Open (operator):** the two W2 backfill write passes, and the `browse_stats` drop. Charter: `docs/design/ppm2-measure-unification.md` | [roadmap/measure-track.md](roadmap/measure-track.md) |
 | Operator workflow | 🟢 mostly done | Collections / tags / notes, deal pipeline, dismissals; U-ME (manual rental estimates) retired 2026-10-19 | [roadmap/operator-workflow-track.md](roadmap/operator-workflow-track.md) |
-| Building decomposition | 🟢 mostly done | Paste-a-building unit extraction + fan-out; B3 business-case tab proposed | [roadmap/building-decomposition-track.md](roadmap/building-decomposition-track.md) |
+| Building decomposition | 🟡 no live entry (ruling owed) | Paste-a-building unit extraction + fan-out; the paste entry (`POST /buildings/from_url`) retired 2026-10-20 with the URL parser, so nothing leaves `pending` until the operator gives it a new entry or retires it; B3 business-case tab proposed | [roadmap/building-decomposition-track.md](roadmap/building-decomposition-track.md) |
 | Skill refinement | 🟡 active | Phase AI — feedback-driven estimation-skill refinement | [roadmap/skill-refinement-track.md](roadmap/skill-refinement-track.md) |
 | Summarize | ✅ done | summarize-1 removed 2026-10-19 with the Stats dashboard (626/627) | [roadmap/summarize-track.md](roadmap/summarize-track.md) |
 | Public release | 🟡 active | Accounts, multi-tenancy (RLS), admin gating, Stripe — see `docs/design/public-release-program.md` | [roadmap/public-release-track.md](roadmap/public-release-track.md) |
