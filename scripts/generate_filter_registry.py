@@ -150,6 +150,7 @@ def _render_constants() -> str:
             " * Generated from toolkit.filter_registry; do not hand-edit. */",
             _arr("FURNISHED_CANONICAL", fr.FURNISHED_CANONICAL),
             _arr("OWNERSHIP_CANONICAL", fr.OWNERSHIP_CANONICAL),
+            _arr("CONDITION_CANONICAL", fr.COLUMN_CANONICAL_VALUES["condition"]),
             "",
             "/* `listings.price_unit` constrains no filter, so it is not in the payload",
             " * above — but every listing surface renders it after the price, and the",

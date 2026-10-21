@@ -2059,7 +2059,10 @@ renumber.** Navigate by area:
     Browse is not compiled in Python. Its TS auto-dispatch is pinned to the same generated
     `sql_kind` (vitest + `tests/fixtures/filter_sql_kinds.json`). Its hand-coded half and the
     two browse RPCs agree per shared predicate only (place plan, rule-23 measures,
-    `curated_cities_matching()`, served predicate). Open divergences: center+radius is a circle
+    `curated_cities_matching()`, served predicate, and the `__unknown__` "Neuvedeno" chip of
+    `furnished` / `ownership` / `condition_match`: NULL or a value outside the column's canon,
+    `COLUMN_CANONICAL_VALUES`, which the canon itself never joins; the RPCs spell each canon out,
+    `tests/test_one_place_predicate.py` pins them, migration 644 added condition's). Open divergences: center+radius is a circle
     in Python and a bounding square in Browse (M3); the six amenities are the property's union
     (MS6) for the Watchdog, Browse and Stats but the canonical advert's own flags in an
     estimation cohort, until MS20

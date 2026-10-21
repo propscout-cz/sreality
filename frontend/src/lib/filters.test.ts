@@ -108,6 +108,13 @@ describe('URL round-trip', () => {
     expect(fromSearchParams(dirty).conditionMatch).toEqual(['novostavba']);
   });
 
+  it("round-trips the condition filter's Neuvedeno chip to the URL and the Watchdog", () => {
+    const f: ListingFilters = { ...DEFAULT_FILTERS, conditionMatch: ['novostavba', '__unknown__'] };
+    expect(toSearchParams(f).get('condition')).toBe('novostavba,__unknown__');
+    expect(fromSearchParams(toSearchParams(f)).conditionMatch).toEqual(['novostavba', '__unknown__']);
+    expect(filtersToWatchdogSpec(f).spec.condition_match).toEqual(['novostavba', '__unknown__']);
+  });
+
   it('round-trips the portals and drops a code that is not one of them', () => {
     const f: ListingFilters = { ...DEFAULT_FILTERS, portals: ['idnes', 'realitymix'] };
     expect(fromSearchParams(toSearchParams(f)).portals).toEqual(['idnes', 'realitymix']);

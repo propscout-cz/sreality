@@ -12,7 +12,7 @@
  * right PostgREST call based on its `type` and id suffix:
  *
  *   - `tristate` (`has_balcony`, `terrace`, …)           → `.eq(col, true|false)` when not 'any'
- *   - `string_list` (`condition_match`, `dispositions`)  → `.in(col, values)` when non-empty
+ *   - `string_list` (`dispositions`, `subtype`)          → `.in(col, values)` when non-empty
  *   - id starts with `min_` OR ends with `_min`          → `.gte(col, value)`
  *   - id starts with `max_` OR ends with `_max`          → `.lte(col, value)`
  *   - plain `string` / `int` / `float` / `bool`          → `.eq(col, value)`
@@ -69,6 +69,7 @@ export const HAND_CODED_BROWSE_FILTERS: ReadonlySet<string> = new Set([
   // predicate the plain `.in` auto-path can't express.
   'furnished',
   'ownership',
+  'condition_match',
   // The curated sets (tags, collections, pipeline) are judged by the SOURCE's
   // own arguments, not a predicate: queries.ts:readSource passes
   // lib/setScope.scopeArgs to the *_visible() SRF (migration 629).

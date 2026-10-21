@@ -436,8 +436,22 @@ def test_build_clauses_condition_match() -> None:
         condition_match=["novostavba", "po_rekonstrukci"],
     )
     where, params = _build_match_clauses(spec)
-    assert "l.condition = ANY(%(condition_match)s)" in where
+    assert "(l.condition = ANY(%(condition_match)s))" in where
     assert params["condition_match"] == ["novostavba", "po_rekonstrukci"]
+    assert "condition_match_canon" not in params
+
+
+def test_build_clauses_condition_unknown_sentinel() -> None:
+    """The "Neuvedeno" chip: NULL or any value outside the canon, as on furnished."""
+    from toolkit.filter_registry import COLUMN_CANONICAL_VALUES
+
+    spec = WatchdogFilterSpec(condition_match=["novostavba", "__unknown__"])
+    where, params = _build_match_clauses(spec)
+    clauses = " ".join(where)
+    assert ("l.condition = ANY(%(condition_match)s) OR "
+            "(l.condition IS NULL OR NOT (l.condition = ANY(%(condition_match_canon)s)))") in clauses
+    assert params["condition_match"] == ["novostavba"]
+    assert params["condition_match_canon"] == list(COLUMN_CANONICAL_VALUES["condition"])
 
 
 def test_build_clauses_condition_match_empty_list_drops_clause() -> None:

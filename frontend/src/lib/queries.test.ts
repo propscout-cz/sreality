@@ -17,7 +17,7 @@ vi.mock('./brokers', async (importOriginal) => ({
   fetchBrokerPropertyIds: vi.fn(async () => [1]),
 }));
 
-import { DEFAULT_FILTERS } from './filters';
+import { CONDITION_CANONICAL, DEFAULT_FILTERS, FURNISHED_CANONICAL } from './filters';
 import { ApiError } from './api';
 import { supabase } from './supabase';
 import {
@@ -1000,5 +1000,55 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
         expect(list.searchParams.has('order') && list.searchParams.has('limit')).toBe(true);
       }
     }
+  });
+});
+
+/* The '__unknown__' chip ("Neuvedeno") on furnished, ownership and condition: NULL or a
+ * value outside the canon (toolkit.filter_compiler._enum_or_unknown_clause, the RPCs'
+ * own arrays). Without it a selection keeps the auto path's shape: one value is `eq`. */
+describe('the Neuvedeno chip reaches the list as NULL or off-canon', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const sent = async (patch: Partial<ListingFilters>): Promise<URLSearchParams> => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'Content-Range': '*/1' }),
+      text: async () => '',
+    }) as unknown as Response);
+    vi.stubGlobal('fetch', fetch);
+    await fetchBrowseCount({ ...DEFAULT_FILTERS, ...patch });
+    return new URL(String(fetch.mock.calls.at(-1)![0])).searchParams;
+  };
+  const conditionCanon = CONDITION_CANONICAL.join(',');
+
+  it('keeps one stated condition an equality and several an IN', async () => {
+    expect((await sent({ conditionMatch: ['novostavba'] })).get('condition')).toBe('eq.novostavba');
+    expect((await sent({ conditionMatch: ['novostavba', 'dobry'] })).get('condition'))
+      .toBe('in.(novostavba,dobry)');
+  });
+
+  it('sends Neuvedeno alone in the shape furnished sends it', async () => {
+    const condition = await sent({ conditionMatch: ['__unknown__'] });
+    expect(condition.get('condition')).toBeNull();
+    expect(condition.getAll('or')).toContain(`(condition.is.null,condition.not.in.(${conditionCanon}))`);
+    const furnished = await sent({ furnished: ['__unknown__'] });
+    expect(furnished.getAll('or'))
+      .toContain(`(furnished.is.null,furnished.not.in.(${FURNISHED_CANONICAL.join(',')}))`);
+  });
+
+  it('ORs stated conditions with Neuvedeno', async () => {
+    const q = await sent({ conditionMatch: ['novostavba', '__unknown__'] });
+    expect(q.getAll('or'))
+      .toContain(`(condition.in.(novostavba),condition.is.null,condition.not.in.(${conditionCanon}))`);
+  });
+
+  it('sends the selection to the aggregates as it stands, the sentinel included', () => {
+    const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, conditionMatch: ['__unknown__'] }, NO_PREFILTERS);
+    expect(args.condition_match_filter).toEqual(['__unknown__']);
   });
 });

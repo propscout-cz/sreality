@@ -66,6 +66,7 @@ class ComparableFilters:
     lifecycle: Literal["active", "delisted", "all"] | None = None
     floor_band: int | None = None
     portals: list[str] | None = None
+    # May carry the `__unknown__` sentinel, like furnished/ownership below.
     condition_match: list[str] | None = None
     building_type_match: list[str] | None = None
     energy_rating_match: list[str] | None = None
