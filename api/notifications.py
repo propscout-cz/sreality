@@ -659,7 +659,7 @@ def mark_all_seen(
 #
 # Three producers, one clock: the realtime worker's `notifications` lane runs `match_once`
 # (step watchdog_new), `match_changes_once` (price) and `match_monitored_collections_once`
-# (monitor) every 300 s, each step in its own transaction. Until W2b the API's matcher_loop
+# (monitor) every 300 s, each step on its own connection. Until W2b the API's matcher_loop
 # below calls the same three beside it. Every INSERT is a target-less ON CONFLICT DO NOTHING
 # over the dedupe_key UNIQUE, and the keys keep the pre-W2 grammar byte for byte
 # (tests/api/test_notifications.py pins it), so two runners write a union, never a duplicate.
@@ -673,6 +673,30 @@ MONITOR_WINDOW = "7 days"
 # 'Delisted' only once the property has stayed gone this long (F14): the delist pipeline's
 # effective dwell, so a portal blink sends neither 'Delisted' nor, later, 'Relisted'.
 INACTIVE_DWELL = "24 hours"
+# One producer statement past this is cancelled and fails its watchdog (or its step) instead of
+# holding a pass. The heaviest measured, a broad watchdog's price statement over 7 days of
+# canonical steps, read 1.4 s (2026-10-21).
+PRODUCER_STATEMENT_TIMEOUT = "120s"
+# What a stored spec fails with deterministically: the model's ValidationError (a ValueError) and
+# the one compiler's ValueError / LookupError. The write routes refuse such a spec (422); a stored
+# one is counted `subscriptions_invalid`, never a statement failure.
+SPEC_REJECTIONS: tuple[type[Exception], ...] = (ValueError, LookupError)
+
+
+def check_filter_spec(spec: "WatchdogFilterSpec") -> None:
+    """Raise what the matcher would raise for this spec (one of SPEC_REJECTIONS), else nothing."""
+    _build_match_clauses(spec)
+
+
+def _commit_one(conn: "psycopg.Connection", sql: str, params: dict[str, Any]) -> int:
+    """One producer statement in its own transaction under the bound, committed at once: the KEY
+    SHARE locks its INSERT takes on the properties it dispatches last one statement, never a whole
+    step, so a merge (autodedup's 5 s lock_timeout) never waits on a producer. SET LOCAL, never a
+    session SET: connect() is the transaction-mode pooler, where a session GUC leaks to others."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(f"SET LOCAL statement_timeout = '{PRODUCER_STATEMENT_TIMEOUT}'")
+        cur.execute(sql, params)
+        return cur.rowcount or 0
 
 
 def _read_int_setting(
@@ -777,29 +801,42 @@ def _live_watchdogs(conn: "psycopg.Connection") -> list[tuple[Any, ...]]:
         return cur.fetchall()
 
 
+@dataclass
+class _Tally:
+    """One producer's per-watchdog outcome: a spec the matcher refuses is `invalid` (the same every
+    pass), a statement that raised is `failed` (the lane reddens its step for it)."""
+    evaluated: int
+    invalid: int = 0
+    failed: int = 0
+    inserted: int = 0
+
+    def stats(self, inserted_key: str) -> dict[str, int]:
+        return {"subscriptions_evaluated": self.evaluated,
+                "subscriptions_invalid": self.invalid,
+                "subscriptions_failed": self.failed,
+                inserted_key: self.inserted}
+
+
 def _insert_per_watchdog(
-    conn: "psycopg.Connection", sub_id: Any, raw_spec: Any, sql: str,
+    conn: "psycopg.Connection", tally: _Tally, sub_id: Any, raw_spec: Any, sql: str,
     params: dict[str, Any], *, extra_where: list[str], label: str,
-) -> int | None:
-    """One watchdog's INSERT (`{where}` in `sql` = its spec + `extra_where`): the rows
-    written, or None when the watchdog failed. Its own transaction (a savepoint inside the
-    lane's step), so one failing watchdog rolls back alone and the others still match."""
+) -> None:
+    """One watchdog's INSERT (`{where}` in `sql` = its spec + `extra_where`), committed on its own
+    (`_commit_one`), so one failing watchdog rolls back alone and the others still match."""
     try:
-        spec = WatchdogFilterSpec(**(raw_spec or {}))
-    except Exception as exc:  # noqa: BLE001 — bad spec, skip but keep loop alive
-        LOG.warning("%s: subscription %s has invalid filter_spec: %s", label, sub_id, exc)
-        return None
+        where, spec_params = _build_match_clauses(WatchdogFilterSpec(**(raw_spec or {})))
+    except SPEC_REJECTIONS as exc:
+        LOG.warning("%s: subscription %s has a spec the matcher refuses: %s", label, sub_id, exc)
+        tally.invalid += 1
+        return
     try:
-        where, spec_params = _build_match_clauses(spec)
-        with conn.transaction(), conn.cursor() as cur:
-            cur.execute(
-                sql.replace("{where}", " AND ".join([*where, *extra_where])),
-                {**spec_params, **params, "subscription_id": str(sub_id)},
-            )
-            return cur.rowcount or 0
+        tally.inserted += _commit_one(
+            conn, sql.replace("{where}", " AND ".join([*where, *extra_where])),
+            {**spec_params, **params, "subscription_id": str(sub_id)},
+        )
     except Exception as exc:  # noqa: BLE001 — isolate one sub, keep loop alive
         LOG.exception("%s: subscription %s failed, skipping: %s", label, sub_id, exc)
-        return None
+        tally.failed += 1
 
 
 # Step watchdog_new. `l` is properties_public: `listing_id` is the canonical advert
@@ -819,12 +856,13 @@ _WATCHDOG_NEW_SQL = (
 
 def match_once(conn: "psycopg.Connection") -> dict[str, int]:
     """Step watchdog_new: one 'new' dispatch per (live watchdog, matching property first
-    seen inside the last 24 h and after the watchdog was switched on).
+    seen inside the last 24 h and after the watchdog last started).
 
     ONE INSERT per watchdog over a fixed window, `first_seen_at > greatest(now() − 24 h,
     active_since)` (F1): a property whose match facts arrive late (its location resolves
-    an hour on) still fires while it is under a day old, and a watchdog created or switched
-    back on alerts only on what appears afterwards, never a backfill (R6 (a)). The once-ever
+    an hour on) still fires while it is under a day old, and a watchdog created, switched
+    back on or given a new filter (each restamps `active_since`, migration 652) alerts only
+    on what appears afterwards, never a backfill (R6 (a)). The once-ever
     `wd:{sub}:new:{property_id}` key is the only idempotence — no cursor, no lookback.
 
     Images-first gate (`notifications_new_requires_image`, default on): the INSERT also
@@ -842,22 +880,14 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
         params["image_zero_rows_floor_minutes"] = IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES
 
     subs = _live_watchdogs(conn)
-    inserted = failed = 0
+    tally = _Tally(evaluated=len(subs))
     for sub_id, raw_spec, active_since in subs:
-        rows = _insert_per_watchdog(
-            conn, sub_id, raw_spec, _WATCHDOG_NEW_SQL,
+        _insert_per_watchdog(
+            conn, tally, sub_id, raw_spec, _WATCHDOG_NEW_SQL,
             {**params, "active_since": active_since},
             extra_where=extra_where, label="matcher",
         )
-        if rows is None:
-            failed += 1
-        else:
-            inserted += rows
-    return {
-        "subscriptions_evaluated": len(subs),
-        "subscriptions_failed": failed,
-        "matches_inserted": inserted,
-    }
+    return tally.stats("matches_inserted")
 
 
 # THE canonical-ad price-step fragment (program § 3.3, step price), read by the watchdog's
@@ -910,28 +940,19 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
     """
     params: dict[str, Any] = {"price_window": PRICE_WINDOW}
     subs = _live_watchdogs(conn)
-    inserted = failed = 0
+    tally = _Tally(evaluated=len(subs))
     for sub_id, raw_spec, active_since in subs:
-        rows = _insert_per_watchdog(
-            conn, sub_id, raw_spec, _WATCHDOG_PRICE_SQL,
+        _insert_per_watchdog(
+            conn, tally, sub_id, raw_spec, _WATCHDOG_PRICE_SQL,
             {**params, "active_since": active_since},
             extra_where=["st.price_czk < st.prev_price_czk",
                          "st.scraped_at > %(active_since)s"],
             label="change matcher",
         )
-        if rows is None:
-            failed += 1
-        else:
-            inserted += rows
-    with conn.cursor() as cur:
-        cur.execute(_MONITOR_PRICE_SQL, params)
-        collection_inserted = cur.rowcount or 0
-    return {
-        "subscriptions_evaluated": len(subs),
-        "subscriptions_failed": failed,
-        "changes_inserted": inserted + collection_inserted,
-        "collection_changes_inserted": collection_inserted,
-    }
+    collection_inserted = _commit_one(conn, _MONITOR_PRICE_SQL, params)
+    tally.inserted += collection_inserted
+    return {**tally.stats("changes_inserted"),
+            "collection_changes_inserted": collection_inserted}
 
 
 # --- collection monitor producer (Sprint C) -------------------------------
@@ -1133,11 +1154,9 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
     if not row or not row[0]:
         return {"monitored_collections": 0, "events_inserted": 0}
     params = {"monitor_window": MONITOR_WINDOW, "inactive_dwell": INACTIVE_DWELL}
-    inserted = 0
-    with conn.cursor() as cur:
-        for sql in (_MONITOR_INACTIVE_SQL, _MONITOR_REACTIVATED_SQL, _MONITOR_NEW_SOURCE_SQL):
-            cur.execute(sql, params)
-            inserted += cur.rowcount or 0
+    # In this order, each committed before the next: reactivated reads the inactive rows.
+    inserted = sum(_commit_one(conn, sql, params) for sql in (
+        _MONITOR_INACTIVE_SQL, _MONITOR_REACTIVATED_SQL, _MONITOR_NEW_SOURCE_SQL))
     return {"monitored_collections": int(row[0]), "events_inserted": inserted}
 
 

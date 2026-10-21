@@ -554,11 +554,13 @@ _HEALTH_PRUNED_AT: float | None = None
 
 # notifications lane (notifications push program W2a, PROGRAM.md § 3.3): the three notification
 # producers of api/notifications on ONE clock, the text_extract/health shape — a CONSTANT tick, no
-# app_settings row, no flag; the brake is a deploy. Each step runs on its own connection in its own
-# transaction, so a step that raises rolls back alone and the others still write; its error is a
-# `portal_errors` entry, which the jobs check renders as the cell `lane/notifications/<step>`, and the
-# step's next clean pass clears it. Until W2b the API's matcher_loop runs the same three producers
-# beside this lane: both write the same dedupe_key, so the overlap is a union, never a duplicate.
+# app_settings row, no flag; the brake is a deploy. Each step runs on its own connection and commits
+# per statement (one watchdog's INSERT, one monitor detector: api/notifications._commit_one, under a
+# 120 s SET LOCAL bound), so the locks an INSERT takes never outlive it and a step that raises stops
+# only itself; its error is a `portal_errors` entry, which the jobs check renders as the cell
+# `lane/notifications/<step>`, and the step's next clean pass clears it. Until W2b the API's
+# matcher_loop runs the same three producers beside this lane: both write the same dedupe_key, so
+# the overlap is a union, never a duplicate.
 NOTIFICATIONS_TICK_SECONDS = 300.0
 # step -> the api.notifications producer it runs (looked up at pass time: the module is lazy-imported).
 NOTIFICATIONS_STEPS: dict[str, str] = {
@@ -566,9 +568,6 @@ NOTIFICATIONS_STEPS: dict[str, str] = {
     "price": "match_changes_once",
     "monitor": "match_monitored_collections_once",
 }
-# One producer statement past this fails its step instead of holding the pass lock. The heaviest
-# measured, a broad watchdog's price step over 7 days of canonical steps, read 1.4 s (2026-10-21).
-NOTIFICATIONS_STATEMENT_TIMEOUT_S = 120
 # A step's producers share one pass, so an abandoned pass must never overlap the next.
 _NOTIFICATIONS_PASS_LOCK = _PassLock("notifications")
 
@@ -2779,22 +2778,33 @@ async def _health_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
 
 
 def _notifications_step(producer: Callable[[Any], dict[str, int]]) -> dict[str, int]:
-    """One step: its producer on a fresh connection inside ONE transaction (each watchdog a
-    savepoint inside it), so a raise rolls the step back whole and touches no other step."""
+    """One step: its producer on a fresh connection, which commits per statement itself."""
     conn = db.connect()
     try:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                cur.execute(f"SET LOCAL statement_timeout = '{NOTIFICATIONS_STATEMENT_TIMEOUT_S}s'")
-            return producer(conn)
+        return producer(conn)
     finally:
         with contextlib.suppress(Exception):
             conn.close()
 
 
+def _notifications_step_error(stats: dict[str, int]) -> str | None:
+    """The step's cell text, or None while it is healthy. A statement that failed reddens it; a
+    stored spec the matcher refuses does not (the write routes refuse one since W2a, so a stored
+    one is one account's legacy row, counted in `last`), unless every watchdog was refused, which
+    is the compiler's fault, not a spec's."""
+    evaluated = stats.get("subscriptions_evaluated", 0)
+    failed = stats.get("subscriptions_failed", 0)
+    invalid = stats.get("subscriptions_invalid", 0)
+    if failed:
+        return f"{failed} of {evaluated} watchdogs failed"
+    if evaluated and invalid == evaluated:
+        return f"every watchdog's spec was refused ({invalid})"
+    return None
+
+
 def _notifications_sync(stop_event: asyncio.Event) -> dict[str, Any]:
     """One pass of the three producers, in ONE thread holding the lane's pass lock. A step that
-    raises, or whose watchdogs failed, is named in `raised` (its cell); the next step still runs."""
+    raises, or whose statements failed, is named in `raised` (its cell); the next step still runs."""
     # Lazy, so the api package stays off every other lane's startup path (the estimation lane's idiom).
     from api import notifications
 
@@ -2815,11 +2825,10 @@ def _notifications_sync(stop_event: asyncio.Event) -> dict[str, Any]:
                 raised[step] = f"{type(exc).__name__}: {exc}"
                 continue
             last[step] = stats
-            if stats.get("subscriptions_failed"):
-                # A watchdog whose spec or statement failed is muted every pass; the producer
-                # logged why, the cell says how many.
-                raised[step] = (f"{stats['subscriptions_failed']} of "
-                                f"{stats['subscriptions_evaluated']} watchdogs failed")
+            error = _notifications_step_error(stats)
+            if error:
+                # The producer logged each watchdog's reason; the cell says how many.
+                raised[step] = error
         wrote = any(value for stats in last.values()
                     for key, value in stats.items() if key.endswith("_inserted"))
         # Only when the pass wrote or failed: an unconditional line is 288 a day.

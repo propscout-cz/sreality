@@ -915,44 +915,23 @@ def test_the_lanes_calls_bind_to_the_real_harness() -> None:
 # --- notifications lane (notifications push program W2a) ----------------------------------
 
 
-class _TxConn(_FakeConn):
-    """A step's connection: what ran, in or out of its transaction, and whether it closed."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.in_tx = False
-
-    @contextlib.contextmanager
-    def transaction(self) -> Iterator[None]:
-        self.calls.append(("BEGIN", None))
-        self.in_tx = True
-        try:
-            yield
-        except BaseException:
-            self.calls.append(("ROLLBACK", None))
-            raise
-        else:
-            self.calls.append(("COMMIT", None))
-        finally:
-            self.in_tx = False
-
-
 @pytest.fixture
 def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """The three api.notifications producers, faked; each records the connection it ran on."""
     from api import notifications
 
     ran: dict[str, Any] = {"conns": [], "steps": [], "fail": {}, "stats": {
-        "match_once": {"subscriptions_evaluated": 1, "subscriptions_failed": 0,
-                       "matches_inserted": 2},
-        "match_changes_once": {"subscriptions_evaluated": 1, "subscriptions_failed": 0,
-                               "changes_inserted": 0, "collection_changes_inserted": 0},
+        "match_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                       "subscriptions_failed": 0, "matches_inserted": 2},
+        "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                               "subscriptions_failed": 0, "changes_inserted": 0,
+                               "collection_changes_inserted": 0},
         "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
     }}
 
     def fake(name: str) -> Any:
-        def producer(conn: _TxConn) -> dict[str, int]:
-            assert conn.in_tx, f"{name} must run inside its step's transaction"
+        def producer(conn: _FakeConn) -> dict[str, int]:
+            assert conn is ran["conns"][-1] and not conn.closed, f"{name} runs on its own connection"
             ran["steps"].append(name)
             if name in ran["fail"]:
                 raise ran["fail"][name]
@@ -962,8 +941,8 @@ def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     for name in rw.NOTIFICATIONS_STEPS.values():
         monkeypatch.setattr(notifications, name, fake(name))
 
-    def connect() -> _TxConn:
-        ran["conns"].append(_TxConn())
+    def connect() -> _FakeConn:
+        ran["conns"].append(_FakeConn())
         return ran["conns"][-1]
 
     monkeypatch.setattr(rw.db, "connect", connect)
@@ -994,18 +973,17 @@ def test_the_lanes_steps_bind_to_the_real_producers() -> None:
         inspect.signature(getattr(notifications, name)).bind(None)
 
 
-def test_a_notifications_pass_runs_each_step_on_its_own_connection_and_transaction(
+def test_a_notifications_pass_runs_each_step_on_its_own_connection(
         producers: dict[str, Any]) -> None:
+    """The lane opens no transaction: each producer commits per statement itself (one watchdog's
+    INSERT, one detector; api/notifications._commit_one), so no lock outlives its statement."""
     state = rw._new_state()
     rw._record_pass_start(state, "notifications")
     asyncio.run(rw._notifications_pass(asyncio.Event(), state))
 
     assert producers["steps"] == list(rw.NOTIFICATIONS_STEPS.values())
     assert len(producers["conns"]) == 3 and all(c.closed for c in producers["conns"])
-    for conn in producers["conns"]:
-        assert [sql for sql, _ in conn.calls] == [
-            "BEGIN", f"SET LOCAL statement_timeout = '{rw.NOTIFICATIONS_STATEMENT_TIMEOUT_S}s'",
-            "COMMIT"]
+    assert all(conn.calls == [] for conn in producers["conns"]), "the lane itself runs no SQL"
     lane = state["lanes"]["notifications"]
     assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
     assert lane["portal_errors"] == {}
@@ -1026,14 +1004,13 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
     asyncio.run(rw._notifications_pass(asyncio.Event(), state))
 
     assert producers["steps"] == list(rw.NOTIFICATIONS_STEPS.values()), "every step ran"
-    price_conn = producers["conns"][1]
-    assert price_conn.calls[-1] == ("ROLLBACK", None) and price_conn.closed
+    assert producers["conns"][1].closed
     lane = state["lanes"]["notifications"]
     assert lane["passes"] == 1 and lane["failing_since"] is None, "the pass itself completed"
     errors = lane["portal_errors"]
     assert set(errors) == {"watchdog_new", "price"}
     assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
-    assert errors["watchdog_new"]["last_error"] == "1 of 1 watchdogs failed"
+    assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
     assert set(lane["last"]) == {"watchdog_new", "monitor"}
 
     now = datetime.fromisoformat(errors["price"]["failing_since"])
@@ -1050,6 +1027,28 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
     del producers["fail"]["match_changes_once"]
     asyncio.run(rw._notifications_pass(asyncio.Event(), state))
     assert state["lanes"]["notifications"]["portal_errors"] == {}
+
+
+@pytest.mark.parametrize(("invalid", "failed", "error"), [
+    (1, 0, None),
+    (2, 0, "every watchdog's spec was refused (2)"),
+    (1, 1, "1 of 2 watchdogs failed"),
+    (0, 0, None),
+], ids=["one-refused", "all-refused", "a-statement-failed", "healthy"])
+def test_a_refused_spec_reddens_no_step_unless_every_watchdog_is_refused(
+        producers: dict[str, Any], invalid: int, failed: int, error: str | None) -> None:
+    """A stored spec the matcher refuses is one account's legacy row (the write routes refuse one
+    since W2a): counted in `last`, never a cell. Every watchdog refused is the compiler's fault."""
+    producers["stats"]["match_once"].update(subscriptions_invalid=invalid,
+                                            subscriptions_failed=failed)
+    state = rw._new_state()
+    asyncio.run(rw._notifications_pass(asyncio.Event(), state))
+    lane = state["lanes"]["notifications"]
+    assert lane["last"]["watchdog_new"]["subscriptions_invalid"] == invalid
+    if error is None:
+        assert "watchdog_new" not in lane["portal_errors"]
+    else:
+        assert lane["portal_errors"]["watchdog_new"]["last_error"] == error
 
 
 def test_an_abandoned_notifications_pass_is_never_overlapped(producers: dict[str, Any]) -> None:

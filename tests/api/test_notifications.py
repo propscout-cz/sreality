@@ -412,6 +412,64 @@ def test_the_routes_answer_a_chip_without_a_code_with_a_422(method, path, monkey
     assert "districts" in res.text
 
 
+@pytest.mark.parametrize("method,path", [
+    ("post", "/notifications/subscriptions"),
+    ("put", "/notifications/subscriptions/46a6005f-dc32-4d94-9ced-4d262b57ef6b"),
+])
+def test_the_routes_answer_a_spec_the_compiler_refuses_with_a_422(method, path, monkeypatch) -> None:
+    """A spec the model accepts but the matcher's compiler refuses (here a retired filter) is
+    refused at write, one layer further in than the chip-without-code 422: stored, it would
+    mute its watchdog every pass. A PUT that leaves the spec alone is not re-judged."""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from api import main as api_main
+    from api import notifications as nf
+    from api import tenant_pool
+
+    written: list[str] = []
+
+    def never(*_a: Any, **_kw: Any) -> None:
+        raise AssertionError("a refused spec must not be written")
+
+    monkeypatch.setattr(nf, "create_subscription", never)
+    monkeypatch.setattr(nf, "update_subscription",
+                        lambda *_a, **kw: written.append(kw["name"]) or {"id": "s"})
+    api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
+    api_main.app.dependency_overrides[tenant_pool.require_account_id] = (
+        lambda: UUID("11111111-1111-1111-1111-111111111111")
+    )
+    try:
+        client = TestClient(api_main.app)
+        body = {"name": "x", "filter_spec": {"near_city_proximity": {"radius_km": 10,
+                                                                     "index_rules": []}}}
+        if method == "put":
+            monkeypatch.setattr(nf, "update_subscription", never)
+        res = getattr(client, method)(path, json=body)
+        assert res.status_code == 422, res.text
+        assert res.json()["detail"].startswith("filter_spec: near_city_proximity is retired")
+        if method == "put":
+            monkeypatch.setattr(nf, "update_subscription",
+                                lambda *_a, **kw: written.append(kw["name"]) or {"id": "s"})
+            assert client.put(path, json={"name": "renamed"}).status_code == 200
+            assert written == ["renamed"]
+    finally:
+        api_main.app.dependency_overrides.clear()
+
+
+def test_the_write_check_is_the_matchers_own_compile() -> None:
+    """One definition of what a spec may hold: the route's check is the matcher's compile, and
+    what it raises is what the producers count as invalid."""
+    from api import notifications as nf
+
+    spec = WatchdogFilterSpec(near_city_proximity={"radius_km": 10, "index_rules": []})
+    with pytest.raises(nf.SPEC_REJECTIONS):
+        nf.check_filter_spec(spec)
+    with pytest.raises(nf.SPEC_REJECTIONS):
+        _build_match_clauses(spec)
+    nf.check_filter_spec(WatchdogFilterSpec())
+
+
 def test_build_clauses_enumerated_columns() -> None:
     # A bare string still coerces to a single-element list (backward-compat).
     spec = WatchdogFilterSpec(furnished="ano", ownership=["osobni", "druzstevni"])
@@ -615,7 +673,7 @@ def test_matcher_lease_cas_acquires_and_yields() -> None:
 
 
 def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> None:
-    """Fail CLOSED: a stored row the model now refuses is counted as failed and
+    """Fail CLOSED: a stored row the model now refuses is counted invalid and
     dispatches nothing — never a cohort widened to the whole country — while the
     healthy watchdog in the same pass still matches. Migration 606 deleted the
     last such rows; this is the rail if one ever reappears."""
@@ -637,8 +695,8 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
     ])
     stats = match_once(conn)  # type: ignore[arg-type]
-    assert stats == {"subscriptions_evaluated": 2, "subscriptions_failed": 1,
-                     "matches_inserted": 2}
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_invalid": 1,
+                     "subscriptions_failed": 0, "matches_inserted": 2}
     inserts = [p for sql, p in conn.executed if "INSERT INTO notification_dispatches" in sql]
     assert len(inserts) == 1 and inserts[0]["subscription_id"] == str(healthy)
     assert inserts[0]["district_codes_ulice"] == [666742]
@@ -665,8 +723,8 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
 
     stats = match_once(conn)  # type: ignore[arg-type]
 
-    assert stats == {"subscriptions_evaluated": 1, "subscriptions_failed": 0,
-                     "matches_inserted": 3}
+    assert stats == {"subscriptions_evaluated": 1, "subscriptions_invalid": 0,
+                     "subscriptions_failed": 0, "matches_inserted": 3}
     subs_sql = next(s for s, _ in conn.executed if "FROM notification_subscriptions" in s)
     assert subs_sql == ("SELECT id, filter_spec, active_since FROM notification_subscriptions "
                         "WHERE is_active = true AND retired_at IS NULL")
@@ -682,7 +740,10 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
     assert params["district_codes_obec"] == [554782]
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql
     assert "'watchdog'" in sql and sql.endswith("ON CONFLICT DO NOTHING")
-    assert conn.transactions == 1, "one transaction (a savepoint in the lane) per watchdog"
+    # Committed on its own under the bound: the INSERT's locks never outlive it.
+    at = [s for s, _ in conn.executed].index(sql)
+    assert conn.executed[at - 1] == ("SET LOCAL statement_timeout = '120s'", None)
+    assert conn.transactions == 1, "one transaction per watchdog"
     executed = " ".join(s for s, _ in conn.executed)
     for gone in ("last_matched_first_seen_at", "max(first_seen_at)", "UPDATE notification_subscriptions",
                  "image_lookback_minutes", "window_size"):
@@ -729,6 +790,7 @@ def test_collection_monitor_emits_the_five_clean_kinds() -> None:
     conn = _FakeConn(script)
     stats = match_monitored_collections_once(conn)  # type: ignore[arg-type]
     assert stats == {"monitored_collections": 2, "events_inserted": 6}
+    assert conn.transactions == 3, "each detector commits before the next reads it"
     match_changes_once(conn)  # type: ignore[arg-type]
 
     inserts = [
@@ -1023,10 +1085,9 @@ def test_match_once_skips_invalid_filter_spec() -> None:
     stats = match_once(conn)  # type: ignore[arg-type]
 
     # Both rows counted as "evaluated" — the broken one was inspected
-    # and skipped, but the surviving one fired one dispatch.
-    assert stats["subscriptions_evaluated"] == 2
-    assert stats["subscriptions_failed"] == 1
-    assert stats["matches_inserted"] == 1
+    # and skipped as invalid, and the surviving one fired one dispatch.
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_invalid": 1,
+                     "subscriptions_failed": 0, "matches_inserted": 1}
 
 
 def _raise_for_poison(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1043,9 +1104,11 @@ def _raise_for_poison(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nf, "_build_match_clauses", fake)
 
 
-def test_match_once_counts_failed_subscriptions(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A spec that raises inside the compile mutes its watchdog every pass. It is counted
-    (the lane names it in its step cell) and the other subscription still matches."""
+def test_a_spec_the_compiler_refuses_is_invalid_never_failed(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A spec the compile refuses (ValueError / LookupError) fails the same way every pass: it
+    is counted invalid, which never reddens the lane's step, and the other subscription still
+    matches."""
     _raise_for_poison(monkeypatch)
     since = datetime(2026, 5, 1, tzinfo=timezone.utc)
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
@@ -1061,14 +1124,14 @@ def test_match_once_counts_failed_subscriptions(monkeypatch: pytest.MonkeyPatch)
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
     ]
     stats = match_once(_FakeConn(script))  # type: ignore[arg-type]
-    assert stats["subscriptions_evaluated"] == 2
-    assert stats["subscriptions_failed"] == 1
-    assert stats["matches_inserted"] == 1
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_invalid": 1,
+                     "subscriptions_failed": 0, "matches_inserted": 1}
 
 
 def test_a_watchdog_whose_statement_fails_rolls_back_alone() -> None:
     """Each watchdog's INSERT is its own transaction: a statement that raises (a timeout,
-    a future spec field's bad SQL) is counted and the next watchdog still matches."""
+    a future spec field's bad SQL) is counted failed (the lane reddens its step) and the
+    next watchdog still matches."""
     import psycopg
 
     bad, good = UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"), UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
@@ -1088,12 +1151,12 @@ def test_a_watchdog_whose_statement_fails_rolls_back_alone() -> None:
     ])
     conn.cursor = lambda: _Raising(conn)  # type: ignore[method-assign]
     stats = match_once(conn)  # type: ignore[arg-type]
-    assert stats == {"subscriptions_evaluated": 2, "subscriptions_failed": 1,
-                     "matches_inserted": 4}
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
+                     "subscriptions_failed": 1, "matches_inserted": 4}
     assert conn.transactions == 2
 
 
-def test_match_changes_once_counts_failed_subscriptions(
+def test_match_changes_once_counts_a_refused_spec_as_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from api.notifications import match_changes_once
@@ -1113,8 +1176,9 @@ def test_match_changes_once_counts_failed_subscriptions(
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
     ]
     stats = match_changes_once(_FakeConn(script))  # type: ignore[arg-type]
-    assert stats == {"subscriptions_evaluated": 2, "subscriptions_failed": 1,
-                     "changes_inserted": 3, "collection_changes_inserted": 2}
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_invalid": 1,
+                     "subscriptions_failed": 0, "changes_inserted": 3,
+                     "collection_changes_inserted": 2}
 
 
 # --- images-first publication gate (Wave C-4) ----------------------------
@@ -1243,8 +1307,10 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
 
     stats = match_changes_once(conn)  # type: ignore[arg-type]
 
-    assert stats == {"subscriptions_evaluated": 1, "subscriptions_failed": 0,
-                     "changes_inserted": 3, "collection_changes_inserted": 1}
+    assert stats == {"subscriptions_evaluated": 1, "subscriptions_invalid": 0,
+                     "subscriptions_failed": 0, "changes_inserted": 3,
+                     "collection_changes_inserted": 1}
+    assert conn.transactions == 2, "the watchdog's INSERT and the collections' each commit"
     watchdog, collection = [(s, p) for s, p in conn.executed
                             if "INSERT INTO notification_dispatches" in s]
     fragment = " ".join(nf._CANONICAL_PRICE_STEPS.split())
@@ -1265,8 +1331,9 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
 def test_match_changes_once_with_no_live_watchdog_runs_only_the_collection_half() -> None:
     conn = _FakeConn([(lambda s: "INSERT INTO notification_dispatches" in s, [], 0)])
     stats = match_changes_once(conn)  # type: ignore[arg-type]
-    assert stats == {"subscriptions_evaluated": 0, "subscriptions_failed": 0,
-                     "changes_inserted": 0, "collection_changes_inserted": 0}
+    assert stats == {"subscriptions_evaluated": 0, "subscriptions_invalid": 0,
+                     "subscriptions_failed": 0, "changes_inserted": 0,
+                     "collection_changes_inserted": 0}
     inserts = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
     assert len(inserts) == 1 and "'collection_monitor'" in inserts[0]
 
