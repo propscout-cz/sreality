@@ -122,7 +122,7 @@ export function PinIcon(p: IconProps) {
   );
 }
 
-/* A monitored collection ("sledováno"). */
+/* A monitored collection ("sledováno"), and the header's way to notifications. */
 export function BellIcon(p: IconProps) {
   return (
     <Svg {...p}>
