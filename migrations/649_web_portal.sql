@@ -1,4 +1,4 @@
--- 648_web_portal.sql -- NEW PROPERTY FROM A LINK, W3 (docs/design/new-property-from-link.md §3.4): the
+-- 649_web_portal.sql -- NEW PROPERTY FROM A LINK, W3 (docs/design/new-property-from-link.md §3.4): the
 -- tenth portal, `web` -- any other site, one pasted advert at a time. ADDITIVE: one row, two nullable
 -- columns and two bodies restated with one line each; nothing is dropped, renamed or rewritten.
 --
@@ -87,7 +87,7 @@ insert into public.portals
    split_threshold, scrape_cadence_minutes, operational_limits, operational_limits_updated_by)
 values
   ('web', 'Web', 'scraper', null, 50, true, true, null,
-   null, 1440, '{"detail_workers": 2, "detail_rate": 1.0, "shared_rate_limiter": true}'::jsonb, 'migration_648_web_portal')
+   null, 1440, '{"detail_workers": 2, "detail_rate": 1.0, "shared_rate_limiter": true}'::jsonb, 'migration_649_web_portal')
 on conflict (source) do nothing;
 
 alter table public.properties
