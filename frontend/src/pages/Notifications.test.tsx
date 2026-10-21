@@ -245,9 +245,8 @@ describe('<Notifications> share rows', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  /* A grant made between migration 652's apply and the deploy keeps the old kind until 652 is re-run.
-   * The API reads such a row's share_kind off its key (`share:collection:42:…` → 'collection'), so it
-   * arrives as below: labelled "Shared", and it keeps its link. */
+  /* A row still labelled with the old kind: migration 653 relabels every one before W3's API (which
+   * parses no key) ships, so the feed no longer sends one; the page still renders the shape as a share. */
   it('renders a share still labelled with the old kind as a share that keeps its link', () => {
     const legacy = {
       ...share,

@@ -965,24 +965,21 @@ def test_dispatch_select_projects_message() -> None:
 
 def test_dispatch_select_names_what_a_share_opens() -> None:
     """A share's bell row opens its collection, the owner's pipeline or the dashboard: the kind is
-    its change_kind's suffix (`shared_<collection|pipeline|dashboard>`, migration 652) and its id is
-    still the key's third segment (`share:<kind>:<ref>:<recipient>…`) until W3; every other
-    producer reads NULL for both."""
-    from api.notifications import _DISPATCH_SELECT
+    its change_kind's suffix (`shared_<collection|pipeline|dashboard>`, migration 652) and its id
+    is the row's own column, the one api/shares.py writes it to (F24: no key is parsed): the
+    collection id, the owner (the actor), the dashboard id (the event_ref). Every other producer
+    reads NULL for both. No row is left labelled 'shared' to fall back for: migration 653
+    relabels any 652's re-run missed before it builds the identity."""
+    import inspect
 
-    assert ("CASE WHEN d.source_kind = 'share' THEN CASE WHEN d.change_kind = 'shared' "
-            "THEN split_part(d.dedupe_key, ':', 2) ELSE split_part(d.change_kind, '_', 2) END "
-            "END AS share_kind, "
-            "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref"
-            ) in _DISPATCH_SELECT
-    for kind, key, opens, ref in (("shared_collection", "share:collection:7:r", "collection", "7"),
-                                  ("shared_pipeline", "share:pipeline:o:r:edit", "pipeline", "o"),
-                                  ("shared_dashboard", "share:dashboard:d:r", "dashboard", "d"),
-                                  # A grant between 652's apply and the deploy keeps 'shared'
-                                  # (until 652's re-run): its kind is read off the key.
-                                  ("shared", "share:collection:7:r", "collection", "7")):
-        rendered = key.split(":")[1] if kind == "shared" else kind.split("_")[1]
-        assert (rendered, key.split(":")[2]) == (opens, ref)
+    from api import notifications as nf
+
+    assert ("CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
+            "CASE d.change_kind WHEN 'shared_collection' THEN d.collection_id::text "
+            "  WHEN 'shared_pipeline' THEN d.actor_account_id::text "
+            "  WHEN 'shared_dashboard' THEN d.event_ref END AS share_ref") in nf._DISPATCH_SELECT
+    assert "dedupe_key" not in nf._DISPATCH_SELECT + nf._DISPATCH_FROM
+    assert "split_part(d.dedupe_key" not in inspect.getsource(nf)
 
 
 def test_dispatch_feed_reads_listings_through_the_public_view() -> None:

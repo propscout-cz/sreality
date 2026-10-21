@@ -52,8 +52,8 @@ const CHANGE_META: Record<DispatchChangeKind, { label: string; dot: string }> = 
   shared_pipeline:   { label: 'Shared pipeline',   dot: 'var(--color-ink-3)' },
 };
 
-/* A share row whose kind the feed does not know yet (a grant made between migration 652
- * and the deploy keeps the old 'shared'). */
+/* A share row whose kind the feed does not know (the old 'shared': migration 653 relabels every
+ * one, so this is a defensive render only). */
 const SHARED_FALLBACK = { label: 'Shared', dot: 'var(--color-ink-3)' };
 
 const SOURCE_TABS: ReadonlyArray<{ key: SourceFilter; label: string }> = [
