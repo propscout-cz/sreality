@@ -302,6 +302,20 @@ category's walk, so even a timed-out index walk leaves a consistent partial resu
 The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only the **index walk** sets `index_pages>0`, and the portal checks read `run_type='index'` rows alone; the worker writes none (`run_id=None`), so the arms that must see its work read the queue, the completions ledger and listings. The image backfill (`--images-only`) deliberately writes NO `scrape_runs` row — recording it once polluted the old liveness and reconciliation arms with `index_pages=0` noise.
 **The lifecycle around both phases lives in ONE place, `portal_runner.run_phase`** (rule #21; never re-add a per-portal copy): `ended_at` means the phase COMPLETED, so a phase that raises bumps `errors` and deliberately leaves `ended_at` NULL with `by_category` still `[]`: a crashed walk is never a finished walk, nor an end-reached one, even once the API's boot sweep stamps its `ended_at`, so its units' `<portal>/walks/<unit>` cells keep aging against G (the delisting check's `<portal>/stuck` cell is another thing: active ads whose gone verdict waits past its limit). The crash path logs and writes no incident (the signature engine retired in Health wave 3, migration 621): a red workflow run is the `jobs` check's `gh/<stem>` cell with its reason line, a portal raising inside the worker its `lane/<lane>/<portal>` cell. **The crash contract and the jobs check: `references/pipeline-verification.md`.**
 
+## Onboarding a portal (what the tenth, `web`, needed — 2026-10-21)
+
+A portal is one row in each registry, never a branch: `portal_factory.PORTAL_CLASSES` + `CLIENT_CLASSES`,
+`scraper.portal._DEFAULTS` (a `PortalConfig`), `realtime_worker.REALTIME_SOURCES`, `scripts/reparse.SUBSTRATE`,
+`contracts/portals/<src>.yaml` + `EXTRACTOR_PREFIXES` + `COORDINATE_RULES` + the lock + a golden, `claims_common.SOURCES`,
+`toolkit/broker_sources.BROKER_SOURCES`, `attribute_contract.CONTRACT` + `IGNORED`, `filter_registry.PORTAL_OPTIONS`
+(+ a migration: the `portals` row, `properties.newest_ad_at_<src>`, `browse_projection` + `rebuild_browse_list`
+restated), `scraper/portal_identity.py` + the probe fixture, a `<src>_index_walk.yml`, and the census bless after
+its first week. `web` (`scraper/web_main.py`): `indexless` — its walk sees nothing, reaches the end and nominates
+every active row through its own `presence_candidates` (NULL categories included); `web_index_walk.yml` runs every
+6 h and only nominates; the worker drains `web` FIRST; pages come through `scraper/egress.py` (the one safe
+outbound session: private ranges refused on every hop, a wall-clock deadline, a decoded-bytes cap). Apply its
+migration before the merge (the rollup writes `newest_ad_at_web`), then dispatch the walk once so Health sees a walk.
+
 ## The real-time worker (`scraper/realtime_worker.py`)
 
 A dark-by-default, always-on Railway service (a 2nd process from the SAME image, gated by

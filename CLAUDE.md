@@ -8,13 +8,13 @@ keeps getting broken, fix it here — don't repeat the correction by hand.
 
 A **market-wide real-estate intelligence platform** for the Czech market. It began as an
 hourly sreality.cz scraper and now collects, enriches, and reasons over property data from
-**nine portals**. Store of record: Postgres (Supabase, `eu-west-1` Ireland, PostGIS) with full
+**ten portals**. Store of record: Postgres (Supabase, `eu-west-1` Ireland, PostGIS) with full
 listing history.
 
 Data layered together:
-- **Scraped listings** from nine portals — sreality (JSON v1 API), bazos (HTML crawler), bezrealitky (GraphQL
+- **Scraped listings** from ten portals — sreality (JSON v1 API), bazos (HTML crawler), bezrealitky (GraphQL
   API), mmreality (Vue-embedded JSON, proxied), idnes / remax / ceskereality / maxima (structured HTML) and
-  realitymix (structured HTML, Centrum.cz aggregator) — landing in one `listings`/`listing_snapshots` contract
+  realitymix (structured HTML, Centrum.cz aggregator) and `web` (any other site, by pasted link; deterministic parser, no index) — landing in one `listings`/`listing_snapshots` contract
   with one canonical vocabulary. Per-portal ingest detail: `docs/architecture.md` § Data sources.
 - **Geo data** — coordinates, districts, ČÚZK/RÚIAN admin boundaries, transit geometry, OSM amenities.
 - **Operator-supplied** — curated city-quality indexes, collections, building decompositions, estimation inputs.
@@ -133,7 +133,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
    earlier gone verdict ≥ `delist_policy.GONE_DWELL` (12 h) old with no sighting since** (`db.gone_evidence`;
    portals blink — sreality took 35–70% of its "gone" ads back within hours), a live page refreshes it, an error
    waits. `walk_coverage` is a logged `COVERAGE` warning, NEVER a gate. No staleness rail, no absence sweep, no
-   `supports_complete_walk` gate. `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
+   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates via its own `presence_candidates` seam). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
    `.overrides` lift it). Budget + gone-rate breaker + effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h:
    `scraper/delist_policy.py`; every flip goes through `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
 4. **`last_seen_at` is driven by index sightings + successful detail fetches only; failed fetches never
