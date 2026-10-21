@@ -106,10 +106,10 @@ interface Props {
    * "0 in this map area — Show all" empty state. */
   hasBounds: boolean;
   /* Hover-sync set: when a card's listing_id appears here (because the
-   * user is hovering the matching pin on the map, or the matching row
-   * in the table), the card lights up. Cards push their own hover
-   * state (their listing_id) outward via onHover. Keyed on the surrogate
-   * listing_id, never sreality_id — null-safe past Gate-2. */
+   * user is hovering the matching pin on the map), the card lights up.
+   * Cards push their own hover state (their listing_id) outward via
+   * onHover. Keyed on the surrogate listing_id, never sreality_id —
+   * null-safe past Gate-2. */
   hoveredIds: ReadonlySet<number>;
   onHover: (ids: ReadonlyArray<number> | null) => void;
   /* Which pane originated the hover. Map-origin hovers get the full

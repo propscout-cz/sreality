@@ -37,6 +37,7 @@ import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
 import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
+import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
 import DelegatedStamp from '@/components/DelegatedStamp';
 import { CURATED_SETS, matchesScope } from '@/lib/setScope';
 import { offerCuratedSet } from '@/lib/curatedSetOffer';
@@ -157,6 +158,7 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
    * stage editor, and no tag / collection decorations — the owner's curation is
    * not readable under it, so those reads are not even made. */
   const readOnly = useActingReadOnly();
+  const newProperty = useNewPropertyDialog();
   const [manage, setManage] = useState(false);
   const [sharing, setSharing] = useState(false);
   /* Filters AND sort live in the URL (lib/pipelineState) using Browse's own
@@ -339,6 +341,16 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
               className={HEADER_BUTTON}
             >
               {manage ? 'Hotovo' : 'Spravovat fáze'}
+            </button>
+          )}
+          {/* The card lands on the board shown: acting through its share. */}
+          {!readOnly && newProperty && (
+            <button
+              type="button"
+              onClick={() => newProperty.open({ stay: true, acting: active })}
+              className={HEADER_BUTTON}
+            >
+              Nová nemovitost
             </button>
           )}
         </div>

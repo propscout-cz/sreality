@@ -10,7 +10,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-import BrowseExperience from './BrowseExperience';
+import BrowseExperience, { type BrowseFeatures } from './BrowseExperience';
+import { NewPropertyProvider } from './NewPropertyProvider';
 import { useMemoryBrowseState } from '@/lib/browseState';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import { fmtShortDate } from '@/lib/format';
@@ -41,6 +42,11 @@ vi.mock('@/components/stats/StatsDashboard', () => ({
   default: ({ filters }: { filters: ListingFilters }) => (
     <div data-testid="stats-dashboard">{filters.portals.join(',')}</div>
   ),
+}));
+/* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth')>()),
+  useAuth: vi.fn(() => ({ isAdmin: true })),
 }));
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
@@ -243,5 +249,41 @@ describe('<BrowseExperience> Stats tab', () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByTestId('stats-dashboard')).toHaveTextContent('idnes');
+  });
+});
+
+/* "Nová nemovitost" beside "+ Create watchdog" (docs/design/new-property-from-link.md
+ * §3.6): outlined, not a second copper primary, and a page feature — both Explore
+ * modals turn it off. */
+describe('<BrowseExperience> Nová nemovitost', () => {
+  function FeatureHost({ features }: { features: BrowseFeatures }) {
+    const view = useMemoryBrowseState({ filters: DEFAULT_FILTERS, sort: DEFAULT_SORT, tab: 'map' });
+    return <BrowseExperience view={view} layout="modal" features={features} />;
+  }
+  const renderWith = (features: BrowseFeatures) =>
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <NewPropertyProvider>
+            <FeatureHost features={features} />
+          </NewPropertyProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  const OFF = { presetBar: false, watchdog: true, mergeMode: false, title: false, sidebar: false };
+
+  it('sits beside the watchdog CTA, outlined, and opens the dialog', async () => {
+    renderWith(OFF);
+    const button = await screen.findByRole('button', { name: 'Nová nemovitost' });
+    expect(button.className).not.toContain('bg-[var(--color-copper)]');
+    expect(screen.getByRole('button', { name: '+ Create watchdog' })).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(await screen.findByRole('dialog', { name: 'Nová nemovitost' })).toBeInTheDocument();
+  });
+
+  it('is absent when the surface turns the feature off', async () => {
+    renderWith({ ...OFF, newProperty: false });
+    expect(await screen.findByRole('button', { name: '+ Create watchdog' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nová nemovitost' })).toBeNull();
   });
 });

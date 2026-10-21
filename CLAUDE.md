@@ -169,7 +169,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     the condition filter; the derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the `listing_condition_scores`
     cache (keyed `(sreality_id, snapshot_id)`) are written together by `score_listing_condition` in one latest-wins transaction.
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091); grouping is out-of-band, never inline at insert (new rows land
-    `property_id` NULL; straggler-attach births a singleton).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
+    `property_id` NULL; straggler-attach births a singleton — the worker lane every 30 s, and inside the daily sweep's loop).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
     two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,
     soft-retires the loser, logs `property_merge_events` (read by `detach_listings`: each advert back to its origin or a refusal, e.g. `moved_since`; a split by letters sends one that cannot go
     home to a new property (`new=`) and itself rules only `different`, across letters — a letter's join is a merge; a split is ONE call, and so is a group undo (`merge_group_id=`) — no replay; an operator merge rules `same` every negative pair it joins). A property shows ONE **canonical ad**, rank 1 of `property_canonical_listings` (migration 588): active first,
@@ -206,7 +206,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     through the shared `portal_runner` on the source-generic queue.
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); `property_maintenance.yml` (`--incremental`, `*/5`)
-    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15) is
+    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
     the reconcile backstop. Both share the `sreality-property-maintenance` concurrency group. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, Browse row, broker queue) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`
@@ -218,7 +218,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property per account at one
     `pipeline_stages` stage (a TABLE, not an enum); "bookmark" == presence of a row at the entry stage. It has its OWN carrier in `PROPERTY_CARRIERS` (over
     `toolkit/pipeline_identity.py`; TERMINAL-AWARE — a live stage always beats a closed one); the losing card is folded into the carry record (rule #18).
-    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards/rows, listing header, kanban drag + trash) is ONE hook,
+    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards, listing header, kanban drag + trash) is ONE hook,
     `lib/usePipelineCard` (id per call), over ONE write policy, `lib/useOptimisticWrite` (`lib/pipelineCache`: patches + re-read list). `<PipelineMark>` +
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN

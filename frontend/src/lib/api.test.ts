@@ -472,3 +472,29 @@ describe('acting as a pipeline owner (X-Act-As, migration 641)', () => {
     expect(headers.every((h) => !('X-Act-As' in h))).toBe(true);
   });
 });
+
+describe('the paste-a-link ingest routes (docs/design/new-property-from-link.md §3.2)', () => {
+  it('POSTs the pasted text, GETs the state by its natural key, and never acts', async () => {
+    const calls: Array<{ url: string; method?: string; body?: unknown; headers: Record<string, string> }> = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method,
+        body: init?.body,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      });
+      return { ok: true, status: 200, statusText: 'OK', text: async () => '{"state":"queued"}' } as Response;
+    });
+    const api = await loadApi();
+    await expect(api.ingestListing('Koukni https://www.sreality.cz/detail/x/12345678')).resolves.toEqual({
+      state: 'queued',
+    });
+    await api.ingestState('maxima', 'f60012727');
+    expect(calls.map((c) => [c.method ?? 'GET', new URL(c.url).pathname])).toEqual([
+      ['POST', '/listings/ingest'],
+      ['GET', '/listings/ingest/maxima/f60012727'],
+    ]);
+    expect(JSON.parse(String(calls[0].body))).toEqual({ url: 'Koukni https://www.sreality.cz/detail/x/12345678' });
+    expect(calls.every((c) => !('X-Act-As' in c.headers))).toBe(true);
+  });
+});

@@ -34,8 +34,8 @@ tests/              pytest suite
   service with a composite `/estimate_yield` endpoint, gated by the
   caller's Supabase JWT (one credential; `API_AUTH_OPTIONAL=1` for local dev only).
 - Browser UI (`frontend/`) reads directly from the `*_public` views with
-  the Supabase anon key. Four pages: Browse (filters + map / table /
-  stats), Listing detail (with snapshot timeline), Region (Mapy.cz-powered
+  the Supabase anon key. Four pages: Browse (filters + map / stats),
+  Listing detail (with snapshot timeline), Region (Mapy.cz-powered
   location search at multiple scales — from kraj to street address — with
   per-disposition price-per-m² box plots), Health (scraper-health
   dashboard).

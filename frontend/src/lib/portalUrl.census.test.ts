@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import * as portals from './portals';
 
-const ALLOWLIST = new Set(['components/NewEstimationModal.tsx']);
+const ALLOWLIST = new Set(['components/NewEstimationModalBody.tsx']);
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

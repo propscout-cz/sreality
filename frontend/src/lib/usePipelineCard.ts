@@ -59,13 +59,17 @@ const lifts = (qc: QueryClient, propertyId: number, stage: PipelineStage | null,
   !stage.is_terminal &&
   qc.getQueryData<boolean>(actingKey(actAs, dismissalKeys.state(propertyId))) === true;
 
-export function usePipelineCard() {
+/* `onAddError` ONLY for a surface that shows a failed add itself (the new-property
+ * dialog's inline block): declaring it silences the global toast for this
+ * instance's adds (lib/useOptimisticWrite). */
+export function usePipelineCard({ onAddError }: { onAddError?: (error: Error) => void } = {}) {
   /* The mutation keys carry the acting segment too, so the pending index of the
    * owner's board and the caller's own never answer for each other. */
   const actAs = useActAs();
   const add = useOptimisticWrite({
     mutationKey: actingKey(actAs, ['write', 'pipeline', 'add']),
     mutationFn: (property_id: number) => addPipelineCard(property_id, ...actOpts(actAs)),
+    onError: onAddError,
     // The entry stage IS the bookmark (rule #22). Unknown until the stage list
     // has loaded — then nothing is painted and the funnel fills when the
     // revalidation lands.

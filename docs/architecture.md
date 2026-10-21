@@ -613,7 +613,7 @@ rules. Identify which one a task belongs to before you start.
   two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as a separate
   service alongside the API.
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
-  trusting a list here, which rots). Today it spans **Browse** (filters → Map / Table /
+  trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
   signature visual element), **Region**, **Health** (operator dashboard),
   **Estimations** + **Estimation Detail**, **Building Detail**, **Collections** +
@@ -886,9 +886,9 @@ rules. Identify which one a task belongs to before you start.
 - Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
   listing pages. The content script matches **every scraped portal's host** (sreality,
   bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
-  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) is the single source of
-  truth for the host list, shared with the SPA's paste-a-link (`parsePortalUrl` →
-  `/listing/:source/:nativeId`) and imported cross-tree exactly like `lib/brand.ts` (it lives under
+  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) mirrors the canon,
+  `scraper/portal_identity.py`, held to it by `tests/fixtures/portal_url_probes.json`; the phone's quick
+  path (`parsePortalUrl`; an admin paste is `POST /listings/ingest`) imports it cross-tree like `lib/brand.ts` (it lives under
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
@@ -970,8 +970,8 @@ rules. Identify which one a task belongs to before you start.
   once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
   excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
   one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
-  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
-  truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
+  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` mirrors
+  `scraper/portal_identity.py` (the canon); `tests/fixtures/portal_url_probes.json` holds both. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
@@ -2682,9 +2682,8 @@ renumber.** Navigate by area:
     reachable by id. The outbox drain (service-role) skips a dispatch whose own account dismissed
     its property, on both the new and the retry pass: it gets no `channel_sends` row and ages out
     of the 7-day window unless the dismissal is lifted first.
-    **One control.** `<DismissButton>` (`overlay` on the Browse card, `inline` in the Table's
-    action cell beside the funnel, `header` on the listing page) over one hook,
-    `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
+    **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
+    `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
     sticky "Vrátit" toast (each new dismissal replaces the last) restores; it keeps working after
     the dismissed card has unmounted. The dismissal leaves every cached Browse list that hides
     dismissed properties at once and those lists are NOT refetched (a triage run must not re-read
@@ -2820,8 +2819,8 @@ renumber.** Navigate by area:
     new stragglers (singletons only — the old geo Tier-1 matcher was removed; grouping is
     out-of-band, rule #15) and recomputes **only the queued properties** (the full
     recompute SQL scoped to
-    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~2 on
-    the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
+    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~30 s
+    on the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
@@ -2834,8 +2833,9 @@ renumber.** Navigate by area:
     237 s against a 900 s cadence). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
     since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
-    New listings (`property_id` NULL) are born + recomputed by straggler-attach, not the queue
-    (bounded at 2000 per pass; it patches `browse_list` for the births). The
+    New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
+    brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
+    of the daily full sweep, under the lease that sweep already holds. The
     **daily full sweep** (`recompute_property_stats.yml`, no `--incremental`, 04:15 UTC) is the
     reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:
@@ -3022,9 +3022,8 @@ renumber.** Navigate by area:
     `GET /pipeline/stages`). **The "Přidat do pipeline" affordance is the shared `<PipelineMark>`
     (`<FunnelIcon>` — a funnel with three arrows, filled body = in-pipeline — plus the stage
     badge), rendered by the listing-detail header (`PipelineToggle`, in the top action bar next to
-    "New estimation", NOT buried in CurationBlock), every Browse card AND every Browse **table
-    row** (`PipelineFunnelButton`, a leading unsortable column) and the Pipeline scope chip + its
-    sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
+    "New estimation", NOT buried in CurationBlock), every Browse card (`PipelineFunnelButton`)
+    and the Pipeline scope chip + its sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
     (`is_entry` — filled = the entry stage) — so the "into the pipeline" concept reads as one
     icon everywhere.** Two surfaces carry their own versions today. The kanban card has no mark
     (its column IS the stage): it moves by drag and removes through its own trash + two-step
@@ -3070,7 +3069,7 @@ renumber.** Navigate by area:
     overflow the viewport, reposition on scroll, close when the anchor scrolls out of sight.
     **Every pipeline write shares one cache patch** (`lib/pipelineCache`): TWO caches hold "where
     is this property" — `members` (the account's whole card set, keyed by `property_id`; read by
-    the Browse funnels, the table rows, the listing header and the pipeline scope alike) and
+    the Browse funnels, the listing header and the pipeline scope alike) and
     `board` (the kanban's own ordered array) — and each surface used to patch only the one it
     could see, so a kanban drag left every Browse funnel badging the pre-drag stage. It was three
     until W3: a per-property `card(id)` cache duplicated a single row of `members`, so every
@@ -3134,7 +3133,7 @@ renumber.** Navigate by area:
     column headers and stage-editor swatch still use their own `stageColor`
     (`pages/Pipeline.tsx`), which falls back to grey. The stage editor exposes `code` as a 4-char
     box whose placeholder IS the ordinal, so "empty = automatic" is visible. Card writes
-    (add/remove/move) from EVERY surface — the Browse funnels, the table rows, the listing header
+    (add/remove/move) from EVERY surface — the Browse funnels, the listing header
     and the kanban's drag and trash — go through one hook, `lib/usePipelineCard.ts`; the property
     id travels with each call, so one instance serves a whole board. It writes over
     `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches and the re-read list.
@@ -3522,16 +3521,14 @@ renumber.** Navigate by area:
     2026-10-17 by pointing `pg_column` at the published `tom_days`, and the escape set the
     test had grown for it was deleted.
 
-    **Known residue, named.** Browse's table still SELECTS and SORTS the raw `estate_area`
-    column while it now FILTERS the measure, so a bazos/realitymix/mmreality/remax land row can
-    match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell — the fix is three lines but
-    `estate_area` is a `SortField`, so a saved `?sort=estate_area` would silently fall back to
-    the default sort, which makes it a Browse-cohort decision rather than an area one. And
-    `browse_stats_properties`, `browse_list`'s own RPCs and
-    `browse_map_cells` still compare `l.estate_area` in SQL. They are inert from the SPA today
-    (`frontend/src/lib/queries.ts` sends them no `estate_area_min_filter`), and moving them
-    means re-creating three large `SECURITY DEFINER` bodies — its own wave, with its own drift
-    hazard (migrations 371/376).
+    **The residue is gone.** Browse's Table tab SELECTED and SORTED the raw `estate_area`
+    column while the cohort FILTERED the measure, so a bazos/realitymix/mmreality/remax land row
+    could match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell. The tab and the
+    `estate_area` sort were deleted together on 2026-10-20 (operator ruling): a saved
+    `?sort=estate_area` now reads as the default sort through `parseSort`, and Browse reads the
+    raw column nowhere (it stays on `browse_projection` / `browse_list`, unread by Browse). The
+    two aggregate RPCs that compared `l.estate_area` in SQL, `browse_stats_properties` and
+    `browse_map_cells`, narrow `plot_area_m2` since migration 547.
 
     **The plausibility view gained the arm that would have caught the sum** (migration 534
     appends two columns to `measure_plausibility_by_source`). `estate_sum_share` is the share of

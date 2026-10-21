@@ -4,7 +4,7 @@
  * value, and chrome-extension/manifest.json's checked-in matches name exactly
  * PORTALS' hosts. */
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { filterById } from './filterRegistry.generated';
@@ -139,5 +139,65 @@ describe('drift rails', () => {
     const matches: string[] = manifest.content_scripts[0].matches;
     const fromRules = PORTALS.flatMap((p) => p.hosts.map((h) => `https://${h}/*`));
     expect([...matches].sort()).toEqual([...fromRules].sort());
+  });
+});
+
+/* The parity arm: the SAME probe rows tests/scraper/test_portal_identity.py runs
+ * against the Python canon (scraper/portal_identity.py), so the walk's identity and
+ * the browser's can only drift with a red suite. Both read the same exact host lists
+ * (pytest compares them). Where the browser stops short by design, the row must
+ * answer null here: a host these rules do not list (the Facebook / Google wrappers,
+ * an unknown site) is the server's call — POST /listings/ingest reads the pasted
+ * text itself. The 512-character cap is resolve_url's, not the id rule's. Read
+ * unconditionally, like imageUrl.test.ts: a moved fixture reds the suite. */
+interface UrlProbe {
+  input: string;
+  source: string | null;
+  native: string | null;
+  note: string;
+}
+const PROBES = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../tests/fixtures/portal_url_probes.json'), 'utf8'),
+) as UrlProbe[];
+
+describe('the shared probe fixture (tests/fixtures/portal_url_probes.json)', () => {
+  const relative = PROBES.filter((p) => p.input.startsWith('/'));
+  const absolute = PROBES.filter((p) => !p.input.startsWith('/'));
+  const known = absolute.filter((p) => portalForUrl(p.input) != null);
+
+  it.each(relative.map((p) => [p.note, p] as const))('index href: %s', (_note, p) => {
+    const portal = PORTALS.find((x) => x.source === p.source);
+    expect(portal, `unknown source ${p.source}`).toBeDefined();
+    expect(detailRef(p.input, portal!.hosts[0])).toEqual(
+      p.native == null ? null : { source: p.source, sourceId: p.native },
+    );
+  });
+
+  it.each(known.map((p) => [p.note, p] as const))('portal URL: %s', (_note, p) => {
+    expect(portalForUrl(p.input)?.source).toBe(p.source);
+    expect(parsePortalUrl(p.input)).toEqual(p.native == null ? null : { source: p.source, nativeId: p.native });
+  });
+
+  it('leaves every other host to the server', () => {
+    for (const p of absolute.filter((x) => portalForUrl(x.input) == null)) {
+      expect(parsePortalUrl(p.input), p.note).toBeNull();
+    }
+  });
+
+  it('refuses a pasted path the fetch would rewrite, as the canon does', () => {
+    for (const url of [
+      'https://reality.bazos.cz/inzerat/1\\..\\..\\inzerat/2/x.php',
+      'reality.bazos.cz/inzerat/1/../../inzerat/2/x.php',
+      'https://www.mmreality.cz/nemovitosti/1/%2E%2E/2/',
+    ]) {
+      expect(parsePortalUrl(url), url).toBeNull();
+    }
+    expect(parsePortalUrl('https://reality.bazos.cz/inzerat/1/a..b.php')).toEqual({ source: 'bazos', nativeId: '1' });
+  });
+
+  it('compares a detail URL and an index href of every portal it can', () => {
+    const covered = new Set(known.filter((p) => p.native != null).map((p) => p.source));
+    expect([...covered].sort()).toEqual(PORTALS.map((p) => p.source).sort());
+    expect(relative.length).toBeGreaterThan(0);
   });
 });

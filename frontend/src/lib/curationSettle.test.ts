@@ -33,10 +33,9 @@ const members = (entries: Array<[number, number]>): PipelineMembers =>
     stage_code: null, stage_position: stage_id, is_terminal: false,
   }]));
 
-/* A Browse cohort with its cards, table and count cached, as Browse leaves them. */
+/* A Browse cohort with its cards and count cached, as Browse leaves them. */
 function seed(qc: QueryClient, f: ListingFilters, cards: number[][], count = 50) {
   qc.setQueryData(browseKeys.cards(f, DEFAULT_SORT), pages(...cards));
-  qc.setQueryData(browseKeys.table(f, DEFAULT_SORT), pages(cards.flat()));
   qc.setQueryData(browseKeys.count(f), count);
   qc.setQueryData(browseKeys.map(f, 200), { points: [] });
   qc.setQueryData(browseKeys.stats(f, { rows: [], cols: [], measure: 'ppm2' }), { cells: [] });
@@ -65,14 +64,13 @@ describe('the settle', () => {
     settle(qc, 'pipeline', () => qc.setQueryData(pipelineKeys.members, members([[P, 5]])));
 
     expect(rowsOf(qc, browseKeys.cards(f, DEFAULT_SORT))).toEqual([[1, 2], [3], [4]]);
-    expect(rowsOf(qc, browseKeys.table(f, DEFAULT_SORT))).toEqual([[1, 2, 3, 4]]);
     expect(qc.getQueryData(browseKeys.count(f))).toBe(49);
     const keys = invalidated(invalidate);
     expect(keys).toContainEqual(['map', f]);
     expect(keys).toContainEqual(['stats', f]);
     expect(keys).toContainEqual(['browse-count', f]);
     // The lists are never re-read for a drop.
-    expect(keys.some((k) => k[0] === 'cards' || k[0] === 'table')).toBe(false);
+    expect(keys.some((k) => k[0] === 'cards')).toBe(false);
   });
 
   it('leaves a cohort the property still belongs to untouched', () => {
