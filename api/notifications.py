@@ -1066,7 +1066,8 @@ _MONITOR_INACTIVE_SQL = (
 
 # reactivated — a property we ALREADY alerted as inactive came back active. The prior
 # 'inactive' dispatch is the durable "was dead" marker (listings.inactive_at is cleared on
-# reactivation, so we can't read it); it must itself postdate monitor_since (the LATERAL ON),
+# reactivation, so we can't read it), and only an event counts: both reads skip a row a merge
+# marked a duplicate. It must itself postdate monitor_since (the LATERAL ON),
 # so a reactivation fires only for a property that went inactive while being monitored. Its
 # event_ref is the epoch of that inactive dispatch's dispatched_at: the pre-W3 key's last segment,
 # which 652 backfilled, so a reactivation already told keeps its identity. This supersedes the
@@ -1087,6 +1088,7 @@ _MONITOR_REACTIVATED_SQL = (
     "      AND collection_id = m.collection_id "
     "      AND property_id = m.property_id "
     "      AND change_kind = 'inactive' "
+    "      AND duplicate_of IS NULL "
     "    ORDER BY dispatched_at DESC LIMIT 1"
     "  ) nd ON p.last_seen_at > nd.dispatched_at "
     "       AND nd.dispatched_at > m.monitor_since "
@@ -1096,6 +1098,7 @@ _MONITOR_REACTIVATED_SQL = (
     "      AND r.collection_id = m.collection_id "
     "      AND r.property_id = m.property_id "
     "      AND r.change_kind = 'reactivated' "
+    "      AND r.duplicate_of IS NULL "
     "      AND r.dispatched_at > nd.dispatched_at"
     "  )"
     ") "

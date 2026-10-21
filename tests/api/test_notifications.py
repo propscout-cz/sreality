@@ -1140,6 +1140,19 @@ def test_mark_seen_follows_a_duplicate_to_the_row_it_duplicates() -> None:
     assert len(nothing.executed) == 1, "nothing is stamped for an id that resolves to nothing"
 
 
+def test_reactivated_is_anchored_on_events_never_on_a_merges_duplicates() -> None:
+    """A merge re-points the retired property's 'inactive' (and 'reactivated') rows and marks the
+    ones the survivor already holds; such a duplicate must neither anchor a 'reactivated' (the
+    LATERAL's latest 'inactive') nor stand in for one already told (the NOT EXISTS)."""
+    from api import notifications as nf
+
+    sql = " ".join(nf._MONITOR_REACTIVATED_SQL.split())
+    lateral = sql.split("JOIN LATERAL (", 1)[1].split(") nd ON", 1)[0]
+    assert "AND change_kind = 'inactive' AND duplicate_of IS NULL ORDER BY dispatched_at DESC LIMIT 1" in lateral
+    told = sql.split("WHERE NOT EXISTS (", 1)[1].split(") ) INSERT", 1)[0]
+    assert "AND r.change_kind = 'reactivated' AND r.duplicate_of IS NULL AND r.dispatched_at > nd.dispatched_at" in told
+
+
 def test_detection_never_consults_dismissals() -> None:
     """Suppressing an INSERT would lose the event for good on undo: a 'new' identity is
     once-ever and the `reactivated` detector keys off a prior `inactive` dispatch, so no
