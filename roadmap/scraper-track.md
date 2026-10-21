@@ -161,8 +161,8 @@ Independent of the analytical, UI, and map tracks.
   the UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
   36995661138): 0×403, 5/5 pages, errors=0 → `portal_rate_state` reset, both `app_settings` kill switches
   lifted, both workflows re-enabled, full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
-- **Next:** the on-demand URL parser (`source_parsers/common.py`, honest bot UA) and
-  `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403 on ceskereality — pre-existing exposure;
+- **Next:** `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403s on ceskereality (the on-demand
+  URL parser that shared the exposure was deleted 2026-10-20) — pre-existing exposure;
   new ceskereality rows/day fell 800→2 on 09-26..09-29 BEFORE the wall, unexplained; a fully blocked walk
   ends green (`errors=0`, `walk_coverage='complete'` with collected=0) and the drain budget is not enforced
   inside a chunk — observability follow-ups from the 10-02 review.
@@ -423,11 +423,11 @@ Independent of the analytical, UI, and map tracks.
   attempt (street held under a NULL provenance stamp → #1406) and passed 40/40 after. Rails seeded:
   coverage ok (20 active sreality rows without a URL, warn at 50), conformance ok 2.27 % (1/44 = an
   mmreality page answering 403 to HEAD — a portal quirk, not a URL defect; a crawler-portal HEAD
-  refusal is a known soft spot of the probe). **Filed, not built:**
-  the SPA's `api.ts` source registry is missing ceskereality/realitymix, BUT `estimation_runs.
-  source_kind`'s CHECK (mig 020) lists neither either — a URL of those portals pasted into the
-  estimation flow may violate the constraint; needs its own investigation (inbound URL→portal
-  registries, four copies), not a 4-line SPA patch.
+  refusal is a known soft spot of the probe). **Resolved 2026-10-20:** the filed gap (the SPA's
+  `api.ts` source registry and `estimation_runs.source_kind`'s CHECK both missing ceskereality /
+  realitymix) is gone with its cause — W1 of `docs/design/new-property-from-link.md` gave every
+  inbound URL one identity canon (`scraper/portal_identity.py` + its pinned SPA mirror), and W2
+  deleted the estimation URL arm that wrote `source_kind`.
 
 ### The nomination gate went STRUCTURAL — counts stopped vetoing (2026-09-08, done)
 - The 5th element of `walk_category` now means **"the walk reached the portal's end"**
@@ -750,8 +750,8 @@ already existed in the database.
 > property foundation + property-grain read/notification slices). The
 > scope notes below are background; the doc is the source of truth.
 
-Today's non-sreality flow is *parse on demand* via
-`source_dispatcher` (LLM call per URL, cached 7 days). To make
+The non-sreality flow was then *parse on demand* via
+`source_dispatcher` (LLM call per URL, cached 7 days; deleted 2026-10-20). To make
 bezrealitky / idnes / remax / maxima comparables (and other portals
 as the operator opens them) show up in `find_comparables`, those
 portals need to land in the `listings` table itself. **Hard

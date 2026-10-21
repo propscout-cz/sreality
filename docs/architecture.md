@@ -36,10 +36,9 @@ emits". That is now one table and one module rather than nine copies of each:
   the boolean readings. The CANON stays in `toolkit/filter_registry.py`
   (`COLUMN_CANONICAL_VALUES`, keyed by `listings` column — NOT scanned off the filters, which
   made the `building_material` bucket name `ostatni` a canonical construction and left
-  `price_unit` with no canon at all) and is imported, never restated; the LLM tool schema's
-  enums are generated from `CANON`, which since W5 IS the whole value space — `disposition`
-  and `price_unit` included, so the on-demand URL parser cannot emit an `8+7` or a fifth
-  spelling of "monthly". A label no entry names is NULL **plus a counted event** in the run
+  `price_unit` with no canon at all) and is imported, never restated; since W5 `CANON` IS the
+  whole value space — `disposition` and `price_unit` included, so nothing may store an `8+7`
+  or a fifth spelling of "monthly". A label no entry names is NULL **plus a counted event** in the run
   summary (`RUN done … unmapped=N`), never a passthrough; the
   counter is drained per drain pass, because the always-on worker runs every source's drain
   in one long-lived process.
@@ -228,9 +227,7 @@ carries `offerType`/`estateType`, the drain derives each listing's category from
 response, so one config walks many categories (no per-category queue encoding).
 `listAdverts` has a `totalCount` and no deep-pagination cap, so a per-category walk can page
 to the API's own last page; the runner nominates the rows such a finished walk did not see for
-a page check (rule #3, source-scoped) and the page decides. NOTE: bezrealitky
-also has an on-demand URL parser (`scraper/source_parsers/bezrealitky.py`, LLM) used by the
-estimation preview — a separate entry point that is unchanged by the scheduled scraper.
+a page check (rule #3, source-scoped) and the page decides.
 
 **Data source (reality.idnes.cz).** A scheduled scraper (`scraper/idnes_client.py`,
 `idnes_parser.py`, `idnes_main.py` — **cadence-split** like sreality/bazos:
@@ -320,9 +317,7 @@ The detail URL carries the category
 (`/detail/{sale}/{cat}/…`), so the drain derives each listing's category from its own URL —
 one config (the `portals` row, migrations 110/111) walks many categories (byty + domy ×
 prodej + pronájem today). Image-URL rows are recorded by the drain; the shared `images.yml`
-job downloads the bytes to R2 (source-agnostic). NOTE: iDNES also has an on-demand URL parser
-(`scraper/source_parsers/idnes_reality.py`, LLM, `source_kind='idnes_reality'`) used by the
-estimation preview — a separate entry point unchanged by the scheduled scraper.
+job downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
 `mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
@@ -391,11 +386,9 @@ logs its own agenda-grain `COVERAGE agenda …` line instead; for the same reaso
 measured, never as a 0% gap by construction; a gone detail (404/410 or a
 redirect off the detail path) is a gone verdict for that one listing (rule #3's hysteresis
 flips it). Registered as a
-scraper portal by CONVERTING the existing on-demand-parser row (migration 135). NOTE:
-remax ALSO has an on-demand URL parser (`scraper/source_parsers/remax.py`, LLM,
-`source_kind='remax'`) used by the estimation preview — a separate entry point
-unchanged by the scheduled scraper, routed by domain in `source_dispatcher`
-independent of the `portals` row's `kind`.
+scraper portal by CONVERTING the existing on-demand-parser row (migration 135). The
+on-demand LLM URL parser itself was deleted on 2026-10-20 (`docs/design/new-property-from-link.md`
+ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ingest` and the drain.
 
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
 `ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. It is large
@@ -438,9 +431,7 @@ its own URL — one config (the `portals` row, migration 249) walks all 12 (cm �
 The client rides the residential proxy (`USE_PROXY`) with the shared Chrome browser `User-Agent` plus
 matching `sec-ch-ua` client hints (`CLIENT_HINTS` — since 2026-09-29 the site's own nginx 403s a hint-less
 Chrome UA), at a polite rate. The site's robots.txt disallows generic bots; sending browser-like headers is
-an operator-owned posture (decided 2026-10-02). NOTE: ceskereality ALSO has an on-demand URL parser
-(`scraper/source_parsers/ceskereality.py`, LLM, `source_kind='ceskereality'`) used by the estimation
-preview — a separate entry point unchanged by the scheduled scraper.
+an operator-owned posture (decided 2026-10-02).
 
 **Data source (reas.cz sold transactions) — NOT a portal.** The tenth source is not a tenth
 portal: it is a feed of **registered sales**, and a sale is an account-less external FACT, not a
@@ -893,8 +884,8 @@ rules. Identify which one a task belongs to before you start.
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
   used there for `name` + `host_permissions`), and `portalIds.test.ts` fails when the template
-  and the rules name different hosts, so onboarding a new portal means adding it to
-  `portalIds.ts` plus its line in the template. `host_permissions`
+  and the rules name different hosts, so onboarding a new portal means its rule in
+  `scraper/portal_identity.py` + the probe fixture, its mirror in `portalIds.ts`, and its line in the template. `host_permissions`
   is narrowed at build time to just the two live API/auth origins the background worker fetches
   (`VITE_API_BASE_URL` + `VITE_SUPABASE_URL`), not a broad wildcard. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
@@ -1033,8 +1024,8 @@ renumber.** Navigate by area:
    via the Supabase MCP. See "Database access" for the full flow and the
    additive-vs-destructive policy.
 2. **Snapshots on content change only.** A fetched payload reaches `listings` ONLY via
-   `scraper/listing_write.py` `write_listings` — every portal's detail drain, the URL
-   parser and the freshness re-check —
+   `scraper/listing_write.py` `write_listings` — every portal's detail drain (a pasted link
+   reaches it through `POST /listings/ingest`) and the freshness re-check —
    which appends a `listing_snapshots` row iff its content hash differs from the listing's
    latest snapshot under THE one order (`scraped_at DESC, id DESC`), stamped
    `statement_timestamp()` late in its transaction (a brand-new row always gets one). The two
@@ -1361,16 +1352,16 @@ renumber.** Navigate by area:
     `create_estimation_run` (`api/estimation_runs.py`) is the one producer every path must go
     through: `POST /estimations` and the building workflow's per-unit children
     (`api/building_runs.py`) both call it, and it (with the executor it schedules) is where the
-    URL parse, the account stamp, the metering gates and the trace recorder live. The row is
+    subject resolution, the account stamp, the metering gates and the trace recorder live. The row is
     INSERTed at submission — `pending` (deterministic, and any run routed to the realtime
     worker's estimation lane), or `running` for an in-process agent run so every per-turn
     `llm_calls` row can attribute to it — and the executor (inline call, BackgroundTask, or the
     worker's `execute_pending_run`) UPDATEs the terminal `status` (`'success'` | `'failed'`) on
     that same row; `sweep_stuck_runs` fails any row orphaned non-terminal. A failure before
-    execution starts (URL parse, target build, unknown skill) INSERTs the row directly as
+    execution starts (target build, unknown skill) INSERTs the row directly as
     `'failed'`. Either way a failed run still persists a row — the row IS the audit trail; the
     endpoint returns HTTP 200 and the row carries `status='failed'` and `error_message`.
-    (Submit-time refusals — an ungeocodable subject's 422, a metering 429 — happen before any
+    (Submit-time refusals — the 422 for an ad we do not hold or cannot place, a metering 429 — happen before any
     run exists; they are not failed runs.) Re-runs INSERT a new row with `parent_run_id` set;
     the original is immutable. Legal `source` values today: `'ui'`, `'api'`, `'clickup'`,
     `'extension'` (CHECK constraint, not enum — migration 347 added `'extension'` by dropping
@@ -1388,43 +1379,39 @@ renumber.** Navigate by area:
     manual-smoke exception.
 
     **What immutability covers.** The RESULT: the estimate, the trace, the cost, the
-    comparables frozen at run time. Two things on the row are deliberately mutable and
-    always have been. (a) The operator's yield `scenario` (`PATCH /estimations/{id}/scenario`)
-    — a what-if overlay, not a computed output. (b) Subject IDENTITY. Since the surrogate
+    comparables frozen at run time. One thing on the row is deliberately mutable: the
+    operator's yield `scenario` (`PATCH /estimations/{id}/scenario`) — a what-if overlay, not a
+    computed output. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
+    changes (2026-10-20; until then a binder could late-bind it, see below). Since the surrogate
     cutover (migration 411, PR #1095, completed for `property_estimates_public` by migration
     412) every read path that answers "what estimates exist for this listing" FILTERS on
-    `estimation_runs.input_listing_id` — `listings.id` — and on nothing else. (Display-side
-    JOINs are a separate matter: `_LIST_FROM` still carries a guarded legacy arm to resolve a
-    locality label for a run whose surrogate is not yet bound. That arm decides what a row
-    shows, never which rows come back.) The legacy
+    `estimation_runs.input_listing_id` — `listings.id` — and on nothing else; the display-side
+    JOINs (the list's place label, the run's subject ad) key on it too. The legacy
     `input_sreality_id` is NULL for every post-Gate-2 non-sreality subject (migration 311's
     sign check), so keying on it silently dropped those subjects; and an empty id set once
     collapsed the predicate entirely, returning the whole table.
 
     One surface still uses the legacy id as a KEY SPACE, and it is not a defect:
     `latest_rent_estimations_by_listing` returns a map keyed by `sreality_id` for Browse's
-    on-card estimate chip. Its JOIN already prefers the surrogate; only the map's keys are
+    on-card estimate chip. Its JOIN keys on the surrogate; only the map's keys are
     legacy, and the chip is sreality-only end to end — the affordance is gated on
     `sreality_id != null` and `createEstimation` submits a `sreality_id`, so no estimate can
     exist for a card the legacy key space would mis-answer. Re-keying the read alone would
     change no behaviour while risking a silent mis-key across six stateful call sites that
-    the compiler cannot check (both ids are `number`). Browse gains non-sreality estimates
-    only when `POST /estimations` accepts a `listing_id` — read and write together, in one
-    PR, with a component test.
+    the compiler cannot check (both ids are `number`). `POST /estimations` accepts a
+    `listing_id` since 2026-10-20 (the property page estimates any portal's ad by it); Browse's
+    chip moves to it as its own change — read and write together, in one PR, with a
+    component test.
 
-    An estimation submitted for a URL the scraper has not reached yet legitimately lands with
-    `input_listing_id` NULL — the insert's `COALESCE` subquery finds no listing — so it
-    belongs to no listing page until the listing appears. `_bind_pending_estimation_listing_ids`
-    (in `scripts/recompute_property_stats.py`, on the property-maintenance tick that already
-    attaches stragglers) stamps it exactly once. That is identity RESOLUTION, not result
-    mutation: it only ever fills a NULL (the `IS NULL` guard is repeated in the UPDATE's own
-    WHERE, so it is one-way and idempotent), it matches only the unique `sreality_id`, and it
-    refuses fuzzy or multi-match URL recovery — a wrong attribution silently credits a paid
-    estimate to the wrong flat, which is worse than leaving it unattached.
-
-    This is also why there is NO `CHECK (input_sreality_id IS NULL OR input_listing_id IS NOT
-    NULL)`. It holds for every row written so far, but it would reject exactly the
-    not-yet-scraped case above and turn a working degraded path into a 500 on submit.
+    **`input_listing_id` is set at submit; there is no late binding (2026-10-20,
+    `docs/design/new-property-from-link.md` §3.5).** An estimation is always of an ad we hold:
+    `POST /estimations` takes a `listing_id` (or the legacy `sreality_id`, resolved to the same
+    ad through the one subject matcher) or a raw `spec`, never a URL — a pasted link becomes an
+    ad through `POST /listings/ingest` first — so every ad's run carries its `listings.id` from
+    its INSERT, and a raw-spec run has none and belongs to no listing page. The 13 historic
+    unbound runs (10 URL-submitted, 3 spec-only) keep their read-only `/estimation/:id` page;
+    the binder that once stamped such rows (it bound 0) is deleted. `CHECK (input_sreality_id IS
+    NULL OR input_listing_id IS NOT NULL)` now holds by construction as well as for every row.
 
     **A paid outside valuation is not our estimate (Valuo, operator ruling 2026-10-19).** The
     property page's Valuo section buys a valuation from Valuo's API v3 (docs.valuo.com; `POST
@@ -1521,7 +1508,12 @@ renumber.** Navigate by area:
     explicit departure from the `estimation_runs` single-shot flow. `units_proposal` (agent
     output, append-only after extraction) and `units` (operator-confirmed) are kept separate
     so the extractor's original guess is auditable. The business-case overlay lives in
-    `business_case jsonb` on this same row.
+    `business_case jsonb` on this same row. **The flow has no live entry since 2026-10-20:** the
+    paste entry (`POST /buildings/from_url`) was retired with the URL parser
+    (`docs/design/new-property-from-link.md` §3.5; `building_runs` held 0 rows), `POST /buildings`
+    creates only a `pending` shell, and `confirm_units` / `re_extract` need `awaiting_input` — so no
+    route leaves `pending` until an operator ruling gives the subsystem a new entry or retires it
+    (`roadmap/building-decomposition-track.md`).
 14. **Condition scoring is two-axis (building + apartment).** `listings.condition` (the raw
     sreality "Stav objektu" enum, ~11 Czech text values) stays as the source field — it's
     what `listings_public` exposes and what the legacy filter binds against. The two derived
@@ -4690,7 +4682,7 @@ rendered blank in production.
 | --- | --- |
 | Database, migrations, schema, connection modes, Supabase MCP | `.claude/skills/database` |
 | Toolkit tools, FastAPI, auth, versioned trace, env-vars & secrets | `.claude/skills/toolkit-api` |
-| LLM URL parsing, cached analysis tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
+| Cached LLM analysis tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running/debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Location-data program (claim spine, RÚIAN mirror, contracts) | `roadmap/location-data.md` + the operator-held design corpus |
 | Roadmap / sequencing | `ROADMAP.md` + `roadmap/<track>.md` |

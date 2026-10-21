@@ -429,11 +429,16 @@ export default function BrowseExperience({
   const [estimates, setEstimates] = useState<Record<number, ListingEstimate>>(
     {},
   );
+  /* A submit the API refused (a 422 for an ad it cannot place) creates no run,
+   * so nothing in `estimates` would say it failed — the API's sentence is kept
+   * per card instead, until the next attempt. */
+  const [estimateRefusals, setEstimateRefusals] = useState<Record<number, string>>({});
   const requestedEstIdsRef = useRef<Set<number>>(new Set());
   const estimatesEnabled = tab === 'map' && isApiConfigured();
 
   useEffect(() => {
     setEstimates({});
+    setEstimateRefusals({});
     requestedEstIdsRef.current = new Set();
   }, [cardsRestorationKey]);
 
@@ -483,6 +488,18 @@ export default function BrowseExperience({
       }),
     onMutate: (srealityId) => {
       setEstimatingIds((prev) => new Set(prev).add(srealityId));
+      setEstimateRefusals((prev) => {
+        if (!(srealityId in prev)) return prev;
+        const next = { ...prev };
+        delete next[srealityId];
+        return next;
+      });
+    },
+    onError: (err, srealityId) => {
+      setEstimateRefusals((prev) => ({
+        ...prev,
+        [srealityId]: err instanceof Error ? err.message : 'Odhad se nepodařilo spustit',
+      }));
     },
     onSuccess: (run, srealityId) => {
       setEstimates((prev) => ({
@@ -741,6 +758,7 @@ export default function BrowseExperience({
                 merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
+                estimateRefusals={estimateRefusals}
                 onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
               />
               </CardHydrationProvider>

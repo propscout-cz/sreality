@@ -180,8 +180,9 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchListingBrokersByIds: vi.fn(async () => new Map()),
 }));
+const openEstimation = vi.hoisted(() => vi.fn());
 vi.mock('@/components/NewEstimationModal', () => ({
-  useNewEstimationModal: () => ({ open: vi.fn() }),
+  useNewEstimationModal: () => ({ open: openEstimation }),
 }));
 vi.mock('@/components/ExploreAreaModal', () => ({
   useExploreAreaModal: () => ({ open: vi.fn() }),
@@ -405,6 +406,41 @@ describe('<PropertyDetail> one property, one voice', () => {
 
     await waitFor(() => expect(where()).toBe('/property/774?advert=105053'));
     expect(api.fetchPropertyOrigins).toHaveBeenCalledWith(500);
+  });
+});
+
+/* The identity track's ask: "New estimation" is the canonical advert's, by its
+   listings.id, on any portal. It used to be bound to a portal URL and its runs to
+   a sreality id, so a property with no sreality advert could not be estimated. */
+describe('<PropertyDetail> New estimation', () => {
+  it('offers the estimate on a property with no sreality advert, bound to its canonical ad', async () => {
+    vi.mocked(queries.fetchProperty).mockResolvedValue({
+      ...PROPERTY,
+      id: 105053,
+      sreality_id: null,
+      source: 'idnes',
+      source_id_native: '6a147cfde222cf687509e018',
+      category_type: 'pronajem',
+    } as unknown as queries.PropertyPublic);
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0]]);
+    openEstimation.mockClear();
+    renderAt('/property/774');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith({
+      listingId: 105053,
+      categoryMain: 'byt',
+      estimateKind: 'rent',
+    });
+  });
+
+  it('binds it to the canonical ad before the advert list arrives', async () => {
+    vi.mocked(queries.fetchPropertySources).mockReturnValue(new Promise(() => {}));
+    openEstimation.mockClear();
+    renderAt('/property/774');
+
+    fireEvent.click(await screen.findByRole('button', { name: /New estimation/ }));
+    expect(openEstimation).toHaveBeenCalledWith(expect.objectContaining({ listingId: 105054 }));
   });
 });
 

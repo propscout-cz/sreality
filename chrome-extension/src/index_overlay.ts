@@ -16,10 +16,9 @@
  * And (index_promo.ts) the grid's cards that are not listings — paid ads,
  * project promos — washed whitish.
  *
- * Sale-apartment gating of the badge: by our row's category when found; for
- * listings not yet in our DB, by the portal's URL category hint (sreality/idnes
- * encode it in the path) so freshly-listed cards still get the estimate
- * affordance.
+ * Sale-apartment gating of the badge: by our row's category. An ad we do not
+ * hold gets no badge — an estimation is always of an ad we hold, and adding one
+ * is the detail panel's "Přidat do databáze" (docs/design/new-property-from-link.md).
  *
  * Controls and badges only ever come from a SUCCESSFUL lookup. When it fails
  * (signed out, network / API error) the page gets one notice in the dock
@@ -40,7 +39,7 @@ import {
 import { mountDock, onVeilChange, readVeil, writeVeil, type DockHandle } from './index_dock';
 import { createPromoWash } from './index_promo';
 import { onAccountChange } from './session';
-import { detailRef, portalForHost, type Portal, type PortalRef } from '../../frontend/src/lib/portalIds';
+import { detailRef, portalForHost, type PortalRef } from '../../frontend/src/lib/portalIds';
 import type { ApiMessage, ApiResult, AuthState, PortalListing } from './types';
 
 type Caller = <T>(m: ApiMessage) => Promise<ApiResult<T>>;
@@ -295,7 +294,7 @@ export async function runIndexOverlay(
   const layer = createCardLayer({
     call,
     cache,
-    badgeFor: (listing, href) => badgeFor(portal, listing, href),
+    badgeFor,
     openPanel: (ref, href, listing) => { void openPanel(ref, href, listing); },
     collectionsUrl: opts.collectionsUrl,
     veilOn: () => veil,
@@ -590,16 +589,6 @@ function cardFor(anchor: HTMLAnchorElement, sourceId: string): HTMLElement {
   return card;
 }
 
-/* sreality/idnes encode prodej/byt in the detail path; other portals return null. */
-function urlSaleHint(portal: Portal, href: string): boolean | null {
-  if (portal.saleApartmentHint == null) return null;
-  try {
-    return portal.saleApartmentHint(new URL(href).pathname);
-  } catch {
-    return null;
-  }
-}
-
 /* A card still waiting on its lookup whose node was recycled from another
  * listing (see PROCESSED_ATTR) drops that listing's controls and click targets
  * now, not on the next successful lookup — a failing or backed-off lookup would
@@ -614,19 +603,16 @@ function unbadgeRecycled(hit: Hit, card: HTMLElement, clear: (card: HTMLElement)
   if (!stillLinked) clear(card);
 }
 
-/* The yield badge — sale apartments only: by our row's category when we have
- * one, else by the portal's URL hint. A value's or a range's yield on the
- * badge; the result's note (the range's (i), or a reason) rides in its title —
- * the badge falls through to the estimate or the CTA when there is no MF yield
- * to show. */
-function badgeFor(portal: Portal, listing: PortalListing, href: string): BadgeView | null {
-  const saleApt = listing.found
-    ? listing.category_main === 'byt' && listing.category_type === 'prodej'
-    : urlSaleHint(portal, href) === true;
-  if (!saleApt) return null;
+/* The yield badge — sale apartments we hold only, by our row's category. A
+ * value's or a range's yield on the badge; the result's note (the range's (i),
+ * or a reason) rides in its title — the badge falls through to the estimate or
+ * the CTA when there is no MF yield to show. */
+function badgeFor(listing: PortalListing): BadgeView | null {
+  if (!listing.found) return null;
+  if (listing.category_main !== 'byt' || listing.category_type !== 'prodej') return null;
 
   let title = 'Klikni pro odhad výnosu';
-  const shape = mfShape(listing.found ? listing.mf_reference_rent : null);
+  const shape = mfShape(listing.mf_reference_rent);
   if (shape.kind === 'value') {
     title = `MF nájem ${fmtCzk(shape.ref.monthly_rent_czk)}/měs · klikni pro odhad`;
   } else if (shape.kind !== 'none' && shape.note != null) {

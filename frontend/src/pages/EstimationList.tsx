@@ -28,8 +28,8 @@ import { runSurfaceUrl } from '@/lib/runLinks';
 import { buildRerunPayload, canRerun } from '@/lib/rerun';
 import { ControlGroup } from '@/components/controls';
 import { RunStatusChip } from '@/components/estimation/RunPanel';
-import { useNewEstimationModal } from '@/components/NewEstimationModal';
-import { listingPath } from '@/lib/listingUrl';
+import { advertPath } from '@/lib/listingUrl';
+import { ROUTES } from '@/lib/routes';
 import { Th } from '@/components/table';
 
 interface EstimationPage {
@@ -129,7 +129,6 @@ export default function EstimationList() {
 /* -------------------------------------------------------------------------- */
 
 function Header() {
-  const { open } = useNewEstimationModal();
   return (
     <header className="flex items-end justify-between gap-6">
       <div>
@@ -143,16 +142,10 @@ function Header() {
           Past runs
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-          Every estimation — from this UI, the API, or ClickUp — lands here.
+          Every estimation — from this UI, the API, or ClickUp — lands here. A new
+          one starts from its property&rsquo;s page.
         </p>
       </div>
-      <button
-        type="button"
-        onClick={() => open()}
-        className="shrink-0 inline-flex items-center gap-2 px-4 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-      >
-        <span>+ New estimation</span>
-      </button>
     </header>
   );
 }
@@ -406,11 +399,12 @@ function FeedbackCell({ run }: { run: EstimationRun }) {
 function ListingLinkCell({ run }: { run: EstimationRun }) {
   // In-app listing page first — it's the primary surface for the run.
   // The external portal URL stays reachable as a secondary ↗.
-  if (run.input_sreality_id != null) {
+  const listing = advertPath({ source: run.subject_source, source_id_native: run.subject_source_id_native });
+  if (listing != null) {
     return (
       <span className="inline-flex items-center gap-1.5">
         <Link
-          to={listingPath(run.input_sreality_id)}
+          to={listing}
           className="text-[var(--color-copper)] hover:underline underline-offset-2"
         >
           Listing
@@ -526,7 +520,6 @@ function RerunInlineButton({ run }: { run: EstimationRun }) {
 /* -------------------------------------------------------------------------- */
 
 function EmptyState({ filtered }: { filtered: boolean }) {
-  const { open } = useNewEstimationModal();
   return (
     <div className="px-6 py-16 text-center border border-dashed border-[var(--color-rule)] rounded-[var(--radius-md)]">
       <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
@@ -537,13 +530,12 @@ function EmptyState({ filtered }: { filtered: boolean }) {
           ? 'No runs match these filters.'
           : 'Past runs will appear here once any user, the API, or ClickUp triggers one.'}
       </p>
-      <button
-        type="button"
-        onClick={() => open()}
+      <Link
+        to={ROUTES.browse.build()}
         className="mt-4 inline-block text-sm text-[var(--color-copper)] hover:underline underline-offset-2"
       >
-        Start an estimation →
-      </button>
+        Find a property to estimate →
+      </Link>
     </div>
   );
 }

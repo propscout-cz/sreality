@@ -2,8 +2,8 @@
 
 `listings.floor` means the same storey whatever portal wrote it: **přízemí = 0,
 1. patro = 1, 1. NP = 0, suterén = −1**. Ground = 0 is not a preference — it is the
-only convention anything in this repo ever DECLARED (this module, the LLM parse
-prompt, `scraper/source_parsers/common.py`); ground = 1 was undeclared portal
+only convention anything in this repo ever DECLARED (this module and the retired LLM
+URL parser's prompt); ground = 1 was undeclared portal
 passthrough on six portals until W8, and the column was a ~50/50 mix of the two
 (the same flat read 3 from its idnes row and 4 from its sreality row).
 
