@@ -7,7 +7,7 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
-### Phase U-MERGE-LETTERS: merge mode as one statement of letters (built 2026-10-21; merges in the window)
+### Phase U-MERGE-LETTERS: merge mode as one statement of letters (live 2026-10-21 06:10Z, PR #1926 = 3e6a904d)
 - **Done (PR #1926, no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
   card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
   a click writes the active letter (A at first, so click-click-merge still makes one group), the same
@@ -17,7 +17,8 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   in id order, each letter its own group; a refusal names the letter and writes nothing); one receipt per
   letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
   D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
-- **Owed:** the first real multi-letter merge in production (a read-only browser check of the keys).
+- **Owed:** the first real multi-letter merge by the operator (the read-only production check of the keys
+  passed 2026-10-21: 19 steps over 24 live cards, 0 console errors, nothing merged).
 
 ### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
