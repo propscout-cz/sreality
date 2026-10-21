@@ -1113,10 +1113,7 @@ export type NotificationSourceKind =
   /* Something was shared with the caller (migrations 610 + 641): a collection
    * (collection_id set) or a pipeline (collection_id null); change_kind
    * 'shared', no listing subject — the `message` text. */
-  | 'share'
-  /* System-health alerts (migration 273/274 producer): pipeline stalls, credit
-   * outages, etc. No listing subject — the payload is the `message` text. */
-  | 'system_health';
+  | 'share';
 
 export interface WatchdogDispatch {
   id: string;
@@ -1127,24 +1124,16 @@ export interface WatchdogDispatch {
   subscription_name: string | null;
   collection_id: number | null;
   collection_name: string | null;
-  sreality_id: number;
-  /* Property grain (Slice 2b). `property_id` is the canonical property;
-   * `change_kind` is why this dispatch fired ('new' = newly matched the
-   * filter, 'price_drop' = a recent price decrease). `sreality_id` is the
-   * property's representative listing (what the feed links to). */
+  /* Property grain (Slice 2b). `property_id` is the property the event is
+   * about — set on every watchdog / collection_monitor row, null on a share;
+   * the row opens it (lib/dispatchTarget). `change_kind` is why this dispatch
+   * fired ('new' = newly matched the filter, 'price_drop' = a recent price
+   * decrease). */
   property_id: number | null;
   change_kind: string;
-  /* Free-text body for the rows with no listing subject: source_kind=
-   * 'system_health' (change_kind 'system_alert') and 'share'
-   * (change_kind 'shared'); null on watchdog / collection_monitor rows, which
-   * describe a listing subject instead. Those two kinds also carry no listing,
-   * so their `sreality_id` is null at runtime despite the type (widening it
-   * touches pages/Watchdog.tsx; owed). */
+  /* Free-text body of a `share` row (change_kind 'shared'), which has no
+   * listing subject; null on watchdog / collection_monitor rows. */
   message: string | null;
-  /* The check a system_health alert is about, read by the API off its dedupe key
-   * (`sys:<check_key>:…`), so the bell opens Health at that check; null on every
-   * other producer. */
-  check_key: string | null;
   /* What a `share` row shares, read by the API off its dedupe key
    * (`share:<kind>:<ref>:…`): the kind, and its id — the collection id, the
    * owner's account uuid for a pipeline, the dashboard uuid. Null on every
@@ -1179,12 +1168,11 @@ export interface WatchdogDispatch {
   last_seen_at: string | null;
   /* MF (Ministry of Finance) reference gross rental yield % — the
    * deterministic Cenová-mapa figure carried on the listing (migration 133).
-   * Sale apartments only; null on rentals / non-apartments / no territory.
-   * Shown alongside the comparables-based estimation yield. */
+   * Sale apartments only; null on rentals / non-apartments / no territory. */
   mf_gross_yield_pct: number | null;
   /* The portal the property was last seen on (`listings.source`, e.g.
    * 'sreality') + the listing's URL on that portal (`source_url`, may be null
-   * for older sreality rows). Drives the Portal column's clickable chip. */
+   * for older sreality rows). */
   source: string | null;
   source_url: string | null;
 }
@@ -1198,16 +1186,9 @@ export interface WatchdogDispatchesResponse {
   next_cursor: string | null;
 }
 
-/* Unseen dispatch counts (GET /notifications/unread-count). `unread_count` is
- * the total, or the scoped count when a source_kind is requested. */
+/* The caller's unseen notifications (GET /notifications/unread-count): the
+ * one number the nav badge and the feed's header show. */
 export interface NotificationUnreadCount {
-  watchdog: number;
-  collection_monitor: number;
-  share: number;
-  system_health: number;
-  /* `total` sums EVERY source_kind (incl. system_health); the nav bell badge
-   * reads `unread_count` (= total when unscoped), so system alerts count too. */
-  total: number;
   unread_count: number;
 }
 

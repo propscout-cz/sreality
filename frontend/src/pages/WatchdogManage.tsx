@@ -88,16 +88,11 @@ function Header() {
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
           A watchdog is a saved filter. The backend matcher fires a
-          notification when a freshly scraped listing matches the spec.
+          notification when a freshly scraped listing matches the spec; its
+          alerts appear in Notifications.
         </p>
       </div>
       <div className="flex items-center gap-3">
-        <Link
-          to={ROUTES.watchdog.build()}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)] transition-colors"
-        >
-          ← Back to feed
-        </Link>
         <Link
           to={ROUTES.browse.build()}
           className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"

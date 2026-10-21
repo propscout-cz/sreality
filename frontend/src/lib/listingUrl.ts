@@ -10,7 +10,7 @@ export function propertyPath(propertyId: number, advertId?: number | null): Rout
 }
 
 /* An ADVERT's own address, for an advert-grain surface that does not know the
- * advert's property (estimation runs, comparables, watchdog dispatches). It is an
+ * advert's property (estimation runs, comparables). It is an
  * alias kept forever: the page resolves the advert's property on land and opens
  * the property page with that advert's row expanded. `sreality_id` is negative
  * for non-sreality portals (migration 097), which the route accepts. */

@@ -3,7 +3,7 @@
  * Browse hands this modal its current filters. The modal builds the
  * WatchdogFilterSpec (filtersToWatchdogSpec), suggests a name
  * (watchdogNameSuggestion), and on confirm POSTs /notifications/subscriptions;
- * on success the watchdog shows up in the Watchdog feed / Manage list like any
+ * on success the watchdog shows up in the Watchdogs list like any
  * other.
  *
  * The map area is the one choice made here (rule 16: what Browse shows is what
@@ -64,7 +64,7 @@ export default function CreateWatchdogModal({ filters, onClose }: CreateWatchdog
         is_active: true,
       }),
     onSuccess: () => {
-      navigate(ROUTES.watchdogManage.build());
+      navigate(ROUTES.watchdog.build());
     },
   });
 

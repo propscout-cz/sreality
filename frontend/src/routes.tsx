@@ -20,7 +20,6 @@ import BrokerDetail from './pages/BrokerDetail';
 import Collections from './pages/Collections';
 import CollectionDetail from './pages/CollectionDetail';
 import Pipeline from './pages/Pipeline';
-import Watchdog from './pages/Watchdog';
 import WatchdogManage from './pages/WatchdogManage';
 import WatchdogEdit from './pages/WatchdogEdit';
 import Notifications from './pages/Notifications';
@@ -134,8 +133,7 @@ export const routes: RouteObject[] = [
       { path: ROUTES.collectionDetail.childPath, element: <CollectionDetail />, handle: { title: 'Collection' } },
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
-      { path: ROUTES.watchdog.childPath, element: <Watchdog />, handle: { title: 'Watchdogs' } },
-      { path: ROUTES.watchdogManage.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs · Manage' } },
+      { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
       { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
       { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
       { path: ROUTES.locationQuality.childPath, element: <AdminPage><LocationQuality /></AdminPage>, handle: { title: 'Location quality' } },

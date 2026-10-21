@@ -67,7 +67,7 @@ export default function WatchdogEdit() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: watchdogKeys.all });
-      navigate(ROUTES.watchdogManage.build());
+      navigate(ROUTES.watchdog.build());
     },
   });
 
@@ -80,7 +80,7 @@ export default function WatchdogEdit() {
 
   // Watchdog creation now lives on Browse ("Create watchdog" from a saved
   // filter). This page is edit-only; a missing id has nowhere to go.
-  if (!id) return <Navigate to={ROUTES.watchdogManage.build()} replace />;
+  if (!id) return <Navigate to={ROUTES.watchdog.build()} replace />;
 
   return (
     <div className="px-6 py-8 max-w-3xl mx-auto">
@@ -214,7 +214,7 @@ export default function WatchdogEdit() {
 
         <div className="flex items-center justify-between gap-3 border-t border-[var(--color-rule)] pt-5">
           <Link
-            to={ROUTES.watchdogManage.build()}
+            to={ROUTES.watchdog.build()}
             className="text-sm text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
           >
             ← Cancel
