@@ -497,11 +497,14 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
    are rendered beside it, so a test reads the statement a key produced. */
 function MergeHarness({ rows }: { rows: CardRow[] }) {
   const merge = useMergeMode();
-  useEffect(() => merge.enter(), [merge.enter]);
+  const { enter } = merge;
+  useEffect(() => enter(), [enter]);
   return (
     <>
       <span data-testid="letters">{JSON.stringify(merge.letters)}</span>
       <span data-testid="active">{merge.activeLetter}</span>
+      {/* A field beside the grid, the way the filter sidebar sits beside it. */}
+      <input data-testid="field" aria-label="Cena od" />
       <ListingCards
         rows={rows}
         total={rows.length}
@@ -603,13 +606,26 @@ describe('<ListingCards> merge mode marks cards with letters', () => {
     expect(grid.letters()).toEqual({ 42: 'C' });
   });
 
-  it('the pointer focuses the card it is over, so keys and Tab share one target', () => {
+  it('the pointer focuses the card it moves over, so keys and Tab share one target', () => {
     const grid = renderMergeGrid();
     const [first, second] = grid.cardButtons();
-    fireEvent.mouseEnter(second.parentElement!);
+    fireEvent.mouseMove(second.parentElement!);
     expect(second).toHaveFocus();
-    fireEvent.mouseEnter(first.parentElement!);
+    fireEvent.mouseMove(first.parentElement!);
     expect(first).toHaveFocus();
+    /* An enter without movement is what a scroll synthesizes under a still
+       pointer: it must not rob the card Tab just reached. */
+    fireEvent.mouseEnter(second.parentElement!);
+    expect(first).toHaveFocus();
+  });
+
+  it('never takes focus from a field the operator is typing in', () => {
+    const grid = renderMergeGrid();
+    const [first] = grid.cardButtons();
+    const field = screen.getByTestId('field');
+    field.focus();
+    fireEvent.mouseMove(first.parentElement!);
+    expect(field).toHaveFocus();
   });
 
   it('Tab moves card to card past the chevrons, and ← → page the focused card’s photos', async () => {

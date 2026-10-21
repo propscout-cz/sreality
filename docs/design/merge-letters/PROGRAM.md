@@ -46,10 +46,11 @@ afterwards. Mandate: subtraction, a north star, no flags, no patchwork.
 ## As built
 
 **Backend.** `toolkit.property_identity`: `LETTERS`, `BadLetters`, `letter_tokens` (the one wire
-codec, `id:A,…`), `letter_sets` (letters as sets, ordered by each letter's lowest id — the one lock
-order), `merge_preview(letters)` (MS12 counts per letter) and **`merge_letters`** (each letter held
-by two or more properties through `merge_property_set` as an operator merge under its own group, all
-in one transaction; a lone letter merges nothing; nothing written on a refusal; no ruling crosses
+codec, `id:A,…`), `letter_sets` (letters as sets, in a stable order), `merge_preview(letters)`
+(MS12 counts per letter) and **`merge_letters`** (every property of the statement row-locked up
+front in id order — the order every writer locks in — then each letter held by two or more
+properties through `merge_property_set` as an operator merge under its own group, all in one
+transaction; a lone letter merges nothing; nothing written on a refusal; no ruling crosses
 letters). `toolkit.property_split._join` builds its landings as a statement and calls the same
 function; `parse_letters` reads through `letter_tokens`. `api/property_merge.py`: `POST
 /properties/merge {letters}` (a lone letter and anything but A–Z are a 400; 2–200 properties), one
@@ -98,6 +99,23 @@ duplicate `useMutation`, the second `lettersParam`. Comes: `merge_letters` + the
   last).
 - A Browse tab left open across the deploy posts the old body once and gets one 422 toast until
   reloaded; no dual acceptance.
+
+## Review (2026-10-21, an independent read of the diff)
+
+- **Fixed: the lock order across letters was not one order.** Locking each letter's set in turn
+  (A = {1, 10} then B = {5, 6}) could meet a single-set merge of {5, 10} in the opposite order and
+  deadlock (nothing harmed, a 500). `merge_letters` now row-locks every property of the statement
+  up front in id order, the order every writer uses; the per-letter locks re-lock rows the
+  transaction holds.
+- **Fixed: the pointer focused a card on `mouseenter`,** which a scroll synthesizes under a still
+  pointer (robbing the card Tab just reached) and which would have taken focus from a filter field
+  mid-typing. It now focuses on real movement (`mousemove`), only when the card is not already the
+  target, and never from an input, textarea, select or editable element.
+- **Fixed: the card's ← → handler also caught arrows from a menu portalled out of the card**
+  (React events bubble through portals); it now ignores events whose target is not inside the card.
+- **Accepted:** `properties_changed` runs once per letter inside the one transaction, so the lock
+  hold grows with the number of letters and can wait behind a Browse rebuild; fine at today's sizes,
+  to batch or bound if it shows.
 
 ## Owed
 

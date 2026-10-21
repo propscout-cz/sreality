@@ -54,7 +54,6 @@ from toolkit.property_identity import (
 Pair = tuple[int, int]
 Slot = tuple[str, int]  # where an ad lands before the joins: ('kept' | 'origin' | 'new', id)
 
-UNIT_LETTERS = LETTERS
 MAX_ADVERTS = 100
 REASON_MAX = 500
 # The lane's per-group bounds (E911): a split never waits long behind the reconcile.
@@ -137,7 +136,7 @@ def _statement_letters(letters: Mapping[Any, Any]) -> dict[int, str]:
         lid = int(ad)
         if lid in named:
             raise _invalid("Inzerát je uveden dvakrát.", [lid])
-        if not isinstance(letter, str) or len(letter) != 1 or letter not in UNIT_LETTERS:
+        if not isinstance(letter, str) or len(letter) != 1 or letter not in LETTERS:
             raise _invalid("Písmeno musí být A–Z.", [lid])
         named[lid] = letter
     if len(set(named.values())) < 2:

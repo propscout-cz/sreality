@@ -13,8 +13,8 @@ per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
   a click writes the active letter (A at first, so click-click-merge still makes one group), the same
   letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
   `POST /properties/merge {letters: {property_id: "A"}}`, the split's statement shape and codec, over
-  `toolkit.property_identity.merge_letters` (shared with the split's join; each letter its own group,
-  letters in order of their lowest id; a refusal names the letter and writes nothing); one receipt per
+  `toolkit.property_identity.merge_letters` (shared with the split's join; every property locked up front
+  in id order, each letter its own group; a refusal names the letter and writes nothing); one receipt per
   letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
   D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
 - **Owed:** the first real multi-letter merge in production (a read-only browser check of the keys).

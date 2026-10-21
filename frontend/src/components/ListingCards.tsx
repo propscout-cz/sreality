@@ -450,17 +450,20 @@ function Card({
     <div
       ref={setWrapperEl}
       /* Hover-sync stays a normal-mode affair, exactly as when these handlers
-       * lived on the <Link>: merge mode is not browsing — there the pointer
-       * FOCUSES the card it is over, so a letter key and ← → have one target,
-       * the same one Tab moves. */
-      onMouseEnter={merge
-        ? () => selectRef.current?.focus({ preventScroll: true })
-        : () => onHover([r.listing_id])}
+       * lived on the <Link>: merge mode is not browsing — there the POINTER
+       * focuses the card it moves over, so a letter key and ← → have one
+       * target, the same one Tab moves. On real movement only: a scroll
+       * synthesizes an enter under a still pointer, which would rob the card
+       * Tab just reached. */
+      onMouseEnter={merge ? undefined : () => onHover([r.listing_id])}
       onMouseLeave={merge ? undefined : () => onHover(null)}
+      onMouseMove={merge ? () => focusFromPointer(selectRef.current) : undefined}
       /* ← → page the photos from wherever focus sits on the card (the title
-       * link, the merge button); the chevrons stay for the mouse. */
+       * link, the merge button); the chevrons stay for the mouse. A menu
+       * portalled out of the card still bubbles here: its arrows are its own. */
       onKeyDown={(e) => {
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        if (!e.currentTarget.contains(e.target as Node)) return;
         if (carouselRef.current?.step(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
       }}
       className={wrapperClass}
@@ -655,6 +658,21 @@ function Card({
       )}
     </div>
   );
+}
+
+/* Merge mode's pointer focus: the card the pointer moves over becomes the
+   target, unless it already is, and never while the operator is typing in a
+   field — a letter typed there is theirs, not a mark. */
+function focusFromPointer(button: HTMLButtonElement | null): void {
+  if (button == null || document.activeElement === button) return;
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLElement &&
+    (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName))
+  ) {
+    return;
+  }
+  button.focus({ preventScroll: true });
 }
 
 function formatTitle(r: CardRow): string {

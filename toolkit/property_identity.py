@@ -444,9 +444,9 @@ def letter_tokens(raw: str) -> dict[int, str]:
 
 
 def letter_sets(letters: Mapping[Any, Any]) -> list[tuple[str, list[int]]]:
-    """A statement's letters as (letter, ids ascending), ordered by each letter's lowest id — the
-    one lock order, so two statements over the same properties never wait on each other in
-    opposite orders. A letter outside A–Z is refused."""
+    """A statement's letters as (letter, ids ascending), ordered by each letter's lowest id — a
+    stable merge order; the lock order is `merge_letters`' one up-front lock over every id. A
+    letter outside A–Z is refused."""
     by: dict[str, list[int]] = {}
     for key, letter in letters.items():
         if not isinstance(letter, str) or len(letter) != 1 or letter not in LETTERS:
@@ -601,15 +601,19 @@ def merge_letters(
     reason: str = "manual_subset",
 ) -> dict[str, dict[str, Any]]:
     """The operator's statement over properties — a letter per property, properties with the
-    same letter one property afterwards — made true in ONE transaction: each letter held by two
-    or more properties through `merge_property_set` as an operator merge under its own group
-    (the split, MS17's one reversal, stays per property), letters in `letter_sets` order; a
-    letter on one property is already true and merges nothing; a refusal anywhere writes nothing.
-    A letter says nothing about the properties it does not hold: no ruling crosses letters.
-    Answers each merged letter's data (`merge_property_set`'s)."""
+    same letter one property afterwards — made true in ONE transaction under ONE lock: every
+    property of the statement row-locked up front in id order (`lock_properties`, the order
+    every writer locks in, so a statement never meets another merge in the opposite order), then
+    each letter held by two or more properties through `merge_property_set` as an operator merge
+    under its own group (the split, MS17's one reversal, stays per property), letters in
+    `letter_sets` order, each re-locking rows the transaction already holds; a letter on one
+    property is already true and merges nothing; a refusal anywhere writes nothing. A letter
+    says nothing about the properties it does not hold: no ruling crosses letters. Answers each
+    merged letter's data (`merge_property_set`'s)."""
     sets = [(letter, ids) for letter, ids in letter_sets(letters) if len(ids) >= 2]
     merged: dict[str, dict[str, Any]] = {}
     with conn.transaction():
+        lock_properties(conn, [pid for _letter, ids in sets for pid in ids])
         for letter, ids in sets:
             merged[letter] = merge_property_set(
                 conn, ids, source="operator", reason=reason, decided_by=decided_by,

@@ -1772,10 +1772,11 @@ renumber.** Navigate by area:
     read-only, and the bar lists each letter's properties with their marks, MS16) posts
     `{letters: {property_id: "A"}}` to `POST /properties/merge`, the split's statement shape and
     codec (`letter_tokens`); `property_identity.merge_letters` merges each letter held by two or
-    more properties through `merge_property_set` under its own group, all in ONE transaction,
-    letters in order of their lowest id (one lock order), a refusal writing nothing and naming
-    the letter; no ruling crosses letters; the answer is one receipt per letter. The split's
-    join of a letter is the same call. **`POST /properties/{id}/split`** (MS18,
+    more properties through `merge_property_set` under its own group, all in ONE transaction
+    under ONE up-front row lock over every property of the statement in id order (the order
+    every writer locks in, so no statement meets another merge in the opposite order), a
+    refusal writing nothing and naming the letter; no ruling crosses letters; the answer is one
+    receipt per letter. The split's join of a letter is the same call. **`POST /properties/{id}/split`** (MS18,
     `toolkit.property_split.split_property`) is the operator's ONE split, by letters:
     `{letters, choices?, reason?, expect}`. `letters` names every advert of the property with a
     letter A–Z (a newcomer the lane merged in since is a 409 `stale`); one letter keeps the

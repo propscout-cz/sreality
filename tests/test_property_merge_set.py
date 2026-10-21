@@ -465,9 +465,11 @@ def test_the_copy_rules_only_live_operator_merges_same_and_is_idempotent():
     assert not re.search(r"\b(update|delete from|drop|truncate)\b", code), "additive only"
 
 
-def test_a_statement_of_letters_is_one_transaction_in_lowest_id_order():
-    """Two letters, two groups, two survivors, ONE transaction; B holds the lowest id, so it is
-    merged (and locked) first — the one lock order over any two statements."""
+def test_a_statement_of_letters_is_one_transaction_under_one_lock():
+    """Two letters, two groups, two survivors, ONE transaction. The whole statement is row-locked
+    FIRST, ascending — the order every writer locks in, so A = {1, 10} then B = {5, 6} can never
+    meet a merge of {5, 10} in the opposite order — and each letter's own lock then re-locks rows
+    the transaction already holds; B, with the lowest id, is merged first."""
     db = _Ledger({10: 1, 20: 2, 30: 3, 40: 4})
     out = pi.merge_letters(db, {3: "A", 4: "A", 1: "B", 2: "B"}, decided_by=OP)
     assert {k: (v["survivor_id"], v["retired_ids"]) for k, v in out.items()} == {
@@ -475,8 +477,9 @@ def test_a_statement_of_letters_is_one_transaction_in_lowest_id_order():
     assert list(out) == ["B", "A"]
     assert len({v["merge_group_id"] for v in out.values()}) == 2
     assert db.listings == {10: 1, 20: 1, 30: 3, 40: 3}
-    locks = [p["ids"] for s, p in db.log if s.startswith("SELECT id, status, first_seen_at")]
-    assert locks == [[1, 2], [3, 4]]
+    held = [p["ids"] for s, p in db.log if s.endswith("FOR UPDATE")]
+    assert held[0] == [1, 2, 3, 4], "the statement is locked first, ascending"
+    assert held[1:] == [[1, 2], [3, 4]]
     assert db.changed == [[1, 2], [3, 4]]
     assert [s for s, _p in db.log if s == "rollback"] == []
 
