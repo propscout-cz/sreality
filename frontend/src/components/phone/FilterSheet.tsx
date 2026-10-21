@@ -31,6 +31,7 @@ import MarketGrowthFilter from '@/components/MarketGrowthFilter';
 import { Segmented } from '@/components/controls';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
+import BrokerFilterControl from '@/components/filter-controls/BrokerFilterControl';
 import { ApiError, createFilterPreset, updateFilterPreset } from '@/lib/api';
 import { browseKeys } from '@/lib/browseKeys';
 import { isNewestFirst, sortLabel, type FeedView } from '@/lib/feed';
@@ -169,6 +170,8 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
         return <MarketGrowthFilter value={draft.priceGrowthRules} onChange={(next) => merge({ priceGrowthRules: next })} />;
       case 'portals':
         return <PortalFilterControl value={draft} onChange={merge} />;
+      case 'broker':
+        return <BrokerFilterControl value={draft.brokerId} onChange={(next) => merge({ brokerId: next })} />;
       default:
         return null;
     }
