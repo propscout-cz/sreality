@@ -9,11 +9,20 @@ import { ApiError } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { SERVER_KEY_B64, installPushFakes, type PushFakes } from '@/test/pushFakes';
 
-import { decodePushKey, readPushOwner, resyncPush, writePushOwner } from './push';
+import {
+  SIGN_OUT_NOTICE_MS,
+  decodePushKey,
+  endPushHere,
+  readPushOwner,
+  resyncPush,
+  signOutPush,
+  writePushOwner,
+} from './push';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   putPushSubscription: vi.fn(),
+  deletePushSubscription: vi.fn(),
 }));
 
 let fakes: PushFakes;
@@ -30,8 +39,10 @@ beforeEach(() => {
 
 afterEach(() => {
   fakes?.uninstall();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.mocked(api.putPushSubscription).mockReset();
+  vi.mocked(api.deletePushSubscription).mockReset();
 });
 
 describe('resyncPush', () => {
@@ -103,6 +114,77 @@ describe('resyncPush', () => {
     writePushOwner('user-1');
     await expect(resyncPush()).resolves.toBeUndefined();
     expect(fakes.subscription).not.toBeNull();
+  });
+});
+
+/* Binding follows identity (AUDIT F18): no subscription outlives its user. */
+describe('endPushHere', () => {
+  it('ends the subscription here and forgets its owner, telling no server', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    await endPushHere();
+    expect(fakes.subscription).toBeNull();
+    expect(readPushOwner()).toBeNull();
+    expect(api.deletePushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op without a subscription or without push', async () => {
+    fakes = installPushFakes();
+    await expect(endPushHere()).resolves.toBeUndefined();
+    fakes.uninstall();
+    fakes = installPushFakes({ push: false });
+    await expect(endPushHere()).resolves.toBeUndefined();
+  });
+});
+
+describe('signOutPush', () => {
+  it('tells the server it signed out, then ends the subscription here', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    vi.mocked(api.deletePushSubscription).mockImplementation(async () => {
+      fakes.log.push('DELETE');
+    });
+    await signOutPush();
+    expect(fakes.log).toEqual(['DELETE', 'unsubscribe']);
+    expect(api.deletePushSubscription).toHaveBeenCalledWith(
+      { endpoint: 'https://web.push.apple.com/QGx1', reason: 'signed_out' },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(readPushOwner()).toBeNull();
+  });
+
+  it(`waits at most ${SIGN_OUT_NOTICE_MS} ms for the server, and aborts the call`, async () => {
+    vi.useFakeTimers();
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    let signal: AbortSignal | undefined;
+    vi.mocked(api.deletePushSubscription).mockImplementation((_body, opts) => {
+      signal = opts?.signal;
+      return new Promise(() => {});
+    });
+    let done = false;
+    void signOutPush().then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(SIGN_OUT_NOTICE_MS - 1);
+    expect(done).toBe(false);
+    expect(fakes.subscription).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(done).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    expect(fakes.subscription).toBeNull();
+  });
+
+  it('still ends the subscription when the server cannot be told', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    vi.mocked(api.deletePushSubscription).mockRejectedValue(new ApiError('down', 0, null, 'network'));
+    await signOutPush();
+    expect(fakes.subscription).toBeNull();
+  });
+
+  it('tells nobody anything without a subscription', async () => {
+    fakes = installPushFakes();
+    await signOutPush();
+    expect(api.deletePushSubscription).not.toHaveBeenCalled();
   });
 });
 

@@ -11,7 +11,12 @@
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { postPushOpened, putPushSubscription, type PushSubscriptionBody } from './api';
+import {
+  deletePushSubscription,
+  postPushOpened,
+  putPushSubscription,
+  type PushSubscriptionBody,
+} from './api';
 import { supabase } from './supabase';
 
 const OWNER_KEY = 'sreality.push.owner';
@@ -103,6 +108,43 @@ export async function resyncPush(): Promise<void> {
   } catch {
     /* The next sign-in or resume tries again. */
   }
+}
+
+/* BINDING FOLLOWS IDENTITY, NOT A BUTTON (AUDIT F18, program § 3.6): no
+ * subscription outlives its user. Ending one locally needs no JWT, so it also
+ * covers a session that ended on its own (an expired refresh, a token-driven
+ * account switch): the server's row then ends "gone" at its next push. */
+export async function endPushHere(): Promise<void> {
+  writePushOwner(null);
+  const subscription = await currentPushSubscription();
+  await subscription?.unsubscribe().catch(() => false);
+}
+
+/* The longest an explicit sign-out waits to tell the server. */
+export const SIGN_OUT_NOTICE_MS = 3000;
+
+/* An explicit sign-out, while the JWT still works: tell the server first (best
+ * effort, at most SIGN_OUT_NOTICE_MS), then end the subscription here. */
+export async function signOutPush(): Promise<void> {
+  const subscription = await currentPushSubscription();
+  if (subscription) {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), SIGN_OUT_NOTICE_MS);
+    try {
+      await Promise.race([
+        deletePushSubscription(
+          { endpoint: subscription.endpoint, reason: 'signed_out' },
+          { signal: deadline.signal },
+        ),
+        new Promise((resolve) => deadline.signal.addEventListener('abort', resolve, { once: true })),
+      ]);
+    } catch {
+      /* The row ends "gone" at its next push instead. */
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  await endPushHere();
 }
 
 /* A push tap carries its delivery id as `?d=` (`/n/{id}?d=`, or the coalesced

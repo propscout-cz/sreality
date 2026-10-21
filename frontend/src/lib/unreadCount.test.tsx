@@ -2,8 +2,8 @@
  * every reader (the desktop badge, the phone bell, the Notifications page) gets
  * its number from it, so one poll serves both frames. Gated by the agenda, as
  * the nav item is; marking rows read refetches it through `notificationKeys.all`.
- * The same number is the installed app's icon badge (ruling R4), and nothing
- * else writes it. */
+ * The same number is the installed app's icon badge (ruling R4, lib/appBadge);
+ * in the page only this observer sets it (an identity change clears it). */
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import { notificationKeys } from '@/lib/queries';
-import { UnreadCountProvider, syncAppBadge, useUnreadCount } from '@/lib/unreadCount';
+import { syncAppBadge } from '@/lib/appBadge';
+import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),

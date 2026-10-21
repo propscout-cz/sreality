@@ -57,11 +57,17 @@ vi.mock('./supabase', () => {
   };
 });
 
-vi.mock('./push', () => ({ resyncPush: vi.fn(async () => {}) }));
+vi.mock('./push', () => ({
+  resyncPush: vi.fn(async () => {}),
+  endPushHere: vi.fn(async () => {}),
+  signOutPush: vi.fn(async () => {}),
+}));
+vi.mock('./appBadge', () => ({ syncAppBadge: vi.fn() }));
 
 import { isTransientApiError } from './api';
+import { syncAppBadge } from './appBadge';
 import { AuthProvider, useAuth } from './auth';
-import { resyncPush } from './push';
+import { endPushHere, resyncPush } from './push';
 
 /* A fresh object each call — exactly what Supabase hands out per auth event,
  * and the reason keying on the session object refetched three times. */
@@ -88,6 +94,8 @@ beforeEach(() => {
   h.initialSession = null;
   h.failNext = {};
   vi.mocked(resyncPush).mockClear();
+  vi.mocked(endPushHere).mockClear();
+  vi.mocked(syncAppBadge).mockClear();
 });
 
 /* postgrest-js's resolved envelopes for a dropped connection and a refused grant. */
@@ -239,5 +247,59 @@ describe('AuthProvider push re-sync', () => {
       for (const cb of h.listeners) cb('SIGNED_IN', sessionFor('user-1'));
     });
     await waitFor(() => expect(resyncPush).toHaveBeenCalledTimes(1));
+  });
+});
+
+/* No subscription outlives its user (AUDIT F18): any change of user, sign-out
+ * included, ends this device's subscription locally and clears the badge. The
+ * explicit sign-out (its order: tell the server, end it here, then sign out)
+ * is pinned against the real lib/push in auth.push.test.tsx. */
+describe('AuthProvider push binding', () => {
+  it('ends the subscription and clears the badge on sign-out', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    expect(endPushHere).not.toHaveBeenCalled();
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_OUT', null);
+    });
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(syncAppBadge).toHaveBeenCalledWith(0);
+  });
+
+  it('ends it on an account switch, and re-sends nothing for the new user', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    vi.mocked(resyncPush).mockClear();
+
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_IN', sessionFor('user-2'));
+    });
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(resyncPush).not.toHaveBeenCalled();
+  });
+
+  it('ends a subscription left behind when the app launches signed out', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    await waitFor(() => expect(endPushHere).toHaveBeenCalledTimes(1));
+    expect(resyncPush).not.toHaveBeenCalled();
+  });
+
+  it('leaves it alone on the events a session emits for the same user', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    act(() => {
+      for (const cb of h.listeners) cb('TOKEN_REFRESHED', sessionFor('user-1'));
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(endPushHere).not.toHaveBeenCalled();
+    expect(syncAppBadge).not.toHaveBeenCalled();
   });
 });

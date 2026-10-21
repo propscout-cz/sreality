@@ -13,7 +13,8 @@ import { resetActiveBoard } from './acting';
 import { supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
-import { resyncPush } from './push';
+import { syncAppBadge } from './appBadge';
+import { endPushHere, resyncPush, signOutPush } from './push';
 import { ROUTES } from './routes';
 
 /**
@@ -129,10 +130,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * TRANSITION (rather than only inside signOut) also covers a switch that
    * happens through a token change rather than an explicit sign-out.
    *
-   * Not before the stored session is read (`loading`): the null it starts from
-   * is not yet anyone. Identity BECOMING a user (the launch, a sign-in) re-sends
-   * this device's push subscription (lib/push `resyncPush`; idempotent, never
-   * prompts). */
+   * Push follows identity the same way (AUDIT F18): on any change of user,
+   * sign-out included, and on a launch with nobody signed in, this device's
+   * subscription ends locally (no JWT needed) and the icon badge clears, so no
+   * subscription outlives its user. Identity BECOMING a user (the launch, a
+   * sign-in) re-sends it instead (lib/push `resyncPush`; idempotent, never
+   * prompts). None of it runs before the stored session is read (`loading`):
+   * the null it starts from is not yet anyone. */
   const prevUserId = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
@@ -143,8 +147,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* The per-device pipeline board and "edit as owner" were the previous
        * account's pick (lib/acting): the next one starts on its own board. */
       resetActiveBoard();
+      syncAppBadge(0);
+      void endPushHere();
     } else if (prev === null && userId !== null) {
       void resyncPush();
+    } else if (prev === null) {
+      void endPushHere();
     }
   }, [loading, userId, queryClient]);
 
@@ -181,6 +189,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error;
       },
       async signOut() {
+        /* While the JWT still works: the server hears it (≤ 3 s), then the
+         * subscription ends here; the transition above then finds none. */
+        await signOutPush();
         const { error } = await supabase.auth.signOut();
         if (error) throw error;
       },
