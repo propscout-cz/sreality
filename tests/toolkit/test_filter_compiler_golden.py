@@ -299,6 +299,11 @@ def generate_cases() -> list[dict[str, Any]]:
     for value in ({}, {"radius_km": 10, "index_rules": []}):
         cases.append(_case("watchdog", f"retired:near_city_proximity={json.dumps(value)}",
                            {"near_city_proximity": value}, None))
+    # Condition scoring parked (operator ruling 2026-10-20): its four level bounds, 0 included.
+    for fid in ("building_condition_level_min", "building_condition_level_max",
+                "apartment_condition_level_min", "apartment_condition_level_max"):
+        for value in (0, 3):
+            cases.append(_case("watchdog", f"retired:{fid}={value}", {fid: value}, None))
 
     # Whole statements, so the interleaving with each caller's own SQL is pinned too.
     for builder in ("build_query", "velocity", "corridor"):
@@ -352,8 +357,9 @@ def _match_for(exc: Exception) -> str:
     text = str(exc)
     if text.startswith("rule 17 violation"):
         return "^rule 17 violation"
-    if "near_city_proximity is retired" in text:
-        return "near_city_proximity is retired"
+    retired = re.match(r"(\w+) is retired", text)
+    if retired:
+        return f"{retired.group(1)} is retired"
     return "^" + re.escape(text[:60])
 
 

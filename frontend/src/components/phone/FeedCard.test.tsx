@@ -17,7 +17,7 @@ import * as queries from '@/lib/queries';
 import type { CardRow, PipelineMembers } from '@/lib/queries';
 import type { ImagePublic, PipelineStage } from '@/lib/types';
 
-import FeedCard, { feedDelta, feedPricePerM2, portalsWord } from './FeedCard';
+import FeedCard, { feedDelta, feedLine2, feedPricePerM2, portalsWord } from './FeedCard';
 
 /* Czech formatting uses no-break spaces; compare as the eye reads it. */
 const plain = (s: string | null) => s?.replace(/\u00a0/g, ' ') ?? null;
@@ -52,6 +52,8 @@ const STAGES: PipelineStage[] = [
 const base: CardRow = {
   property_id: 304388,
   listing_id: 9001,
+  lat: 50.08,
+  lng: 14.43,
   sreality_id: 123,
   display_label: 'Freyova, Praha 9 – Vysočany',
   disposition: '2+kk',
@@ -69,6 +71,7 @@ const base: CardRow = {
   source: 'sreality',
   source_id_native: '123',
   mf_gross_yield_pct: 4.1,
+  plot_area_m2: null,
   total_price_change_pct: -5.1,
   price_change_count: 1,
   all_sources: ['sreality', 'idnes', 'bazos'],
@@ -80,6 +83,8 @@ const rent: CardRow = {
   ...base,
   property_id: 5,
   listing_id: 5005,
+  lat: 50.08,
+  lng: 14.43,
   disposition: '2+1',
   area_m2: 60,
   price_czk: 22_500,
@@ -213,6 +218,14 @@ describe('<FeedCard> — the lines', () => {
     expect(screen.queryByText(/^MF /)).toBeNull();
     expect(screen.getByText('dnes')).toBeInTheDocument();
     expect(screen.getByText('1 portál')).toBeInTheDocument();
+  });
+
+  it('names the lot after the floor area, and a pozemek area once', () => {
+    const house = { ...base, category_main: 'dum', disposition: '5+1', area_m2: 180, plot_area_m2: 850 };
+    expect(plain(feedLine2(house))).toBe('Dům 5+1 · 180 m² · 850 m² pozemku · Freyova, Praha 9 – Vysočany');
+    const land = { ...base, category_main: 'pozemek', disposition: null, area_m2: 1200, plot_area_m2: 1200 };
+    expect(plain(feedLine2(land))).toBe('Pozemek · 1 200 m² pozemku · Freyova, Praha 9 – Vysočany');
+    expect(plain(feedLine2({ ...base, plot_area_m2: null }))).toBe('2+kk · 54 m² · Freyova, Praha 9 – Vysočany');
   });
 
   it('formats the price move and the portal count in Czech', () => {

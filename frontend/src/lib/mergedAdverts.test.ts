@@ -271,7 +271,6 @@ describe('refreshAfterSplit', () => {
       ['autodedup', 'category-splits'],
       ['cards'],
       ['map'],
-      ['table'],
       ['stats'],
       ['browse-count'],
     ]) {

@@ -3,9 +3,8 @@
  * The drift guard is the most important test here: without it, a new
  * registry filter could land that fits no dispatch path AND is not
  * in HAND_CODED_BROWSE_FILTERS, and the Browse cohort would silently
- * fail to narrow when the operator sets it (exactly the
- * apartment/building_condition_level_min bug that motivated this
- * module — see PR history around #140 / #146). */
+ * fail to narrow when the operator sets it (exactly the bug that
+ * motivated this module — see PR history around #140 / #146). */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -129,14 +128,14 @@ describe('auto-dispatch', () => {
     const r = new _Recorder();
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
-      buildingConditionLevelMin: 4,
-      apartmentConditionLevelMin: 3,
+      parkingLotsMin: 2,
+      gardenAreaMin: 100,
     });
     const cols = r.calls
       .filter((c) => c.op === 'gte')
       .map((c) => `${c.col}=${String(c.value)}`);
-    expect(cols).toContain('building_condition_level=4');
-    expect(cols).toContain('apartment_condition_level=3');
+    expect(cols).toContain('parking_lots=2');
+    expect(cols).toContain('garden_area=100');
   });
 
   it('emits lte for `_max` numeric filters', () => {
@@ -144,13 +143,13 @@ describe('auto-dispatch', () => {
     applyRegistryFilters(r, {
       ...DEFAULT_FILTERS,
       areaMax: 100,
-      apartmentConditionLevelMax: 4,
+      gardenAreaMax: 400,
     });
     const cols = r.calls
       .filter((c) => c.op === 'lte')
       .map((c) => `${c.col}=${String(c.value)}`);
     expect(cols).toContain('area_m2=100');
-    expect(cols).toContain('apartment_condition_level=4');
+    expect(cols).toContain('garden_area=400');
   });
 
   it('time-on-market bounds reach the list query (they once reached only Stats)', () => {
@@ -266,10 +265,10 @@ describe('auto-dispatch', () => {
       ...DEFAULT_FILTERS,
       areaMin: null,
       areaMax: null,
-      buildingConditionLevelMin: null,
+      gardenAreaMin: null,
     });
     expect(r.calls.find((c) => c.col === 'area_m2')).toBeUndefined();
-    expect(r.calls.find((c) => c.col === 'building_condition_level')).toBeUndefined();
+    expect(r.calls.find((c) => c.col === 'garden_area')).toBeUndefined();
   });
 });
 

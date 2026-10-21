@@ -36,10 +36,9 @@ emits". That is now one table and one module rather than nine copies of each:
   the boolean readings. The CANON stays in `toolkit/filter_registry.py`
   (`COLUMN_CANONICAL_VALUES`, keyed by `listings` column — NOT scanned off the filters, which
   made the `building_material` bucket name `ostatni` a canonical construction and left
-  `price_unit` with no canon at all) and is imported, never restated; the LLM tool schema's
-  enums are generated from `CANON`, which since W5 IS the whole value space — `disposition`
-  and `price_unit` included, so the on-demand URL parser cannot emit an `8+7` or a fifth
-  spelling of "monthly". A label no entry names is NULL **plus a counted event** in the run
+  `price_unit` with no canon at all) and is imported, never restated; since W5 `CANON` IS the
+  whole value space — `disposition` and `price_unit` included, so nothing may store an `8+7`
+  or a fifth spelling of "monthly". A label no entry names is NULL **plus a counted event** in the run
   summary (`RUN done … unmapped=N`), never a passthrough; the
   counter is drained per drain pass, because the always-on worker runs every source's drain
   in one long-lived process.
@@ -228,9 +227,7 @@ carries `offerType`/`estateType`, the drain derives each listing's category from
 response, so one config walks many categories (no per-category queue encoding).
 `listAdverts` has a `totalCount` and no deep-pagination cap, so a per-category walk can page
 to the API's own last page; the runner nominates the rows such a finished walk did not see for
-a page check (rule #3, source-scoped) and the page decides. NOTE: bezrealitky
-also has an on-demand URL parser (`scraper/source_parsers/bezrealitky.py`, LLM) used by the
-estimation preview — a separate entry point that is unchanged by the scheduled scraper.
+a page check (rule #3, source-scoped) and the page decides.
 
 **Data source (reality.idnes.cz).** A scheduled scraper (`scraper/idnes_client.py`,
 `idnes_parser.py`, `idnes_main.py` — **cadence-split** like sreality/bazos:
@@ -320,9 +317,7 @@ The detail URL carries the category
 (`/detail/{sale}/{cat}/…`), so the drain derives each listing's category from its own URL —
 one config (the `portals` row, migrations 110/111) walks many categories (byty + domy ×
 prodej + pronájem today). Image-URL rows are recorded by the drain; the shared `images.yml`
-job downloads the bytes to R2 (source-agnostic). NOTE: iDNES also has an on-demand URL parser
-(`scraper/source_parsers/idnes_reality.py`, LLM, `source_kind='idnes_reality'`) used by the
-estimation preview — a separate entry point unchanged by the scheduled scraper.
+job downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
 `mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
@@ -391,11 +386,9 @@ logs its own agenda-grain `COVERAGE agenda …` line instead; for the same reaso
 measured, never as a 0% gap by construction; a gone detail (404/410 or a
 redirect off the detail path) is a gone verdict for that one listing (rule #3's hysteresis
 flips it). Registered as a
-scraper portal by CONVERTING the existing on-demand-parser row (migration 135). NOTE:
-remax ALSO has an on-demand URL parser (`scraper/source_parsers/remax.py`, LLM,
-`source_kind='remax'`) used by the estimation preview — a separate entry point
-unchanged by the scheduled scraper, routed by domain in `source_dispatcher`
-independent of the `portals` row's `kind`.
+scraper portal by CONVERTING the existing on-demand-parser row (migration 135). The
+on-demand LLM URL parser itself was deleted on 2026-10-20 (`docs/design/new-property-from-link.md`
+ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ingest` and the drain.
 
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
 `ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. It is large
@@ -438,9 +431,7 @@ its own URL — one config (the `portals` row, migration 249) walks all 12 (cm �
 The client rides the residential proxy (`USE_PROXY`) with the shared Chrome browser `User-Agent` plus
 matching `sec-ch-ua` client hints (`CLIENT_HINTS` — since 2026-09-29 the site's own nginx 403s a hint-less
 Chrome UA), at a polite rate. The site's robots.txt disallows generic bots; sending browser-like headers is
-an operator-owned posture (decided 2026-10-02). NOTE: ceskereality ALSO has an on-demand URL parser
-(`scraper/source_parsers/ceskereality.py`, LLM, `source_kind='ceskereality'`) used by the estimation
-preview — a separate entry point unchanged by the scheduled scraper.
+an operator-owned posture (decided 2026-10-02).
 
 **Data source (reas.cz sold transactions) — NOT a portal.** The tenth source is not a tenth
 portal: it is a feed of **registered sales**, and a sale is an account-less external FACT, not a
@@ -613,7 +604,7 @@ rules. Identify which one a task belongs to before you start.
   two-stage Docker build (see `frontend/Dockerfile`). Deployed to Railway as a separate
   service alongside the API.
 - The current page set lives in `frontend/src/routes.tsx` (consult it rather than
-  trusting a list here, which rots). Today it spans **Browse** (filters → Map / Table /
+  trusting a list here, which rots). Today it spans **Browse** (filters → Map /
   Stats), **Listing Detail** (with the snapshot-timeline strip — the product's
   signature visual element), **Region**, **Health** (operator dashboard),
   **Estimations** + **Estimation Detail**, **Building Detail**, **Collections** +
@@ -886,15 +877,15 @@ rules. Identify which one a task belongs to before you start.
 - Manifest v3 browser extension that overlays MF rent/yield + an estimate panel on portal
   listing pages. The content script matches **every scraped portal's host** (sreality,
   bazos, bezrealitky, idnes, maxima, remax, mmreality, ceskereality, realitymix).
-  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) is the single source of
-  truth for the host list, shared with the SPA's paste-a-link (`parsePortalUrl` →
-  `/listing/:source/:nativeId`) and imported cross-tree exactly like `lib/brand.ts` (it lives under
+  `frontend/src/lib/portalIds.ts` (host→portal + detail-URL→native-id) mirrors the canon,
+  `scraper/portal_identity.py`, held to it by `tests/fixtures/portal_url_probes.json`; the phone's quick
+  path (`parsePortalUrl`; an admin paste is `POST /listings/ingest`) imports it cross-tree like `lib/brand.ts` (it lives under
   `frontend/` because the SPA's Docker context is `frontend/` only) —
   `manifest.json`'s checked-in `content_scripts.matches` is a template only; `vite.config.ts`'s
   `closeBundle` hook overwrites it at build time from `PORTALS[].hosts` (same pattern already
   used there for `name` + `host_permissions`), and `portalIds.test.ts` fails when the template
-  and the rules name different hosts, so onboarding a new portal means adding it to
-  `portalIds.ts` plus its line in the template. `host_permissions`
+  and the rules name different hosts, so onboarding a new portal means its rule in
+  `scraper/portal_identity.py` + the probe fixture, its mirror in `portalIds.ts`, and its line in the template. `host_permissions`
   is narrowed at build time to just the two live API/auth origins the background worker fetches
   (`VITE_API_BASE_URL` + `VITE_SUPABASE_URL`), not a broad wildcard. Several portals (sreality's
   Next.js frontend confirmed live) navigate between listings via client-side routing (History
@@ -970,8 +961,8 @@ rules. Identify which one a task belongs to before you start.
   once (or prompts); a reply to a call sent before the change is never delivered (`content.ts` `call`, auth messages
   excepted). The notice's sign-in asks `get_auth_state` first; one lookup is out per generation (an account change or the retry starts
   one; an older failure is dropped, an older `ok` still badges); a lookup unanswered after 20 s shows as failed but a late `ok` still badges;
-  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` is the single source of
-  truth for host→portal + detail-URL→native-id. One entry per Vite pass since #1524 (`npm run build` runs
+  `stop()` removes the notice on route change. `frontend/src/lib/portalIds.ts` mirrors
+  `scraper/portal_identity.py` (the canon); `tests/fixtures/portal_url_probes.json` holds both. One entry per Vite pass since #1524 (`npm run build` runs
   `vite build --mode content` then `--mode background`: `content.js` a self-contained IIFE
   classic script with `index_overlay.ts` bundled in, `background.js` ESM) plus a copied-over
   `manifest.json` and `icon-{16,48,128}.png`; output lands in `chrome-extension/dist/`.
@@ -1033,8 +1024,8 @@ renumber.** Navigate by area:
    via the Supabase MCP. See "Database access" for the full flow and the
    additive-vs-destructive policy.
 2. **Snapshots on content change only.** A fetched payload reaches `listings` ONLY via
-   `scraper/listing_write.py` `write_listings` — every portal's detail drain, the URL
-   parser and the freshness re-check —
+   `scraper/listing_write.py` `write_listings` — every portal's detail drain (a pasted link
+   reaches it through `POST /listings/ingest`) and the freshness re-check —
    which appends a `listing_snapshots` row iff its content hash differs from the listing's
    latest snapshot under THE one order (`scraped_at DESC, id DESC`), stamped
    `statement_timestamp()` late in its transaction (a brand-new row always gets one). The two
@@ -1361,16 +1352,16 @@ renumber.** Navigate by area:
     `create_estimation_run` (`api/estimation_runs.py`) is the one producer every path must go
     through: `POST /estimations` and the building workflow's per-unit children
     (`api/building_runs.py`) both call it, and it (with the executor it schedules) is where the
-    URL parse, the account stamp, the metering gates and the trace recorder live. The row is
+    subject resolution, the account stamp, the metering gates and the trace recorder live. The row is
     INSERTed at submission — `pending` (deterministic, and any run routed to the realtime
     worker's estimation lane), or `running` for an in-process agent run so every per-turn
     `llm_calls` row can attribute to it — and the executor (inline call, BackgroundTask, or the
     worker's `execute_pending_run`) UPDATEs the terminal `status` (`'success'` | `'failed'`) on
     that same row; `sweep_stuck_runs` fails any row orphaned non-terminal. A failure before
-    execution starts (URL parse, target build, unknown skill) INSERTs the row directly as
+    execution starts (target build, unknown skill) INSERTs the row directly as
     `'failed'`. Either way a failed run still persists a row — the row IS the audit trail; the
     endpoint returns HTTP 200 and the row carries `status='failed'` and `error_message`.
-    (Submit-time refusals — an ungeocodable subject's 422, a metering 429 — happen before any
+    (Submit-time refusals — the 422 for an ad we do not hold or cannot place, a metering 429 — happen before any
     run exists; they are not failed runs.) Re-runs INSERT a new row with `parent_run_id` set;
     the original is immutable. Legal `source` values today: `'ui'`, `'api'`, `'clickup'`,
     `'extension'` (CHECK constraint, not enum — migration 347 added `'extension'` by dropping
@@ -1388,43 +1379,39 @@ renumber.** Navigate by area:
     manual-smoke exception.
 
     **What immutability covers.** The RESULT: the estimate, the trace, the cost, the
-    comparables frozen at run time. Two things on the row are deliberately mutable and
-    always have been. (a) The operator's yield `scenario` (`PATCH /estimations/{id}/scenario`)
-    — a what-if overlay, not a computed output. (b) Subject IDENTITY. Since the surrogate
+    comparables frozen at run time. One thing on the row is deliberately mutable: the
+    operator's yield `scenario` (`PATCH /estimations/{id}/scenario`) — a what-if overlay, not a
+    computed output. Subject IDENTITY (`input_listing_id`) is stamped at submit and never
+    changes (2026-10-20; until then a binder could late-bind it, see below). Since the surrogate
     cutover (migration 411, PR #1095, completed for `property_estimates_public` by migration
     412) every read path that answers "what estimates exist for this listing" FILTERS on
-    `estimation_runs.input_listing_id` — `listings.id` — and on nothing else. (Display-side
-    JOINs are a separate matter: `_LIST_FROM` still carries a guarded legacy arm to resolve a
-    locality label for a run whose surrogate is not yet bound. That arm decides what a row
-    shows, never which rows come back.) The legacy
+    `estimation_runs.input_listing_id` — `listings.id` — and on nothing else; the display-side
+    JOINs (the list's place label, the run's subject ad) key on it too. The legacy
     `input_sreality_id` is NULL for every post-Gate-2 non-sreality subject (migration 311's
     sign check), so keying on it silently dropped those subjects; and an empty id set once
     collapsed the predicate entirely, returning the whole table.
 
     One surface still uses the legacy id as a KEY SPACE, and it is not a defect:
     `latest_rent_estimations_by_listing` returns a map keyed by `sreality_id` for Browse's
-    on-card estimate chip. Its JOIN already prefers the surrogate; only the map's keys are
+    on-card estimate chip. Its JOIN keys on the surrogate; only the map's keys are
     legacy, and the chip is sreality-only end to end — the affordance is gated on
     `sreality_id != null` and `createEstimation` submits a `sreality_id`, so no estimate can
     exist for a card the legacy key space would mis-answer. Re-keying the read alone would
     change no behaviour while risking a silent mis-key across six stateful call sites that
-    the compiler cannot check (both ids are `number`). Browse gains non-sreality estimates
-    only when `POST /estimations` accepts a `listing_id` — read and write together, in one
-    PR, with a component test.
+    the compiler cannot check (both ids are `number`). `POST /estimations` accepts a
+    `listing_id` since 2026-10-20 (the property page estimates any portal's ad by it); Browse's
+    chip moves to it as its own change — read and write together, in one PR, with a
+    component test.
 
-    An estimation submitted for a URL the scraper has not reached yet legitimately lands with
-    `input_listing_id` NULL — the insert's `COALESCE` subquery finds no listing — so it
-    belongs to no listing page until the listing appears. `_bind_pending_estimation_listing_ids`
-    (in `scripts/recompute_property_stats.py`, on the property-maintenance tick that already
-    attaches stragglers) stamps it exactly once. That is identity RESOLUTION, not result
-    mutation: it only ever fills a NULL (the `IS NULL` guard is repeated in the UPDATE's own
-    WHERE, so it is one-way and idempotent), it matches only the unique `sreality_id`, and it
-    refuses fuzzy or multi-match URL recovery — a wrong attribution silently credits a paid
-    estimate to the wrong flat, which is worse than leaving it unattached.
-
-    This is also why there is NO `CHECK (input_sreality_id IS NULL OR input_listing_id IS NOT
-    NULL)`. It holds for every row written so far, but it would reject exactly the
-    not-yet-scraped case above and turn a working degraded path into a 500 on submit.
+    **`input_listing_id` is set at submit; there is no late binding (2026-10-20,
+    `docs/design/new-property-from-link.md` §3.5).** An estimation is always of an ad we hold:
+    `POST /estimations` takes a `listing_id` (or the legacy `sreality_id`, resolved to the same
+    ad through the one subject matcher) or a raw `spec`, never a URL — a pasted link becomes an
+    ad through `POST /listings/ingest` first — so every ad's run carries its `listings.id` from
+    its INSERT, and a raw-spec run has none and belongs to no listing page. The 13 historic
+    unbound runs (10 URL-submitted, 3 spec-only) keep their read-only `/estimation/:id` page;
+    the binder that once stamped such rows (it bound 0) is deleted. `CHECK (input_sreality_id IS
+    NULL OR input_listing_id IS NOT NULL)` now holds by construction as well as for every row.
 
     **A paid outside valuation is not our estimate (Valuo, operator ruling 2026-10-19).** The
     property page's Valuo section buys a valuation from Valuo's API v3 (docs.valuo.com; `POST
@@ -1522,23 +1509,44 @@ renumber.** Navigate by area:
     explicit departure from the `estimation_runs` single-shot flow. `units_proposal` (agent
     output, append-only after extraction) and `units` (operator-confirmed) are kept separate
     so the extractor's original guess is auditable. The business-case overlay lives in
-    `business_case jsonb` on this same row.
-14. **Condition scoring is two-axis (building + apartment).** `listings.condition` (the raw
-    sreality "Stav objektu" enum, ~11 Czech text values) stays as the source field — it's
-    what `listings_public` exposes and what the legacy filter binds against. The two derived
-    columns `listings.building_condition_level` and `apartment_condition_level` (integers
-    1..5, NULL if not yet scored) live alongside it, computed by
+    `business_case jsonb` on this same row. **The flow has no live entry since 2026-10-20:** the
+    paste entry (`POST /buildings/from_url`) was retired with the URL parser
+    (`docs/design/new-property-from-link.md` §3.5; `building_runs` held 0 rows), `POST /buildings`
+    creates only a `pending` shell, and `confirm_units` / `re_extract` need `awaiting_input` — so no
+    route leaves `pending` until an operator ruling gives the subsystem a new entry or retires it
+    (`roadmap/building-decomposition-track.md`).
+14. **Condition scoring is two-axis (building + apartment), and PARKED.** `listings.condition`
+    is the source field: the multi-portal 11-value canon (`scraper/vocabulary.py`
+    `CANON["condition"]`: projekt … k_demolici), what `listings_public` exposes and what the
+    `condition_match` filter binds against. The two derived columns
+    `listings.building_condition_level` and `apartment_condition_level` (integers 1..5, NULL
+    if not yet scored) live alongside it, computed by
     `toolkit.condition_scoring.score_listing_condition`. The score cache lives in
     `listing_condition_scores`, keyed on `(sreality_id, snapshot_id)` — same
     auto-invalidation pattern as `listing_summaries` / `listing_marker_extractions`. The
     scorer writes the cache row AND updates the two `listings` columns in one transaction
-    with a latest-wins guard so a stale-snapshot scorer can't overwrite a fresher score. The
-    coarse `condition_assessment` produced by `summarize_listing` is for cohort skimming,
-    not authoritative filtering — use the new columns for that. The 5-level rubric lives in
-    `data/condition_rubric_v1.json` (committed) and is loaded into
+    with a latest-wins guard so a stale-snapshot scorer can't overwrite a fresher score;
+    `propagate_condition_levels` copies a genuine score onto same-property siblings. The
+    5-level rubric lives in `data/condition_rubric_v1.json` (committed) and is loaded into
     `app_settings.llm_condition_rubric` by `scripts/seed_condition_settings.py`; the curated
     marker dictionary follows the same pattern via `data/condition_markers_curated.json` →
     `app_settings.llm_condition_marker_dictionary`.
+    **PARKED (operator ruling 2026-10-20: "keep the scoring engine for now, but make sure it
+    does not impact anything").** The crons were paused 2026-07-09 and the last level was
+    written 2026-06-18 (~4% of properties). Code, tables, columns, data and the six
+    dispatch-only workflows are kept, and the Settings per-kraj toggle only scopes a manual
+    run. NO surface reads the levels: the four `*_condition_level_min/_max` filters left the
+    registry (and so Browse, its URL, the Watchdog, every estimation cohort and the agent's
+    tool schema; a saved Watchdog spec still deserialises them, and any value raises via
+    `toolkit/filter_compiler.RETIRED_FILTERS` rather than widening), the agent's first
+    message carries `target.condition` only, and migration 645 took the level guidance out of
+    the estimator prompt. The property rollup still copies the levels into `properties` /
+    `browse_list` (storage; nothing reads them), and the two Browse aggregate RPCs still
+    carry four DEFAULTed level parameters nobody sends (dropped in a later migration, 597's
+    order). Resuming means re-ruling which surface may read the levels; the blockers are
+    owed on `roadmap/scraper-track.md`. Until then `condition_match` is the condition filter,
+    and the coarse `condition_assessment` produced by `summarize_listing` is for cohort
+    skimming, not filtering.
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091).** Each
     `listings` row carries `(source, source_id_native)` (unique together) plus `source_url`,
     and an FK `property_id` to a `properties` row that groups observations of the same
@@ -1567,8 +1575,8 @@ renumber.** Navigate by area:
     Both seen keys are fixed for the adverts they rank (561's "most recently seen" swapped two
     live adverts on every index sighting and restamped `repr_since`). ONE RULE PER FIELD
     (`docs/design/merge-sprint/PROGRAM.md` MS11): every advert field (price, area with no
-    fallback, layout, category, subtype, source, condition with both derived levels -- rule #14
-    --, furnished) is the canonical advert's, and `repr_listing_ref_id` names it for every read
+    fallback, layout, category, subtype, source, condition with both derived levels -- rule #14,
+    parked: stored, unread --, furnished) is the canonical advert's, and `repr_listing_ref_id` names it for every read
     model (`properties_public.listing_id` IS it). The same statement stores the LOCATION advert,
     `location_listing_ref_id`, rank 1 of the function's `location_rank` (migration 635: a map
     point, then determined foreign, then the finest `location_granularity_rank` rung whatever
@@ -2307,14 +2315,15 @@ renumber.** Navigate by area:
     a red production run is now a `jobs` cell carrying its reason line
     (`scripts/failure_signature.reason_line`), and a portal failing inside the worker a lane cell.
     Delivery, watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
-    **A FOURTH producer is live (migration 610, one kind for both shares since 641): `share`.**
+    **A FOURTH producer is live (migration 610, one kind for every share since 641; dashboards since 647): `share`.**
     `api/shares.py` writes it for a collection share (`POST /collections/{id}/shares`: ONE dispatch
     per (collection, recipient) ever, `dedupe_key` `share:collection:<collection>:<recipient>`, no
     time: a revoke + re-share loop cannot refill an inbox; `collection_id` set; "<owner email> shared
     the collection "<name>" with you") and for a pipeline share (`POST /pipeline/shares`: one per
     (owner, recipient, mode), `share:pipeline:<owner>:<recipient>:<mode>`, written when the grant is
     new or widens to edit; `collection_id` NULL; "<owner email> shared their pipeline with you (view
-    only|edit)") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
+    only|edit)") and for a dashboard share (647: `share:dashboard:<dashboard>:<recipient>`, once ever, `collection_id`
+    NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind = 'shared'`, the one stored copy of an email
     in the sharing model (a snapshot at share time), in-app only (`target_channels` empty, never
     routed to email/Telegram). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
@@ -2587,7 +2596,8 @@ renumber.** Navigate by area:
     `share_party_emails()` (the caller's counterparties only) over `account_email()`, the one
     label definition; a shared collection reads `monitoring_enabled = false` (alerts stay the
     owner's). A share is keyed on the collection, which a merge never changes, so it needs no
-    carrier; the `shared` mark rides the note through a merge and a split's copy.
+    carrier; the `shared` mark rides the note through a merge and a split's copy. A named Stats dashboard is
+    shared the same way (migration 647, `stats_dashboard_shares`; never the account's working board).
     **Acting as the owner (migration 641, `docs/design/pipeline-sharing.md`): a pipeline share
     REPLACES the identity on curation, it never widens it.** `pipeline_shares` (owner, recipient,
     mode `read|edit`; browser SELECT + DELETE, no INSERT) lets the recipient send `X-Act-As:
@@ -2600,17 +2610,17 @@ renumber.** Navigate by area:
     `acting_account_ids(true)` (ruling 2) — and only on GET/HEAD (`request.method`, set by
     PostgREST and by `tenant_pool.tenant_transaction` alike; the API runs an acting GET READ ONLY). Without the header the two functions agree; a header
     naming no live share yields an EMPTY identity (fail closed). Every other table — billing,
-    estimations, watchdog, presets, notifications, both share tables — stays the caller's own. A
+    estimations, watchdog, presets, notifications, dashboards, the share tables — stays the caller's own. A
     tenant write route declares which account it writes: `tenant_pool.require_acting_account_id`
     (the eleven tables only, pinned by `tests/api/test_acting_routes_census.py`) or
     `require_account_id` (always the caller's own; 403 under the header — watchdog, presets, the stats
-    board, both share-create routes: sharing itself; a delegate may not set the owner's collection
+    board, every share-create route: sharing itself; a delegate may not set the owner's collection
     monitoring either). Every write made while acting is stamped in `delegated_edits` (actor user
     + account, owner, relation, row key, op, time) by ONE trigger function on the eleven tables; only
     the owner reads it, and notes, cards and the board views carry the row's stamp
     (`edited_by_email` / `edited_by_account_id` + `edited_at`) from ONE definition,
     `latest_delegated_edit()` (cleared once the owner changes the row), labelled through
-    `share_party_emails()`, now over both share kinds and the owner's own ledger actors. The ledger names rows, not properties, so it
+    `share_party_emails()`, now over every share kind (647 added dashboards) and the owner's own ledger actors. The ledger names rows, not properties, so it
     needs no carrier; cards and curation stay owned by exactly one account.
     **Dismissal (migration 536) is the fourth curation fact: "I reviewed this property and never
     want to see it again."** It is NOT a special collection — collections are many-to-many
@@ -2667,9 +2677,8 @@ renumber.** Navigate by area:
     reachable by id. The outbox drain (service-role) skips a dispatch whose own account dismissed
     its property, on both the new and the retry pass: it gets no `channel_sends` row and ages out
     of the 7-day window unless the dismissal is lifted first.
-    **One control.** `<DismissButton>` (`overlay` on the Browse card, `inline` in the Table's
-    action cell beside the funnel, `header` on the listing page) over one hook,
-    `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
+    **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
+    `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
     sticky "Vrátit" toast (each new dismissal replaces the last) restores; it keeps working after
     the dismissed card has unmounted. The dismissal leaves every cached Browse list that hides
     dismissed properties at once and those lists are NOT refetched (a triage run must not re-read
@@ -2805,8 +2814,8 @@ renumber.** Navigate by area:
     new stragglers (singletons only — the old geo Tier-1 matcher was removed; grouping is
     out-of-band, rule #15) and recomputes **only the queued properties** (the full
     recompute SQL scoped to
-    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~2 on
-    the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
+    `id = ANY(...)`), so a new/edited/delisted listing reaches `properties` within ~5 min (~30 s
+    on the worker's maintenance lane) and the job is **O(changes)**, not O(all properties). Reaching
     **Browse** is a second step, because `browse_projection` reads `properties` and Browse reads
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, `sync_browse_list`,
@@ -2819,8 +2828,9 @@ renumber.** Navigate by area:
     237 s against a 900 s cadence). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes only those untouched
     since (a mid-run re-dirty bumps `marked_at` past the cutoff → survives to the next pass).
-    New listings (`property_id` NULL) are born + recomputed by straggler-attach, not the queue
-    (bounded at 2000 per pass; it patches `browse_list` for the births). The
+    New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
+    brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
+    of the daily full sweep, under the lease that sweep already holds. The
     **daily full sweep** (`recompute_property_stats.yml`, no `--incremental`, 04:15 UTC) is the
     reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:
@@ -3007,9 +3017,8 @@ renumber.** Navigate by area:
     `GET /pipeline/stages`). **The "Přidat do pipeline" affordance is the shared `<PipelineMark>`
     (`<FunnelIcon>` — a funnel with three arrows, filled body = in-pipeline — plus the stage
     badge), rendered by the listing-detail header (`PipelineToggle`, in the top action bar next to
-    "New estimation", NOT buried in CurationBlock), every Browse card AND every Browse **table
-    row** (`PipelineFunnelButton`, a leading unsortable column) and the Pipeline scope chip + its
-    sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
+    "New estimation", NOT buried in CurationBlock), every Browse card (`PipelineFunnelButton`)
+    and the Pipeline scope chip + its sidebar stage picker; the stage-manager's entry-stage indicator uses the bare `<FunnelIcon>`
     (`is_entry` — filled = the entry stage) — so the "into the pipeline" concept reads as one
     icon everywhere.** Two surfaces carry their own versions today. The kanban card has no mark
     (its column IS the stage): it moves by drag and removes through its own trash + two-step
@@ -3055,7 +3064,7 @@ renumber.** Navigate by area:
     overflow the viewport, reposition on scroll, close when the anchor scrolls out of sight.
     **Every pipeline write shares one cache patch** (`lib/pipelineCache`): TWO caches hold "where
     is this property" — `members` (the account's whole card set, keyed by `property_id`; read by
-    the Browse funnels, the table rows, the listing header and the pipeline scope alike) and
+    the Browse funnels, the listing header and the pipeline scope alike) and
     `board` (the kanban's own ordered array) — and each surface used to patch only the one it
     could see, so a kanban drag left every Browse funnel badging the pre-drag stage. It was three
     until W3: a per-property `card(id)` cache duplicated a single row of `members`, so every
@@ -3119,7 +3128,7 @@ renumber.** Navigate by area:
     column headers and stage-editor swatch still use their own `stageColor`
     (`pages/Pipeline.tsx`), which falls back to grey. The stage editor exposes `code` as a 4-char
     box whose placeholder IS the ordinal, so "empty = automatic" is visible. Card writes
-    (add/remove/move) from EVERY surface — the Browse funnels, the table rows, the listing header
+    (add/remove/move) from EVERY surface — the Browse funnels, the listing header
     and the kanban's drag and trash — go through one hook, `lib/usePipelineCard.ts`; the property
     id travels with each call, so one instance serves a whole board. It writes over
     `lib/useOptimisticWrite`; `lib/pipelineCache` holds the patches and the re-read list.
@@ -3510,16 +3519,14 @@ renumber.** Navigate by area:
     2026-10-17 by pointing `pg_column` at the published `tom_days`, and the escape set the
     test had grown for it was deleted.
 
-    **Known residue, named.** Browse's table still SELECTS and SORTS the raw `estate_area`
-    column while it now FILTERS the measure, so a bazos/realitymix/mmreality/remax land row can
-    match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell — the fix is three lines but
-    `estate_area` is a `SortField`, so a saved `?sort=estate_area` would silently fall back to
-    the default sort, which makes it a Browse-cohort decision rather than an area one. And
-    `browse_stats_properties`, `browse_list`'s own RPCs and
-    `browse_map_cells` still compare `l.estate_area` in SQL. They are inert from the SPA today
-    (`frontend/src/lib/queries.ts` sends them no `estate_area_min_filter`), and moving them
-    means re-creating three large `SECURITY DEFINER` bodies — its own wave, with its own drift
-    hazard (migrations 371/376).
+    **The residue is gone.** Browse's Table tab SELECTED and SORTED the raw `estate_area`
+    column while the cohort FILTERED the measure, so a bazos/realitymix/mmreality/remax land row
+    could match "plots ≥ 5,000 m²" and render an EMPTY Lot-area cell. The tab and the
+    `estate_area` sort were deleted together on 2026-10-20 (operator ruling): a saved
+    `?sort=estate_area` now reads as the default sort through `parseSort`, and Browse reads the
+    raw column nowhere (it stays on `browse_projection` / `browse_list`, unread by Browse). The
+    two aggregate RPCs that compared `l.estate_area` in SQL, `browse_stats_properties` and
+    `browse_map_cells`, narrow `plot_area_m2` since migration 547.
 
     **The plausibility view gained the arm that would have caught the sum** (migration 534
     appends two columns to `measure_plausibility_by_source`). `estate_sum_share` is the share of
@@ -4399,8 +4406,9 @@ feed lane) because without them one street read its whole category band and the 
 `browse_projection` re-sources `obec_id` / `okres_id` / `region_id` from
 `ll.obec_kod` / `okres_kod` / `kraj_kod` and `lat` / `lng` from `ST_Y/ST_X(ll.geom)`, and appends
 `cast_obce_id`, `uncertainty_radius_m` and `granularity_rank`. The last two are what the map DRAWS: a
-pin the resolver placed **below building level** (rank < 90, `location_granularity_rank`) is an open
-ring and one at or above it a solid dot, so "middle of the village" and "this front door" stop looking
+pin the resolver placed **at or above building level** (rank ≥ 90, `location_granularity_rank`) carries
+a black outer contour and a coarser one does not (an active pin is green with a white contour, an inactive
+one white-transparent with a green contour), so "middle of the village" and "this front door" stop looking
 identical; clicking a pin draws its true-metre circle of `uncertainty_radius_m` for as long as its
 popup is open, and the popup names the rung and the radius. (W3-3 first drew that circle under every
 such pin at once — with ~87 % of active pins below building level it buried the map, 2026-09-22.)
@@ -4491,7 +4499,8 @@ entirely for 3.5 h with no run row and no log line. A starved job looks exactly 
   original name, rebuild each matview beside itself and swap it in under a 5s `lock_timeout` — so
   neither the detail read nor the Health dashboard is ever without a relation. The 17 that went had
   no reader anywhere: four typed-NULL placeholders, the ten legacy place columns `display_label`
-  replaced, `broker_name`, and the two condition levels Browse reads off `browse_list`.
+  replaced, `broker_name`, and the two condition levels (Browse read them off `browse_list`
+  until condition scoring was parked, rule #14).
   `portal_listing_counts` stays 8 wide and that is the census result, not a deferral: all eight are
   read by `portal_health_mv`, so it is already minimal.
 * `ScrapedListing` keeps `locality`, `district`, `street`, `house_number`, `zip`, `lat`, `lon` —
@@ -4697,7 +4706,7 @@ rendered blank in production.
 | --- | --- |
 | Database, migrations, schema, connection modes, Supabase MCP | `.claude/skills/database` |
 | Toolkit tools, FastAPI, auth, versioned trace, env-vars & secrets | `.claude/skills/toolkit-api` |
-| LLM URL parsing, cached analysis tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
+| Cached LLM analysis tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running/debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Location-data program (claim spine, RÚIAN mirror, contracts) | `roadmap/location-data.md` + the operator-held design corpus |
 | Roadmap / sequencing | `ROADMAP.md` + `roadmap/<track>.md` |

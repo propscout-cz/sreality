@@ -1,8 +1,8 @@
 """The property rollup -- attach stragglers, then recompute each property from its adverts.
 
 1. Attach stragglers: every `property_id IS NULL` listing (the batched detail-drain writes them)
-   is born a bare singleton (`scraper.db.NEW_SINGLETONS_SQL`, the one birth path) and recomputed
-   in the same transaction. No cross-listing matching, ever (CLAUDE.md rule 15).
+   is born a bare singleton (`scraper.db.NEW_SINGLETONS_SQL`, the one birth path) and brought
+   current by `properties_changed` in the same transaction. No cross-listing matching, ever (rule 15).
 2. Recompute, ONE RULE PER FIELD (docs/design/merge-sprint/PROGRAM.md MS11). The canonical advert
    is rank 1 of `property_canonical_listings(property_id)` (migration 588, MS5: active, a map
    point, earliest first seen among active / latest last seen among inactive, trust, id). Every
@@ -46,8 +46,8 @@ Two run modes (Phase 3 -- real-time properties):
 
   * --incremental (cron */5, property_maintenance.yml): attach new stragglers + recompute
     ONLY the properties queued in `dirty_properties` by the writers. O(changes).
-  * full (default, daily reconcile, recompute_property_stats.yml): attach +
-    recompute EVERY property (one cycle, resumed across runs when the budget
+  * full (default, daily reconcile, recompute_property_stats.yml): attach (again after
+    every batch) + recompute EVERY property (one cycle, resumed across runs when the budget
     cuts it) + reconcile childless + clear the queue. The self-healing backstop
     for anything the incremental pass missed.
 
@@ -291,18 +291,10 @@ _RECOMPUTE_BATCH_SQL = f"""
     WHERE p.id = r.pid
 """
 
-# Single-property recompute, derived from the batch SQL by narrowing the `batch`
-# CTE to one id. Deriving it (rather than re-writing the body) guarantees the
-# ingest birth's recompute and the batch can never drift apart.
-_RECOMPUTE_ONE_SQL = _RECOMPUTE_BATCH_SQL.replace(
-    "SELECT id FROM properties WHERE id >= %(lo)s AND id < %(hi)s",
-    "SELECT id FROM properties WHERE id = %(pid)s",
-)
-
-# Dirty-set recompute (Phase 3), derived the same way: the batch CTE is scoped to
-# an explicit id array instead of an id range, so `properties_changed` (the drain,
-# the identity writers) and straggler-attach recompute exactly their properties
-# with the identical body (never drifts from full).
+# Dirty-set recompute (Phase 3), derived from the batch SQL by scoping its `batch` CTE
+# to an explicit id array instead of an id range, so `properties_changed` (the drain,
+# the identity writers, straggler-attach) recomputes exactly its properties with the
+# identical body: deriving it, never re-writing it, means it cannot drift from full.
 _RECOMPUTE_SCOPED_SQL = _RECOMPUTE_BATCH_SQL.replace(
     "SELECT id FROM properties WHERE id >= %(lo)s AND id < %(hi)s",
     "SELECT id FROM properties WHERE id = ANY(%(ids)s)",
@@ -394,17 +386,6 @@ _SAVE_SWEEP_CURSOR_SQL = """
 _DELETE_SWEEP_CURSOR_SQL = "DELETE FROM app_settings WHERE key = 'property_sweep_cursor'"
 
 
-def recompute_one(conn: Any, property_id: int) -> None:
-    """Recompute one property's rollup + stats using the batch job's exact SQL.
-
-    No transaction wrapper, so it nests inside a caller's open transaction. Its one caller is
-    the ingest birth (`scraper.db._ensure_property`); the identity writers and the dirty drain
-    use `properties_changed`.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_RECOMPUTE_ONE_SQL, {"pid": property_id})
-
-
 # Every advert of these properties that a broker is attributed to, queued for the broker drain
 # (Broker Unify W3): `brokers.property_count` / `active_property_count` key on the advert's
 # property, so a recompute, a merge or a detach changes them. Stamped clock_timestamp(), not
@@ -424,8 +405,9 @@ _MIRROR_BROKER_DIRTY_SQL = (
 def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     """Make what is derived from these properties true now, inside the caller's transaction: the
     rollup (the sweep's own body, scoped), their Browse rows, and their attributed adverts queued
-    for the broker drain. THE after-step of the dirty drain and of both identity writers
-    (`toolkit.property_identity`); it opens no transaction, sets no ceiling and never enqueues
+    for the broker drain. THE after-step of the dirty drain, of both identity writers
+    (`toolkit.property_identity`) and of every birth (`_attach_stragglers`, under `_bounded`); it
+    opens no transaction, sets no ceiling and never enqueues
     `dirty_properties` (the drain calls it on ids it is about to dequeue).
 
     The order is load-bearing: `browse_projection` reads the recomputed `properties` row, and the
@@ -485,9 +467,9 @@ def _batch_ranges(max_id: int, batch_size: int, start: int = 1) -> Iterator[tupl
 
 
 def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH) -> int:
-    """Give up to `limit` property_id-NULL listings their own singleton, recomputed and browse-synced at birth.
-    No cross-listing matching happens here, ever (CLAUDE.md rule 15)."""
-    # Birth, link and first recompute in ONE transaction: a replay after a failure (db.
+    """Give up to `limit` property_id-NULL listings their own singleton, brought current at birth
+    by `properties_changed`. No cross-listing matching happens here, ever (CLAUDE.md rule 15)."""
+    # Birth, link and after-step in ONE transaction: a replay after a failure (db.
     # run_resilient replays this op) finds the stragglers still unlinked, never a linked bare
     # row that Browse could show before its recompute. The browse patch is best-effort in its
     # own savepoint (sync_browse_list), so it can never abort the birth.
@@ -497,58 +479,9 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH) -> int:
             stragglers = [int(r[0]) for r in cur.fetchall()]
         born = db.create_singleton_properties(conn, stragglers) if stragglers else []
         if born:
-            _run_recompute_statement(conn, _RECOMPUTE_SCOPED_SQL, {"ids": born})
-            sync_browse_list(conn, born)
+            with _bounded(conn):
+                properties_changed(conn, born)
     return len(born)
-
-
-def _bind_pending_estimation_listing_ids(conn: Any, *, limit: int = 5000) -> int:
-    """Late-binding identity resolution for estimation_runs. Returns rows stamped.
-
-    An estimation submitted for a sreality URL the scraper has not reached yet
-    lands input_sreality_id NOT NULL + input_listing_id NULL (the insert's COALESCE
-    subquery finds no listing). Every estimation read path now keys solely on the
-    surrogate input_listing_id, so such a run belongs to no listing page until this
-    stamps it. This is the same "a listing just became visible" tick that attaches
-    stragglers, which is exactly the event that makes the NULL resolvable.
-
-    Lives here, not in api/estimation_runs.py, on purpose: property_maintenance.yml
-    installs base extras only (`pip install -e .`, no [api]), so importing that
-    fastapi-dependent module would ImportError the whole cron.
-
-    Rule 12 (runs are immutable) is respected — this resolves IDENTITY, never a
-    result. It only ever fills a NULL: the `input_listing_id IS NULL` guard is
-    repeated in the UPDATE's own WHERE, not just the CTE, so the stamp is one-way
-    and idempotent under concurrency and can never overwrite an already-bound run.
-
-    Deliberately NOT fuzzy. listings_sreality_id_uidx makes the subquery provably
-    single-valued, so a multi-match cannot be represented on this arm; a run that
-    stays ambiguous keeps its NULL rather than being attributed by an arbitrary
-    tie-break, and there is no input_url arm. A wrong attribution silently credits
-    a paid estimate to the wrong flat — strictly worse than staying unattached
-    (the principle the street extractor already follows).
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            "WITH cand AS ("
-            "  SELECT er.id AS run_id,"
-            "         (SELECT l.id FROM listings l"
-            "           WHERE l.sreality_id = er.input_sreality_id) AS listing_id"
-            "    FROM estimation_runs er"
-            "   WHERE er.input_listing_id IS NULL"
-            "     AND er.input_sreality_id IS NOT NULL"
-            "   ORDER BY er.id"
-            "   LIMIT %(limit)s"
-            ") "
-            "UPDATE estimation_runs er "
-            "   SET input_listing_id = cand.listing_id "
-            "  FROM cand "
-            " WHERE er.id = cand.run_id "
-            "   AND cand.listing_id IS NOT NULL "
-            "   AND er.input_listing_id IS NULL",
-            {"limit": int(limit)},
-        )
-        return cur.rowcount or 0
 
 
 # The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a */15
@@ -734,6 +667,10 @@ def _try_lease(conn: Any, holder: str, lease: str) -> bool:
         return cur.fetchone() is not None
 
 
+class _LeaseLost(RuntimeError):
+    """Another writer holds the maintenance lease now: nothing may continue under it."""
+
+
 def _renew_lease(conn: Any, holder: str) -> None:
     """Heartbeat: re-grant our own lease, pushing expiry out one TTL.
 
@@ -743,7 +680,7 @@ def _renew_lease(conn: Any, holder: str) -> None:
     >15 min on a single statement, which is itself worth a red run.
     """
     if not _try_lease(conn, holder, _LEASE_TTL):
-        raise RuntimeError(
+        raise _LeaseLost(
             "maintenance lease lost mid-work (expired and re-claimed by another "
             "writer) — aborting rather than recomputing concurrently"
         )
@@ -828,24 +765,17 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """
     holder = _new_holder("incremental")
     if not _try_lease(conn, holder, _LEASE_TTL):
-        return {
-            "skipped": True, "attached": 0,
-            "estimations_bound": 0, "recomputed": 0,
-        }
+        return {"skipped": True, "attached": 0, "recomputed": 0}
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]
         attached = _attach_stragglers(conn)
-        bound = _bind_pending_estimation_listing_ids(conn)
         recomputed = _drain_dirty(
             conn, batch_size, cutoff,
             renew=lambda: _renew_lease(conn, holder),
         )
-        return {
-            "skipped": False, "attached": attached,
-            "estimations_bound": bound, "recomputed": recomputed,
-        }
+        return {"skipped": False, "attached": attached, "recomputed": recomputed}
     finally:
         _release_lease(conn, holder)
 
@@ -1025,6 +955,12 @@ def main() -> int:
             ranges = list(_batch_ranges(max_id, args.batch_size, start_lo))
             total_batches = len(ranges)
             batches = recomputed = 0
+
+            # Renews first, like _renew_and_recompute below, so a birth never widens the renewal gap.
+            def _renew_and_attach(c: Any) -> int:
+                _renew_lease(c, holder)
+                return _attach_stragglers(c)
+
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
                 # stop batching with enough headroom left to finalize + release,
@@ -1070,6 +1006,15 @@ def main() -> int:
                     lo, hi, time.monotonic() - batch_started,
                     batches, total_batches,
                 )
+                # Births wait on this lease; newborns sit above max_id, so no batch revisits them.
+                # A failed birth costs only latency (the worker's lane births once the lease is
+                # free), so it never stops the backstop sweep; a lost lease still does.
+                try:
+                    attached += step(_renew_and_attach, "sweep.attach", attempts=2)
+                except _LeaseLost:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - see above
+                    LOG.warning("RECOMPUTE sweep.attach failed after batch=%d-%d: %s", lo, hi, exc)
 
             # The finalize block is wrapped too: a drop here would throw away an
             # otherwise-complete sweep's completion stamp and red the health check.
@@ -1164,9 +1109,9 @@ def main() -> int:
         return 1
     LOG.info(
         "RECOMPUTE done max_property_id=%d from_id=%d cycle_runs=%d batches=%d "
-        "avg_batch_s=%.1f elapsed=%.1fs",
+        "avg_batch_s=%.1f attached=%d elapsed=%.1fs",
         max_id, start_lo, runs + 1, batches, elapsed / batches if batches else 0.0,
-        elapsed,
+        attached, elapsed,
     )
     return 0
 

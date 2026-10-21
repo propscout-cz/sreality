@@ -1,5 +1,5 @@
 /* The one infinite-list hook, shared by every scrolled surface (Browse
- * cards + table on properties_public, and the Estimations + Watchdog API
+ * cards on properties_public, and the Estimations + Watchdog API
  * feeds). It wraps React Query v5's useInfiniteQuery and adds the two
  * things every caller needs identically: (1) flattening pages into one row
  * array, and (2) de-duplicating by a stable row id so a row that re-sorts

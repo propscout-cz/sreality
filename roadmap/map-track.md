@@ -82,6 +82,9 @@ of the analytical and UI phases; runs alongside them.
   range 20–2 000; the input above the map, URL `pins=`), which IS the server's point budget (one
   number end to end, in the map query key); price labels a tick box (URL `labels=0`). Deleted the
   zoom-14 pin rule, the browser-side grouping of points and `MAP_POINT_BUDGET`.
+- **W5 (done 2026-10-20):** the locator halo follows a card hover in COUNT mode too — the card
+  rows carry the property's point (`lat`, `lng` on `CARD_COLS`) and hand it to the map
+  (`HoverTarget` → `haloPoints`), replacing the map's own row lookup and `hoverOrigin`.
 - **Named follow-ups:** town- and quarter-centroid stacks (up to 1 369 rows on one point) sit in one
   tile (a location-precision concern); `DatasetMap.tsx` interpolates `obec_name` into popup HTML
   unescaped; four `MAP_COLS` columns are never read and commercial popups show "—" for `subtype`.

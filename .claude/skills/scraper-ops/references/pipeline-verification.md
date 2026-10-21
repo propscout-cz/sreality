@@ -1271,16 +1271,16 @@ a blocker, so it is told once, by the `jobs` check's `artifact/browse_list` cell
 an absolute 600 px, so a downgrade that stays above it (the one on record, the 749 px CROPPED frames
 `docs/architecture.md` describes under Photos) reads 0 % narrow (owed: judge the stored width
 against the declared source width); a change's age can include time its row spent at VERIFY, because
-a promotion keeps `enqueued_at`. The daily full property sweep attaches stragglers once, at its
-start, then holds the maintenance lease for up to its 6,000 s budget
-(`recompute_property_stats._MAX_BUDGET_SECONDS`) while the worker's maintenance lane skips, so ads
-first written meanwhile wait for their property until it lets go: on a sweep day longer than about
-40 min, visible reads Problem for the sweep's duration and recovers on a measured OK. The 28-day
-replay opens five such onsets on four days (ceskereality and sreality 10-02, ceskereality 10-05,
-sreality 10-08, bezrealitky 10-09; new ads held 41-100 min, each incident closed within 80 min); no
-visible cell has read even Watch since 10-17 (the 10-18 sweep ran 887 s). Those ads really were out
-of Browse past the 15-min target, so the onsets are disclosed, not silenced; attaching while the
-sweep runs is owed to the scraper track. It replaces `acquisition_lag` (unclaimed NEW rows only, 6 h
+a promotion keeps `enqueued_at`. Births no longer wait for the daily full property sweep: it holds
+the maintenance lease for up to its 6,000 s budget (`recompute_property_stats._MAX_BUDGET_SECONDS`)
+while the worker's 30 s maintenance lane skips, so since 2026-10-20 it attaches stragglers after
+every batch under that lease (a failed attach is logged and the sweep goes on), and a new ad waits
+one batch at most. Before, it attached only at its start, and on a sweep day longer than about
+40 min visible read Problem for the sweep's duration: the 28-day replay holds five such onsets on
+four days (ceskereality and sreality 10-02, ceskereality 10-05, sreality 10-08, bezrealitky 10-09;
+new ads held 41-100 min, each closed within 80 min). Those ads really were out of Browse past the
+15-min target, so the onsets stay disclosed, not silenced; they age out of the replay by 11-06.
+It replaces `acquisition_lag` (unclaimed NEW rows only, 6 h
 / 24 h), `property_maintenance`'s dirty arm (2.5 h / 3 h; its sweep arm is `jobs`'
 `artifact/property_sweep` cell) and `sreality_image_template` with its live CDN probe.
 

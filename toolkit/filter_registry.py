@@ -172,7 +172,7 @@ FILTER_BASES: frozenset[str] = frozenset({BASIS_DEPENDS_ON_CATEGORY, *PPM2_BASES
 # numeric filter cannot ship unlabelled by omission. Three kinds live here, and
 # nothing else may:
 #   * identifiers — a code, not a quantity (no arithmetic is valid on them);
-#   * ordinal levels — a 1..5 rank, where "5 units" is meaningless;
+#   * ordinal levels — a rank or a distance in ranks, where "5 units" is meaningless;
 #   * bare counts and 0–10 index scores, where the counted noun / the scale is
 #     the label and the description already states it.
 # It is NOT an escape hatch for a dimensioned quantity. If the number is in
@@ -183,11 +183,6 @@ UNITLESS_NUMERIC_FILTERS: frozenset[str] = frozenset(
         "category_sub_cb",
         # ordinal levels — a rank or a distance in ranks, not a dimension
         "floor_band",
-        # ordinal 1..5 condition ranks (rule #14)
-        "building_condition_level_min",
-        "building_condition_level_max",
-        "apartment_condition_level_min",
-        "apartment_condition_level_max",
         # counts of a named thing
         "price_change_count_min",
         "min_parking_lots",
@@ -1187,81 +1182,6 @@ def _build_registry() -> dict[str, FilterDef]:
             ui_control=UiControl.MULTISELECT,
             agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
             enum_values=ENERGY_RATING_OPTIONS,
-        ),
-        FilterDef(
-            id="building_condition_level_min",
-            type=FilterType.INT,
-            pg_column="building_condition_level",
-            default=None,
-            description=(
-                "Minimum building condition score (`building_condition_level "
-                ">= N`, 1..5). Set by toolkit.condition_scoring.score_listing_condition "
-                "off the curated Czech marker dictionary + 5-level rubric. "
-                "NULL rows (not yet scored) are excluded from the result. "
-                "5 = výborný stav (excellent), 4 = velmi dobrý stav, "
-                "3 = průměrný / udržovaný, 2 = vyžaduje rekonstrukci, "
-                "1 = kritický stav."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("buildingConditionLevelMin",),
-        ),
-        FilterDef(
-            id="apartment_condition_level_min",
-            type=FilterType.INT,
-            pg_column="apartment_condition_level",
-            default=None,
-            description=(
-                "Minimum apartment condition score (`apartment_condition_level "
-                ">= N`, 1..5). Same scorer as building_condition_level_min "
-                "but scoped to the unit itself rather than the building shell. "
-                "NULL rows (not yet scored) are excluded from the result. "
-                "5 = výborný stav (novostavba / po kompletní rekonstrukci), "
-                "4 = velmi dobrý stav (po rekonstrukci, new jádro / koupelna), "
-                "3 = průměrný, 2 = v původním stavu / před rekonstrukcí, "
-                "1 = umakartové jádro."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("apartmentConditionLevelMin",),
-        ),
-        FilterDef(
-            id="building_condition_level_max",
-            type=FilterType.INT,
-            pg_column="building_condition_level",
-            default=None,
-            description=(
-                "Maximum building condition score (`building_condition_level "
-                "<= N`, 1..5). Companion upper bound to "
-                "building_condition_level_min; same scorer and rubric. "
-                "NULL rows (not yet scored) are excluded from the result."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("buildingConditionLevelMax",),
-        ),
-        FilterDef(
-            id="apartment_condition_level_max",
-            type=FilterType.INT,
-            pg_column="apartment_condition_level",
-            default=None,
-            description=(
-                "Maximum apartment condition score (`apartment_condition_level "
-                "<= N`, 1..5). Companion upper bound to "
-                "apartment_condition_level_min; same scorer and rubric. "
-                "NULL rows (not yet scored) are excluded from the result."
-            ),
-            category=CATEGORY_PROPERTY,
-            ui_control=UiControl.NUMBER_INPUT,
-            agendas=_ALL_AGENDAS,
-            constraints={"min": 1, "max": 5},
-            aliases=("apartmentConditionLevelMax",),
         ),
         FilterDef(
             id="furnished",

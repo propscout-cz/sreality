@@ -1122,7 +1122,7 @@ def test_maintenance_lane_registered_and_live_by_default():
     # Ships LIVE: the lane exists precisely because GH throttles
     # property_maintenance.yml's */5 to a measured ~2h median, so merging must
     # activate the fix. Interval <= 0 remains the kill-switch.
-    assert rw.MAINTENANCE_INTERVAL_DEFAULT == 120
+    assert rw.MAINTENANCE_INTERVAL_DEFAULT == 30
     src = inspect.getsource(rw._amain)
     assert '("maintenance"' in src
 

@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing per-source HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
 ---
 
 # Scraper operations
@@ -26,18 +26,10 @@ test / log helpers: `scripts/test-summary.sh` and `scripts/logs.sh <run-id> [pat
    `raw_json` pass — ~62 KB/row detoast); NULL is acceptable for a nullable column. The new cell reaches
    the `parsing` alarm's fill arm only once the OPERATOR re-blesses (`--bless` needs the prod DB).
 
-## Refreshing per-source HTML fixtures
+## Refreshing portal HTML fixtures
 
-The LLM-driven parsers (`scraper/source_parsers/`) are tested against saved listing HTML in
-`tests/fixtures/source_html/`. Real listings get taken down or change layout, so every few
-months the fixtures need a refresh. Don't fetch live in tests — that would burn LLM credit and
-break offline runs.
-
-Refresh (CLI, fastest): `gh workflow run fetch-fixtures.yml --ref <branch>` (add `-f` inputs to
-override URLs), or Actions → **Fetch + anonymize source HTML fixtures** → **Run workflow**. It
-fetches each URL, scrubs via `scripts/fetch_and_anonymize_fixtures.py` and commits the
-`*_sample.html` files back to the branch; the skipif tests in
-`tests/scraper/test_source_parsers/test_real_fixtures.py` light up once they exist.
+Portal media fixtures (`tests/scraper/test_portal_media_fixtures.py`) are saved detail pages scrubbed by
+`scripts/fetch_and_anonymize_fixtures.py --scrub-contacts`; never fetch live in tests.
 
 Anonymization scope: phones → `+420 XXX XXX XXX`, emails → `agent@example.cz`, street numbers
 (`123/45`) → `XXX/YY`. Listing prices and the surrounding HTML structure are preserved — public
@@ -69,7 +61,7 @@ Two tests in `tests/location_data/test_payload_norm_measured.py` fail if a commi
 carries contact details in plaintext **or** in Cloudflare's hex.
 
 **The nine SCRAPER portal parsers are a separate fixture set** in `tests/fixtures/portal_html/`
-(`tests/scraper/test_portal_media_fixtures.py`), distinct from the LLM `source_parsers` set
+(`tests/scraper/test_portal_media_fixtures.py`)
 above. They exist because a hand-authored fixture can only assert back the strings the test
 itself planted, so it is structurally blind to upstream drift — that blindness is what let a
 19-day realitymix gallery blackout and a ~63% idnes photo loss both ship with CI green. Never
@@ -196,7 +188,7 @@ OWN predicates (`phash`, `clip_tagged_at`). It deletes no label/review/CLIP-cach
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
 and `properties`, so a parser's coordinate/locality/street reading is evidence for the resolver,
 not a write; a listing's place is `listing_location` (join on `listing_id`).
-`scraper/geocoding.py` survives for `/maps/*` and the on-demand URL parse only.
+`scraper/geocoding.py` survives for `/maps/*` and the curated-city seed only.
 
 One monitoring workflow watches the rest: the canary, `verify_pipeline.yml` ("Monitoring: health canary (hourly)"; GitHub
 delivers ~5 runs a day). Step 1, the poller `scripts/record_workflow_failures.py`, records PRODUCTION runs only (event
@@ -263,24 +255,22 @@ nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip
 walk ONLY above its 2,000-active-row floor (`VERIFY DEFERRED`, in `delist_flip_refusals`); the page must be the row's OWN (a `detail_ref`
 naming another id is dropped). Stop-reason vocabulary: `references/coverage-and-delisting.md`.
 
-**Condition scoring is currently UNSCHEDULED — an intentional pause, not a bug** (PR #730,
-confirmed operator-intentional 2026-07-09; ~56k byt rows unscored is accepted). Don't
-re-enable or backfill without explicit direction. The machinery is otherwise unchanged and
-**batch-driven** when it does run: `condition_score_batches.yml` is the driver (Anthropic
-Message Batches API, 50% cost) — `submit` (previously every 3h) puts the next slice of
-unscored listings in a batch, `ingest` hourly (`35 * * * *`, still live for any in-flight
-batch) polls + persists; one workflow, mode chosen by `github.event.schedule`. The
-synchronous `condition_scores.yml` is a **dispatch-only fallback** — don't schedule both,
-they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
-The scoring model is `app_settings.llm_condition_model` (Haiku today), so batch+Haiku ≈ 25%
-of the original Sonnet-sync cost. The scrape has no scoring phase (its runner left `scraper.main` in C2-2).
-Scoring is **kraj-scoped and reuse-first** (migration 174):
-the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
-`app_settings.condition_scoring_enabled_region_ids` (operator-edited via the Settings page
-"Hodnocení stavu — kraje" toggles; empty = paused; an unresolved listing is parked), and
-`propagate_condition_levels` copies a property's genuine score to its cross-portal siblings
-(`listings.condition_levels_propagated_from` records provenance) before every submit/backfill,
-so a duplicate never re-bills the LLM. `check_llm_health` mirrors the same scope.
+**Condition scoring is PARKED — an intentional pause, not a bug** (crons off since PR #730,
+2026-07-09; last level written 2026-06-18; operator ruling 2026-10-20: "keep the scoring engine
+for now, but make sure it does not impact anything"). Don't re-enable, schedule or backfill
+without explicit direction. Code, tables, the `listings.*_condition_level` columns and their data
+stay; NO surface reads the levels (no filter, agent fact or estimate — rule #14; the four level
+filters are `filter_compiler.RETIRED_FILTERS`). All six condition workflows are dispatch-only:
+`condition_score_batches.yml` (Anthropic Message Batches API, 50% cost; `submit` / `ingest` modes,
+both crons commented out) and the synchronous `condition_scores.yml` fallback — never run both at
+once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
+The scoring model is `app_settings.llm_condition_model` (Haiku). The scrape has no scoring phase
+(its runner left `scraper.main` in C2-2). Scoring is **kraj-scoped and reuse-first** (migration
+174): the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
+`app_settings.condition_scoring_enabled_region_ids` (the Settings page "Hodnocení stavu — kraje"
+toggles; empty = none; a toggle alone runs nothing), and `propagate_condition_levels` copies a
+property's genuine score to its cross-portal siblings (`listings.condition_levels_propagated_from`
+records provenance) before every submit/backfill. Resume blockers: `roadmap/scraper-track.md`.
 
 **Images** stay decoupled across four workflows (the scrape split has no image phase; the drain only
 records image-URL rows — bytes land in R2 via these jobs). sreality comes through their `SQUARE_1800_JPG` template
@@ -323,7 +313,7 @@ Per-lane notes:
 - **Per-source kill switches** `realtime_probe_disabled_sources` / `realtime_drain_disabled_sources` (JSON lists, read every pass, no redeploy; PR #694) — a portal leaves that lane, its GH Actions cadence untouched.
 - **sreality count-probe lane** (migration 270, PR #696) — a per-`(category_main, category_type)` count
   check that sees a market-wide count swing faster than a full index walk; opted in, it dispatches `index_walk.yml` early.
-- **Property-maintenance lane**, every 2 min (PR #716) — `run_incremental_pass` against `dirty_properties`
+- **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
   (rule #20), far more often than the 5-min GH cron; serialized with it + the daily sweep by the lease-row
   CAS (PR #717): **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
   slice = ONE `properties_changed` txn (recompute, Browse patch, `dirty_broker_listings` mirror), as merge/detach run inline.
@@ -392,6 +382,12 @@ Per-lane notes:
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer
   `realtime_autodedup_interval_seconds` (seeded 0 = stopped; 60 running) is cadence AND brake, claim = engine rate × half a 1050 s deadline (a build's three quarters, E951), rate
   halved BEFORE every pass, restored the moment it commits (or the pair budget refuses it, E970), then overwritten by its measurement (E941), at least doubled instead when the clock cut the claim, the feeds filled it (the re-claims ride on top and fill none, E971) and the pass took under half the deadline (E951; `last.pass_budget_s`, `rate_doubled` when 2× beat the blend); one pair budget, build and live: 150k pairs to DECIDE once the reject ledger has answered (E943: `autodedup.rt_reject_ledger`, mig 596, a below-floor reject skipped while both decision digests, the calibration, the feature version and the engine digest — decision sources, model, settings — match; a deploy touching them or a re-cut costs one full-price pass; a CLIP re-embed that leaves `clip_tagged_at` alone must empty it), each refusal re-claiming a quarter of the claim made (E952; `last.attempts`/`wanted_pairs`/`wanted_by_attempt`/`pairs_to_decide`/`pairs_to_decide_by_attempt`/`aborted`/`ledger_skipped`/`ledger_written`); a pass reads facts only for its claim and the sides of the pairs it decides (E960, mig 604 `rt_fp.dd`; `last.dirty`/`reads` by reason; `dirty` is a neighbourhood, never a backlog: the build's backlog, rate and decision lag are the Health `dedup` check's), so an advert it does not claim is seen as its row stored it — a reparse wave, a location correction, sightings or a re-master reach `rt` only when a feed re-claims the advert, the freshness rule re-claims it (a merge applies only when its moving members were refreshed within 12 h under this engine, else `last.reconcile_stale`; waiting groups are re-claimed whole — an active advert in the group's cluster first (E973), then flats for sale, flats for rent, the rest (E972), oldest first within each; the hand-on list's 5,000-advert cap cuts the same order — 200 adverts a pass (a group that does not fit is skipped for the next, the first taken whole, E973) on top of the feeds' limit (E971: the worker's memory holds a pass to ~300 adverts), never more than `rt_claim_cap`, on a pass's first attempt only, each group tried at most once in 6 h (stamped as the pass ends on its own terms, never by a shutdown, a lost lease or a kill, E973), paused once and halved after a pass that died with them (`rt_redecide_budget`; watch `stale_claimed` beside `deadline_exceeded`), never while the apply scope is closed or the reject ledger is inert, so a W8 undo or a go-live backlog drains at ~80–110 groups a pass; arrival merges never wait; `last.reconcile_handed_on`/`_dropped`/`stale_claimed`; escape: brake 0 → delete `autodedup.settings` `rt_redecide:<gen>` → brake 60) or the scope is re-seeded; a killed pass keeps the half; `SystemExit`/trip = a failed pass. Decides + groups `rt`, then RECONCILES production: re-clustered groups merge via `merge_property_set` inside `app_settings.autodedup_apply_scope`, never a split (`mode=unapply` undoes). `rt_seed`/`apply`/`unapply` share `autodedup.rt_lease`; every lane transaction (pass, each reconcile group, re-cut) ends with `rt_lease.hold` (`lease_lost`). SIGTERM marks the lane stopping: the pass stops at its next checkpoint (`PassStopped`), rolls back and releases; the handler also releases the holder's lease on a fresh connection (2 attempts; `drainingSeconds` 30); a pass whose connections a database restart took retries the release on new ones, every 20 s for up to 180 s, before falling back to the TTL. A restart in place (same hostname + pid) releases, right before the take, the live lease its dead predecessor left (holder `<host>:<pid>:<second>` older than this boot; E948; the engine logs it) and halves `rt_claim_cap:<gen>` in the same commit: the feeds' limit = min(500, cap, rate × budget) (each feed a fifth of it, the revived one too since E970) and the re-claims ≤ cap (E971 review), floor 25, only a seed, or a container limit (read each pass) grown ≥ 25 % over the row's `limit_mb`, raises it (E948b: `limit_mb` = the biggest limit a death since the last seed/reset died under; a row without one takes the pass's limit, but one E948 halved (no key) is measured from the 8 GB `E948_LIMIT_MB` 7,629.4; a boot seeing the growth AND a dead predecessor releases it without halving); at the floor the lease waits out its TTL (`predecessor_kept`). `last.peak_rss_mb`/`rss_mb`/`memory_limit_mb`/`claim_cap`/`predecessor_released`; `MAX_SCHEMA_MB` 1,500 (20 KiB an ad with the ledger); no GH schedule. The decided pairs are scored 5,000 at a time and each chunk's rows are written before the next, so the rows follow the chunk; a side's CLIP vectors are held from its first decided pair to its last, which in a dense pass is most sides (E950; `last.chunks`/`chunk_rss_mb`/`chunk_vectored`). No body or token memo outlives its pass (E949): each pass counts and empties them (`last.memo_entries`), and freed heap goes back to the kernel (`gc.collect` + glibc `malloc_trim(0)`) as every pass begins and ends, before its lock is released (`last.rss_at_start_mb` / `rss_after_trim_mb`), a raised pass's when the next one begins; the worker starts as `env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker` (two arenas; Railway's exec form needs `env`).
+
+- **A pasted link enters the same queue.** `POST /listings/ingest {url}` (admin) resolves the URL with the one
+  identity canon (`scraper/portal_identity.resolve_url`) and, for an ad we do not hold (or hold inactive), calls
+  `db.enqueue_detail` at NEW (a `given_up` row is re-armed); `GET /listings/ingest/{source}/{native_id}` reports
+  `refused | held | queued | gone | failed`. The API never fetches a page: the worker's drain does, so the ad is written,
+  born (the maintenance lane, 30 s) and located exactly like a walked one (`docs/design/new-property-from-link.md`).
 
 ## Pipeline verification (migration 274)
 

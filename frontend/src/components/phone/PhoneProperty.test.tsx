@@ -366,7 +366,7 @@ describe('the phone property page', () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
     const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
     renderAt({ pathname: '/listing/bazos/196123456', state: { pastedUrl: url } });
-    expect(await screen.findByText('Tento inzerát v databázi nemáme', {}, LOADED)).toBeInTheDocument();
+    expect(await screen.findByText('Tento inzerát v databázi nemáme.', {}, LOADED)).toBeInTheDocument();
     expect(screen.getByText('196123456')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
   });

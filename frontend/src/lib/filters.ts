@@ -15,6 +15,7 @@ import { fmtArea } from './format';
  * this file, and the level list and the chip guard must have ONE definition. */
 import { isDistrictChip, type LocationLevel } from './districtCodes';
 import { portalScopeLabel } from './portals';
+import { parseSort, sortToParam } from './browseSort';
 import {
   CURATED_SET_NAMES,
   normalizeScope,
@@ -46,7 +47,7 @@ export type BuildingMaterial = 'cihla' | 'panel' | 'smisena' | 'ostatni';
 
 /* Map-viewport rectangle. west < east, south < north, all WGS84
  * degrees. Acts as an additional filter alongside the sidebar fields:
- * cards / table / stats all narrow to listings whose (lng, lat) falls
+ * cards / stats all narrow to listings whose (lng, lat) falls
  * inside the rectangle. NULL = no map area applied. */
 export interface MapBounds {
   west: number;
@@ -225,13 +226,6 @@ export interface ListingFilters {
    * Watchdog. */
   gardenAreaMin: number | null;
   gardenAreaMax: number | null;
-  /* Derived condition scores (migrations 072 / 073). 1..5 each; rows
-   * with NULL (not yet scored) are excluded from the result when a
-   * bound is set. Set by toolkit.condition_scoring.score_listing_condition. */
-  buildingConditionLevelMin: number | null;
-  buildingConditionLevelMax: number | null;
-  apartmentConditionLevelMin: number | null;
-  apartmentConditionLevelMax: number | null;
   /* Price-history signals (migration 173). Derived columns on `properties`,
    * maintained by the recompute job; property grain, applied against
    * properties_public. `priceChangeCountMin` counts cuts AND raises across
@@ -344,10 +338,6 @@ export const DEFAULT_FILTERS: ListingFilters = {
   parkingLotsMin: null,
   gardenAreaMin: null,
   gardenAreaMax: null,
-  buildingConditionLevelMin: null,
-  buildingConditionLevelMax: null,
-  apartmentConditionLevelMin: null,
-  apartmentConditionLevelMax: null,
   priceChangeCountMin: null,
   priceChangeWindowDays: null,
   totalPriceChangePct: null,
@@ -604,10 +594,6 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     parkingLotsMin: parseIntOrNull(sp.get('parking_min')),
     gardenAreaMin: parseIntOrNull(sp.get('garden_min')),
     gardenAreaMax: parseIntOrNull(sp.get('garden_max')),
-    buildingConditionLevelMin: parseIntOrNull(sp.get('bld_cond_min')),
-    buildingConditionLevelMax: parseIntOrNull(sp.get('bld_cond_max')),
-    apartmentConditionLevelMin: parseIntOrNull(sp.get('apt_cond_min')),
-    apartmentConditionLevelMax: parseIntOrNull(sp.get('apt_cond_max')),
     priceChangeCountMin: parseIntOrNull(sp.get('changes_min')),
     priceChangeWindowDays: parsePriceChangeWindow(sp.get('changes_window')),
     totalPriceChangePct: parseFloatOrNull(sp.get('total_change_pct')),
@@ -813,10 +799,6 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
   if (f.parkingLotsMin != null) sp.set('parking_min', String(f.parkingLotsMin));
   if (f.gardenAreaMin != null) sp.set('garden_min', String(f.gardenAreaMin));
   if (f.gardenAreaMax != null) sp.set('garden_max', String(f.gardenAreaMax));
-  if (f.buildingConditionLevelMin != null) sp.set('bld_cond_min', String(f.buildingConditionLevelMin));
-  if (f.buildingConditionLevelMax != null) sp.set('bld_cond_max', String(f.buildingConditionLevelMax));
-  if (f.apartmentConditionLevelMin != null) sp.set('apt_cond_min', String(f.apartmentConditionLevelMin));
-  if (f.apartmentConditionLevelMax != null) sp.set('apt_cond_max', String(f.apartmentConditionLevelMax));
   if (f.priceChangeCountMin != null) sp.set('changes_min', String(f.priceChangeCountMin));
   if (f.priceChangeWindowDays != null) sp.set('changes_window', String(f.priceChangeWindowDays));
   if (f.totalPriceChangePct != null) sp.set('total_change_pct', String(f.totalPriceChangePct));
@@ -1039,8 +1021,8 @@ export const isDefault = (f: ListingFilters): boolean =>
 
 /** Persisted preset payload. The opaque `filter_spec` blob the API stores
  *  verbatim. `sort` is the serialized sort param (`sortToParam` form, e.g.
- *  "-price_czk") — kept as a plain string so this module needn't depend on
- *  the queries sort types. `null`/absent means the default sort. */
+ *  "-price_czk"), stored as a plain string. `null`/absent means the default
+ *  sort. */
 export interface PresetSpec {
   filters: ListingFilters;
   sort?: string | null;
@@ -1166,17 +1148,18 @@ function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope 
 /** Read a stored preset blob, tolerating the legacy bare-`ListingFilters`
  *  shape (presets saved before sort was captured) and fields whose type drifted
  *  after the preset was saved. Always returns a complete, shape-safe filter set
- *  merged onto DEFAULT_FILTERS, plus the saved sort (or null for the default). */
+ *  merged onto DEFAULT_FILTERS, plus the saved sort as parseSort reads it, so a
+ *  preset whose sort has no control loads clean, not dirty. */
 export const readPresetSpec = (
   spec: PresetSpec | ListingFilters,
-): { filters: ListingFilters; sort: string | null } => {
+): { filters: ListingFilters; sort: string } => {
   const wrapped =
     spec != null && (spec as PresetSpec).filters != null;
   const filters = wrapped
     ? (spec as PresetSpec).filters
     : (spec as ListingFilters);
   const sort = wrapped ? (spec as PresetSpec).sort ?? null : null;
-  return { filters: coerceStoredFilters(filters), sort };
+  return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
 const canonicalParams = (sp: URLSearchParams): string =>
@@ -1254,10 +1237,6 @@ export const REGISTRY_KEY_MAP = {
   min_parking_lots: 'parkingLotsMin',
   min_garden_area: 'gardenAreaMin',
   max_garden_area: 'gardenAreaMax',
-  building_condition_level_min: 'buildingConditionLevelMin',
-  building_condition_level_max: 'buildingConditionLevelMax',
-  apartment_condition_level_min: 'apartmentConditionLevelMin',
-  apartment_condition_level_max: 'apartmentConditionLevelMax',
   price_change_count_min: 'priceChangeCountMin',
   price_change_window_days: 'priceChangeWindowDays',
   total_price_change_pct: 'totalPriceChangePct',
@@ -1496,10 +1475,6 @@ export function filtersToWatchdogSpec(
     portals_excluded_active_only: f.portalsExcludedActiveOnly,
     condition_match: arr(f.conditionMatch),
     min_parking_lots: f.parkingLotsMin,
-    building_condition_level_min: f.buildingConditionLevelMin,
-    building_condition_level_max: f.buildingConditionLevelMax,
-    apartment_condition_level_min: f.apartmentConditionLevelMin,
-    apartment_condition_level_max: f.apartmentConditionLevelMax,
     price_change_count_min: f.priceChangeCountMin,
     price_change_window_days:
       f.priceChangeWindowDays != null

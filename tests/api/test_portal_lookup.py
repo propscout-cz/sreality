@@ -41,7 +41,6 @@ def _mk_market_row(source: str, source_id: str, found: bool, **cols: Any) -> dic
     row: dict[str, Any] = {
         "source": source, "source_id": source_id, "found": found,
         "sreality_id": None, "listing_id": None, "property_id": None,
-        "source_url": None,
         "category_main": None, "category_type": None,
         "area_m2": None, "area_basis": None,
         "price_czk": None, "price_per_m2": None, "price_per_m2_basis": None,
@@ -268,7 +267,7 @@ def test_lookup_binds_one_value_pair_per_item() -> None:
 def test_lookup_account_query_targets_only_found_listings() -> None:
     market_rows = [
         _mk_market_row("sreality", "a", True, sreality_id=1, listing_id=11,
-                       property_id=100, source_url="https://sreality.cz/x",
+                       property_id=100,
                        category_main="byt", category_type="prodej", is_active=True),
         _mk_market_row("idnes", "miss", False),
     ]
@@ -278,9 +277,9 @@ def test_lookup_account_query_targets_only_found_listings() -> None:
         market_conn, tenant_conn, _items(("sreality", "a"), ("idnes", "miss")),
     )
     sql, params = tenant_conn.cur.executed
-    # One (listing_id, property_id, source_url) tuple — the miss is excluded —
+    # One (listing_id, property_id) tuple — the miss is excluded —
     # and NOTHING else: no account is bound, because none is taken.
-    assert params == [11, 100, "https://sreality.cz/x"]
+    assert params == [11, 100]
     assert sql.count("%s") == len(params)  # nothing else CAN be bound
     # RLS-only by construction. Not "the predicate binds the right value" but
     # "there is no predicate left to bind wrong" — the shape #917 broke is gone.

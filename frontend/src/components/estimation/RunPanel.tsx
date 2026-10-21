@@ -1,9 +1,10 @@
 /* The estimation-run body — extracted from the Estimation Detail page so the
  * SAME components render a run wherever it surfaces: embedded in the Listing
  * Detail estimations section (the primary surface) and on the standalone
- * /estimation/:id fallback page for orphan runs (pasted URLs we don't have in
- * the DB). RunBody dispatches on run status (in-flight / failed / success);
- * the deep analytics live in RunDetailModal behind "Show estimation detail".
+ * /estimation/:id fallback page for runs that never had an ad (historic
+ * pasted-URL runs and raw-spec runs). RunBody dispatches on run status
+ * (in-flight / failed / success); the deep analytics live in RunDetailModal
+ * behind "Show estimation detail".
  *
  * `embedded` drops the big headline + the run-level MF reference card —
  * the estimations section renders both itself, side by side.
@@ -64,7 +65,7 @@ import { MfReferenceCard } from '@/components/estimation/MfReferenceCard';
 import { mfShape } from '@/lib/mfReference';
 import { DecimalField, PickButton } from '@/components/controls';
 import { canRerun, type RerunOverrides } from '@/lib/rerun';
-import { listingPath } from '@/lib/listingUrl';
+import { advertPath, listingPath } from '@/lib/listingUrl';
 import { filterById } from '@/lib/filterRegistry.generated';
 import type {
   ComparableExcluded,
@@ -763,6 +764,7 @@ function Warnings({ warnings }: { warnings: string[] }) {
 
 function InputRecap({ run }: { run: EstimationRun }) {
   const spec = run.input_spec;
+  const ad = advertPath({ source: run.subject_source, source_id_native: run.subject_source_id_native });
   const facts: Array<[string, string | null]> = [];
 
   if (spec) {
@@ -808,14 +810,14 @@ function InputRecap({ run }: { run: EstimationRun }) {
           </a>
         </p>
       )}
-      {run.input_sreality_id != null && (
+      {ad != null && (
         <p className="mt-1.5 text-sm">
           <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mr-2">Listing</span>
           <Link
-            to={listingPath(run.input_sreality_id)}
+            to={ad}
             className="font-mono tabular-nums text-[var(--color-copper)] hover:text-[var(--color-copper-2)] underline-offset-2 hover:underline"
           >
-            id {run.input_sreality_id}
+            {run.subject_source} {run.subject_source_id_native}
           </Link>
         </p>
       )}

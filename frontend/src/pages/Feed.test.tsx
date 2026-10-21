@@ -50,6 +50,8 @@ vi.mock('@/lib/queries', async (importOriginal) => {
 const row = (id: number, first_seen_at: string, extra: Partial<CardRow> = {}): CardRow => ({
   property_id: id,
   listing_id: id * 10,
+  lat: 50.08,
+  lng: 14.43,
   sreality_id: null,
   display_label: `Místo ${id}`,
   disposition: '2+kk',
@@ -67,6 +69,7 @@ const row = (id: number, first_seen_at: string, extra: Partial<CardRow> = {}): C
   source: 'sreality',
   source_id_native: String(id),
   mf_gross_yield_pct: null,
+  plot_area_m2: null,
   total_price_change_pct: null,
   price_change_count: 0,
   all_sources: ['sreality'],

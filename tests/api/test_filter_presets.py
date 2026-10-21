@@ -1,15 +1,17 @@
 """Tests for the /filter-presets endpoints (Browse saved filter presets).
 
 Hermetic — overrides the tenant connection + JWT (the routes are per account
-since ticket #1761) so no real DB is hit, and patches the api.filter_presets.*
-persistence helpers with in-memory fakes. Pydantic validation (blank name,
-missing filter_spec) runs unmodified through the route layer. The account
+since ticket #1761) so no real DB is hit, and patches the saved-set persistence
+functions (api/saved_sets.py, the presets instance) with in-memory fakes. Pydantic
+validation (blank name, missing filter_spec) and the PUT's field rule
+(`saved_sets.changes`) run unmodified through the route layer. The account
 resolver is stubbed to a distinctive sentinel, never to None (tenancy.md's
 #917 rule), and the tests assert the sentinel ARRIVES at the insert.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -20,16 +22,22 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from fastapi.routing import APIRoute
 
 from api import dependencies as deps
-from api import filter_presets as fp
 from api import main as api_main
+from api import saved_sets as ss
 from api import tenant_pool
+from api.routes.filter_presets import PRESETS
 
 _SUB = "11111111-1111-1111-1111-111111111111"
 _ACCT = "33333333-3333-3333-3333-333333333333"
 
 
+def _id(n: int) -> str:
+    """The n-th preset the fake store mints: ids are uuids at the route edge (a malformed one is a 422)."""
+    return f"00000000-0000-0000-0000-{n:012d}"
+
+
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
     monkeypatch.setattr(
@@ -40,23 +48,28 @@ def client(monkeypatch):
 
 
 @pytest.fixture()
-def store(monkeypatch):
-    """In-memory replacement for the filter_presets.* persistence functions."""
+def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """In-memory replacement for the saved-set persistence functions, presets kind only."""
     state: dict[str, Any] = {"presets": {}, "owners": {}, "next_id": 1}
 
     def _to_dict(pid: str) -> dict[str, Any]:
         return dict(state["presets"][pid])
 
-    def fake_create_preset(conn, *, name, filter_spec, color=None, account_id):
-        pid = str(state["next_id"])
+    def fake_create_preset(
+        conn: Any, kind: ss.SavedSetKind, values: dict[str, Any], *, account_id: str,
+    ) -> dict[str, Any]:
+        assert kind is PRESETS
+        name, filter_spec, color = values["name"], values["filter_spec"], values["color"]
+        n = state["next_id"]
+        pid = _id(n)
         state["next_id"] += 1
         state["owners"][pid] = account_id
         state["presets"][pid] = {
             "id": pid,
             "name": name,
             "filter_spec": filter_spec,
-            "created_at": f"2026-06-03T00:00:0{pid}+00:00",
-            "updated_at": f"2026-06-03T00:00:0{pid}+00:00",
+            "created_at": f"2026-06-03T00:00:0{n}+00:00",
+            "updated_at": f"2026-06-03T00:00:0{n}+00:00",
             # Append at end: one past the current max position.
             "position": max(
                 (p["position"] for p in state["presets"].values()), default=-1
@@ -66,40 +79,39 @@ def store(monkeypatch):
         }
         return _to_dict(pid)
 
-    def fake_list_presets(conn):
+    def fake_list_presets(conn: Any, kind: ss.SavedSetKind) -> list[dict[str, Any]]:
+        assert kind is PRESETS
         rows = [_to_dict(pid) for pid in state["presets"]]
         rows.sort(key=lambda r: (r["position"], r["created_at"]))
         return rows
 
-    def fake_get_preset(conn, pid):
+    def fake_get_preset(conn: Any, kind: ss.SavedSetKind, pid: str) -> dict[str, Any] | None:
         return _to_dict(pid) if pid in state["presets"] else None
 
-    def fake_update_preset(conn, pid, *, name=None, filter_spec=None, color=fp._UNSET):
+    def fake_update_preset(
+        conn: Any, kind: ss.SavedSetKind, pid: str, fields: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        # The route hands over only what changes (saved_sets.changes), so the fake applies it whole.
         if pid not in state["presets"]:
             return None
-        if name is not None:
-            state["presets"][pid]["name"] = name
-        if filter_spec is not None:
-            state["presets"][pid]["filter_spec"] = filter_spec
-        if color is not fp._UNSET:
-            state["presets"][pid]["color"] = color
+        state["presets"][pid].update(fields)
         return _to_dict(pid)
 
-    def fake_delete_preset(conn, pid):
+    def fake_delete_preset(conn: Any, kind: ss.SavedSetKind, pid: str) -> bool:
         return state["presets"].pop(pid, None) is not None
 
-    def fake_reorder_presets(conn, ids):
+    def fake_reorder_presets(conn: Any, kind: ss.SavedSetKind, ids: list[str]) -> list[dict[str, Any]]:
         for pos, pid in enumerate(ids):
             if pid in state["presets"]:
                 state["presets"][pid]["position"] = pos
-        return fake_list_presets(conn)
+        return fake_list_presets(conn, kind)
 
-    monkeypatch.setattr(fp, "create_preset", fake_create_preset)
-    monkeypatch.setattr(fp, "list_presets", fake_list_presets)
-    monkeypatch.setattr(fp, "get_preset", fake_get_preset)
-    monkeypatch.setattr(fp, "update_preset", fake_update_preset)
-    monkeypatch.setattr(fp, "delete_preset", fake_delete_preset)
-    monkeypatch.setattr(fp, "reorder_presets", fake_reorder_presets)
+    monkeypatch.setattr(ss, "create", fake_create_preset)
+    monkeypatch.setattr(ss, "list_rows", fake_list_presets)
+    monkeypatch.setattr(ss, "get", fake_get_preset)
+    monkeypatch.setattr(ss, "update", fake_update_preset)
+    monkeypatch.setattr(ss, "delete", fake_delete_preset)
+    monkeypatch.setattr(ss, "reorder", fake_reorder_presets)
 
     return state
 
@@ -111,7 +123,7 @@ def test_create_preset_returns_row(client, store):
     res = client.post("/filter-presets", json={"name": "Praha pod 6M", "filter_spec": SPEC})
     assert res.status_code == 200
     body = res.json()
-    assert body["id"] == "1"
+    assert body["id"] == _id(1)
     assert body["name"] == "Praha pod 6M"
     assert body["filter_spec"] == SPEC
 
@@ -143,9 +155,9 @@ def test_update_preset_sets_and_clears_color(client, store):
         "/filter-presets", json={"name": "p", "filter_spec": SPEC, "color": "sage"}
     )
     # Recolour.
-    assert client.put("/filter-presets/1", json={"color": "teal"}).json()["color"] == "teal"
+    assert client.put(f"/filter-presets/{_id(1)}", json={"color": "teal"}).json()["color"] == "teal"
     # Explicit null clears it.
-    assert client.put("/filter-presets/1", json={"color": None}).json()["color"] is None
+    assert client.put(f"/filter-presets/{_id(1)}", json={"color": None}).json()["color"] is None
 
 
 def test_update_preset_omitting_color_leaves_it(client, store):
@@ -153,7 +165,7 @@ def test_update_preset_omitting_color_leaves_it(client, store):
         "/filter-presets", json={"name": "p", "filter_spec": SPEC, "color": "brick"}
     )
     # A name-only update must not wipe the colour (omitted != cleared).
-    body = client.put("/filter-presets/1", json={"name": "renamed"}).json()
+    body = client.put(f"/filter-presets/{_id(1)}", json={"name": "renamed"}).json()
     assert body["name"] == "renamed"
     assert body["color"] == "brick"
 
@@ -182,7 +194,7 @@ def test_reorder_presets_rewrites_order(client, store):
     for name in ("a", "b", "c"):
         client.post("/filter-presets", json={"name": name, "filter_spec": SPEC})
     # Move "c" (id 3) to the front, then "a" (id 1), then "b" (id 2).
-    res = client.put("/filter-presets/reorder", json={"ids": ["3", "1", "2"]})
+    res = client.put("/filter-presets/reorder", json={"ids": [_id(3), _id(1), _id(2)]})
     assert res.status_code == 200
     body = res.json()
     assert body["total"] == 3
@@ -198,7 +210,7 @@ def test_reorder_presets_rewrites_order(client, store):
 
 def test_reorder_unknown_id_is_noop_for_missing(client, store):
     client.post("/filter-presets", json={"name": "a", "filter_spec": SPEC})
-    res = client.put("/filter-presets/reorder", json={"ids": ["999", "1"]})
+    res = client.put("/filter-presets/reorder", json={"ids": [_id(999), _id(1)]})
     assert res.status_code == 200
     # The one real preset still resolves; the unknown id is ignored.
     assert [r["name"] for r in res.json()["data"]] == ["a"]
@@ -209,12 +221,12 @@ def test_reorder_presets_empty_422(client, store):
 
 
 def test_get_preset_404_when_missing(client, store):
-    assert client.get("/filter-presets/999").status_code == 404
+    assert client.get(f"/filter-presets/{_id(999)}").status_code == 404
 
 
 def test_update_preset_renames_without_touching_spec(client, store):
     client.post("/filter-presets", json={"name": "old", "filter_spec": SPEC})
-    res = client.put("/filter-presets/1", json={"name": "new"})
+    res = client.put(f"/filter-presets/{_id(1)}", json={"name": "new"})
     assert res.status_code == 200
     body = res.json()
     assert body["name"] == "new"
@@ -224,7 +236,7 @@ def test_update_preset_renames_without_touching_spec(client, store):
 def test_update_preset_replaces_spec(client, store):
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
     new_spec = {"categoryMain": "dum", "categoryType": "prodej"}
-    res = client.put("/filter-presets/1", json={"filter_spec": new_spec})
+    res = client.put(f"/filter-presets/{_id(1)}", json={"filter_spec": new_spec})
     assert res.status_code == 200
     assert res.json()["filter_spec"] == new_spec
 
@@ -250,8 +262,8 @@ def test_a_preset_holding_a_chip_without_a_code_is_a_422_and_writes_nothing(clie
     assert client.post("/filter-presets", json={"name": "p", "filter_spec": spec}).status_code == 422
     assert store["presets"] == {}
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
-    assert client.put("/filter-presets/1", json={"filter_spec": spec}).status_code == 422
-    assert store["presets"]["1"]["filter_spec"] == SPEC
+    assert client.put(f"/filter-presets/{_id(1)}", json={"filter_spec": spec}).status_code == 422
+    assert store["presets"][_id(1)]["filter_spec"] == SPEC
 
 
 def test_a_preset_with_coded_chips_is_stored_unchanged(client, store):
@@ -260,7 +272,7 @@ def test_a_preset_with_coded_chips_is_stored_unchanged(client, store):
     res = client.post("/filter-presets", json={"name": "p", "filter_spec": spec})
     assert res.status_code == 200
     assert res.json()["filter_spec"] == spec
-    assert client.put("/filter-presets/1", json={"filter_spec": spec}).json()["filter_spec"] == spec
+    assert client.put(f"/filter-presets/{_id(1)}", json={"filter_spec": spec}).json()["filter_spec"] == spec
 
 
 @pytest.mark.parametrize("spec", [SPEC, {"filters": SPEC, "sort": None},
@@ -272,13 +284,33 @@ def test_a_preset_without_chips_is_untouched(client, store, spec):
 
 
 def test_update_preset_404_when_missing(client, store):
-    assert client.put("/filter-presets/999", json={"name": "x"}).status_code == 404
+    assert client.put(f"/filter-presets/{_id(999)}", json={"name": "x"}).status_code == 404
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [
+    ("get", "/filter-presets/1", None),
+    ("put", "/filter-presets/not-a-uuid", {"name": "x"}),
+    ("delete", "/filter-presets/1", None),
+    ("put", "/filter-presets/reorder", {"ids": ["1"]}),
+])
+def test_a_malformed_id_is_a_422_not_a_cast_error(
+    client: Any, store: dict[str, Any], method: str, path: str, body: dict[str, Any] | None,
+) -> None:
+    """A hand-edited link must not reach the database's uuid cast (a 500)."""
+    call = getattr(client, method)
+    assert (call(path, json=body) if body is not None else call(path)).status_code == 422
+
+
+def test_a_stored_blob_that_is_not_an_object_reads_as_empty():
+    """PostgREST can write a JSON null into the NOT NULL column; the SPA reads `spec.filters`."""
+    row = (_id(1), "p", None, None, None, 0, None)
+    assert ss._row(PRESETS, row)["filter_spec"] == {}
 
 
 def test_delete_preset(client, store):
     client.post("/filter-presets", json={"name": "p", "filter_spec": SPEC})
-    assert client.delete("/filter-presets/1").json() == {"deleted": True}
-    assert client.delete("/filter-presets/1").status_code == 404
+    assert client.delete(f"/filter-presets/{_id(1)}").json() == {"deleted": True}
+    assert client.delete(f"/filter-presets/{_id(1)}").status_code == 404
 
 
 # --- per account (ticket #1761) ---------------------------------------------
@@ -354,7 +386,7 @@ class _Cursor:
         self.log.append((sql, params))
 
     def fetchone(self) -> tuple:
-        return ("p-1",)
+        return ("p-1", "p", SPEC, None, None, 0, None)
 
 
 class _Conn:
@@ -365,18 +397,17 @@ class _Conn:
         return _Cursor(self.log)
 
 
-def test_create_preset_sql_binds_the_account(monkeypatch):
+def test_create_preset_sql_binds_the_account():
     """The persistence layer writes the owner into the row, and takes it as a
     REQUIRED keyword (no default: a dropped argument is a TypeError, not a NULL)."""
     import inspect
 
-    param = inspect.signature(fp.create_preset).parameters["account_id"]
+    param = inspect.signature(ss.create).parameters["account_id"]
     assert param.default is inspect.Parameter.empty
     assert param.kind is inspect.Parameter.KEYWORD_ONLY
 
-    monkeypatch.setattr(fp, "get_preset", lambda conn, pid: {"id": pid})
     conn = _Conn()
-    fp.create_preset(conn, name="p", filter_spec=SPEC, color=None, account_id=_ACCT)
+    ss.create(conn, PRESETS, {"name": "p", "filter_spec": SPEC, "color": None}, account_id=_ACCT)
     sql, params = conn.log[0]
     assert "account_id" in sql.split("VALUES")[0]
     assert params[-1] == _ACCT
@@ -388,6 +419,8 @@ def test_reads_and_writes_by_id_carry_no_account_predicate():
     definition of the caller (the #917 bug), not a gate."""
     import inspect
 
-    for fn in (fp.list_presets, fp.get_preset, fp.update_preset, fp.delete_preset,
-               fp.reorder_presets):
+    for fn in (ss.list_rows, ss.get, ss.update, ss.delete, ss.reorder, ss.changes):
         assert "account_id" not in inspect.getsource(fn), fn.__name__
+    for sql in (ss._list_sql(PRESETS), ss._get_sql(PRESETS), ss._get_for_update_sql(PRESETS), ss._delete_sql(PRESETS),
+                ss._update_sql(PRESETS, ("name", "filter_spec", "color")), ss._reorder_sql(PRESETS)):
+        assert "account_id" not in sql, sql

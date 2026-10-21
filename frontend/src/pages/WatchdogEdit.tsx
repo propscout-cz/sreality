@@ -219,8 +219,6 @@ export default function WatchdogEdit() {
             min_estate_area: 'Estate area m²',
             min_garden_area: 'Garden area m²',
             min_parking_lots: 'Min parking lots',
-            building_condition_level_min: 'Building condition (1–5)',
-            apartment_condition_level_min: 'Apartment condition (1–5)',
             price_change_count_min: 'Price changed N+ times',
             price_change_window_days: 'Price change window',
             total_price_change_pct: 'Total price change % (− = drop)',

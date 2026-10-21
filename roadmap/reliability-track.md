@@ -465,10 +465,10 @@ Owed and stated (also in the design's "As built" note):
   of that hour it is about 210-240 %, under the 300 % line), and sreality's precision cell may read
   Problem on 10-20/21 (its 10-18 flip cohort, ~17.5 % active again): the blink tail #1858
   addresses, told, not suppressed.
-- On a day the full property sweep holds the maintenance lease longer than about 40 min,
-  `publishing`'s visible cell reads Problem for its duration (new ads wait for their property,
-  because the sweep attaches only at its start) and recovers when it lets go; attaching while the
-  sweep runs is owed to the scraper track.
+- Closed 2026-10-20 (`feature/link-ingest`): a full property sweep holding the maintenance lease
+  over about 40 min turned `publishing`'s visible cell Problem (new ads waited for their property,
+  the sweep attaching only at its start); it now attaches after every batch under that lease, and
+  the worker's maintenance lane runs every 30 s.
 - Left for wave 9: the 150 ceskereality and mmreality rows of `portal_index_slices` and
   `portal_coverage_gate` (read by nothing), `portals.supports_complete_walk` (no writer now; the
   old Health page's portal posture still reads it) and `delist_flip_refusals` (still written, read
