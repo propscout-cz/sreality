@@ -13,6 +13,7 @@ import {
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
 import { enumLabel } from '@/lib/enums';
+import { mapAreaLabel } from '@/lib/filters';
 import { fmtAbsolute, fmtCount, fmtRelative } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import { portalScopeLabel } from '@/lib/portals';
@@ -292,15 +293,7 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
         : head,
     );
   }
-  if (
-    spec.lat != null &&
-    spec.lng != null &&
-    spec.radius_m != null
-  ) {
-    bits.push(
-      `within ${spec.radius_m} m of (${spec.lat.toFixed(4)}, ${spec.lng.toFixed(4)})`,
-    );
-  }
+  if (spec.bounds) bits.push(mapAreaLabel(spec.bounds));
   if (spec.min_price_czk != null || spec.max_price_czk != null) {
     const lo = spec.min_price_czk != null ? `${spec.min_price_czk.toLocaleString()}` : '0';
     const hi = spec.max_price_czk != null ? `${spec.max_price_czk.toLocaleString()}` : '∞';

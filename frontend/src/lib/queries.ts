@@ -9,11 +9,10 @@ import {
 import { fetchBrokerPropertyIds } from './brokers';
 import type { LlmCostDailyRow, LlmCostHourlyRow } from './llmCosts';
 import {
-  type CenterRadius,
   type ListingFilters,
   type ListingStatus,
-  type MapBounds,
   buildingMaterialToValues,
+  effectiveBbox,
   isoNDaysAgo,
   priceChangeCountColumn,
   UNKNOWN_FILTER_VALUE,
@@ -42,40 +41,6 @@ import type {
   SoldCoverage,
 } from './types';
 import type { BorderCase } from './api';
-
-/* Circle → bounding box approximation. Used when the operator picks
- * the centre+radius mode on the map: PostgREST has no native
- * ST_DWithin filter, so we send the bounding box of the radius
- * circle as the spatial predicate. The bbox is slightly oversized
- * versus the true circle (a square circumscribes a circle), which
- * means a few extra listings near the corners can slip into the
- * cohort — acceptable for the headline use case; true distance
- * filtering belongs in a follow-up RPC if it ever matters. */
-const EARTH_RADIUS_M = 6_371_000;
-
-const centerRadiusBbox = (cr: CenterRadius): MapBounds => {
-  const dLat = (cr.radius_m / EARTH_RADIUS_M) * (180 / Math.PI);
-  const dLng =
-    (cr.radius_m / (EARTH_RADIUS_M * Math.cos((cr.lat * Math.PI) / 180))) *
-    (180 / Math.PI);
-  return {
-    south: cr.lat - dLat,
-    north: cr.lat + dLat,
-    west: cr.lng - dLng,
-    east: cr.lng + dLng,
-  };
-};
-
-/** Returns the bbox the cohort filter should apply for a given
- *  filters object. Honours `locationMode`: viewport → use bounds
- *  (or null); center_radius → derive bbox from centerRadius (or null
- *  if no centre is set). The caller doesn't have to branch. */
-export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
-  if (f.locationMode === 'center_radius') {
-    return f.centerRadius ? centerRadiusBbox(f.centerRadius) : null;
-  }
-  return f.bounds;
-};
 
 export const CARD_PAGE_SIZE = 24;
 
