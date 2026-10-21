@@ -38,6 +38,7 @@ import type {
   SkillRefinement,
   Tag,
   TagColor,
+  DispatchChangeKind,
   NotificationSourceKind,
   NotificationUnreadCount,
   WatchdogDispatch,
@@ -2824,7 +2825,7 @@ export const markWatchdogDispatchSeen = (
 
 export interface ListNotificationsParams {
   source_kind?: NotificationSourceKind | 'all';
-  change_kind?: string;
+  change_kind?: DispatchChangeKind;
   collection_id?: number;
   seen?: WatchdogSeenFilter;
   limit?: number;

@@ -24,6 +24,7 @@ import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
 import LoadMore from '@/components/LoadMore';
 import type {
+  DispatchChangeKind,
   NotificationSourceKind,
   WatchdogDispatch,
   WatchdogSeenFilter,
@@ -39,16 +40,21 @@ const FEED = ROUTES.notifications.build();
 
 /* change_kind → label + the colour of its leading dot (only design tokens that
  * are known to exist; the chip itself stays neutral). */
-const CHANGE_META: Record<string, { label: string; dot: string }> = {
-  new:           { label: 'New match',     dot: 'var(--color-copper)' },
-  price_drop:    { label: 'Price drop',    dot: 'var(--color-sage)' },
-  price_rise:    { label: 'Price rise',    dot: 'var(--color-brick)' },
-  inactive:      { label: 'Delisted',      dot: 'var(--color-ink-4)' },
-  reactivated:   { label: 'Relisted',      dot: 'var(--color-copper)' },
-  new_source:    { label: 'New source',    dot: 'var(--color-copper)' },
-  broker_change: { label: 'Broker change', dot: 'var(--color-ink-3)' },
-  shared:        { label: 'Shared',        dot: 'var(--color-ink-3)' },
+const CHANGE_META: Record<DispatchChangeKind, { label: string; dot: string }> = {
+  new:               { label: 'New match',         dot: 'var(--color-copper)' },
+  price_drop:        { label: 'Price drop',        dot: 'var(--color-sage)' },
+  price_rise:        { label: 'Price rise',        dot: 'var(--color-brick)' },
+  inactive:          { label: 'Delisted',          dot: 'var(--color-ink-4)' },
+  reactivated:       { label: 'Relisted',          dot: 'var(--color-copper)' },
+  new_source:        { label: 'New source',        dot: 'var(--color-copper)' },
+  shared_collection: { label: 'Shared collection', dot: 'var(--color-ink-3)' },
+  shared_dashboard:  { label: 'Shared dashboard',  dot: 'var(--color-ink-3)' },
+  shared_pipeline:   { label: 'Shared pipeline',   dot: 'var(--color-ink-3)' },
 };
+
+/* A share row whose kind the feed does not know yet (a grant made between migration 652
+ * and the deploy keeps the old 'shared'). */
+const SHARED_FALLBACK = { label: 'Shared', dot: 'var(--color-ink-3)' };
 
 const SOURCE_TABS: ReadonlyArray<{ key: SourceFilter; label: string }> = [
   { key: 'all', label: 'All' },
@@ -345,7 +351,7 @@ function ShareNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }) {
   const markSeen = useMarkSeen(d);
   const unread = d.seen_at == null;
   const unreadId = useId();
-  const meta = CHANGE_META.shared;
+  const meta = CHANGE_META[d.change_kind] ?? SHARED_FALLBACK;
   const kind = d.share_kind ? SHARE_META[d.share_kind] : null;
   const to = dispatchTarget(d);
 

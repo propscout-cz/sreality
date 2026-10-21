@@ -68,11 +68,16 @@ _UPSERT_PIPELINE_SHARE_SQL = (
 )
 
 # ONE notification per dedupe key ever: no time in it, so a revoke + re-share loop cannot refill
-# the recipient's inbox with text the sender chose (a collection name).
+# the recipient's inbox with text the sender chose (a collection name). The kind names what opens
+# (migration 652), the actor is the sharer (the owner: sharing never delegates) and event_ref tells
+# two shares of one kind apart (the dashboard id, the pipeline mode; NULL for a collection).
 _INSERT_SHARE_DISPATCH_SQL = (
     "INSERT INTO notification_dispatches "
-    "  (source_kind, collection_id, change_kind, message, account_id, dedupe_key) "
-    "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text, %s::uuid, %s::text) "
+    "  (source_kind, collection_id, change_kind, message, account_id, actor_account_id, event_ref, "
+    "   dedupe_key) "
+    "VALUES ('share', %(collection_id)s::bigint, %(change_kind)s::text, "
+    "        account_email(%(actor)s::uuid) || %(message)s::text, %(recipient)s::uuid, "
+    "        %(actor)s::uuid, %(event_ref)s::text, %(dedupe_key)s::text) "
     "ON CONFLICT DO NOTHING"
 )
 
@@ -151,21 +156,33 @@ def grant(
             if row is None:
                 return
             if isinstance(share, CollectionShare):
-                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
-                    share.collection_id, row[0], f' shared the collection "{share.name}" with you',
-                    recipient, f"share:collection:{share.collection_id}:{recipient}",
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, _share_dispatch(
+                    "shared_collection", share.collection_id, row[0],
+                    f' shared the collection "{share.name}" with you', recipient, None,
+                    f"share:collection:{share.collection_id}:{recipient}",
                 ))
             elif isinstance(share, DashboardShare):
-                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
-                    None, row[0], f' shared the dashboard "{share.name}" with you',
-                    recipient, f"share:dashboard:{share.dashboard_id}:{recipient}",
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, _share_dispatch(
+                    "shared_dashboard", None, row[0], f' shared the dashboard "{share.name}" with you',
+                    recipient, str(share.dashboard_id),
+                    f"share:dashboard:{share.dashboard_id}:{recipient}",
                 ))
             elif row[0] or share.mode == "edit":
-                cur.execute(_INSERT_SHARE_DISPATCH_SQL, (
-                    None, share.owner,
+                cur.execute(_INSERT_SHARE_DISPATCH_SQL, _share_dispatch(
+                    "shared_pipeline", None, share.owner,
                     f" shared their pipeline with you ({_PIPELINE_MODE_LABEL[share.mode]})",
-                    recipient, f"share:pipeline:{share.owner}:{recipient}:{share.mode}",
+                    recipient, share.mode, f"share:pipeline:{share.owner}:{recipient}:{share.mode}",
                 ))
+
+
+def _share_dispatch(
+    change_kind: str, collection_id: int | None, actor: uuid.UUID, message: str,
+    recipient: uuid.UUID, event_ref: str | None, dedupe_key: str,
+) -> dict[str, Any]:
+    """The share notification's row: `actor` (the sharer) labels the message and is stored as the actor."""
+    return {"change_kind": change_kind, "collection_id": collection_id, "actor": actor,
+            "message": message, "recipient": recipient, "event_ref": event_ref,
+            "dedupe_key": dedupe_key}
 
 
 def revoke_collection(

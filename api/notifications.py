@@ -449,14 +449,15 @@ _LISTING_PROJECTION = (
 # so the two never diverge. LEFT JOINs (not INNER): a collection_monitor row has
 # subscription_id NULL, so an INNER join to subscriptions would silently drop it.
 # Exposes the source discriminator + provenance the watchdog feed never needed.
-# `share_kind` + `share_ref` say what a share opens, read the same way off its key
-# (api/shares.py: `share:<collection|pipeline|dashboard>:<collection id | owner | dashboard id>:…`).
+# `share_kind` says what a share opens, read off its change_kind (`shared_<collection|pipeline|
+# dashboard>`, migration 652); `share_ref` its id, still read off the key (api/shares.py:
+# `share:<kind>:<collection id | owner | dashboard id>:…`) until W3 retires the key.
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
     "d.listing_id, d.property_id, d.change_kind, d.message, "
-    "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 2) END AS share_kind, "
+    "CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref, "
     "d.dispatched_at, d.seen_at, "
     "d.trigger_price_czk, d.prev_price_czk, d.trigger_snapshot_id, "

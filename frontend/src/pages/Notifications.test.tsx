@@ -58,7 +58,7 @@ const share: WatchdogDispatch = {
   ...baseDispatch,
   id: 'd4',
   source_kind: 'share',
-  change_kind: 'shared',
+  change_kind: 'shared_collection',
   message: 'owner@example.com shared the collection "Vinohrady" with you',
   subscription_id: null,
   subscription_name: null,
@@ -183,7 +183,7 @@ describe('<Notifications> source tabs', () => {
 describe('<Notifications> share rows', () => {
   it('shows the message and links to the shared collection', () => {
     renderPage();
-    const text = screen.getByRole('button', { name: /^Shared owner@example\.com shared the collection "Vinohrady"/ });
+    const text = screen.getByRole('button', { name: /^Shared collection owner@example\.com shared the collection "Vinohrady"/ });
     expect(text).toHaveAccessibleDescription('unread');
     expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('href', '/collection/42');
   });
@@ -203,12 +203,13 @@ describe('<Notifications> share rows', () => {
       message: 'owner@example.com shared their pipeline with you (edit)',
       collection_id: null,
       collection_name: null,
+      change_kind: 'shared_pipeline' as const,
       share_kind: 'pipeline' as const,
       share_ref: '0b0b0b0b-0000-4000-8000-000000000002',
     };
     renderPage({ ...feed, data: [pipelineShare], total: 1 });
     expect(
-      screen.getByRole('button', { name: /^Shared owner@example\.com shared their pipeline with you \(edit\)/ }),
+      screen.getByRole('button', { name: /^Shared pipeline owner@example\.com shared their pipeline with you \(edit\)/ }),
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open pipeline' })).toHaveAttribute('href', '/pipeline');
     expect(screen.queryByRole('link', { name: 'Open collection' })).toBeNull();
@@ -224,12 +225,13 @@ describe('<Notifications> share rows', () => {
       message: 'owner@example.com shared the dashboard "Ceny Praha" with you',
       collection_id: null,
       collection_name: null,
+      change_kind: 'shared_dashboard' as const,
       share_kind: 'dashboard' as const,
       share_ref: '6f1c2d3e-0000-4000-8000-000000000001',
     };
     renderPage({ ...feed, data: [dashboardShare], total: 1 });
     expect(
-      screen.getByRole('button', { name: /^Shared owner@example\.com shared the dashboard "Ceny Praha" with you/ }),
+      screen.getByRole('button', { name: /^Shared dashboard owner@example\.com shared the dashboard "Ceny Praha" with you/ }),
     ).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'Open dashboard' });
     expect(link).toHaveAttribute('href', '/browse?tab=stats&dashboard=6f1c2d3e-0000-4000-8000-000000000001');
@@ -240,8 +242,15 @@ describe('<Notifications> share rows', () => {
 
   it('renders a share it cannot open as text alone, with no link', () => {
     renderPage({ ...feed, data: [{ ...share, share_kind: null, share_ref: null, message: null }], total: 1 });
-    expect(screen.getByRole('button', { name: /^Shared Something was shared with you\./ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Shared collection Something was shared with you\./ })).toBeInTheDocument();
     expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  /* A grant made between migration 652 and the deploy keeps the old kind; it still reads as a share. */
+  it('renders a share still labelled with the old kind as a share', () => {
+    const legacy = { ...share, change_kind: 'shared' as unknown as WatchdogDispatch['change_kind'] };
+    renderPage({ ...feed, data: [legacy], total: 1 });
+    expect(screen.getByRole('button', { name: /^Shared owner@example\.com shared the collection/ })).toBeInTheDocument();
   });
 
   it('nests no control inside another', () => {

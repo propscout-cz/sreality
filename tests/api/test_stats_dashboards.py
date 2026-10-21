@@ -306,11 +306,14 @@ def test_a_new_share_writes_one_recipient_stamped_notification_and_returns_the_d
     assert share == ("INSERT INTO stats_dashboard_shares (dashboard_id, recipient_account_id) VALUES (%s, %s) "
                      "ON CONFLICT DO NOTHING RETURNING account_id", (_ID, _RECIPIENT))
     sql, params = dispatch
-    assert "VALUES ('share', %s::bigint, 'shared', account_email(%s::uuid) || %s::text," in sql
+    assert "account_email(%(actor)s::uuid) || %(message)s::text" in sql
     assert "ON CONFLICT DO NOTHING" in sql
-    # (no collection, the owner the trigger stamped for the label, the text, the recipient, the key)
-    assert params == (None, _ACCT, ' shared the dashboard "Praha byty" with you', _RECIPIENT,
-                      f"share:dashboard:{_ID}:{_RECIPIENT}")
+    # No collection; the owner the trigger stamped labels the text and is the actor (migration 652).
+    assert params == {
+        "change_kind": "shared_dashboard", "collection_id": None, "actor": _ACCT,
+        "message": ' shared the dashboard "Praha byty" with you', "recipient": _RECIPIENT,
+        "event_ref": str(_ID), "dedupe_key": f"share:dashboard:{_ID}:{_RECIPIENT}",
+    }
     assert identity.tx == ["commit"]
     # The gate ran first, and the answer is re-read on the tenant connection (with shared_with).
     assert conn.executed[0][0] == _GATE and conn.executed[-1][0].startswith("SELECT t.id")
@@ -341,7 +344,7 @@ def test_a_revoke_then_re_share_notifies_no_second_time(client, conn, monkeypatc
         assert client.post(f"/stats/dashboards/{_ID}/shares", json={"email": "b@x.cz"}).status_code == 200
         [(sql, params)] = [(q, p) for q, p in identity.executed if "notification_dispatches" in q]
         assert sql.endswith("ON CONFLICT DO NOTHING")
-        keys.append(params[4])
+        keys.append(params["dedupe_key"])
         revoke = ScriptConn([(_starts("DELETE FROM stats_dashboard_shares"), [(1,)])])
         assert shares.revoke_dashboard(revoke, str(_ID), str(_RECIPIENT)) == {"deleted": True}
     assert keys == [f"share:dashboard:{_ID}:{_RECIPIENT}"] * 2

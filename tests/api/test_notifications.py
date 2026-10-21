@@ -889,18 +889,19 @@ def test_dispatch_select_projects_message() -> None:
 
 
 def test_dispatch_select_names_what_a_share_opens() -> None:
-    """A share's bell row opens its collection, the owner's pipeline or the dashboard (migration 647):
-    api/shares.py keys every share `share:<kind>:<ref>:<recipient>…`, so the kind is the second segment and
-    the collection id / owner / dashboard id the third; every other producer reads NULL for both."""
+    """A share's bell row opens its collection, the owner's pipeline or the dashboard: the kind is
+    its change_kind's suffix (`shared_<collection|pipeline|dashboard>`, migration 652) and its id is
+    still the key's third segment (`share:<kind>:<ref>:<recipient>…`) until W3; every other
+    producer reads NULL for both."""
     from api.notifications import _DISPATCH_SELECT
 
-    assert ("CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 2) END AS share_kind, "
+    assert ("CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
             "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref"
             ) in _DISPATCH_SELECT
-    for key, kind, ref in (("share:collection:7:r", "collection", "7"),
-                           ("share:pipeline:o:r:edit", "pipeline", "o"),
-                           ("share:dashboard:d:r", "dashboard", "d")):
-        assert key.split(":")[1:3] == [kind, ref]
+    for kind, key, opens, ref in (("shared_collection", "share:collection:7:r", "collection", "7"),
+                                  ("shared_pipeline", "share:pipeline:o:r:edit", "pipeline", "o"),
+                                  ("shared_dashboard", "share:dashboard:d:r", "dashboard", "d")):
+        assert (kind.split("_")[1], key.split(":")[2]) == (opens, ref)
 
 
 def test_dispatch_feed_reads_listings_through_the_public_view() -> None:

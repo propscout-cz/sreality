@@ -1110,10 +1110,23 @@ export interface SavedDashboard {
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
-  /* Something was shared with the caller (migrations 610 + 641): a collection
-   * (collection_id set) or a pipeline (collection_id null); change_kind
-   * 'shared', no listing subject — the `message` text. */
+  /* Something was shared with the caller (migrations 610, 641, 647): a collection
+   * (collection_id set), a pipeline or a dashboard (collection_id null); change_kind
+   * names which (migration 652), no listing subject — the `message` text. */
   | 'share';
+
+/* Why a dispatch fired: a detector's event, or what a share opens (the change_kind
+ * CHECK of migration 652, minus the kinds no feed row carries). */
+export type DispatchChangeKind =
+  | 'new'
+  | 'price_drop'
+  | 'price_rise'
+  | 'inactive'
+  | 'reactivated'
+  | 'new_source'
+  | 'shared_collection'
+  | 'shared_dashboard'
+  | 'shared_pipeline';
 
 export interface WatchdogDispatch {
   id: string;
@@ -1130,14 +1143,14 @@ export interface WatchdogDispatch {
    * fired ('new' = newly matched the filter, 'price_drop' = a recent price
    * decrease). */
   property_id: number | null;
-  change_kind: string;
-  /* Free-text body of a `share` row (change_kind 'shared'), which has no
+  change_kind: DispatchChangeKind;
+  /* Free-text body of a `share` row (change_kind 'shared_<kind>'), which has no
    * listing subject; null on watchdog / collection_monitor rows. */
   message: string | null;
-  /* What a `share` row shares, read by the API off its dedupe key
-   * (`share:<kind>:<ref>:…`): the kind, and its id — the collection id, the
-   * owner's account uuid for a pipeline, the dashboard uuid. Null on every
-   * other producer. */
+  /* What a `share` row shares: the kind (the API reads it off change_kind,
+   * migration 652), and its id off the dedupe key (`share:<kind>:<ref>:…`) — the
+   * collection id, the owner's account uuid for a pipeline, the dashboard uuid.
+   * Null on every other producer. */
   share_kind: 'collection' | 'pipeline' | 'dashboard' | null;
   share_ref: string | null;
   dispatched_at: string;
