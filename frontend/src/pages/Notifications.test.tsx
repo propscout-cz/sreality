@@ -246,11 +246,19 @@ describe('<Notifications> share rows', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  /* A grant made between migration 652 and the deploy keeps the old kind; it still reads as a share. */
-  it('renders a share still labelled with the old kind as a share', () => {
-    const legacy = { ...share, change_kind: 'shared' as unknown as WatchdogDispatch['change_kind'] };
+  /* A grant made between migration 652's apply and the deploy keeps the old kind until 652 is re-run.
+   * The API reads such a row's share_kind off its key (`share:collection:42:…` → 'collection'), so it
+   * arrives as below: labelled "Shared", and it keeps its link. */
+  it('renders a share still labelled with the old kind as a share that keeps its link', () => {
+    const legacy = {
+      ...share,
+      change_kind: 'shared' as unknown as WatchdogDispatch['change_kind'],
+      share_kind: 'collection' as const,
+      share_ref: '42',
+    };
     renderPage({ ...feed, data: [legacy], total: 1 });
     expect(screen.getByRole('button', { name: /^Shared owner@example\.com shared the collection/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('href', '/collection/42');
   });
 
   it('nests no control inside another', () => {

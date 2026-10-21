@@ -871,13 +871,19 @@ def test_dispatch_select_names_what_a_share_opens() -> None:
     producer reads NULL for both."""
     from api.notifications import _DISPATCH_SELECT
 
-    assert ("CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
+    assert ("CASE WHEN d.source_kind = 'share' THEN CASE WHEN d.change_kind = 'shared' "
+            "THEN split_part(d.dedupe_key, ':', 2) ELSE split_part(d.change_kind, '_', 2) END "
+            "END AS share_kind, "
             "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref"
             ) in _DISPATCH_SELECT
     for kind, key, opens, ref in (("shared_collection", "share:collection:7:r", "collection", "7"),
                                   ("shared_pipeline", "share:pipeline:o:r:edit", "pipeline", "o"),
-                                  ("shared_dashboard", "share:dashboard:d:r", "dashboard", "d")):
-        assert (kind.split("_")[1], key.split(":")[2]) == (opens, ref)
+                                  ("shared_dashboard", "share:dashboard:d:r", "dashboard", "d"),
+                                  # A grant between 652's apply and the deploy keeps 'shared'
+                                  # (until 652's re-run): its kind is read off the key.
+                                  ("shared", "share:collection:7:r", "collection", "7")):
+        rendered = key.split(":")[1] if kind == "shared" else kind.split("_")[1]
+        assert (rendered, key.split(":")[2]) == (opens, ref)
 
 
 def test_dispatch_feed_reads_listings_through_the_public_view() -> None:

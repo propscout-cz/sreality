@@ -450,14 +450,18 @@ _LISTING_PROJECTION = (
 # subscription_id NULL, so an INNER join to subscriptions would silently drop it.
 # Exposes the source discriminator + provenance the watchdog feed never needed.
 # `share_kind` says what a share opens, read off its change_kind (`shared_<collection|pipeline|
-# dashboard>`, migration 652); `share_ref` its id, still read off the key (api/shares.py:
-# `share:<kind>:<collection id | owner | dashboard id>:…`) until W3 retires the key.
+# dashboard>`, migration 652) — off the key for a row still labelled 'shared' (a grant between
+# 652's apply and the deploy, until its re-run), so it keeps its link; `share_ref` its id, still
+# read off the key (api/shares.py: `share:<kind>:<collection id | owner | dashboard id>:…`)
+# until W3 retires the key.
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
     "d.listing_id, d.property_id, d.change_kind, d.message, "
-    "CASE WHEN d.source_kind = 'share' THEN split_part(d.change_kind, '_', 2) END AS share_kind, "
+    "CASE WHEN d.source_kind = 'share' THEN CASE WHEN d.change_kind = 'shared' "
+    "THEN split_part(d.dedupe_key, ':', 2) ELSE split_part(d.change_kind, '_', 2) END "
+    "END AS share_kind, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref, "
     "d.dispatched_at, d.seen_at, "
     "d.trigger_price_czk, d.prev_price_czk, d.trigger_snapshot_id, "
