@@ -452,20 +452,17 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         return []
     if sql == S.RT_STALE_SQL:
         # Every asked advert, its last refresh, whether a merge may NOT rest on it, its row's
-        # categories, whether its cluster holds an active listing and its location row's town
-        # (E974); an advert with no row is stale (fail closed), as the left join makes it.
+        # categories and its location row's town (E974); an advert with no row is stale (fail
+        # closed), as the left join makes it.
         bound = db.now - timedelta(seconds=float(p["fresh_s"]))
         since = (datetime.fromisoformat(p["engine_since"]) if p.get("engine_since") else None)
         out = []
         for listing_id in sorted({int(i) for i in p["listing_ids"]}):
             row = db.rt_fp.get((gen, listing_id)) or {}
             stamp = row.get("updated_at")
-            keys = {k for g, k, i in db.cluster_members if g == gen and i == listing_id}
-            active = any(db.listings.get(i, {}).get("is_active")
-                         for g, k, i in db.cluster_members if g == gen and k in keys)
             out.append((listing_id, stamp, stamp is None or stamp < bound
                         or (since is not None and stamp < since),
-                        row.get("category_main"), row.get("category_type"), active,
+                        row.get("category_main"), row.get("category_type"),
                         (db.locations.get(listing_id) or {}).get("obec_kod")))
         return out
     if sql == S.RT_FP_DD_SQL:

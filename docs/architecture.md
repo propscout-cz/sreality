@@ -1915,13 +1915,13 @@ renumber.** Navigate by area:
     claim as its row stored it (E960), so a merge is applied only when every advert it moves was
     refreshed — re-read and its pairs re-decided — within 12 h (a policy window) and under the
     engine version the lane runs now; otherwise the group waits (`stale_decision`) and the next
-    pass re-claims waiting groups whole — a group whose cluster holds an active advert first
-    (E973), then Praha, the towns the apply scope names with a `town:` block, the rest (E974,
-    the operator's order of 2026-10-21), then flats for sale, flats for rent, houses and
-    commercial for sale, the rest (E972, E974), oldest first within each, a group going by its
-    best member — 200 adverts on top of its feeds (E971: the worker's
-    memory holds a pass to ~300 adverts; a group that does not fit is skipped for the next
-    ones, the first taken whole whatever its size, E973), never more than the
+    pass re-claims waiting groups whole — Praha, the towns the apply scope names with a
+    `town:` block, the rest (E974, the operator's order of 2026-10-21), then flats for sale,
+    flats for rent, houses and commercial for sale, the rest (E972, E974), oldest first within
+    each, a group going by its best member, active and inactive groups together (the operator's
+    ruling of 2026-10-21 retired E973's active-first level) — 200 adverts on top of its feeds
+    (E971: the worker's memory holds a pass to ~300 adverts; a group that does not fit is
+    skipped for the next ones, the first taken whole whatever its size, E973), never more than the
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
     (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
     shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is

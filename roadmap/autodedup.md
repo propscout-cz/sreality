@@ -137,7 +137,8 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
 - **E974 (2026-10-21, the operator's region order):** the waiting groups are re-claimed Praha first, then
   the eight towns the apply scope names with a `town:` block, then the rest (the Středočeský kraj okresy
   to come); within each, flats for sale, flats for rent, houses and commercial for sale, the rest.
-  E973's active-first stays above the region. An order only: no decision module, digest unchanged.
+  Active and inactive groups together: the operator's ruling of 2026-10-21 ("aktivní i neaktivní
+  dohromady") retired E973's active-first level. An order only: no decision module, digest unchanged.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.
