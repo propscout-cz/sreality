@@ -1,7 +1,6 @@
 # Notifications: one event, one feed, one push path
 
-> **Status: PLAN, awaiting operator approval (2026-10-21). Nothing here is built.** The eleven rulings
-> in § 6 are open; the recommended defaults are marked. The audit this program answers is in
+> **Status: APPROVED 2026-10-21 (all eleven rulings taken, recorded in § 6). Build in progress, W1 first.** The audit this program answers is in
 > [AUDIT.md](./AUDIT.md) (28 confirmed findings, cited below as F1–F28). Build sequencing:
 > § 5 Waves; every wave's PR updates the docs and skills it changes (CLAUDE.md rule) and the
 > roadmap track. Operator brief: push through the iPhone app (the installed PWA) for watchdog,
@@ -209,17 +208,17 @@ Migration numbers are claimed at merge (648 is #1938's). Additive ones run throu
 
 Decided by your brief: shares are pushed; push is for the iPhone, an app rule (the switch shows only there). The server accepts any Apple endpoint, macOS Safari included; Android would need one more host.
 
-1. **R1. Replace the Email/Telegram picker (watchdogs, collections) and Settings › Delivery with one switch per iPhone?** (a) Yes. (b) No; it would then control nothing (dead code). **Recommended: (a).** Nobody ticked it; switched on, it mails other users' alerts to you.
-2. **R2. Should system/health alerts leave the bell and live only on Health, with the GitHub email as the alarm?** This reverses your 2026-10-18 "bell only" ruling. (a) Yes; the 902 old rows stay as history the app never shows. (b) Yes, and delete them after a backup (amending rule 16's "append-only"). (c) No; they stay in a System tab, never pushed or counted (one special case). **Recommended: (a).** None was read; they bury your 8 real alerts.
-3. **R3. Should /watchdog drop its second alert list (with the MF-yield and portal columns) and just list your watchdogs, all alerts living in Notifications with "Load more"?** (a) Yes. (b) No. **Recommended: (a).** It copies the feed.
-4. **R4. On the phone: a bell with the count, that number on the app icon, and the switch in the account sheet?** (a) All three. (b) Bell and switch. (c) Switch only. **Recommended: (a).** Without a bell a push leads nowhere else.
-5. **R5. Delete the unused email code now, rebuilding email to each account's own address when you switch it on?** (a) Delete; git keeps it. (b) Keep it parked, uncallable. **Recommended: (a).** It sent nothing, and its one shared address is the leak.
-6. **R6. Timing?** (a) Every kind checked every 5 min; "Staženo z nabídky" after 24 h gone; a new or re-enabled watchdog alerts only on what appears afterwards. (b) As (a), but a new watchdog first shows the last 24 h. (c) Today's behaviour. **Recommended: (a).** Daily is too slow, blinks fake "Delisted", resumes flood.
-7. **R7. Ship push now on today's railway.app address?** (a) Now; after the domain move each user re-adds the app and taps the switch once. (b) Wait. **Recommended: (a).** The move forces a reinstall anyway.
-8. **R8. Approve one destructive cleanup window in W6, backup first?** (a) Approve. (b) Leave the dead columns. **Recommended: (a).** All of it is empty, constant or unread.
-9. **R9. Should the GitHub alarm e-mail keep reminding at 6 h, 24 h, 72 h, then weekly, or hourly until you acknowledge?** (a) As today. (b) Hourly. **Recommended: (a).** Hourly would have mailed you on each of the last 24 runs.
-10. **R10. "Estimate rent" and "Run matcher now":** (a) delete both; (b) keep "Run matcher now" for admins. **Recommended: (a).** Both are security holes with 0 uses.
-11. **R11. Can one person ping your phone with shares at most once a day (the rest still reach the bell), and should the bell drop their email once a share ends?** (a) Yes. (b) No limit; keep the email. **Recommended: (a).** Signup is open; anyone could otherwise flood a stranger's lock screen.
+1. **R1. Replace the Email/Telegram picker (watchdogs, collections) and Settings › Delivery with one switch per iPhone?** (a) Yes. (b) No; it would then control nothing (dead code). **Recommended: (a).** Nobody ticked it; switched on, it mails other users' alerts to you. **Ruled 2026-10-21: (a).**
+2. **R2. Should system/health alerts leave the bell and live only on Health, with the GitHub email as the alarm?** This reverses your 2026-10-18 "bell only" ruling. (a) Yes; the 902 old rows stay as history the app never shows. (b) Yes, and delete them after a backup (amending rule 16's "append-only"). (c) No; they stay in a System tab, never pushed or counted (one special case). **Recommended: (a).** None was read; they bury your 8 real alerts. **Ruled 2026-10-21: (b).**
+3. **R3. Should /watchdog drop its second alert list (with the MF-yield and portal columns) and just list your watchdogs, all alerts living in Notifications with "Load more"?** (a) Yes. (b) No. **Recommended: (a).** It copies the feed. **Ruled 2026-10-21: (a).**
+4. **R4. On the phone: a bell with the count, that number on the app icon, and the switch in the account sheet?** (a) All three. (b) Bell and switch. (c) Switch only. **Recommended: (a).** Without a bell a push leads nowhere else. **Ruled 2026-10-21: (a).**
+5. **R5. Delete the unused email code now, rebuilding email to each account's own address when you switch it on?** (a) Delete; git keeps it. (b) Keep it parked, uncallable. **Recommended: (a).** It sent nothing, and its one shared address is the leak. **Ruled 2026-10-21: (a).**
+6. **R6. Timing?** (a) Every kind checked every 5 min; "Staženo z nabídky" after 24 h gone; a new or re-enabled watchdog alerts only on what appears afterwards. (b) As (a), but a new watchdog first shows the last 24 h. (c) Today's behaviour. **Recommended: (a).** Daily is too slow, blinks fake "Delisted", resumes flood. **Ruled 2026-10-21: (a).**
+7. **R7. Ship push now on today's railway.app address?** (a) Now; after the domain move each user re-adds the app and taps the switch once. (b) Wait. **Recommended: (a).** The move forces a reinstall anyway. **Ruled 2026-10-21: (a).**
+8. **R8. Approve one destructive cleanup window in W6, backup first?** (a) Approve. (b) Leave the dead columns. **Recommended: (a).** All of it is empty, constant or unread. **Ruled 2026-10-21: (a).**
+9. **R9. Should the GitHub alarm e-mail keep reminding at 6 h, 24 h, 72 h, then weekly, or hourly until you acknowledge?** (a) As today. (b) Hourly. **Recommended: (a).** Hourly would have mailed you on each of the last 24 runs. **Ruled 2026-10-21: (a).**
+10. **R10. "Estimate rent" and "Run matcher now":** (a) delete both; (b) keep "Run matcher now" for admins. **Recommended: (a).** Both are security holes with 0 uses. **Ruled 2026-10-21: (a).**
+11. **R11. Can one person ping your phone with shares at most once a day (the rest still reach the bell), and should the bell drop their email once a share ends?** (a) Yes. (b) No limit; keep the email. **Recommended: (a).** Signup is open; anyone could otherwise flood a stranger's lock screen. **Ruled 2026-10-21: (a).**
 
 ## 7. Risks, and what we will NOT do
 
