@@ -1,6 +1,6 @@
 # MERGE BY LETTERS — Browse's merge mode as one statement
 
-**Status:** BUILT 2026-10-21 (one PR, no migration); merges in the autodedup session's window.
+**Status:** LIVE 2026-10-21 06:10Z — PR #1926 merged as 3e6a904d on the autodedup session's green light (no migration); Railway API / vite / realtime-worker green 06:10Z; the read-only production check of the keys passed (19 steps over 24 live cards: pointer focus, a letter key, Tab past the chevrons, "Merge A" offered after one GET preview, → paged 1 / 29 → 2 / 29, Backspace, Shift+Tab, a second letter, Cancel; 0 console errors, 0 POST).
 **Track:** [roadmap/operator-workflow-track.md](../../../roadmap/operator-workflow-track.md) § U-MERGE-LETTERS.
 **Binds with:** rule 15, MS12 / MS15 / MS16 / MS17 / MS18 of the merge sprint
 ([merge-sprint/PROGRAM.md](../merge-sprint/PROGRAM.md)); the glossary term **Letter**.
@@ -119,6 +119,6 @@ duplicate `useMutation`, the second `lettersParam`. Comes: `merge_letters` + the
 
 ## Owed
 
-- The first real multi-letter merge in production (a read-only browser check of the keys after the
-  rollout).
+- The first real multi-letter merge by the operator (the read-only check of the keys on production
+  passed 2026-10-21; nothing was merged by it).
 - The open idea on the track stays open: naming twins outside the current filter in merge mode.
