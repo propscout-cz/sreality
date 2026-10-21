@@ -872,72 +872,20 @@ def test_no_producer_writes_routing_or_the_legacy_id() -> None:
         assert not named & {"channel", "status", "target_channels", "sreality_id"}, named
 
 
-def test_get_unread_count_breaks_down_by_source() -> None:
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (
-            lambda s: "GROUP BY d.source_kind" in s,
-            [("watchdog", 4), ("collection_monitor", 3)],
-            0,
-        ),
-    ]
-    conn = _FakeConn(script)
-    out = get_unread_count(conn)  # type: ignore[arg-type]
-    assert out == {
-        "watchdog": 4, "collection_monitor": 3, "share": 0, "system_health": 0,
-        "total": 7, "unread_count": 7,
-    }
-    scoped = get_unread_count(conn, source_kind="collection_monitor")  # type: ignore[arg-type]
-    assert scoped["unread_count"] == 3
-
-
-def test_get_unread_count_sums_system_health_into_total() -> None:
-    # total sums EVERY kind, not a hardcoded watchdog+collection_monitor — the bug
-    # that previously dropped system_health alerts from the nav badge.
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (
-            lambda s: "GROUP BY d.source_kind" in s,
-            [("watchdog", 4), ("collection_monitor", 3), ("system_health", 2)],
-            0,
-        ),
-    ]
-    conn = _FakeConn(script)
-    out = get_unread_count(conn)  # type: ignore[arg-type]
-    assert out["system_health"] == 2
-    assert out["total"] == 9
-    assert out["unread_count"] == 9
-    scoped = get_unread_count(conn, source_kind="system_health")  # type: ignore[arg-type]
-    assert scoped["unread_count"] == 2
-
-
-def test_get_unread_count_names_the_share_kind() -> None:
-    # Every SourceKind gets its own count from the ONE alias; both share kinds are one 'share'
-    # producer (migrations 610 + 641).
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "GROUP BY d.source_kind" in s, [("share", 2)], 0),
-    ]
-    out = get_unread_count(_FakeConn(script))  # type: ignore[arg-type]
-    assert out["share"] == 2 and out["total"] == 2
-    assert "collection_share" not in out
+def test_the_unread_count_is_one_number() -> None:
+    """Bell and badge count one visible set (program § 3.6): no per-source breakdown, no scope."""
+    conn = _FakeConn([(lambda s: s.startswith("SELECT count(*) FROM notification_dispatches d"),
+                       [(7,)], 0)])
+    assert get_unread_count(conn) == {"unread_count": 7}  # type: ignore[arg-type]
+    [(sql, params)] = conn.executed
+    assert "GROUP BY" not in sql and "source_kind" not in sql and params is None
 
 
 def test_dispatch_select_projects_message() -> None:
-    # The feed row carries d.message so system_health alerts render their verbatim text.
+    # The feed row carries d.message, the share's sentence.
     from api.notifications import _DISPATCH_SELECT
 
     assert "d.message" in _DISPATCH_SELECT
-
-
-def test_dispatch_select_names_the_check_a_system_alert_is_about() -> None:
-    """The bell's "Open Health" opens Health at the alert's check, as the outbox's links do. Every system dedupe
-    key opens `sys:<key>:` (emit_system_alert refuses any other), so the key is its second segment; every other
-    producer's key (`wd:…`, `cm:…`) names no check and reads NULL. Checked live on 2026-10-19: all 882 system rows
-    agree with the outbox's `^sys:([a-z0-9_]+):` and no other row carries a key."""
-    from api.notifications import _DISPATCH_SELECT
-
-    assert (
-        "CASE WHEN d.source_kind = 'system_health' "
-        "THEN split_part(d.dedupe_key, ':', 2) END AS check_key"
-    ) in _DISPATCH_SELECT
 
 
 def test_dispatch_select_names_what_a_share_opens() -> None:
@@ -1039,7 +987,7 @@ def test_every_in_app_read_and_count_hides_dismissed_properties() -> None:
     for sql in reads:
         assert _HIDDEN in sql, sql
     totals = [s for s in reads if s.startswith("SELECT count(*) FROM notification_dispatches d")]
-    assert len(totals) == 2
+    assert len(totals) == 3  # the badge, and the two feed reads' first-page totals
 
 
 def test_a_dispatch_is_still_reachable_by_id() -> None:

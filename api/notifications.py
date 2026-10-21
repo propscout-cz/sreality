@@ -36,7 +36,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -51,8 +51,9 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
-# The notification_dispatches producers (rule 16; CHECK notification_dispatches_source_ck).
-SourceKind = Literal["watchdog", "collection_monitor", "share", "system_health"]
+# The producers whose rows the feed shows (rule 16; CHECK notification_dispatches_source_ck).
+# system_health rows are history the app no longer shows (ruling R2, notifications W1).
+SourceKind = Literal["watchdog", "collection_monitor", "share"]
 SourceKindFilter = Literal[SourceKind, "all"]
 
 
@@ -448,9 +449,6 @@ _LISTING_PROJECTION = (
 # so the two never diverge. LEFT JOINs (not INNER): a collection_monitor row has
 # subscription_id NULL, so an INNER join to subscriptions would silently drop it.
 # Exposes the source discriminator + provenance the watchdog feed never needed.
-# `check_key` names the check a system alert is about, so the bell's "Open Health"
-# opens Health at it: every system dedupe key opens `sys:<key>:`
-# (toolkit.system_alerts.emit_system_alert); null on every other producer.
 # `share_kind` + `share_ref` say what a share opens, read the same way off its key
 # (api/shares.py: `share:<collection|pipeline|dashboard>:<collection id | owner | dashboard id>:…`).
 _DISPATCH_SELECT = (
@@ -458,8 +456,6 @@ _DISPATCH_SELECT = (
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
     "d.listing_id, d.property_id, d.change_kind, d.message, "
-    "CASE WHEN d.source_kind = 'system_health' "
-    "THEN split_part(d.dedupe_key, ':', 2) END AS check_key, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 2) END AS share_kind, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref, "
     "d.dispatched_at, d.seen_at, "
@@ -621,32 +617,15 @@ def _fetch_dispatch(
     return _dispatch_row_to_dict(cols, row)
 
 
-def get_unread_count(
-    conn: "psycopg.Connection",
-    *,
-    source_kind: SourceKindFilter = "all",
-) -> dict[str, int]:
-    """Unseen dispatch counts — drives the nav unread badge.
-
-    Always returns the per-source breakdown plus `unread_count` (the total, or
-    the scoped count when `source_kind` is set) so one call powers both a
-    combined badge and any per-surface count.
-    """
+def get_unread_count(conn: "psycopg.Connection") -> dict[str, int]:
+    """The one unread number (bell and badge): the caller's visible unseen dispatches."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT d.source_kind, count(*) FROM notification_dispatches d "
-            f"WHERE d.seen_at IS NULL AND {_NOT_DISMISSED} GROUP BY d.source_kind"
+            "SELECT count(*) FROM notification_dispatches d "
+            f"WHERE d.seen_at IS NULL AND {_NOT_DISMISSED}"
         )
-        counts = {r[0]: int(r[1]) for r in cur.fetchall()}
-    # total sums EVERY source_kind (incl. system_health + any future kind), not a
-    # hardcoded watchdog+collection_monitor — the earlier hardcode silently dropped
-    # system_health alerts from the badge.
-    total = sum(counts.values())
-    return {
-        **{kind: counts.get(kind, 0) for kind in get_args(SourceKind)},
-        "total": total,
-        "unread_count": total if source_kind == "all" else counts.get(source_kind, 0),
-    }
+        row = cur.fetchone()
+    return {"unread_count": int(row[0]) if row else 0}
 
 
 def mark_all_seen(

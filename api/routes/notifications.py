@@ -144,16 +144,10 @@ def get_dispatches(
 
 @router.get("/unread-count")
 def get_unread_count(
-    source_kind: nf.SourceKindFilter = "all",
     conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, int]:
-    """Unseen dispatch counts for the nav badge.
-
-    Returns one count per `SourceKind` (api/notifications.py) + `total` + `unread_count` —
-    `unread_count` is the total (or the scoped count when `source_kind` is set). RLS scopes the
-    count to the caller's own account.
-    """
-    return nf.get_unread_count(conn, source_kind=source_kind)
+    """`{"unread_count": N}`, the one unread number; RLS scopes it to the caller's own account."""
+    return nf.get_unread_count(conn)
 
 
 @router.post("/mark-all-seen")
