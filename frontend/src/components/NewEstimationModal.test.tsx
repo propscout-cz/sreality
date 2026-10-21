@@ -72,28 +72,30 @@ function renderHost(count = 1) {
   );
 }
 
-const renderModals = (count = 1) => {
+const renderModals = async (count = 1) => {
   const utils = renderHost(count);
   screen.getAllByRole('button', { name: 'Open estimation' }).forEach((b) => fireEvent.click(b));
+  /* The body is a lazy chunk (first-visit budget): wait for every dialog to mount. */
+  await screen.findAllByRole('dialog');
   return utils;
 };
 
 describe('<NewEstimationModal>', () => {
-  it('names the dialog and offers no URL field', () => {
-    renderModals();
+  it('names the dialog and offers no URL field', async () => {
+    await renderModals();
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Estimate this property');
     expect(screen.queryByRole('textbox', { name: 'Listing URL' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: /Building/ })).not.toBeInTheDocument();
   });
 
-  it('seeds the selectors from the ad', () => {
-    renderModals();
+  it('seeds the selectors from the ad', async () => {
+    await renderModals();
     expect(screen.getByRole('radio', { name: 'House' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: 'Sale' })).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('names the operator-context textareas', () => {
-    renderModals();
+  it('names the operator-context textareas', async () => {
+    await renderModals();
     expect(screen.getByRole('textbox', { name: 'Special instructions' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Property context' })).toBeInTheDocument();
   });
@@ -102,7 +104,7 @@ describe('<NewEstimationModal>', () => {
     createEstimation.mockResolvedValue({
       id: 88, status: 'pending', subject_source: 'idnes', subject_source_id_native: 'abc123',
     });
-    renderModals();
+    await renderModals();
     fireEvent.click(screen.getByRole('radio', { name: 'Rent' }));
     fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
 
@@ -125,13 +127,13 @@ describe('<NewEstimationModal>', () => {
 
   it('says what the API refused, in its own words', async () => {
     createEstimation.mockRejectedValue(new ApiError('This listing needs a location to be estimated.', 422, null));
-    renderModals();
+    await renderModals();
     fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
     expect(await screen.findByText('This listing needs a location to be estimated.')).toBeInTheDocument();
   });
 
-  it('gives two mounted modals distinct ids, so neither steals the other label', () => {
-    renderModals(2);
+  it('gives two mounted modals distinct ids, so neither steals the other label', async () => {
+    await renderModals(2);
     const [a, b] = screen.getAllByRole('textbox', { name: 'Special instructions' });
     expect(a.id).not.toBe('');
     expect(a.id).not.toBe(b.id);
@@ -143,18 +145,18 @@ describe('<NewEstimationModal>', () => {
 });
 
 describe('<NewEstimationModal> dialog contract', () => {
-  it('names itself, traps focus, closes one layer on Escape and gives focus back', () => {
+  it('names itself, traps focus, closes one layer on Escape and gives focus back', async () => {
     renderHost();
     const trigger = screen.getByRole('button', { name: 'Open estimation' });
     expectDialogContract({ trigger, open: () => fireEvent.click(trigger) });
   });
 
-  it('opens on the primary action, not on the close glyph in front of it', () => {
-    renderModals();
+  it('opens on the primary action, not on the close glyph in front of it', async () => {
+    await renderModals();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Estimate' }));
   });
 
-  it('leaves no scroll lock behind when the page underneath navigates away', () => {
+  it('leaves no scroll lock behind when the page underneath navigates away', async () => {
     renderHost();
     const trigger = screen.getByRole('button', { name: 'Open estimation' });
     trigger.focus();
@@ -175,7 +177,7 @@ describe('<NewEstimationModal> in-flight guard', () => {
    * asserted against that one place. */
   async function submitAndHang() {
     createEstimation.mockReturnValue(new Promise(() => {}));
-    renderModals();
+    await renderModals();
     fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
     /* react-query settles `isPending` a microtask later, so waiting on the
      * button's in-flight label is what makes this test about the guard rather
