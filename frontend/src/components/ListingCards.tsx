@@ -31,10 +31,11 @@ import {
   CARD_SORTS,
   sortToParam,
   type CardRow,
+  type ListingFloor,
   type SortSpec,
 } from '@/lib/queries';
 import {
-  fmtArea, fmtCzk, fmtMeasuredPricePerM2,
+  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
 import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
@@ -369,7 +370,8 @@ function Card({
       });
     }
   }, [hovered, scrollOnHover]);
-  const title = formatTitle(r);
+  const hydration = useCardHydration();
+  const title = formatTitle(r, hydration.floorFor(r.listing_id));
   /* The card's letter in merge mode, the stretched button that holds it (the
    * card's one focus stop there: the pointer focuses it, Tab moves on) and the
    * carousel ← → page through. */
@@ -431,7 +433,7 @@ function Card({
      rows the layer holds (the comparables surface consumes those same rows
      un-projected), memoized on the array identity — the cohort map is stable
      across renders, so this recomputes only when this listing's photos change. */
-  const photos = useCardHydration().photosFor(r.listing_id);
+  const photos = hydration.photosFor(r.listing_id);
   const images = useMemo(() => taggedImageUrls(photos), [photos]);
   const cover = useMemo(() => coverIndex(photos, coverTag), [photos, coverTag]);
 
@@ -684,7 +686,12 @@ function focusFromPointer(button: HTMLButtonElement | null): void {
   button.focus({ preventScroll: true });
 }
 
-function formatTitle(r: CardRow): string {
+/* A storey is a fact about a UNIT in a building: 91 % of apartments and 25 % of
+ * commercial units carry one, but a house's is almost always the ground floor
+ * ("přízemí" on a house reads as a claim) and a plot has none. */
+const STOREY_CATEGORIES: ReadonlySet<string | null> = new Set(['byt', 'komercni']);
+
+function formatTitle(r: CardRow, storey: ListingFloor | null): string {
   // The specific subtype is the noun for commercial/houses ("Ubytování",
   // "Činžovní dům"); apartments + subtype-less rows fall back to the generic
   // category word ("Byt", "Komerční prostor"). disposition still appends for
@@ -694,6 +701,11 @@ function formatTitle(r: CardRow): string {
   const parts = [`${kind} ${deal}`];
   if (r.disposition) parts.push(r.disposition);
   if (r.area_m2 != null) parts.push(fmtArea(r.area_m2));
+  const floor =
+    storey != null && STOREY_CATEGORIES.has(r.category_main)
+      ? fmtFloor(storey.floor, storey.total_floors)
+      : null;
+  if (floor != null) parts.push(floor);
   const plot = plotBesideArea(r);
   if (plot != null) parts.push(fmtArea(plot, 'plot'));
   return parts.join(' · ');

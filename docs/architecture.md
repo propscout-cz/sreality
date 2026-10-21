@@ -3169,7 +3169,10 @@ renumber.** Navigate by area:
     server-side `DISTINCT ON`, deliberately a different QUERY from the multi-image
     `useListingPhotos` that Browse cards and the estimation comparables share (W7a): asking the
     multi-image read for one photo per card is the fetch-everything-then-discard W4 measured at
-    901 rows / 3,995 buffers for 44 cards; the **property's broker list** per card (MS7: the
+    901 rows / 3,995 buffers for 44 cards (Browse cards also opt into `floors` —
+    `useListingFloors`, `id,floor,total_floors` from `listings_public` per page-sized bucket, the
+    storey in the card title for apartments and commercial units — because `browse_list` carries no
+    floor column); the **property's broker list** per card (MS7: the
     property page's `propertyBrokers` rule, shown as its first entry plus "+N") via two batched
     reads — the cards' adverts (`fetchPropertySourcesByPropertyIds`), then their brokers
     (`fetchListingBrokersByIds`, `POST /brokers/by-listings`), NOT the raw drift-prone

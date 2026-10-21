@@ -48,6 +48,7 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     ...actual,
     fetchImagesForListingIds: vi.fn(async () => new Map()),
     fetchListingCovers: vi.fn(async () => new Map()),
+    fetchListingFloors: vi.fn(async () => new Map()),
     fetchPropertyCollectionMemberSet: vi.fn(async () => new Map()),
     /* The card's pipeline funnel reads these two shared queries. Unmocked they
        reach the network, so every role assertion below would depend on it. */
@@ -165,6 +166,8 @@ function renderGrid(
     orderPortal?: string | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
+    /* Browse opts the storey in; the grid tests that predate it do not. */
+    floors?: boolean;
   } = {},
 ) {
   const qc = new QueryClient({
@@ -175,7 +178,7 @@ function renderGrid(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <LocationProbe />
-        <CardHydrationProvider listingIds={[111]} renders={{ photos: 50 }}>
+        <CardHydrationProvider listingIds={[111]} renders={{ photos: 50, floors: opts.floors }}>
           <ListingCards
             rows={opts.rows ?? [opts.row ?? ROW]}
             total={1}
@@ -216,6 +219,8 @@ const withPhotos = () =>
 beforeEach(() => {
   vi.mocked(queries.fetchImagesForListingIds).mockReset();
   vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
+  vi.mocked(queries.fetchListingFloors).mockReset();
+  vi.mocked(queries.fetchListingFloors).mockResolvedValue(new Map());
   vi.mocked(queries.fetchPipelineMembers).mockResolvedValue(new Map());
   vi.mocked(queries.fetchPipelineStages).mockResolvedValue([]);
   vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
@@ -305,6 +310,73 @@ describe('<ListingCards> photo hydration', () => {
     expect(await screen.findByText(/Sadová/)).toBeInTheDocument();
     expect(queries.fetchListingCovers).not.toHaveBeenCalled();
     expect(brokers.fetchListingBrokersByIds).not.toHaveBeenCalled();
+    expect(queries.fetchListingFloors).not.toHaveBeenCalled();
+  });
+});
+
+/* The storey on the card title. browse_list carries no floor, so it arrives
+   through the hydration layer like the photos: the card paints without it and
+   the storey joins the title when its read lands. */
+describe('<ListingCards> the storey', () => {
+  const STOREY_TITLE_RE = /^Byt na prodej · 2\+kk · 62\sm² · 4\. patro z 5 podlaží$/;
+  const storeyOf = (floor: number | null, total_floors: number | null) =>
+    vi.mocked(queries.fetchListingFloors).mockResolvedValue(
+      new Map([[111, { floor, total_floors }]]),
+    );
+
+  it('appends the floor and the building\'s podlaží to an apartment\'s title', async () => {
+    storeyOf(4, 5);
+
+    renderGrid({ floors: true });
+
+    expect(await screen.findByRole('link', { name: STOREY_TITLE_RE })).toBeInTheDocument();
+  });
+
+  it('paints the title without it while the floor read is still in flight', async () => {
+    vi.mocked(queries.fetchListingFloors).mockReturnValue(
+      new Promise(() => {}) as ReturnType<typeof queries.fetchListingFloors>,
+    );
+
+    renderGrid({ floors: true });
+
+    expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+  });
+
+  it('reads the cohort once, keyed on the surrogate listing id', async () => {
+    storeyOf(4, 5);
+
+    renderGrid({ floors: true });
+
+    await screen.findByRole('link', { name: STOREY_TITLE_RE });
+    expect(queries.fetchListingFloors).toHaveBeenCalledTimes(1);
+    expect(queries.fetchListingFloors).toHaveBeenCalledWith([111], expect.anything());
+  });
+
+  it('says nothing for an ad with no floor, rather than a gap or a zero', async () => {
+    storeyOf(null, 5);
+
+    renderGrid({ floors: true });
+
+    await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
+    expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
+  });
+
+  it('keeps a house\'s ground floor off the card — "přízemí" on a house is noise', async () => {
+    storeyOf(0, 2);
+
+    renderGrid({ floors: true, row: { ...ROW, category_main: 'dum' } as CardRow });
+
+    await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
+    expect(await screen.findByRole('link', { name: /^Dům na prodej/ })).toBeInTheDocument();
+    expect(screen.queryByText(/přízemí/)).toBeNull();
+  });
+
+  it('shows a commercial unit\'s ground floor', async () => {
+    storeyOf(0, 3);
+
+    renderGrid({ floors: true, row: { ...ROW, category_main: 'komercni', disposition: null } as CardRow });
+
+    expect(await screen.findByRole('link', { name: /přízemí z 3 podlaží$/ })).toBeInTheDocument();
   });
 });
 
