@@ -15,15 +15,16 @@ import type { QueryClient } from '@tanstack/react-query';
 import { arrayMove } from '@dnd-kit/sortable';
 import { supabase } from './supabase';
 import { pgRead, type PgReadOptions } from './pgRead';
-import { apiPut } from './api';
+import { apiDelete, apiGet, apiPost, apiPut } from './api';
 import { browseKeys } from './browseKeys';
 import { buildBrowseStatsArgs, resolveBrowsePrefilters, type BrowsePrefilters } from './queries';
-import type { ListingFilters } from './filters';
+import type { ListingFilters, PresetSpec } from './filters';
 import { PPM2_UNIT, PRICE_PERIOD_UNIT, ppm2BasisFromToken } from './measure';
 import { categoryMainLabelPlural, categoryTypeLabel } from './enums';
 import { filterById } from './filterRegistry.generated';
 import { fmtCount } from './format';
 import { csCollator } from './collator';
+import type { SavedDashboard, TagColor } from './types';
 import {
   STATS_REGISTRY,
   type ChartStat,
@@ -178,19 +179,17 @@ export async function fetchStatsPivot(
  * it lives outside the browse sweep. */
 export const statsDashboardKey = ['stats-dashboard'] as const;
 
-/* RLS returns the caller's row; no row ⇒ the default board, and the first save
- * persists the whole list. A saved EMPTY list is the user's choice and stays empty.
- * Single-membership assumption: RLS reads every account the user belongs to
- * (current_account_ids) while PUT writes the first one (require_account_id). One
- * user has one membership today; a second one (out of scope) needs a
- * GET /stats/dashboard on the write's account resolution instead of this read. */
+/* GET /stats/dashboard: the account's WORKING board (the unnamed row, migration
+ * 647), resolved like the PUT's. No row ⇒ the default board, and the first save
+ * persists the whole list. A saved EMPTY list is the user's choice and stays empty. */
 export async function fetchDashboard({ signal }: PgReadOptions = {}): Promise<ChartSpec[]> {
-  const { data } = await pgRead<{ charts: unknown } | null>(
-    supabase.from('stats_dashboards').select('charts').is('name', null).limit(1).maybeSingle(),
-    { signal },
+  const row = await apiGet<{ id: string; charts: unknown; updated_at: string } | null>(
+    '/stats/dashboard',
+    undefined,
+    signal,
   );
-  if (data == null) return DEFAULT_CHARTS;
-  return sanitizeCharts(data.charts);
+  if (row == null) return DEFAULT_CHARTS;
+  return sanitizeCharts(row.charts);
 }
 
 /* PUT /stats/dashboard {charts}: the whole document, validated server-side by
@@ -199,6 +198,50 @@ export async function saveDashboard(charts: ChartSpec[]): Promise<ChartSpec[]> {
   const res = await apiPut<{ charts: unknown }>('/stats/dashboard', { charts });
   return sanitizeCharts(res.charts);
 }
+
+/* The NAMED dashboards (migration 647): the filter presets' twin in the one
+ * saved-set primitive (docs/design/saved-dashboards.md) — the same six routes
+ * under /stats/dashboards, plus read-only sharing. The list holds the caller's
+ * own and those shared with it (`owner_email` set); a write to a shared one is
+ * the owner's alone (404 for a recipient). On a PUT an explicit
+ * `filter_spec: null` clears the filter, an absent one keeps it. They live here,
+ * in the Stats chunk, not in lib/api: the first-visit bundle never pays for them. */
+export const statsDashboardKeys = {
+  all: ['stats-dashboards'] as const,
+};
+
+export type DashboardList = { data: SavedDashboard[]; total: number };
+const dashboardPath = (id: string, tail = ''): string =>
+  `/stats/dashboards/${encodeURIComponent(id)}${tail}`;
+
+export const listStatsDashboards = (): Promise<DashboardList> =>
+  apiGet<DashboardList>('/stats/dashboards');
+
+export const createStatsDashboard = (input: {
+  name: string;
+  charts: ChartSpec[];
+  filter_spec?: PresetSpec;
+  color?: TagColor | null;
+}): Promise<SavedDashboard> => apiPost<SavedDashboard>('/stats/dashboards', input);
+
+export const updateStatsDashboard = (
+  id: string,
+  patch: { name?: string; charts?: ChartSpec[]; filter_spec?: PresetSpec | null; color?: TagColor | null },
+): Promise<SavedDashboard> => apiPut<SavedDashboard>(dashboardPath(id), patch);
+
+export const deleteStatsDashboard = (id: string): Promise<unknown> => apiDelete(dashboardPath(id));
+
+/* The caller's own dashboards in their new order; answers the canonical list. */
+export const reorderStatsDashboards = (ids: string[]): Promise<DashboardList> =>
+  apiPut<DashboardList>('/stats/dashboards/reorder', { ids });
+
+/* Answers the dashboard with its `shared_with`. */
+export const shareStatsDashboard = (id: string, email: string): Promise<SavedDashboard> =>
+  apiPost<SavedDashboard>(dashboardPath(id, '/shares'), { email });
+
+/* The owner revokes a recipient, or a recipient leaves (its own grant's account_id). */
+export const unshareStatsDashboard = (id: string, account_id: string): Promise<unknown> =>
+  apiDelete(dashboardPath(id, `/shares/${encodeURIComponent(account_id)}`));
 
 /* -------------------------------------------------------------------------- */
 /* The registry by id, and the names the UI gives it                           */
@@ -317,8 +360,13 @@ export function sanitizeChart(raw: unknown): ChartSpec | null {
   return chartProblem(chart) == null ? chart : null;
 }
 
-const sanitizeCharts = (raw: unknown): ChartSpec[] =>
+export const sanitizeCharts = (raw: unknown): ChartSpec[] =>
   Array.isArray(raw) ? raw.map(sanitizeChart).filter((c): c is ChartSpec => c != null) : [];
+
+/* Two boards hold the same charts in the same order. sanitizeChart builds every
+ * chart with one key order, so the JSON of two sanitized lists is a stable compare. */
+export const chartsEqual = (a: readonly ChartSpec[], b: readonly ChartSpec[]): boolean =>
+  JSON.stringify(a.map(sanitizeChart)) === JSON.stringify(b.map(sanitizeChart));
 
 type Shelf = 'rows' | 'cols';
 

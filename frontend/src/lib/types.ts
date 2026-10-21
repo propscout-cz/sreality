@@ -1109,6 +1109,26 @@ export interface FilterPreset {
   color: TagColor | null;
 }
 
+/* A named Browse › Stats dashboard (stats_dashboards, migration 647): the
+ * filter preset's twin in the one saved-set primitive (docs/design/
+ * saved-dashboards.md). `charts` is its stored chart list — read it through
+ * lib/stats `sanitizeCharts`; `filter_spec` is the preset blob, null = the
+ * dashboard carries no filter. Sharing as a collection's: `owner_email` is null
+ * exactly when the caller owns it; the owner sees every recipient, a recipient
+ * only its own grant (the account_id it leaves with). */
+export interface SavedDashboard {
+  id: string;
+  name: string;
+  charts: unknown;
+  filter_spec: PresetSpec | null;
+  position: number;
+  color: TagColor | null;
+  created_at: string;
+  updated_at: string;
+  owner_email: string | null;
+  shared_with: CollectionShare[];
+}
+
 export type NotificationSourceKind =
   | 'watchdog'
   | 'collection_monitor'
@@ -1147,6 +1167,12 @@ export interface WatchdogDispatch {
    * (`sys:<check_key>:…`), so the bell opens Health at that check; null on every
    * other producer. */
   check_key: string | null;
+  /* What a `share` row shares, read by the API off its dedupe key
+   * (`share:<kind>:<ref>:…`): the kind, and its id — the collection id, the
+   * owner's account uuid for a pipeline, the dashboard uuid. Null on every
+   * other producer. */
+  share_kind: 'collection' | 'pipeline' | 'dashboard' | null;
+  share_ref: string | null;
   dispatched_at: string;
   seen_at: string | null;
   /* Change provenance — collection-monitor price events carry these so "why was
