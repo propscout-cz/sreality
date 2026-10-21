@@ -10,11 +10,11 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAuthRetryableFetchError, type Session, type User } from '@supabase/supabase-js';
 import { resetActiveBoard } from './acting';
-import { supabase } from './supabase';
+import { isSupabaseConfigured, supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
 import { syncAppBadge } from './appBadge';
-import { endPushHere, resyncPush, signOutPush } from './push';
+import { endPushHere, setPushGate, signOutPush } from './push';
 import { ROUTES } from './routes';
 
 /**
@@ -41,6 +41,17 @@ type AuthState = {
 };
 
 const AuthContext = createContext<AuthState | null>(null);
+
+/* THE notifications gate: the bell, the feed's nav entry, the unread poll and
+ * push (lib/push `setPushGate`) all follow it. Admins, unconfigured local dev
+ * and a plan read that failed (null: shown rather than blanked over a hiccup)
+ * pass; otherwise the plan's `notifications` agenda decides. */
+export function notificationsVisible(
+  isAdmin: boolean,
+  agendas: Record<string, boolean> | null,
+): boolean {
+  return isAdmin || !isSupabaseConfigured() || agendas === null || agendas['notifications'] === true;
+}
 
 /* Cache key for the session's plan agendas. Deliberately NOT under any
  * feature's namespace: it is session state, read once per user. */
@@ -142,10 +153,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * device's subscription ends locally (no JWT needed) and the icon badge
    * clears, so no subscription outlives its user. A launch that could not
    * refresh its session (`sessionUncertain`) ends nothing: its user is most
-   * likely still there. Identity BECOMING a user (the launch, a sign-in)
-   * re-sends it instead (lib/push `resyncPush`; idempotent, never prompts).
-   * None of it runs before the stored session is read (`loading`): the null it
-   * starts from is not yet anyone. */
+   * likely still there. None of it runs before the stored session is read
+   * (`loading`): the null it starts from is not yet anyone. */
   const prevUserId = useRef<string | null>(null);
   useEffect(() => {
     if (loading) return;
@@ -158,20 +167,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetActiveBoard();
       syncAppBadge(0);
       void endPushHere();
-    } else if (prev === null && userId !== null) {
-      void resyncPush();
-    } else if (prev === null && !sessionUncertain) {
+    } else if (prev === null && userId === null && !sessionUncertain) {
       syncAppBadge(0);
       void endPushHere();
     }
   }, [loading, userId, sessionUncertain, queryClient]);
+
+  /* Push rides the notifications gate, once the plan is read (admins never
+   * wait for it): turning true (a launch, a sign-in) re-sends this device's
+   * subscription (lib/push `resyncPush`; idempotent, never prompts), turning
+   * false (a plan without notifications) ends it here and re-sends nothing.
+   * Null while signed out or while the plan is read. */
+  const isAdmin = session?.user?.app_metadata?.is_admin === true;
+  const pushGate =
+    userId === null
+      ? null
+      : isAdmin || !agendasQ.isPending
+        ? notificationsVisible(isAdmin, agendas)
+        : null;
+  useEffect(() => {
+    setPushGate(pushGate);
+  }, [pushGate]);
 
   const value = useMemo<AuthState>(
     () => ({
       session,
       user: session?.user ?? null,
       loading,
-      isAdmin: session?.user?.app_metadata?.is_admin === true,
+      isAdmin,
       agendas,
       async signInWithPassword(email, password) {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -206,7 +229,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error;
       },
     }),
-    [session, loading, agendas],
+    [session, loading, isAdmin, agendas],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -10,18 +10,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthRetryableFetchError } from '@supabase/supabase-js';
 
-import { installPushFakes, type PushFakes } from '@/test/pushFakes';
+import { SERVER_KEY_B64, installPushFakes, type PushFakes } from '@/test/pushFakes';
 
 const h = vi.hoisted(() => ({
   listeners: [] as Array<(event: string, session: unknown) => void>,
   session: null as unknown,
   error: null as unknown,
+  planAgendas: { notifications: true } as Record<string, boolean>,
   log: null as string[] | null,
 }));
 
 vi.mock('./supabase', () => {
   const rows = (relation: string) =>
-    relation === 'plans' ? [{ key: 'free', agendas: { browse: true }, is_default: true }] : [];
+    relation === 'plans' ? [{ key: 'free', agendas: h.planAgendas, is_default: true }] : [];
   const table = (relation: string) => {
     let single = false;
     const b: Record<string, unknown> = {
@@ -64,6 +65,7 @@ vi.mock('./supabase', () => {
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
+  getPushKey: vi.fn(async () => ({ public_key: SERVER_KEY_B64 })),
   putPushSubscription: vi.fn(async () => {
     h.log?.push('PUT');
   }),
@@ -108,6 +110,7 @@ beforeEach(() => {
   localStorage.clear();
   h.listeners = [];
   h.error = null;
+  h.planAgendas = { notifications: true };
   fakes = installPushFakes({ subscribed: true, permission: 'granted' });
   h.log = fakes.log;
   writePushOwner('operator');
@@ -123,6 +126,15 @@ describe('push binding follows identity', () => {
     renderSignedIn('operator');
     await waitFor(() => expect(fakes.log).toEqual(['PUT']));
     expect(fakes.subscription).not.toBeNull();
+  });
+
+  it('a plan without notifications ends the subscription here and re-sends nothing', async () => {
+    h.planAgendas = { browse: true };
+    renderSignedIn('operator');
+    await waitFor(() => expect(fakes.subscription).toBeNull());
+    expect(fakes.log).toEqual(['unsubscribe']);
+    expect(api.putPushSubscription).not.toHaveBeenCalled();
+    expect(api.deletePushSubscription).not.toHaveBeenCalled();
   });
 
   it('signing out tells the server, ends the subscription here, then signs out', async () => {

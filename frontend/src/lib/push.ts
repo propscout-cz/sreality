@@ -12,6 +12,7 @@ import { useSearchParams } from 'react-router-dom';
 
 import {
   deletePushSubscription,
+  getPushKey,
   postPushOpened,
   putPushSubscription,
   type PushSubscriptionBody,
@@ -84,21 +85,49 @@ export function samePushKey(subscription: PushSubscription, key: Uint8Array): bo
   return bytes.length === key.length && bytes.every((b, i) => b === key[i]);
 }
 
+/* The notifications gate for the signed-in user (lib/auth
+ * `notificationsVisible`, the bell's): true or false once the plan is read,
+ * null while signed out or reading. Turning true re-sends this device's
+ * subscription (the launch's and each sign-in's re-sync); turning false ends
+ * it here, telling no server (its row ends at the next push's 404/410). */
+let pushGate: boolean | null = null;
+
+export function setPushGate(allowed: boolean | null): void {
+  if (allowed === pushGate) return;
+  pushGate = allowed;
+  if (allowed === true) void resyncPush();
+  else if (allowed === false) void endPushHere();
+}
+
 /* Re-sends this device's subscription for the signed-in account (the PUT is
  * idempotent). iOS never fires `pushsubscriptionchange`, so the launch, each
- * sign-in and the hourly resume check (lib/serviceWorker) are how a subscription
- * reaches the server again. It never prompts and never subscribes. One found
- * under another account than the one that switched it on here is ended
- * instead: it is not this user's to re-bind. */
+ * sign-in (setPushGate) and the hourly resume check (lib/serviceWorker) are how
+ * a subscription reaches the server again. It never prompts and never
+ * subscribes, and re-sends nothing while the gate is not open. A subscription
+ * it must not re-send is ended here instead: one another account switched on
+ * (not this user's to re-bind), or one made under a server key the server no
+ * longer gives (a rotated key: every push to it is refused, so re-sending it
+ * would only revive a dead row). A key that cannot be read is no verdict. */
 export async function resyncPush(): Promise<void> {
   try {
+    if (pushGate === false) {
+      await endPushHere();
+      return;
+    }
+    if (pushGate !== true) return;
     const subscription = await currentPushSubscription();
     if (!subscription) return;
     const { data } = await supabase.auth.getSession();
     const userId = data.session?.user?.id;
     if (!userId) return;
     const owner = readPushOwner();
-    if (owner !== undefined && owner !== userId) {
+    const foreign = owner !== undefined && owner !== userId;
+    const key = foreign
+      ? null
+      : await getPushKey()
+          .then((r) => decodePushKey(r.public_key))
+          .catch(() => null);
+    if (foreign || (key && !samePushKey(subscription, key))) {
       await subscription.unsubscribe();
       writePushOwner(null);
       return;

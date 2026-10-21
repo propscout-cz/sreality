@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '@/lib/api';
 import { ApiError } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
-import { SERVER_KEY_B64, installPushFakes, type PushFakes } from '@/test/pushFakes';
+import { SERVER_KEY_B64, fakeSubscription, installPushFakes, type PushFakes } from '@/test/pushFakes';
 
 import {
   SIGN_OUT_NOTICE_MS,
@@ -15,6 +15,7 @@ import {
   endPushHere,
   readPushOwner,
   resyncPush,
+  setPushGate,
   signOutPush,
   writePushOwner,
 } from './push';
@@ -23,6 +24,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   putPushSubscription: vi.fn(),
   deletePushSubscription: vi.fn(),
+  getPushKey: vi.fn(),
 }));
 
 let fakes: PushFakes;
@@ -33,8 +35,13 @@ const session = (id: string | null) =>
 
 beforeEach(() => {
   localStorage.clear();
+  /* The gate open (a signed-in plan with notifications); opening it re-syncs
+   * at once, here with no push platform installed yet, so a no-op. */
+  setPushGate(null);
+  setPushGate(true);
   vi.spyOn(supabase.auth, 'getSession').mockResolvedValue(session('user-1'));
   vi.mocked(api.putPushSubscription).mockResolvedValue(undefined);
+  vi.mocked(api.getPushKey).mockResolvedValue({ public_key: SERVER_KEY_B64 });
 });
 
 afterEach(() => {
@@ -43,6 +50,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(api.putPushSubscription).mockReset();
   vi.mocked(api.deletePushSubscription).mockReset();
+  vi.mocked(api.getPushKey).mockReset();
 });
 
 describe('resyncPush', () => {
@@ -108,12 +116,77 @@ describe('resyncPush', () => {
     expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
   });
 
+  /* A rotated server key: every push to the old subscription is refused, so
+   * re-sending it every hour would only revive a dead row. */
+  it('ends a subscription made under a key the server no longer gives', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    fakes.rotateKey();
+    await resyncPush();
+    expect(api.putPushSubscription).not.toHaveBeenCalled();
+    expect(fakes.log).toEqual(['unsubscribe']);
+    expect(readPushOwner()).toBeNull();
+  });
+
+  it('re-sends when the key cannot be read (a 503 is no verdict)', async () => {
+    vi.mocked(api.getPushKey).mockRejectedValue(new ApiError('push is not configured', 503, null));
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    fakes.rotateKey();
+    await resyncPush();
+    expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
+    expect(fakes.subscription).not.toBeNull();
+  });
+
   it('swallows a failed re-send', async () => {
     vi.mocked(api.putPushSubscription).mockRejectedValue(new ApiError('down', 0, null, 'network'));
     fakes = installPushFakes({ subscribed: true, permission: 'granted' });
     writePushOwner('user-1');
     await expect(resyncPush()).resolves.toBeUndefined();
     expect(fakes.subscription).not.toBeNull();
+  });
+});
+
+/* Push rides the notifications gate (the bell's, lib/auth): it re-sends only
+ * while the gate is open, and a plan without notifications ends the
+ * subscription here (no DELETE: the row ends at its next push's 404/410). */
+describe('the notifications gate', () => {
+  it('re-sends nothing while the plan is still being read, and keeps the subscription', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    setPushGate(null);
+    await resyncPush();
+    expect(api.putPushSubscription).not.toHaveBeenCalled();
+    expect(fakes.subscription).not.toBeNull();
+  });
+
+  it('opening re-sends the subscription (the sign-in re-sync)', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    setPushGate(null);
+    setPushGate(true);
+    await vi.waitFor(() => expect(api.putPushSubscription).toHaveBeenCalledTimes(1));
+    setPushGate(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(api.putPushSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  it('shutting ends the subscription here, telling no server', async () => {
+    fakes = installPushFakes({ subscribed: true, permission: 'granted' });
+    writePushOwner('user-1');
+    setPushGate(false);
+    await vi.waitFor(() => expect(fakes.subscription).toBeNull());
+    expect(api.deletePushSubscription).not.toHaveBeenCalled();
+    expect(api.putPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it('a shut gate makes the hourly re-sync end, never re-send', async () => {
+    fakes = installPushFakes();
+    setPushGate(false);
+    fakes.subscription = fakeSubscription(fakes.log);
+    await resyncPush();
+    expect(api.putPushSubscription).not.toHaveBeenCalled();
+    expect(fakes.subscription).toBeNull();
   });
 });
 

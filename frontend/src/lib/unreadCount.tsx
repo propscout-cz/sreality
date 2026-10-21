@@ -18,9 +18,8 @@ import { useQuery } from '@tanstack/react-query';
 
 import { getNotificationUnreadCount } from './api';
 import { syncAppBadge } from './appBadge';
-import { useAuth } from './auth';
+import { notificationsVisible, useAuth } from './auth';
 import { notificationKeys } from './queries';
-import { isSupabaseConfigured } from './supabase';
 
 export interface UnreadCount {
   /* The agenda gate: false hides every bell and stops the poll. */
@@ -35,8 +34,7 @@ export const useUnreadCount = (): UnreadCount => useContext(UnreadCountContext);
 
 export function UnreadCountProvider({ children }: { children: ReactNode }) {
   const { isAdmin, agendas } = useAuth();
-  const visible =
-    isAdmin || !isSupabaseConfigured() || agendas === null || agendas['notifications'] === true;
+  const visible = notificationsVisible(isAdmin, agendas);
   const unreadQ = useQuery({
     queryKey: notificationKeys.unreadCount,
     queryFn: () => getNotificationUnreadCount(),
