@@ -2839,29 +2839,6 @@ export const markWatchdogDispatchSeen = (
     { method: 'POST' },
   );
 
-export const kickoffWatchdogDispatchEstimate = (
-  dispatchId: string,
-): Promise<WatchdogDispatch> =>
-  request<WatchdogDispatch>(
-    `/notifications/dispatches/${encodeURIComponent(dispatchId)}/estimate`,
-    { method: 'POST' },
-  );
-
-export const runWatchdogMatcher = (): Promise<{
-  data: {
-    subscriptions_evaluated: number;
-    matches_inserted: number;
-    listings_in_window: number;
-  };
-}> =>
-  request<{
-    data: {
-      subscriptions_evaluated: number;
-      matches_inserted: number;
-      listings_in_window: number;
-    };
-  }>('/notifications/matcher/run', { method: 'POST' });
-
 /* ----- Unified notifications feed (Sprint C) ---------------------------- */
 
 export interface ListNotificationsParams {

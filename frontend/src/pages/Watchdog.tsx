@@ -9,11 +9,9 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
 
 import {
-  kickoffWatchdogDispatchEstimate,
   listWatchdogDispatches,
   listWatchdogSubscriptions,
   markWatchdogDispatchSeen,
-  runWatchdogMatcher,
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
@@ -41,15 +39,8 @@ interface WatchdogPage {
   nextCursor?: string;
   total: number | null;
 }
-/* Two-tier polling: feed cadence (new dispatches from the background
- * matcher) is decoupled from estimation cadence (status refresh for
- * a kicked-off run). The matcher itself ticks every 5 min, so 30 s
- * for the feed gives plenty of resolution at a fraction of the
- * request volume; we only flip to 5 s when a row in the visible
- * page has a non-terminal estimation status, and we drop back to
- * 30 s the moment it terminates. */
+/* The matcher ticks every 5 min, so 30 s gives plenty of resolution. */
 const POLL_INTERVAL_FEED_MS = 30_000;
-const POLL_INTERVAL_ESTIMATION_MS = 5_000;
 
 const SEEN_OPTIONS: ReadonlyArray<WatchdogSeenFilter> = ['all', 'unseen', 'seen'];
 
@@ -86,16 +77,7 @@ export default function Watchdog() {
     },
     pageSize: PAGE_SIZE,
     getRowId: (r) => r.id,
-    /* Two-tier poll over ALL loaded pages, so a kicked-off run finishing on
-     * a row scrolled far up still flips, and new dispatches surface. */
-    refetchInterval: (rows) =>
-      rows.some(
-        (d) =>
-          d.estimation_status === 'pending'
-          || d.estimation_status === 'running',
-      )
-        ? POLL_INTERVAL_ESTIMATION_MS
-        : POLL_INTERVAL_FEED_MS,
+    refetchInterval: () => POLL_INTERVAL_FEED_MS,
   });
   const total = dispatches.firstPage?.total ?? null;
 
@@ -109,7 +91,7 @@ export default function Watchdog() {
   });
 
   /* Surgical update of one dispatch across every loaded page of every
-   * dispatches infinite query — so mark-seen / kickoff don't blow the cache
+   * dispatches infinite query — so mark-seen doesn't blow the cache
    * and reset the scroll position (the old invalidate(all) did). The mutation
    * responses already carry the updated row. The callback is partition-aware
    * (it sees each cached query's `seen` filter) so marking a row seen DROPS
@@ -136,31 +118,6 @@ export default function Watchdog() {
     }
   };
 
-  const patchDispatch = (updated: WatchdogDispatch) =>
-    updateDispatchCaches((rows) =>
-      rows.map((r) => (r.id === updated.id ? updated : r)),
-    );
-
-  const matcherMut = useMutation({
-    mutationFn: runWatchdogMatcher,
-    onSuccess: () => {
-      // New matches prepend; refetch the loaded pages in place (dedup by id
-      // in the hook keeps the seam clean).
-      qc.invalidateQueries({ queryKey: ['watchdog', 'dispatches'] });
-    },
-  });
-
-  const estimateMut = useMutation({
-    mutationFn: (dispatchId: string) =>
-      kickoffWatchdogDispatchEstimate(dispatchId),
-    onSuccess: (updated) => patchDispatch(updated),
-    onError: (err: Error) => {
-      // Surface the failure instead of silently reverting the button — a
-      // server-side error here previously looked like "nothing happens".
-      window.alert(`Couldn't start the estimation: ${err.message}`);
-    },
-  });
-
   const markSeenMut = useMutation({
     mutationFn: (dispatchId: string) => markWatchdogDispatchSeen(dispatchId),
     onSuccess: (updated) =>
@@ -182,11 +139,7 @@ export default function Watchdog() {
 
   return (
     <div className="px-6 py-8 max-w-6xl mx-auto">
-      <Header
-        onRunMatcher={() => matcherMut.mutate()}
-        matcherPending={matcherMut.isPending}
-        matcherResult={matcherMut.data?.data ?? null}
-      />
+      <Header />
 
       <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3">
         <SubscriptionFilter
@@ -216,9 +169,7 @@ export default function Watchdog() {
             isFetchingNextPage={dispatches.isFetchingNextPage}
             hasNextPage={dispatches.hasNextPage}
             onReachEnd={dispatches.fetchNextPage}
-            onKickoff={(id) => estimateMut.mutate(id)}
             onMarkSeen={(id) => markSeenMut.mutate(id)}
-            kickoffPending={estimateMut.isPending ? estimateMut.variables ?? null : null}
           />
         )}
       </div>
@@ -230,19 +181,7 @@ export default function Watchdog() {
 /* Header                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function Header({
-  onRunMatcher,
-  matcherPending,
-  matcherResult,
-}: {
-  onRunMatcher: () => void;
-  matcherPending: boolean;
-  matcherResult: {
-    subscriptions_evaluated: number;
-    matches_inserted: number;
-    listings_in_window: number;
-  } | null;
-}) {
+function Header() {
   return (
     <header className="flex flex-wrap items-end justify-between gap-4">
       <div>
@@ -257,30 +196,10 @@ function Header({
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
           Saved filters fire a notification the moment a freshly scraped
-          listing matches. Click <em>Estimate rent</em> on any row to
-          kick off a deterministic monthly-rent calculation in the
-          background — the result appears here when it lands. The
-          <em> Portal</em> column links to the listing on the portal it was
+          listing matches. The <em>Portal</em> column links to the listing on the portal it was
           last seen on; the <em>MF yield</em> column shows the property's
           Ministry-of-Finance reference gross yield, the one the filter matched.
         </p>
-        {matcherResult ? (
-          <p className="mt-2 text-[0.75rem] text-[var(--color-ink-3)]">
-            Last matcher run: inspected{' '}
-            <span className="tabular-nums text-[var(--color-ink-2)]">
-              {fmtCount(matcherResult.listings_in_window)}
-            </span>{' '}
-            new listings against{' '}
-            <span className="tabular-nums text-[var(--color-ink-2)]">
-              {matcherResult.subscriptions_evaluated}
-            </span>{' '}
-            active watchdog{matcherResult.subscriptions_evaluated === 1 ? '' : 's'},{' '}
-            <span className="tabular-nums text-[var(--color-ink-2)]">
-              {fmtCount(matcherResult.matches_inserted)}
-            </span>{' '}
-            match{matcherResult.matches_inserted === 1 ? '' : 'es'} fired.
-          </p>
-        ) : null}
       </div>
       <div className="flex items-center gap-3">
         <Link
@@ -289,15 +208,6 @@ function Header({
         >
           Manage watchdogs
         </Link>
-        <button
-          type="button"
-          onClick={onRunMatcher}
-          disabled={matcherPending}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)] transition-colors disabled:opacity-50"
-          title="Run the matcher once now, instead of waiting for the next scheduler tick."
-        >
-          {matcherPending ? 'Running…' : 'Run matcher now'}
-        </button>
       </div>
     </header>
   );
@@ -386,18 +296,14 @@ function DispatchesTable({
   isFetchingNextPage,
   hasNextPage,
   onReachEnd,
-  onKickoff,
   onMarkSeen,
-  kickoffPending,
 }: {
   rows: WatchdogDispatch[];
   total: number | null;
   isFetchingNextPage: boolean;
   hasNextPage: boolean;
   onReachEnd: () => void;
-  onKickoff: (dispatchId: string) => void;
   onMarkSeen: (dispatchId: string) => void;
-  kickoffPending: string | null;
 }) {
   return (
     <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] overflow-hidden">
@@ -411,9 +317,7 @@ function DispatchesTable({
               <Th align="left">When</Th>
               <Th align="left">Watchdog</Th>
               <Th align="left">Portal</Th>
-              <Th align="left">Estimation</Th>
               <Th align="right">MF yield</Th>
-              <Th align="right"> </Th>
             </tr>
           </thead>
           <tbody>
@@ -421,9 +325,7 @@ function DispatchesTable({
               <Row
                 key={r.id}
                 dispatch={r}
-                onKickoff={onKickoff}
                 onMarkSeen={onMarkSeen}
-                kickoffPending={kickoffPending === r.id}
               />
             ))}
           </tbody>
@@ -451,14 +353,10 @@ function DispatchesTable({
 
 function Row({
   dispatch,
-  onKickoff,
   onMarkSeen,
-  kickoffPending,
 }: {
   dispatch: WatchdogDispatch;
-  onKickoff: (dispatchId: string) => void;
   onMarkSeen: (dispatchId: string) => void;
-  kickoffPending: boolean;
 }) {
   const unread = dispatch.seen_at == null;
   const handleListingClick = () => {
@@ -504,18 +402,8 @@ function Row({
       <td className="px-4 py-2.5 align-middle">
         <PortalCell dispatch={dispatch} onMarkSeen={onMarkSeen} unread={unread} />
       </td>
-      <td className="px-4 py-2.5 align-middle">
-        <EstimationCell dispatch={dispatch} />
-      </td>
       <td className="px-4 py-2.5 align-middle text-right">
         <MfYieldCell dispatch={dispatch} />
-      </td>
-      <td className="px-4 py-2.5 align-middle text-right">
-        <KickoffButton
-          dispatch={dispatch}
-          onKickoff={() => onKickoff(dispatch.id)}
-          pending={kickoffPending}
-        />
       </td>
     </tr>
   );
@@ -588,58 +476,8 @@ function PortalCell({
   );
 }
 
-/* A dispatch carries its run's id, not the run's subject ad: the run's own
-   address, /estimation/:id, redirects to its surface by that subject. */
-function EstimationCell({ dispatch }: { dispatch: WatchdogDispatch }) {
-  if (dispatch.estimation_run_id == null) {
-    return <span className="text-[var(--color-ink-4)]">—</span>;
-  }
-  const status = dispatch.estimation_status;
-  if (status === 'pending' || status === 'running') {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ochre)]">
-        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" aria-hidden />
-        {status}…
-      </span>
-    );
-  }
-  if (status === 'failed') {
-    return (
-      <Link
-        to={ROUTES.estimationDetail.build({ id: dispatch.estimation_run_id })}
-        className="text-[0.75rem] text-[var(--color-brick)] hover:underline underline-offset-2"
-      >
-        failed
-      </Link>
-    );
-  }
-  const isRental = dispatch.estimation_kind === 'rent';
-  const point = isRental
-    ? dispatch.estimated_monthly_rent_czk
-    : dispatch.estimated_sale_price_czk;
-  return (
-    <Link
-      to={ROUTES.estimationDetail.build({ id: dispatch.estimation_run_id })}
-      className="block hover:text-[var(--color-copper)] hover:underline underline-offset-2"
-    >
-      <span className="block font-mono tabular-nums text-[var(--color-ink)]">
-        {point != null ? fmtCzk(point) : '—'}
-        {isRental && point != null ? (
-          <span className="ml-1 text-[var(--color-ink-3)] text-[0.7rem]">/mo</span>
-        ) : null}
-      </span>
-      {dispatch.gross_yield_pct != null ? (
-        <span className="block text-[0.7rem] text-[var(--color-ink-3)] tabular-nums">
-          yield {dispatch.gross_yield_pct.toFixed(1)}%
-        </span>
-      ) : null}
-    </Link>
-  );
-}
-
 /* MF (Ministry of Finance) reference gross yield carried on the listing —
- * the deterministic Cenová-mapa figure, shown next to the comparables-based
- * estimation yield. Sale apartments only; '—' otherwise. */
+ * the deterministic Cenová-mapa figure. Sale apartments only; '—' otherwise. */
 function MfYieldCell({ dispatch }: { dispatch: WatchdogDispatch }) {
   if (dispatch.mf_gross_yield_pct == null) {
     return <span className="text-[var(--color-ink-4)]">—</span>;
@@ -651,46 +489,6 @@ function MfYieldCell({ dispatch }: { dispatch: WatchdogDispatch }) {
     >
       {dispatch.mf_gross_yield_pct.toFixed(1)}%
     </span>
-  );
-}
-
-function KickoffButton({
-  dispatch,
-  onKickoff,
-  pending,
-}: {
-  dispatch: WatchdogDispatch;
-  onKickoff: () => void;
-  pending: boolean;
-}) {
-  if (dispatch.estimation_run_id != null) {
-    const status = dispatch.estimation_status;
-    if (status === 'pending' || status === 'running') {
-      return (
-        <span className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-4)]">
-          in flight
-        </span>
-      );
-    }
-    return (
-      <Link
-        to={ROUTES.estimationDetail.build({ id: dispatch.estimation_run_id })}
-        className="text-[0.75rem] text-[var(--color-copper)] hover:underline underline-offset-2"
-      >
-        open →
-      </Link>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={onKickoff}
-      disabled={pending}
-      title="Estimate the monthly rent this property would fetch (rental comparables)"
-      className="px-2.5 py-1 text-[0.75rem] rounded-[var(--radius-sm)] border border-[var(--color-copper)] text-[var(--color-copper)] hover:bg-[var(--color-copper-soft)]/60 transition-colors disabled:opacity-50"
-    >
-      {pending ? 'Starting…' : 'Estimate rent'}
-    </button>
   );
 }
 
@@ -714,7 +512,7 @@ function EmptyState({
         {filtered
           ? 'No notifications match these filters.'
           : hasAnyWatchdog
-            ? 'No new listings have matched your watchdogs since the last scrape. The matcher wakes up automatically; you can also click Run matcher now.'
+            ? 'No new listings have matched your watchdogs since the last scrape. The matcher wakes up automatically.'
             : 'Define a watchdog (a saved filter) and you’ll get a notification when a freshly scraped listing matches.'}
       </p>
       {!hasAnyWatchdog ? (

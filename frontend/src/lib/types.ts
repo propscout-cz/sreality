@@ -1158,13 +1158,6 @@ export interface WatchdogDispatch {
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
   trigger_snapshot_id: number | null;
-  estimation_run_id: number | null;
-  estimation_status: EstimationStatus | null;
-  estimation_kind: 'rent' | 'sale' | null;
-  estimated_monthly_rent_czk: number | null;
-  estimated_sale_price_czk: number | null;
-  gross_yield_pct: number | null;
-  confidence: Confidence | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */
