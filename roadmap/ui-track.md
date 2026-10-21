@@ -23,6 +23,10 @@ toolkit work.
   "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
   defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
   own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+- **Shipped (2026-10-21 follow-up):** Status, "All ads | Seen at birth" and "Show dismissed | Hide
+  dismissed" are one block of segmented controls (`SegmentedBar`, the amenities' any/yes/no look,
+  now shared); the dismissed switch moved there from Curation. Browse › Stats warns above the
+  charts while Hide dismissed leaves dismissed properties out of the sample, with "Započítat skryté".
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,

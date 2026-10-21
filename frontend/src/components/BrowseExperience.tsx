@@ -861,7 +861,10 @@ export default function BrowseExperience({
             )}
             {tab === 'stats' && (
               <Suspense fallback={<Skeleton height={320} className="my-8" />}>
-                <StatsDashboard filters={filters} />
+                <StatsDashboard
+                  filters={filters}
+                  onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
+                />
               </Suspense>
             )}
           </div>

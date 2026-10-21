@@ -14,6 +14,7 @@ import {
   statsDashboardKey,
   type ChartSpec,
 } from '@/lib/stats';
+import DismissedSkewNotice from './DismissedSkewNotice';
 import StatsChart, { type CardFocus } from './StatsChart';
 
 /* Browse › Stats: the account's board of charts over the current filter. The
@@ -22,7 +23,14 @@ import StatsChart, { type CardFocus } from './StatsChart';
  * PUT /stats/dashboard through the one optimistic write (lib/useOptimisticWrite).
  * No saved row ⇒ the four default charts, and the first save persists the whole
  * list. */
-export default function StatsDashboard({ filters }: { filters: ListingFilters }) {
+export default function StatsDashboard({
+  filters,
+  onIncludeDismissed,
+}: {
+  filters: ListingFilters;
+  /* Flips the sidebar to Show dismissed, from the skew warning. */
+  onIncludeDismissed?: () => void;
+}) {
   const qc = useQueryClient();
   const [pending, setPending] = useState<ChartSpec | null>(null);
   /* Where focus lands after a board-level change: the moved card's arrow, the
@@ -106,6 +114,7 @@ export default function StatsDashboard({ filters }: { filters: ListingFilters })
 
   return (
     <div className="space-y-4">
+      <DismissedSkewNotice filters={filters} onInclude={onIncludeDismissed} />
       <p className="text-[0.75rem] text-[var(--color-ink-3)]">
         Každý graf počítá nemovitosti z filtru; sestava grafů je uložená k vašemu účtu.
       </p>

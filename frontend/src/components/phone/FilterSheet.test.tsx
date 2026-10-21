@@ -121,13 +121,13 @@ describe('the registry walk', () => {
     const rows = sheetBands(HOUSES_FOR_SALE).map((b) => [b.title, b.groups.flatMap((g) => g.rows.map((r) => r.key))]);
     expect(rows).toEqual([
       ['Essentials', [
-        'category_type', 'status', 'tom_observed_only', 'category_main_in', 'subtype', 'districts',
+        'category_type', 'status', 'tom_observed_only', 'show_dismissed', 'category_main_in', 'subtype', 'districts',
         'min_price_czk', 'min_price_per_m2', 'recently_added_days', 'recently_changed_days', 'ownership',
         'include_no_price', 'dispositions', 'min_area_m2', 'min_estate_area', 'min_usable_area',
         'condition_match', 'building_material', 'furnished',
         'has_balcony', 'has_lift', 'has_parking', 'terrace', 'cellar', 'garage', 'min_parking_lots',
       ]],
-      ['Curation', ['show_dismissed', 'pipeline', 'collections', 'tags', 'portals', 'with_estimates']],
+      ['Curation', ['pipeline', 'collections', 'tags', 'portals', 'with_estimates']],
       ['Velocity & price activity', [
         'price_change_count_min', 'price_change_window_days', 'total_price_change_pct',
         'first_seen_min_days', 'last_seen_min_days', 'tom_days_min',
