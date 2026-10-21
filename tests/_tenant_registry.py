@@ -32,10 +32,13 @@ TENANT_TABLES: tuple[str, ...] = (
     "property_artifact_links",
     # Migration 610: owner-stamped by trigger; browser roles SELECT + DELETE, never INSERT.
     "collection_shares",
-    # Migration 626: the Stats board, one row per account; the SPA reads it, the API writes it.
+    # Migration 626: the Stats board; since 647 one unnamed WORKING board per account plus named
+    # dashboards, written by the API.
     "stats_dashboards",
     # Migration 641: account_id = the owner; browser roles SELECT + DELETE, never INSERT.
     # (delegated_edits is not here: browser roles only SELECT it, and it names its owner
     # `owner_account_id`.)
     "pipeline_shares",
+    # Migration 647: account_id = the owner, stamped from the dashboard; browser roles SELECT + DELETE.
+    "stats_dashboard_shares",
 )

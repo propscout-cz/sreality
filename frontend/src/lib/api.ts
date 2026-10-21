@@ -20,19 +20,18 @@ import type {
   Collection,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
-  CreateBuildingFromUrlIn,
   UpdateBuildingInputsIn,
   CreateEstimationIn,
   EstimationFeedback,
   EstimationListParams,
   EstimationListResponse,
   EstimationRun,
+  IngestState,
   ListingEstimate,
   ListingSummaryBatchRow,
   ArtifactLink,
   Note,
   NoteAttachment,
-  ParseResult,
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
@@ -325,21 +324,30 @@ export const apiGetBlob = (
   signal?: AbortSignal,
 ): Promise<Blob> => requestBlob(path, { query: params, signal });
 
-/* ----- estimations ------------------------------------------------------- */
+/* ----- a pasted ad link (docs/design/new-property-from-link.md §3.2) ------ */
 
-/* POST /estimations/preview — generic URL parser (sreality fast path
- * + LLM-driven per-source parser for everything else, dispatched on
- * the backend). When force_refresh is true the 7-day URL cache is
- * bypassed and a fresh parse is performed (the cache row is also
- * upserted on success). */
-export const previewListingUrl = (
+/* POST /listings/ingest — the server resolves the pasted text (its first URL)
+ * to one ad and answers ONE state; a link we do not hold is queued for the
+ * worker's drain. Market data only: never acts (no X-Act-As). */
+export const ingestListing = (
   url: string,
-  options: { force_refresh?: boolean } = {},
-): Promise<ParseResult> =>
-  request<ParseResult>('/estimations/preview', {
-    method: 'POST',
-    json: { url, force_refresh: options.force_refresh ?? false },
-  });
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>('/listings/ingest', { method: 'POST', json: { url }, signal });
+
+/* GET /listings/ingest/{source}/{native_id} — the same state, re-read while the
+ * page is fetched and the ad's property is born. */
+export const ingestState = (
+  source: string,
+  nativeId: string,
+  { signal }: { signal?: AbortSignal } = {},
+): Promise<IngestState> =>
+  request<IngestState>(
+    `/listings/ingest/${encodeURIComponent(source)}/${encodeURIComponent(nativeId)}`,
+    { signal },
+  );
+
+/* ----- estimations ------------------------------------------------------- */
 
 export const createEstimation = (
   input: CreateEstimationIn,
@@ -502,14 +510,6 @@ export const verifyListingFreshness = (
   });
 
 /* ----- buildings (Phase B1) ---------------------------------------------- */
-
-export const createBuildingFromUrl = (
-  input: CreateBuildingFromUrlIn,
-): Promise<BuildingRun> =>
-  request<BuildingRun>('/buildings/from_url', {
-    method: 'POST',
-    json: input,
-  });
 
 export const getBuilding = (id: number): Promise<BuildingRun> =>
   request<BuildingRun>(`/buildings/${id}`);
@@ -2279,7 +2279,8 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
  * GET returns every kraj (admin_boundaries level='kraj') with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
- * same payload. The scheduled batch job reads the same key. */
+ * same payload. Condition scoring is parked (rule 14): its workflows are
+ * dispatch-only, so the key only scopes a manually dispatched run. */
 
 export interface ConditionScoringRegion {
   id: number;
@@ -2660,8 +2661,8 @@ export const undismissProperty = (
 export const addPipelineCard = (
   property_id: number,
   { actAs }: Acting = {},
-): Promise<{ property_id: number; stage_key: string; added: boolean }> =>
-  request<{ property_id: number; stage_key: string; added: boolean }>(
+): Promise<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }> =>
+  request<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }>(
     '/pipeline/cards',
     { method: 'POST', json: { property_id }, actAs },
   );

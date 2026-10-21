@@ -38,6 +38,7 @@ from scraper import street, vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal
+from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.published import czech_date
 from scraper.scraped_listing import ScrapedListing
@@ -65,8 +66,6 @@ CATEGORY_MAIN: dict[str, str] = {
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-# The numeric listing id is the trailing "-1234567.html" of the detail URL.
-_ID_RE = re.compile(r"-(\d{4,})\.html\b")
 _STRANA_RE = re.compile(r"[?&]strana=(\d+)")
 _PATH_RE = re.compile(r"^/([a-z]+)/([a-z0-9-]+)/")
 # A Czech-format price run: digits split by ordinary / no-break / thin spaces.
@@ -127,13 +126,6 @@ def _text(node: Node | None) -> str | None:
 
 def _in_cz_bbox(lat: float, lon: float) -> bool:
     return _CZ_LAT_MIN <= lat <= _CZ_LAT_MAX and _CZ_LON_MIN <= lon <= _CZ_LON_MAX
-
-
-def _id_from_href(href: str | None) -> str | None:
-    if not href:
-        return None
-    m = _ID_RE.search(href)
-    return m.group(1) if m else None
 
 
 def category_from_url(url: str) -> tuple[str | None, str | None]:
@@ -401,7 +393,7 @@ def parse_index(html: str) -> IndexPage:
             "a.i-estate__title-link"
         )
         href = link.attributes.get("href") if link else None
-        source_id = _id_from_href(href)
+        source_id = native_id(SOURCE, href)
         if not source_id or not href or source_id in seen:
             continue
         seen.add(source_id)
@@ -492,7 +484,7 @@ def parse_detail(
     category_type: str | None,
 ) -> ScrapedListing:
     tree = HTMLParser(html)
-    source_id = _id_from_href(source_url) or ""
+    source_id = native_id(SOURCE, source_url) or ""
     ld = _jsonld_product(html)
     offers = ld.get("offers") if isinstance(ld.get("offers"), dict) else {}
     params = _detail_params(tree)

@@ -1199,7 +1199,7 @@
     {
       "filename": "condition_score_batches.yml",
       "name": "Scraping: Sreality condition scoring (batch API)",
-      "description": "Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
+      "description": "PARKED (rule #14, operator ruling 2026-10-20): both crons are off and no filter, agent fact or estimate reads the levels. Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1263,8 +1263,8 @@
     },
     {
       "filename": "condition_scores.yml",
-      "name": "Scraping: Sreality condition scoring (hourly + manual backfill)",
-      "description": "Decoupled condition-scoring job. Scores building/apartment condition (1..5) for active listings whose latest snapshot doesn't yet have a row in `listing_condition_scores`, writing both the cache row AND the two listings.*_condition_level columns in one transaction per listing (autocommit — every successful score commits independently, so a timeout or cancel preserves the rows already done). Resumable: scored listings drop out of the next selection.",
+      "name": "Scraping: Sreality condition scoring (PARKED, manual backfill)",
+      "description": "PARKED (rule #14, operator ruling 2026-10-20): dispatch-only, and no filter, agent fact or estimate reads the levels it writes. Decoupled condition-scoring job. Scores building/apartment condition (1..5) for active listings whose latest snapshot doesn't yet have a row in `listing_condition_scores`, writing both the cache row AND the two listings.*_condition_level columns in one transaction per listing (autocommit — every successful score commits independently, so a timeout or cancel preserves the rows already done). Resumable: scored listings drop out of the next selection.",
       "manual": true,
       "schedules": [],
       "onPush": false,
@@ -1908,65 +1908,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/waiff/sreality/actions/workflows/export_raw_pages_archive.yml",
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
-    },
-    {
-      "filename": "fetch-fixtures.yml",
-      "name": "Fixtures: source HTML (anonymized)",
-      "description": "Manual trigger only. Fetches each listing URL, runs the anonymization in scripts/fetch_and_anonymize_fixtures.py, and commits the resulting fixtures to the current branch. Operator runs this once per source refresh; tests then read the saved files instead of hitting the internet.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "bezrealitky_url",
-          "description": "bezrealitky.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://www.bezrealitky.cz/nemovitosti-byty-domy/547214-nabidka-pronajem-bytu-pod-harfou-hlavni-mesto-praha",
-          "options": null
-        },
-        {
-          "name": "idnes_url",
-          "description": "reality.idnes.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://reality.idnes.cz/detail/pronajem/byt/brno-veveri/69f8c898e58c5ab7d70f3505/",
-          "options": null
-        },
-        {
-          "name": "remax_url",
-          "description": "remax-czech.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://www.remax-czech.cz/reality/detail/438735/pronajem-bytu-1-kk-v-osobnim-vlastnictvi-31-m2-praha-8-liben",
-          "options": null
-        },
-        {
-          "name": "bazos_index_url",
-          "description": "reality.bazos.cz search/index URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://reality.bazos.cz/prodam/byt/",
-          "options": null
-        },
-        {
-          "name": "bazos_detail_url",
-          "description": "reality.bazos.cz single-listing detail URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch-fixtures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch-fixtures.yml"
     },
     {
       "filename": "fetch_rent_map.yml",

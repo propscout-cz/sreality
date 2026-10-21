@@ -7,7 +7,6 @@ import {
 } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
-import { runSurfaceUrl } from '@/lib/runLinks';
 
 import {
   kickoffWatchdogDispatchEstimate,
@@ -589,6 +588,8 @@ function PortalCell({
   );
 }
 
+/* A dispatch carries its run's id, not the run's subject ad: the run's own
+   address, /estimation/:id, redirects to its surface by that subject. */
 function EstimationCell({ dispatch }: { dispatch: WatchdogDispatch }) {
   if (dispatch.estimation_run_id == null) {
     return <span className="text-[var(--color-ink-4)]">—</span>;
@@ -605,10 +606,7 @@ function EstimationCell({ dispatch }: { dispatch: WatchdogDispatch }) {
   if (status === 'failed') {
     return (
       <Link
-        to={runSurfaceUrl({
-          id: dispatch.estimation_run_id,
-          input_sreality_id: dispatch.sreality_id,
-        })}
+        to={ROUTES.estimationDetail.build({ id: dispatch.estimation_run_id })}
         className="text-[0.75rem] text-[var(--color-brick)] hover:underline underline-offset-2"
       >
         failed
@@ -621,10 +619,7 @@ function EstimationCell({ dispatch }: { dispatch: WatchdogDispatch }) {
     : dispatch.estimated_sale_price_czk;
   return (
     <Link
-      to={runSurfaceUrl({
-          id: dispatch.estimation_run_id,
-          input_sreality_id: dispatch.sreality_id,
-        })}
+      to={ROUTES.estimationDetail.build({ id: dispatch.estimation_run_id })}
       className="block hover:text-[var(--color-copper)] hover:underline underline-offset-2"
     >
       <span className="block font-mono tabular-nums text-[var(--color-ink)]">
@@ -679,10 +674,7 @@ function KickoffButton({
     }
     return (
       <Link
-        to={runSurfaceUrl({
-          id: dispatch.estimation_run_id,
-          input_sreality_id: dispatch.sreality_id,
-        })}
+        to={ROUTES.estimationDetail.build({ id: dispatch.estimation_run_id })}
         className="text-[0.75rem] text-[var(--color-copper)] hover:underline underline-offset-2"
       >
         open →

@@ -38,6 +38,7 @@ import {
   watchdogNameSuggestion,
 } from './filters';
 import { districtsFilterClause } from './districtCodes';
+import { DEFAULT_SORT, parseSort, sortToParam } from './browseSort';
 import { BUILDING_MATERIAL_BUCKETS, filterById } from './filterRegistry.generated';
 import type { Disposition } from './types';
 
@@ -140,13 +141,9 @@ describe('URL round-trip', () => {
       .toEqual(['sreality']);
   });
 
-  it('round-trips the condition-level bounds and price-change filters', () => {
+  it('round-trips the price-change filters', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
-      buildingConditionLevelMin: 2,
-      buildingConditionLevelMax: 4,
-      apartmentConditionLevelMin: 3,
-      apartmentConditionLevelMax: 5,
       priceChangeCountMin: 2,
       priceChangeWindowDays: 90,
       totalPriceChangePct: -10,
@@ -164,6 +161,13 @@ describe('URL round-trip', () => {
     // the default state rather than throwing.
     const legacy = new URLSearchParams('drops_min=2&sites_min=2&drop_pct_min=10');
     expect(fromSearchParams(legacy)).toEqual(DEFAULT_FILTERS);
+  });
+
+  it('the retired condition-level bounds degrade silently (condition scoring parked)', () => {
+    const url = new URLSearchParams('bld_cond_min=3&bld_cond_max=5&apt_cond_min=2&apt_cond_max=4');
+    expect(fromSearchParams(url)).toEqual(DEFAULT_FILTERS);
+    const stored = { ...DEFAULT_FILTERS, buildingConditionLevelMin: 3, apartmentConditionLevelMax: 4 };
+    expect(readPresetSpec(stored as ListingFilters).filters).toEqual(DEFAULT_FILTERS);
   });
 
   it('round-trips the subtype multi-select', () => {
@@ -1001,11 +1005,11 @@ describe('filter presets', () => {
     expect(got.sort).toBe('-price_czk');
   });
 
-  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (sort null)', () => {
+  it('readPresetSpec tolerates a legacy bare-ListingFilters preset (the default sort)', () => {
     const legacy: ListingFilters = { ...DEFAULT_FILTERS, areaMin: 50 };
     const got = readPresetSpec(legacy);
     expect(got.filters.areaMin).toBe(50);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
     // And it still round-trips through the URL serializer.
     expect(fromSearchParams(toSearchParams(got.filters)).areaMin).toBe(50);
   });
@@ -1017,7 +1021,20 @@ describe('filter presets', () => {
     // Missing fields fall back to defaults, so toSearchParams won't throw.
     expect(got.filters.categoryMain).toEqual(['byt']);
     expect(got.filters.priceMin).toBe(1000);
-    expect(got.sort).toBeNull();
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+  });
+
+  /* A preset saved under a sort with no control would load the default order while
+   * holding the old token, and read dirty before the user touched anything. */
+  it('readPresetSpec reads a sort Browse no longer offers as the default, so the preset loads clean', () => {
+    const got = readPresetSpec({ filters: { ...DEFAULT_FILTERS, areaMin: 50 }, sort: '-estate_area' });
+    expect(got.sort).toBe(sortToParam(DEFAULT_SORT));
+    // What Browse holds once the preset is loaded: its filters through the URL,
+    // and the sort the URL parses to. Both halves of PresetBar's dirty check agree.
+    const loadedFilters = fromSearchParams(toSearchParams(got.filters));
+    const loadedSort = sortToParam(parseSort(got.sort));
+    expect(filtersEqualForPreset(loadedFilters, got.filters)).toBe(true);
+    expect(loadedSort).toBe(got.sort);
   });
 
   it('readPresetSpec coerces stale scalar fields that became arrays (the load crash)', () => {

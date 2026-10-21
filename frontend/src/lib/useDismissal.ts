@@ -1,5 +1,5 @@
 /* The one place a property is dismissed or restored from (migration 536) — the
- * Browse cards, the Table rows and the listing header all share this hook.
+ * Browse cards and the listing header both share this hook.
  *
  * Dismissing is optimistic and list-aware: it is one case of the curation
  * settle (lib/curationSettle, lens 'dismissed') — the property leaves every

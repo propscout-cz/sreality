@@ -7,8 +7,8 @@
  * confirm. The real write is verified by api/test_pipeline.py; here we only
  * assert the right wrapper is called.
  *
- * W3: this surface reads pipelineKeys.members (the same query every Browse/
- * Table funnel uses) instead of its own per-property fetch — the fixture
+ * W3: this surface reads pipelineKeys.members (the same query every Browse
+ * card funnel uses) instead of its own per-property fetch — the fixture
  * below is a PipelineMembers map, not a lone PipelineCard.
  */
 

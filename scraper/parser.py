@@ -152,20 +152,6 @@ def parse_listing(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def locality_coords(raw: dict[str, Any]) -> tuple[float | None, float | None]:
-    """The payload's own pin, as (lat, lon).
-
-    NOT part of the listings row: W4-c dropped `listings.geom`, so a coordinate
-    reaches the database only as a claim the resolver arbitrates. This is the
-    on-demand URL-parse path (scraper.url_parser), where the estimation spec
-    needs the subject's point in the same request that fetched it.
-    """
-    loc = raw.get("locality") or {}
-    def _f(value: Any) -> float | None:
-        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
-    return _f(loc.get("gps_lat")), _f(loc.get("gps_lon"))
-
-
 def parse_images(raw: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for img in raw.get("advert_images") or []:

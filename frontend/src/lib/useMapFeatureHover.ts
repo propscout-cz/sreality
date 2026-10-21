@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type maplibregl from 'maplibre-gl';
 
+import type { HaloPoint } from './hoverSync';
+
 /* Project a set of hovered feature ids onto a MapLibre source's feature-state so
  * `['feature-state','hovered']` paint expressions light up. Diffs against the
  * previously-styled set so only changed features are touched — no full-source scan.
@@ -34,3 +36,15 @@ export function useMapFeatureHover(
     styledIdsRef.current = new Set(hoveredIds);
   }, [map, ready, source, hoveredIds, revision]);
 }
+
+/* The locator halo's source data: one point feature per hovered row. */
+export const haloFeatures = (
+  points: ReadonlyArray<HaloPoint>,
+): GeoJSON.FeatureCollection<GeoJSON.Point> => ({
+  type: 'FeatureCollection',
+  features: points.map((p) => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+    properties: {},
+  })),
+});

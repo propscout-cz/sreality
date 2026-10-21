@@ -1,0 +1,380 @@
+[
+  {
+    "input": "https://www.sreality.cz/detail/pronajem/byt/2+1/rychnov-nad-kneznou-rychnov-nad-kneznou-mirova/2557083724",
+    "source": "sreality",
+    "native": "2557083724",
+    "note": "sreality www, 10-digit id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://sreality.cz/detail/prodej/byt/3+1/brno-zabovresky/12345678",
+    "source": "sreality",
+    "native": "12345678",
+    "note": "sreality apex, 8-digit id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.sreality.cz/detail/prodej/dum/rodinny/kolin/12345/",
+    "source": "sreality",
+    "native": "12345",
+    "note": "sreality 5-digit id, trailing slash",
+    "kind": "detail"
+  },
+  {
+    "input": "https://reality.bazos.cz/inzerat/225346441/prodej-projektu-na-klic-s-pozemkem-954-m2-v-krizove.php",
+    "source": "bazos",
+    "native": "225346441",
+    "note": "bazos",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.bezrealitky.cz/nemovitosti-byty-domy/1078834-nabidka-pronajem-bytu-sedova-praha",
+    "source": "bezrealitky",
+    "native": "1078834",
+    "note": "bezrealitky .cz www",
+    "kind": "detail"
+  },
+  {
+    "input": "https://bezrealitky.cz/nemovitosti-byty-domy/1078834-nabidka-pronajem-bytu-sedova-praha",
+    "source": "bezrealitky",
+    "native": "1078834",
+    "note": "bezrealitky .cz apex",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.bezrealitky.com/properties-flats-houses/1078834-offer-for-rent-flat-sedova-prague",
+    "source": "bezrealitky",
+    "native": "1078834",
+    "note": "bezrealitky .com www: the English site, same id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://bezrealitky.com/properties-flats-houses/1078834-offer-for-rent-flat-sedova-prague",
+    "source": "bezrealitky",
+    "native": "1078834",
+    "note": "bezrealitky .com apex",
+    "kind": "detail"
+  },
+  {
+    "input": "https://reality.idnes.cz/detail/pronajem/byt/chomutov-drinovska/6ad7ca9d45dd870c0a0b152a/",
+    "source": "idnes",
+    "native": "6ad7ca9d45dd870c0a0b152a",
+    "note": "idnes 24-hex id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://nemovitosti.maxima.cz/nemovitosti/f60012727/",
+    "source": "maxima",
+    "native": "f60012727",
+    "note": "maxima letter+digits id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.remax-czech.cz/reality/detail/450988/pronajem-bytu-1-kk-v-osobnim-vlastnictvi-32-m2-praha-10-horni-mecholupy",
+    "source": "remax",
+    "native": "450988",
+    "note": "remax www",
+    "kind": "detail"
+  },
+  {
+    "input": "https://remax-czech.cz/reality/detail/450988/pronajem-bytu-1-kk",
+    "source": "remax",
+    "native": "450988",
+    "note": "remax apex",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.mmreality.cz/nemovitosti/957233/",
+    "source": "mmreality",
+    "native": "957233",
+    "note": "mmreality www",
+    "kind": "detail"
+  },
+  {
+    "input": "https://mmreality.cz/nemovitosti/957233/",
+    "source": "mmreality",
+    "native": "957233",
+    "note": "mmreality apex",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.ceskereality.cz/prodej/pozemky/stavebni-parcely/mikulovice-pardubice/prodej-stavebni-parcely-647-m2-3928148.html",
+    "source": "ceskereality",
+    "native": "3928148",
+    "note": "ceskereality www; the '-647-m2' slug decoy is not the id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://ceskereality.cz/prodej/byty/byty-2-kk/praha/prodej-bytu-2-kk-54-m2-3928148.html",
+    "source": "ceskereality",
+    "native": "3928148",
+    "note": "ceskereality apex",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.realitymix.cz/detail/praha/prodej-bytu-2-kk-43-m-zasklena-lodzie-praha-11-chodov-metro-haje-8728815.html",
+    "source": "realitymix",
+    "native": "8728815",
+    "note": "realitymix www",
+    "kind": "detail"
+  },
+  {
+    "input": "https://realitymix.cz/detail/stara-boleslav/prodej-pole-253870-m-stara-boleslav-8728815.html",
+    "source": "realitymix",
+    "native": "8728815",
+    "note": "realitymix apex; the '253870' area decoy is not the id",
+    "kind": "detail"
+  },
+  {
+    "input": "https://reality.idnes.cz/detail/prodej/byt/praha-5-smichov/6ad7ca9d45dd870c0a0b152a/?s-et=flat&s-qc%5BsubtypeFlat%5D%5B0%5D=2k#gallery",
+    "source": "idnes",
+    "native": "6ad7ca9d45dd870c0a0b152a",
+    "note": "query + fragment: both ignored by the id rule",
+    "kind": "detail"
+  },
+  {
+    "input": "HTTPS://WWW.SREALITY.CZ/detail/prodej/byt/2+kk/praha/12345678",
+    "source": "sreality",
+    "native": "12345678",
+    "note": "scheme and host are case-insensitive; the path is not",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.sreality.cz/detail/prodej/byt/2+kk/praha/12345/67890",
+    "source": "sreality",
+    "native": "67890",
+    "note": "sreality decoy: the LAST all-digit segment is the id, not an earlier one",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.mmreality.cz/nemovitosti/12345/",
+    "source": "mmreality",
+    "native": "12345",
+    "note": "mmreality five-digit id: no length floor",
+    "kind": "detail"
+  },
+  {
+    "input": "https://www.mmreality.cz/nemovitosti/12345abc",
+    "source": "mmreality",
+    "native": "12345",
+    "note": "mmreality decoy: the rule reads the leading digits of the segment (the walk's rule)",
+    "kind": "detail"
+  },
+  {
+    "input": "/inzerat/225346441/prodej-projektu-na-klic.php",
+    "source": "bazos",
+    "native": "225346441",
+    "note": "bazos index card href",
+    "kind": "relative"
+  },
+  {
+    "input": "/detail/prodej/byt/praha-5-smichov/6ad7ca9d45dd870c0a0b152a/",
+    "source": "idnes",
+    "native": "6ad7ca9d45dd870c0a0b152a",
+    "note": "idnes index card href",
+    "kind": "relative"
+  },
+  {
+    "input": "/prodej/byty/byty-2-kk/praha/prodej-bytu-2-kk-54-m2-3928148.html",
+    "source": "ceskereality",
+    "native": "3928148",
+    "note": "ceskereality index card href",
+    "kind": "relative"
+  },
+  {
+    "input": "/detail/praha/prodej-bytu-2-kk-43-m-8728815.html",
+    "source": "realitymix",
+    "native": "8728815",
+    "note": "realitymix index card href",
+    "kind": "relative"
+  },
+  {
+    "input": "/reality/detail/450988/pronajem-bytu-1-kk",
+    "source": "remax",
+    "native": "450988",
+    "note": "remax index card data-url",
+    "kind": "relative"
+  },
+  {
+    "input": "/nemovitosti/f60012727/",
+    "source": "maxima",
+    "native": "f60012727",
+    "note": "maxima index card href",
+    "kind": "relative"
+  },
+  {
+    "input": "/nemovitosti/957233/",
+    "source": "mmreality",
+    "native": "957233",
+    "note": "mmreality index card href",
+    "kind": "relative"
+  },
+  {
+    "input": "/nemovitosti/957233/",
+    "source": "maxima",
+    "native": null,
+    "note": "the mmreality path on maxima: maxima ids carry a letter",
+    "kind": "relative"
+  },
+  {
+    "input": "https://l.facebook.com/l.php?u=https%3A%2F%2Fwww.sreality.cz%2Fdetail%2Fprodej%2Fbyt%2F2%2Bkk%2Fpraha%2F2557083724%3Ffbclid%3DIwAR0abc&h=AT0xyzAbc",
+    "source": "sreality",
+    "native": "2557083724",
+    "note": "facebook l.php wrapper",
+    "kind": "wrapper"
+  },
+  {
+    "input": "https://lm.facebook.com/l.php?u=https%3A%2F%2Fwww.mmreality.cz%2Fnemovitosti%2F957233%2F&h=AT1",
+    "source": "mmreality",
+    "native": "957233",
+    "note": "facebook mobile wrapper",
+    "kind": "wrapper"
+  },
+  {
+    "input": "https://www.google.com/url?sa=t&url=https%3A%2F%2Freality.idnes.cz%2Fdetail%2Fprodej%2Fbyt%2Fpraha%2F6ad7ca9d45dd870c0a0b152a%2F&ved=2ahUKE",
+    "source": "idnes",
+    "native": "6ad7ca9d45dd870c0a0b152a",
+    "note": "google url= wrapper",
+    "kind": "wrapper"
+  },
+  {
+    "input": "https://www.google.cz/url?q=https://www.bezrealitky.cz/nemovitosti-byty-domy/1078834-nabidka&sa=D&source=docs",
+    "source": "bezrealitky",
+    "native": "1078834",
+    "note": "google q= wrapper on a country domain",
+    "kind": "wrapper"
+  },
+  {
+    "input": "https://l.facebook.com/l.php?u=https%3A%2F%2F127.0.0.1%5C.bazos.cz%2Finzerat%2F1%2Fx.php&h=AT2",
+    "source": null,
+    "native": null,
+    "note": "a wrapped backslash host: requests would fetch 127.0.0.1",
+    "kind": "wrapper"
+  },
+  {
+    "input": "https://www.sreality.cz/",
+    "source": "sreality",
+    "native": null,
+    "note": "portal home page",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://www.sreality.cz/hledani/prodej/byty/praha",
+    "source": "sreality",
+    "native": null,
+    "note": "sreality search page",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://reality.idnes.cz/s/prodej/byty/praha/",
+    "source": "idnes",
+    "native": null,
+    "note": "idnes search page",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://reality.bazos.cz/prodam/byt/",
+    "source": "bazos",
+    "native": null,
+    "note": "bazos category page",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://www.ceskereality.cz/prodej/byty/praha/",
+    "source": "ceskereality",
+    "native": null,
+    "note": "ceskereality listing index",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://reality.idnes.cz/detail/prodej/byt/praha/6ad7ca9d/",
+    "source": "idnes",
+    "native": null,
+    "note": "idnes id too short to be an ad",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://www.sreality.cz/detail/prodej/byt/2+kk/praha/12345678/foto",
+    "source": "sreality",
+    "native": null,
+    "note": "sreality decoy: a trailing non-id segment, so the id is not the last segment",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://www.sreality.cz/detail/prodej/byt/2+kk/praha/1234567890123456789",
+    "source": "sreality",
+    "native": null,
+    "note": "sreality 19-digit id: over the queue's bigint",
+    "kind": "not-ad"
+  },
+  {
+    "input": "https://reality.bazos.cz/inzerat/123/../../inzerat/456/x.php",
+    "source": "bazos",
+    "native": null,
+    "note": "bazos dot segments: the rule reads 123, the fetch would get 456",
+    "kind": "ambiguous"
+  },
+  {
+    "input": "https://reality.bazos.cz/inzerat/123/%2e%2e/%2E%2E/inzerat/456/x.php",
+    "source": "bazos",
+    "native": null,
+    "note": "bazos percent-encoded dot segments",
+    "kind": "ambiguous"
+  },
+  {
+    "input": "https://www.remax-czech.cz/reality/detail/111/../../../reality/detail/222/",
+    "source": "remax",
+    "native": null,
+    "note": "remax dot segments: the rule reads 111, the fetch would get 222",
+    "kind": "ambiguous"
+  },
+  {
+    "input": "https://www.mmreality.cz/nemovitosti/12345/../67890/",
+    "source": "mmreality",
+    "native": null,
+    "note": "mmreality dot segment",
+    "kind": "ambiguous"
+  },
+  {
+    "input": "https://www.example.com/inzerat/225346441/byt.php",
+    "source": null,
+    "native": null,
+    "note": "unknown host with a bazos-shaped path",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://www.facebook.com/marketplace/item/123456789/",
+    "source": null,
+    "native": null,
+    "note": "facebook itself is not a wrapper",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://auto.bazos.cz/inzerat/187654321/skoda-octavia.php",
+    "source": null,
+    "native": null,
+    "note": "another bazos section: same id space, not a reality ad, not a host we fetch",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://127.0.0.1\\.bazos.cz/inzerat/1/x.php",
+    "source": null,
+    "native": null,
+    "note": "backslash host: urlsplit reads *.bazos.cz, requests would fetch 127.0.0.1",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://evil.com\\.idnes.cz/detail/x/0123456789abcdef",
+    "source": null,
+    "native": null,
+    "note": "backslash host on idnes",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://www.sreality.cz/detail/prodej/byt/2+kk/praha-zizkov/2557083724?foto0=x000abcdefghijklm&foto1=x001abcdefghijklm&foto2=x002abcdefghijklm&foto3=x003abcdefghijklm&foto4=x004abcdefghijklm&foto5=x005abcdefghijklm&foto6=x006abcdefghijklm&foto7=x007abcdefghijklm&foto8=x008abcdefghijklm&foto9=x009abcdefghijklm&foto10=x010abcdefghijklm&foto11=x011abcdefghijklm&foto12=x012abcdefghijklm&foto13=x013abcdefghijklm&foto14=x014abcdefghijklm&foto15=x015abcdefghijklm&foto16=x016abcdefghijklm&foto17=x017abcdefghijklm&foto18=x018abcdefghijklm&foto19=x019abcdefghijklm&foto20=x020abcdefghijklm&foto21=x021abcdefghijklm",
+    "source": "sreality",
+    "native": "2557083724",
+    "note": "over 512 characters, none of it tracking: refused by resolve_url",
+    "kind": "too-long"
+  }
+]

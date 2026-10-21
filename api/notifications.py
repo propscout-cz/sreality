@@ -158,9 +158,8 @@ class WatchdogFilterSpec(BaseModel):
     # Parking lots minimum.
     min_parking_lots: int | None = None
 
-    # Derived condition scores (migrations 072 / 073). NULL rows excluded
-    # by the `>= N` / `<= N` comparison — same semantics as the Browse
-    # filter.
+    # RETIRED (condition scoring parked, operator ruling 2026-10-20): kept only so an old
+    # saved spec deserialises; any value raises in toolkit/filter_compiler.RETIRED_FILTERS.
     building_condition_level_min: int | None = None
     building_condition_level_max: int | None = None
     apartment_condition_level_min: int | None = None
@@ -491,6 +490,8 @@ _LISTING_PROJECTION = (
 # `check_key` names the check a system alert is about, so the bell's "Open Health"
 # opens Health at it as the outbox's links do: every system dedupe key opens
 # `sys:<key>:` (toolkit.system_alerts.emit_system_alert); null on every other producer.
+# `share_kind` + `share_ref` say what a share opens, read the same way off its key
+# (api/shares.py: `share:<collection|pipeline|dashboard>:<collection id | owner | dashboard id>:…`).
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
@@ -498,6 +499,8 @@ _DISPATCH_SELECT = (
     "d.sreality_id, d.listing_id, d.property_id, d.change_kind, d.message, "
     "CASE WHEN d.source_kind = 'system_health' "
     "THEN split_part(d.dedupe_key, ':', 2) END AS check_key, "
+    "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 2) END AS share_kind, "
+    "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref, "
     "d.dispatched_at, d.seen_at, "
     "d.trigger_price_czk, d.prev_price_czk, d.trigger_snapshot_id, "
     "d.target_channels, "

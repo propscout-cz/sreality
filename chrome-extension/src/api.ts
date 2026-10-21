@@ -13,6 +13,7 @@ import type {
   ExtCollection,
   ExtNote,
   ExtTag,
+  IngestState,
   NotePatch,
   PipelineCardResult,
   PipelineStage,
@@ -146,6 +147,27 @@ export async function lookupListings(
   return { ok: true, data: res.data.data };
 }
 
+/* POST /listings/ingest — ask for an ad we do not hold: the API resolves the
+ * URL, enqueues its page for the worker's detail drain and answers one state
+ * (admins only in v1). Idempotent server-side. */
+export async function ingestListing(url: string): Promise<ApiResult<IngestState>> {
+  return request<IngestState>('/listings/ingest', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+}
+
+/* GET /listings/ingest/:source/:native_id — the same state, polled until the
+ * ad is held with a property. */
+export async function ingestState(
+  source: string,
+  nativeId: string,
+): Promise<ApiResult<IngestState>> {
+  return request<IngestState>(
+    `/listings/ingest/${encodeURIComponent(source)}/${encodeURIComponent(nativeId)}`,
+  );
+}
+
 /* PATCH /estimations/:id/scenario — write the operator's yield
  * overrides. A body with all fields null clears the column. */
 export async function patchScenario(
@@ -158,9 +180,10 @@ export async function patchScenario(
   });
 }
 
-/* POST /estimations — kicks off a new estimation for the listing the
- * operator is currently viewing. We surface the resulting row id and the panel
- * polls until it lands.
+/* POST /estimations — kicks off a new estimation of the ad the operator is
+ * viewing, by its `listing_id` from the lookup: an estimation is always of an ad
+ * we hold (an ad we lack is added first, ingestListing). We surface the
+ * resulting row id and the panel polls until it lands.
  *
  * The subject's CATEGORY decides what may be estimated. This used to send a
  * flat `estimate_kind:'rent'` for everything and nothing else, which — because
@@ -170,11 +193,11 @@ export async function patchScenario(
  * subject whose per-m² measure is capital. Both knobs are now passed through
  * from the caller; omitting either keeps the server's historical default. */
 export async function createEstimation(
-  url: string,
+  listing_id: number,
   opts: { estimate_kind?: 'rent' | 'sale'; category_main?: string | null } = {},
 ): Promise<ApiResult<EstimationRun>> {
   const body: Record<string, unknown> = {
-    url,
+    listing_id,
     source: 'extension',
     estimate_kind: opts.estimate_kind ?? 'rent',
     // mode:'agent' is the metered path (Wave 1) — this is what the "(zbývá X)"
@@ -182,9 +205,8 @@ export async function createEstimation(
     // when it's exhausted; the panel surfaces that as an upgrade prompt.
     mode: 'agent',
   };
-  // Only when we actually know it: a null would PIN "every category", which is
-  // not what an unknown subject means (and yields a cohort with no single
-  // per-m² basis). Absent = the server's 'byt' default, exactly as before.
+  // Only when the ad says: a null would PIN "every category" (a cohort with no
+  // single per-m² basis). Absent = the server's 'byt' default.
   if (opts.category_main != null) body.category_main = opts.category_main;
   return request<EstimationRun>('/estimations', {
     method: 'POST',
