@@ -38,6 +38,7 @@ import * as brokers from '@/lib/brokers';
 import * as queries from '@/lib/queries';
 import { fmtShortDate } from '@/lib/format';
 import type { CardRow } from '@/lib/queries';
+import type { HoverTarget } from '@/lib/hoverSync';
 import type { ImagePublic, ListingEstimate } from '@/lib/types';
 import type { CoverTag } from '@/lib/imageTags';
 
@@ -160,6 +161,7 @@ function renderGrid(
     estimates?: Record<number, ListingEstimate>;
     row?: CardRow;
     rows?: CardRow[];
+    onHover?: (targets: ReadonlyArray<HoverTarget> | null) => void;
     orderPortal?: string | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
@@ -190,7 +192,7 @@ function renderGrid(
             hasFilters={false}
             hasBounds={false}
             hoveredIds={new Set()}
-            onHover={() => {}}
+            onHover={opts.onHover ?? (() => {})}
             onSort={() => {}}
             onClearFilters={() => {}}
             onClearBounds={() => {}}
@@ -349,6 +351,21 @@ describe('<ListingCards> the cover photo', () => {
     });
     expect(onCoverTag).toHaveBeenCalledWith('garage');
     expect(screen.getByRole('option', { name: 'Fasáda' })).toBeInTheDocument();
+  });
+});
+
+describe('<ListingCards> hover-sync', () => {
+  /* The card hands the map its own point, so the locator halo lands on the
+   * property even while the map shows it only inside a count mark. */
+  it('reports the hovered card with its point, and nothing on leave', async () => {
+    const onHover = vi.fn();
+    renderGrid({ row: { ...ROW, lat: 50.08, lng: 14.43 } as CardRow, onHover });
+    const price = await screen.findByText(/5.400.000/);
+    fireEvent.mouseEnter(price);
+    /* The row itself is the target: its key and its point. */
+    expect(onHover).toHaveBeenLastCalledWith([expect.objectContaining({ listing_id: 111, lat: 50.08, lng: 14.43 })]);
+    fireEvent.mouseLeave(price);
+    expect(onHover).toHaveBeenLastCalledWith(null);
   });
 });
 
