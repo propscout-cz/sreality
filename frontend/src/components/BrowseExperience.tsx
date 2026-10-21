@@ -8,6 +8,7 @@
  * small props — `layout` (sticky full-page vs contained) and `features` (which
  * page-chrome bits to show). Everything cohort-related is identical, so the two
  * surfaces can never drift. */
+import { haloPointsOf, NO_HOVER, nextHover, type HoverState, type HoverTarget } from '@/lib/hoverSync';
 import {
   Suspense,
   useCallback,
@@ -185,39 +186,22 @@ export default function BrowseExperience({
     });
   }, []);
 
-  /* Hover-sync between cards / map. Ephemeral component state. */
-  const [hoverState, setHoverState] = useState<{
-    ids: ReadonlySet<number>;
-    origin: 'map' | 'list' | null;
-  }>({ ids: new Set(), origin: null });
+  /* Hover-sync between cards / map: ephemeral state, one transition
+   * (lib/hoverSync). The cards hand over their rows' points for the map's
+   * locator halo; a map-origin hover carries none (the cursor is already
+   * on the spot). */
+  const [hoverState, setHoverState] = useState<HoverState>(NO_HOVER);
   const hoveredIds = hoverState.ids;
-  const setHovered = useCallback(
-    (ids: ReadonlyArray<number> | null, origin: 'map' | 'list') => {
-      setHoverState((prev) => {
-        if (ids == null || ids.length === 0) {
-          return prev.ids.size === 0
-            ? prev
-            : { ids: new Set<number>(), origin: null };
-        }
-        if (
-          prev.origin === origin &&
-          prev.ids.size === ids.length &&
-          ids.every((id) => prev.ids.has(id))
-        ) {
-          return prev;
-        }
-        return { ids: new Set(ids), origin };
-      });
-    },
+  const setHoveredFromMap = useCallback(
+    (ids: ReadonlyArray<number> | null) => setHoverState((prev) => nextHover(prev, ids, [], 'map')),
     [],
   );
-  const setHoveredFromMap = useCallback(
-    (ids: ReadonlyArray<number> | null) => setHovered(ids, 'map'),
-    [setHovered],
-  );
-  const setHoveredFromList = useCallback(
-    (ids: ReadonlyArray<number> | null) => setHovered(ids, 'list'),
-    [setHovered],
+  const setHoveredFromCards = useCallback(
+    (targets: ReadonlyArray<HoverTarget> | null) =>
+      setHoverState((prev) =>
+        nextHover(prev, targets?.map((t) => t.listing_id) ?? null, haloPointsOf(targets ?? []), 'list'),
+      ),
+    [],
   );
 
   /* Operator-resizable columns + the sidebar/map-collapsed preferences (all per-browser
@@ -751,7 +735,7 @@ export default function BrowseExperience({
                 hasBounds={filters.bounds != null}
                 hoveredIds={hoveredIds}
                 hoverOrigin={hoverState.origin}
-                onHover={setHoveredFromList}
+                onHover={setHoveredFromCards}
                 onSort={view.setSort}
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
                 onClearBounds={() => view.setBounds(null)}
@@ -783,7 +767,7 @@ export default function BrowseExperience({
                     bounds={filters.bounds}
                     onBoundsChange={view.setBounds}
                     hoveredIds={hoveredIds}
-                    hoverOrigin={hoverState.origin}
+                    haloPoints={hoverState.points}
                     onHover={setHoveredFromMap}
                     centerCircle={
                       filters.locationMode === 'center_radius'
