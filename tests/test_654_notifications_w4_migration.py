@@ -42,6 +42,9 @@ def test_a_device_has_one_live_row_per_endpoint_and_ends_without_its_secrets() -
     assert "check (end_reason in ('gone', 'signed_out', 'switched_off', 'replaced'))" in CODE
     assert "references public.accounts(id) on delete cascade" in CODE
     assert "check (origin ~ '^https://')" in CODE
+    # A 429 holds the device, not its rows (no attempt is spent waiting out Retry-After).
+    assert "last_seen_at timestamptz not null default now(), hold_until timestamptz, ended_at timestamptz," in CODE
+    assert "comment on column public.push_subscriptions.hold_until is" in CODE
 
 
 def test_a_delivery_is_one_row_per_event_and_device_and_one_word_of_reason() -> None:

@@ -392,7 +392,7 @@ Per-lane notes:
   events ≤ 24 h × the account's live devices registered before each; a share past one per sharer a day = `skipped/capped`), a claim
   (≤ 10 devices, 2-min lease = `next_attempt_at`, SKIP LOCKED, < 5 attempts), re-check (seen | hidden | stale | device_ended), ONE
   push per device (coalesced: "N nových upozornění", `/notifications?d=`), finalized right after its POST (sent | gone: the device
-  ends | 429: the device waits Retry-After | retry 2ⁿ min | failed). No lock but the lease; steps `fan_out`/`claim`/`send` are
+  ends | 429: the device is held, `hold_until`, the rows keep their attempt | retry 2ⁿ min | failed). No lock but the lease; steps `fan_out`/`claim`/`send` are
   `portal_errors` cells by exception CLASS only — an endpoint is a secret, never in the heartbeat or the log (`PUSH` line on a send).
 - **Autodedup re-cut** (E944) — pHash coverage < 0.85 marks `rt_recut:<gen>` due; the NEXT tick re-cuts instead of passing (same lease, 1,050 s, reads stop 120 s early); never in a build or while the scope (max of the last cut's count and the store's `rt_fp`) holds > `RECUT_MAX_LISTINGS` 50k ads (row says `bootstrap`/`unfit`: Prague keeps its seed's cut); ≤ 1 attempt / 6 h, stamped before the cut, so a death mid-cut waits and does not halve the claim cap (2 deaths under one cut = `died` until a seed); failed = `errors: 1` + `recut_failed`; shutdown = taken back while its stamp holds.
   Heartbeat `last.recut` + the lane's own `recut` (lost on restart; durable: `rt_recut:<gen>.last`), `calibration_built_age_days`. The parsed calibration (~16 MB at 39.5k) outlives its pass, read once a digest — E949's one deliberate exception.

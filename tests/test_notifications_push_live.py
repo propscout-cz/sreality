@@ -156,8 +156,9 @@ def test_a_claim_leases_and_a_claim_whose_process_died_is_due_after_its_lease(cu
     cur.execute("UPDATE notification_deliveries SET attempts = 5, next_attempt_at = now() WHERE id = %s", (row,))
     assert pd.claim(cur.connection) == []
     cur.execute(pd.EXHAUSTED_SQL, {"max_attempts": pd.MAX_ATTEMPTS})
-    cur.execute("SELECT status, next_attempt_at = 'infinity' FROM notification_deliveries WHERE id = %s", (row,))
-    assert cur.fetchone() == ("failed", True)
+    cur.execute("SELECT status, next_attempt_at = 'infinity', reason FROM notification_deliveries WHERE id = %s",
+                (row,))
+    assert cur.fetchone() == ("failed", True, "lease_expired"), "a crash-exhausted row is named"
 
 
 @pytest.fixture()
@@ -201,19 +202,64 @@ def test_two_concurrent_claims_never_share_a_row(committed: tuple[Any, Any, dict
 # --- outcomes ----------------------------------------------------------------------------------
 
 
-def test_a_429_holds_every_due_row_of_that_device_and_no_other(cur: Any) -> None:
+def _hold_left_s(cur: Any, device: int) -> Any:
+    cur.execute("SELECT round(extract(epoch FROM hold_until - now())) FROM push_subscriptions WHERE id = %s",
+                (device,))
+    return cur.fetchone()[0]
+
+
+def test_a_429_holds_the_device_and_no_other_and_spends_no_attempt(cur: Any) -> None:
     me = _account(cur)
     held, free = _device(cur, me), _device(cur, me)
     sharer = _account(cur)
-    claimed = _delivery(cur, _share(cur, me, sharer), held)
+    first = _delivery(cur, _share(cur, me, sharer), held)
     waiting = _delivery(cur, _share(cur, me, sharer), held)
     elsewhere = _delivery(cur, _share(cur, me, sharer), free)
-    pd.finalize(cur.connection, held, [claimed], push.Outcome("throttled", "TooManyRequests", retry_after_s=120))
-    cur.execute("SELECT id, status, reason, round(extract(epoch FROM next_attempt_at - now())) "
-                "FROM notification_deliveries WHERE id = ANY(%s) ORDER BY id", ([claimed, waiting, elsewhere],))
-    assert cur.fetchall() == [(claimed, "pending", "TooManyRequests", 120), (waiting, "pending", None, 120),
-                              (elsewhere, "pending", None, 0)]
-    assert [c.delivery_id for c in pd.claim(cur.connection)] == [elsewhere]
+    claims = {c.delivery_id: c for c in pd.claim(cur.connection, max_devices=1)}
+    assert set(claims) == {first, waiting}
+    pd.finalize(cur.connection, held, [first, waiting],
+                push.Outcome("throttled", "TooManyRequests", retry_after_s=120))
+    cur.execute("SELECT id, status, attempts, reason, next_attempt_at <= now() FROM notification_deliveries "
+                "WHERE id = ANY(%s) ORDER BY id", ([first, waiting, elsewhere],))
+    assert cur.fetchall() == [(first, "pending", 0, "TooManyRequests", True),
+                              (waiting, "pending", 0, "TooManyRequests", True),
+                              (elsewhere, "pending", 0, None, True)]
+    assert _hold_left_s(cur, held) == 120 and _hold_left_s(cur, free) is None
+    assert [c.delivery_id for c in pd.claim(cur.connection)] == [elsewhere], "the held device is not claimed"
+
+
+def test_five_429s_running_leave_the_rows_pending_with_every_attempt_and_the_device_held(cur: Any) -> None:
+    me = _account(cur)
+    device = _device(cur, me)
+    row = _delivery(cur, _share(cur, me, _account(cur)), device)
+    throttled = push.Outcome("throttled", "TooManyRequests", retry_after_s=60)
+    for attempt in range(5):
+        if attempt:  # the hold of the previous 429 has run out
+            cur.execute("UPDATE push_subscriptions SET hold_until = now() - interval '1 second' WHERE id = %s",
+                        (device,))
+        last = pd.deliver_once(cur.connection, stop=lambda: False, send=lambda *a, **k: throttled)
+        assert (last["claimed"], last["throttled"], last["exhausted"]) == (1, 1, 0), attempt
+    cur.execute("SELECT status, attempts, reason FROM notification_deliveries WHERE id = %s", (row,))
+    assert cur.fetchone() == ("pending", 0, "TooManyRequests")
+    assert _hold_left_s(cur, device) == 60
+
+
+def test_a_new_event_for_a_held_device_waits_out_the_hold(cur: Any) -> None:
+    me = _account(cur)
+    device = _device(cur, me)
+    cur.execute("UPDATE push_subscriptions SET hold_until = now() + interval '5 minutes' WHERE id = %s", (device,))
+    event = _share(cur, me, _account(cur), ago="1 minute")
+    posted: list[Any] = []
+
+    def send(*args: Any, **kwargs: Any) -> push.Outcome:
+        posted.append(args)
+        return push.Outcome("sent", provider_message_id="H-1")
+
+    last = pd.deliver_once(cur.connection, stop=lambda: False, send=send)
+    assert last["fanned_out"] == 1 and last["claimed"] == 0 and posted == []
+    assert _ledger(cur, device) == {event: ("pending", None)}, "fan-out keeps writing; the row simply waits"
+    cur.execute("UPDATE push_subscriptions SET hold_until = now() - interval '1 second' WHERE id = %s", (device,))
+    assert pd.deliver_once(cur.connection, stop=lambda: False, send=send)["sent"] == 1 and len(posted) == 1
 
 
 @pytest.mark.parametrize(("outcome", "attempts", "expected"), [
@@ -364,6 +410,12 @@ def test_the_health_checks_reads_judge_the_real_ledger(cur: Any) -> None:
     stuck = _delivery(cur, _share(cur, me, _account(cur)), device)
     cur.execute("UPDATE notification_deliveries SET next_attempt_at = now() - interval '11 minutes' "
                 "WHERE id = %s", (stuck,))
+    throttled_account = _account(cur)                                  # a 429's rows wait by design: no stall
+    held = _device(cur, throttled_account)
+    cur.execute("UPDATE push_subscriptions SET hold_until = now() + interval '30 minutes' WHERE id = %s", (held,))
+    waiting = _delivery(cur, _share(cur, throttled_account, _account(cur), ago="20 minutes"), held)
+    cur.execute("UPDATE notification_deliveries SET next_attempt_at = now() - interval '15 minutes' "
+                "WHERE id = %s", (waiting,))
     for reason in ("BadDeviceToken", "BadDeviceToken", "400"):
         row = _delivery(cur, _share(cur, me, _account(cur)), device)
         cur.execute("UPDATE notification_deliveries SET status = 'failed', reason = %s, "
@@ -371,6 +423,6 @@ def test_the_health_checks_reads_judge_the_real_ledger(cur: Any) -> None:
     out = nc.check_notifications(cur.connection, THRESHOLDS)
     cells = {c["subject"]: (c["status"], c["value"]) for c in out["details"]["cells"]}
     assert cells == {"push/stall": ("fail", 1), "push/recall": ("fail", 1), "push/failures": ("fail", 3),
-                     "push/unconfigured": ("ok", 1)}
+                     "push/unconfigured": ("ok", 2)}
     failures = next(c for c in out["details"]["cells"] if c["subject"] == "push/failures")
     assert failures["facts"]["reasons"] == ["400", "BadDeviceToken"]

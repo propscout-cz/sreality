@@ -92,10 +92,14 @@ def test_fan_out_is_every_visible_unseen_event_of_a_day_times_its_accounts_older
 
 def test_the_claim_is_a_leased_skip_locked_compare_and_set_of_at_most_ten_devices() -> None:
     sql = " ".join(pd.CLAIM_SQL.split())
-    assert ("WHERE status IN ('pending', 'failed') AND next_attempt_at <= now() AND attempts < %(max_attempts)s "
-            "ORDER BY next_attempt_at, id LIMIT %(max_rows)s FOR UPDATE SKIP LOCKED") in sql
+    assert "WHERE status IN ('pending', 'failed') AND next_attempt_at <= now() AND attempts < %(max_attempts)s" in sql
+    assert "ORDER BY next_attempt_at, id LIMIT %(max_rows)s FOR UPDATE SKIP LOCKED" in sql
     assert "SET next_attempt_at = now() + interval '2 minutes', attempts = x.attempts + 1" in sql
     assert "LIMIT %(max_devices)s" in sql and " ".join(VISIBLE_SQL.split()) in sql
+    # A device Apple throttled is skipped in the window itself: its rows neither fill it nor get locked.
+    due = sql.split("), devices AS", 1)[0]
+    assert ("NOT EXISTS (SELECT 1 FROM push_subscriptions h WHERE h.id = notification_deliveries.push_subscription_id "
+            "AND h.hold_until > now())") in due
     assert (pd.MAX_ATTEMPTS, pd.MAX_DEVICES, pd.MAX_ROWS) == (5, 10, 200)
     assert pd.MAX_DEVICES * 10 < 120, "ten 10 s POSTs fit one 2-minute lease"
 
@@ -164,8 +168,6 @@ def test_the_recheck_skips_with_its_reason_and_sends_nothing_for_it(row: tuple[A
 
 @pytest.mark.parametrize(("outcome", "sql", "extra"), [
     (push.Outcome("sent", provider_message_id="C2E1"), pd.SENT_SQL, {"message_id": "C2E1"}),
-    (push.Outcome("throttled", "TooManyRequests", retry_after_s=120), pd.HOLD_SQL,
-     {"reason": "TooManyRequests", "wait": 120}),
     (push.Outcome("retry", "ConnectionError"), pd.RETRY_SQL, {"reason": "ConnectionError"}),
     (push.Outcome("failed", "BadJwtToken"), pd.FAIL_SQL, {"reason": "BadJwtToken"}),
 ], ids=lambda v: getattr(v, "kind", None))
@@ -176,8 +178,29 @@ def test_each_outcome_is_one_statement(outcome: push.Outcome, sql: str, extra: d
     assert params["ids"] == [70, 71] and params["device"] == 7
     assert {k: params[k] for k in extra} == extra
     assert last[outcome.kind] == 1 and last["pushes"] == 1
-    others = {pd.SENT_SQL, pd.HOLD_SQL, pd.RETRY_SQL, pd.FAIL_SQL, pd.GONE_SQL, pd.END_DEVICE_SQL} - {sql}
+    others = {pd.SENT_SQL, pd.THROTTLED_SQL, pd.HOLD_DEVICE_SQL, pd.RETRY_SQL, pd.FAIL_SQL, pd.GONE_SQL,
+              pd.END_DEVICE_SQL} - {sql}
     assert not any(_after(conn, s) for s in others)
+
+
+def test_a_429_holds_the_device_and_gives_the_rows_their_attempt_back_five_times_running() -> None:
+    """Five passes, five 429s: each holds the device for Retry-After and hands the claimed rows their attempt back
+    (due again, still pending), in one transaction; never the retry clock, never the terminal failure."""
+    throttled = push.Outcome("throttled", "TooManyRequests", retry_after_s=120)
+    for _ in range(5):
+        conn = _conn([_row(70, 7), _row(71, 7)])
+        last = pd.deliver_once(conn, stop=lambda: False, send=_Send(throttled))
+        assert last["throttled"] == 1 and last["raised"] == {}
+        [rows] = _after(conn, pd.THROTTLED_SQL)
+        [device] = _after(conn, pd.HOLD_DEVICE_SQL)
+        assert (rows["ids"], rows["reason"], device["device"], device["wait"]) == (
+            [70, 71], "TooManyRequests", 7, 120)
+        assert not any(_after(conn, s) for s in (pd.RETRY_SQL, pd.FAIL_SQL, pd.SENT_SQL))
+        assert conn.tx == ["commit"]
+    sql = " ".join(pd.THROTTLED_SQL.split())
+    assert "attempts = greatest(attempts - 1, 0), next_attempt_at = now()" in sql and "status =" not in sql
+    assert "hold_until = greatest(hold_until, now() + make_interval(secs => %(wait)s))" in pd.HOLD_DEVICE_SQL
+    assert "reason = coalesce(reason, 'lease_expired')" in pd.EXHAUSTED_SQL
 
 
 def test_gone_ends_the_device_with_its_rows_in_one_transaction() -> None:

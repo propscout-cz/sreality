@@ -55,18 +55,27 @@ FANOUT_SQL = (
     "RETURNING status"
 )
 
-# A row claimed MAX_ATTEMPTS times whose process died each time (never finalized) is failed for good.
+# A row claimed MAX_ATTEMPTS times whose process died each time (never finalized) is failed for good, and named so
+# unless a retry already named it (a 429 gives its attempt back, so it never lands here).
 EXHAUSTED_SQL = (
-    "UPDATE notification_deliveries SET status = 'failed', next_attempt_at = 'infinity' "
+    "UPDATE notification_deliveries SET status = 'failed', next_attempt_at = 'infinity', "
+    "reason = coalesce(reason, 'lease_expired') "
     "WHERE status IN ('pending', 'failed') AND attempts >= %(max_attempts)s AND next_attempt_at <= now()"
 )
+# A device Apple throttled (`push_subscriptions.hold_until`, a 429's Retry-After): none of its rows is claimed.
+_NOT_HELD = (
+    "NOT EXISTS (SELECT 1 FROM push_subscriptions h "
+    "WHERE h.id = notification_deliveries.push_subscription_id AND h.hold_until > now())"
+)
 
-# (b) The claim: the due rows of at most MAX_DEVICES devices, leased for 2 minutes, each with what it says and where
-# it goes. The select re-checks (c) in the same statement: seen, VISIBLE, 24 h, the device still live.
+# (b) The claim: the due rows of at most MAX_DEVICES devices not on hold, leased for 2 minutes, each with what it says
+# and where it goes (a held device's rows neither fill the window nor get locked). The select re-checks (c) in the
+# same statement: seen, VISIBLE, 24 h, the device still live.
 CLAIM_SQL = (
     "WITH due AS ("
     "  SELECT id, push_subscription_id, next_attempt_at FROM notification_deliveries "
     "   WHERE status IN ('pending', 'failed') AND next_attempt_at <= now() AND attempts < %(max_attempts)s "
+    f"    AND {_NOT_HELD} "
     "   ORDER BY next_attempt_at, id LIMIT %(max_rows)s FOR UPDATE SKIP LOCKED"
     "), devices AS ("
     "  SELECT push_subscription_id FROM due GROUP BY push_subscription_id "
@@ -117,14 +126,15 @@ END_DEVICE_SQL = (
     "UPDATE push_subscriptions SET ended_at = now(), end_reason = 'gone', endpoint = NULL, p256dh = NULL, "
     "auth = NULL WHERE id = %(device)s AND ended_at IS NULL"
 )
-# A 429 holds the DEVICE: every due row of it waits Retry-After, still pending (or failed and retrying).
-HOLD_SQL = (
-    "UPDATE notification_deliveries "
-    "SET next_attempt_at = now() + make_interval(secs => %(wait)s), "
-    "    reason = CASE WHEN id = ANY(%(ids)s) THEN %(reason)s ELSE reason END "
-    "WHERE push_subscription_id = %(device)s AND status IN ('pending', 'failed') "
-    "  AND next_attempt_at < 'infinity' "
-    "  AND (id = ANY(%(ids)s) OR next_attempt_at < now() + make_interval(secs => %(wait)s))"
+# A 429 holds the DEVICE for Retry-After (the claim skips it), and its rows get their attempt back and stay due, so
+# no run of 429s ever spends the five attempts: the rows wait out the hold, then go in the next pass.
+HOLD_DEVICE_SQL = (
+    "UPDATE push_subscriptions SET hold_until = greatest(hold_until, now() + make_interval(secs => %(wait)s)) "
+    "WHERE id = %(device)s"
+)
+THROTTLED_SQL = (
+    "UPDATE notification_deliveries SET attempts = greatest(attempts - 1, 0), next_attempt_at = now(), "
+    "reason = %(reason)s WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
 )
 RETRY_SQL = (
     "UPDATE notification_deliveries SET status = 'failed', reason = %(reason)s, "
@@ -138,9 +148,11 @@ FAIL_SQL = (
 )
 
 # The `notifications` Health check's reads (scripts/checks/notifications.py), beside the statements they judge.
+# A held device's rows wait by design: not a stall.
 STALL_SQL = (
     "SELECT count(*), extract(epoch FROM now() - min(next_attempt_at)) FROM notification_deliveries "
-    "WHERE status IN ('pending', 'failed') AND next_attempt_at < now() - make_interval(mins => %(stall_min)s)"
+    "WHERE status IN ('pending', 'failed') AND next_attempt_at < now() - make_interval(mins => %(stall_min)s) "
+    f"  AND {_NOT_HELD}"
 )
 RECALL_SQL = (
     "SELECT count(*), extract(epoch FROM now() - min(d.dispatched_at)) "
@@ -251,16 +263,18 @@ def claim(conn: Any, *, max_devices: int = MAX_DEVICES, max_rows: int = MAX_ROWS
 
 
 def finalize(conn: Any, device_id: int, ids: list[int], outcome: push.Outcome) -> None:
-    """One push's rows by its outcome: sent | gone (the device ends) | throttled (the device waits) | retry | failed."""
+    """One push's rows by its outcome: sent | gone (the device ends) | throttled (the device is held, the rows get
+    their attempt back) | retry | failed."""
     params = {"ids": ids, "device": device_id, "reason": outcome.reason, "max_attempts": MAX_ATTEMPTS,
               "message_id": outcome.provider_message_id, "wait": outcome.retry_after_s or 60}
-    if outcome.kind == "gone":
+    if outcome.kind in ("gone", "throttled"):
+        rows_sql, device_sql = (GONE_SQL, END_DEVICE_SQL) if outcome.kind == "gone" else (THROTTLED_SQL,
+                                                                                         HOLD_DEVICE_SQL)
         with conn.transaction():
-            _run(conn, GONE_SQL, params)
-            _run(conn, END_DEVICE_SQL, params)
+            _run(conn, rows_sql, params)
+            _run(conn, device_sql, params)
         return
-    sql = {"sent": SENT_SQL, "throttled": HOLD_SQL, "retry": RETRY_SQL}.get(outcome.kind, FAIL_SQL)
-    _run(conn, sql, params)
+    _run(conn, {"sent": SENT_SQL, "retry": RETRY_SQL}.get(outcome.kind, FAIL_SQL), params)
 
 
 def _deliver(conn: Any, rows: list[Claimed], send: Callable[..., push.Outcome]) -> push.Outcome:

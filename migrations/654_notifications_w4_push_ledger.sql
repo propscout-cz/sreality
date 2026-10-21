@@ -14,6 +14,8 @@
 --                            three secrets (endpoint, p256dh, auth) and keeps it, for churn. One LIVE row per endpoint
 --                            (partial unique index); `origin` is the app's https origin, taken from the Origin header
 --                            checked against CORS_ALLOW_ORIGINS, so a push links absolutely without SPA_BASE_URL (F11).
+--                            `hold_until` is Apple's 429 on the DEVICE: until then the claim takes none of its rows,
+--                            and the throttled rows got their attempt back, so a burst of 429s never fails an alert.
 --   notification_deliveries  written only by the push lane (api/push_delivery.py) and POST /push/opened (`opened_at`).
 --                            `next_attempt_at` is the lease: a claim moves it 2 minutes ahead, so a crashed send comes
 --                            back after it; a terminal failure waits for ever ('infinity'). `reason` is one word
@@ -43,6 +45,7 @@ create table if not exists public.push_subscriptions (
   user_agent    text,
   created_at    timestamptz not null default now(),
   last_seen_at  timestamptz not null default now(),
+  hold_until    timestamptz,
   ended_at      timestamptz,
   end_reason    text,
   constraint push_subscriptions_origin_ck check (origin ~ '^https://'),
@@ -65,6 +68,9 @@ comment on column public.push_subscriptions.endpoint is
   'Apple''s push resource URL, a secret capability: never logged, never in an error, NULL once the row ended.';
 comment on column public.push_subscriptions.origin is
   'The app''s https origin (the Origin header of its PUT, one of CORS_ALLOW_ORIGINS): a push''s absolute link base.';
+comment on column public.push_subscriptions.hold_until is
+  'Apple answered 429: no row of this device is claimed before this (now() + Retry-After); the throttled rows '
+  'got their attempt back, so a 429 never consumes one. NULL or past: not held.';
 comment on column public.push_subscriptions.created_at is
   'When this app first registered for this account, never updated: only events after it are pushed to it.';
 

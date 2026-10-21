@@ -2270,7 +2270,8 @@ renumber.** Navigate by area:
     UPDATE SKIP LOCKED`, so a deploy overlap shares no row and a killed send returns), re-checks them,
     sends ONE declarative Web Push per device (`api/push.py`: RFC 8291 aes128gcm, RFC 8292 VAPID with
     `sub` = the device's origin; `TTL` ≥ 60 s, `Urgency: high`, a `Topic` per batch) and finalizes it at
-    once (a 429 holds the device, a retry waits 2ⁿ min, the fifth fails for good). Its words are one
+    once (a 429 holds the DEVICE, `push_subscriptions.hold_until` = Retry-After, and hands the rows their
+    attempt back, so throttling never fails an alert; a retry waits 2ⁿ min, the fifth fails for good). Its words are one
     Czech renderer (`api/notification_render.py`, by `change_kind`, from the frozen prices and the place
     label; a share says what opens, never who), its link `/n/{id}?d={delivery}` (coalesced:
     `/notifications?d=`), which `POST /push/opened` stamps. The endpoint is a secret: validated before
