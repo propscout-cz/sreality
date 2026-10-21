@@ -271,11 +271,10 @@ class SubscriptionRow:
     is_active: bool
     created_at: str
     updated_at: str
-    channels: list[str]
     dispatch_count: int
 
 
-_SUB_COLS = "id, name, filter_spec, is_active, created_at, updated_at, channels"
+_SUB_COLS = "id, name, filter_spec, is_active, created_at, updated_at"
 
 
 def _row_to_sub(row: tuple[Any, ...], dispatch_count: int) -> SubscriptionRow:
@@ -286,7 +285,6 @@ def _row_to_sub(row: tuple[Any, ...], dispatch_count: int) -> SubscriptionRow:
         is_active=bool(row[3]),
         created_at=row[4].isoformat() if row[4] else "",
         updated_at=row[5].isoformat() if row[5] else "",
-        channels=list(row[6]) if row[6] else [],
         dispatch_count=dispatch_count,
     )
 
@@ -346,7 +344,6 @@ def create_subscription(
     name: str,
     filter_spec: WatchdogFilterSpec,
     is_active: bool = True,
-    channels: list[str] | None = None,
     account_id: uuid.UUID | str,
 ) -> dict[str, Any]:
     # account_id is NOT NULL (migration 364) and REQUIRED here (no default): the
@@ -355,13 +352,12 @@ def create_subscription(
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO notification_subscriptions "
-            "  (name, filter_spec, is_active, channels, account_id) "
-            "VALUES (%s, %s::jsonb, %s, %s::text[], %s) RETURNING id",
+            "  (name, filter_spec, is_active, account_id) "
+            "VALUES (%s, %s::jsonb, %s, %s) RETURNING id",
             (
                 name,
                 json.dumps(filter_spec.model_dump()),
                 is_active,
-                channels or [],
                 account_id,
             ),
         )
@@ -377,7 +373,6 @@ def update_subscription(
     name: str | None = None,
     filter_spec: WatchdogFilterSpec | None = None,
     is_active: bool | None = None,
-    channels: list[str] | None = None,
 ) -> dict[str, Any] | None:
     sets: list[str] = []
     params: list[Any] = []
@@ -390,9 +385,6 @@ def update_subscription(
     if is_active is not None:
         sets.append("is_active = %s")
         params.append(is_active)
-    if channels is not None:
-        sets.append("channels = %s::text[]")
-        params.append(channels)
     if not sets:
         return get_subscription(conn, subscription_id)
     params.append(subscription_id)
@@ -442,7 +434,7 @@ def delete_subscription(
 # PROPERTY's (ruling R5): a dispatch is property-grain (rule 16), so the feed
 # names the place its property page, Browse and the map name, its location ad's.
 _LISTING_PROJECTION = (
-    "lp.sreality_id, lp.category_main, lp.category_type, lp.price_czk, "
+    "lp.category_main, lp.category_type, lp.price_czk, "
     "lp.price_unit, lp.area_m2, lp.disposition, lp.subtype, "
     "pp.display_label, "
     "lp.is_active, lp.first_seen_at, lp.last_seen_at, "
@@ -457,22 +449,21 @@ _LISTING_PROJECTION = (
 # subscription_id NULL, so an INNER join to subscriptions would silently drop it.
 # Exposes the source discriminator + provenance the watchdog feed never needed.
 # `check_key` names the check a system alert is about, so the bell's "Open Health"
-# opens Health at it as the outbox's links do: every system dedupe key opens
-# `sys:<key>:` (toolkit.system_alerts.emit_system_alert); null on every other producer.
+# opens Health at it: every system dedupe key opens `sys:<key>:`
+# (toolkit.system_alerts.emit_system_alert); null on every other producer.
 # `share_kind` + `share_ref` say what a share opens, read the same way off its key
 # (api/shares.py: `share:<collection|pipeline|dashboard>:<collection id | owner | dashboard id>:…`).
 _DISPATCH_SELECT = (
     "d.id, d.source_kind, "
     "d.subscription_id, s.name AS subscription_name, "
     "d.collection_id, c.name AS collection_name, "
-    "d.sreality_id, d.listing_id, d.property_id, d.change_kind, d.message, "
+    "d.listing_id, d.property_id, d.change_kind, d.message, "
     "CASE WHEN d.source_kind = 'system_health' "
     "THEN split_part(d.dedupe_key, ':', 2) END AS check_key, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 2) END AS share_kind, "
     "CASE WHEN d.source_kind = 'share' THEN split_part(d.dedupe_key, ':', 3) END AS share_ref, "
     "d.dispatched_at, d.seen_at, "
     "d.trigger_price_czk, d.prev_price_czk, d.trigger_snapshot_id, "
-    "d.target_channels, "
     f"{_LISTING_PROJECTION}"
 )
 
@@ -508,7 +499,7 @@ def list_dispatches(
     fired against multiple subscriptions are grouped client-side by the
     matching subscription names — but on the wire each row is the
     canonical (dispatch, listing) pair so the table renders one line
-    per dispatch and the UI dedups (sreality_id → list of subscriptions)
+    per dispatch and the UI dedups (property_id → list of subscriptions)
     when it wants the "fired by N watchdogs" presentation.
 
     The feed is append-only and grows under the background matcher; keyset
@@ -806,13 +797,11 @@ def _insert_new_dispatches(
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO notification_dispatches "
-            "  (subscription_id, source_kind, property_id, sreality_id, listing_id, "
-            "   change_kind, status, channel, trigger_price_czk, "
-            "   target_channels, dedupe_key) "
+            "  (subscription_id, source_kind, property_id, listing_id, "
+            "   change_kind, trigger_price_czk, dedupe_key) "
             # `l` is properties_public: `listing_id` is the canonical advert (migration 561).
-            "SELECT %(subscription_id)s, 'watchdog', l.property_id, l.sreality_id, l.listing_id, "
-            "       'new', 'sent', 'in_app', l.price_czk, "
-            "       %(target_channels)s::text[], "
+            "SELECT %(subscription_id)s, 'watchdog', l.property_id, l.listing_id, "
+            "       'new', l.price_czk, "
             "       'wd:' || %(subscription_id)s || ':new:' || l.property_id::text "
             "FROM properties_public l "
             f"WHERE {' AND '.join(where)} "
@@ -858,7 +847,7 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, filter_spec, last_matched_first_seen_at, channels "
+            "SELECT id, filter_spec, last_matched_first_seen_at "
             "FROM notification_subscriptions "
             "WHERE is_active = true"
         )
@@ -872,7 +861,7 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
     # loop's INFO line says so instead of one LOG per subscription nobody reads.
     failed = 0
 
-    for sub_id, raw_spec, cursor_ts, channels in sub_rows:
+    for sub_id, raw_spec, cursor_ts in sub_rows:
         try:
             spec = WatchdogFilterSpec(**(raw_spec or {}))
         except Exception as exc:  # noqa: BLE001 — bad spec, skip but keep loop alive
@@ -933,13 +922,7 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
                     IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES
                 )
 
-            insert_params = {
-                **params,
-                "subscription_id": str(sub_id),
-                # Delivery routing stamped on the event for the outbox; in_app is
-                # implicit (the feed reads the row), so it's never in target_channels.
-                "target_channels": [c for c in (channels or []) if c != "in_app"],
-            }
+            insert_params = {**params, "subscription_id": str(sub_id)}
 
             if upper is not None:
                 # Phase 2: insert dispatches for matches in the window (held
@@ -1076,14 +1059,14 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, filter_spec, channels FROM notification_subscriptions "
+            "SELECT id, filter_spec FROM notification_subscriptions "
             "WHERE is_active = true"
         )
         sub_rows = cur.fetchall()
 
     total_inserted = 0
     failed = 0
-    for sub_id, raw_spec, channels in sub_rows:
+    for sub_id, raw_spec in sub_rows:
         try:
             spec = WatchdogFilterSpec(**(raw_spec or {}))
         except Exception as exc:  # noqa: BLE001 — bad spec, skip but keep loop alive
@@ -1102,19 +1085,16 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
             params["drop_sids"] = drop_sids
             params["drop_prices"] = drop_prices
             params["drop_prevs"] = drop_prevs
-            params["target_channels"] = [c for c in (channels or []) if c != "in_app"]
             with conn.cursor() as cur:
                 # One dispatch per (matching property x in-window drop snapshot).
                 # The unnest JOIN restricts to dropped properties; the spec WHERE
                 # matches against current property state (lockstep with Browse).
                 cur.execute(
                     "INSERT INTO notification_dispatches "
-                    "  (subscription_id, source_kind, property_id, sreality_id, listing_id, "
-                    "   change_kind, status, channel, target_channels, "
+                    "  (subscription_id, source_kind, property_id, listing_id, change_kind, "
                     "   trigger_snapshot_id, trigger_price_czk, prev_price_czk, dedupe_key) "
-                    "SELECT %(subscription_id)s, 'watchdog', l.property_id, l.sreality_id, "
-                    "       l.listing_id, 'price_drop', 'sent', 'in_app', "
-                    "       %(target_channels)s::text[], "
+                    "SELECT %(subscription_id)s, 'watchdog', l.property_id, "
+                    "       l.listing_id, 'price_drop', "
                     "       d.snapshot_id, d.price_czk, d.prev_price, "
                     "       'wd:' || %(subscription_id)s || ':price_drop:' || d.snapshot_id::text "
                     "FROM properties_public l "
@@ -1154,9 +1134,7 @@ def _read_monitor_window_days(conn: "psycopg.Connection") -> int:
 
 
 # The monitored-membership CTE shared by every detector below: each property in
-# a collection with monitoring_enabled, carrying the collection's notify_channels
-# (which become the dispatch's target_channels). status='active' skips
-# merged-away properties.
+# a collection with monitoring_enabled. status='active' skips merged-away properties.
 # `monitor_since` is the anchor that makes every detector fire only for changes
 # AFTER monitoring began for this (collection, property) pair: the later of when
 # the property was added (collection_properties.added_at) and when the collection
@@ -1164,9 +1142,8 @@ def _read_monitor_window_days(conn: "psycopg.Connection") -> int:
 # A pre-membership change never notifies.
 _MONITORED_CTE = (
     "monitored AS ("
-    "  SELECT cp.collection_id, p.id AS property_id, p.repr_listing_id, "
+    "  SELECT cp.collection_id, p.id AS property_id, "
     "         p.repr_listing_ref_id, p.repr_since, "
-    "         c.notify_channels, "
     "         greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) "
     "           AS monitor_since "
     "  FROM collection_properties cp "
@@ -1191,9 +1168,8 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
     Each dispatch carries `collection_id` (the source, required by source_ck) and
     a per-event `dedupe_key` (`cm:{collection}:{kind}:{discriminator}`) so re-runs
     over an overlapping window are idempotent and a 2nd real change is its own
-    event. `target_channels` is stamped from the collection's `notify_channels`
-    (the Sprint N outbox reads only that column). Set-based: one INSERT...SELECT
-    per kind across ALL monitored collections — no per-collection Python loop.
+    event. Set-based: one INSERT...SELECT per kind across ALL monitored
+    collections — no per-collection Python loop.
 
     A property in N monitored collections fires N times (once per collection):
     the source_ck requires a collection_id, so monitoring is per-collection by
@@ -1231,14 +1207,12 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
         cur.execute(
             f"WITH {_MONITORED_CTE} "
             "INSERT INTO notification_dispatches "
-            "  (source_kind, collection_id, property_id, sreality_id, listing_id, change_kind, "
-            "   status, target_channels, trigger_snapshot_id, trigger_price_czk, "
-            "   prev_price_czk, dedupe_key) "
-            "SELECT 'collection_monitor', m.collection_id, st.property_id, m.repr_listing_id, "
-            "       st.listing_id, "
+            "  (source_kind, collection_id, property_id, listing_id, change_kind, "
+            "   trigger_snapshot_id, trigger_price_czk, prev_price_czk, dedupe_key) "
+            "SELECT 'collection_monitor', m.collection_id, st.property_id, st.listing_id, "
             "       CASE WHEN st.price_czk < st.prev_price_czk "
             "            THEN 'price_drop' ELSE 'price_rise' END, "
-            "       'sent', m.notify_channels, st.snapshot_id, st.price_czk, st.prev_price_czk, "
+            "       st.snapshot_id, st.price_czk, st.prev_price_czk, "
             "       'cm:' || m.collection_id::text || ':' || "
             "         CASE WHEN st.price_czk < st.prev_price_czk "
             "              THEN 'price_drop' ELSE 'price_rise' END || "
@@ -1258,24 +1232,20 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
         cur.execute(
             f"WITH {_MONITORED_CTE}, "
             "gone AS ("
-            "  SELECT m.collection_id, m.property_id, m.repr_listing_id, "
-            "         m.repr_listing_ref_id, "
-            "         m.notify_channels, max(l.inactive_at) AS inactive_at "
+            "  SELECT m.collection_id, m.property_id, m.repr_listing_ref_id, "
+            "         max(l.inactive_at) AS inactive_at "
             "  FROM monitored m "
             "  JOIN properties p ON p.id = m.property_id AND p.is_active = false "
             "  JOIN listings l ON l.property_id = m.property_id "
-            "  GROUP BY m.collection_id, m.property_id, m.repr_listing_id, "
-            "           m.repr_listing_ref_id, m.notify_channels, "
+            "  GROUP BY m.collection_id, m.property_id, m.repr_listing_ref_id, "
             "           m.monitor_since "
             "  HAVING max(l.inactive_at) > now() - %(win)s::interval "
             "     AND max(l.inactive_at) > m.monitor_since"
             ") "
             "INSERT INTO notification_dispatches "
-            "  (source_kind, collection_id, property_id, sreality_id, listing_id, change_kind, "
-            "   status, target_channels, dedupe_key) "
-            "SELECT 'collection_monitor', g.collection_id, g.property_id, g.repr_listing_id, "
-            "       g.repr_listing_ref_id, "
-            "       'inactive', 'sent', g.notify_channels, "
+            "  (source_kind, collection_id, property_id, listing_id, change_kind, dedupe_key) "
+            "SELECT 'collection_monitor', g.collection_id, g.property_id, "
+            "       g.repr_listing_ref_id, 'inactive', "
             "       'cm:' || g.collection_id::text || ':inactive:' || g.property_id::text || ':' || "
             "         floor(extract(epoch FROM g.inactive_at))::bigint::text "
             "FROM gone g "
@@ -1294,8 +1264,7 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
         cur.execute(
             f"WITH {_MONITORED_CTE}, "
             "back AS ("
-            "  SELECT m.collection_id, m.property_id, m.repr_listing_id, "
-            "         m.repr_listing_ref_id, m.notify_channels, "
+            "  SELECT m.collection_id, m.property_id, m.repr_listing_ref_id, "
             "         nd.dispatched_at AS inactive_at "
             "  FROM monitored m "
             "  JOIN properties p ON p.id = m.property_id "
@@ -1320,11 +1289,9 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
             "  )"
             ") "
             "INSERT INTO notification_dispatches "
-            "  (source_kind, collection_id, property_id, sreality_id, listing_id, change_kind, "
-            "   status, target_channels, dedupe_key) "
-            "SELECT 'collection_monitor', b.collection_id, b.property_id, b.repr_listing_id, "
-            "       b.repr_listing_ref_id, "
-            "       'reactivated', 'sent', b.notify_channels, "
+            "  (source_kind, collection_id, property_id, listing_id, change_kind, dedupe_key) "
+            "SELECT 'collection_monitor', b.collection_id, b.property_id, "
+            "       b.repr_listing_ref_id, 'reactivated', "
             "       'cm:' || b.collection_id::text || ':reactivated:' || b.property_id::text || ':' || "
             "         floor(extract(epoch FROM b.inactive_at))::bigint::text "
             "FROM back b "
@@ -1341,7 +1308,7 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
         cur.execute(
             f"WITH {_MONITORED_CTE}, "
             "src AS ("
-            "  SELECT m.collection_id, m.notify_channels, m.monitor_since, l.property_id, l.sreality_id, "
+            "  SELECT m.collection_id, m.monitor_since, l.property_id, l.sreality_id, "
             "         l.id AS listing_id, l.first_seen_at, "
             "         row_number() OVER (PARTITION BY m.collection_id, l.property_id, l.source "
             "                            ORDER BY l.first_seen_at, l.sreality_id) AS rn, "
@@ -1359,11 +1326,9 @@ def match_monitored_collections_once(conn: "psycopg.Connection") -> dict[str, in
             "  FROM src"
             ") "
             "INSERT INTO notification_dispatches "
-            "  (source_kind, collection_id, property_id, sreality_id, listing_id, change_kind, "
-            "   status, target_channels, dedupe_key) "
-            "SELECT 'collection_monitor', src.collection_id, src.property_id, src.sreality_id, "
-            "       src.listing_id, "
-            "       'new_source', 'sent', src.notify_channels, "
+            "  (source_kind, collection_id, property_id, listing_id, change_kind, dedupe_key) "
+            "SELECT 'collection_monitor', src.collection_id, src.property_id, "
+            "       src.listing_id, 'new_source', "
             # dedupe_key is NOT NULL, and `||` yields NULL if ANY operand is NULL:
             # post-Gate-2 a new non-sreality listing (sreality_id NULL) would make
             # the whole key NULL and abort the ENTIRE collection-monitor pass with a

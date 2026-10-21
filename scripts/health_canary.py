@@ -5,7 +5,7 @@ alarm path that needs neither pg_cron nor Railway (only SUPABASE_DB_URL). Four a
 bounded read each: `db_answers`; `liveness_fresh` (pg_cron's watcher wrote a result in the last
 30 min); `failing_cells_have_incidents` (a liveness cell failing for 15 min has an open incident,
 else the API's teller is not running); `alarm_notices_handled` (an alarm's onset or reminder
-system alert of the last 12 h was, 15 min on, read in the bell, delivered, or its key has no open
+system alert of the last 12 h was, 15 min on, read in the bell, or its key has no open
 unacknowledged incident left; a gauge's system alerts ring in the bell only). A failure prints `CANARY
 FAIL <name>: <reason>` as a GitHub error annotation and reds the run, so GitHub emails the
 operator: exit 2 when the database does not answer, 1 when an assertion fails.
@@ -26,7 +26,7 @@ from toolkit.system_alerts import CELL_PREFIX, _cells
 LIVENESS_STALE_MIN = 30  # the watcher writes every 5 min: six missed ticks, never one late tick
 TELLER_GRACE_MIN = 15  # the teller passes every 60 s; 15 min of failing outlasts an API deploy
 NOTICE_WINDOW_H = 12  # a notice is asserted for 12 h; the alarm's next reminder re-arms it
-NOTICE_GRACE_MIN = 15  # the outbox sends every 120 s and retries once inside this
+NOTICE_GRACE_MIN = 15  # a notice this young is not asserted yet
 STATEMENT_TIMEOUT = "10s"  # Postgres cancels a read past this: a wedged DB does not answer
 
 _LIVENESS_SQL = """
@@ -44,12 +44,9 @@ select r.run_at, r.status, r.details -> 'cells',
  order by r.run_at desc
 """
 
-# starts_with, not LIKE: every check key holds `_`. notification_id is the indexed twin of the
-# outbox's `notif:<dispatch>:<channel>` key; `delivered` is the Resend webhook's later `sent`.
+# starts_with, not LIKE: every check key holds `_`.
 _NOTICES_SQL = """
 select d.dedupe_key, d.dispatched_at, d.seen_at is not null,
-       exists (select 1 from channel_sends s
-                where s.notification_id = d.id and s.status in ('sent', 'delivered')),
        hc.class,
        exists (select 1 from ops_incidents i
                 where i.resolved_at is null and i.acknowledged_at is null
@@ -100,16 +97,16 @@ def failing_cells_have_incidents(rows: Sequence[tuple[datetime, str, Any]],
 
 
 def alarm_notices_handled(notices: Iterable[Sequence[Any]], now: datetime) -> list[str]:
-    """Every alarm onset or reminder of the window, past its grace, was seen, sent or answered."""
+    """Every alarm onset or reminder of the window, past its grace, was seen or answered."""
     reasons = []
-    for dedupe_key, dispatched_at, seen, delivered, cls, open_unacked in notices:
+    for dedupe_key, dispatched_at, seen, cls, open_unacked in notices:
         _, key, kind, *_ = (dedupe_key or "").split(":") + ["", "", ""]
         age = now - dispatched_at
         if (cls == "alarm" and kind in ("onset", "reminder")
                 and timedelta(minutes=NOTICE_GRACE_MIN) <= age <= timedelta(hours=NOTICE_WINDOW_H)
-                and not seen and not delivered and open_unacked):
-            reasons.append(f"the {key} {kind} system alert sent {_age(age)} ago was neither read "
-                           "in the bell nor delivered, and its incident is open and unacknowledged")
+                and not seen and open_unacked):
+            reasons.append(f"the {key} {kind} system alert sent {_age(age)} ago was not read "
+                           "in the bell, and its incident is open and unacknowledged")
     return reasons
 
 

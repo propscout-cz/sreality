@@ -1464,7 +1464,7 @@ def test_a_platform_admin_cannot_rewrite_a_system_alert(
         with scoped(tenants["a_user"]) as conn:
             for sql in (
                 "UPDATE notification_dispatches SET message = 'rewritten' WHERE id = %s",
-                "UPDATE notification_dispatches SET target_channels = '{telegram}' WHERE id = %s",
+                "UPDATE notification_dispatches SET target_channels = '{email}' WHERE id = %s",
                 "UPDATE notification_dispatches SET dedupe_key = 'sys:forged' WHERE id = %s",
                 "UPDATE notification_dispatches SET estimation_run_id = NULL WHERE id = %s",
             ):

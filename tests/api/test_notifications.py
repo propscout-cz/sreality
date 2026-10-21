@@ -619,10 +619,10 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (dead, {"districts": [{"name": "Jihlava"}]}, cursor_ts, ["in_app"]),
+                (dead, {"districts": [{"name": "Jihlava"}]}, cursor_ts),
                 (healthy, {"districts": [{"name": "Na Rybníčkách", "context": "Pardubice",
                                           "level": "ulice", "id": 666742}]},
-                 cursor_ts, ["in_app"]),
+                 cursor_ts),
             ],
             2,
         ),
@@ -660,7 +660,7 @@ def test_match_once_uses_per_subscription_cursor() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [(sub_id, {"category_main": "byt", "category_type": "pronajem",
                        "districts": [{"name": "Praha", "level": "obec", "id": 554782}]},
-              cursor_ts, ["email", "in_app"])],
+              cursor_ts)],
             1,
         ),
         # Window upper-bound query (first_seen_at-keyed; the publication gate is gone)
@@ -710,18 +710,14 @@ def test_match_once_uses_per_subscription_cursor() -> None:
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql
 
     # The 'new' dispatch INSERT writes the unified event shape: source_kind,
-    # a per-property dedupe_key, ON CONFLICT on that key (migration 206), and the
-    # producer-stamped target_channels (migration 208) — the subscription's
-    # channels minus the always-implicit 'in_app'.
-    insert_sql, insert_params = next(
+    # a per-property dedupe_key and ON CONFLICT on that key (migration 206).
+    insert_sql, _ = next(
         (sql, p) for sql, p in conn.executed
         if "INSERT INTO notification_dispatches" in sql
     )
     assert "'watchdog'" in insert_sql
     assert ":new:' || l.property_id::text" in insert_sql
     assert "ON CONFLICT (dedupe_key)" in insert_sql
-    assert "%(target_channels)s::text[]" in insert_sql
-    assert insert_params["target_channels"] == ["email"]
 
 
 def test_collection_monitor_noop_when_nothing_monitored() -> None:
@@ -844,6 +840,36 @@ def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
     # itself postdate monitor_since (no leak off a pre-fix ungated dispatch).
     reactivated_sql = next(s for s in inserts if "'reactivated'" in s)
     assert "nd.dispatched_at > m.monitor_since" in reactivated_sql
+
+
+def test_no_producer_writes_routing_or_the_legacy_id() -> None:
+    """Producers write facts (notifications program, north star 1): channel, status and
+    target_channels take their column defaults (migrations 057/206) until W6 drops them,
+    and nothing reads a dispatch's sreality_id any more."""
+    from api import shares
+    from api.notifications import match_changes_once
+
+    sub_row = (UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b"), {},
+               datetime(2026, 5, 14, tzinfo=timezone.utc))
+    conn = _FakeConn([
+        (lambda s: "FROM app_settings" in s, [], 0),
+        (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
+        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s,
+         [(datetime(2026, 5, 15, tzinfo=timezone.utc), 1)], 0),
+        (lambda s: "FROM listing_price_steps" in s, [(101, 5001, 4_900_000, 5_000_000)], 0),
+        (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
+    ])
+    match_once(conn)  # type: ignore[arg-type]
+    conn.script[1] = (conn.script[1][0], [sub_row[:2]], 1)
+    match_changes_once(conn)  # type: ignore[arg-type]
+    match_monitored_collections_once(conn)  # type: ignore[arg-type]
+    statements = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
+    statements.append(" ".join(shares._INSERT_SHARE_DISPATCH_SQL.split()))
+    columns = [re.search(r"INSERT INTO notification_dispatches \(([^)]*)\)", s) for s in statements]
+    assert len(columns) == 8 and all(columns), statements
+    for match in columns:
+        named = {c.strip() for c in match.group(1).split(",")}
+        assert not named & {"channel", "status", "target_channels", "sreality_id"}, named
 
 
 def test_get_unread_count_breaks_down_by_source() -> None:
@@ -1053,7 +1079,7 @@ def test_match_once_skips_subscription_with_no_listings() -> None:
         (lambda s: "FROM app_settings" in s, [(False,)], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts, [])],
+            [(sub_id, {}, cursor_ts)],
             1,
         ),
         # Window query returns (NULL, 0) — no fresh listings.
@@ -1087,9 +1113,9 @@ def test_match_once_skips_invalid_filter_spec() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
                 # Invalid: a map box with west >= east.
-                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, cursor_ts, []),
+                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, cursor_ts),
                 # Valid spec
-                (good_id, {}, cursor_ts, []),
+                (good_id, {}, cursor_ts),
             ],
             2,
         ),
@@ -1139,8 +1165,8 @@ def test_match_once_counts_failed_subscriptions(monkeypatch: pytest.MonkeyPatch)
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
                 (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666},
-                 cursor_ts, []),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, cursor_ts, []),
+                 cursor_ts),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, cursor_ts),
             ],
             2,
         ),
@@ -1174,8 +1200,8 @@ def test_match_changes_once_counts_failed_subscriptions(
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, []),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, []),
+                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}),
             ],
             2,
         ),
@@ -1205,7 +1231,7 @@ def _gate_script(
         (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts, [])],
+            [(sub_id, {}, cursor_ts)],
             1,
         ),
         (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [upper], 0),
@@ -1320,7 +1346,7 @@ def test_match_once_gate_flag_off_restores_old_behavior() -> None:
         (lambda s: "FROM app_settings" in s, [(False,)], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts, [])],
+            [(sub_id, {}, cursor_ts)],
             1,
         ),
         (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [(upper_ts, 2)], 0),
@@ -1390,7 +1416,7 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
         # active subscriptions
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {"category_main": "byt", "category_type": "pronajem"}, ["email"])],
+            [(sub_id, {"category_main": "byt", "category_type": "pronajem"})],
             1,
         ),
         # INSERT price_drop dispatches — 2 inserted
@@ -1418,10 +1444,6 @@ def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
     assert insert_params["drop_sids"] == [5001, 5002]
     assert insert_params["drop_prices"] == [4_900_000, 2_400_000]
     assert insert_params["drop_prevs"] == [5_000_000, 2_500_000]
-    # Producer-stamped delivery routing (migration 208) — subscription channels
-    # minus the always-implicit 'in_app'.
-    assert "%(target_channels)s::text[]" in insert_sql
-    assert insert_params["target_channels"] == ["email"]
 
 
 def test_match_changes_once_noops_when_no_recent_drops() -> None:

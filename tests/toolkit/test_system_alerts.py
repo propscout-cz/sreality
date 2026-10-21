@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import json
 from typing import Any
 
 import pytest
@@ -62,12 +61,10 @@ class _FakeCursor:
         elif "FROM health_checks" in norm:
             # The registration guard holds only where the statement states it.
             self._rows = c.newest_rows(cutover=_CUTOVER in norm)
-        elif "FROM app_settings" in norm:
-            self._rows = [] if c.channels is _MISSING else [(c.channels,)]
         elif "INSERT INTO notification_dispatches" in norm:
-            message, key, channels = params
+            message, key = params
             if key not in {d[1] for d in c.dispatches}:  # ON CONFLICT (dedupe_key) DO NOTHING
-                c.dispatches.append((message, key, channels))
+                c.dispatches.append((message, key, []))
                 self.rowcount = 1
         elif "INSERT INTO ops_incidents" in norm:
             if not any(i["signature"] == params["sig"] for i in c.open_incidents()):
@@ -117,8 +114,7 @@ class _FakeTx:
 class _FakeConn:
     """The four tables the ladder touches, in memory."""
 
-    def __init__(self, *, channels: Any = _MISSING, lock_free: bool = True) -> None:
-        self.channels = channels
+    def __init__(self, *, lock_free: bool = True) -> None:
         self.lock_free = lock_free
         self.registry: dict[str, dict[str, Any]] = {}
         self.results: dict[str, list[tuple[_dt.datetime, str, Any, dict[str, Any]]]] = {}
@@ -685,7 +681,8 @@ def test_emit_inserts_one_system_health_row_and_a_repeat_is_a_no_op() -> None:
     assert emit_system_alert(conn, "llm_errors", "down", dedupe_key="sys:llm_errors:onset:x")
     assert not emit_system_alert(conn, "llm_errors", "down", dedupe_key="sys:llm_errors:onset:x")
     sql = next(s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s)
-    assert "'system_health'" in sql and "'system_alert'" in sql and "'in_app'" in sql
+    assert "'system_health'" in sql and "'system_alert'" in sql
+    assert "channel" not in sql  # routing is the column defaults' (notifications W1b)
     assert "ON CONFLICT (dedupe_key) DO NOTHING" in sql
     assert conn.dispatches == [("down", "sys:llm_errors:onset:x", [])]
 
@@ -707,19 +704,6 @@ def test_emit_refuses_a_dedupe_key_outside_its_checks_namespace(
     with pytest.raises(ValueError):
         emit_system_alert(conn, check_key, "down", dedupe_key=dedupe_key)
     assert conn.executed == [] and conn.dispatches == []
-
-
-@pytest.mark.parametrize(("stored", "channels"), [
-    (["email", "telegram"], ["email", "telegram"]),
-    (_MISSING, []),
-    (json.dumps(["telegram"]), ["telegram"]),
-    ({"not": "a list"}, []),
-    (["email", 42, None, "telegram"], ["email", "telegram"]),
-])
-def test_emit_stamps_the_system_health_channels(stored: Any, channels: list[str]) -> None:
-    conn = _FakeConn(channels=stored)
-    emit_system_alert(conn, "llm_errors", "down", dedupe_key="sys:llm_errors:onset:x")
-    assert conn.dispatches[0][2] == channels
 
 
 def test_only_verdict_cells_are_cells() -> None:

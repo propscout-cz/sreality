@@ -7,7 +7,6 @@ CI's database job; here the fake answers each read with the rows that SQL would 
 from __future__ import annotations
 
 import datetime as _dt
-import re
 from pathlib import Path
 from typing import Any
 
@@ -34,18 +33,10 @@ def _row(minutes: float, *failing: str, incidents: tuple[str, ...] = ()) -> tupl
 
 
 def _notice(minutes: float, *, kind: str = "onset", key: str = "llm_errors",
-            cls: str | None = "alarm", seen: bool = False, delivered: bool = False,
+            cls: str | None = "alarm", seen: bool = False,
             open_unacked: bool = True) -> tuple[Any, ...]:
     """One system alert as _NOTICES_SQL returns it."""
-    return (f"sys:{key}:{kind}:2026-10-18T10:00:00Z", _ago(minutes), seen, delivered, cls,
-            open_unacked)
-
-
-def _counted(status: str) -> bool:
-    """Whether _NOTICES_SQL counts a channel_sends row in this status as the notice delivered."""
-    statuses = re.search(r"s\.status in \(([^)]*)\)", hc._NOTICES_SQL)
-    assert statuses, "_NOTICES_SQL no longer reads `s.status in (...)`: re-pin the delivery tests"
-    return status in {s.strip(" '") for s in statuses[1].split(",")}
+    return (f"sys:{key}:{kind}:2026-10-18T10:00:00Z", _ago(minutes), seen, cls, open_unacked)
 
 
 class _Conn:
@@ -197,7 +188,7 @@ def test_an_unseen_undelivered_alarm_onset_with_an_open_incident_exits_1(
     assert _main(monkeypatch, _conn(notices=[_notice(20)])) == 1
     out = capsys.readouterr().out
     assert ("CANARY FAIL alarm_notices_handled: the llm_errors onset system alert sent 20 min "
-            "ago") in out
+            "ago was not read in the bell") in out
 
 
 def test_an_unseen_reminder_is_asserted_like_an_onset(monkeypatch: Any) -> None:
@@ -208,15 +199,6 @@ def test_an_unseen_reminder_is_asserted_like_an_onset(monkeypatch: Any) -> None:
                          ids=["seen", "acknowledged"])
 def test_a_handled_alarm_notice_exits_0(monkeypatch: Any, handled: dict[str, bool]) -> None:
     assert _main(monkeypatch, _conn(notices=[_notice(20, **handled)])) == 0
-
-
-@pytest.mark.parametrize("status, code", [("delivered", 0), ("sent", 0), ("queued", 1),
-                                          ("failed", 1), ("bounced", 1), ("suppressed", 1)])
-def test_a_channel_send_handles_the_notice_once_sent(monkeypatch: Any, status: str,
-                                                     code: int) -> None:
-    """Resend's webhook turns `sent` into `delivered` later; Telegram has no webhook, so a
-    sent-only row must count. A send queued, failed, bounced or suppressed reached no one."""
-    assert _main(monkeypatch, _conn(notices=[_notice(20, delivered=_counted(status))])) == code
 
 
 def test_a_notice_inside_its_grace_is_not_asserted_yet(monkeypatch: Any) -> None:

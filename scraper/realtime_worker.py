@@ -3,7 +3,7 @@
 A SECOND Railway service from the same Docker image (start command
 `env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker`, E949) that replaces cron
 quantization for the latency-critical path. Settings-paced asyncio lanes (the proven
-matcher/outbox pattern from api/notifications + api/notification_outbox):
+matcher-loop pattern of api/notifications):
 
 - probe:     every `realtime_probe_interval_seconds` (default 180), run the
              newest-first delta probe (portal_runner.run_index_probe, Wave C-2)
