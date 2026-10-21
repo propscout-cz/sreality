@@ -2853,6 +2853,14 @@ export const markAllNotificationsSeen = (
     query: { source_kind },
   });
 
+/* ----- Push (notifications push program W4/W5b) ------------------------- */
+
+/* A tap on a push lands on `/n/{dispatch}?d={delivery}` (or the coalesced
+ * `/notifications?d=`): this stamps that the caller opened their own delivery.
+ * An unknown id is still 204. Best effort, never awaited by a navigation. */
+export const postPushOpened = (delivery: number): Promise<void> =>
+  request<void>('/push/opened', { method: 'POST', json: { delivery } });
+
 /* ----- Saved Browse filter presets (migration 151) ----------------------
  * Per account (migration 595, ticket #1761): every route rides the user's
  * JWT and RLS. */

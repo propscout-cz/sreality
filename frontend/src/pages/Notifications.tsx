@@ -12,7 +12,10 @@
  * and its bell carries the count, so the eyebrow and the explanation step
  * aside (the empty state still explains); the rows' hairlines run to the screen
  * edge as the roll's do, and a row turns into two lines — kind and time, then
- * what it is about — whose prices never split. */
+ * what it is about — whose prices never split.
+ *
+ * A coalesced push opens this page as `/notifications?d={delivery}`: the open is
+ * reported once and the parameter dropped (lib/push). */
 
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -26,6 +29,7 @@ import { notificationKeys } from '@/lib/queries';
 import { dispatchTarget } from '@/lib/dispatchTarget';
 import { ROUTES } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
+import { usePushOpenedParam } from '@/lib/push';
 import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
@@ -76,6 +80,7 @@ export default function Notifications() {
   const qc = useQueryClient();
   const [source, setSource] = useState<SourceFilter>('all');
   const [seen, setSeen] = useState<WatchdogSeenFilter>('all');
+  usePushOpenedParam();
 
   const feed = useInfiniteList<WatchdogDispatch>({
     queryKey: notificationKeys.feed({ source, seen }),

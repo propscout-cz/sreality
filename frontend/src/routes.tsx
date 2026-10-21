@@ -58,6 +58,9 @@ const AutodedupJudge = lazyChunk(() => import('./pages/AutodedupJudge'));
 // the feed's chunk after its first launch (`/assets/*` cache-first).
 const LinkPage = lazyChunk(() => import('./pages/Link'));
 const Feed = lazyChunk(() => import('./pages/Feed'));
+// Where a tapped push lands (notifications push § 3.5): opened from a
+// notification only, so outside the first visit.
+const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -136,6 +139,15 @@ export const routes: RouteObject[] = [
       { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
       { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
       { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
+      {
+        path: ROUTES.notificationOpen.childPath,
+        element: (
+          <Suspense fallback={null}>
+            <NotificationOpen />
+          </Suspense>
+        ),
+        handle: { title: 'Upozornění' },
+      },
       { path: ROUTES.locationQuality.childPath, element: <AdminPage><LocationQuality /></AdminPage>, handle: { title: 'Location quality' } },
       { path: ROUTES.settings.childPath, element: <AdminPage><Settings /></AdminPage>, handle: { title: 'Settings' } },
       { path: ROUTES.newDedup.childPath, element: <AdminPage><NewDedupDashboard /></AdminPage>, handle: { title: 'NEW DEDUP' } },

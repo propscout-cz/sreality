@@ -117,6 +117,9 @@ export const ROUTES = {
   watchdog: def('/watchdog'),
   watchdogEdit: def('/watchdog/:id/edit'),
   notifications: def('/notifications'),
+  // Where a push tap lands (notifications push § 3.5): marks the dispatch read,
+  // then replaces itself with what it is about (lib/dispatchTarget).
+  notificationOpen: def('/n/:dispatchId'),
   locationQuality: def('/location-quality'),
   settings: def('/settings'),
   newDedup: def('/new-dedup'),
