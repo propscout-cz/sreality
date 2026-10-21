@@ -555,9 +555,17 @@ class _FakeConn:
     ):
         self.script = script
         self.executed: list[tuple[str, Any]] = []
+        self.transactions = 0
 
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self)
+
+    def transaction(self) -> Any:
+        # Each watchdog's INSERT is its own transaction (a savepoint inside the lane's step).
+        import contextlib
+
+        self.transactions += 1
+        return contextlib.nullcontext()
 
 
 def test_create_subscription_stamps_account_id() -> None:
@@ -613,111 +621,87 @@ def test_a_stored_spec_with_a_chip_without_a_code_mutes_only_its_watchdog() -> N
     last such rows; this is the rail if one ever reappears."""
     dead = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
     healthy = UUID("5b1e4c8e-0d1f-4a77-9c3e-2a6f1d0b9e10")
-    cursor_ts = datetime(2026, 10, 16, 12, 0, 0, tzinfo=timezone.utc)
+    since = datetime(2026, 10, 16, 12, 0, 0, tzinfo=timezone.utc)
     conn = _FakeConn([
         (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (dead, {"districts": [{"name": "Jihlava"}]}, cursor_ts),
+                (dead, {"districts": [{"name": "Jihlava"}]}, since),
                 (healthy, {"districts": [{"name": "Na Rybníčkách", "context": "Pardubice",
                                           "level": "ulice", "id": 666742}]},
-                 cursor_ts),
+                 since),
             ],
             2,
         ),
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s,
-         [(datetime(2026, 10, 16, 13, 0, 0, tzinfo=timezone.utc), 4)], 0),
-        (lambda s: "INSERT INTO notification_dispatches" in s
-         and "image_lookback_minutes" in s, [], 0),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
-        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s,
-         [], 1),
     ])
     stats = match_once(conn)  # type: ignore[arg-type]
-    assert stats["subscriptions_evaluated"] == 2
-    assert stats["subscriptions_failed"] == 1
-    assert stats["matches_inserted"] == 2
-    inserts = [p for sql, p in conn.executed
-               if "INSERT INTO notification_dispatches" in sql and isinstance(p, dict)]
-    assert inserts and {p.get("subscription_id") for p in inserts} == {str(healthy)}
-    assert all(p["district_codes_ulice"] == [666742] for p in inserts)
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_failed": 1,
+                     "matches_inserted": 2}
+    inserts = [p for sql, p in conn.executed if "INSERT INTO notification_dispatches" in sql]
+    assert len(inserts) == 1 and inserts[0]["subscription_id"] == str(healthy)
+    assert inserts[0]["district_codes_ulice"] == [666742]
 
 
-def test_match_once_uses_per_subscription_cursor() -> None:
-    """The matcher reads `last_matched_first_seen_at` per subscription
-    and injects it as the `cursor` clause — proves the per-subscription
-    cursor column drives the SQL, not the old global watermark."""
+def test_match_once_reads_one_24h_window_from_active_since() -> None:
+    """F1: ONE INSERT per live watchdog over `first_seen_at > greatest(now() − 24 h,
+    active_since)` — a late-matching property under a day old still fires, a watchdog
+    switched on alerts only on what appears afterwards (R6 (a)), and nothing advances:
+    no cursor, no window upper bound, no lookback re-scan."""
     sub_id = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
-    cursor_ts = datetime(2026, 5, 14, 13, 57, 48, tzinfo=timezone.utc)
-    upper_ts = datetime(2026, 5, 15, 21, 0, 0, tzinfo=timezone.utc)
-
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        # app_settings reads for interval / window / image gate — default all.
+    since = datetime(2026, 10, 21, 9, 0, 0, tzinfo=timezone.utc)
+    conn = _FakeConn([
         (lambda s: "FROM app_settings" in s, [], 0),
-        # Active subscriptions query
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [(sub_id, {"category_main": "byt", "category_type": "pronajem",
                        "districts": [{"name": "Praha", "level": "obec", "id": 554782}]},
-              cursor_ts)],
+              since)],
             1,
         ),
-        # Window upper-bound query (first_seen_at-keyed; the publication gate is gone)
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [(upper_ts, 5)], 0),
-        # Gate-pending lookback INSERT (default-on gate) — nothing released.
-        (
-            lambda s: "INSERT INTO notification_dispatches" in s
-            and "image_lookback_minutes" in s,
-            [],
-            0,
-        ),
-        # Window INSERT dispatches — return rowcount 3 (idempotent dedup)
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 3),
-        # Cursor advance UPDATE — rowcount 1
-        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s, [], 1),
-    ]
-    conn = _FakeConn(script)
+    ])
 
     stats = match_once(conn)  # type: ignore[arg-type]
 
-    assert stats == {
-        "subscriptions_evaluated": 1,
-        "subscriptions_failed": 0,
-        "matches_inserted": 3,
-        "gate_lookback_inserted": 0,
-        "listings_in_window": 5,
-        "cursors_advanced": 1,
-    }
-
-    # Verify the WHERE clause references the per-subscription cursor
-    # parameter, not a global watermark.
-    window_query = next(
-        (sql, p) for sql, p in conn.executed if "max(first_seen_at), count(*)" in sql
-    )
-    sql, params = window_query
-    # New-dispatch detection keys on arrival (first_seen_at) — the migration-273
-    # published_at anchor died with the publication gate (NEW DEDUP cutoff §3).
-    assert "l.first_seen_at > %(cursor)s" in sql
-    assert isinstance(params, dict) and params["cursor"] == cursor_ts
-
-    # And that the filter spec made it through too. The stored spec carries a
-    # legacy scalar category_main; the before-validator lifts it to
-    # category_main_in and the matcher emits an = ANY membership.
+    assert stats == {"subscriptions_evaluated": 1, "subscriptions_failed": 0,
+                     "matches_inserted": 3}
+    subs_sql = next(s for s, _ in conn.executed if "FROM notification_subscriptions" in s)
+    assert subs_sql == ("SELECT id, filter_spec, active_since FROM notification_subscriptions "
+                        "WHERE is_active = true AND retired_at IS NULL")
+    [(sql, params)] = [(s, p) for s, p in conn.executed
+                       if "INSERT INTO notification_dispatches" in s]
+    assert ("l.first_seen_at > greatest(now() - %(new_window)s::interval, %(active_since)s)"
+            in sql)
+    assert params["new_window"] == "24 hours" and params["active_since"] == since
+    assert params["subscription_id"] == str(sub_id)
+    # The spec made it through the one compiler (rule 16).
     assert params["category_main_in"] == ["byt"]
     assert params["category_type"] == "pronajem"
     assert params["district_codes_obec"] == [554782]
     assert "l.obec_id = ANY(%(district_codes_obec)s)" in sql
+    assert "'watchdog'" in sql and sql.endswith("ON CONFLICT DO NOTHING")
+    assert conn.transactions == 1, "one transaction (a savepoint in the lane) per watchdog"
+    executed = " ".join(s for s, _ in conn.executed)
+    for gone in ("last_matched_first_seen_at", "max(first_seen_at)", "UPDATE notification_subscriptions",
+                 "image_lookback_minutes", "window_size"):
+        assert gone not in executed, gone
 
-    # The 'new' dispatch INSERT writes the unified event shape: source_kind,
-    # a per-property dedupe_key and ON CONFLICT on that key (migration 206).
-    insert_sql, _ = next(
-        (sql, p) for sql, p in conn.executed
-        if "INSERT INTO notification_dispatches" in sql
-    )
-    assert "'watchdog'" in insert_sql
-    assert ":new:' || l.property_id::text" in insert_sql
-    assert "ON CONFLICT (dedupe_key)" in insert_sql
+
+def test_a_quiet_pass_writes_nothing_and_never_touches_the_watchdog() -> None:
+    """No matching property is the steady state: one INSERT that writes 0 rows, and the
+    subscription row is never written (there is no cursor to move)."""
+    conn = _FakeConn([
+        (lambda s: "FROM app_settings" in s, [(False,)], 0),
+        (lambda s: "FROM notification_subscriptions WHERE is_active" in s,
+         [(UUID("00000000-0000-0000-0000-000000000001"), {},
+           datetime(2030, 1, 1, tzinfo=timezone.utc))], 1),
+        (lambda s: "INSERT INTO notification_dispatches" in s, [], 0),
+    ])
+    stats = match_once(conn)  # type: ignore[arg-type]
+    assert stats["matches_inserted"] == 0
+    assert not any("UPDATE notification_subscriptions" in s for s, _ in conn.executed)
 
 
 def test_collection_monitor_noop_when_nothing_monitored() -> None:
@@ -734,19 +718,18 @@ def test_collection_monitor_noop_when_nothing_monitored() -> None:
 
 
 def test_collection_monitor_emits_the_five_clean_kinds() -> None:
-    """One set-based INSERT per detector across all monitored collections;
-    every dispatch is source_kind='collection_monitor', collection-scoped
-    dedupe, ON CONFLICT idempotent. broker_change is reserved, not emitted."""
+    """One set-based INSERT per detector across all monitored collections — inactive,
+    reactivated and new_source in step monitor, price_drop / price_rise (one CASE) in
+    step price; every dispatch is source_kind='collection_monitor', collection-scoped
+    dedupe, idempotent. broker_change is reserved, not emitted."""
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(2,)], 0),
-        (lambda s: "FROM app_settings" in s, [], 0),  # window default
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
     ]
     conn = _FakeConn(script)
     stats = match_monitored_collections_once(conn)  # type: ignore[arg-type]
-    assert stats["monitored_collections"] == 2
-    # 4 INSERT statements (price_drop + price_rise share one CASE insert) x rowcount 2.
-    assert stats["events_inserted"] == 8
+    assert stats == {"monitored_collections": 2, "events_inserted": 6}
+    match_changes_once(conn)  # type: ignore[arg-type]
 
     inserts = [
         sql for sql, _ in conn.executed
@@ -758,7 +741,7 @@ def test_collection_monitor_emits_the_five_clean_kinds() -> None:
     for kind in ("'price_drop'", "'price_rise'", "'inactive'", "'reactivated'", "'new_source'"):
         assert kind in joined
     assert "'cm:'" in joined                       # collection-scoped dedupe prefix
-    assert joined.count("ON CONFLICT (dedupe_key)") == 4
+    assert joined.count("ON CONFLICT DO NOTHING") == 4
     assert "'broker_change'" not in joined          # reserved, no clean signal yet
 
 
@@ -771,25 +754,18 @@ def test_collection_monitor_dedupe_keys_survive_a_null_sreality_id() -> None:
     silently stops notifying, not just the one row. The `new_source` detector was
     the one keyed this way; it now COALESCEs onto the surrogate. This test pins the
     invariant for every detector so a future one can't reintroduce it."""
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
-        (lambda s: "FROM app_settings" in s, [], 0),
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 0),
-    ]
-    conn = _FakeConn(script)
-    match_monitored_collections_once(conn)  # type: ignore[arg-type]
+    from api import notifications as nf
 
-    for sql, _ in conn.executed:
-        if "INSERT INTO notification_dispatches" not in sql:
-            continue
+    for sql in (nf._MONITOR_PRICE_SQL, nf._MONITOR_INACTIVE_SQL, nf._MONITOR_REACTIVATED_SQL,
+                nf._MONITOR_NEW_SOURCE_SQL, nf._WATCHDOG_NEW_SQL, nf._WATCHDOG_PRICE_SQL):
+        sql = " ".join(sql.split())
         # The dedupe_key expression is the tail of the SELECT list; any bare
         # sreality_id concatenated into it is the bug.
         assert "|| src.sreality_id::text" not in sql
         assert "|| st.sreality_id::text" not in sql
         assert "|| l.sreality_id::text" not in sql
-        if "new_source" in sql:
-            # Positive form: the surrogate is the NULL-safe fallback.
-            assert "coalesce(src.sreality_id::text, 'l' || src.listing_id::text)" in sql
+    new_source = " ".join(nf._MONITOR_NEW_SOURCE_SQL.split())
+    assert "coalesce(src.sreality_id::text, 'l' || src.listing_id::text)" in new_source
 
 
 def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
@@ -798,17 +774,18 @@ def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
     `monitor_since = greatest(added_at, monitoring_enabled_at)`, and price /
     inactive / new_source gate their change-time on it (reactivated is gated
     transitively via the inactive dispatch). This is the false-positive the fix
-    closes: a price drop that predates membership must not notify."""
+    closes: a price drop that predates membership must not notify. 'inactive' also
+    waits out the delist dwell (F14): a blink sends neither Delisted nor Relisted."""
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
-        (lambda s: "FROM app_settings" in s, [], 0),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 0),
     ]
     conn = _FakeConn(script)
     match_monitored_collections_once(conn)  # type: ignore[arg-type]
+    match_changes_once(conn)  # type: ignore[arg-type]
 
     inserts = [
-        sql for sql, _ in conn.executed
+        (sql, params) for sql, params in conn.executed
         if "INSERT INTO notification_dispatches" in sql
     ]
     assert len(inserts) == 4
@@ -816,19 +793,22 @@ def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
         "greatest(cp.added_at, coalesce(c.monitoring_enabled_at, cp.added_at)) "
         "AS monitor_since"
     )
-    for sql in inserts:
+    for sql, _ in inserts:
         assert anchor in sql  # every detector shares the anchored CTE
 
-    price_sql = next(s for s in inserts if "'price_drop'" in s)
+    price_sql = next(s for s, _ in inserts if "'price_drop'" in s)
     assert "st.scraped_at > m.monitor_since" in price_sql
 
     # The inactive insert references 'inactive' but not 'reactivated'.
-    inactive_sql = next(
-        s for s in inserts if "'inactive'" in s and "'reactivated'" not in s
+    inactive_sql, params = next(
+        (s, p) for s, p in inserts if "'inactive'" in s and "'reactivated'" not in s
     )
     assert "max(l.inactive_at) > m.monitor_since" in inactive_sql
+    assert "max(l.inactive_at) < now() - %(inactive_dwell)s::interval" in inactive_sql
+    assert "max(l.inactive_at) > now() - %(monitor_window)s::interval" in inactive_sql
+    assert params == {"monitor_window": "7 days", "inactive_dwell": "24 hours"}
 
-    new_source_sql = next(s for s in inserts if "'new_source'" in s)
+    new_source_sql = next(s for s, _ in inserts if "'new_source'" in s)
     assert "src.first_seen_at > src.monitor_since" in new_source_sql
     # new_source must NOT use count(DISTINCT ...) OVER (...): Postgres rejects it
     # (0A000), which threw on every producer run pre-fix. The distinct-source
@@ -838,7 +818,7 @@ def test_collection_monitor_gates_every_detector_on_monitor_since() -> None:
 
     # reactivated is hardened: the prior 'inactive' dispatch it keys on must
     # itself postdate monitor_since (no leak off a pre-fix ungated dispatch).
-    reactivated_sql = next(s for s in inserts if "'reactivated'" in s)
+    reactivated_sql = next(s for s, _ in inserts if "'reactivated'" in s)
     assert "nd.dispatched_at > m.monitor_since" in reactivated_sql
 
 
@@ -854,19 +834,15 @@ def test_no_producer_writes_routing_or_the_legacy_id() -> None:
     conn = _FakeConn([
         (lambda s: "FROM app_settings" in s, [], 0),
         (lambda s: "FROM notification_subscriptions WHERE is_active" in s, [sub_row], 1),
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s,
-         [(datetime(2026, 5, 15, tzinfo=timezone.utc), 1)], 0),
-        (lambda s: "FROM listing_price_steps" in s, [(101, 5001, 4_900_000, 5_000_000)], 0),
         (lambda s: "FROM collections WHERE monitoring_enabled = true" in s, [(1,)], 0),
     ])
     match_once(conn)  # type: ignore[arg-type]
-    conn.script[1] = (conn.script[1][0], [sub_row[:2]], 1)
     match_changes_once(conn)  # type: ignore[arg-type]
     match_monitored_collections_once(conn)  # type: ignore[arg-type]
     statements = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
     statements.append(" ".join(shares._INSERT_SHARE_DISPATCH_SQL.split()))
     columns = [re.search(r"INSERT INTO notification_dispatches \(([^)]*)\)", s) for s in statements]
-    assert len(columns) == 8 and all(columns), statements
+    assert len(columns) == 7 and all(columns), statements
     for match in columns:
         named = {c.strip() for c in match.group(1).split(",")}
         assert not named & {"channel", "status", "target_channels", "sreality_id"}, named
@@ -933,13 +909,11 @@ def test_feed_mf_yield_is_the_number_the_matcher_filtered_on() -> None:
     `properties_public` row, by the same key, that the matcher's yield bound was
     evaluated against — so a row that fired on `yield >= 4` can never show a
     different yield next to it (the listing-grain column it replaced could)."""
-    import inspect
-
     from api import notifications as nf
 
     where, _ = _build_match_clauses(WatchdogFilterSpec(min_mf_gross_yield_pct=4.0))
     assert "l.mf_gross_yield_pct >= %(min_mf_gross_yield_pct)s" in where
-    insert = inspect.getsource(nf._insert_new_dispatches)
+    insert = nf._WATCHDOG_NEW_SQL
     assert "FROM properties_public l " in insert
     assert "SELECT %(subscription_id)s, 'watchdog', l.property_id," in insert
 
@@ -1001,51 +975,20 @@ def test_a_dispatch_is_still_reachable_by_id() -> None:
 
 
 def test_detection_never_consults_dismissals() -> None:
-    """Suppressing an INSERT would lose the event for good on undo: the matcher's
-    cursor advances regardless, `:new:` dedupe keys are once-ever, and the
-    `reactivated` detector keys off a prior `inactive` dispatch."""
+    """Suppressing an INSERT would lose the event for good on undo: `:new:` dedupe keys are
+    once-ever and the `reactivated` detector keys off a prior `inactive` dispatch, so no
+    producer statement reads a dismissal."""
     import inspect
 
     from api import notifications as nf
 
     for fn in (nf.match_once, nf.match_changes_once, nf.match_monitored_collections_once):
         assert "dismiss" not in inspect.getsource(fn), fn.__name__
-    assert "dismiss" not in nf._MONITORED_CTE
-
-
-def test_match_once_skips_subscription_with_no_listings() -> None:
-    """An empty window (no listings past the cursor) is the steady
-    state. The matcher should record zero dispatches and zero cursor
-    advances rather than blow up trying to UPDATE with a NULL value.
-    (Image gate scripted OFF — the gate's empty-window lookback re-scan
-    has its own test below.)"""
-    sub_id = UUID("00000000-0000-0000-0000-000000000001")
-    cursor_ts = datetime(2030, 1, 1, tzinfo=timezone.utc)
-
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        # Every app_settings read returns false-y: interval/window fall back to
-        # their floors and the image-gate flag reads False (gate off).
-        (lambda s: "FROM app_settings" in s, [(False,)], 0),
-        (
-            lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts)],
-            1,
-        ),
-        # Window query returns (NULL, 0) — no fresh listings.
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [(None, 0)], 0),
-    ]
-    conn = _FakeConn(script)
-
-    stats = match_once(conn)  # type: ignore[arg-type]
-
-    assert stats["subscriptions_evaluated"] == 1
-    assert stats["matches_inserted"] == 0
-    assert stats["cursors_advanced"] == 0
-    # Critically: no INSERT or UPDATE was attempted.
-    assert not any("INSERT INTO notification_dispatches" in sql for sql, _ in conn.executed)
-    assert not any(
-        "UPDATE notification_subscriptions" in sql for sql, _ in conn.executed
-    )
+    for sql in (nf._MONITORED_CTE, nf._CANONICAL_PRICE_STEPS, nf._IMAGE_GATE_SQL,
+                nf._WATCHDOG_NEW_SQL, nf._WATCHDOG_PRICE_SQL, nf._MONITOR_PRICE_SQL,
+                nf._MONITOR_INACTIVE_SQL, nf._MONITOR_REACTIVATED_SQL,
+                nf._MONITOR_NEW_SOURCE_SQL):
+        assert "dismiss" not in sql
 
 
 def test_match_once_skips_invalid_filter_spec() -> None:
@@ -1053,8 +996,7 @@ def test_match_once_skips_invalid_filter_spec() -> None:
     legacy row) must NOT crash the whole matcher pass — log + skip."""
     good_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
     bad_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-    cursor_ts = datetime(2026, 5, 1, tzinfo=timezone.utc)
-    upper_ts = datetime(2026, 5, 15, tzinfo=timezone.utc)
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
 
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "FROM app_settings" in s, [], 0),
@@ -1062,21 +1004,13 @@ def test_match_once_skips_invalid_filter_spec() -> None:
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
                 # Invalid: a map box with west >= east.
-                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, cursor_ts),
+                (bad_id, {"bounds": {"west": 14.5, "south": 50.0, "east": 14.0, "north": 50.2}}, since),
                 # Valid spec
-                (good_id, {}, cursor_ts),
+                (good_id, {}, since),
             ],
             2,
         ),
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [(upper_ts, 1)], 0),
-        (
-            lambda s: "INSERT INTO notification_dispatches" in s
-            and "image_lookback_minutes" in s,
-            [],
-            0,
-        ),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
-        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s, [], 1),
     ]
     conn = _FakeConn(script)
 
@@ -1085,6 +1019,7 @@ def test_match_once_skips_invalid_filter_spec() -> None:
     # Both rows counted as "evaluated" — the broken one was inspected
     # and skipped, but the surviving one fired one dispatch.
     assert stats["subscriptions_evaluated"] == 2
+    assert stats["subscriptions_failed"] == 1
     assert stats["matches_inserted"] == 1
 
 
@@ -1104,37 +1039,52 @@ def _raise_for_poison(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_match_once_counts_failed_subscriptions(monkeypatch: pytest.MonkeyPatch) -> None:
     """A spec that raises inside the compile mutes its watchdog every pass. It is counted
-    (the loop logs the stats at INFO when the count is above 0) and the other
-    subscription still matches."""
+    (the lane names it in its step cell) and the other subscription still matches."""
     _raise_for_poison(monkeypatch)
-    cursor_ts = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666},
-                 cursor_ts),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, cursor_ts),
+                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, since),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, since),
             ],
             2,
         ),
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s,
-         [(datetime(2026, 5, 15, tzinfo=timezone.utc), 1)], 0),
-        (
-            lambda s: "INSERT INTO notification_dispatches" in s
-            and "image_lookback_minutes" in s,
-            [],
-            0,
-        ),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
-        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s,
-         [], 1),
     ]
     stats = match_once(_FakeConn(script))  # type: ignore[arg-type]
     assert stats["subscriptions_evaluated"] == 2
     assert stats["subscriptions_failed"] == 1
     assert stats["matches_inserted"] == 1
+
+
+def test_a_watchdog_whose_statement_fails_rolls_back_alone() -> None:
+    """Each watchdog's INSERT is its own transaction: a statement that raises (a timeout,
+    a future spec field's bad SQL) is counted and the next watchdog still matches."""
+    import psycopg
+
+    bad, good = UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"), UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+    class _Raising(_FakeCursor):
+        def execute(self, sql: str, params: Any = None) -> None:
+            super().execute(sql, params)
+            if "INSERT INTO" in sql and params["subscription_id"] == str(bad):
+                raise psycopg.errors.QueryCanceled("canceling statement due to statement timeout")
+
+    conn = _FakeConn([
+        (lambda s: "FROM app_settings" in s, [], 0),
+        (lambda s: "FROM notification_subscriptions WHERE is_active" in s,
+         [(bad, {}, since), (good, {}, since)], 2),
+        (lambda s: "INSERT INTO notification_dispatches" in s, [], 4),
+    ])
+    conn.cursor = lambda: _Raising(conn)  # type: ignore[method-assign]
+    stats = match_once(conn)  # type: ignore[arg-type]
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_failed": 1,
+                     "matches_inserted": 4}
+    assert conn.transactions == 2
 
 
 def test_match_changes_once_counts_failed_subscriptions(
@@ -1143,23 +1093,22 @@ def test_match_changes_once_counts_failed_subscriptions(
     from api.notifications import match_changes_once
 
     _raise_for_poison(monkeypatch)
+    since = datetime(2026, 5, 1, tzinfo=timezone.utc)
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "FROM app_settings" in s, [], 0),
-        (lambda s: "FROM listing_price_steps" in s, [(101, 5001, 4_900_000, 5_000_000)], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
             [
-                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}),
-                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}),
+                (UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"), {"min_price_czk": 666}, since),
+                (UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"), {}, since),
             ],
             2,
         ),
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
+        (lambda s: "INSERT INTO notification_dispatches" in s and "'watchdog'" in s, [], 1),
+        (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
     ]
     stats = match_changes_once(_FakeConn(script))  # type: ignore[arg-type]
-    assert stats["subscriptions_evaluated"] == 2
-    assert stats["subscriptions_failed"] == 1
-    assert stats["changes_inserted"] == 1
+    assert stats == {"subscriptions_evaluated": 2, "subscriptions_failed": 1,
+                     "changes_inserted": 3, "collection_changes_inserted": 2}
 
 
 # --- images-first publication gate (Wave C-4) ----------------------------
@@ -1172,158 +1121,78 @@ from api.notifications import (
 )
 
 
-def _gate_script(
-    sub_id: UUID, cursor_ts: datetime, upper: tuple[Any, Any],
-) -> list[tuple[Any, list[tuple[Any, ...]], int]]:
+def _gate_script(sub_id: UUID, since: datetime) -> list[tuple[Any, list[tuple[Any, ...]], int]]:
     return [
         # app_settings all default → gate ON (default true), timeout 30.
         (lambda s: "FROM app_settings" in s, [], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts)],
+            [(sub_id, {}, since)],
             1,
         ),
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [upper], 0),
-        (
-            lambda s: "INSERT INTO notification_dispatches" in s
-            and "image_lookback_minutes" in s,
-            [],
-            1,
-        ),
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 0),
-        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s, [], 1),
+        (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
     ]
 
 
 def test_match_once_image_gate_holds_new_properties_without_losing_them() -> None:
-    """Default-on gate: the window INSERT requires a stored image (or a release
-    arm), the CURSOR still advances past held properties (the window/upper query
-    carries NO gate — one photoless CDN can't stall the feed), and the
-    gate-pending lookback re-scan re-considers already-passed properties so a
-    held property is dispatched once released — never lost."""
+    """Default-on gate: the window INSERT requires a stored image (or a release arm).
+    A held property is still inside the 24 h window on the next pass, so the first
+    pass after its release dispatches it — the hold never loses it, and no separate
+    lookback exists."""
     sub_id = UUID("00000000-0000-0000-0000-00000000000a")
-    cursor_ts = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    upper_ts = datetime(2026, 7, 2, tzinfo=timezone.utc)
-
-    conn = _FakeConn(_gate_script(sub_id, cursor_ts, (upper_ts, 2)))
+    conn = _FakeConn(_gate_script(sub_id, datetime(2026, 7, 1, tzinfo=timezone.utc)))
     stats = match_once(conn)  # type: ignore[arg-type]
 
-    # Phase 1 (window upper / cursor advance) is gate-free by design.
-    window_sql, _ = next(
-        (sql, p) for sql, p in conn.executed
-        if "max(first_seen_at), count(*)" in sql
-    )
-    assert "storage_path" not in window_sql
-
-    inserts = [
-        (sql, p) for sql, p in conn.executed
-        if "INSERT INTO notification_dispatches" in sql
-    ]
-    assert len(inserts) == 2  # window insert + lookback re-scan
-
-    window_insert_sql, window_params = inserts[0]
-    assert "image_lookback_minutes" not in window_insert_sql
+    [(sql, params)] = [(s, p) for s, p in conn.executed if "INSERT INTO notification_dispatches" in s]
     # The three release arms, set-based inside the INSERT's WHERE:
-    assert "gi.storage_path IS NOT NULL" in window_insert_sql            # (a)
-    assert (
-        "make_interval(mins => %(image_timeout_minutes)s)"
-        in window_insert_sql
-    )                                                                     # (b)
-    assert "make_interval(mins => %(image_zero_rows_floor_minutes)s)" in window_insert_sql
-    assert "AND NOT EXISTS" in window_insert_sql                          # (c)
-    assert window_params["image_timeout_minutes"] == 30
-    assert (
-        window_params["image_zero_rows_floor_minutes"]
-        == IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES
-    )
-
-    lookback_sql, lookback_params = inserts[1]
-    # Re-scan targets properties the cursor already passed, bounded by the
-    # lookback window, under the same gate; dedupe_key keeps it idempotent.
-    assert "l.first_seen_at <= %(cursor)s" in lookback_sql
-    assert "make_interval(mins => %(image_lookback_minutes)s)" in lookback_sql
-    assert "gi.storage_path IS NOT NULL" in lookback_sql
-    assert "ON CONFLICT (dedupe_key) DO NOTHING" in lookback_sql
-    assert lookback_params["image_lookback_minutes"] == 60  # max(60, 2×30)
-
-    # Cursor advanced past the (possibly held) window — the lookback re-scan is
-    # what keeps held properties reachable, not a stalled cursor.
-    assert any(
-        "UPDATE notification_subscriptions SET last_matched_first_seen_at" in sql
-        for sql, _ in conn.executed
-    )
-    assert stats["cursors_advanced"] == 1
-    assert stats["matches_inserted"] == 1       # the released lookback property
-    assert stats["gate_lookback_inserted"] == 1
-
-
-def test_match_once_gate_lookback_runs_even_when_window_is_empty() -> None:
-    """A held property must not be stranded waiting for unrelated new
-    inventory: with NO fresh listings past the cursor (upper NULL) the
-    gate-pending lookback INSERT still runs — that's how a gated property gets
-    dispatched after its images land even on a quiet market."""
-    sub_id = UUID("00000000-0000-0000-0000-00000000000b")
-    cursor_ts = datetime(2026, 7, 1, tzinfo=timezone.utc)
-
-    conn = _FakeConn(_gate_script(sub_id, cursor_ts, (None, 0)))
-    stats = match_once(conn)  # type: ignore[arg-type]
-
-    inserts = [
-        sql for sql, _ in conn.executed
-        if "INSERT INTO notification_dispatches" in sql
-    ]
-    assert len(inserts) == 1
-    assert "image_lookback_minutes" in inserts[0]
-    # No window → no cursor advance (unchanged), but the release still fired.
-    assert not any(
-        "UPDATE notification_subscriptions" in sql for sql, _ in conn.executed
-    )
-    assert stats["cursors_advanced"] == 0
+    assert "gi.storage_path IS NOT NULL" in sql                                   # (a)
+    assert "make_interval(mins => %(image_timeout_minutes)s)" in sql              # (b)
+    assert "make_interval(mins => %(image_zero_rows_floor_minutes)s)" in sql      # (c)
+    assert "AND NOT EXISTS" in sql
+    assert params["image_timeout_minutes"] == 30
+    assert params["image_zero_rows_floor_minutes"] == IMAGE_GATE_ZERO_ROWS_FLOOR_MINUTES
+    assert "image_lookback_minutes" not in sql
     assert stats["matches_inserted"] == 1
-    assert stats["gate_lookback_inserted"] == 1
 
 
 def test_match_once_gate_flag_off_restores_old_behavior() -> None:
-    """`notifications_new_requires_image` = false → exactly one ungated window
-    INSERT, no lookback re-scan, no gate SQL anywhere."""
+    """`notifications_new_requires_image` = false → the one window INSERT carries no gate SQL."""
     sub_id = UUID("00000000-0000-0000-0000-00000000000c")
-    cursor_ts = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    upper_ts = datetime(2026, 7, 2, tzinfo=timezone.utc)
-
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
         # Every app_settings read returns false-y → the gate flag reads False.
         (lambda s: "FROM app_settings" in s, [(False,)], 0),
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {}, cursor_ts)],
+            [(sub_id, {}, datetime(2026, 7, 1, tzinfo=timezone.utc))],
             1,
         ),
-        (lambda s: "SELECT max(first_seen_at), count(*) FROM" in s, [(upper_ts, 2)], 0),
         (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
-        (lambda s: "UPDATE notification_subscriptions SET last_matched_first_seen_at" in s, [], 1),
     ]
     conn = _FakeConn(script)
     stats = match_once(conn)  # type: ignore[arg-type]
-
-    inserts = [
-        sql for sql, _ in conn.executed
-        if "INSERT INTO notification_dispatches" in sql
-    ]
-    assert len(inserts) == 1
-    assert "storage_path" not in inserts[0]
-    assert "image_lookback_minutes" not in inserts[0]
+    [sql] = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
+    assert "storage_path" not in sql and "image_timeout_minutes" not in sql
     assert stats["matches_inserted"] == 2
-    assert stats["gate_lookback_inserted"] == 0
-    assert stats["cursors_advanced"] == 1
 
 
-def test_image_gate_lookback_always_covers_the_timeout() -> None:
-    """The re-scan window must exceed the longest possible hold, or a property
-    gated the whole way would leave the lookback before its release."""
-    assert ImageGateSettings(True, 30).lookback_minutes == 60
-    assert ImageGateSettings(True, 45).lookback_minutes == 90
-    assert ImageGateSettings(True, 120).lookback_minutes == 240
-    assert ImageGateSettings(True, 5).lookback_minutes == 60  # floor
+def test_the_image_gate_hold_always_ends_inside_the_window() -> None:
+    """A hold past the 24 h window would let a held property leave it unreleased: the
+    timeout is clamped below the window, with passes to spare for the release."""
+    from api.notifications import (
+        IMAGE_GATE_TIMEOUT_CEILING_MINUTES,
+        NEW_WINDOW,
+        _load_image_gate_settings,
+    )
+
+    def gate(rows: list[tuple[Any, ...]]) -> ImageGateSettings:
+        conn = _FakeConn([(lambda s: "FROM app_settings" in s, rows, 0)])
+        return _load_image_gate_settings(conn)  # type: ignore[arg-type]
+
+    assert NEW_WINDOW == "24 hours"
+    assert IMAGE_GATE_TIMEOUT_CEILING_MINUTES * 60 + 2 * 300 < 24 * 3600
+    assert gate([]) == ImageGateSettings(enabled=True, timeout_minutes=30)
+    assert gate([(5000,)]).timeout_minutes == IMAGE_GATE_TIMEOUT_CEILING_MINUTES
+    assert gate([(0,)]).timeout_minutes == 1
 
 
 def test_read_bool_setting_parses_jsonb_shapes() -> None:
@@ -1348,70 +1217,284 @@ from api.notifications import match_changes_once
 
 
 def test_match_changes_once_emits_price_drop_for_matching_subs() -> None:
-    """The change matcher resolves recent per-snapshot price drops once, then
-    fires a `price_drop` dispatch per (matching subscription x drop snapshot),
-    deduped by the per-snapshot dedupe_key so each genuine cut is its own
-    event. Provenance (snapshot id + new/prev price) rides the unnest join."""
+    """Step price: ONE canonical-ad step fragment feeds a `price_drop` per (matching
+    watchdog x drop step after its active_since), keyed per snapshot, and then the
+    collection monitor's price_drop / price_rise over the same fragment."""
+    from api import notifications as nf
+
     sub_id = UUID("12121212-1212-1212-1212-121212121212")
+    since = datetime(2026, 10, 1, tzinfo=timezone.utc)
     script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        # window-days app_settings read → default
-        (lambda s: "FROM app_settings" in s, [], 0),
-        # recent price-drop steps: (property_id, snapshot_id, price, prev)
-        (
-            lambda s: "FROM listing_price_steps" in s,
-            [(101, 5001, 4_900_000, 5_000_000), (102, 5002, 2_400_000, 2_500_000)],
-            0,
-        ),
-        # active subscriptions
         (
             lambda s: "FROM notification_subscriptions WHERE is_active" in s,
-            [(sub_id, {"category_main": "byt", "category_type": "pronajem"})],
+            [(sub_id, {"category_main": "byt", "category_type": "pronajem"}, since)],
             1,
         ),
-        # INSERT price_drop dispatches — 2 inserted
-        (lambda s: "INSERT INTO notification_dispatches" in s, [], 2),
+        (lambda s: "INSERT INTO notification_dispatches" in s and "'watchdog'" in s, [], 2),
+        (lambda s: "INSERT INTO notification_dispatches" in s, [], 1),
     ]
     conn = _FakeConn(script)
 
     stats = match_changes_once(conn)  # type: ignore[arg-type]
 
-    assert stats["subscriptions_evaluated"] == 1
-    assert stats["price_drops_in_window"] == 2
-    assert stats["changes_inserted"] == 2
+    assert stats == {"subscriptions_evaluated": 1, "subscriptions_failed": 0,
+                     "changes_inserted": 3, "collection_changes_inserted": 1}
+    watchdog, collection = [(s, p) for s, p in conn.executed
+                            if "INSERT INTO notification_dispatches" in s]
+    fragment = " ".join(nf._CANONICAL_PRICE_STEPS.split())
+    for sql, params in (watchdog, collection):
+        assert sql.startswith(f"WITH {fragment}")
+        assert params["price_window"] == "7 days"
+        assert sql.endswith("ON CONFLICT DO NOTHING")
+    sql, params = watchdog
+    assert "'price_drop'" in sql and "'price_rise'" not in sql
+    assert "st.price_czk < st.prev_price_czk AND st.scraped_at > %(active_since)s" in sql
+    assert params["active_since"] == since and params["category_type"] == "pronajem"
+    assert "JOIN properties_public l ON l.property_id = st.property_id" in sql
+    sql, params = collection
+    assert "JOIN canonical_steps st ON st.property_id = m.property_id" in sql
+    assert "WHERE st.scraped_at > m.monitor_since" in sql
 
-    insert_sql, insert_params = next(
-        (sql, p) for sql, p in conn.executed
-        if "INSERT INTO notification_dispatches" in sql
-    )
-    assert "'price_drop'" in insert_sql
-    # Per-snapshot dedup + the unnest provenance join replace the old
-    # ANY(drop_ids) + composite ON CONFLICT.
-    assert "ON CONFLICT (dedupe_key)" in insert_sql
-    assert ":price_drop:' || d.snapshot_id::text" in insert_sql
-    assert "JOIN unnest(" in insert_sql
-    assert insert_params["drop_pids"] == [101, 102]
-    assert insert_params["drop_sids"] == [5001, 5002]
-    assert insert_params["drop_prices"] == [4_900_000, 2_400_000]
-    assert insert_params["drop_prevs"] == [5_000_000, 2_500_000]
 
-
-def test_match_changes_once_noops_when_no_recent_drops() -> None:
-    """No recent price drops → no subscription scan, no inserts."""
-    script: list[tuple[Any, list[tuple[Any, ...]], int]] = [
-        (lambda s: "FROM app_settings" in s, [], 0),
-        (lambda s: "FROM listing_price_steps" in s, [], 0),
-    ]
-    conn = _FakeConn(script)
-
+def test_match_changes_once_with_no_live_watchdog_runs_only_the_collection_half() -> None:
+    conn = _FakeConn([(lambda s: "INSERT INTO notification_dispatches" in s, [], 0)])
     stats = match_changes_once(conn)  # type: ignore[arg-type]
+    assert stats == {"subscriptions_evaluated": 0, "subscriptions_failed": 0,
+                     "changes_inserted": 0, "collection_changes_inserted": 0}
+    inserts = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
+    assert len(inserts) == 1 and "'collection_monitor'" in inserts[0]
 
-    assert stats == {
-        "subscriptions_evaluated": 0,
-        "subscriptions_failed": 0,
-        "price_drops_in_window": 0,
-        "changes_inserted": 0,
-    }
-    assert not any(
-        "INSERT INTO notification_dispatches" in sql for sql, _ in conn.executed
-    )
 
+
+
+# --- the dedupe_key grammar is pinned (notifications W2a) -------------------------------
+#
+# W2a runs the producers on the worker beside the API's matcher for 48 h. The overlap is a
+# union only while every key is byte-identical to the one written before W2 (the UNIQUE on
+# dedupe_key is still the one identity until W3), so each producer statement's key, kind and
+# event_ref expressions are RENDERED against fixture rows by the small evaluator below and
+# compared with the pre-W2 grammar, spelled out in Python.
+
+import math as _math
+
+_TOKEN = re.compile(r"\s*('(?:[^']|'')*'|%\(\w+\)s|\|\||::|[(),<]|[A-Za-z_][\w.]*)")
+
+
+def _tokens(sql: str) -> list[str]:
+    out, i = [], 0
+    while i < len(sql):
+        m = _TOKEN.match(sql, i)
+        if not m:
+            if sql[i:].strip() == "":
+                break
+            raise AssertionError(f"cannot tokenize at {sql[i:i + 40]!r}")
+        out.append(m.group(1))
+        i = m.end()
+    return out
+
+
+class _Expr:
+    """Evaluates the producers' SELECT-list subset: literals, params, column refs, `||`, `::text`
+    / `::bigint`, floor(), extract(epoch FROM …), coalesce(a, b), CASE WHEN a < b THEN … ELSE … END."""
+
+    def __init__(self, toks: list[str], row: dict[str, Any], params: dict[str, Any]) -> None:
+        self.toks, self.i, self.row, self.params = toks, 0, row, params
+
+    def peek(self) -> str | None:
+        return self.toks[self.i] if self.i < len(self.toks) else None
+
+    def take(self, want: str | None = None) -> str:
+        tok = self.toks[self.i]
+        assert want is None or tok.upper() == want.upper(), (want, tok)
+        self.i += 1
+        return tok
+
+    def concat(self) -> Any:
+        parts = [self.cast()]
+        while self.peek() == "||":
+            self.take()
+            parts.append(self.cast())
+        if len(parts) == 1:
+            return parts[0]
+        return None if any(p is None for p in parts) else "".join(str(p) for p in parts)
+
+    def cast(self) -> Any:
+        value = self.atom()
+        while self.peek() == "::":
+            self.take()
+            kind = self.take().lower()
+            if value is not None:
+                value = {"text": str, "bigint": int}[kind](value)
+        return value
+
+    def atom(self) -> Any:
+        tok = self.take()
+        if tok.startswith("'"):
+            return tok[1:-1].replace("''", "'")
+        if tok.startswith("%("):
+            return self.params[tok[2:-2]]
+        upper = tok.upper()
+        if upper == "NULL":
+            return None
+        if upper == "CASE":
+            self.take("WHEN")
+            left = self.cast()
+            self.take("<")
+            right = self.cast()
+            self.take("THEN")
+            yes = self.concat()
+            self.take("ELSE")
+            no = self.concat()
+            self.take("END")
+            return yes if left < right else no
+        if self.peek() == "(":
+            self.take("(")
+            if upper == "EXTRACT":
+                self.take("epoch")
+                self.take("FROM")
+                value = self.cast().timestamp()
+            elif upper == "FLOOR":
+                value = _math.floor(self.concat())
+            elif upper == "COALESCE":
+                first = self.concat()
+                self.take(",")
+                second = self.concat()
+                value = first if first is not None else second
+            else:
+                raise AssertionError(f"unknown function {tok}")
+            self.take(")")
+            return value
+        return self.row[tok.split(".")[-1]]
+
+
+def _select_list(select: str) -> str:
+    """The SELECT list: everything before the first FROM outside parentheses and literals."""
+    depth, quoted = 0, False
+    for i, ch in enumerate(select):
+        if ch == "'":
+            quoted = not quoted
+        elif not quoted and ch in "()":
+            depth += 1 if ch == "(" else -1
+        elif not quoted and depth == 0 and select.startswith(" FROM ", i):
+            return select[:i]
+    raise AssertionError("no FROM")
+
+
+def _rendered(sql: str, row: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+    """column -> value the INSERT's SELECT list renders for one fixture row."""
+    sql = " ".join(sql.split())
+    head, select = sql.split("INSERT INTO notification_dispatches (", 1)[1].split(") SELECT ", 1)
+    columns = [c.strip() for c in head.split(",")]
+    expr = _Expr([*_tokens(_select_list(select)), "FROM"], row, params)
+    values = []
+    for n, _ in enumerate(columns):
+        values.append(expr.concat())
+        expr.take("," if n < len(columns) - 1 else "FROM")
+    return dict(zip(columns, values))
+
+
+_SUB = "46a6005f-dc32-4d94-9ced-4d262b57ef6b"
+_GONE_AT = datetime(2026, 10, 19, 8, 30, 15, 999_000, tzinfo=timezone.utc)
+_FLAGGED_AT = datetime(2026, 10, 20, 9, 0, 0, tzinfo=timezone.utc)
+
+
+def _pre_w2(kind: str, r: dict[str, Any]) -> str:
+    """The dedupe_key grammar every row written before W2 carries (migration 206, Sprint C)."""
+    if kind == "new":
+        return f"wd:{_SUB}:new:{r['property_id']}"
+    if kind == "wd_price":
+        return f"wd:{_SUB}:price_drop:{r['snapshot_id']}"
+    if kind == "cm_price":
+        step = "price_drop" if r["price_czk"] < r["prev_price_czk"] else "price_rise"
+        return f"cm:{r['collection_id']}:{step}:{r['snapshot_id']}"
+    if kind in ("inactive", "reactivated"):
+        return (f"cm:{r['collection_id']}:{kind}:{r['property_id']}:"
+                f"{int(_math.floor(r['inactive_at'].timestamp()))}")
+    if kind == "new_source":
+        handle = r["sreality_id"] if r["sreality_id"] is not None else f"l{r['listing_id']}"
+        return f"cm:{r['collection_id']}:new_source:{handle}"
+    raise AssertionError(kind)
+
+
+_PRICE_ROW = {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000,
+              "prev_price_czk": 5_000_000, "snapshot_id": 5001, "collection_id": 7}
+
+
+@pytest.mark.parametrize(("statement", "kind", "row", "event_ref"), [
+    ("_WATCHDOG_NEW_SQL", "new", {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000},
+     None),
+    ("_WATCHDOG_PRICE_SQL", "wd_price", _PRICE_ROW, "5001"),
+    ("_MONITOR_PRICE_SQL", "cm_price", _PRICE_ROW, "5001"),
+    ("_MONITOR_PRICE_SQL", "cm_price",
+     {**_PRICE_ROW, "price_czk": 5_100_000, "snapshot_id": 5002}, "5002"),
+    ("_MONITOR_INACTIVE_SQL", "inactive",
+     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
+      "inactive_at": _GONE_AT}, str(int(_GONE_AT.timestamp()))),
+    ("_MONITOR_REACTIVATED_SQL", "reactivated",
+     {"collection_id": 7, "property_id": 101, "repr_listing_ref_id": 9001,
+      "inactive_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
+    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
+     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
+     "402678"),
+    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
+     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
+     "402678"),
+    # A legacy handle is signed (2026-10-21: the one live new_source row keys on -248427).
+    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
+     {"collection_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
+     "402678"),
+], ids=["new", "wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
+        "new-source-no-sreality", "new-source-legacy-handle"])
+def test_every_producer_key_is_byte_identical_to_the_pre_w2_grammar(
+    statement: str, kind: str, row: dict[str, Any], event_ref: str | None,
+) -> None:
+    from api import notifications as nf
+
+    out = _rendered(getattr(nf, statement), row, {"subscription_id": _SUB})
+    assert out["dedupe_key"] == _pre_w2(kind, row)
+    # event_ref is what migration 652 backfills from the same key: the snapshot segment, the
+    # epoch segment, the introducing listing.
+    assert out["event_ref"] == event_ref
+    key = out["dedupe_key"].split(":")
+    if kind in ("wd_price", "cm_price"):
+        assert out["event_ref"] == key[3] == str(out["trigger_snapshot_id"])
+        assert out["change_kind"] == key[2]
+    elif kind in ("inactive", "reactivated"):
+        assert out["event_ref"] == key[4] and out["change_kind"] == kind
+    elif kind == "new_source":
+        assert out["listing_id"] == row["listing_id"]
+
+
+def test_every_producer_insert_writes_event_ref_with_a_targetless_on_conflict() -> None:
+    """Until W3 the dedupe_key UNIQUE decides identity; a target-less ON CONFLICT DO NOTHING
+    also absorbs W3's identity index the day it lands, and every row states its event_ref."""
+    from api import notifications as nf
+    from api import shares
+
+    statements = [nf._WATCHDOG_NEW_SQL, nf._WATCHDOG_PRICE_SQL, nf._MONITOR_PRICE_SQL,
+                  nf._MONITOR_INACTIVE_SQL, nf._MONITOR_REACTIVATED_SQL,
+                  nf._MONITOR_NEW_SOURCE_SQL, shares._INSERT_SHARE_DISPATCH_SQL]
+    for sql in statements:
+        sql = " ".join(sql.split())
+        head = sql.split("INSERT INTO notification_dispatches (", 1)[1].split(")", 1)[0]
+        assert "event_ref" in {c.strip() for c in head.split(",")}, sql
+        assert sql.endswith("ON CONFLICT DO NOTHING") and "ON CONFLICT (" not in sql, sql
+    assert "actor_account_id" in " ".join(shares._INSERT_SHARE_DISPATCH_SQL.split())
+
+
+def test_the_change_kinds_the_producers_write_are_the_check_652_allows() -> None:
+    """Every change_kind a producer renders or a share writes is in migration 652's CHECK, and 652
+    keeps every value it found."""
+    import inspect
+
+    from api import shares
+    from tests.migration_defs import MIGRATIONS
+
+    sql = " ".join((MIGRATIONS / "652_notifications_w2a_event_columns.sql").read_text().split())
+    check = sql.split("add constraint notification_dispatches_change_kind_ck check (", 1)[1]
+    allowed = set(re.findall(r"'(\w+)'", check.split(");", 1)[0]))
+    share_kinds = set(re.findall(r'"(shared_\w+)"', inspect.getsource(shares.grant)))
+    assert share_kinds == {"shared_collection", "shared_dashboard", "shared_pipeline"}
+    produced = {"new", "price_drop", "price_rise", "inactive", "reactivated", "new_source"}
+    assert produced | share_kinds <= allowed
+    assert {"shared", "system_alert", "broker_change"} <= allowed, "652 drops nothing"
