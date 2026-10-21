@@ -16,7 +16,14 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       now" (R10); the Email/Telegram picker, Settings › Delivery, Telegram, the outbox, ChannelClient, the Resend
       transport, webhook and unsubscribe (R1, R5); the duplicate /watchdog feed and the System tab (R3); system alerts
       leave the bell for Health + the canary e-mail (R2b, R9a; migration 651).
-- [ ] **Next:** W2 one clock in the worker (the notifications lane; R6) · W3 one event identity (the unique index
+- [ ] **W2a (built 2026-10-21, stacked on W1; done when merged + 48 h overlap gate)** — the worker's `notifications` lane
+      (300 s; steps watchdog_new / price / monitor, each its own transaction and `lane/notifications/<step>` cell) runs
+      the producers beside the API's matcher: the cursor and lookback go (24 h from `active_since`), one canonical-ad
+      price fragment (7 days), 'inactive' after 24 h gone (R6 a); keys byte-identical (render test), `event_ref` +
+      `actor_account_id` written; shares become `shared_collection | shared_dashboard | shared_pipeline` (migration 652:
+      the five columns, the `active_since` trigger, the wider CHECK, backfills). Gate: cells green, the 9-preset replay,
+      EXPLAIN < 2 s, the false-new baseline.
+- [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W3 one event identity (the unique index
       replaces the dedupe key) · W4 push plumbing, dark (VAPID, the push ledger, /push routes; R7, R11) · W5 the phone
       bell, badge and switch (R4) · W6 the one destructive prune, backup first (R8).
 
