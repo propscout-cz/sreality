@@ -8,9 +8,8 @@
 
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  getNotificationUnreadCount,
   listNotifications,
   markAllNotificationsSeen,
   markWatchdogDispatchSeen,
@@ -19,6 +18,7 @@ import { notificationKeys } from '@/lib/queries';
 import { dispatchTarget } from '@/lib/dispatchTarget';
 import { ROUTES } from '@/lib/routes';
 import { usePageTitle } from '@/lib/pageTitle';
+import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
@@ -85,12 +85,6 @@ export default function Notifications() {
     refetchInterval: POLL_MS,
   });
 
-  const unreadQ = useQuery({
-    queryKey: notificationKeys.unreadCount,
-    queryFn: () => getNotificationUnreadCount(),
-    refetchInterval: POLL_MS,
-  });
-
   const markAll = useMutation({
     mutationFn: () => markAllNotificationsSeen(),
     onSuccess: () => {
@@ -99,7 +93,8 @@ export default function Notifications() {
   });
 
   const rows = feed.rows;
-  const unread = unreadQ.data?.unread_count ?? 0;
+  /* Shell's one unread observer (lib/unreadCount), the number the bells show. */
+  const { count: unread } = useUnreadCount();
 
   // Tab title carries the unread count, capped like the nav badge so the two
   // never disagree. Zero → the plain "Notifications" route handle.

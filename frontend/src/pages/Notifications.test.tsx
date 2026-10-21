@@ -284,3 +284,14 @@ describe('<Notifications> Load more', () => {
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 });
+
+/* The count is Shell's one observer (lib/unreadCount); the page polls none of
+ * its own, so outside Shell it reads zero and has nothing to mark. */
+describe('<Notifications> unread count', () => {
+  it('reads the shared observer and polls no count of its own', () => {
+    vi.mocked(getNotificationUnreadCount).mockClear();
+    renderPage();
+    expect(getNotificationUnreadCount).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Mark all read' })).toBeDisabled();
+  });
+});
