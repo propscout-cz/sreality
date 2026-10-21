@@ -482,7 +482,7 @@ export interface MapRow {
   display_label: string | null;
   /* The two the pin-precision rules read (lib/uncertaintyCircle). `granularity_rank`
    * is the INT rung from location_granularity_rank (migration 380): compare it,
-   * never the enum text. A pin below BUILDING is drawn as an open ring, and the pin
+   * never the enum text. A pin at BUILDING or better gets a black outer contour, and the pin
    * whose popup is open gets a circle of `uncertainty_radius_m` metres -- see
    * ListingMap. Both are NULL for an unresolved row, which draws no circle rather
    * than a circle of unknown size. */
