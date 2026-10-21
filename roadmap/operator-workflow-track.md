@@ -7,6 +7,18 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-MERGE-LETTERS: merge mode as one statement of letters (built 2026-10-21; merges in the window)
+- **Done (PR #1926, no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
+  card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
+  a click writes the active letter (A at first, so click-click-merge still makes one group), the same
+  letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
+  `POST /properties/merge {letters: {property_id: "A"}}`, the split's statement shape and codec, over
+  `toolkit.property_identity.merge_letters` (shared with the split's join; every property locked up front
+  in id order, each letter its own group; a refusal names the letter and writes nothing); one receipt per
+  letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
+  D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
+- **Owed:** the first real multi-letter merge in production (a read-only browser check of the keys).
+
 ### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
 The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;
@@ -29,9 +41,20 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `VALUO_SANDBOX_API_TOKEN`), `api/http_json.py` folding the two `_http_get_json` copies (the Mapy key no longer reaches
   logs), the admin-claim copies folded into `deps.is_admin`, the server label dicts into `filter_registry.label_cs`,
   and the phone Poloha no longer calls a district point a town. Rationale: `docs/architecture.md` § rule 12.
-- **Next:** W3, the section (desktop editor + phone read-only card); the sandbox probe through the live API after the
-  deploy (flat sale and lease, a house with `lot_area`, land, a negative floor) decides the lease basis and whether a
-  house's plot is sent; a per-plan monthly quota counted from the rows before the production token.
+- **Done (W3, the section, on Valuo v3):** `<section id="valuo">` after Odhady on the property page for every signed-in
+  user (`components/listing-detail/ValuoSection.tsx` over `lib/valuo.ts`): the editor flips in place and is drawn from
+  the API's `fields` alone — exactly each type's v3 request schema (`api.valuo.com/v1/market-value/{type}`, commercial
+  included), the place editable — each value tagged with its provenance (`z inzerátu` / `odvozeno` / `předpoklad` /
+  `chybí` / `upraveno`), Valuo's refused parameters under their fields; the result card reads Valuo's confidence band
+  (`range_price`) on the ruler against the asking price, our latest run and MF, a reliability line (comparables, reach,
+  match; no grade) and the comparables with their photos (one `advert/detail` call, migration 646); a sandbox answer
+  is stored `sandbox` whatever the token's name; the history is the estimations' `RunHistory`, generalised; the phone
+  shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
+- **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
+  exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
+  confirms the lease basis (a lease reads as monthly: `ValuoSection` `Price`) and whether a house's plot is sent; a per-plan monthly
+  quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`).
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:

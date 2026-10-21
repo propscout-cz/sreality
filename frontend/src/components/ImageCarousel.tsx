@@ -1,4 +1,10 @@
-import { useState, type ImgHTMLAttributes, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useImperativeHandle,
+  useState,
+  type ImgHTMLAttributes,
+  type ReactNode,
+} from 'react';
 import ImageTagBadge from './ImageTagBadge';
 import ImageRenderBadge from './ImageRenderBadge';
 import { type TaggedImageUrl } from '@/lib/imageTags';
@@ -36,6 +42,10 @@ interface Props {
   /* Chevrons fade in on parent `.group` hover (cards) rather than always
    * showing (a panel with no hover-group wrapper). */
   fadeChevrons?: boolean;
+  /* Chevrons as tab stops (the default: in a panel they are the only way to
+   * page by keyboard). A Browse card passes false — the card is ONE tab stop
+   * and pages with ← → through the handle below — so Tab goes card to card. */
+  tabbableChevrons?: boolean;
   /* Decode the first frame immediately. The first screenful of a review queue is
    * the whole point of that page, so its photos are not lazy; everything below
    * the fold stays lazy, which is the default. */
@@ -55,7 +65,13 @@ interface Props {
   children?: ReactNode;
 }
 
-export default function ImageCarousel({
+/* What a caller can ask of a mounted carousel: page by `delta` frames; false when
+ * there is nothing to page, so the caller leaves the key to the browser. */
+export interface ImageCarouselHandle {
+  step: (delta: number) => boolean;
+}
+
+const ImageCarousel = forwardRef<ImageCarouselHandle, Props>(function ImageCarousel({
   images,
   startIndex = 0,
   aspect = 'aspect-[5/4]',
@@ -63,11 +79,12 @@ export default function ImageCarousel({
   imgClassName = '',
   hoverZoom = false,
   fadeChevrons = false,
+  tabbableChevrons = true,
   eager = false,
   referrerPolicy,
   fallback,
   children,
-}: Props) {
+}: Props, ref) {
   /* Where the operator paged to, remembered against the startIndex it paged
    * FROM — so a changed startIndex wins without an effect to reset it. */
   const [paged, setPaged] = useState<{ from: number; to: number } | null>(null);
@@ -82,10 +99,12 @@ export default function ImageCarousel({
   const hasMany = images.length > 1;
   const current = images[safeIndex];
 
-  const step = (delta: number) => () => {
-    if (images.length === 0) return;
+  const step = (delta: number) => (): boolean => {
+    if (!hasMany) return false;
     setPaged({ from: startIndex, to: (safeIndex + delta + images.length) % images.length });
+    return true;
   };
+  useImperativeHandle(ref, () => ({ step: (delta: number) => step(delta)() }));
 
   /* --z-card-action is the rung a Browse card reserves for its controls
    * (globals.css): the card's stretched link paints an ::after over the whole
@@ -151,6 +170,7 @@ export default function ImageCarousel({
           <button
             type="button"
             onClick={step(-1)}
+            tabIndex={tabbableChevrons ? undefined : -1}
             aria-label="Previous photo"
             className={`${chevronBase} left-1`}
           >
@@ -159,6 +179,7 @@ export default function ImageCarousel({
           <button
             type="button"
             onClick={step(1)}
+            tabIndex={tabbableChevrons ? undefined : -1}
             aria-label="Next photo"
             className={`${chevronBase} right-1`}
           >
@@ -168,7 +189,9 @@ export default function ImageCarousel({
       )}
     </div>
   );
-}
+});
+
+export default ImageCarousel;
 
 function Chevron({ dir }: { dir: 'left' | 'right' }) {
   const d = dir === 'left' ? 'M7.5 3 L4 6 L7.5 9' : 'M4.5 3 L8 6 L4.5 9';

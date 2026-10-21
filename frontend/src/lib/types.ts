@@ -170,6 +170,12 @@ export interface ImagePublic {
    * cover); NULL when the active model has not scored the photo. */
   tag_head_scores?: Record<string, number> | null;
 }
+/* A photo for the shared lightbox without an image row's CLIP/pHash facts (its badges self-guard on null):
+ * a stored copy by `storage_path`, or an outside photo by its own URL. */
+export const bareImage = (id: number, storage_path: string | null, sreality_url = ''): ImagePublic => ({
+  id, sreality_id: 0, sequence: null, sreality_url, storage_path,
+  clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
+});
 
 /* Distributional shape — drawn by components/estimation/RangeStrip. */
 
@@ -1056,8 +1062,9 @@ export interface WatchdogFilterSpec {
   // Multi-select enums; the '__unknown__' element matches NULL / non-canonical.
   furnished: string[] | null;
   ownership: string[] | null;
-  // Raw sreality condition enum (Stav objektu). Matches l.condition = ANY(...);
-  // null / empty = any. Honoured by the matcher (_build_match_clauses).
+  // The canonical condition (Stav objektu). Matches l.condition = ANY(...), and
+  // '__unknown__' NULL / non-canonical like furnished; null / empty = any.
+  // Honoured by the matcher (_build_match_clauses).
   condition_match: string[] | null;
   // The portal rule's two sides (MS19 + migration 597): a property with an ad on
   // one of `portals` (null / empty = all) and none on `portals_excluded` (any ad,

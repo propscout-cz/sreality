@@ -2973,28 +2973,43 @@ export interface MergeResult {
   hidden_for_you: boolean | null;
 }
 
-/* Merge an operator-checked SET of properties (Browse mergeMode) into its oldest
- * record under one merge group; a split undoes it. A category clash over the
- * set's ads is a 409 whose message is the Czech sentence. */
-export const mergePropertySet = (
-  propertyIds: number[],
-): Promise<MergeResult> =>
-  request<MergeResult>('/properties/merge', {
-    method: 'POST',
-    json: { property_ids: propertyIds },
-  });
+/* A statement of letters: a letter A–Z per id, ids with the same letter one
+ * property afterwards — over properties in Browse's merge mode, over the adverts
+ * of one property in the split (MS18). `lettersParam` is its one wire form,
+ * `94020:A,94492:B`, ids ascending. */
+export type Letters = Record<number, string>;
+export const LETTERS: readonly string[] = Array.from({ length: 26 }, (_, i) =>
+  String.fromCharCode(65 + i),
+);
 
-/* How many "Různé" rulings a merge of these properties would take back (MS12),
- * read before the click; the merge itself answers the same count. */
-export interface MergePreview {
-  property_ids: number[];
-  rulings_taken_back: number;
+export function lettersParam(letters: Letters): string {
+  return Object.entries(letters)
+    .map(([id, letter]) => [Number(id), letter] as const)
+    .sort((a, b) => a[0] - b[0])
+    .map(([id, letter]) => `${id}:${letter}`)
+    .join(',');
 }
 
-export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePreview> =>
-  request<MergePreview>('/properties/merge', {
-    query: { properties: propertyIds.join(',') },
-  });
+/* Make a statement over properties true: each letter merged into its oldest
+ * record under its own merge group, all in one transaction (a refusal writes
+ * nothing); one receipt per letter. A category clash over a letter's ads is a
+ * 409 whose message is the Czech sentence, naming the letter when there are
+ * several. A split undoes one letter's merge. */
+export interface MergeLettersResult {
+  letters: Record<string, MergeResult>;
+}
+
+export const mergeProperties = (letters: Letters): Promise<MergeLettersResult> =>
+  request<MergeLettersResult>('/properties/merge', { method: 'POST', json: { letters } });
+
+/* How many "Různé" rulings each letter would take back (MS12), read before the
+ * click; the merge itself answers the same counts. */
+export interface MergePreview {
+  letters: Record<string, { property_ids: number[]; rulings_taken_back: number }>;
+}
+
+export const getMergePreview = (letters: Letters): Promise<MergePreview> =>
+  request<MergePreview>('/properties/merge', { query: { letters: lettersParam(letters) } });
 
 /* The split by letters (MS18), `GET`/`POST /properties/{id}/split`: every ad of
  * the property with a letter, one letter = one property afterwards. The preview
@@ -3006,7 +3021,6 @@ export const getMergePreview = (propertyIds: readonly number[]): Promise<MergePr
 export const DETACH_REASON_MAX = 500;
 
 /* listings.id -> letter (A–Z). */
-export type SplitLetters = Record<number, string>;
 
 export interface SplitChoice {
   to: string;
@@ -3014,7 +3028,7 @@ export interface SplitChoice {
 }
 
 export interface SplitStatement {
-  letters: SplitLetters;
+  letters: Letters;
   /* Item key (`note:11`, `pipeline`, `collection:5`, `tag:7`, `dismissal`) ->
    * the letter that gets it and its copies; an absent key follows the preview. */
   choices?: Record<string, SplitChoice>;

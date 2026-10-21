@@ -55,8 +55,7 @@ import {
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
 import CreateWatchdogModal from '@/components/CreateWatchdogModal';
-import { MergeSelection } from '@/components/CurationMarks';
-import MergeTakenBack from '@/components/MergeTakenBack';
+import MergeBar from '@/components/MergeBar';
 import PresetBar from '@/components/PresetBar';
 import type { ListingEstimate } from '@/lib/types';
 import {
@@ -66,7 +65,8 @@ import {
 } from '@/lib/api';
 import { pushToast } from '@/lib/toast';
 import { browseKeys } from '@/lib/browseKeys';
-import { useMergePreview, useMergeProperties } from '@/lib/useMergeProperties';
+import { useMergeMode } from '@/lib/useMergeMode';
+import { useMergeProperties } from '@/lib/useMergeProperties';
 import {
   cityQualityKeys,
   fetchCityIndexDefinitions,
@@ -180,24 +180,9 @@ export default function BrowseExperience({
   const [mapFlyTo, setMapFlyTo] = useState<MapFlyToCommand | null>(null);
   const [watchdogModalOpen, setWatchdogModalOpen] = useState(false);
 
-  /* Dedup merge mode (page only). */
-  const [mergeMode, setMergeMode] = useState(false);
-  const [selectedForMerge, setSelectedForMerge] = useState<ReadonlySet<number>>(
-    () => new Set(),
-  );
-  const toggleSelectForMerge = useCallback((propertyId: number) => {
-    setSelectedForMerge((prev) => {
-      const next = new Set(prev);
-      if (next.has(propertyId)) next.delete(propertyId);
-      else next.add(propertyId);
-      return next;
-    });
-  }, []);
-  const exitMergeMode = useCallback(() => {
-    setMergeMode(false);
-    setSelectedForMerge(new Set());
-  }, []);
-  const mergeMut = useMergeProperties(exitMergeMode);
+  /* Merge mode (page only): one statement of letters over the cards. */
+  const mergeMode = useMergeMode();
+  const mergeMut = useMergeProperties(mergeMode.exit);
   const handleLocationPick = useCallback((s: MapySuggestion) => {
     if (!s.position) return;
     setMapFlyTo({
@@ -722,12 +707,10 @@ export default function BrowseExperience({
                   label="Card image size"
                 />
                 {f.mergeMode && (
-                  <MergeModeBar
-                    active={mergeMode}
-                    selected={selectedForMerge}
+                  <MergeBar
+                    merge={mergeMode}
                     merging={mergeMut.isPending}
-                    onToggle={() => (mergeMode ? exitMergeMode() : setMergeMode(true))}
-                    onMerge={() => mergeMut.mutate([...selectedForMerge])}
+                    onMerge={() => mergeMut.mutate(mergeMode.letters)}
                   />
                 )}
               </div>
@@ -778,9 +761,7 @@ export default function BrowseExperience({
                 onSort={view.setSort}
                 onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
                 onClearBounds={() => view.setBounds(null)}
-                mergeMode={mergeMode}
-                selectedPropertyIds={selectedForMerge}
-                onToggleSelect={toggleSelectForMerge}
+                merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
                 onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
@@ -1147,61 +1128,6 @@ function CardsGlyph() {
       <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
       <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
     </svg>
-  );
-}
-
-/* Merge mode's bar: the ticked properties by number, each with its marks
-   (MS16), so what a merge will carry is in view before the click, and the
-   "Různé" rulings it would take back (MS12), read before the merge is offered. */
-export function MergeModeBar({
-  active,
-  selected,
-  merging,
-  onToggle,
-  onMerge,
-}: {
-  active: boolean;
-  selected: ReadonlySet<number>;
-  merging: boolean;
-  onToggle: () => void;
-  onMerge: () => void;
-}) {
-  const selectedCount = selected.size;
-  const preview = useMergePreview(selected);
-  const btn = 'px-3 py-1.5 text-sm rounded-[var(--radius-sm)] transition-colors disabled:opacity-50';
-  return (
-    <div className="flex items-center gap-2 shrink-0">
-      {active && (
-        <>
-          {selectedCount === 0 ? (
-            <span className="text-[0.75rem] text-[var(--color-ink-3)]">Pick listings to merge</span>
-          ) : (
-            <MergeSelection ids={selected} />
-          )}
-          {selectedCount >= 2 && <MergeTakenBack preview={preview} className="text-[0.75rem]" />}
-          <button
-            type="button"
-            onClick={onMerge}
-            disabled={merging || selectedCount < 2 || preview.isPending}
-            className={`${btn} bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)]`}
-          >
-            {merging ? 'Merging…' : `Merge ${selectedCount >= 2 ? selectedCount : ''}`.trim()}
-          </button>
-        </>
-      )}
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={merging}
-        className={`${btn} border ${
-          active
-            ? 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
-            : 'border-[var(--color-copper)] text-[var(--color-copper-2)] hover:bg-[var(--color-copper-soft)]'
-        }`}
-      >
-        {active ? 'Cancel' : 'Merge mode'}
-      </button>
-    </div>
   );
 }
 

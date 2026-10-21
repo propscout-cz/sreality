@@ -18,7 +18,7 @@ import {
 } from '@/lib/api';
 import { imageSrc, type ImageRef } from '@/lib/imageUrl';
 import ImageLightbox from '@/components/ImageLightbox';
-import type { ImagePublic } from '@/lib/types';
+import { bareImage } from '@/lib/types';
 import Spinner from '@/components/Spinner';
 import ErrorBanner from '@/components/ErrorBanner';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
@@ -339,21 +339,7 @@ export default function NewDedupTrainingSet() {
     el.scrollIntoView?.({ block: 'center', behavior: still ? 'auto' : 'smooth' });
   };
 
-  const galleryImages: ImagePublic[] = useMemo(
-    () => rows.map((r) => ({
-      id: r.image_id,
-      sreality_id: 0,
-      sequence: null,
-      sreality_url: '',
-      storage_path: r.storage_path,
-      clip_fine_tag: null,
-      clip_logical_tag: null,
-      clip_confidence: null,
-      clip_render_score: null,
-      phash: null,
-    })),
-    [rows],
-  );
+  const galleryImages = useMemo(() => rows.map((r) => bareImage(r.image_id, r.storage_path)), [rows]);
 
   /* THE DRAW. A head trains on a thousand negatives picked at random, not on
    * every negative it has; the rest wait in the negative reserve. Drawing again

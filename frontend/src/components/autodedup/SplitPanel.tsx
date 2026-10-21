@@ -22,7 +22,7 @@ import {
   splitProperty,
   splitRefusal,
   type SplitChoice,
-  type SplitLetters,
+  type Letters,
   type SplitPreview,
   type SplitPreviewItem,
   type SplitSkip,
@@ -43,7 +43,7 @@ export const STALE_TEXT =
 
 /* The server's preview of these letters with the user's picks; the last one
  * stays on screen while a changed statement is read. */
-function useSplitPreview(propertyId: number, letters: SplitLetters, choices: Record<string, SplitChoice>) {
+function useSplitPreview(propertyId: number, letters: Letters, choices: Record<string, SplitChoice>) {
   const param = lettersParam(letters);
   const picked = choicesParam(choices);
   return useQuery<SplitPreview, Error>({
@@ -90,7 +90,7 @@ export default function SplitPanel({
 }: {
   propertyId: number;
   /* Every ad of the property with its letter. */
-  letters: SplitLetters;
+  letters: Letters;
   canonicalListingId: number | null;
   portalOf: (listingId: number) => string;
   priceOf: (listingId: number) => string;

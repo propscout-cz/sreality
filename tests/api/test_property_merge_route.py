@@ -29,10 +29,10 @@ def merge():
     from api import dependencies as deps
     from api import main as api_main
 
-    def post(db: _Ledger, ids: list[int], claims: dict[str, Any]) -> Any:
+    def post(db: _Ledger, letters: dict[int, str], claims: dict[str, Any]) -> Any:
         api_main.app.dependency_overrides[deps.get_db_conn] = lambda: db
         api_main.app.dependency_overrides[deps.require_admin] = lambda: claims
-        return TestClient(api_main.app).post("/properties/merge", json={"property_ids": ids})
+        return TestClient(api_main.app).post("/properties/merge", json={"letters": letters})
 
     yield post
     api_main.app.dependency_overrides.clear()
@@ -46,11 +46,12 @@ def test_the_receipt_is_the_acting_accounts_and_empty_without_one(merge, monkeyp
     real = pm.merge_receipt
     monkeypatch.setattr(pm, "merge_receipt", lambda conn, merged, acc: asked.append(
         (merged["survivor_id"], acc)) or real(conn, merged, None))
-    body = merge(_Ledger({1: 10, 2: 20}), [20, 10], {**ADMIN, "sub": "user-1"}).json()
+    body = merge(_Ledger({1: 10, 2: 20}), {20: "A", 10: "A"}, {**ADMIN, "sub": "user-1"}).json()
+    body = body["letters"]["A"]
     assert (body["survivor_id"], body["retired_ids"], body["rulings_taken_back"]) == (10, [20], 0)
     assert asked == [(10, account)]
     for claims in ({**ADMIN, "sub": "user-2"}, ADMIN):
-        body = merge(_Ledger({1: 10, 2: 20}), [10, 20], claims).json()
+        body = merge(_Ledger({1: 10, 2: 20}), {10: "A", 20: "A"}, claims).json()["letters"]["A"]
         assert (body["carried"], body["hidden_for_you"]) == (
             {"notes": 0, "pipeline": None, "collections": [], "tags": []}, False)
     assert asked[1:] == [(10, None), (10, None)]
@@ -65,25 +66,48 @@ def test_no_read_around_the_merge_reports_a_committed_merge_as_failed(merge, mon
     db = _Ledger({1: 10, 2: 20})
     monkeypatch.setattr(pm.tenant_pool, "resolve_account_id", gone)
     with pytest.raises(psycopg.OperationalError):
-        merge(db, [10, 20], {**ADMIN, "sub": "user-1"})
+        merge(db, {10: "A", 20: "A"}, {**ADMIN, "sub": "user-1"})
     assert db.listings == {1: 10, 2: 20}
     monkeypatch.setattr(pm.tenant_pool, "resolve_account_id", lambda conn, claims: uuid.uuid4())
     monkeypatch.setattr(pm, "merge_receipt", gone)
-    body = merge(db, [10, 20], {**ADMIN, "sub": "user-1"}).json()
+    body = merge(db, {10: "A", 20: "A"}, {**ADMIN, "sub": "user-1"}).json()["letters"]["A"]
     assert (body["survivor_id"], body["carried"], body["hidden_for_you"]) == (10, None, None)
     assert db.listings == {1: 10, 2: 10}
 
 
+CLASH = ("Inzerát v kategorii Byty a inzerát v kategorii Domy systém nikdy nespojí do jedné "
+         "nemovitosti (výjimkou jsou jen dvojice dům – komerční objekt, dům – pozemek, komerční "
+         "objekt – pozemek a byt – komerční objekt), proto nemohou mít stejné písmeno. Dejte jim "
+         "různá písmena.")
+
+
 def test_a_category_clash_is_refused_in_czech_naming_both_properties(merge):
     db = _Ledger({1: 10, 2: 20}, ad_cats={1: ("prodej", "byt"), 2: ("prodej", "dum")})
-    res = merge(db, [10, 20], ADMIN)
+    res = merge(db, {10: "A", 20: "A"}, ADMIN)
     assert res.status_code == 409 and db.listings == {1: 10, 2: 20}
-    assert res.json()["detail"] == {"code": "refused", "ids": [10, 20], "message": (
-        "Inzerát v kategorii Byty a inzerát v kategorii Domy systém nikdy nespojí do jedné "
-        "nemovitosti (výjimkou jsou jen dvojice dům – komerční objekt, dům – pozemek, komerční "
-        "objekt – pozemek a byt – komerční objekt), proto je nelze sloučit.")}
-    gone = merge(_Ledger({1: 10}, props={20: "merged_away"}), [10, 20], ADMIN)
+    assert res.json()["detail"] == {"code": "refused", "ids": [10, 20], "message": CLASH}
+    gone = merge(_Ledger({1: 10}, props={20: "merged_away"}), {10: "A", 20: "A"}, ADMIN)
     assert gone.json()["detail"].startswith("properties not found")
+
+
+def test_a_statement_merges_every_letter_in_one_transaction_or_nothing(merge):
+    """Two letters are two merges with two receipts; a clash in one letter names that letter and
+    leaves the other unmerged; a lone letter is a slip, refused before anything is read."""
+    db = _Ledger({1: 10, 2: 20, 3: 30, 4: 40})
+    body = merge(db, {10: "A", 20: "A", 30: "B", 40: "B"}, ADMIN).json()["letters"]
+    assert {k: (v["survivor_id"], v["retired_ids"]) for k, v in body.items()} == {
+        "A": (10, [20]), "B": (30, [40])}
+    assert body["A"]["merge_group_id"] != body["B"]["merge_group_id"]
+    assert db.listings == {1: 10, 2: 10, 3: 30, 4: 30}
+    db = _Ledger({1: 10, 2: 20, 3: 30, 4: 40}, ad_cats={3: ("prodej", "byt"), 4: ("prodej", "dum")})
+    res = merge(db, {10: "A", 20: "A", 30: "B", 40: "B"}, ADMIN)
+    assert res.status_code == 409 and db.listings == {1: 10, 2: 20, 3: 30, 4: 40}
+    assert res.json()["detail"] == {"code": "refused", "ids": [30, 40],
+                                    "message": f"Písmeno B: {CLASH}"}
+    db = _Ledger({1: 10, 2: 20, 3: 30, 4: 40})
+    for slip in ({10: "A", 20: "A", 30: "B"}, {10: "A"}, {10: "A", 20: "a"}):
+        assert merge(db, slip, ADMIN).status_code == 400
+    assert db.log == [] and db.listings == {1: 10, 2: 20, 3: 30, 4: 40}
 
 
 def test_the_merge_list_routes_are_gone():
@@ -116,14 +140,14 @@ def test_the_merge_preview_counts_what_the_merge_would_take_back(api):
     db.rule(1, 3, "different")
     db.rule(2, 3, "different")                  # inside 20: not between what the merge joins
     http = api(db, ADMIN)
-    res = http.get("/properties/merge", params={"properties": "20,10"})
+    res = http.get("/properties/merge", params={"letters": "20:A,10:A"})
     assert res.status_code == 200
-    assert res.json() == {"property_ids": [10, 20], "rulings_taken_back": 1}
+    assert res.json() == {"letters": {"A": {"property_ids": [10, 20], "rulings_taken_back": 1}}}
     assert not [s for s, _p in db.log if s.startswith(("INSERT", "UPDATE", "DELETE"))]
-    for bad in ("10", "10,x", "10,10"):
-        assert http.get("/properties/merge", params={"properties": bad}).status_code == 400
-    merged = http.post("/properties/merge", json={"property_ids": [10, 20]}).json()
-    assert merged["rulings_taken_back"] == 1
+    for bad in ("10:A", "10:A,x:A", "10:A,10:A", "10:A,20:a", "10:A,20:B"):
+        assert http.get("/properties/merge", params={"letters": bad}).status_code == 400
+    merged = http.post("/properties/merge", json={"letters": {"10": "A", "20": "A"}}).json()
+    assert merged["letters"]["A"]["rulings_taken_back"] == 1
 
 
 def test_the_split_routes_show_and_move_the_acting_accounts_items_only(api, monkeypatch):
