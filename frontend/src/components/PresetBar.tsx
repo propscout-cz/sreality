@@ -48,7 +48,6 @@ import {
 } from '@/lib/api';
 import {
   filterPresetKeys,
-  DEFAULT_SORT,
   sortToParam,
   type SortSpec,
 } from '@/lib/queries';
@@ -109,7 +108,6 @@ export default function PresetBar({
   const presets = presetsQ.data?.data ?? [];
 
   const sortParam = sortToParam(sort);
-  const defaultSortParam = sortToParam(DEFAULT_SORT);
 
   const active =
     activePresetId != null
@@ -119,7 +117,7 @@ export default function PresetBar({
   /* Dirty when either the filters OR the sort drift from the loaded preset. */
   const dirty = activeSpec
     ? !filtersEqualForPreset(filters, activeSpec.filters) ||
-      (activeSpec.sort ?? defaultSortParam) !== sortParam
+      activeSpec.sort !== sortParam
     : false;
   const hasMapArea = filters.bounds != null;
 

@@ -65,7 +65,6 @@ export interface KeysetCursor {
 const NON_NULL_SORT_FIELDS = new Set<string>([
   'last_seen_at',
   'first_seen_at',
-  'is_active',
 ]);
 
 /* One portal's order column (queries.ts effectiveSort) is NOT NULL on every row

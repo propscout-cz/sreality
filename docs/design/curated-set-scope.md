@@ -145,7 +145,7 @@ branch are deleted. The member maps stay for glyphs and the board.
 every curation write (pipeline add/move/remove, collection add/remove, tag attach/detach,
 dismiss): it walks the Browse query cache (filters sit at `browseKeys` slot 1), re-evaluates
 `matchesScope` for that property under each query's scopes with the patched member maps, drops
-the row in place from cards/table pages when it no longer matches, decrements the exact count,
+the row in place from the cards pages when it no longer matches, decrements the exact count,
 and invalidates map/stats keys. This replaces the 52 `pipelineScoped` / `collectionScoped` /
 `cohortScoped` prop sites and closes the tag-write and phone-Feed staleness gaps.
 
