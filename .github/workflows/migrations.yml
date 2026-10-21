@@ -219,11 +219,11 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_curated_set_scope_live.py -q
 
-      # Valuo valuations (migration 637): a paid call is saved `pending` before it is made and
+      # Valuo valuations (migrations 637 + 646): a paid call is saved `pending` before it is made and
       # finished once, and the partial unique index over md5(request::text) is what makes a
       # double submit pay once. The hermetic tests fake the store, so only the real index, the
       # two CHECKs and the revoked grants can show the money is guarded.
-      - name: A Valuo call is saved before it is paid and pays once (migration 637)
+      - name: A Valuo call is saved before it is paid and pays once (migrations 637 + 646)
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"

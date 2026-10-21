@@ -86,11 +86,12 @@ def test_the_ts_module_declares_the_same_levels_and_columns() -> None:
 # over 625's WHERE verbatim (tests/test_626_stats_dashboard.py); 629 (curated-set scope) added
 # nine trailing parameters and one clause block to both RPCs; 632 restated the Stats pivot with the
 # floor at five and nothing else changed (tests/test_stats_min_n_migration.py); 634 made its
-# status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list. Re-read the
-# chip arms when this moves again.
+# status fact read the cohort's own portal rule (tests/test_stats_status_lens_migration.py); 630 re-pointed the map's at browse_list;
+# 640 dropped the id denylist; 644 gave the condition conjunct the `__unknown__` chip
+# (tests/test_644_condition_unknown_filter.py). Re-read the chip arms when this moves again.
 _LATEST_RPC_DEFINITION = {
-    "browse_stats_properties": "640_drop_property_ids_excluded.sql",
-    "browse_map_cells": "640_drop_property_ids_excluded.sql",
+    "browse_stats_properties": "644_condition_unknown_filter.sql",
+    "browse_map_cells": "644_condition_unknown_filter.sql",
 }
 
 
@@ -137,21 +138,35 @@ def test_the_stats_and_map_cohorts_inherit_the_consumer_rule(func: str, relation
         assert legacy not in body, f"{func} reads {legacy} — it would bypass the rule"
 
 
+def _unknown_capable_columns() -> list[str]:
+    from toolkit import filter_registry as fr
+
+    return sorted(f.pg_column for f in fr.all_filters()
+                  if fr.sql_kind(f) == "enum_or_unknown" and fr.Agenda.BROWSE in f.agendas)
+
+
+def test_every_unknown_chip_is_on_the_aggregates() -> None:
+    """The registry decides which filters carry the `__unknown__` chip; a new one must
+    reach these bodies too. RED by: a chip added in Python and the SPA alone."""
+    assert _unknown_capable_columns() == ["condition", "furnished", "ownership"]
+
+
 @pytest.mark.parametrize("func", ["browse_stats_properties", "browse_map_cells"])
-def test_the_rpc_bodies_know_the_same_canonical_ownership(func: str) -> None:
-    """The `__unknown__` ownership pill means "NULL or not canonical", and rule 16
-    gives that predicate one definition. Browse's list compiles it from
-    `OWNERSHIP_CANONICAL`; these two bodies spell the array out. RED by: widening
-    the canon (W5 added `jine`) without carrying it into the SQL, which makes the
-    aggregates count as unknown the rows the list beside them no longer does."""
-    from toolkit.filter_registry import OWNERSHIP_CANONICAL
+@pytest.mark.parametrize("column", _unknown_capable_columns())
+def test_the_rpc_bodies_know_the_same_canon(func: str, column: str) -> None:
+    """The `__unknown__` pill (Neuvedeno) means "NULL or not canonical", and rule 16
+    gives that predicate one definition. Browse's list compiles it from the generated
+    canon; these two bodies spell the array out. RED by: widening a canon (W5 added
+    ownership `jine`) without carrying it into the SQL, which makes the aggregates
+    count as unknown the rows the list beside them no longer does."""
+    from toolkit.filter_registry import COLUMN_CANONICAL_VALUES
 
     arrays = re.findall(
-        r"l\.ownership = any\(array\[([^\]]+)\]\)", _function_body(func)
+        rf"l\.{column} = any\(array\[([^\]]+)\]\)", _function_body(func)
     )
-    assert arrays, f"{func} has no ownership __unknown__ predicate"
+    assert arrays, f"{func} has no {column} __unknown__ predicate"
     for arr in arrays:
-        assert tuple(re.findall(r"'([a-z_]+)'", arr)) == OWNERSHIP_CANONICAL
+        assert tuple(re.findall(r"'([a-z_]+)'", arr)) == COLUMN_CANONICAL_VALUES[column]
 
 
 @pytest.mark.parametrize("func", ["browse_stats_properties", "browse_map_cells"])

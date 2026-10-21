@@ -17,6 +17,7 @@ import {
   isoNDaysAgo,
   priceChangeCountColumn,
   UNKNOWN_FILTER_VALUE,
+  CONDITION_CANONICAL,
   FURNISHED_CANONICAL,
   OWNERSHIP_CANONICAL,
 } from './filters';
@@ -408,25 +409,22 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
   /* Multi-select enums with the '__unknown__' sentinel. The sentinel matches a
    * NULL or non-canonical value, which the plain `.in()` auto-dispatch can't
    * express — so they're hand-coded here as an `.or(in.(…),is.null,not.in.(…))`
-   * clause. Mirrors browse_stats_properties + the watchdog matcher (the
-   * shared toolkit.filter_compiler._enum_or_unknown_clause). */
-  const enumOrUnknown = (
-    col: string, values: string[], canonical: readonly string[],
-  ): string | null => {
-    if (!values.length) return null;
-    const reals = values.filter((v) => v !== UNKNOWN_FILTER_VALUE);
-    const parts: string[] = [];
-    if (reals.length) parts.push(`${col}.in.(${reals.join(',')})`);
-    if (values.includes(UNKNOWN_FILTER_VALUE)) {
-      parts.push(`${col}.is.null`);
-      parts.push(`${col}.not.in.(${canonical.join(',')})`);
+   * clause. A selection without it keeps the auto path's shape (one value is
+   * `.eq()`: the planner rule in registryQueryBuilder.ts). Mirrors
+   * browse_stats_properties + the watchdog matcher (the shared
+   * toolkit.filter_compiler._enum_or_unknown_clause). */
+  const enumOrUnknown = (col: string, values: string[], canonical: readonly string[]) => {
+    if (!values.includes(UNKNOWN_FILTER_VALUE)) {
+      if (values.length) r = values.length === 1 ? r.eq(col, values[0]) : r.in(col, values);
+      return;
     }
-    return parts.length ? parts.join(',') : null;
+    const reals = values.filter((v) => v !== UNKNOWN_FILTER_VALUE);
+    const known = reals.length ? [`${col}.in.(${reals.join(',')})`] : [];
+    r = r.or([...known, `${col}.is.null`, `${col}.not.in.(${canonical.join(',')})`].join(','));
   };
-  const furnishedOr = enumOrUnknown('furnished', f.furnished, FURNISHED_CANONICAL);
-  if (furnishedOr) r = r.or(furnishedOr);
-  const ownershipOr = enumOrUnknown('ownership', f.ownership, OWNERSHIP_CANONICAL);
-  if (ownershipOr) r = r.or(ownershipOr);
+  enumOrUnknown('furnished', f.furnished, FURNISHED_CANONICAL);
+  enumOrUnknown('ownership', f.ownership, OWNERSHIP_CANONICAL);
+  enumOrUnknown('condition', f.conditionMatch, CONDITION_CANONICAL);
   /* Absolute price bound (price_czk). Hand-coded — not the registry auto
    * `.gte`/`.lte` — so `includeNoPrice` can widen it to keep no-price listings:
    * a plain `.gte` already drops NULLs and a later `.or` can't add them back, so

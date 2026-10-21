@@ -126,9 +126,14 @@ def test_the_cohort_where_is_625s_byte_for_byte() -> None:
     # in the database), so the effective WHERE is 625's minus that line, plus the block inserted
     # right after its predecessor (the property_ids_filter allowlist).
     base_now = base[:anchor] + base[anchor + 1:]
+    # 644 swapped one conjunct in place: the condition filter's, into furnished's `__unknown__` shape.
+    from tests.test_644_condition_unknown_filter import _NEW, _OLD
+
+    cond = base_now.index(_OLD.rstrip("\n"))
+    base_now = base_now[:cond] + _NEW.rstrip("\n").split("\n") + base_now[cond + 1:]
     start = later.index(base[anchor - 1]) + 1
     end = later.index(base[anchor + 1], start)
-    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop plus one inserted block"
+    assert later[:start] + later[end:] == base_now, "the effective WHERE is not 625's minus 640's drop, 644's swap, plus one inserted block"
     block = " ".join(later[start:end])
     assert later[start].lstrip().startswith("-- migration 629: the curated-set scope")
     assert all(f"{c}_set" in block for c in ("tags", "collections", "pipeline")), block

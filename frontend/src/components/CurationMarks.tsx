@@ -1,7 +1,7 @@
 /* What users put on a property, as marks to read, never to change (MS16): merge
- * mode shows them on every card and beside every ticked property in the merge
- * bar. Each reads the query its Browse control already shares, so they cost no
- * new request; a failed read is a retry, never an absent mark. */
+ * mode shows them on every card and beside every lettered property in the merge
+ * bar (MergeBar). Each reads the query its Browse control already shares, so
+ * they cost no new request; a failed read is a retry, never an absent mark. */
 
 import { useQuery } from '@tanstack/react-query';
 import type { CSSProperties, ReactNode } from 'react';
@@ -76,19 +76,5 @@ export default function CurationMarks({ property_id }: { property_id: number }) 
       )}
       <NoteMark property_id={property_id} />
     </span>
-  );
-}
-
-/* The merge bar's list of what is ticked: each property by number, with its marks. */
-export function MergeSelection({ ids }: { ids: ReadonlySet<number> }) {
-  return (
-    <ul aria-label="Vybráno ke sloučení" className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      {[...ids].map((id) => (
-        <li key={id} className="flex items-center gap-1.5">
-          <span className="font-mono text-[0.75rem] tabular-nums text-[var(--color-ink-2)]">#{id}</span>
-          <CurationMarks property_id={id} />
-        </li>
-      ))}
-    </ul>
   );
 }
