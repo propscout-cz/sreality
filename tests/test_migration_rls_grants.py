@@ -405,6 +405,10 @@ _ADMIN_ONLY_RELATIONS = frozenset({
     # reads both only through the admin-gated pipeline_checks_public.
     "health_checks",
     "ops_incidents",
+    # The push device registry and its delivery ledger (migration 654): service role only, NO
+    # `_public` view; the /push routes and the worker's push lane are their one writer each.
+    "push_subscriptions",
+    "notification_deliveries",
 })
 
 _CREATE_GATED_OBJ = re.compile(
