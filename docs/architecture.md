@@ -2466,7 +2466,8 @@ renumber.** Navigate by area:
     every statement commits on its own, so no INSERT's locks outlive it). It is their ONE clock: W2b
     deleted the API's `matcher_loop`, its lease, interval readers and daily gates (the lease table and
     six settings rows wait for W6's drop), and the jobs check reads a registered lane missing from the
-    heartbeat as a worker lagging a deploy (Watch, then Problem). **The cursor is gone:** a watchdog's `new` is ONE INSERT
+    heartbeat as an older process beating beside a new one, a deploy overlap (Watch, then Problem; a
+    lone worker on old code runs the old check too, so Railway's per-service commit status is its signal). **The cursor is gone:** a watchdog's `new` is ONE INSERT
     over published properties first seen in the last 24 h and visible since after its `active_since` (stamped by a trigger on
     create, on every switch-on and on every filter edit: an edited watchdog is a new start; keyed on visibility, the publication
     rule above, so a property first seen up to 6 h before a watchdog starts and published after it is still told), so a
@@ -2637,8 +2638,9 @@ renumber.** Navigate by area:
     of the poller or the harness or the harness step overrunning its 6 minutes, so GitHub's failure email is
     the one path to the operator that needs neither Supabase's scheduler nor Railway — with system
     alerts out of the bell (R2b), it is how an alarm leaves the app, at today's rhythm (R9a). Who
-    watches whom: pg_cron watches the worker, the API's loops, the teller and every alarm's
-    freshness (the canary's own keys included); the API tells; the canary watches pg_cron, the
+    watches whom: pg_cron watches the worker, the teller (`unalerted`) and every alarm's freshness
+    (the canary's own keys included); a dead API is visible only through `unalerted` and the canary;
+    the API tells; the canary watches pg_cron, the
     teller and whether an alarm stands unacknowledged; the worker's `jobs` check watches every scheduled
     machine, the canary's poller included (wave 3). **The `system_health` rows (history since W1) are
     NOT property-grain** — about the pipeline, not a listing, so `listing_id` / `sreality_id` /
