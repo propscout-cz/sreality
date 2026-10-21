@@ -14,7 +14,7 @@ import CollectionSaveMenu, {
   COLLECTION_SAVE_LABEL,
 } from '@/components/CollectionSaveMenu';
 import CurationMarks from '@/components/CurationMarks';
-import ImageCarousel from '@/components/ImageCarousel';
+import ImageCarousel, { type ImageCarouselHandle } from '@/components/ImageCarousel';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import Spinner from '@/components/Spinner';
 import DismissButton from '@/components/DismissButton';
@@ -43,6 +43,7 @@ import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { propertyPath } from '@/lib/listingUrl';
 import { inzeratu } from '@/lib/mergedAdverts';
+import type { MergeMode } from '@/lib/useMergeMode';
 
 /* The card grid is CONTAINER-intrinsic, not viewport-keyed: columns flow to
  * fit the cards COLUMN's own width via `auto-fill`, each at least --card-min
@@ -120,12 +121,10 @@ interface Props {
   onSort: (next: SortSpec) => void;
   onClearFilters: () => void;
   onClearBounds: () => void;
-  /* Dedup merge mode: when on, cards show a selection checkbox and a click
-   * toggles selection instead of navigating; the marks stay, read-only (MS16).
-   * selected holds the picked property_ids. */
-  mergeMode: boolean;
-  selectedPropertyIds: ReadonlySet<number>;
-  onToggleSelect: (propertyId: number) => void;
+  /* Merge mode (lib/useMergeMode), or null: a card shows its letter and a click
+   * writes the active one instead of navigating; the marks stay, read-only
+   * (MS16); the grid hands the mode's key handler the focused card. */
+  merge: MergeMode | null;
   /* On-card estimate: latest rent estimate per listing id (keyed by
    * sreality_id), the set of ids whose run is being kicked off right now
    * (optimistic spinner), and the trigger. Estimate runs on apartment cards
@@ -157,9 +156,7 @@ export default function ListingCards({
   onSort,
   onClearFilters,
   onClearBounds,
-  mergeMode,
-  selectedPropertyIds,
-  onToggleSelect,
+  merge,
   estimates,
   estimatingIds,
   onEstimate,
@@ -211,7 +208,9 @@ export default function ListingCards({
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto pr-1">
+      {/* Merge mode's keys arrive here from the focused card (never from the
+          window, so a filter field keeps its letters). */}
+      <div ref={scrollRef} onKeyDown={merge?.onKeyDown} className="flex-1 min-h-0 overflow-y-auto pr-1">
         {showSkeleton && <SkeletonGrid />}
         {isEmpty && (
           <EmptyState
@@ -233,9 +232,7 @@ export default function ListingCards({
                     dimmed={mapHover && !hoveredIds.has(r.listing_id)}
                     scrollOnHover={mapHover && r.listing_id === firstHoveredId}
                     onHover={onHover}
-                    mergeMode={mergeMode}
-                    selected={selectedPropertyIds.has(r.property_id)}
-                    onToggleSelect={onToggleSelect}
+                    merge={merge}
                     /* Estimate state is sreality-keyed (the estimation backend
                        runs by sreality_id) — a null-sreality card can't be
                        estimated, so it reads no state and shows no affordance. */
@@ -328,9 +325,7 @@ function Card({
   dimmed,
   scrollOnHover,
   onHover,
-  mergeMode,
-  selected,
-  onToggleSelect,
+  merge,
   estimate,
   estimating,
   onEstimate,
@@ -346,9 +341,7 @@ function Card({
    * case it sits below the fold of the card column. */
   scrollOnHover: boolean;
   onHover: (ids: ReadonlyArray<number> | null) => void;
-  mergeMode: boolean;
-  selected: boolean;
-  onToggleSelect: (propertyId: number) => void;
+  merge: MergeMode | null;
   estimate: ListingEstimate | undefined;
   estimating: boolean;
   onEstimate: (srealityId: number) => void;
@@ -370,8 +363,12 @@ function Card({
     }
   }, [hovered, scrollOnHover]);
   const title = formatTitle(r);
-  /* Ties the merge-mode checkbox to the card-wide <label> below it. */
-  const selectId = useId();
+  /* The card's letter in merge mode, the stretched button that holds it (the
+   * card's one focus stop there: the pointer focuses it, Tab moves on) and the
+   * carousel ← → page through. */
+  const letter = merge?.letters[r.property_id] ?? null;
+  const selectRef = useRef<HTMLButtonElement | null>(null);
+  const carouselRef = useRef<ImageCarouselHandle | null>(null);
   /* ONE server-composed label (migration 503). It used to be placePrimary()
    * plus the district, de-duped in the browser; the resolver now says street,
    * town or country once, so there is nothing left to de-dupe. */
@@ -387,7 +384,7 @@ function Card({
   /* The hover-link state is OCHRE — the same surveyor's-mark color the
    * map uses for its locator halo, so the two ends of the link read as
    * one gesture. Copper stays reserved for committed selection. */
-  const surface = selected
+  const surface = letter != null
     ? 'bg-[var(--color-paper-2)] border-[var(--color-copper)] ring-1 ring-[var(--color-copper)]'
     : hovered
       ? 'bg-[var(--color-ochre-soft)] border-[var(--color-ochre)] ring-1 ring-[var(--color-ochre)]'
@@ -437,7 +434,10 @@ function Card({
     'group relative rounded-[var(--radius-sm)] border overflow-hidden',
     'transition-[border-color,background-color,opacity] duration-150',
     dimmed ? 'opacity-50' : '',
-    mergeMode ? 'cursor-pointer' : '',
+    /* The target of a key: the card holding focus, in the hover-link ochre. */
+    merge
+      ? 'cursor-pointer focus-within:border-[var(--color-ochre)] focus-within:ring-1 focus-within:ring-[var(--color-ochre)]'
+      : '',
     surface,
   ].join(' ');
 
@@ -450,61 +450,56 @@ function Card({
     <div
       ref={setWrapperEl}
       /* Hover-sync stays a normal-mode affair, exactly as when these handlers
-       * lived on the <Link>: merge mode is not browsing. */
-      onMouseEnter={mergeMode ? undefined : () => onHover([r.listing_id])}
-      onMouseLeave={mergeMode ? undefined : () => onHover(null)}
+       * lived on the <Link>: merge mode is not browsing — there the pointer
+       * FOCUSES the card it is over, so a letter key and ← → have one target,
+       * the same one Tab moves. */
+      onMouseEnter={merge
+        ? () => selectRef.current?.focus({ preventScroll: true })
+        : () => onHover([r.listing_id])}
+      onMouseLeave={merge ? undefined : () => onHover(null)}
+      /* ← → page the photos from wherever focus sits on the card (the title
+       * link, the merge button); the chevrons stay for the mouse. */
+      onKeyDown={(e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        if (carouselRef.current?.step(e.key === 'ArrowRight' ? 1 : -1)) e.preventDefault();
+      }}
       className={wrapperClass}
     >
       <ImageCarousel
+        ref={carouselRef}
         images={images}
         startIndex={cover}
         imgClassName={imageFilter}
         hoverZoom
         fadeChevrons
+        tabbableChevrons={false}
       >
-        {mergeMode && (
-          <div className="absolute top-1 left-1 z-[var(--z-card-action)] w-6 h-6">
-            {/* A REAL checkbox, not a drawn facsimile: it carries `checked`,
-                Space toggles it natively, and it is the card's one tab stop in
-                merge mode. Native rendering is dropped (appearance-none) so the
-                box keeps the card's own tokens unchanged; the ✓ is drawn over
-                it as decoration. Its click target is the whole card — see the
-                stretched <label> at the end of the card. */}
-            <input
-              id={selectId}
-              type="checkbox"
-              checked={selected}
-              onChange={() => onToggleSelect(r.property_id)}
-              aria-label={`Vybrat ke sloučení: ${title}`}
-              className={[
-                'appearance-none block w-6 h-6 rounded-[var(--radius-xs)] border cursor-pointer',
-                selected
-                  ? 'bg-[var(--color-copper)] border-[var(--color-copper)]'
-                  : 'bg-[var(--color-paper)]/90 border-[var(--color-rule)]',
-              ].join(' ')}
-            />
-            {selected && (
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 flex items-center justify-center text-white"
-              >
-                <svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor"
-                  strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M2.5 6.2 5 8.5l4.5-5" />
-                </svg>
-              </span>
-            )}
-          </div>
+        {merge && (
+          /* The letter, drawn: a badge over the photo, inert — the click lands on
+             the stretched button at the end of the card, whose name carries the
+             letter too. Empty while the card has none. */
+          <span
+            aria-hidden="true"
+            className={[
+              'pointer-events-none absolute top-1 left-1 z-[2] flex h-6 w-6 items-center justify-center',
+              'rounded-[var(--radius-xs)] border font-mono text-[0.78rem] font-medium',
+              letter != null
+                ? 'bg-[var(--color-copper)] border-[var(--color-copper)] text-white'
+                : 'bg-[var(--color-paper)]/90 border-[var(--color-rule)]',
+            ].join(' ')}
+          >
+            {letter}
+          </span>
         )}
-        {mergeMode && (
-          /* The marks a merge will carry, read-only (MS16), beside the checkbox:
-             over the stretched label, so hovering one shows its title instead of
-             ticking the card. */
+        {merge && (
+          /* The marks a merge will carry, read-only (MS16), beside the letter:
+             over the stretched button, so hovering one shows its title instead
+             of marking the card. */
           <div className="absolute top-1 left-8 z-[var(--z-card-action)]">
             <CurationMarks property_id={r.property_id} />
           </div>
         )}
-        {!mergeMode && (
+        {!merge && (
           <div className="absolute top-1 left-1 z-[var(--z-card-action)] flex items-center gap-1">
             <PipelineFunnelButton property_id={r.property_id} />
             <CollectionSaveButton property_id={r.property_id} />
@@ -571,7 +566,7 @@ function Card({
       </ImageCarousel>
       <div className="p-2">
         <h3 className={`text-[0.78rem] leading-snug line-clamp-2 ${titleColor}`}>
-          {mergeMode ? (
+          {merge ? (
             title
           ) : (
             /* THE card's link, and the only one: `.stretched-link` (globals.css)
@@ -630,7 +625,7 @@ function Card({
             that runs an estimate or opens a run would be a second meaning for
             the same gesture. `.card-action` lifts it over the stretched link's
             ::after — without it the corner would be inert. */}
-        {r.category_main === 'byt' && r.sreality_id != null && !mergeMode && (
+        {r.category_main === 'byt' && r.sreality_id != null && !merge && (
           <div className="card-action mt-1 flex justify-end">
             <EstimateCorner
               srealityId={r.sreality_id}
@@ -641,16 +636,22 @@ function Card({
           </div>
         )}
       </div>
-      {mergeMode && (
-        /* The whole card is the checkbox's click target, exactly as it was when
-           the card was a role="button" — but expressed as a <label for>, so the
-           gesture is the browser's own and nothing has to preventDefault its way
-           out of a wrapper. Deliberately EMPTY: the checkbox is named by its
-           aria-label, which takes precedence over a <label> (HTML-AAM), so any
-           text here would be ignored — it is a hit target, not a name. Its
-           ::after is stopped by every control carrying --z-card-action, so the
-           carousel chevrons still page instead of selecting. */
-        <label htmlFor={selectId} className="stretched-link" />
+      {merge && (
+        /* The whole card is the button's click target, the way the card was a
+           role="button" once — expressed as `.stretched-link` on a real button,
+           so Space and Enter are the browser's own and nothing has to
+           preventDefault its way out of a wrapper. Its ::after is stopped by
+           every control carrying --z-card-action, so the carousel chevrons still
+           page instead of marking. The grid's key handler finds the card by the
+           id it carries. */
+        <button
+          ref={selectRef}
+          type="button"
+          data-property-id={r.property_id}
+          onClick={() => merge.stamp(r.property_id)}
+          aria-label={letter != null ? `Písmeno ${letter}: ${title}` : `Bez písmene: ${title}`}
+          className="stretched-link appearance-none border-0 bg-transparent p-0"
+        />
       )}
     </div>
   );

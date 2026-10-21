@@ -24,7 +24,7 @@
  * says how many "Různé" rulings it takes back, MS12). */
 
 import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import ErrorBanner from '@/components/ErrorBanner';
@@ -52,7 +52,6 @@ import {
 import {
   ApiError,
   getAutodedupRulings,
-  mergePropertySet,
   postAutodedupVerdict,
   type AutodedupMember,
   type AutodedupVerdictInput,
@@ -68,8 +67,8 @@ import {
 import { fmtAbsolute, fmtCount } from '@/lib/format';
 import { useListingPhotos } from '@/lib/hydration/useCardHydration';
 import { propertyPath } from '@/lib/listingUrl';
-import { mergedAdvertsKeys, pushMergeReceipt, refreshAfterSplit, splitPath } from '@/lib/mergedAdverts';
-import { useMergePreview } from '@/lib/useMergeProperties';
+import { mergedAdvertsKeys, splitPath } from '@/lib/mergedAdverts';
+import { useMergePreview, useMergeProperties } from '@/lib/useMergeProperties';
 import { fetchListingsForListingIds } from '@/lib/queries';
 import { ROUTES, withQuery } from '@/lib/routes';
 import type { ListingPublic } from '@/lib/types';
@@ -709,23 +708,19 @@ function CorrectionBar({
  * counted before the second click. Neither is a ruling of its own making. */
 function Consequence({ row }: { row: RulingPairRow }) {
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const [armed, setArmed] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const negative = NEGATIVE_VERDICTS.includes(row.verdict);
   const standing = row.status === 'standing' && row.property_lo != null && row.property_hi != null;
   const needsSplit = standing && negative && row.together_now;
   const needsMerge = standing && row.verdict === 'same' && !row.together_now;
-  const preview = useMergePreview(armed && needsMerge ? [row.property_lo!, row.property_hi!] : []);
-  const merge = useMutation({
-    mutationFn: () => mergePropertySet([row.property_lo!, row.property_hi!]),
-    onSuccess: (res) => {
-      pushMergeReceipt(res, (id) => navigate(ROUTES.property.build({ propertyId: id })));
-      setDone(`Sloučeno do #${res.survivor_id}.`);
-      setArmed(false);
-      refreshAfterSplit(qc);
-      qc.invalidateQueries({ queryKey: autodedupKeys.all });
-    },
+  /* The pair as a one-letter statement: the same merge Browse makes. */
+  const statement = { [row.property_lo ?? 0]: 'A', [row.property_hi ?? 0]: 'A' };
+  const preview = useMergePreview(armed && needsMerge ? statement : {});
+  const merge = useMergeProperties((res) => {
+    setDone(`Sloučeno do #${res.letters.A.survivor_id}.`);
+    setArmed(false);
+    qc.invalidateQueries({ queryKey: autodedupKeys.all });
   });
 
   if (!needsSplit && !needsMerge) return done ? <p className="mt-2 text-[0.75rem]">{done}</p> : null;
@@ -771,7 +766,7 @@ function Consequence({ row }: { row: RulingPairRow }) {
               autoFocus
               disabled={merge.isPending}
               aria-disabled={counting}
-              onClick={() => !counting && merge.mutate()}
+              onClick={() => !counting && merge.mutate(statement)}
               className={`rounded-[var(--radius-sm)] border border-[var(--color-ink-2)] px-3 py-1 text-[0.78rem] disabled:opacity-50 ${
                 counting ? 'opacity-50' : ''
               }`}

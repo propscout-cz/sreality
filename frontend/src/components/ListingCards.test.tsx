@@ -28,9 +28,11 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 
+import { useEffect } from 'react';
 import ListingCards from './ListingCards';
 import ListingTable from './ListingTable';
 import { CardHydrationProvider } from '@/lib/hydration';
+import { useMergeMode, type MergeMode } from '@/lib/useMergeMode';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
@@ -97,7 +99,7 @@ const ROW = {
    with a non-breaking space, and the anchors make this an equality test rather
    than a substring one. */
 const TITLE_RE = /^Byt na prodej · 2\+kk · 62\sm²$/;
-const SELECT_RE = /^Vybrat ke sloučení: Byt na prodej · 2\+kk · 62\sm²$/;
+const NO_LETTER_RE = /^Bez písmene: Byt na prodej · 2\+kk · 62\sm²$/;
 
 const ESTIMATE: ListingEstimate = {
   sreality_id: 900,
@@ -134,12 +136,31 @@ function LocationProbe() {
 }
 const locationNow = () => screen.getByTestId('loc').textContent;
 
+/* Merge mode as the grid reads it: the card's letter and the verbs a test
+   watches; the hook's own keys are proved through `renderMergeGrid` below. */
+function mergeMode(opts: { letter?: string | null; stamp?: (propertyId: number) => void }): MergeMode {
+  return {
+    active: true,
+    letters: opts.letter ? { 42: opts.letter } : {},
+    activeLetter: 'A',
+    groups: [],
+    complete: false,
+    enter: () => {},
+    exit: () => {},
+    stamp: opts.stamp ?? (() => {}),
+    mark: () => {},
+    clear: () => {},
+    setActiveLetter: () => {},
+    onKeyDown: () => {},
+  };
+}
+
 function renderGrid(
   opts: {
-    merge?: { selected: boolean };
-    onToggleSelect?: (propertyId: number) => void;
+    merge?: { letter?: string | null; stamp?: (propertyId: number) => void } | MergeMode;
     estimates?: Record<number, ListingEstimate>;
     row?: CardRow;
+    rows?: CardRow[];
     orderPortal?: string | null;
     coverTag?: CoverTag;
     onCoverTag?: (next: CoverTag) => void;
@@ -148,13 +169,14 @@ function renderGrid(
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  const merge = opts.merge == null ? null : 'active' in opts.merge ? opts.merge : mergeMode(opts.merge);
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <LocationProbe />
         <CardHydrationProvider listingIds={[111]} renders={{ photos: 50 }}>
           <ListingCards
-            rows={[opts.row ?? ROW]}
+            rows={opts.rows ?? [opts.row ?? ROW]}
             total={1}
             sort={{ field: 'last_seen_at', dir: 'desc' } as never}
             orderPortal={opts.orderPortal}
@@ -173,9 +195,7 @@ function renderGrid(
             onSort={() => {}}
             onClearFilters={() => {}}
             onClearBounds={() => {}}
-            mergeMode={opts.merge != null}
-            selectedPropertyIds={new Set(opts.merge?.selected ? [42] : [])}
-            onToggleSelect={opts.onToggleSelect ?? (() => {})}
+            merge={merge}
             estimates={opts.estimates}
             estimatingIds={new Set()}
             onEstimate={() => {}}
@@ -473,45 +493,157 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
 /* Merge mode used to swap the card's <Link> for a role="button" div carrying
  * aria-pressed, while DRAWING a checkbox that was pure decoration. The drawn
  * thing is now the real thing. */
-describe('<ListingCards> merge mode selects with a real checkbox', () => {
-  it('exposes a checkbox named by the listing it selects', () => {
-    renderGrid({ merge: { selected: false } });
+/* The grid under the REAL merge mode (lib/useMergeMode): the letters it holds
+   are rendered beside it, so a test reads the statement a key produced. */
+function MergeHarness({ rows }: { rows: CardRow[] }) {
+  const merge = useMergeMode();
+  useEffect(() => merge.enter(), [merge.enter]);
+  return (
+    <>
+      <span data-testid="letters">{JSON.stringify(merge.letters)}</span>
+      <span data-testid="active">{merge.activeLetter}</span>
+      <ListingCards
+        rows={rows}
+        total={rows.length}
+        sort={{ field: 'last_seen_at', dir: 'desc' } as never}
+        imageLarge={false}
+        coverTag="default"
+        onCoverTag={() => {}}
+        isLoading={false}
+        isFetchingNextPage={false}
+        hasNextPage={false}
+        onReachEnd={() => {}}
+        restorationKey="test"
+        hasFilters={false}
+        hasBounds={false}
+        hoveredIds={new Set()}
+        onHover={() => {}}
+        onSort={() => {}}
+        onClearFilters={() => {}}
+        onClearBounds={() => {}}
+        merge={merge.active ? merge : null}
+        estimates={undefined}
+        estimatingIds={new Set()}
+        onEstimate={() => {}}
+      />
+    </>
+  );
+}
+const ROW_2 = { ...ROW, property_id: 43, listing_id: 112, sreality_id: 901 } as CardRow;
+function renderMergeGrid(rows: CardRow[] = [ROW, ROW_2]) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <CardHydrationProvider listingIds={rows.map((r) => r.listing_id)} renders={{ photos: 50 }}>
+          <MergeHarness rows={rows} />
+        </CardHydrationProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  return {
+    letters: () => JSON.parse(screen.getByTestId('letters').textContent ?? '{}') as Record<string, string>,
+    active: () => screen.getByTestId('active').textContent,
+    cardButtons: () => screen.getAllByRole('button', { name: /^(Bez písmene|Písmeno [A-Z]):/ }),
+  };
+}
 
-    const box = screen.getByRole('checkbox', { name: /^Vybrat ke sloučení/ });
-    expect(box).toHaveAccessibleName(SELECT_RE);
-    expect(box).not.toBeChecked();
+describe('<ListingCards> merge mode marks cards with letters', () => {
+  it('exposes one button per card, named by the listing and its letter', () => {
+    renderGrid({ merge: { letter: null } });
+    expect(screen.getByRole('button', { name: /^Bez písmene/ })).toHaveAccessibleName(NO_LETTER_RE);
+    renderGrid({ merge: { letter: 'B' } });
+    expect(screen.getByRole('button', { name: /^Písmeno B: Byt na prodej/ })).toBeInTheDocument();
   });
 
-  it('carries the selection as real checked state', () => {
-    renderGrid({ merge: { selected: true } });
-
-    expect(screen.getByRole('checkbox', { name: /^Vybrat ke sloučení/ })).toBeChecked();
-  });
-
-  it('toggles on Space', async () => {
-    const onToggleSelect = vi.fn();
+  it('a click, Space or Enter writes the active letter', async () => {
+    const stamp = vi.fn();
     const user = userEvent.setup();
-    renderGrid({ merge: { selected: false }, onToggleSelect });
-
-    const box = screen.getByRole('checkbox', { name: /^Vybrat ke sloučení/ });
-    box.focus();
+    renderGrid({ merge: { letter: null, stamp } });
+    const card = screen.getByRole('button', { name: /^Bez písmene/ });
+    fireEvent.click(card);
+    card.focus();
     await user.keyboard(' ');
+    await user.keyboard('{Enter}');
+    expect(stamp.mock.calls).toEqual([[42], [42], [42]]);
+  });
 
-    expect(onToggleSelect).toHaveBeenCalledWith(42);
+  it('a letter key marks the focused card and becomes the active letter; the same letter again, Backspace and Delete clear it', async () => {
+    const user = userEvent.setup();
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    first.focus();
+    await user.keyboard('b');
+    expect(grid.letters()).toEqual({ 42: 'B' });
+    expect(grid.active()).toBe('B');
+    expect(first).toHaveAccessibleName(/^Písmeno B:/);
+    second.focus();
+    await user.keyboard('b');
+    expect(grid.letters()).toEqual({ 42: 'B', 43: 'B' });
+    await user.keyboard('b');
+    expect(grid.letters()).toEqual({ 42: 'B' });
+    await user.keyboard('c');
+    expect(grid.letters()).toEqual({ 42: 'B', 43: 'C' });
+    await user.keyboard('{Backspace}');
+    expect(grid.letters()).toEqual({ 42: 'B' });
+    first.focus();
+    await user.keyboard('{Delete}');
+    expect(grid.letters()).toEqual({});
+  });
+
+  it('a click writes the letter the last key made active, and the same letter again clears', async () => {
+    const user = userEvent.setup();
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    first.focus();
+    await user.keyboard('c');
+    fireEvent.click(second);
+    expect(grid.letters()).toEqual({ 42: 'C', 43: 'C' });
+    fireEvent.click(second);
+    expect(grid.letters()).toEqual({ 42: 'C' });
+  });
+
+  it('the pointer focuses the card it is over, so keys and Tab share one target', () => {
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    fireEvent.mouseEnter(second.parentElement!);
+    expect(second).toHaveFocus();
+    fireEvent.mouseEnter(first.parentElement!);
+    expect(first).toHaveFocus();
+  });
+
+  it('Tab moves card to card past the chevrons, and ← → page the focused card’s photos', async () => {
+    withPhotos();
+    const user = userEvent.setup();
+    const grid = renderMergeGrid();
+    const [first, second] = grid.cardButtons();
+    const next = await screen.findByRole('button', { name: 'Next photo' });
+    expect(next).toHaveAttribute('tabindex', '-1');
+    first.focus();
+    await user.tab();
+    expect(second).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(first).toHaveFocus();
+    expect(screen.getByText(counterIs('1 / 2'))).toBeInTheDocument();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByText(counterIs('2 / 2'))).toBeInTheDocument();
+    await user.keyboard('{ArrowLeft}');
+    expect(screen.getByText(counterIs('1 / 2'))).toBeInTheDocument();
+    expect(grid.letters()).toEqual({});
   });
 
   /* One meaning per click at any moment (TagContentsGallery's rule): in merge
-     mode a click selects, so there is no listing link and no estimate control
+     mode a click marks, so there is no listing link and no estimate control
      competing for the same gesture. */
-  it('offers no link and no estimate corner while selecting', () => {
-    renderGrid({ merge: { selected: false } });
+  it('offers no link and no estimate corner while marking', () => {
+    renderGrid({ merge: { letter: null } });
 
     expect(screen.queryByRole('link')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Odhad' })).toBeNull();
   });
 
   it('has no interactive element nested inside another', () => {
-    const { container } = renderGrid({ merge: { selected: true } });
+    const { container } = renderGrid({ merge: { letter: 'A' } });
 
     expectNoNestedInteractive(container);
   });
@@ -628,7 +760,7 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
   });
 
   it('shows the stage, collection, dismissal and note marks and none of the verbs', async () => {
-    const { container } = renderGrid({ merge: { selected: false } });
+    const { container } = renderGrid({ merge: { letter: null } });
     for (const mark of ['V pipeline: Prověřit', 'V kolekci', 'Skryto', 'Poznámky: 3']) {
       expect(await screen.findByText(mark)).toBeInTheDocument();
     }
@@ -676,17 +808,14 @@ describe('<ListingCards> merge mode keeps the marks, read-only', () => {
 });
 
 describe('<ListingCards> merge mode with a multi-photo card', () => {
-  it('keeps the checkbox named and lets a chevron page without selecting', async () => {
+  it('keeps the card button named and lets a chevron page without marking', async () => {
     withPhotos();
-    const onToggleSelect = vi.fn();
-    renderGrid({ merge: { selected: false }, onToggleSelect });
-    const box = await screen.findByRole('checkbox');
-    expect(box).toHaveAccessibleName(/Vybrat ke sloučení/);
-    const next = screen.queryByRole('button', { name: /Další|Next|další/i });
-    if (next) {
-      fireEvent.click(next);
-      expect(onToggleSelect).not.toHaveBeenCalled();
-    }
+    const stamp = vi.fn();
+    renderGrid({ merge: { letter: null, stamp } });
+    expect(screen.getByRole('button', { name: /^Bez písmene/ })).toHaveAccessibleName(NO_LETTER_RE);
+    fireEvent.click(await screen.findByRole('button', { name: 'Next photo' }));
+    expect(screen.getByText(counterIs('2 / 2'))).toBeInTheDocument();
+    expect(stamp).not.toHaveBeenCalled();
   });
 });
 

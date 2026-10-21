@@ -89,9 +89,12 @@ Taking one or more ads out of a property, into another property or into a new on
 _Avoid_: unmerge, detach, undo, separate
 
 **Letter**:
-In a split, the mark the user gives each ad; ads with the same letter are one property afterwards;
-one letter keeps the property's number and page.
-_Avoid_: unit, part, side, group
+The mark the user gives each item of a statement; items with the same letter are one property
+afterwards. In a split, every ad of one property gets a letter and one letter keeps the property's
+number and page. In Browse's merge mode, each card (a property) the user marks gets a letter and one
+click merges every letter into its oldest property; a letter says nothing about the cards it does not
+hold, and the letters are forgotten when the mode closes.
+_Avoid_: unit, part, side, group, selection, tick
 
 **Survivor**:
 The property that keeps its identity: after a merge, the one that remains; after a split, the one

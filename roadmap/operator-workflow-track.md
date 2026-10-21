@@ -7,6 +7,18 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-MERGE-LETTERS: merge mode as one statement of letters (built 2026-10-21; merges in the window)
+- **Done (no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
+  card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
+  a click writes the active letter (A at first, so click-click-merge still makes one group), the same
+  letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
+  `POST /properties/merge {letters: {property_id: "A"}}`, the split's statement shape and codec, over
+  `toolkit.property_identity.merge_letters` (shared with the split's join; each letter its own group,
+  letters in order of their lowest id; a refusal names the letter and writes nothing); one receipt per
+  letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
+  D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
+- **Owed:** the first real multi-letter merge in production (a read-only browser check of the keys).
+
 ### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
 The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;

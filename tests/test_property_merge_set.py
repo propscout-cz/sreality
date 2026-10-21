@@ -324,7 +324,8 @@ def test_an_operator_merge_takes_back_every_different_between_its_members():
     db.rule(30, 31, "same_building_different_unit")
     db.rule_set(500, [31, 70], "different")
     db.rule_set(501, [30, 31], "different")
-    assert pi.merge_preview(db, [7, 3]) == {"property_ids": [3, 7], "rulings_taken_back": 2}
+    assert pi.merge_preview(db, {7: "A", 3: "A"}) == {"letters": {"A": {
+        "property_ids": [3, 7], "rulings_taken_back": 2}}}
     out = _merge(db, [3, 7], source="operator", decided_by=OP)
     note = f"operator merge {out['merge_group_id']}"
     assert (out["pairs_ruled_same"], out["rulings_taken_back"]) == (2, 2)
@@ -462,3 +463,49 @@ def test_the_copy_rules_only_live_operator_merges_same_and_is_idempotent():
     ):
         assert fragment in code, fragment
     assert not re.search(r"\b(update|delete from|drop|truncate)\b", code), "additive only"
+
+
+def test_a_statement_of_letters_is_one_transaction_in_lowest_id_order():
+    """Two letters, two groups, two survivors, ONE transaction; B holds the lowest id, so it is
+    merged (and locked) first — the one lock order over any two statements."""
+    db = _Ledger({10: 1, 20: 2, 30: 3, 40: 4})
+    out = pi.merge_letters(db, {3: "A", 4: "A", 1: "B", 2: "B"}, decided_by=OP)
+    assert {k: (v["survivor_id"], v["retired_ids"]) for k, v in out.items()} == {
+        "B": (1, [2]), "A": (3, [4])}
+    assert list(out) == ["B", "A"]
+    assert len({v["merge_group_id"] for v in out.values()}) == 2
+    assert db.listings == {10: 1, 20: 1, 30: 3, 40: 3}
+    locks = [p["ids"] for s, p in db.log if s.startswith("SELECT id, status, first_seen_at")]
+    assert locks == [[1, 2], [3, 4]]
+    assert db.changed == [[1, 2], [3, 4]]
+    assert [s for s, _p in db.log if s == "rollback"] == []
+
+
+def test_a_refusal_in_one_letter_writes_nothing_of_the_others():
+    db = _Ledger({10: 1, 20: 2, 30: 3, 40: 4},
+                 ad_cats={30: ("prodej", "byt"), 40: ("prodej", "dum")})
+    with pytest.raises(CategoryClash):
+        pi.merge_letters(db, {1: "A", 2: "A", 3: "B", 4: "B"}, decided_by=OP)
+    assert db.listings == {10: 1, 20: 2, 30: 3, 40: 4}
+    assert db.changed == []
+
+
+def test_a_lone_letter_merges_nothing_and_no_ruling_crosses_letters():
+    db = _Ledger({10: 1, 20: 2, 30: 3}, canonical={1: 10, 2: 20, 3: 30})
+    out = pi.merge_letters(db, {1: "A", 2: "A", 3: "B"}, decided_by=OP)
+    assert list(out) == ["A"] and db.listings == {10: 1, 20: 1, 30: 3}
+    assert [(r["listing_lo"], r["listing_hi"], r["verdict"]) for r in _appended(db)] == [
+        (10, 20, "same")]
+
+
+def test_letter_sets_and_letter_tokens_are_the_one_codec():
+    assert pi.letter_sets({"7": "A", 3: "B", 5: "A"}) == [("B", [3]), ("A", [5, 7])]
+    assert pi.letter_tokens("7:A, 3:B,5:A") == {7: "A", 3: "B", 5: "A"}
+    for bad in ({1: "a"}, {1: "AB"}, {1: 1}):
+        with pytest.raises(pi.BadLetters):
+            pi.letter_sets(bad)
+    with pytest.raises(pi.BadLetters) as twice:
+        pi.letter_tokens("1:A,1:B")
+    assert twice.value.ids == [1]
+    with pytest.raises(pi.BadLetters):
+        pi.letter_tokens("x:A")
