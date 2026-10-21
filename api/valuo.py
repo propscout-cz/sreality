@@ -198,10 +198,9 @@ DUPLICATE = {"code": "duplicate", "http_status": None, "message": "StejnÃ© ocenÄ
 
 RESULT_KEYS = ("avg_price", "range_price", "avg_price_m2", "range_price_m2", "std_price_m2", "calc_area",
                "distance", "flags")  # range_price = Valuo's confidence band; min/max_price are not it
-RECORD_KEYS = ("id", "place", "lat", "lon", "local_type", "calc_area", "lot_area", "floor", "total_floors", "rating",
-               "new_building", "kind", "property_type", "price", "price_m2", "sale_price", "adjusted_price",
-               "adjusted_price_m2", "distance", "score_prct", "days", "first_seen_at", "last_seen_at")
-SUMMARY_KEYS = ("avg_distance", "avg_age", "avg_duration", "avg_score", "distance", "age")
+RECORD_KEYS = ("id", "place", "local_type", "calc_area", "price", "price_m2", "sale_price", "adjusted_price",
+               "adjusted_price_m2", "distance", "score_prct", "days")  # what the page reads; the rest stays in `response`
+SUMMARY_KEYS = ("avg_distance", "avg_score", "distance", "age")
 ADVERT_LIMIT = 10  # comparables whose photos are asked for, in Valuo's order: one advert/detail call per valuation
 PHOTO_LIMIT = 12
 PHOTO_URL = "https://pics.valuo.cz/{size}/{path}"  # pt = 450 px, p = 1200 px; public, no token

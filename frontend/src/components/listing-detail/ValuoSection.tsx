@@ -26,8 +26,9 @@ import { mfShape } from '@/lib/mfReference';
 import { useEstimationRuns, type PropertyPublic } from '@/lib/queries';
 import { bareImage, type EstimationRun } from '@/lib/types';
 import {
-  band, formErrors, missingRequired, optionLabel, reliability, shownPerM2, shownPrice, useNewValuation, useValuoPage, withEdit,
-  type NewValuation, type Provenance, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoRecord,
+  BAND_FROM, MIN_KEPT, band, formErrors, isOwnAd, missingRequired, optionLabel, recalc, recalcBase, reliability, shownPerM2,
+  shownPrice, useNewValuation, useValuoPage, withEdit,
+  type NewValuation, type Provenance, type RecalcBase, type Valuation, type ValuoField, type ValuoIssue, type ValuoPage, type ValuoRecord,
   type ValuoValue, type ValuoValues,
 } from '@/lib/valuo';
 
@@ -57,9 +58,10 @@ const PerM2 = ({ v, className }: { v: Valuation; className?: string }) => {
 const ENVIRONMENT: Record<Valuation['environment'], string> = { sandbox: 'sandbox', production: 'ostré' };
 const BRICK = 'text-[0.75rem] text-[var(--color-brick)]';
 
-export default function ValuoSection({ property, listingIds, readOnly = false, bare = false }: {
+export default function ValuoSection({ property, listingIds, adUrls = [], readOnly = false, bare = false }: {
   property: PropertyPublic;
   listingIds: number[];
+  adUrls?: readonly (string | null)[]; // every ad of the property, delisted ones too: Valuo's own-ad match runs over them
   readOnly?: boolean;
   bare?: boolean;
 }) {
@@ -107,7 +109,7 @@ export default function ValuoSection({ property, listingIds, readOnly = false, b
           <>
             <ValuoCard valuation={shown} page={page} property={property} runs={runsQ.data?.data ?? []}
               onEdit={canValue ? () => setEditing(true) : undefined} />
-            {!readOnly && <Comparables key={shown.id} valuation={shown} fields={page.fields} />}
+            {!readOnly && <Comparables key={shown.id} valuation={shown} fields={page.fields} adUrls={adUrls} />}
           </>
         ) : !page.refusal && (
           <EstimateCard tone="absent" eyebrow="Ocenění Valuo" className="flex flex-col items-start gap-2">
@@ -242,37 +244,92 @@ const NUM = 'font-mono tabular-nums whitespace-nowrap';
 /* A shade on the box's right edge while columns sit past it (below ~1024 px): the paper cover rides with the content
  * (local) and hides the edge's shade (scroll) once the last column is in view, or when nothing overflows. */
 const SCROLL_HINT = '[background:linear-gradient(var(--color-paper),var(--color-paper))_right/1.5rem_100%_no-repeat_local,linear-gradient(to_left,var(--color-rule-strong),transparent)_right/1rem_100%_no-repeat_scroll]';
-const SOLD = (
-  <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)"
-    className={`block font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>prodáno</span>
-);
+const TAG = `block font-sans text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`;
+const SOLD = <span title="Realizovaná prodejní cena (ČÚZK / realitní kanceláře)" className={TAG}>prodáno</span>;
+const OWN = <span title="Inzerát této nemovitosti: Valuo ho započítalo mezi srovnání" className={TAG}>tento inzerát</span>;
+
+/* Our figure over the comparables left ticked, beside Valuo's card and labelled ours. It keeps one height in every state
+ * (a sentence, a figure, a figure with its band) so the table below never jumps under the cursor. */
+function Recalculation({ valuation: v, base, kept, count, onReset }: {
+  valuation: Valuation; base: RecalcBase; kept: readonly ValuoRecord[]; count: number; onReset: (() => void) | undefined;
+}) {
+  const basis = ppm2BasisFromToken(v.ppm2_basis);
+  const lease = isLease(v);
+  const mine = kept.length >= MIN_KEPT ? recalc(kept) : null;
+  const delta = mine ? (mine.avg / base.ref - 1) * 100 : 0;
+  const [low, high] = mine ? [mine.avg - mine.std, mine.avg + mine.std] : [0, 0];
+  const shown = (perM2: number) => shownPrice(Math.round(perM2 * base.area), lease);
+  return (
+    <EstimateCard tone="ours" eyebrow={`Náš přepočet · ${kept.length} z ${count} srovnání`} className="mb-4 min-h-[8.5rem]"
+      aside={<button type="button" onClick={onReset} disabled={!onReset} className={QUIET}>Vrátit výchozí</button>}>
+      {mine == null ? (
+        <p className={`mt-2 text-sm ${INK3}`}>Pro přepočet ponechte alespoň {MIN_KEPT} srovnání</p>
+      ) : (
+        <>
+          <div className="mt-1 flex items-baseline justify-between gap-3">
+            <Price value={Math.round(mine.avg * base.area)} lease={lease} className="text-lg font-medium font-mono tabular-nums" />
+            <span title={fmtMeasuredPricePerM2(mine.avg, basis)} className={`text-[0.72rem] font-mono tabular-nums ${INK3}`}>
+              {fmtMeasuredPricePerM2(shownPerM2(mine.avg, lease), basis)}
+            </span>
+          </div>
+          <p className="mt-0.5 text-[0.8rem] text-[var(--color-ink-2)]">
+            {Math.abs(delta) < 0.05 ? 'stejně jako Valuo' : `o ${fmtPct(Math.abs(delta))} ${delta > 0 ? 'nad' : 'pod'} Valuo`}
+            {kept.length < BAND_FROM && <span title="Z méně než pěti srovnání, bez pásma" className={`ml-2 text-[0.58rem] tracking-[0.16em] uppercase ${INK3}`}>orientační</span>}
+          </p>
+          {kept.length >= BAND_FROM && (
+            <dl className="mt-1 text-[0.72rem] font-mono tabular-nums">
+              <CardRow label="pásmo">
+                <span title={`Průměr ± jedna směrodatná odchylka srovnání; za m²: ${fmtCount(low)}–${fmtMeasuredPricePerM2(high, basis)}`}>
+                  {fmtCount(shown(low))}–{fmtCzk(shown(high))}{lease && <PerMonth />}
+                </span>
+              </CardRow>
+            </dl>
+          )}
+        </>
+      )}
+    </EstimateCard>
+  );
+}
 
 /* Valuo's comparables under its card, in Valuo's order; every per-m² figure names its own unit (rule 23). Fits a 1024 px
- * page without a sideways scroll, so a tag sits under its figure, never beside it; the phone card leaves them out. */
-function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: readonly ValuoField[] }) {
+ * page without a sideways scroll, so a tag sits under its figure, never beside it; the phone card leaves them out. While
+ * our recalculation is offered each row has a tick: page state only, forgotten by a reload or another history row. */
+function Comparables({ valuation: v, fields, adUrls }: {
+  valuation: Valuation; fields: readonly ValuoField[]; adUrls: readonly (string | null)[];
+}) {
   const [opened, setOpened] = useState<ValuoRecord | null>(null);
   const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
+  const [dropped, setDropped] = useState<ReadonlySet<number>>(() => new Set());
   const records = v.records ?? [];
   if (records.length === 0) return null;
+  const base = recalcBase(v);
   const basis = ppm2BasisFromToken(v.ppm2_basis);
   const lease = basis === 'rent';
   const czk = (n: number | null) => <>{fmtCzk(n)}{lease && n != null && <PerMonth />}</>;
+  const toggle = (i: number) => setDropped((d) => { const next = new Set(d); if (!next.delete(i)) next.add(i); return next; });
   // The advert detail's shape is unseen in production yet: only a string reads as an address.
   const address = (r: ValuoRecord) => (typeof r.address === 'string' && r.address !== '' ? r.address : r.place);
+  const photo = (r: ValuoRecord, i: number) => (r.photos?.[0] && !broken.has(i) ? (
+    <button type="button" onClick={() => setOpened(r)}
+      aria-label={`Fotografie (${r.photos?.length ?? 0}): ${address(r) ?? 'srovnání'}`}
+      className="block h-[3.375rem] w-[4.5rem] overflow-hidden rounded-[var(--radius-xs)] bg-[var(--color-inset)]">
+      <img src={r.photos[0].thumb} alt={address(r) ?? 'Fotka srovnání'} loading="lazy" decoding="async"
+        onError={() => setBroken((b) => new Set(b).add(i))} className="block h-full w-full object-cover" />
+    </button>
+  ) : <span aria-hidden className={NO_PHOTO} />);
   const columns: Column<ValuoRecord>[] = [
-    { header: 'Foto', cell: (r, i) => (r.photos?.[0] && !broken.has(i) ? (
-      <button type="button" onClick={() => setOpened(r)}
-        aria-label={`Fotografie (${r.photos?.length ?? 0}): ${address(r) ?? 'srovnání'}`}
-        className="block h-[3.375rem] w-[4.5rem] overflow-hidden rounded-[var(--radius-xs)] bg-[var(--color-inset)]">
-        <img src={r.photos[0].thumb} alt={address(r) ?? 'Fotka srovnání'} loading="lazy" decoding="async"
-          onError={() => setBroken((b) => new Set(b).add(i))} className="block h-full w-full object-cover" />
-      </button>
-    ) : <span aria-hidden className={NO_PHOTO} />) },
+    { header: 'Foto', cell: (r, i) => (base == null ? photo(r, i) : (
+      <div className="flex items-center gap-2">
+        <input type="checkbox" checked={!dropped.has(i)} onChange={() => toggle(i)}
+          aria-label={`Zahrnout do přepočtu: ${address(r) ?? 'srovnání'}`} className="h-4 w-4 shrink-0 accent-[var(--color-copper)]" />
+        {photo(r, i)}
+      </div>
+    )) },
     { header: 'Adresa', className: 'text-[var(--color-ink)]', cell: (r) => {
       const href = webUrl(r.advert_url);
       const text = address(r) ?? (href ? 'Inzerát' : '—');
       const link = href ? <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline underline-offset-2">{text}</a> : text;
-      return <span title={text} className="w-[12rem] line-clamp-2">{link}</span>;
+      return <><span title={text} className="w-[12rem] line-clamp-2">{link}</span>{base && isOwnAd(r, adUrls) && OWN}</>;
     } },
     { header: 'Velikost', className: 'whitespace-nowrap font-mono tabular-nums text-[var(--color-ink-2)]', cell: (r) => (
       // 4ch holds every layout Valuo names ("2+kk", "Jiná"), so the area starts at one x down the column.
@@ -281,16 +338,22 @@ function Comparables({ valuation: v, fields }: { valuation: Valuation; fields: r
     { header: 'Cena', align: 'right', className: `${NUM} text-[var(--color-ink)]`, cell: (r) => (
       <>{czk(r.price)}<span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</span>{r.sale_price && SOLD}</>
     ) },
-    { header: 'Upravená', align: 'right', className: `${NUM} text-[var(--color-ink)]`, cell: (r) => czk(r.adjusted_price) },
+    { header: 'Upravená', align: 'right', className: `${NUM} text-[var(--color-ink)]`, cell: (r) => (
+      // The per-m² our figure is built from, shown only where the figure is offered.
+      <>{czk(r.adjusted_price)}{base && <span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.adjusted_price_m2, basis)}</span>}</>
+    ) },
     { header: 'Vzdálenost', align: 'right', className: `${NUM} text-[var(--color-ink-2)]`, cell: (r) => fmtDistanceM(r.distance) },
     { header: 'Shoda', align: 'right', className: `${NUM} text-[var(--color-ink-2)]`, cell: (r) => fmtPct(r.score_prct, { digits: 0 }) },
     { header: 'V\u00a0inzerci', align: 'right', className: `${NUM} text-[var(--color-ink-2)]`, cell: (r) => fmtTomDays(r.days) },
   ];
   return (
     <div className="pt-3">
+      {base && <Recalculation valuation={v} base={base} kept={records.filter((_, i) => !dropped.has(i))} count={records.length}
+        onReset={dropped.size > 0 ? () => setDropped(new Set()) : undefined} />}
       <SectionLabel>
         Srovnávací nemovitosti · <span className="font-mono tabular-nums tracking-normal">{records.length}</span>
       </SectionLabel>
+      {base && <p className={`mt-1 text-[0.8rem] ${INK3}`}>Odškrtněte srovnání a přepočítáme odhad z ostatních.</p>}
       <div className={`mt-3 min-w-0 overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)] ${SCROLL_HINT}`}>
         <table aria-label="Srovnávací nemovitosti Valuo" className="w-full text-sm">
           <thead className="bg-[var(--color-paper-2)] border-b border-[var(--color-rule)]">

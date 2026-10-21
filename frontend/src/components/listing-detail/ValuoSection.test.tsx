@@ -79,7 +79,7 @@ const SALE: Valuation = {
     avg_price_m2: 111_937, range_price_m2: [103_540, 120_870], std_price_m2: 7_200, calc_area: 54.5, flags: [],
   } as Valuation['result'],
   summary: {
-    count: 12, avg_distance: 406, avg_age: 30, avg_duration: 21, avg_score: 0.8, distance: 2000, age: 90, not_enough: false,
+    count: 12, avg_distance: 406, avg_score: 0.8, distance: 2000, age: 90, not_enough: false,
   },
   kind_label: 'Prodej',
   error: null,
@@ -99,10 +99,9 @@ const REFUSED: Valuation = {
 };
 
 const record = (over: Partial<ValuoRecord>): ValuoRecord => ({
-  id: 'r1', place: 'Testovací 148, Sandboxov', lat: 50.07, lon: 14.43, local_type: '2+kk', calc_area: 52,
-  lot_area: null, floor: 2, total_floors: 5, rating: 'good', new_building: false, kind: 'sale', property_type: 'flat',
+  id: 'r1', place: 'Testovací 148, Sandboxov', local_type: '2+kk', calc_area: 52,
   price: 5_900_000, price_m2: 113_462, sale_price: true, adjusted_price: 6_050_000, adjusted_price_m2: 116_346,
-  distance: 350, score_prct: 87, days: 41, first_seen_at: '2026-08-01', last_seen_at: '2026-09-10',
+  distance: 350, score_prct: 87, days: 41,
   address: 'Testovací 148, Sandboxov', advert_url: 'https://www.example.test/inzerat/r1',
   photos: [{ thumb: 'https://pics.valuo.cz/pt/a/1.jpg', full: 'https://pics.valuo.cz/p/a/1.jpg' },
            { thumb: 'https://pics.valuo.cz/pt/a/2.jpg', full: 'https://pics.valuo.cz/p/a/2.jpg' }],
@@ -137,14 +136,16 @@ const PROPERTY = {
   mf_reference_rent: { monthly_rent_czk: 19_000 },
 } as unknown as PropertyPublic;
 
-function renderSection(p: ValuoPage | Error, { readOnly = false, runs }: { readOnly?: boolean; runs?: EstimationRun[] } = {}) {
+function renderSection(p: ValuoPage | Error, { readOnly = false, runs, adUrls }: {
+  readOnly?: boolean; runs?: EstimationRun[]; adUrls?: (string | null)[];
+} = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (runs) qc.setQueryData(estimationKeys.byListing([11]), { data: runs, total: runs.length });
   if (p instanceof Error) vi.mocked(apiGet).mockRejectedValue(p);
   else vi.mocked(apiGet).mockResolvedValue(p);
   return render(
     <QueryClientProvider client={qc}>
-      <ValuoSection property={PROPERTY} listingIds={[11]} readOnly={readOnly} />
+      <ValuoSection property={PROPERTY} listingIds={[11]} adUrls={adUrls} readOnly={readOnly} />
     </QueryClientProvider>,
   );
 }
@@ -599,5 +600,194 @@ describe('<ValuoSection> states', () => {
     const { container } = renderSection(page({ history: [] }), { readOnly: true });
     await waitFor(() => expect(apiGet).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+/* Our recalculation: the comparables are real answers' numbers (no address, link or id), so Valuo's own average is the
+ * one the recipe reproduces and the tick boxes are offered. */
+const FLAT_ROWS: [number, number][] = [
+  [123029, 89], [121000, 84], [120820, 80], [111774, 80], [117808, 80], [117799, 77], [110070, 75], [110395, 74],
+];
+const LEASE_ROWS: [number, number][] = [
+  [380, 85], [343, 79], [382, 78], [365, 77], [353, 77], [365, 76], [423, 74], [412, 74],
+];
+const comparables = (rows: [number, number][], advertUrl?: (i: number) => string | undefined) => rows.map(([adjusted_price_m2, score_prct], i) =>
+  record({ id: `c${i + 1}`, place: `Srovnání ${i + 1}`, address: `Srovnání ${i + 1}`, adjusted_price_m2, score_prct,
+           sale_price: false, advert_url: advertUrl?.(i), photos: undefined }));
+const FLAT: Valuation = {
+  ...SALE, id: 20, records: comparables(FLAT_ROWS),
+  result: { ...SALE.result!, avg_price: 7_702_860, avg_price_m2: 116_710, std_price_m2: 4_847, calc_area: 66,
+            range_price: [7_381_000, 8_023_000], range_price_m2: [111_863, 121_557] },
+};
+const LEASE: Valuation = {
+  ...FLAT, id: 21, request: { ...SALE.request, kind: 'lease' }, kind_label: 'Pronájem', ppm2_basis: 'rent_monthly_czk_m2',
+  records: comparables(LEASE_ROWS),
+  result: { ...FLAT.result!, avg_price: 18_850, avg_price_m2: 377, std_price_m2: 25, calc_area: 50,
+            range_price: [17_600, 20_100], range_price_m2: [352, 402] },
+};
+const box = (n: number) => screen.getByRole('checkbox', { name: `Zahrnout do přepočtu: Srovnání ${n}` });
+const boxes = () => screen.getAllByRole('checkbox');
+const card = () => screen.getByText(/^Náš přepočet/).closest('[class*="min-h-"]') as HTMLElement;
+const untick = (...ns: number[]) => ns.forEach((n) => fireEvent.click(box(n)));
+const SALE_KEPT = (n: string) => t(`Náš přepočet · ${n} z 8 srovnání`);
+
+describe('<ValuoSection> our recalculation', () => {
+  it('opens identical to Valuo: every comparable ticked, a hint above, Valuo card and band untouched', async () => {
+    renderSection(page({ history: [FLAT] }));
+    expect(await screen.findByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(boxes()).toHaveLength(8);
+    expect(boxes().every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getByText('Odškrtněte srovnání a přepočítáme odhad z ostatních.')).toBeInTheDocument();
+    // Our figure at 8 of 8 is Valuo's own to within its rounding: 116 708 x 66, shown to 10 000 Kč like Valuo's card.
+    const ours = within(card());
+    expect(ours.getByText(t(fmtCzk(7_700_000)))).toHaveAttribute('title', fmtCzk(7_702_728));
+    expect(ours.getByText(t(fmtMeasuredPricePerM2(116_700, 'sale')))).toHaveAttribute('title', fmtMeasuredPricePerM2(116_708, 'sale'));
+    expect(ours.getByText('stejně jako Valuo')).toBeInTheDocument();
+    expect(screen.getByText('Odhad ceny · Valuo')).toBeInTheDocument();
+    expect(screen.getByText('pásmo spolehlivosti (Valuo)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vrátit výchozí' })).toBeDisabled();
+  });
+
+  it('puts the adjusted price per m² under the adjusted price: the number our figure is built from', async () => {
+    renderSection(page({ history: [FLAT] }));
+    await screen.findByText(t(SALE_KEPT('8')));
+    const first = within(screen.getAllByRole('row')[1]);
+    expect(first.getByText(t(fmtMeasuredPricePerM2(123_029, 'sale')))).toBeInTheDocument();
+    expect(screen.getAllByRole('row')[1]).toHaveTextContent(t(`${fmtCzk(6_050_000)}${fmtMeasuredPricePerM2(123_029, 'sale')}`));
+  });
+
+  it('recomputes from the comparables left ticked, against Valuo, with the band from five on', async () => {
+    renderSection(page({ history: [FLAT] }));
+    await screen.findByText(t(SALE_KEPT('8')));
+    untick(1);
+    // 116 717 / 4 453 over the other seven: 7 637 322 Kč, 0,85 % under Valuo's 116 710.
+    expect(screen.getByText(t(SALE_KEPT('7')))).toBeInTheDocument();
+    const ours = within(card());
+    expect(ours.getByText(t(fmtCzk(7_640_000)))).toHaveAttribute('title', fmtCzk(7_637_322));
+    expect(ours.getByText(t(fmtMeasuredPricePerM2(115_700, 'sale')))).toBeInTheDocument();
+    expect(ours.getByText(t(`o ${fmtPct(0.8508)} pod Valuo`))).toBeInTheDocument();
+    // The band is one standard deviation each way: 111 264 to 120 170 Kč/m², times Valuo's 66 m².
+    const band = ours.getByText('pásmo').parentElement!;
+    expect(band).toHaveTextContent(t(`${fmtCount(7_340_000)}–${fmtCzk(7_930_000)}`));
+    expect(within(band).getByTitle(/Průměr ± jedna směrodatná odchylka/)).toHaveAttribute(
+      'title', expect.stringContaining(`${fmtCount(111_264)}–${fmtMeasuredPricePerM2(120_170, 'sale')}`));
+    expect(ours.queryByText('orientační')).not.toBeInTheDocument();
+    expect(box(2)).toBeChecked();
+    expect(box(1)).not.toBeChecked();
+    // Valuo's card did not move.
+    expect(screen.getByText(t(fmtCzk(7_700_000)), { selector: 'span[title]' })).toBeInTheDocument();
+    expect(screen.getByText('pásmo spolehlivosti (Valuo)')).toBeInTheDocument();
+  });
+
+  it('marks 3 or 4 kept as orientační with no band, and asks for 3 below that, at one fixed card height', async () => {
+    const { container } = renderSection(page({ history: [FLAT] }));
+    await screen.findByText(t(SALE_KEPT('8')));
+    const height = card().className.match(/min-h-\[[^\]]+\]/)![0];
+    expect(container.querySelectorAll(`[class*="${height}"]`)).toHaveLength(1);
+    untick(1, 2, 3);
+    expect(screen.getByText(t(SALE_KEPT('5')))).toBeInTheDocument(); // five is the first with a band
+    expect(within(card()).getByText('pásmo')).toBeInTheDocument();
+    expect(within(card()).queryByText('orientační')).not.toBeInTheDocument();
+    untick(4);
+    expect(screen.getByText(t(SALE_KEPT('4')))).toBeInTheDocument();
+    expect(within(card()).getByText('orientační')).toBeInTheDocument();
+    expect(within(card()).queryByText('pásmo')).not.toBeInTheDocument();
+    expect(within(card()).getByText(t(fmtCzk(7_530_000)))).toBeInTheDocument(); // 114 054 x 66
+    untick(5);
+    expect(screen.getByText(t(SALE_KEPT('3')))).toBeInTheDocument();
+    expect(within(card()).getByText('orientační')).toBeInTheDocument();
+    untick(6);
+    expect(screen.getByText(t(SALE_KEPT('2')))).toBeInTheDocument();
+    expect(within(card()).getByText('Pro přepočet ponechte alespoň 3 srovnání')).toBeInTheDocument();
+    expect(within(card()).queryByText(/Kč/)).not.toBeInTheDocument();
+    expect(within(card()).queryByText('orientační')).not.toBeInTheDocument();
+    // The same card, the same height class, the same place in the page in every state.
+    expect(container.querySelectorAll(`[class*="${height}"]`)).toHaveLength(1);
+    expect(card()).toHaveClass(height);
+  });
+
+  it('gives the values back with Vrátit výchozí', async () => {
+    renderSection(page({ history: [FLAT] }));
+    await screen.findByText(t(SALE_KEPT('8')));
+    untick(1, 2);
+    const reset = screen.getByRole('button', { name: 'Vrátit výchozí' });
+    expect(reset).toBeEnabled();
+    fireEvent.click(reset);
+    expect(screen.getByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(boxes().every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    expect(reset).toBeDisabled();
+    fireEvent.click(box(3)); // unticking and re-ticking undoes as well
+    fireEvent.click(box(3));
+    expect(screen.getByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+  });
+
+  it('reads a lease monthly: /měs on the total and the band, the rent unit on the per-m²', async () => {
+    renderSection(page({ history: [LEASE] }));
+    await screen.findByText(t(SALE_KEPT('8')));
+    untick(1);
+    // 376 Kč/m² x 50 m² = 18 800 Kč a month; the band 349 to 403 Kč/m²: 17 450 to 20 150.
+    const ours = within(card());
+    expect(ours.getByText(t(fmtCzk(18_800)), { exact: false })).toHaveTextContent(t(`${fmtCzk(18_800)}/měs`));
+    expect(ours.getByText(t(fmtMeasuredPricePerM2(376, 'rent')))).toBeInTheDocument();
+    expect(ours.getByText('pásmo').parentElement).toHaveTextContent(t(`${fmtCount(17_500)}–${fmtCzk(20_200)}/měs`));
+    expect(ours.getByText(t(`o ${fmtPct(0.2653)} pod Valuo`))).toBeInTheDocument();
+    expect(within(screen.getAllByRole('row')[1]).getByText(t(fmtMeasuredPricePerM2(380, 'rent')))).toBeInTheDocument();
+  });
+
+  it('tags the subject own ad, even a delisted one, and leaves it ticked', async () => {
+    const OWN_ID = 'https://www.example.invalid/detail/prodej/byt/2+kk/praha-1/4700001';
+    const answerWithOwn: Valuation = {
+      ...FLAT, records: comparables(FLAT_ROWS, (i) => (i === 0 ? `${OWN_ID}/` : `https://www.example.invalid/detail/x/${4800000 + i}`)),
+    };
+    // The property's ads as the page holds them, the delisted one too: only its id (not its slug or host) is the same.
+    const ours = ['https://www.example.invalid/detail/prodej/byt/2+kk/praha-2/4700099', 'https://m.example.invalid/x/4700001', null];
+    renderSection(page({ history: [answerWithOwn] }), { adUrls: ours });
+    await screen.findByText(t(SALE_KEPT('8')));
+    expect(screen.getAllByText('tento inzerát')).toHaveLength(1);
+    expect(within(screen.getAllByRole('row')[1]).getByText('tento inzerát')).toHaveAttribute('title', expect.stringContaining('Inzerát této nemovitosti'));
+    expect(box(1)).toBeChecked();
+  });
+
+  it('tags nothing when no ad of the property shares the id', async () => {
+    const answerWithOwn: Valuation = { ...FLAT, records: comparables(FLAT_ROWS, (i) => `https://www.example.invalid/detail/x/${4800000 + i}`) };
+    renderSection(page({ history: [answerWithOwn] }), { adUrls: ['https://www.example.invalid/detail/x/4700001'] });
+    await screen.findByText(t(SALE_KEPT('8')));
+    expect(screen.queryByText('tento inzerát')).not.toBeInTheDocument();
+  });
+
+  it('forgets the ticks when another history row is picked', async () => {
+    const other: Valuation = { ...FLAT, id: 22, created_at: '2026-10-18T12:02:00Z' };
+    renderSection(page({ history: [FLAT, other] }));
+    await screen.findByText(t(SALE_KEPT('8')));
+    untick(1, 2);
+    expect(screen.getByText(t(SALE_KEPT('6')))).toBeInTheDocument();
+    const pick = (row: Valuation) => fireEvent.click(screen.getByRole('button', { name: (n) => t(n).startsWith(t(fmtDateSlash(row.created_at))) }));
+    pick(other);
+    expect(await screen.findByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(boxes().every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    untick(3);
+    pick(FLAT); // and back: the first row's ticks are not remembered either
+    expect(screen.getByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+  });
+
+  it('draws the table exactly as before when the recipe does not land on Valuo (older row, new method, other type)', async () => {
+    const off: Valuation = { ...FLAT, result: { ...FLAT.result!, avg_price_m2: 120_500 } }; // 3.2 % away
+    renderSection(page({ history: [off] }), { adUrls: ['https://www.example.invalid/x/4700001'] });
+    await screen.findByText(/^Srovnávací nemovitosti/);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Náš přepočet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Odškrtněte/)).not.toBeInTheDocument();
+    expect(screen.queryByText('tento inzerát')).not.toBeInTheDocument();
+    const second = screen.getAllByRole('row')[1];
+    expect(second).toHaveTextContent(t(fmtCzk(6_050_000))); // the adjusted price, with no per-m² line under it
+    expect(second).not.toHaveTextContent(fmtMeasuredPricePerM2(123_029, 'sale'));
+  });
+
+  it('leaves the table, the ticks and our card off the phone', async () => {
+    renderSection(page({ history: [FLAT] }), { readOnly: true });
+    expect(await screen.findByText(t(fmtCzk(7_700_000)))).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Náš přepočet/)).not.toBeInTheDocument();
   });
 });

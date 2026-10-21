@@ -22,16 +22,14 @@ export type ValuoPhoto = { thumb: string; full: string };
 /* One of Valuo's comparables, in Valuo's order and under Valuo's names; `address`, `photos` and `advert_url`
  * come from Valuo's advert detail, absent when that call was not made or failed. */
 export type ValuoRecord = {
-  id: string | number; place: string | null; lat: number | null; lon: number | null; local_type: string | null;
-  calc_area: number | null; lot_area: number | null; floor: number | null; total_floors: number | null;
-  rating: string | null; new_building: boolean | null; kind: string | null; property_type: string | null;
+  id: string | number; place: string | null; local_type: string | null; calc_area: number | null;
   price: number | null; price_m2: number | null; sale_price: boolean | null; // true: a realised sale, not an ask
   adjusted_price: number | null; adjusted_price_m2: number | null; distance: number | null; score_prct: number | null;
-  days: number | null; first_seen_at: string | null; last_seen_at: string | null;
+  days: number | null;
   address?: string | null; photos?: ValuoPhoto[]; advert_url?: string | null;
 };
 /* What the answer stands on, as Valuo reports it: avg_score 0–1, distances in metres, age in days. */
-export type ValuoSummary = Record<'count' | 'avg_distance' | 'avg_age' | 'avg_duration' | 'avg_score' | 'distance' | 'age', number | null>
+export type ValuoSummary = Record<'count' | 'avg_distance' | 'avg_score' | 'distance' | 'age', number | null>
   & { not_enough: boolean };
 /* A parameter Valuo refused; `field` is the request key it names, null when it names none. */
 export type ValuoIssue = { field: string | null; message: string };
@@ -91,6 +89,50 @@ export function reliability(s: ValuoSummary): string[] {
 
 export const optionLabel = (fields: readonly ValuoField[], name: string, value: ValuoValue): string =>
   fields.find((f) => f.name === name)?.options.find((o) => o.value === value)?.label ?? String(value ?? '—');
+
+/* Our recalculation over the comparables a user keeps: ours, never Valuo's, never stored (rule 12). Valuo's average is a
+ * geometric mean of its comparables' adjusted Kč/m², each weighted by its match (score_prct), a realised sale twice;
+ * re-run on five real answers it lands within 0.11 % of Valuo's own. The spread is the weighted standard deviation of
+ * the same logarithms. Both stay Valuo's per-m² (rule 23): the totals below multiply them by Valuo's own area. */
+export const MIN_KEPT = 3;
+export const BAND_FROM = 5;
+export type Recalc = { avg: number; std: number };
+export type RecalcBase = { area: number; ref: number };
+type Priced = ValuoRecord & { adjusted_price_m2: number; score_prct: number };
+const priced = (r: ValuoRecord): r is Priced =>
+  typeof r.adjusted_price_m2 === 'number' && r.adjusted_price_m2 > 0 && typeof r.score_prct === 'number' && r.score_prct > 0;
+
+export function recalc(rs: readonly ValuoRecord[]): Recalc | null {
+  if (rs.length === 0 || !rs.every(priced)) return null;
+  const w = rs.map((r) => r.score_prct * (r.sale_price ? 2 : 1));
+  const x = rs.map((r) => Math.log(r.adjusted_price_m2));
+  const sum = w.reduce((a, b) => a + b, 0);
+  const mu = x.reduce((a, v, i) => a + w[i] * v, 0) / sum;
+  const geo = Math.exp(mu);
+  return { avg: Math.round(geo), std: Math.round(geo * Math.sqrt(x.reduce((a, v, i) => a + w[i] * (v - mu) ** 2, 0) / sum)) };
+}
+
+/* Ticking is offered only while the recipe over EVERY comparable lands within 1 % of Valuo's own per-m² average (an older
+ * row, a type never measured, a changed Valuo method: the table then stays as Valuo sent it). It answers the anchors
+ * the card needs: Valuo's area and average. */
+export function recalcBase(v: Valuation): RecalcBase | null {
+  const all = recalc(v.records ?? []);
+  const ref = v.result?.avg_price_m2, area = v.result?.calc_area;
+  return all != null && typeof ref === 'number' && ref > 0 && typeof area === 'number' && Math.abs(all.avg / ref - 1) <= 0.01
+    ? { area, ref } : null;
+}
+
+/* A portal's own id for an advert: the last segment of its address (the hosts and slugs of Valuo's links and ours differ). */
+export function advertToken(url: string | null | undefined): string | null {
+  try { return new URL(url ?? '').pathname.split('/').filter(Boolean).pop() ?? null; } catch { return null; }
+}
+
+/* Valuo counts the subject's own ad as a comparable, and by then it can be a delisted one: so the match runs over EVERY ad
+ * of the property, active or not. */
+export function isOwnAd(r: ValuoRecord, adUrls: readonly (string | null)[]): boolean {
+  const token = advertToken(r.advert_url);
+  return token != null && adUrls.some((u) => advertToken(u) === token);
+}
 
 const pageKey = (propertyId: number) => ['valuo', propertyId] as const;
 
