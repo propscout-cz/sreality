@@ -775,7 +775,8 @@ above) tells a stopped lane, and the lane is a `lane/health` job cell like any o
 `check_jobs` (`scripts/checks/platform.py`; platform alarm on the worker, cadence 600 s, label
 "Jobs", unit "cells") gives one job cell per scheduled machine on every runtime, with the subjects
 `gh/<workflow file stem>`, `gh/poller`, `cron/<jobname>`, `lane/<lane>`, `lane/<lane>/<portal>` (its
-`portal` field set) and `artifact/<name>`, so the ladder opens one incident per failing job, each
+`portal` field set; on the notifications lane the key is a step, `lane/notifications/<step>`) and
+`artifact/<name>`, so the ladder opens one incident per failing job, each
 shown on Health with its reason. It replaces
 `worker_lane_stall`, `workflow_poller_liveness`, `broker_resolution_freshness` and
 `db_saturation`'s failure-rate arm (above).
@@ -851,21 +852,24 @@ failing rule; the other lanes' `last.errors` count per-item failures inside comp
 | no cell | the worker has been up under 15 min and the lane has not passed in this process yet |
 
 A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
-`portal_errors`: Problem once its `failing_since` is older than max(3 × the lane's interval,
-15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
+`portal_errors`, and so does a step failing inside the notifications lane (notifications W2a:
+`portal_errors` keyed by step, `watchdog_new` / `price` / `monitor`, so the cell is
+`lane/notifications/<step>` with the step as its `portal`; a statement failure reddens it, a stored
+spec the matcher refuses does not unless every watchdog was refused): Problem once its
+`failing_since` is older than max(3 × the lane's interval, 15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
 stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 6 while
 `worker_lane_stall` read OK.
 
 **What the heartbeat carries** (`scraper/realtime_worker.py`, wave 3). `_amain` registers every
 lane from the module constant `LANES` — `probe`, `drain`, `images`, `count_probe`, `maintenance`,
 `broker_maintenance`, `estimation`, `location_resolve`, `location_intake_fast`, `location_refetch`,
-`sold_comps`, `text_extract`, `health`, `autodedup`, `heartbeat` — seeds each with `interval_s`
+`sold_comps`, `text_extract`, `health`, `autodedup`, `notifications`, `heartbeat` — seeds each with `interval_s`
 None before any task starts, and asserts that the names it registers equal `LANES`; nothing imports
 the worker to learn the list. `_lane_loop` writes `interval_s` on every wake, the idle branch
 included, so an off lane reads off, not absent. Per lane: `interval_s`, `passes`, `failed_passes`,
 `last_pass_at`, `last_duration_s`, `started_at`, `in_flight_s`, `last`, `failing_since`,
-`last_error` (at most 300 characters) and, on the probe and drain lanes, `portal_errors`
-(`{portal: {failing_since, last_error}}`); `last_failure_at` is gone. A pass fails exactly where it
+`last_error` (at most 300 characters) and, on the probe, drain and notifications lanes,
+`portal_errors` (`{portal or step: {failing_since, last_error}}`); `last_failure_at` is gone. A pass fails exactly where it
 failed before — a raise (`last_error` = `<Type>: <message>`), the 1,800 s timeout (`pass exceeded
 1800 s`), `text_extract`'s `fatal`, autodedup's refusal — and nothing new counts as a failure:
 `_record_pass_failed` sets `failing_since` once and overwrites `last_error`; `_record_pass` clears

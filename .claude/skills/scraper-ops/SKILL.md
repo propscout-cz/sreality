@@ -379,12 +379,13 @@ Per-lane notes:
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
 - **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
-  a live watchdog's matches first seen in the last 24 h and after its `active_since`, images-first gated; no cursor), `price`
-  (`match_changes_once`: the one canonical-ad step fragment, 7 days, for watchdogs and monitored collections) and `monitor`
-  (inactive after 24 h gone, reactivated, new_source), each on its own connection in one transaction (`SET LOCAL statement_timeout`
-  120 s; a watchdog is a savepoint). Why steps, not one pass: a step that raises, or whose watchdogs failed, is its own
-  `portal_errors` entry, so the `jobs` check shows `lane/notifications/<step>` red alone while the others write; `NOTIFICATIONS` log
-  line only when a pass wrote or failed. Beside the API's `matcher_loop` until W2b: same `dedupe_key`, so the overlap is a union.
+  a live watchdog's matches first seen in the last 24 h and after its `active_since` (create, switch-on, filter edit), images-first
+  gated; no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
+  `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
+  INSERT, one detector; `SET LOCAL statement_timeout` 120 s), so no INSERT's locks block a merge. Why steps: a step that raises or has a
+  failed statement is its own `portal_errors` entry, `lane/notifications/<step>` red alone while the others write; a stored spec the
+  matcher refuses is `last.*.subscriptions_invalid`, never red (the write routes 422 it) unless every watchdog was refused. Beside the
+  API's `matcher_loop` until W2b: same `dedupe_key`, so the overlap is a union; `NOTIFICATIONS` log line only on a write or a failure.
 - **Autodedup re-cut** (E944) — pHash coverage < 0.85 marks `rt_recut:<gen>` due; the NEXT tick re-cuts instead of passing (same lease, 1,050 s, reads stop 120 s early); never in a build or while the scope (max of the last cut's count and the store's `rt_fp`) holds > `RECUT_MAX_LISTINGS` 50k ads (row says `bootstrap`/`unfit`: Prague keeps its seed's cut); ≤ 1 attempt / 6 h, stamped before the cut, so a death mid-cut waits and does not halve the claim cap (2 deaths under one cut = `died` until a seed); failed = `errors: 1` + `recut_failed`; shutdown = taken back while its stamp holds.
   Heartbeat `last.recut` + the lane's own `recut` (lost on restart; durable: `rt_recut:<gen>.last`), `calibration_built_age_days`. The parsed calibration (~16 MB at 39.5k) outlives its pass, read once a digest — E949's one deliberate exception.
 - **Autodedup lane** (AUTODEDUP §7.3/E914, mig 557) — THE engine's one real-time pass (`run_incremental`); one integer

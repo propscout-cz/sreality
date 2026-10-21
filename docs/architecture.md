@@ -2196,11 +2196,12 @@ renumber.** Navigate by area:
     once per real cut — and so does the collection-monitor producer). **The producers run on ONE
     clock (notifications W2a, migration 652):** the realtime worker's `notifications` lane runs
     `match_once` (step `watchdog_new`), `match_changes_once` (`price`) and
-    `match_monitored_collections_once` (`monitor`) every 300 s, each step in its own transaction and
-    its own `lane/notifications/<step>` jobs cell; the API's `matcher_loop` runs the same three beside
-    it until W2b. **The cursor is gone:** a watchdog's `new` is ONE INSERT over properties first seen
-    in the last 24 h and after its `active_since` (stamped by a trigger on create and on every
-    switch-on), images-first gated (a hold ends inside the window, so it never loses a property), so a
+    `match_monitored_collections_once` (`monitor`) every 300 s, each step in its own transaction; a
+    failing step is its own `lane/notifications/<step>` jobs cell (red alone while the others write;
+    every statement commits on its own, so no INSERT's locks outlive it); the API's `matcher_loop`
+    runs the same three beside it until W2b. **The cursor is gone:** a watchdog's `new` is ONE INSERT
+    over properties first seen in the last 24 h and after its `active_since` (stamped by a trigger on
+    create, on every switch-on and on every filter edit: an edited watchdog is a new start), images-first gated (a hold ends inside the window, so it never loses a property), so a
     late-matching property under a day old still fires and a resumed watchdog never floods; `price` is
     ONE canonical-ad step fragment (`_CANONICAL_PRICE_STEPS`, 7 days, from `active_since` /
     `monitor_since`) for both producers; `monitor`'s `inactive` waits out 24 h gone (a portal blink
@@ -2250,8 +2251,8 @@ renumber.** Navigate by area:
     the anchor closes). `monitoring_enabled_at` is stamped by a trigger on every false→true
     monitoring transition, so the anchor is correct across all write paths.
     `broker_change` is in the `change_kind` CHECK
-    (migration 209) but NOT yet emitted — `listing_broker_public` is current-state-only with no
-    change signal; the kind is reserved for when one exists. **The health ladder, `system_health`,
+    (migration 209) but never emitted — `listing_broker_public` is current-state-only with no
+    change signal; the kind leaves in W6. **The health ladder, `system_health`,
     was the third producer until W1** (migration 274; reshaped by migration 619 in wave 1 of the Health
     dashboard sprint, `docs/design/health-dashboard.md`; since ruling R2b, 2026-10-21, it writes no dispatch). Its measurer is ONE registry,
     `scripts/verify_pipeline.py` `CHECKS`: each check is declared once with its class (`alarm` or
