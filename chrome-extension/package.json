@@ -6,7 +6,8 @@
   "scripts": {
     "build": "vite build --mode content && vite build --mode background",
     "watch": "vite build --mode content --watch",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "node --test src/*.test.ts"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.270",

@@ -14,8 +14,9 @@ import {
   feedSearch,
   feedViewOf,
   isNewestFirst,
+  sortLabel,
 } from './feed';
-import { DEFAULT_SORT, type CardRow } from './queries';
+import { CARD_SORTS, DEFAULT_SORT, parseSort, type CardRow } from './queries';
 import type { FilterPreset } from './types';
 
 const preset = (filter_spec: FilterPreset['filter_spec']): FilterPreset => ({
@@ -113,6 +114,16 @@ describe("the view in the URL — Browse's contract", () => {
     expect(isNewestFirst(DEFAULT_SORT)).toBe(true);
     expect(isNewestFirst({ field: 'first_seen_at', direction: 'asc' })).toBe(false);
     expect(isNewestFirst({ field: 'price_czk', direction: 'desc' })).toBe(false);
+  });
+
+  it('names every order a URL can reach by its menu label, never a raw token', () => {
+    const labels = CARD_SORTS.map((o) => o.label);
+    for (const field of ['first_seen_at', 'last_seen_at', 'price_czk', 'price_per_m2',
+                         'area_m2', 'mf_gross_yield_pct', 'estate_area']) {
+      expect(labels).toContain(sortLabel(parseSort(field)));
+      expect(labels).toContain(sortLabel(parseSort(`-${field}`)));
+    }
+    expect(sortLabel(parseSort('last_seen_at'))).toBe('Naposledy viděno');
   });
 });
 

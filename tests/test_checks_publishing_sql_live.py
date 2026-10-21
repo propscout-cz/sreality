@@ -36,7 +36,7 @@ from scraper.db import (QUEUE_PRIORITY_CHANGED, QUEUE_PRIORITY_FAILURE, QUEUE_PR
                         QUEUE_PRIORITY_VERIFY)
 from scripts.checks import publishing as pub
 from scripts.checks.common import iso, now as db_now
-from scripts.recompute_property_stats import _RECOMPUTE_ONE_SQL
+from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 from scripts.verify_pipeline import THRESHOLDS
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -227,8 +227,7 @@ def test_an_ad_is_judged_on_its_propertys_location_ad_never_on_its_own_location(
     _located(conn, _ad(conn, "idnes", property_id=re_resolved), _POINT, resolved=10 * _MIN)
     canonical[re_resolved] = _ad(conn, "bazos", seen=50 * _H, property_id=re_resolved)
     _located(conn, canonical[re_resolved], _POINT)
-    for pid in canonical:
-        conn.execute(_RECOMPUTE_ONE_SQL, {"pid": pid})
+    conn.execute(_RECOMPUTE_SCOPED_SQL, {"ids": list(canonical)})
     stored = conn.execute("select id, repr_listing_ref_id from properties where id = any(%s)", (list(canonical),))
     assert dict(stored.fetchall()) == canonical
     location = {**canonical, abroad: abroad_ad}

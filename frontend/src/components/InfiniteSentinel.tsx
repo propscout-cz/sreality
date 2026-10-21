@@ -8,7 +8,7 @@ import Spinner from '@/components/Spinner';
  *
  * The scroll root is parameterized because the surfaces differ: the Browse
  * cards live in an independently-scrolling fixed-height column (pass that
- * element's ref), while the table / API feeds page-scroll the window (omit
+ * element's ref), while the API feeds page-scroll the window (omit
  * rootRef → viewport). This is the one knob that lets a single component
  * serve both layouts without a per-surface fork. */
 export interface InfiniteSentinelProps {

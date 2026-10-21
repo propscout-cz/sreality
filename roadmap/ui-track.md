@@ -27,6 +27,10 @@ toolkit work.
   dismissed" are one block of segmented controls (`SegmentedBar`, the amenities' any/yes/no look,
   now shared); the dismissed switch moved there from Curation. Browse › Stats warns above the
   charts while Hide dismissed leaves dismissed properties out of the sample, with "Započítat skryté".
+- **Done: Table tab removed 2026-10-20** (operator ruling; ~470 lines net; the cards sort menu
+  gains "Plocha: od nejmenší / od největší" + "Naposledy viděno" (one direction; an ascending
+  last-seen link reads descending); the sort fields without a control and `estate_area` deleted,
+  a stored or linked one reads as the default). An old `?tab=table` link opens the Properties tab.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
@@ -271,7 +275,7 @@ oxidised-copper accent, Fraunces / Inter / JetBrains Mono, tabular
 numerals, Czech locale formatting).
 - **Browse**: filter sidebar (district typeahead, disposition multi-toggle,
   dual-handle price + area sliders, tri-state status, last-seen-within,
-  has-balcony/lift/parking) → Map / Table / Stats tabs. Filter and
+  has-balcony/lift/parking) → Map / Stats tabs (the Table tab went 2026-10-20). Filter and
   sort state in URL params; bookmarkable, refresh-survives.
 - **Listing detail** (`/listing/:sreality_id`): hero, mini-map, key
   facts, snapshot timeline strip (the product's signature visual

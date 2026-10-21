@@ -6,6 +6,7 @@ import { notificationKeys } from '@/lib/queries';
 import { useAuth } from '@/lib/auth';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { NewEstimationProvider } from './NewEstimationModal';
+import { NewPropertyProvider } from './NewPropertyProvider';
 import { ExploreAreaProvider } from './ExploreAreaModal';
 import { ExploreBrokerProvider } from './ExploreBrokerModal';
 import ToastViewport from './ToastViewport';
@@ -163,26 +164,28 @@ export default function Shell() {
   );
   return (
     <NewEstimationProvider>
-      <ExploreAreaProvider>
-        <ExploreBrokerProvider>
-          {phone ? (
-            <PhoneFrame>{body}</PhoneFrame>
-          ) : (
-            <div className="min-h-dvh flex flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
-              <SkipLink />
-              <TopBar />
-              {/* id + tabIndex=-1: the skip link's target and where useRouteFocus
-                * lands keyboard focus after every navigation. -1 keeps it out of
-                * the tab order while letting it be focused programmatically. */}
-              <main id={MAIN_ID} tabIndex={-1} className="flex-1 outline-none">
-                {body}
-              </main>
-              <Footer />
-            </div>
-          )}
-          <ToastViewport placement={phone ? 'phone' : 'corner'} />
-        </ExploreBrokerProvider>
-      </ExploreAreaProvider>
+      <NewPropertyProvider>
+        <ExploreAreaProvider>
+          <ExploreBrokerProvider>
+            {phone ? (
+              <PhoneFrame>{body}</PhoneFrame>
+            ) : (
+              <div className="min-h-dvh flex flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
+                <SkipLink />
+                <TopBar />
+                {/* id + tabIndex=-1: the skip link's target and where useRouteFocus
+                  * lands keyboard focus after every navigation. -1 keeps it out of
+                  * the tab order while letting it be focused programmatically. */}
+                <main id={MAIN_ID} tabIndex={-1} className="flex-1 outline-none">
+                  {body}
+                </main>
+                <Footer />
+              </div>
+            )}
+            <ToastViewport placement={phone ? 'phone' : 'corner'} />
+          </ExploreBrokerProvider>
+        </ExploreAreaProvider>
+      </NewPropertyProvider>
     </NewEstimationProvider>
   );
 }

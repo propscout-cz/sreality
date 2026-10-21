@@ -13,6 +13,7 @@ import type {
   ExtCollection,
   ExtNote,
   ExtTag,
+  IngestState,
   NotePatch,
   PipelineCardResult,
   PipelineStage,
@@ -144,6 +145,27 @@ export async function lookupListings(
   });
   if (!res.ok) return res;
   return { ok: true, data: res.data.data };
+}
+
+/* POST /listings/ingest — ask for an ad we do not hold: the API resolves the
+ * URL, enqueues its page for the worker's detail drain and answers one state
+ * (admins only in v1). Idempotent server-side. */
+export async function ingestListing(url: string): Promise<ApiResult<IngestState>> {
+  return request<IngestState>('/listings/ingest', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+}
+
+/* GET /listings/ingest/:source/:native_id — the same state, polled until the
+ * ad is held with a property. */
+export async function ingestState(
+  source: string,
+  nativeId: string,
+): Promise<ApiResult<IngestState>> {
+  return request<IngestState>(
+    `/listings/ingest/${encodeURIComponent(source)}/${encodeURIComponent(nativeId)}`,
+  );
 }
 
 /* PATCH /estimations/:id/scenario — write the operator's yield

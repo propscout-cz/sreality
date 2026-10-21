@@ -231,8 +231,8 @@ export function CardFace({
               {fmtCzk(card.price_czk)}
             </span>
             {/* The board is deal-agnostic (rule 22), so a monthly rent and a
-                capital sum sit in one column. Same marker the Browse table and
-                the Browse cards use. */}
+                capital sum sit in one column. Same marker the Browse cards
+                use. */}
             {card.category_type === 'pronajem' && card.price_czk != null && (
               <span className="text-[var(--color-ink-4)] text-[0.7rem]">/měs</span>
             )}

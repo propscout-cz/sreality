@@ -43,6 +43,7 @@ from toolkit.filter_registry import REGISTRY, Agenda
 REPO = Path(__file__).resolve().parents[1]
 MIGRATIONS = REPO / "migrations"
 QUERIES_TS = REPO / "frontend" / "src" / "lib" / "queries.ts"
+BROWSE_SORT_TS = REPO / "frontend" / "src" / "lib" / "browseSort.ts"
 GATE_CALL = re.compile(r"publication_gate_enabled\s*\(\s*\)", re.IGNORECASE)
 # Strip line comments so a comment that merely *describes* the bad pattern
 # ("...a BARE call: publication_gate_enabled()...") isn't flagged. `--` covers
@@ -306,9 +307,9 @@ def _ts_string_const(name: str) -> str:
 
 
 def _sortable_fields() -> set[str]:
-    src = QUERIES_TS.read_text()
+    src = BROWSE_SORT_TS.read_text()
     m = re.search(r"const SORTABLE_FIELDS[^;]+;", src)
-    assert m, "queries.ts: SORTABLE_FIELDS not found"
+    assert m, "browseSort.ts: SORTABLE_FIELDS not found"
     return set(re.findall(r"'(\w+)'", m.group(0)))
 
 
@@ -350,12 +351,10 @@ def test_frontend_read_contract_subset_of_projection() -> None:
         if d.pg_column and Agenda.BROWSE in d.agendas
     }
     card_cols = set(_ts_string_const("CARD_COLS").split(","))
-    table_cols = set(_ts_string_const("TABLE_COLS").split(","))
     map_cols = set(_ts_string_const("MAP_COLS").split(","))
     contract = (
         registry_cols
         | card_cols
-        | table_cols
         | map_cols
         | _sortable_fields()
         | HAND_CODED_FILTER_COLUMNS
