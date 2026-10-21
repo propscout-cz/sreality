@@ -169,7 +169,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `score_listing_condition` in one latest-wins transaction. Filter on the derived columns, not the
     coarse `condition_assessment`.
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091); grouping is out-of-band, never inline at insert (new rows land
-    `property_id` NULL; straggler-attach births a singleton).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
+    `property_id` NULL; straggler-attach births a singleton — the worker lane every 30 s, and inside the daily sweep's loop).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
     two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,
     soft-retires the loser, logs `property_merge_events` (read by `detach_listings`: each advert back to its origin or a refusal, e.g. `moved_since`; a split by letters sends one that cannot go
     home to a new property (`new=`) and itself rules only `different`, across letters — a letter's join is a merge; a split is ONE call, and so is a group undo (`merge_group_id=`) — no replay; an operator merge rules `same` every negative pair it joins). A property shows ONE **canonical ad**, rank 1 of `property_canonical_listings` (migration 588): active first,
@@ -206,7 +206,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     through the shared `portal_runner` on the source-generic queue.
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); `property_maintenance.yml` (`--incremental`, `*/5`)
-    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15) is
+    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
     the reconcile backstop. Both share the `sreality-property-maintenance` concurrency group. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, Browse row, broker queue) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`

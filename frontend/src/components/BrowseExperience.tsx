@@ -18,6 +18,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
+import { useNewPropertyDialog } from '@/components/NewPropertyProvider';
 import Skeleton from '@/components/Skeleton';
 import { useIsFetching, useMutation, useQuery } from '@tanstack/react-query';
 import Tabs, { type Tab } from '@/components/Tabs';
@@ -110,6 +111,8 @@ export interface BrowseFeatures {
   presetBar?: boolean;
   /* "Create watchdog" CTA + name-prompt modal. */
   watchdog?: boolean;
+  /* "Nová nemovitost" (paste an ad link) beside it — page only. */
+  newProperty?: boolean;
   /* Dedup merge mode toggle on the Properties cards — page only. */
   mergeMode?: boolean;
   /* The big "Browse" heading in the summary block — hidden in the modal,
@@ -128,6 +131,7 @@ export interface BrowseFeatures {
 const DEFAULT_FEATURES: Required<BrowseFeatures> = {
   presetBar: true,
   watchdog: true,
+  newProperty: true,
   mergeMode: true,
   title: true,
   sidebar: true,
@@ -149,6 +153,7 @@ export default function BrowseExperience({
 }) {
   const f = { ...DEFAULT_FEATURES, ...features };
   const isModal = layout === 'modal';
+  const newProperty = useNewPropertyDialog();
   const { filters, sort, tab, overlay, activePresetId } = view;
 
   // Browser-tab title reflects the active filters ("LR: 2+kk · 60–90 m² · Praha")
@@ -679,6 +684,7 @@ export default function BrowseExperience({
                 : undefined
             }
             onCreateWatchdog={f.watchdog ? () => setWatchdogModalOpen(true) : undefined}
+            onNewProperty={f.newProperty && newProperty ? () => newProperty.open() : undefined}
           />
           {f.presetBar && (
             <div className="mt-3">
@@ -938,6 +944,7 @@ function FilterSummary({
   onClearBounds,
   onClearBroker,
   onCreateWatchdog,
+  onNewProperty,
 }: {
   filters: ListingFilters;
   order: { portal: string; direction: SortDirection } | null;
@@ -959,6 +966,7 @@ function FilterSummary({
    * Browse") would be a dead end with no way to leave the scope. */
   onClearBroker?: () => void;
   onCreateWatchdog?: () => void;
+  onNewProperty?: () => void;
 }) {
   return (
     <div className="flex items-start justify-between gap-4">
@@ -1020,16 +1028,28 @@ function FilterSummary({
           )}
         </div>
       </div>
-      {onCreateWatchdog && (
-        <button
-          type="button"
-          onClick={onCreateWatchdog}
-          className="shrink-0 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
-          title="Save the current filters as a watchdog — get notified when a new listing matches"
-        >
-          + Create watchdog
-        </button>
-      )}
+      <div className="shrink-0 flex items-center gap-2">
+        {/* Outlined: the copper primary on this header stays the watchdog. */}
+        {onNewProperty && (
+          <button
+            type="button"
+            onClick={onNewProperty}
+            className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-[var(--color-rule-strong)] text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
+          >
+            Nová nemovitost
+          </button>
+        )}
+        {onCreateWatchdog && (
+          <button
+            type="button"
+            onClick={onCreateWatchdog}
+            className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+            title="Save the current filters as a watchdog — get notified when a new listing matches"
+          >
+            + Create watchdog
+          </button>
+        )}
+      </div>
     </div>
   );
 }

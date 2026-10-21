@@ -27,6 +27,7 @@ import {
   setActiveBoard,
 } from '@/lib/acting';
 import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
+import { NewPropertyProvider } from '@/components/NewPropertyProvider';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -46,8 +47,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
     sharePipeline: vi.fn(),
     unsharePipeline: vi.fn(),
     createPipelineStage: vi.fn(),
+    ingestListing: vi.fn(),
+    addPipelineCard: vi.fn(),
   };
 });
+
+/* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
+vi.mock('@/lib/auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth')>()),
+  useAuth: vi.fn(() => ({ isAdmin: true })),
+}));
 
 vi.mock('@/lib/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/queries')>();
@@ -1049,5 +1058,92 @@ describe('<Pipeline> shared boards', () => {
       fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet' }));
       await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('acc-b', 'shared_with'));
     });
+  });
+});
+
+/* "Nová nemovitost" (docs/design/new-property-from-link.md §3.6): the header's
+ * paste box, mounted under the Shell's provider. The card lands on the board on
+ * screen — the owner's on an edit share — and the page stays, with a toast. A
+ * read board offers no button. */
+describe('<Pipeline> Nová nemovitost', () => {
+  const READ = { account_id: 'owner-r', email: 'petr@example.cz', mode: 'read' as const };
+  const EDIT = { account_id: 'owner-e', email: 'jana@example.cz', mode: 'edit' as const };
+  const URL_IDNES = 'https://reality.idnes.cz/detail/prodej/byt/praha/6ad7ca9d45dd870c0a0b152a/';
+
+  function renderWithDialog() {
+    const qc = new QueryClient({
+      mutationCache: createMutationCache(),
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/pipeline']}>
+          <NewPropertyProvider>
+            <Pipeline />
+          </NewPropertyProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  async function addFromHeader() {
+    fireEvent.click(await screen.findByRole('button', { name: 'Nová nemovitost' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Nová nemovitost' });
+    fireEvent.change(within(dialog).getByLabelText('Odkaz na inzerát'), { target: { value: URL_IDNES } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Přidat' }));
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    reloadActingStore();
+    vi.mocked(toast.pushToast).mockClear();
+    vi.mocked(api.addPipelineCard).mockReset().mockResolvedValue({ property_id: 456, stage_key: 'interested', added: true });
+    vi.mocked(api.ingestListing).mockReset().mockResolvedValue({
+      state: 'held',
+      message_cs: null,
+      source: 'idnes',
+      source_id_native: '6ad7ca9d45dd870c0a0b152a',
+      listing_id: 123,
+      is_active: true,
+      property_id: 456,
+      queue: null,
+    });
+    vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [READ, EDIT] });
+    vi.mocked(api.listTags).mockResolvedValue({ data: TAGS });
+    vi.mocked(api.fetchArtifactLinks).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS);
+    vi.mocked(queries.fetchListingCovers).mockResolvedValue(new Map());
+    vi.mocked(queries.fetchPropertySourcesByPropertyIds).mockResolvedValue(new Map());
+    vi.mocked(brokersApi.fetchListingBrokersByIds).mockResolvedValue(new Map());
+    vi.mocked(api.listCollections).mockResolvedValue({ data: COLLECTIONS, total: COLLECTIONS.length });
+    vi.mocked(queries.fetchPropertyCollectionMemberSet).mockResolvedValue(new Map());
+  });
+  afterEach(() => resetActiveBoard());
+
+  it('adds the pasted ad to my board and stays, with a toast that opens it', async () => {
+    renderWithDialog();
+    await addFromHeader();
+    await waitFor(() => expect(api.addPipelineCard).toHaveBeenCalledWith(456));
+    await waitFor(() =>
+      expect(toast.pushToast).toHaveBeenCalledWith('ok', 'Přidáno do pipeline', 0, expect.objectContaining({ label: 'Otevřít' })),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Pipeline obchodů' })).toBeInTheDocument();
+  });
+
+  it('adds it to the owner\'s board on an edit share', async () => {
+    setActiveBoard(EDIT);
+    renderWithDialog();
+    await addFromHeader();
+    await waitFor(() => expect(api.addPipelineCard).toHaveBeenCalledWith(456, { actAs: 'owner-e' }));
+  });
+
+  it('offers no button on a read board', async () => {
+    setActiveBoard(READ);
+    renderWithDialog();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nová nemovitost' })).toBeNull();
   });
 });
