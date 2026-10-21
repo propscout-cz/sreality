@@ -184,6 +184,9 @@ const openEstimation = vi.hoisted(() => vi.fn());
 vi.mock('@/components/NewEstimationModal', () => ({
   useNewEstimationModal: () => ({ open: openEstimation }),
 }));
+vi.mock('@/components/listing-detail/ValuoSection', () => ({
+  default: ({ adUrls }: { adUrls: (string | null)[] }) => <div data-testid="valuo-ads">{JSON.stringify(adUrls)}</div>,
+}));
 vi.mock('@/components/ExploreAreaModal', () => ({
   useExploreAreaModal: () => ({ open: vi.fn() }),
 }));
@@ -311,6 +314,14 @@ describe('<PropertyDetail> one property, one voice', () => {
     // The curation controls read, so the header offers them, never a retry.
     expect(await screen.findByRole('button', { name: /Přidat do pipeline/ })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Uložit do kolekce' })).toBeInTheDocument();
+  });
+
+  it('hands the Valuo section the link of every advert, a delisted one too (its own-ad tag needs them)', async () => {
+    vi.mocked(queries.fetchPropertySources).mockResolvedValue([SOURCES[0], { ...SOURCES[1], is_active: false }]);
+    renderAt('/property/774');
+
+    const ads = await screen.findByTestId('valuo-ads');
+    expect(JSON.parse(ads.textContent ?? '[]')).toEqual(SOURCES.map((s) => s.source_url));
   });
 
   it('charts the canonical advert alone when the advert list cannot be read', async () => {

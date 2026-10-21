@@ -92,7 +92,7 @@ export const optionLabel = (fields: readonly ValuoField[], name: string, value: 
 
 /* Our recalculation over the comparables a user keeps: ours, never Valuo's, never stored (rule 12). Valuo's average is a
  * geometric mean of its comparables' adjusted Kč/m², each weighted by its match (score_prct), a realised sale twice;
- * re-run on five real answers it lands within 0.11 % of Valuo's own. The spread is the weighted standard deviation of
+ * valuo.test.ts re-runs it on five real answers. The spread is the weighted standard deviation of
  * the same logarithms. Both stay Valuo's per-m² (rule 23): the totals below multiply them by Valuo's own area. */
 export const MIN_KEPT = 3;
 export const BAND_FROM = 5;

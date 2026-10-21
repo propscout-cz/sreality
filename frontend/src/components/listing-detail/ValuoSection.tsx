@@ -260,12 +260,12 @@ function Recalculation({ valuation: v, base, kept, count, onReset }: {
   const [low, high] = mine ? [mine.avg - mine.std, mine.avg + mine.std] : [0, 0];
   const shown = (perM2: number) => shownPrice(Math.round(perM2 * base.area), lease);
   return (
-    <EstimateCard tone="ours" eyebrow={`Náš přepočet · ${kept.length} z ${count} srovnání`} className="mb-4 min-h-[8.5rem]"
+    <EstimateCard tone="ours" eyebrow={<>Náš přepočet · <span className="font-mono tabular-nums tracking-normal">{kept.length} z {count}</span> srovnání</>} className="mb-4 min-h-[8.5rem]"
       aside={<button type="button" onClick={onReset} disabled={!onReset} className={QUIET}>Vrátit výchozí</button>}>
       {mine == null ? (
-        <p className={`mt-2 text-sm ${INK3}`}>Pro přepočet ponechte alespoň {MIN_KEPT} srovnání</p>
+        <p className={`mt-2 text-sm ${INK3}`}>Pro přepočet ponechte alespoň <span className="font-mono tabular-nums">{MIN_KEPT}</span> srovnání</p>
       ) : (
-        <>
+        <div aria-live="polite">
           <div className="mt-1 flex items-baseline justify-between gap-3">
             <Price value={Math.round(mine.avg * base.area)} lease={lease} className="text-lg font-medium font-mono tabular-nums" />
             <span title={fmtMeasuredPricePerM2(mine.avg, basis)} className={`text-[0.72rem] font-mono tabular-nums ${INK3}`}>
@@ -285,7 +285,7 @@ function Recalculation({ valuation: v, base, kept, count, onReset }: {
               </CardRow>
             </dl>
           )}
-        </>
+        </div>
       )}
     </EstimateCard>
   );
@@ -339,7 +339,6 @@ function Comparables({ valuation: v, fields, adUrls }: {
       <>{czk(r.price)}<span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.price_m2, basis)}</span>{r.sale_price && SOLD}</>
     ) },
     { header: 'Upravená', align: 'right', className: `${NUM} text-[var(--color-ink)]`, cell: (r) => (
-      // The per-m² our figure is built from, shown only where the figure is offered.
       <>{czk(r.adjusted_price)}{base && <span className={`block text-[0.7rem] ${INK3}`}>{fmtMeasuredPricePerM2(r.adjusted_price_m2, basis)}</span>}</>
     ) },
     { header: 'Vzdálenost', align: 'right', className: `${NUM} text-[var(--color-ink-2)]`, cell: (r) => fmtDistanceM(r.distance) },

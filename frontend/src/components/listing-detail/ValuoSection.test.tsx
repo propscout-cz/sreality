@@ -629,14 +629,16 @@ const box = (n: number) => screen.getByRole('checkbox', { name: `Zahrnout do př
 const boxes = () => screen.getAllByRole('checkbox');
 const card = () => screen.getByText(/^Náš přepočet/).closest('[class*="min-h-"]') as HTMLElement;
 const untick = (...ns: number[]) => ns.forEach((n) => fireEvent.click(box(n)));
-const SALE_KEPT = (n: string) => t(`Náš přepočet · ${n} z 8 srovnání`);
+const whole = (text: string) => (_c: string, el: Element | null) => el?.tagName === 'P' && t(el.textContent ?? '') === t(text);
+const SALE_KEPT = (n: string) => whole(`Náš přepočet · ${n} z 8 srovnání`);
 
 describe('<ValuoSection> our recalculation', () => {
   it('opens identical to Valuo: every comparable ticked, a hint above, Valuo card and band untouched', async () => {
     renderSection(page({ history: [FLAT] }));
-    expect(await screen.findByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(await screen.findByText(SALE_KEPT('8'))).toBeInTheDocument();
     expect(boxes()).toHaveLength(8);
     expect(boxes().every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    expect(card().querySelector('[aria-live="polite"]')).not.toBeNull(); // a screen reader hears the figure change
     expect(screen.getByText('Odškrtněte srovnání a přepočítáme odhad z ostatních.')).toBeInTheDocument();
     // Our figure at 8 of 8 is Valuo's own to within its rounding: 116 708 x 66, shown to 10 000 Kč like Valuo's card.
     const ours = within(card());
@@ -650,7 +652,7 @@ describe('<ValuoSection> our recalculation', () => {
 
   it('puts the adjusted price per m² under the adjusted price: the number our figure is built from', async () => {
     renderSection(page({ history: [FLAT] }));
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     const first = within(screen.getAllByRole('row')[1]);
     expect(first.getByText(t(fmtMeasuredPricePerM2(123_029, 'sale')))).toBeInTheDocument();
     expect(screen.getAllByRole('row')[1]).toHaveTextContent(t(`${fmtCzk(6_050_000)}${fmtMeasuredPricePerM2(123_029, 'sale')}`));
@@ -658,10 +660,10 @@ describe('<ValuoSection> our recalculation', () => {
 
   it('recomputes from the comparables left ticked, against Valuo, with the band from five on', async () => {
     renderSection(page({ history: [FLAT] }));
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     untick(1);
     // 116 717 / 4 453 over the other seven: 7 637 322 Kč, 0,85 % under Valuo's 116 710.
-    expect(screen.getByText(t(SALE_KEPT('7')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('7'))).toBeInTheDocument();
     const ours = within(card());
     expect(ours.getByText(t(fmtCzk(7_640_000)))).toHaveAttribute('title', fmtCzk(7_637_322));
     expect(ours.getByText(t(fmtMeasuredPricePerM2(115_700, 'sale')))).toBeInTheDocument();
@@ -681,24 +683,24 @@ describe('<ValuoSection> our recalculation', () => {
 
   it('marks 3 or 4 kept as orientační with no band, and asks for 3 below that, at one fixed card height', async () => {
     const { container } = renderSection(page({ history: [FLAT] }));
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     const height = card().className.match(/min-h-\[[^\]]+\]/)![0];
     expect(container.querySelectorAll(`[class*="${height}"]`)).toHaveLength(1);
     untick(1, 2, 3);
-    expect(screen.getByText(t(SALE_KEPT('5')))).toBeInTheDocument(); // five is the first with a band
+    expect(screen.getByText(SALE_KEPT('5'))).toBeInTheDocument(); // five is the first with a band
     expect(within(card()).getByText('pásmo')).toBeInTheDocument();
     expect(within(card()).queryByText('orientační')).not.toBeInTheDocument();
     untick(4);
-    expect(screen.getByText(t(SALE_KEPT('4')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('4'))).toBeInTheDocument();
     expect(within(card()).getByText('orientační')).toBeInTheDocument();
     expect(within(card()).queryByText('pásmo')).not.toBeInTheDocument();
     expect(within(card()).getByText(t(fmtCzk(7_530_000)))).toBeInTheDocument(); // 114 054 x 66
     untick(5);
-    expect(screen.getByText(t(SALE_KEPT('3')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('3'))).toBeInTheDocument();
     expect(within(card()).getByText('orientační')).toBeInTheDocument();
     untick(6);
-    expect(screen.getByText(t(SALE_KEPT('2')))).toBeInTheDocument();
-    expect(within(card()).getByText('Pro přepočet ponechte alespoň 3 srovnání')).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('2'))).toBeInTheDocument();
+    expect(within(card()).getByText(whole('Pro přepočet ponechte alespoň 3 srovnání'))).toBeInTheDocument();
     expect(within(card()).queryByText(/Kč/)).not.toBeInTheDocument();
     expect(within(card()).queryByText('orientační')).not.toBeInTheDocument();
     // The same card, the same height class, the same place in the page in every state.
@@ -708,22 +710,22 @@ describe('<ValuoSection> our recalculation', () => {
 
   it('gives the values back with Vrátit výchozí', async () => {
     renderSection(page({ history: [FLAT] }));
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     untick(1, 2);
     const reset = screen.getByRole('button', { name: 'Vrátit výchozí' });
     expect(reset).toBeEnabled();
     fireEvent.click(reset);
-    expect(screen.getByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('8'))).toBeInTheDocument();
     expect(boxes().every((b) => (b as HTMLInputElement).checked)).toBe(true);
     expect(reset).toBeDisabled();
     fireEvent.click(box(3)); // unticking and re-ticking undoes as well
     fireEvent.click(box(3));
-    expect(screen.getByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('8'))).toBeInTheDocument();
   });
 
   it('reads a lease monthly: /měs on the total and the band, the rent unit on the per-m²', async () => {
     renderSection(page({ history: [LEASE] }));
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     untick(1);
     // 376 Kč/m² x 50 m² = 18 800 Kč a month; the band 349 to 403 Kč/m²: 17 450 to 20 150.
     const ours = within(card());
@@ -742,7 +744,7 @@ describe('<ValuoSection> our recalculation', () => {
     // The property's ads as the page holds them, the delisted one too: only its id (not its slug or host) is the same.
     const ours = ['https://www.example.invalid/detail/prodej/byt/2+kk/praha-2/4700099', 'https://m.example.invalid/x/4700001', null];
     renderSection(page({ history: [answerWithOwn] }), { adUrls: ours });
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     expect(screen.getAllByText('tento inzerát')).toHaveLength(1);
     expect(within(screen.getAllByRole('row')[1]).getByText('tento inzerát')).toHaveAttribute('title', expect.stringContaining('Inzerát této nemovitosti'));
     expect(box(1)).toBeChecked();
@@ -751,23 +753,23 @@ describe('<ValuoSection> our recalculation', () => {
   it('tags nothing when no ad of the property shares the id', async () => {
     const answerWithOwn: Valuation = { ...FLAT, records: comparables(FLAT_ROWS, (i) => `https://www.example.invalid/detail/x/${4800000 + i}`) };
     renderSection(page({ history: [answerWithOwn] }), { adUrls: ['https://www.example.invalid/detail/x/4700001'] });
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     expect(screen.queryByText('tento inzerát')).not.toBeInTheDocument();
   });
 
   it('forgets the ticks when another history row is picked', async () => {
     const other: Valuation = { ...FLAT, id: 22, created_at: '2026-10-18T12:02:00Z' };
     renderSection(page({ history: [FLAT, other] }));
-    await screen.findByText(t(SALE_KEPT('8')));
+    await screen.findByText(SALE_KEPT('8'));
     untick(1, 2);
-    expect(screen.getByText(t(SALE_KEPT('6')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('6'))).toBeInTheDocument();
     const pick = (row: Valuation) => fireEvent.click(screen.getByRole('button', { name: (n) => t(n).startsWith(t(fmtDateSlash(row.created_at))) }));
     pick(other);
-    expect(await screen.findByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(await screen.findByText(SALE_KEPT('8'))).toBeInTheDocument();
     expect(boxes().every((b) => (b as HTMLInputElement).checked)).toBe(true);
     untick(3);
     pick(FLAT); // and back: the first row's ticks are not remembered either
-    expect(screen.getByText(t(SALE_KEPT('8')))).toBeInTheDocument();
+    expect(screen.getByText(SALE_KEPT('8'))).toBeInTheDocument();
   });
 
   it('draws the table exactly as before when the recipe does not land on Valuo (older row, new method, other type)', async () => {
