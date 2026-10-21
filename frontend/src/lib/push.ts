@@ -11,7 +11,8 @@
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
-import { postPushOpened, type PushSubscriptionBody } from './api';
+import { postPushOpened, putPushSubscription, type PushSubscriptionBody } from './api';
+import { supabase } from './supabase';
 
 const OWNER_KEY = 'sreality.push.owner';
 
@@ -77,6 +78,31 @@ export function samePushKey(subscription: PushSubscription, key: Uint8Array): bo
   if (!used) return true;
   const bytes = new Uint8Array(used);
   return bytes.length === key.length && bytes.every((b, i) => b === key[i]);
+}
+
+/* Re-sends this device's subscription for the signed-in account (the PUT is
+ * idempotent). iOS never fires `pushsubscriptionchange`, so the launch, each
+ * sign-in and the hourly resume check (lib/serviceWorker) are how a subscription
+ * reaches the server again. It never prompts and never subscribes. One found
+ * under another account than the one that switched it on here is ended
+ * instead: it is not this user's to re-bind. */
+export async function resyncPush(): Promise<void> {
+  try {
+    const subscription = await currentPushSubscription();
+    if (!subscription) return;
+    const { data } = await supabase.auth.getSession();
+    const userId = data.session?.user?.id;
+    if (!userId) return;
+    const owner = readPushOwner();
+    if (owner !== undefined && owner !== userId) {
+      await subscription.unsubscribe();
+      writePushOwner(null);
+      return;
+    }
+    await putPushSubscription(pushSubscriptionBody(subscription));
+  } catch {
+    /* The next sign-in or resume tries again. */
+  }
 }
 
 /* A push tap carries its delivery id as `?d=` (`/n/{id}?d=`, or the coalesced

@@ -12,12 +12,16 @@
  * not a navigation, and can go weeks without a cold start. So a visible-again
  * page asks for an update itself, at most once an hour: that is how a fix, or
  * the kill switch, reaches it. The worker never decides which BUILD runs, so a
- * worker a few days old is harmless; new builds are buildSkew's business.
+ * worker a few days old is harmless; new builds are buildSkew's business. The
+ * same hourly check re-sends this device's push subscription (lib/push
+ * `resyncPush`): iOS never tells the page that a subscription changed.
  *
  * STORAGE. An installed web app gets persistent storage only if it asks
  * (WebKit grants it by heuristic to home-screen apps; #1763). Asked once per
  * launch, and only in the installed app: in a desktop Firefox tab the same call
  * opens a permission prompt. */
+
+import { resyncPush } from './push';
 
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60_000;
 
@@ -33,6 +37,7 @@ export function registerServiceWorker(): void {
           if (Date.now() - lastCheck < UPDATE_CHECK_INTERVAL_MS) return;
           lastCheck = Date.now();
           registration.update().catch(() => {});
+          void resyncPush();
         });
       })
       .catch(() => {});

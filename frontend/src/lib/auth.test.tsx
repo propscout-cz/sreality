@@ -57,8 +57,11 @@ vi.mock('./supabase', () => {
   };
 });
 
+vi.mock('./push', () => ({ resyncPush: vi.fn(async () => {}) }));
+
 import { isTransientApiError } from './api';
 import { AuthProvider, useAuth } from './auth';
+import { resyncPush } from './push';
 
 /* A fresh object each call — exactly what Supabase hands out per auth event,
  * and the reason keying on the session object refetched three times. */
@@ -84,6 +87,7 @@ beforeEach(() => {
   h.reads = [];
   h.initialSession = null;
   h.failNext = {};
+  vi.mocked(resyncPush).mockClear();
 });
 
 /* postgrest-js's resolved envelopes for a dropped connection and a refused grant. */
@@ -207,5 +211,33 @@ describe('AuthProvider session bootstrap', () => {
 
     // null -> user is a login, not a switch: nothing cached belonged to anyone else.
     expect(qc.getQueryData(['market-data'])).toBeDefined();
+  });
+});
+
+/* iOS never fires `pushsubscriptionchange`: the launch and each sign-in re-send
+ * this device's push subscription (lib/push), once per identity, never on the
+ * auth events a session emits for the same user. */
+describe('AuthProvider push re-sync', () => {
+  it('re-sends once when the app launches signed in', async () => {
+    h.initialSession = sessionFor('user-1');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByTestId } = renderAuth(qc);
+    await waitFor(() => expect(getByTestId('agendas').textContent).toBe('browse'));
+    for (const event of ['SIGNED_IN', 'TOKEN_REFRESHED', 'INITIAL_SESSION']) {
+      for (const cb of h.listeners) cb(event, sessionFor('user-1'));
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resyncPush).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-sends on a sign-in, and not while signed out', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderAuth(qc);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resyncPush).not.toHaveBeenCalled();
+    act(() => {
+      for (const cb of h.listeners) cb('SIGNED_IN', sessionFor('user-1'));
+    });
+    await waitFor(() => expect(resyncPush).toHaveBeenCalledTimes(1));
   });
 });

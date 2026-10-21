@@ -13,6 +13,7 @@ import { resetActiveBoard } from './acting';
 import { supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
+import { resyncPush } from './push';
 import { ROUTES } from './routes';
 
 /**
@@ -126,17 +127,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * (5 min), so the next session could paint the previous account's collections,
    * pipeline and notifications before its own reads landed. Clearing on the
    * TRANSITION (rather than only inside signOut) also covers a switch that
-   * happens through a token change rather than an explicit sign-out. */
+   * happens through a token change rather than an explicit sign-out.
+   *
+   * Not before the stored session is read (`loading`): the null it starts from
+   * is not yet anyone. Identity BECOMING a user (the launch, a sign-in) re-sends
+   * this device's push subscription (lib/push `resyncPush`; idempotent, never
+   * prompts). */
   const prevUserId = useRef<string | null>(null);
   useEffect(() => {
-    if (prevUserId.current !== null && prevUserId.current !== userId) {
+    if (loading) return;
+    const prev = prevUserId.current;
+    prevUserId.current = userId;
+    if (prev !== null && prev !== userId) {
       queryClient.clear();
       /* The per-device pipeline board and "edit as owner" were the previous
        * account's pick (lib/acting): the next one starts on its own board. */
       resetActiveBoard();
+    } else if (prev === null && userId !== null) {
+      void resyncPush();
     }
-    prevUserId.current = userId;
-  }, [userId, queryClient]);
+  }, [loading, userId, queryClient]);
 
   const value = useMemo<AuthState>(
     () => ({
