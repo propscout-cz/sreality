@@ -160,10 +160,12 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   `share_party_emails()` (every share kind, plus every actor in the caller's own ledger, so a revoked
   delegate stays named) is the label door; deleting the actor's account nulls the actor, not the row.
 - **One notification kind.** `notification_dispatches.source_kind = 'share'` for every kind
-  (`collection_id` set for a collection share, NULL for a pipeline or dashboard share); 641 renamed
-  `collection_share` (and its keys to `share:collection:<collection>:<recipient>`); `api/shares.py`
-  writes all three (`share:dashboard:<dashboard>:<recipient>`, 647). In-app now, also pushed from W4 (collection-sharing ruling
-  5(e) superseded 2026-10-21).
+  (`collection_id` set for a collection share, NULL for a pipeline or dashboard share; 641 renamed
+  `collection_share`); `api/shares.py` writes all three with `change_kind` `shared_<collection|pipeline|dashboard>`
+  (652), the sharer as `actor_account_id` and the dashboard id or the mode as `event_ref`, conflicting on the
+  one event identity (`EVENT_IDENTITY`, migration 653; no `dedupe_key` since W3), so a share notifies once per
+  (recipient, thing, actor) ever. In-app now, also pushed from W4 (collection-sharing ruling 5(e) superseded
+  2026-10-21).
 - **The API declares, per write route, which account it writes.** `tenant_conn` carries the header
   and the method into the transaction (`tenant_pool.tenant_transaction(claims, act_as=, method=)`,
   both required); `require_acting_account_id` (curation writes: own account, or the owner the

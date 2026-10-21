@@ -2191,9 +2191,16 @@ renumber.** Navigate by area:
     change_kind)` — **property-grain** for the first two, a text row for `share` (`system_health`, the
     fourth until W1, is closed history: no writer, hidden by migration 651, deleted in W6; the
     `SourceKind` alias in `api/notifications.py` is the list),
-    deduped by a single per-event **`dedupe_key`** (`wd:{sub}:new:{property_id}` once-ever;
-    `wd:{sub}:price_drop:{snapshot_id}` **per-snapshot**, so a property that keeps dropping fires
-    once per real cut — and so does the collection-monitor producer). **The producers run on ONE
+    deduped by **ONE event identity** (notifications W3, migration 653): the unique index
+    `notification_dispatches_identity_uq` over `EVENT_IDENTITY` (`api/notifications.py`) =
+    `(account_id, source_kind, subscription_id, collection_id, change_kind, property_id, event_ref,
+    actor_account_id)`, NULLS NOT DISTINCT, partial on `duplicate_of IS NULL` — a watchdog's `new`
+    once ever per property, a price step **once per snapshot** (`event_ref`), so a property that keeps
+    dropping fires once per real cut — and so does the collection-monitor producer. Every producer
+    INSERT and the share grant end in `ON CONFLICT (<EVENT_IDENTITY>) WHERE duplicate_of IS NULL DO
+    NOTHING` (`ON_EVENT_CONFLICT`, a test pins all of them and the index to one tuple); nothing writes
+    the pre-W3 `dedupe_key` (nullable since 653; its UNIQUE and column go in W6) or
+    `trigger_snapshot_id`, and nothing parses a key (F24). **The producers run on ONE
     clock (notifications W2a, migration 652):** the realtime worker's `notifications` lane runs
     `match_once` (step `watchdog_new`), `match_changes_once` (`price`) and
     `match_monitored_collections_once` (`monitor`) every 300 s, each step in its own transaction; a
@@ -2205,29 +2212,36 @@ renumber.** Navigate by area:
     late-matching property under a day old still fires and a resumed watchdog never floods; `price` is
     ONE canonical-ad step fragment (`_CANONICAL_PRICE_STEPS`, 7 days, from `active_since` /
     `monitor_since`) for both producers; `monitor`'s `inactive` waits out 24 h gone (a portal blink
-    sends neither Delisted nor Relisted). Every row also writes `event_ref` (the discriminator within
-    source, kind and property: snapshot id, inactive epoch, introducing listing, dashboard id,
-    pipeline mode) and a share its `actor_account_id`, with a target-less `ON CONFLICT DO NOTHING`;
-    the keys stay byte-identical to the pre-W2 grammar (a render test pins them) until W3's identity
-    index replaces them. **A price step is one
+    sends neither Delisted nor Relisted). Every row writes `event_ref` (the discriminator within
+    source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
+    inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its
+    `actor_account_id`; each producer's `event_ref` is what migration 652 backfilled from the old key
+    on the rows written before it (a render test pins the two), so no event already told re-fires.
+    **A price step is one
     advert's change against its OWN previous priced snapshot** — `listing_price_steps`
     (migration 559) is the one definition, read by the watchdog, the collection monitor and
     the property rollup alike; the two notification producers used to window every advert of
     a property into one series, so two portals quoting 5.0M and 5.2M fired a drop and a rise
     on every scrape and a merge alone sent false alerts. Each row carries provenance
-    (`trigger_price_czk` / `prev_price_czk` / `trigger_snapshot_id`); since W1 (2026-10-21) producers
+    (`trigger_price_czk` / `prev_price_czk`; the snapshot is its `event_ref`); since W1 (2026-10-21) producers
     write facts only, never `channel`, `status` or `target_channels` (W6 drops them; the routing
     contract of `docs/design/notifications-unified.md` is superseded by `docs/design/notifications-push/PROGRAM.md`).
     Rows are carried onto the survivor by `PROPERTY_CARRIERS`' `notification_dispatches` entry
-    (rule #18, `toolkit/property_carriers.py`, collapse key `(subscription_id, collection_id,
-    change_kind, trigger_snapshot_id)`, NULL-safe — the merge's one delete there, its `channel_sends`
-    re-pointed onto the kept row first (`Dispatches.RESEND_SQL`: the FK is ON DELETE SET NULL and
-    `channel_sends_check` refuses a NULL on a notification-backed send, so one delivered alert used to
-    abort the whole merge; `Dispatches.LOCK_SQL` first locks the retired rows FOR UPDATE in its own
-    statement, so an outbox claim could not land a send between the re-point and the delete; with the
-    outbox gone since W1 both steps move nothing, and W3 replaces the collapse); deleting a
-    subscription or collection cascades its rows) so they never orphan
-    onto a `merged_away` property. **Delivery and detection are SEPARATE:** in-app delivery is the event row itself;
+    (rule #18, `toolkit/property_carriers.Dispatches`), so they never orphan onto a `merged_away`
+    property: ONE UPDATE re-points every alert of the retired property and, where the survivor already
+    holds the same identity (`Dispatches.IDENTITY` = `EVENT_IDENTITY` without `property_id`, NULL-safe,
+    the survivor's unmarked rows, the earliest), marks it `duplicate_of` that row. **A merge deletes no
+    alert:** W3 retired the collapse on `(subscription_id, collection_id, change_kind,
+    trigger_snapshot_id)`, which erased distinct events as "twins" (audit F6: two epochs' Delisted),
+    and its `channel_sends` LOCK/RESEND steps (no writer since W1). The re-pointed row is also what
+    closes the second `new` after two fresh properties merge: it holds the survivor's identity, so the
+    producer's next pass over the survivor conflicts. Alerts write no carry rows, so a detach or split
+    leaves them in place (a split-off property under a day old may get `new` once more: accepted).
+    **Deleting a watchdog retires it** (`retired_at`, `is_active = false`; F21): it stops matching and
+    leaves the list, and its rows stay for analysis; deleting a collection still cascades its rows
+    (collection retirement is deferred). What any reader sees is ONE fragment, **`VISIBLE_SQL`**: not a
+    marked repeat, not about a property the event's own account dismissed, not from a retired
+    watchdog — the same under RLS and on the service role. **Delivery and detection are SEPARATE:** in-app delivery is the event row itself;
     external delivery is a ledger of its own, never a `channel`-column widen. (The old
     migration-057 comment claiming a new channel was "a one-line ALTER" was **false**: migration
     096 dropped `channel` from the dedup key, so the grain could never carry a second channel —
@@ -2243,7 +2257,7 @@ renumber.** Navigate by area:
     `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
     `listings.inactive_at` is cleared on reactivation), and `new_source` (a sibling listing on a
     new portal). It is set-based (one `INSERT…SELECT` per kind across all monitored collections),
-    collection-scoped dedupe (`cm:{collection}:{kind}:{discriminator}`); until W1 it also stamped
+    idempotent on the one identity (collection, kind, property, `event_ref`); until W1 it also stamped
     `target_channels` from the collection's `notify_channels`. Every detector is **anchored on `monitor_since`**
     (= `greatest(collection_properties.added_at, collections.monitoring_enabled_at)`, migration 230)
     so it fires only for changes observed AFTER the operator started watching that property — a
@@ -2346,15 +2360,16 @@ renumber.** Navigate by area:
     Watcher and canary detail: `.claude/skills/scraper-ops/references/pipeline-verification.md`.
     **The third live producer is `share` (migration 610, one kind for every share since 641; dashboards since 647).**
     `api/shares.py` writes it for a collection share (`POST /collections/{id}/shares`: ONE dispatch
-    per (collection, recipient) ever, `dedupe_key` `share:collection:<collection>:<recipient>`, no
-    time: a revoke + re-share loop cannot refill an inbox; `collection_id` set; "<owner email> shared
+    per (collection, recipient) ever — the identity holds no time, so a revoke + re-share loop cannot
+    refill an inbox; `collection_id` set; "<owner email> shared
     the collection "<name>" with you") and for a pipeline share (`POST /pipeline/shares`: one per
-    (owner, recipient, mode), `share:pipeline:<owner>:<recipient>:<mode>`, written when the grant is
+    (owner, recipient, mode), written when the grant is
     new or widens to edit; `collection_id` NULL; "<owner email> shared their pipeline with you (view
-    only|edit)") and for a dashboard share (647: `share:dashboard:<dashboard>:<recipient>`, once ever, `collection_id`
+    only|edit)") and for a dashboard share (647: once per (dashboard, recipient) ever, `collection_id`
     NULL, "<owner email> shared the dashboard "<name>" with you") — `subscription_id` NULL, `change_kind` naming what opens
     (`shared_collection | shared_dashboard | shared_pipeline`, migration 652, which relabelled the old `'shared'` rows; the feed's
-    `share_kind` reads it), `actor_account_id` the sharer and `event_ref` the dashboard id or the mode, the one stored copy of an email
+    `share_kind` reads it), `actor_account_id` the sharer and `event_ref` the dashboard id or the mode (the feed's `share_ref` is
+    the collection id, the actor or the event_ref, never a parsed key), the one stored copy of an email
     in the sharing model (a snapshot at share time), in-app now and pushed from W4 (collection-sharing
     ruling 5(e)'s in-app-only superseded 2026-10-21, `docs/design/notifications-push/PROGRAM.md` § 3.1). Migration 641 renamed 610's `collection_share` rows and keys. It is stamped to
     the RECIPIENT by the route on the service role (tenants hold no INSERT on the table), and the
@@ -2434,11 +2449,13 @@ renumber.** Navigate by area:
     and **follows the property across a merge**, which records it in the carry record.
     `toolkit/property_carriers.py` (`PROPERTY_CARRIERS`, the one ordered list; `NOT_CARRIED` +
     the census) carries that state inside the merge transaction, in a fixed order:
-    collections, tags, notes AND `notification_dispatches` as `CurationTable`s (SET tables union
+    collections, tags and notes as `CurationTable`s (SET tables union
     with collision-collapse; APPEND tables move every row), then `property_artifact_links` (migration
     599: the operator's one "Artifact link" URL per property, a SET table on `account_id` with no
     `at`, so the survivor's link stands on a collision, nothing is recorded, and a detach leaves
-    it where it is); the pipeline (rule #22); then
+    it where it is); `notification_dispatches` (`Dispatches`, migration 653: ONE UPDATE re-points
+    every alert and marks the one the survivor already holds `duplicate_of`, deleting none, rule 16);
+    the pipeline (rule #22); then
     dismissals, AFTER the pipeline so a live card lifts its account's dismissal. The private
     `_merge_pair` (one per retired property of a `merge_property_set`) is the only writer that
     retires a property, and it runs every carrier before the retire, so no operator-state row can
@@ -2703,12 +2720,13 @@ renumber.** Navigate by area:
     115 ms (31 ms baseline), Stats no slower, map clusters +95 ms.
     **Notifications: a dismissal hides, it never un-detects.** The watchdog matcher, change
     detector and collection monitor are untouched — `match_once` reads its 24 h window whether or
-    not it inserts, `:new:` dedupe keys are once-ever, and the `reactivated` detector keys off a
+    not it inserts, a `new` identity is once-ever, and the `reactivated` detector keys off a
     prior `inactive` dispatch, so suppressing an INSERT would lose the event for good on undo.
     Instead every in-app read of `notification_dispatches` — the feed and its total, the unread
-    badge, mark-all-seen, each watchdog's dispatch count — carries one `_NOT_DISMISSED` predicate
-    (RLS-scoped, via the view), so the badge and the list cannot disagree; a dispatch stays
-    reachable by id. The W4 push fans out only these VISIBLE rows, so a dismissed property is never
+    badge, mark-all-seen, mark-seen, each watchdog's dispatch count — carries the one `VISIBLE_SQL`
+    fragment (since W3; its dismissal arm names the event's own account on the active row, so the
+    service role agrees with RLS), so the badge and the list cannot disagree; a hidden dispatch is a
+    404 by id. The W4 push fans out only these VISIBLE rows, so a dismissed property is never
     pushed (the outbox drain that skipped it the same way was deleted in W1).
     **One control.** `<DismissButton>` (`overlay` on the Browse card beside the funnel,
     `header` on the listing page) over one hook, `lib/useDismissal`. A click hides with no confirm — nothing is destroyed — and a single
