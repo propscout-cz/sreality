@@ -813,6 +813,25 @@ describe('<ListingCards> merge mode with a multi-photo card', () => {
 /* MS19: a card is a property. Its badge names the portals where it has an active ad
  * (or, with none active, every portal it had, marked inactive), and under one
  * portal's "Newest first" a card whose date there is not its own first seen says so. */
+describe('<ListingCards> the title names the lot', () => {
+  const title = () => screen.findByRole('link', { name: /na prodej/ });
+
+  it('adds a house lot after its floor area', async () => {
+    renderGrid({ row: { ...ROW, category_main: 'dum', disposition: '5+1', area_m2: 180, plot_area_m2: 850 } as CardRow });
+    expect(await title()).toHaveAccessibleName(/ na prodej · 5\+1 · 180\sm² · 850\sm²\spozemku$/);
+  });
+
+  it('names a pozemek area once', async () => {
+    renderGrid({ row: { ...ROW, category_main: 'pozemek', disposition: null, area_m2: 1200, plot_area_m2: 1200 } as CardRow });
+    expect(await title()).toHaveAccessibleName(/ na prodej · 1\s200\sm²$/);
+  });
+
+  it('leaves a flat without a lot as it was', async () => {
+    renderGrid({ row: { ...ROW, plot_area_m2: null } as CardRow });
+    expect(await title()).toHaveAccessibleName(TITLE_RE);
+  });
+});
+
 describe('<ListingCards> the portal badge and the order date', () => {
   const badge = () => screen.getByTitle(/^Portály/);
 

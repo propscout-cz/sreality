@@ -478,7 +478,7 @@ describe('the one-portal order', () => {
   });
 
   it('passes every other sort straight through', () => {
-    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'last_seen_at',
+    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'last_seen_at',
                          'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
@@ -564,6 +564,31 @@ describe('the cards sort menu', () => {
       ['property_id', { ascending: false }],
     ]);
     vi.restoreAllMocks();
+  });
+  /* Lot area is THE plot measure (the Lot area filter's column), never the bare
+   * estate_area, which four portals leave empty on land. */
+  it('offers lot area both ways, on the plot measure', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Pozemek: od nejmenšího')).toEqual({ field: 'plot_area_m2', direction: 'asc' });
+    expect(byLabel.get('Pozemek: od největšího')).toEqual({ field: 'plot_area_m2', direction: 'desc' });
+    expect(parseSort('-plot_area_m2')).toEqual({ field: 'plot_area_m2', direction: 'desc' });
+  });
+
+  it('pages the cards by lot area with the rows that have no lot last, and shows the lot', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'plot_area_m2', direction: 'asc' },
+      { value: 850, id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['plot_area_m2', { ascending: true, nullsFirst: false }],
+      ['property_id', { ascending: true }],
+    ]);
+    expect(s.calls).toContainEqual(
+      ['or', ['plot_area_m2.gt.850,and(plot_area_m2.eq.850,property_id.gt.7),plot_area_m2.is.null']]);
+    vi.restoreAllMocks();
+    expect(BROWSE_SELECT_COLUMNS.cards.split(',')).toContain('plot_area_m2');
   });
 });
 

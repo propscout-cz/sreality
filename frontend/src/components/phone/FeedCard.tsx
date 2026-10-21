@@ -21,7 +21,7 @@ import { listingTypeLabel } from '@/lib/enums';
 import { useCardPhotos } from '@/lib/hydration';
 import type { CoverTag } from '@/lib/imageTags';
 import { propertyPath } from '@/lib/listingUrl';
-import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
+import { areaKindOf, plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
 import { portalShort } from '@/lib/portals';
 import type { CardRow } from '@/lib/queries';
 
@@ -57,12 +57,17 @@ export function feedLayout(r: Pick<CardRow, 'category_main' | 'disposition' | 's
   return [listingTypeLabel(r), r.disposition].filter(Boolean).join(' ');
 }
 
-/* Line 2: layout · area · place. */
+/* Line 2: layout · area · lot · place. */
 export function feedLine2(
-  r: Pick<CardRow, 'category_main' | 'disposition' | 'subtype' | 'area_m2' | 'display_label'>,
+  /* The lot is optional: the phone property page shares this line and reads
+   * properties_public, which carries no plot measure. */
+  r: Pick<CardRow, 'category_main' | 'disposition' | 'subtype' | 'area_m2' | 'display_label'> &
+    Partial<Pick<CardRow, 'plot_area_m2'>>,
 ): string {
   const parts = [feedLayout(r)];
   if (r.area_m2 != null) parts.push(fmtArea(r.area_m2, areaKindOf(r.category_main)));
+  const plot = plotBesideArea(r);
+  if (plot != null) parts.push(fmtArea(plot, 'plot'));
   if (r.display_label) parts.push(r.display_label);
   return parts.join(' · ');
 }
