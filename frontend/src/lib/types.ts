@@ -538,17 +538,14 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise in-app change alerts on their member
-   * properties (price moves, delisting). `notify_channels` is the source's
-   * channel pick that the producer folds into notifications.target_channels —
-   * empty means in-app only. `is_system` marks the protected default
+  /* Monitored collections raise change alerts on their member properties
+   * (price moves, delisting). `is_system` marks the protected default
    * "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
-  notify_channels: string[];
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
    * the collection (lib/collectionCache `isMine`); on a shared row monitoring
-   * reads off and notify_channels empty — the alerts are the owner's. */
+   * reads off — the alerts are the owner's. */
   owner_email: string | null;
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
@@ -1068,10 +1065,6 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
-  /* Non-in_app delivery channels this watchdog fans out to (e.g. ['email'])
-   * — folded into each dispatch's target_channels by the matcher (Sprint N).
-   * in_app is always implicit. */
-  channels: string[];
   dispatch_count: number;
 }
 
@@ -1165,9 +1158,6 @@ export interface WatchdogDispatch {
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
   trigger_snapshot_id: number | null;
-  /* Non-in_app delivery channels the producer stamped (the Sprint N outbox
-   * reads this column); empty = in-app only. */
-  target_channels: string[];
   estimation_run_id: number | null;
   estimation_status: EstimationStatus | null;
   estimation_kind: 'rent' | 'sale' | null;

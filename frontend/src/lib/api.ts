@@ -2417,7 +2417,6 @@ export const createCollection = (input: {
   name: string;
   description?: string | null;
   monitoring_enabled?: boolean;
-  notify_channels?: string[];
 }): Promise<Collection> =>
   request<Collection>('/collections', { method: 'POST', json: input });
 
@@ -2427,7 +2426,6 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
-    notify_channels?: string[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2799,7 +2797,6 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
-  channels?: string[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2812,7 +2809,6 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
-    channels?: string[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(

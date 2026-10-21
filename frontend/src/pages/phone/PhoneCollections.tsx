@@ -4,8 +4,8 @@
  * one — and "Nová sbírka" as the one action, a name in a bottom sheet.
  *
  * Reads and writes are the desktop page's own: `useCollections`,
- * `createCollection` (monitoring off — monitoring and its channels are set on
- * the desktop, Q11), then `revalidateCollections` so every collection glyph on
+ * `createCollection` (monitoring off — monitoring is set on the desktop, Q11),
+ * then `revalidateCollections` so every collection glyph on
  * every card hears about the new list. Rename, delete, monitoring and sharing
  * have no control here on purpose; the footer says where they live. Collections
  * someone shared with me follow under "Sdílené se mnou", read-only. */

@@ -37,7 +37,6 @@ const baseDispatch: WatchdogDispatch = {
   trigger_price_czk: null,
   prev_price_czk: null,
   trigger_snapshot_id: null,
-  target_channels: [],
   estimation_run_id: null,
   estimation_status: null,
   estimation_kind: null,
