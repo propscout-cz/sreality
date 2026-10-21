@@ -2267,7 +2267,9 @@ renumber.** Navigate by area:
     producer. The worker's `push` lane (15 s; brake: no `VAPID_PRIVATE_KEY`) fans out every VISIBLE unseen
     event of the last day to the devices registered before it (a share past one per sharer a day is
     `skipped/capped`), claims due rows by compare-and-set (`next_attempt_at` is a 2-minute lease, `FOR
-    UPDATE SKIP LOCKED`, so a deploy overlap shares no row and a killed send returns), re-checks them,
+    UPDATE SKIP LOCKED`, so a deploy overlap shares no row and a killed send returns; no device is started 90 s
+    after the claim, a POST is bounded at 3.05 s + 6 s, and every later write is a compare-and-set on the
+    claimed `(id, attempts)`, so an overrun claimer never overwrites a newer outcome), re-checks them,
     sends ONE declarative Web Push per device (`api/push.py`: RFC 8291 aes128gcm, RFC 8292 VAPID with
     `sub` = the device's origin; `TTL` ≥ 60 s, `Urgency: high`, a `Topic` per batch) and finalizes it at
     once (a 429 holds the DEVICE, `push_subscriptions.hold_until` = Retry-After, and hands the rows their

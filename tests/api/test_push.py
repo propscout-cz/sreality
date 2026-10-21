@@ -176,7 +176,7 @@ def test_a_push_is_encrypted_signed_and_bounded(key: str, device: Any, posted: l
     out = push.send(ENDPOINT, ORIGIN, p256dh, auth_b64, payload, ttl_s=5, topic="a" * 22)
     assert out == push.Outcome("sent", provider_message_id="6A1C9C5E-2D2B-4F7B-9A43-1F0E6C3B2A10")
     [call] = posted
-    assert call["url"] == ENDPOINT and call["allow_redirects"] is False and call["timeout"] == 10.0
+    assert call["url"] == ENDPOINT and call["allow_redirects"] is False and call["timeout"] == (3.05, 6.0)
     headers = call["headers"]
     assert int(headers["TTL"]) >= 60 and headers["TTL"] == "60", "TTL is never below a minute (BadTtl)"
     assert (headers["Urgency"], headers["Topic"], headers["Content-Encoding"]) == ("high", "a" * 22, "aes128gcm")

@@ -117,8 +117,10 @@ def apple_host(endpoint: str) -> str | None:
 
 
 def send(endpoint: str, device_origin: str, p256dh: str, auth: str, payload: dict[str, Any], *, ttl_s: int,
-         urgency: str = "high", topic: str | None = None, timeout_s: float = 10.0) -> Outcome:
-    """POST one encrypted push; the endpoint's host is re-checked first, and redirects are never followed."""
+         urgency: str = "high", topic: str | None = None,
+         timeout: tuple[float, float] = (3.05, 6.0)) -> Outcome:
+    """POST one encrypted push; the endpoint's host is re-checked first, and redirects are never followed. The
+    (connect, read) timeout keeps a pass of ten devices inside the push lane's 2-minute lease."""
     host = apple_host(endpoint)
     if host is None:
         return Outcome("failed", "BadEndpoint")
@@ -130,7 +132,7 @@ def send(endpoint: str, device_origin: str, p256dh: str, auth: str, payload: dic
     if topic:
         headers["Topic"] = topic
     try:
-        resp = requests.post(endpoint, data=body, headers=headers, timeout=timeout_s, allow_redirects=False)
+        resp = requests.post(endpoint, data=body, headers=headers, timeout=timeout, allow_redirects=False)
     except requests.RequestException as exc:
         return Outcome("retry", type(exc).__name__)
     return _outcome(resp)

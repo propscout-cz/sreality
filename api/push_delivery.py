@@ -3,7 +3,9 @@ finalize. scraper/realtime_worker.py's `push` lane runs `deliver_once` every 15 
 
 No lock but the claim: fan-out is idempotent on the (event, device) pair, a claim moves a row's `next_attempt_at`
 two minutes ahead (`FOR UPDATE SKIP LOCKED`, so two claims never share a row) and a process that dies holding one
-leaves it due again when that lease runs out. One push per device per pass, finalized right after its POST, the
+leaves it due again when that lease runs out. The pass stays inside the lease (no device started past
+CLAIM_BUDGET_S), and every write after the claim is a compare-and-set on it, so a claimer that overran never
+overwrites a newer outcome. One push per device per pass, finalized right after its POST, the
 stop signal read between devices. An endpoint is never logged and never in an error: a step or a device that
 raises is recorded by its exception's class name alone.
 """
@@ -12,7 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,9 +26,13 @@ from api.notifications import VISIBLE_SQL
 LOG = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5
-# Ten devices a pass: ten 10 s POSTs stay inside one 2-minute lease.
+# Ten devices a pass at most; CLAIM_BUDGET_S, not this, is what keeps the pass inside its lease.
 MAX_DEVICES = 10
 MAX_ROWS = 200
+# The lease covers the pass: no device is started past this many seconds after the claim, and one started just
+# before it ends inside the 2-minute lease (a POST is bounded at 3.05 s connect + 6 s read, api/push.py). The
+# devices left over come back when their lease runs out.
+CLAIM_BUDGET_S = 90.0
 COALESCED_TITLES = 3
 # The two SPA routes a push opens (tests/test_spa_route_contract.py pins both to frontend/src/lib/routes.ts).
 LANDING_PATH = "/n/{dispatch_id}?d={delivery_id}"
@@ -102,10 +109,14 @@ CLAIM_SQL = (
     "ORDER BY c.push_subscription_id, d.dispatched_at DESC, c.id"
 )
 
-SKIP_SQL = (
-    "UPDATE notification_deliveries SET status = 'skipped', reason = %(reason)s "
-    "WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
+# Every write after the claim is a compare-and-set on the claim it holds: (id, attempts) as claimed, still open. A
+# claimer whose lease ran out (another took the row, attempts moved) can never overwrite the newer outcome.
+_AS_CLAIMED = (
+    "FROM unnest(%(ids)s::bigint[], %(attempts)s::int[]) AS c(id, attempts) "
+    "WHERE x.id = c.id AND x.attempts = c.attempts AND x.status IN ('pending', 'failed')"
 )
+
+SKIP_SQL = f"UPDATE notification_deliveries x SET status = 'skipped', reason = %(reason)s {_AS_CLAIMED}"
 
 # The badge: the account's VISIBLE unseen count at send time, the bell's number.
 UNREAD_SQL = (
@@ -113,15 +124,12 @@ UNREAD_SQL = (
     f"WHERE d.account_id = %(account_id)s AND d.seen_at IS NULL AND {VISIBLE_SQL}"
 )
 
-# (f) Finalize, each guarded on the claimed state so a late writer never overwrites a finished row.
+# (f) Finalize, each on the claim it holds (_AS_CLAIMED).
 SENT_SQL = (
-    "UPDATE notification_deliveries SET status = 'sent', sent_at = now(), provider_message_id = %(message_id)s, "
-    "reason = NULL WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
+    "UPDATE notification_deliveries x SET status = 'sent', sent_at = now(), provider_message_id = %(message_id)s, "
+    f"reason = NULL {_AS_CLAIMED}"
 )
-GONE_SQL = (
-    "UPDATE notification_deliveries SET status = 'gone', reason = %(reason)s "
-    "WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
-)
+GONE_SQL = f"UPDATE notification_deliveries x SET status = 'gone', reason = %(reason)s {_AS_CLAIMED}"
 END_DEVICE_SQL = (
     "UPDATE push_subscriptions SET ended_at = now(), end_reason = 'gone', endpoint = NULL, p256dh = NULL, "
     "auth = NULL WHERE id = %(device)s AND ended_at IS NULL"
@@ -133,18 +141,17 @@ HOLD_DEVICE_SQL = (
     "WHERE id = %(device)s"
 )
 THROTTLED_SQL = (
-    "UPDATE notification_deliveries SET attempts = greatest(attempts - 1, 0), next_attempt_at = now(), "
-    "reason = %(reason)s WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
+    "UPDATE notification_deliveries x SET attempts = greatest(x.attempts - 1, 0), next_attempt_at = now(), "
+    f"reason = %(reason)s {_AS_CLAIMED}"
 )
 RETRY_SQL = (
-    "UPDATE notification_deliveries SET status = 'failed', reason = %(reason)s, "
-    "next_attempt_at = CASE WHEN attempts >= %(max_attempts)s THEN 'infinity'::timestamptz "
-    "  ELSE now() + make_interval(mins => power(2, attempts)::int) END "
-    "WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
+    "UPDATE notification_deliveries x SET status = 'failed', reason = %(reason)s, "
+    "next_attempt_at = CASE WHEN x.attempts >= %(max_attempts)s THEN 'infinity'::timestamptz "
+    f"  ELSE now() + make_interval(mins => power(2, x.attempts)::int) END {_AS_CLAIMED}"
 )
 FAIL_SQL = (
-    "UPDATE notification_deliveries SET status = 'failed', reason = %(reason)s, next_attempt_at = 'infinity' "
-    "WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')"
+    "UPDATE notification_deliveries x SET status = 'failed', reason = %(reason)s, next_attempt_at = 'infinity' "
+    f"{_AS_CLAIMED}"
 )
 
 # The `notifications` Health check's reads (scripts/checks/notifications.py), beside the statements they judge.
@@ -262,11 +269,16 @@ def claim(conn: Any, *, max_devices: int = MAX_DEVICES, max_rows: int = MAX_ROWS
     return [_claimed(row) for row in _fetch(conn, CLAIM_SQL, params)]
 
 
-def finalize(conn: Any, device_id: int, ids: list[int], outcome: push.Outcome) -> None:
+def _as_claimed(claims: Sequence[tuple[int, int]]) -> dict[str, list[int]]:
+    return {"ids": [i for i, _ in claims], "attempts": [a for _, a in claims]}
+
+
+def finalize(conn: Any, device_id: int, claims: Sequence[tuple[int, int]], outcome: push.Outcome) -> None:
     """One push's rows by its outcome: sent | gone (the device ends) | throttled (the device is held, the rows get
     their attempt back) | retry | failed."""
-    params = {"ids": ids, "device": device_id, "reason": outcome.reason, "max_attempts": MAX_ATTEMPTS,
-              "message_id": outcome.provider_message_id, "wait": outcome.retry_after_s or 60}
+    params = {**_as_claimed(claims), "device": device_id, "reason": outcome.reason,
+              "max_attempts": MAX_ATTEMPTS, "message_id": outcome.provider_message_id,
+              "wait": outcome.retry_after_s or 60}
     if outcome.kind in ("gone", "throttled"):
         rows_sql, device_sql = (GONE_SQL, END_DEVICE_SQL) if outcome.kind == "gone" else (THROTTLED_SQL,
                                                                                          HOLD_DEVICE_SQL)
@@ -284,12 +296,12 @@ def _deliver(conn: Any, rows: list[Claimed], send: Callable[..., push.Outcome]) 
     outcome = send(first.endpoint, first.origin, first.p256dh, first.auth,
                    build_payload(rows, first.origin, badge), ttl_s=max(60, max(r.ttl_left_s for r in rows)),
                    urgency="high", topic=topic(first.device_id, min(ids)))
-    finalize(conn, first.device_id, ids, outcome)
+    finalize(conn, first.device_id, [(r.delivery_id, r.attempts) for r in rows], outcome)
     return outcome
 
 
-def deliver_once(conn: Any, *, stop: Callable[[], bool],
-                 send: Callable[..., push.Outcome] = push.send) -> dict[str, Any]:
+def deliver_once(conn: Any, *, stop: Callable[[], bool], send: Callable[..., push.Outcome] = push.send,
+                 clock: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     """One pass. Returns the heartbeat's `last`, plus `attempted` and `raised` (step -> class names, never a text)."""
     last: dict[str, Any] = {"live_devices": 0, "fanned_out": 0, "capped": 0, "claimed": 0, "skipped": {},
                             "pushes": 0, "sent": 0, "gone": 0, "throttled": 0, "retry": 0, "failed": 0}
@@ -301,28 +313,33 @@ def deliver_once(conn: Any, *, stop: Callable[[], bool],
     except Exception as exc:  # noqa: BLE001 - a step's error is its class name; its text may hold a row
         raised["fan_out"] = type(exc).__name__
     devices: dict[int, list[Claimed]] = {}
+    claimed_at = clock()
     try:
         last["exhausted"] = _run(conn, EXHAUSTED_SQL, {"max_attempts": MAX_ATTEMPTS})
         rows = claim(conn)
+        claimed_at = clock()
         last["claimed"] = len(rows)
-        skips: dict[str, list[int]] = {}
+        skips: dict[str, list[tuple[int, int]]] = {}
         for row in rows:
             reason = skip_reason(row)
             if reason:
-                skips.setdefault(reason, []).append(row.delivery_id)
+                skips.setdefault(reason, []).append((row.delivery_id, row.attempts))
             else:
                 devices.setdefault(row.device_id, []).append(row)
-        for reason, ids in sorted(skips.items()):
-            _run(conn, SKIP_SQL, {"reason": reason, "ids": ids})
-        last["skipped"] = {reason: len(ids) for reason, ids in sorted(skips.items())}
+        for reason, claims in sorted(skips.items()):
+            _run(conn, SKIP_SQL, {"reason": reason, **_as_claimed(claims)})
+        last["skipped"] = {reason: len(claims) for reason, claims in sorted(skips.items())}
     except Exception as exc:  # noqa: BLE001
         raised["claim"] = type(exc).__name__
         devices = {}
     errors: dict[str, int] = {}
     for device_rows in devices.values():
+        # The rest come back when their lease runs out.
         if stop():
-            # The rest come back when their lease runs out.
             last["stopped"] = True
+            break
+        if clock() - claimed_at >= CLAIM_BUDGET_S:
+            last["deadline_stopped"] = True
             break
         try:
             outcome = _deliver(conn, device_rows, send)

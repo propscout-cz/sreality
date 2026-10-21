@@ -101,13 +101,15 @@ def test_the_claim_is_a_leased_skip_locked_compare_and_set_of_at_most_ten_device
     assert ("NOT EXISTS (SELECT 1 FROM push_subscriptions h WHERE h.id = notification_deliveries.push_subscription_id "
             "AND h.hold_until > now())") in due
     assert (pd.MAX_ATTEMPTS, pd.MAX_DEVICES, pd.MAX_ROWS) == (5, 10, 200)
-    assert pd.MAX_DEVICES * 10 < 120, "ten 10 s POSTs fit one 2-minute lease"
+    assert pd.CLAIM_BUDGET_S + 3.05 + 6.0 < 120, "the last device started still ends inside the 2-minute lease"
 
 
-def test_every_finalize_touches_only_rows_still_claimed() -> None:
-    for sql in (pd.SENT_SQL, pd.GONE_SQL, pd.RETRY_SQL, pd.FAIL_SQL, pd.SKIP_SQL):
-        assert "WHERE id = ANY(%(ids)s) AND status IN ('pending', 'failed')" in " ".join(sql.split())
-    assert "THEN 'infinity'::timestamptz ELSE now() + make_interval(mins => power(2, attempts)::int)" in " ".join(
+def test_every_write_after_the_claim_is_a_compare_and_set_on_that_claim() -> None:
+    claimed = ("FROM unnest(%(ids)s::bigint[], %(attempts)s::int[]) AS c(id, attempts) "
+               "WHERE x.id = c.id AND x.attempts = c.attempts AND x.status IN ('pending', 'failed')")
+    for sql in (pd.SENT_SQL, pd.GONE_SQL, pd.THROTTLED_SQL, pd.RETRY_SQL, pd.FAIL_SQL, pd.SKIP_SQL):
+        assert " ".join(sql.split()).endswith(claimed), sql
+    assert "THEN 'infinity'::timestamptz ELSE now() + make_interval(mins => power(2, x.attempts)::int)" in " ".join(
         pd.RETRY_SQL.split())
 
 
@@ -130,8 +132,10 @@ def test_one_push_per_device_and_several_rows_coalesce() -> None:
                                    "lang": "cs", "app_badge": 7}
     assert one["web_push"] == 8030 and one["app_badge"] == 7 == many["app_badge"]
     assert _after(conn, pd.SENT_SQL) == [
-        {"ids": [11, 12, 13, 14], "device": 1, "reason": None, "max_attempts": 5, "message_id": "M-1", "wait": 60},
-        {"ids": [20], "device": 2, "reason": None, "max_attempts": 5, "message_id": "M-1", "wait": 60}]
+        {"ids": [11, 12, 13, 14], "attempts": [1, 1, 1, 1], "device": 1, "reason": None, "max_attempts": 5,
+         "message_id": "M-1", "wait": 60},
+        {"ids": [20], "attempts": [1], "device": 2, "reason": None, "max_attempts": 5, "message_id": "M-1",
+         "wait": 60}]
     assert (last["pushes"], last["sent"], last["claimed"], last["fanned_out"], last["capped"]) == (2, 2, 5, 2, 1)
     assert last["raised"] == {} and last["live_devices"] == 2
 
@@ -161,7 +165,7 @@ def test_the_recheck_skips_with_its_reason_and_sends_nothing_for_it(row: tuple[A
     conn = _conn([row, _row(60, 6)])
     send = _Send()
     last = pd.deliver_once(conn, stop=lambda: False, send=send)
-    assert _after(conn, pd.SKIP_SQL) == [{"reason": reason, "ids": [row[0]]}]
+    assert _after(conn, pd.SKIP_SQL) == [{"reason": reason, "ids": [row[0]], "attempts": [1]}]
     assert [c["endpoint"] for c in send.calls] == [_endpoint(6)]
     assert last["skipped"] == {reason: 1}
 
@@ -175,7 +179,7 @@ def test_each_outcome_is_one_statement(outcome: push.Outcome, sql: str, extra: d
     conn = _conn([_row(70, 7), _row(71, 7)])
     last = pd.deliver_once(conn, stop=lambda: False, send=_Send(outcome))
     [params] = _after(conn, sql)
-    assert params["ids"] == [70, 71] and params["device"] == 7
+    assert params["ids"] == [70, 71] and params["attempts"] == [1, 1] and params["device"] == 7
     assert {k: params[k] for k in extra} == extra
     assert last[outcome.kind] == 1 and last["pushes"] == 1
     others = {pd.SENT_SQL, pd.THROTTLED_SQL, pd.HOLD_DEVICE_SQL, pd.RETRY_SQL, pd.FAIL_SQL, pd.GONE_SQL,
@@ -198,7 +202,7 @@ def test_a_429_holds_the_device_and_gives_the_rows_their_attempt_back_five_times
         assert not any(_after(conn, s) for s in (pd.RETRY_SQL, pd.FAIL_SQL, pd.SENT_SQL))
         assert conn.tx == ["commit"]
     sql = " ".join(pd.THROTTLED_SQL.split())
-    assert "attempts = greatest(attempts - 1, 0), next_attempt_at = now()" in sql and "status =" not in sql
+    assert "SET attempts = greatest(x.attempts - 1, 0), next_attempt_at = now()" in sql and "status =" not in sql
     assert "hold_until = greatest(hold_until, now() + make_interval(secs => %(wait)s))" in pd.HOLD_DEVICE_SQL
     assert "reason = coalesce(reason, 'lease_expired')" in pd.EXHAUSTED_SQL
 
@@ -223,6 +227,18 @@ def test_the_stop_signal_is_read_between_devices() -> None:
     last = pd.deliver_once(conn, stop=stop, send=send)
     assert len(send.calls) == 1 and last["stopped"] is True and asked == [0, 1]
     assert [p["ids"] for p in _after(conn, pd.SENT_SQL)] == [[90]], "the rest come back after their lease"
+
+
+def test_no_device_is_started_past_the_claims_budget() -> None:
+    """The lease covers the pass: past CLAIM_BUDGET_S after the claim no new POST begins, and the devices left over
+    come back when their lease runs out."""
+    conn = _conn([_row(130, 16), _row(131, 17), _row(132, 18)])
+    send = _Send()
+    ticks = iter([0.0, 0.0, 1.0, 89.9, 90.0, 500.0])
+    last = pd.deliver_once(conn, stop=lambda: False, send=send, clock=lambda: next(ticks))
+    assert [c["endpoint"] for c in send.calls] == [_endpoint(16), _endpoint(17)]
+    assert last["deadline_stopped"] is True and last["pushes"] == 2
+    assert [p["ids"] for p in _after(conn, pd.SENT_SQL)] == [[130], [131]]
 
 
 def test_a_device_that_raises_is_counted_by_class_and_the_next_still_sends(caplog) -> None:

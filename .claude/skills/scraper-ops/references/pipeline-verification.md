@@ -860,7 +860,8 @@ stored spec the matcher refuses, which `last` counts as `subscriptions_invalid`)
 lane (notifications push W4: `key` / `fan_out` / `claim` / `send`, each error the exception's CLASS
 name only — `send` reads "N of M devices failed: <classes>" — because a push endpoint is a secret
 capability URL and a psycopg or requests message can carry one; a transport retry is no error, the
-`notifications` check judges outcomes): Problem once its
+`notifications` check judges outcomes; `last.deadline_stopped` = the pass reached its 90 s claim budget and
+left the remaining devices to their lease, `last.stopped` = the shutdown did): Problem once its
 `failing_since` is older than max(3 × the lane's interval, 15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
 stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 6 while
 `worker_lane_stall` read OK.

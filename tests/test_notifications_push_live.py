@@ -217,7 +217,7 @@ def test_a_429_holds_the_device_and_no_other_and_spends_no_attempt(cur: Any) -> 
     elsewhere = _delivery(cur, _share(cur, me, sharer), free)
     claims = {c.delivery_id: c for c in pd.claim(cur.connection, max_devices=1)}
     assert set(claims) == {first, waiting}
-    pd.finalize(cur.connection, held, [first, waiting],
+    pd.finalize(cur.connection, held, [(first, 1), (waiting, 1)],
                 push.Outcome("throttled", "TooManyRequests", retry_after_s=120))
     cur.execute("SELECT id, status, attempts, reason, next_attempt_at <= now() FROM notification_deliveries "
                 "WHERE id = ANY(%s) ORDER BY id", ([first, waiting, elsewhere],))
@@ -274,7 +274,7 @@ def test_each_outcome_lands_in_a_row_the_checks_accept(cur: Any, outcome: push.O
     device = _device(cur, me)
     row = _delivery(cur, _share(cur, me, _account(cur)), device)
     cur.execute("UPDATE notification_deliveries SET attempts = %s WHERE id = %s", (attempts, row))
-    pd.finalize(cur.connection, device, [row], outcome)
+    pd.finalize(cur.connection, device, [(row, attempts)], outcome)
     cur.execute("SELECT status, reason, provider_message_id, sent_at IS NOT NULL, next_attempt_at = 'infinity' "
                 "FROM notification_deliveries WHERE id = %s", (row,))
     assert cur.fetchone() == expected
@@ -283,11 +283,40 @@ def test_each_outcome_lands_in_a_row_the_checks_accept(cur: Any, outcome: push.O
         assert cur.fetchone()[0].total_seconds() == 120, "2^1 minutes"
 
 
+def test_a_claimer_whose_lease_ran_out_never_overwrites_the_newer_outcome(cur: Any) -> None:
+    me = _account(cur)
+    device = _device(cur, me)
+    row = _delivery(cur, _share(cur, me, _account(cur)), device)
+    [stale] = pd.claim(cur.connection)                                 # A claims, then stalls past its lease
+    cur.execute("UPDATE notification_deliveries SET next_attempt_at = now() - interval '1 second' WHERE id = %s",
+                (row,))
+    [fresh] = pd.claim(cur.connection)                                 # B takes the row over
+    assert (stale.attempts, fresh.attempts) == (1, 2)
+    pd.finalize(cur.connection, device, [(row, fresh.attempts)], push.Outcome("sent", provider_message_id="B-1"))
+    for late in (push.Outcome("retry", "ReadTimeout"), push.Outcome("failed", "BadJwtToken"),
+                 push.Outcome("throttled", "TooManyRequests", retry_after_s=60), push.Outcome("sent")):
+        pd.finalize(cur.connection, device, [(row, stale.attempts)], late)
+    cur.execute("SELECT status, provider_message_id, attempts, reason FROM notification_deliveries WHERE id = %s",
+                (row,))
+    assert cur.fetchone() == ("sent", "B-1", 2, None)
+    # Apple's 429 to A still held the device (a device-level fact); let it pass for the second half.
+    cur.execute("UPDATE push_subscriptions SET hold_until = NULL WHERE id = %s", (device,))
+    # And A, finishing first, loses to B the same way: B's claim moved attempts on, so A's write matches nothing.
+    other = _delivery(cur, _share(cur, me, _account(cur)), device)
+    [a] = pd.claim(cur.connection)
+    cur.execute("UPDATE notification_deliveries SET next_attempt_at = now() - interval '1 second' WHERE id = %s",
+                (other,))
+    [b] = pd.claim(cur.connection)
+    pd.finalize(cur.connection, device, [(other, a.attempts)], push.Outcome("failed", "BadJwtToken"))
+    cur.execute("SELECT status, attempts FROM notification_deliveries WHERE id = %s", (other,))
+    assert cur.fetchone() == ("pending", b.attempts)
+
+
 def test_gone_ends_the_device_and_blanks_its_secrets(cur: Any) -> None:
     me = _account(cur)
     device = _device(cur, me)
     row = _delivery(cur, _share(cur, me, _account(cur)), device)
-    pd.finalize(cur.connection, device, [row], push.Outcome("gone", "Unregistered"))
+    pd.finalize(cur.connection, device, [(row, 0)], push.Outcome("gone", "Unregistered"))
     cur.execute("SELECT status, reason FROM notification_deliveries WHERE id = %s", (row,))
     assert cur.fetchone() == ("gone", "Unregistered")
     cur.execute("SELECT endpoint, p256dh, auth, end_reason, ended_at IS NOT NULL FROM push_subscriptions "
