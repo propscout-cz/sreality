@@ -2235,7 +2235,15 @@ renumber.** Navigate by area:
     trigger_snapshot_id)`, which erased distinct events as "twins" (audit F6: two epochs' Delisted),
     and its `channel_sends` LOCK/RESEND steps (no writer since W1). The re-pointed row is also what
     closes the second `new` after two fresh properties merge: it holds the survivor's identity, so the
-    producer's next pass over the survivor conflicts. Alerts write no carry rows, so a detach or split
+    producer's next pass over the survivor conflicts. **Producers and merges serialize on one
+    transaction-scoped advisory lock** (`NOTIFICATION_EVENTS_LOCK_SQL`, `toolkit/property_carriers.py`;
+    W3 review), because the identity includes `property_id`, which a merge changes: a merge takes it
+    EXCLUSIVE before its first `properties` row lock (`merge_property_set`, `lock_properties`,
+    autodedup's `recheck_group`; taken after them it would deadlock with a producer whose foreign key
+    check waits on those rows), and each producer statement takes it SHARED as its own statement first
+    (`_commit_one`), so its snapshot comes after any merge's commit (the retired property merged_away)
+    and a later merge's REPOINT sees the producer's row and marks the twin
+    (`tests/test_notification_events_lock_live.py`, two connections). Alerts write no carry rows, so a detach or split
     leaves them in place (a split-off property under a day old may get `new` once more: accepted).
     **Deleting a watchdog retires it** (`retired_at`, `is_active = false`; F21): it stops matching and
     leaves the list, and its rows stay for analysis; deleting a collection still cascades its rows

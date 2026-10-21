@@ -122,6 +122,21 @@ class CurationTable:
         return out
 
 
+# THE notification-events lock (notifications W3 review): producers and merges serialize on one
+# transaction-scoped advisory lock, because the event identity includes property_id, which a merge
+# changes. The protocol, two lines:
+#   - a merge takes it EXCLUSIVE before its first `properties` row lock, at every merge entry
+#     (`property_identity.merge_property_set` and `lock_properties`, autodedup's `recheck_group`;
+#     `Dispatches.on_merge` re-takes it, a no-op once held). Taken after its row locks it would
+#     deadlock: a producer holding it SHARED waits on those rows through its foreign key check.
+#   - a producer statement takes it SHARED as its own statement first, in the same transaction
+#     (`api.notifications._commit_one`), so its READ COMMITTED snapshot is taken after any merge
+#     holding it committed (the retired property merged_away, its ads on the survivor); a merge that
+#     comes second waits for the producer's commit, and its REPOINT sees that row and marks the twin.
+NOTIFICATION_EVENTS_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('notification_events'))"
+NOTIFICATION_EVENTS_SHARED_LOCK_SQL = (
+    "SELECT pg_advisory_xact_lock_shared(hashtext('notification_events'))")
+
 class Dispatches:
     """The unified event table (rule 16): an alert follows its property and is never deleted
     (F6, F13, F21). ONE UPDATE re-points every alert of the retired property onto the survivor;
@@ -149,9 +164,11 @@ class Dispatches:
         + " ORDER BY s.dispatched_at, s.id LIMIT 1), r.duplicate_of) "
         "WHERE r.property_id = %(retired)s"
     )
-    sql = (REPOINT_SQL,)
+    sql = (NOTIFICATION_EVENTS_LOCK_SQL, REPOINT_SQL)
 
     def on_merge(self, cur: psycopg.Cursor, step: MergeStep) -> list[Carried]:
+        # The merge entry already holds it (the protocol above); re-taking it is a no-op.
+        cur.execute(NOTIFICATION_EVENTS_LOCK_SQL)
         cur.execute(self.REPOINT_SQL, {"retired": step.retired, "survivor": step.survivor})
         return []
 

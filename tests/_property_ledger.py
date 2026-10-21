@@ -437,6 +437,7 @@ _HANDLERS: dict[str, Callable[[_Ledger, Any], Any]] = {
         (brm._INSERT_SQL, _Ledger._nothing),
         (rps._MIRROR_BROKER_DIRTY_SQL, _Ledger._broker_mirror),
         (carriers.Dispatches.REPOINT_SQL, _Ledger._dispatch_repoint),
+        (carriers.NOTIFICATION_EVENTS_LOCK_SQL, _Ledger._nothing),
     )
 }
 

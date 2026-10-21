@@ -789,7 +789,11 @@ def test_match_once_reads_one_24h_window_from_active_since() -> None:
     assert "'watchdog'" in sql and sql.endswith(ON_EVENT_CONFLICT)
     # Committed on its own under the bound: the INSERT's locks never outlive it.
     at = [s for s, _ in conn.executed].index(sql)
-    assert conn.executed[at - 1] == ("SET LOCAL statement_timeout = '120s'", None)
+    assert conn.executed[at - 2] == ("SET LOCAL statement_timeout = '120s'", None)
+    # The notification-events lock, SHARED, as its own statement just before the INSERT: the INSERT's
+    # snapshot then comes after any merge's commit (toolkit.property_carriers states the protocol).
+    from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
+    assert conn.executed[at - 1] == (NOTIFICATION_EVENTS_SHARED_LOCK_SQL, None)
     assert conn.transactions == 1, "one transaction per watchdog"
     executed = " ".join(s for s, _ in conn.executed)
     for gone in ("last_matched_first_seen_at", "max(first_seen_at)", "UPDATE notification_subscriptions",

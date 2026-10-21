@@ -45,6 +45,7 @@ from api.location_filter import DistrictChip, MapBounds, bounds_where, district_
 from location_data.claims_common import served_location_predicate
 from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
+from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 
 if TYPE_CHECKING:
     import psycopg
@@ -734,9 +735,15 @@ def _commit_one(conn: "psycopg.Connection", sql: str, params: dict[str, Any]) ->
     """One producer statement in its own transaction under the bound, committed at once: the KEY
     SHARE locks its INSERT takes on the properties it dispatches last one statement, never a whole
     step, so a merge (autodedup's 5 s lock_timeout) never waits on a producer. SET LOCAL, never a
-    session SET: connect() is the transaction-mode pooler, where a session GUC leaks to others."""
+    session SET: connect() is the transaction-mode pooler, where a session GUC leaks to others.
+
+    The notification-events lock, SHARED, as its own statement before the INSERT (the protocol is
+    toolkit.property_carriers'): the identity includes property_id, which a merge changes, so the
+    INSERT's snapshot must come after any merge holding the lock has committed, and a merge that
+    comes second must wait for this commit and mark the twin it then sees."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(f"SET LOCAL statement_timeout = '{PRODUCER_STATEMENT_TIMEOUT}'")
+        cur.execute(NOTIFICATION_EVENTS_SHARED_LOCK_SQL)
         cur.execute(sql, params)
         return cur.rowcount or 0
 

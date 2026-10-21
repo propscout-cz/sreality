@@ -382,7 +382,8 @@ Per-lane notes:
   a live watchdog's matches first seen in the last 24 h and after its `active_since` (create, switch-on, filter edit), images-first
   gated; no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
   `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
-  INSERT, one detector; `SET LOCAL statement_timeout` 120 s), so no INSERT's locks block a merge. Why steps: a step that raises or has a
+  INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
+  at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a
   failed statement is its own `portal_errors` entry, `lane/notifications/<step>` red alone while the others write; a stored spec the
   matcher refuses is `last.*.subscriptions_invalid`, never red (the write routes 422 it), even when every watchdog is. Beside the
   API's `matcher_loop` until W2b: one identity index (mig 653), so the overlap is a union; `NOTIFICATIONS` log line only on a write or a failure.

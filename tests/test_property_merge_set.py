@@ -346,6 +346,23 @@ def test_an_engine_merge_takes_back_nothing():
     assert len(db.sets) == 1 and db.sql("autodedup.") == []
 
 
+def test_a_merge_takes_the_notification_events_lock_before_any_row_lock():
+    """The protocol's exclusive half (toolkit.property_carriers): the merge's FIRST statement, before
+    its properties FOR UPDATE, and `lock_properties` (letters, splits, detaches) likewise. Taken after
+    a row lock it could deadlock with a producer holding it shared whose foreign key check waits on
+    that row."""
+    db = _Ledger({1: 3, 2: 7})
+    _merge(db, [3, 7])
+    statements = [s for s, _p in db.log]
+    assert statements[0] == carriers.NOTIFICATION_EVENTS_LOCK_SQL
+    assert statements[1] == " ".join(pi._LOCK_SET_SQL.split())
+
+    db = _Ledger({1: 3})
+    pi.lock_properties(db, [3])
+    assert [s for s, _p in db.log] == [carriers.NOTIFICATION_EVENTS_LOCK_SQL,
+                                       " ".join((pi._STATUS_SQL + " FOR UPDATE").split())]
+
+
 def _alerted() -> _Ledger:
     """3 survives 7. Account A's collection 5 alerted 'new' on both (one identity but the
     property), a price drop on 7, and 'inactive' on each at its own epoch; account B's

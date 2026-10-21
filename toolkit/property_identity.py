@@ -270,8 +270,10 @@ def resolve_active_property_id(
 
 def lock_properties(conn: psycopg.Connection, ids: list[int]) -> dict[int, tuple[str, int | None]]:
     """Row-lock these properties in id order, the order every writer locks in; (status,
-    merged_into) per id."""
+    merged_into) per id. The notification-events lock comes first (property_carriers): a merge or a
+    split's join may follow in this transaction, and it must never be taken after a row lock."""
     with conn.cursor() as cur:
+        cur.execute(carriers.NOTIFICATION_EVENTS_LOCK_SQL)
         cur.execute(_STATUS_SQL + " FOR UPDATE", {"ids": sorted({int(i) for i in ids})})
         return {int(r[0]): (r[1], r[2]) for r in cur.fetchall()}
 
@@ -548,6 +550,8 @@ def merge_property_set(
 
     with conn.transaction():
         with conn.cursor() as cur:
+            # Before any row lock: the notification-events protocol (property_carriers).
+            cur.execute(carriers.NOTIFICATION_EVENTS_LOCK_SQL)
             cur.execute(_LOCK_SET_SQL, {"ids": ids})
             rows = {int(r[0]): r for r in cur.fetchall()}
         _gate_set(rows, ids)

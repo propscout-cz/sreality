@@ -280,8 +280,9 @@ def test_the_dispatch_carrier_is_one_update_that_marks_and_deletes_nothing():
 
     dispatches = _carrier("notification_dispatches")
     assert isinstance(dispatches, carriers.Dispatches)
-    (repoint,) = (_n(s) for s in dispatches.sql)
-    assert [s for s, _p in _walk(dispatches).ran] == [repoint]
+    lock, repoint = (_n(s) for s in dispatches.sql)
+    assert lock == carriers.NOTIFICATION_EVENTS_LOCK_SQL, "the protocol's exclusive half first"
+    assert [s for s, _p in _walk(dispatches).ran] == [lock, repoint]
     assert repoint.startswith("UPDATE notification_dispatches r SET property_id = %(survivor)s, "
                               "duplicate_of = coalesce((SELECT s.id FROM notification_dispatches s ")
     assert repoint.endswith("ORDER BY s.dispatched_at, s.id LIMIT 1), r.duplicate_of) "
@@ -292,6 +293,17 @@ def test_the_dispatch_carrier_is_one_update_that_marks_and_deletes_nothing():
         c for c in EVENT_IDENTITY if c != "property_id")
     assert "account_id" in carriers.Dispatches.IDENTITY, "the match must never cross an account"
     assert "DELETE" not in repoint.upper()
+
+
+def test_producers_and_merges_share_one_transaction_scoped_lock():
+    """The notification-events protocol: the merge's half EXCLUSIVE, the producer's SHARED, one key,
+    both transaction-scoped (released at commit, never a session lock a pooler would strand)."""
+    from api import notifications as nf
+
+    key = "hashtext('notification_events')"
+    assert carriers.NOTIFICATION_EVENTS_LOCK_SQL == f"SELECT pg_advisory_xact_lock({key})"
+    assert carriers.NOTIFICATION_EVENTS_SHARED_LOCK_SQL == f"SELECT pg_advisory_xact_lock_shared({key})"
+    assert nf.NOTIFICATION_EVENTS_SHARED_LOCK_SQL is carriers.NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 
 
 # --- what each carrier hands the carry record (migration 589) ----------------------------
@@ -333,10 +345,11 @@ def test_the_artifact_link_collapses_within_an_account_and_leaves_no_carry_row()
 
 
 def test_alert_events_get_no_carry_rows_and_five_tables_get_them():
-    """MS14's default: the dispatch carrier runs its one statement and hands back nothing. The
-    carry record's five tables (no CHECK pins them): the three above, the card, the dismissal."""
+    """MS14's default: the dispatch carrier runs its lock and its one UPDATE and hands back
+    nothing. The carry record's five tables (no CHECK pins them): the three above, the card, the
+    dismissal."""
     cur = _walk(_carrier("notification_dispatches"))
-    assert len(cur.ran) == 1 and cur.carried == []
+    assert len(cur.ran) == 2 and cur.carried == []
     assert {c.name for c in PROPERTY_CARRIERS if getattr(c, "at", None)} == {
         "collection_properties", "property_tags", "property_notes"}
 
