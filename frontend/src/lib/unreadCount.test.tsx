@@ -1,7 +1,9 @@
 /* The unread count's one observer (W5a, AUDIT F9): Shell mounts it once, and
  * every reader (the desktop badge, the phone bell, the Notifications page) gets
  * its number from it, so one poll serves both frames. Gated by the agenda, as
- * the nav item is; marking rows read refetches it through `notificationKeys.all`. */
+ * the nav item is; marking rows read refetches it through `notificationKeys.all`.
+ * The same number is the installed app's icon badge (ruling R4), and nothing
+ * else writes it. */
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
 import { notificationKeys } from '@/lib/queries';
-import { UnreadCountProvider, useUnreadCount } from '@/lib/unreadCount';
+import { UnreadCountProvider, syncAppBadge, useUnreadCount } from '@/lib/unreadCount';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
@@ -97,5 +99,107 @@ describe('the unread observer', () => {
     await act(() => qc.invalidateQueries({ queryKey: notificationKeys.all }));
     await waitFor(() => expect(screen.getByText('bell: 1')).toBeInTheDocument());
     expect(screen.getByText('badge: 1')).toBeInTheDocument();
+  });
+});
+
+/* jsdom has no Badging API and is no installed app; each test grants what it needs. */
+type BadgeNavigator = Navigator & { standalone?: boolean };
+function grant({ installed = true, api: withApi = true } = {}) {
+  const nav = navigator as BadgeNavigator;
+  const setAppBadge = vi.fn(() => Promise.resolve());
+  const clearAppBadge = vi.fn(() => Promise.resolve());
+  if (withApi) {
+    Object.defineProperty(nav, 'setAppBadge', { value: setAppBadge, configurable: true });
+    Object.defineProperty(nav, 'clearAppBadge', { value: clearAppBadge, configurable: true });
+  }
+  Object.defineProperty(nav, 'standalone', { value: installed, configurable: true });
+  return { setAppBadge, clearAppBadge };
+}
+
+describe('the app-icon badge', () => {
+  afterEach(() => {
+    const nav = navigator as unknown as Record<string, unknown>;
+    delete nav.setAppBadge;
+    delete nav.clearAppBadge;
+    delete nav.standalone;
+  });
+
+  it('shows the unread count on the installed app\'s icon', async () => {
+    const badge = grant();
+    signIn(false, { notifications: true });
+    renderReaders();
+    await waitFor(() => expect(badge.setAppBadge).toHaveBeenCalledWith(4));
+    expect(badge.clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('clears the icon at zero, and when the plan hides notifications', async () => {
+    const badge = grant();
+    vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
+    signIn(false, { notifications: true });
+    const { unmount } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <UnreadCountProvider>
+          <Reader name="bell" />
+        </UnreadCountProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(badge.clearAppBadge).toHaveBeenCalled());
+    expect(badge.setAppBadge).not.toHaveBeenCalled();
+    unmount();
+    badge.clearAppBadge.mockClear();
+    signIn(false, { notifications: false });
+    renderReaders();
+    expect(badge.clearAppBadge).toHaveBeenCalled();
+    expect(badge.setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('leaves the icon alone until the first count lands', () => {
+    const badge = grant();
+    vi.mocked(api.getNotificationUnreadCount).mockReturnValue(new Promise(() => {}));
+    signIn(false, { notifications: true });
+    renderReaders();
+    expect(badge.setAppBadge).not.toHaveBeenCalled();
+    expect(badge.clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('clears the icon when Shell goes (sign-out)', async () => {
+    const badge = grant();
+    signIn(false, { notifications: true });
+    const qc = new QueryClient();
+    const { unmount } = render(
+      <QueryClientProvider client={qc}>
+        <UnreadCountProvider>
+          <Reader name="bell" />
+        </UnreadCountProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(badge.setAppBadge).toHaveBeenCalledWith(4));
+    unmount();
+    expect(badge.clearAppBadge).toHaveBeenCalled();
+  });
+
+  it('never badges a browser tab', async () => {
+    const badge = grant({ installed: false });
+    signIn(false, { notifications: true });
+    renderReaders();
+    expect(await screen.findByText('bell: 4')).toBeInTheDocument();
+    expect(badge.setAppBadge).not.toHaveBeenCalled();
+    expect(badge.clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('swallows a refused badge and an engine without the API', async () => {
+    const badge = grant();
+    badge.setAppBadge.mockImplementation(() => Promise.reject(new Error('NotAllowedError')));
+    signIn(false, { notifications: true });
+    renderReaders();
+    await waitFor(() => expect(badge.setAppBadge).toHaveBeenCalledWith(4));
+    const nav = navigator as unknown as Record<string, unknown>;
+    delete nav.setAppBadge;
+    delete nav.clearAppBadge;
+    expect(() => syncAppBadge(3)).not.toThrow();
+    grant({ api: false });
+    Object.defineProperty(navigator, 'setAppBadge', { value: () => Promise.resolve(), configurable: true });
+    /* setAppBadge without clearAppBadge: the clear throws synchronously. */
+    expect(() => syncAppBadge(0)).not.toThrow();
   });
 });
