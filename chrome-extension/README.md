@@ -139,9 +139,10 @@ maxima, remax, mmreality, ceskereality).
 - **Sale apartments** additionally get the per-card yield badge, after the
   three controls: `Výnos MF X.X %` (or the
   town's `X.X–Y.Y %` range, its note in the tooltip) when the property's MF
-  result has a yield, otherwise a clickable **Odhadnout výnos** badge that runs one
-  on-demand estimation by that card's own URL. Controls and badges come only from a
-  successful lookup; when it fails the page is not left silent — one small
+  result has a yield, otherwise a clickable **Odhadnout výnos** badge that opens
+  the yield panel to estimate that ad. Only an ad we hold gets one. Controls and
+  badges come only from a successful lookup; when it fails the page is not left
+  silent — one small
   notice in the dock, above the switch, says
   why: **Přihlásit se přes Google** when signed out (a click first checks for
   a session made elsewhere — the panel, another tab — and skips the Google
@@ -195,16 +196,15 @@ it never derives them:
   fond can apply to this subject", and an **absent key** means the API predates
   this change — the panel then falls back to the pre-W7 literal so an old
   deployment cannot silently blank the field and drop the headline yield.
-- `POST /estimations` is **category-aware**: the panel sends the subject's
-  `category_main` and picks `estimate_kind` from it (a subject being sold needs
-  a rent, one already let needs a sale price, land is never estimated as a
-  rent), instead of the flat `estimate_kind:'rent'` with no category it sent
-  before. **This arm is latent today.** The estimation block only renders when
-  `isSaleApt !== false` — apartments for sale, plus a listing we don't have
-  whose URL doesn't say otherwise — so every reachable call still resolves to
-  `rent` + `byt`, which is what the old hardcoded body sent. It takes effect
-  the moment that category gate widens; no house, commercial unit or plot can
-  reach this surface's estimate button in the meantime.
+- `POST /estimations` takes the ad's `listing_id` from the lookup (an
+  estimation is always of an ad we hold; an ad we lack is added first) and is
+  **category-aware**: the panel sends the subject's `category_main` and picks
+  `estimate_kind` from it (a subject being sold needs a rent, one already let
+  needs a sale price, land is never estimated as a rent). **The category arm is
+  latent today.** The estimation block only renders for apartments for sale we
+  hold, so every reachable call still resolves to `rent` + `byt`. It takes
+  effect the moment that category gate widens; no house, commercial unit or
+  plot can reach this surface's estimate button in the meantime.
 
 > **Backend dependency:** needs the `POST /listings/lookup` endpoint
 > (shipped in the `feature/portal-mf-lookup` PR). Make sure that's deployed
@@ -467,7 +467,8 @@ tab (search pages drop their badges and card controls; open panels prompt).
    replaced by a short note (the bookmark + app link still show).
 5. Below the MF headline, the **comparables estimation** block: if a
    successful estimation exists it loads the editable yield scenario; if not,
-   a **Spustit odhad** button `POST`s to `/estimations` and polls until done.
+   a **Spustit odhad** button `POST`s the ad's `listing_id` to `/estimations`
+   and polls until done.
    Edits to the three fields debounce 500 ms and PATCH the scenario back —
    the SPA's `/estimation/:id` page picks up the same state on next load.
 
@@ -487,8 +488,8 @@ tab (search pages drop their badges and card controls; open panels prompt).
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
-   clickable **Odhadnout výnos** badge that runs one estimation for that card
-   and swaps in the result.
+   clickable **Odhadnout výnos** badge that opens the yield panel, where the
+   estimate runs.
 3. In the bottom-left corner, the **Skrýt skryté** switch: on, the properties
    you have hidden stay on the page as barely visible cards (hover one to peek
    at it, click its eye to bring it back); off, they look like every other
@@ -496,7 +497,8 @@ tab (search pages drop their badges and card controls; open panels prompt).
 4. Cards aren't matched by portal-specific markup — the overlay scans each
    card's detail link and resolves it through `/listings/lookup`, so it
    survives the portals reshuffling their card HTML. Cards not in our DB get no
-   icons (a sale apartment the URL identifies still gets the estimate badge).
+   icons and no badge; an ad is added from its own detail page (**Přidat do
+   databáze**).
 
 ### Supported portals
 

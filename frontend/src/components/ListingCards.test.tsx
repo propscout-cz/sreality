@@ -482,10 +482,10 @@ describe('<ListingCards> the card is not a link — its TITLE is', () => {
     renderGrid({ estimates: { 900: ESTIMATE } });
 
     const link = await screen.findByRole('link', { name: /Výnos/ });
-    expect(link).toHaveAttribute('href', '/listing/900?run=77#estimations');
+    expect(link).toHaveAttribute('href', '/listing/sreality/900?run=77#estimations');
 
     fireEvent.click(link);
-    expect(locationNow()).toBe('/listing/900?run=77#estimations');
+    expect(locationNow()).toBe('/listing/sreality/900?run=77#estimations');
   });
 });
 

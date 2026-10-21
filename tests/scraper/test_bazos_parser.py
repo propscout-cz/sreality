@@ -2,9 +2,7 @@
 
 These use minimal, synthetic HTML that mirrors the documented bazos markup
 (div.inzeraty.inzeratyflex index blocks, the detail details-table, the
-Google-Maps locality link). The richer skipif tests against the real captured
-fixtures live in tests/scraper/test_source_parsers/test_real_fixtures.py-style
-checks once the fetch-fixtures workflow has run.
+Google-Maps locality link).
 """
 
 from __future__ import annotations

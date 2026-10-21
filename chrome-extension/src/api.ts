@@ -180,9 +180,10 @@ export async function patchScenario(
   });
 }
 
-/* POST /estimations — kicks off a new estimation for the listing the
- * operator is currently viewing. We surface the resulting row id and the panel
- * polls until it lands.
+/* POST /estimations — kicks off a new estimation of the ad the operator is
+ * viewing, by its `listing_id` from the lookup: an estimation is always of an ad
+ * we hold (an ad we lack is added first, ingestListing). We surface the
+ * resulting row id and the panel polls until it lands.
  *
  * The subject's CATEGORY decides what may be estimated. This used to send a
  * flat `estimate_kind:'rent'` for everything and nothing else, which — because
@@ -192,11 +193,11 @@ export async function patchScenario(
  * subject whose per-m² measure is capital. Both knobs are now passed through
  * from the caller; omitting either keeps the server's historical default. */
 export async function createEstimation(
-  url: string,
+  listing_id: number,
   opts: { estimate_kind?: 'rent' | 'sale'; category_main?: string | null } = {},
 ): Promise<ApiResult<EstimationRun>> {
   const body: Record<string, unknown> = {
-    url,
+    listing_id,
     source: 'extension',
     estimate_kind: opts.estimate_kind ?? 'rent',
     // mode:'agent' is the metered path (Wave 1) — this is what the "(zbývá X)"
@@ -204,9 +205,8 @@ export async function createEstimation(
     // when it's exhausted; the panel surfaces that as an upgrade prompt.
     mode: 'agent',
   };
-  // Only when we actually know it: a null would PIN "every category", which is
-  // not what an unknown subject means (and yields a cohort with no single
-  // per-m² basis). Absent = the server's 'byt' default, exactly as before.
+  // Only when the ad says: a null would PIN "every category" (a cohort with no
+  // single per-m² basis). Absent = the server's 'byt' default.
   if (opts.category_main != null) body.category_main = opts.category_main;
   return request<EstimationRun>('/estimations', {
     method: 'POST',

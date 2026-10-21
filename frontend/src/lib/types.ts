@@ -195,18 +195,7 @@ export type EstimationSource = 'ui' | 'api' | 'clickup';
 export type EstimationMode = 'deterministic' | 'agent';
 export type EstimationProvider = 'anthropic' | 'gemini';
 export type Lifecycle = 'active' | 'delisted' | 'all';
-/* Result confidence (estimate_yield) only ever returns the first three;
- * parse confidence (URL parser) can additionally be 'best_effort'. The
- * widened union covers both call sites. */
-export type Confidence = 'low' | 'medium' | 'high' | 'best_effort';
-
-/* Mirrors the CHECK constraint on estimation_runs.source_kind (migration 020). */
-export type SourceKind =
-  | 'sreality'
-  | 'bezrealitky'
-  | 'idnes_reality'
-  | 'remax'
-  | 'unsupported';
+export type Confidence = 'low' | 'medium' | 'high';
 
 export interface TargetSpecIn {
   lat: number;
@@ -333,13 +322,15 @@ export interface EstimationRun {
   mode: EstimationMode;
   status: EstimationStatus;
   input_url: string | null;
+  /* Kept for older clients; nothing here routes by it (sreality ads only). */
   input_sreality_id: number | null;
-  /* Gate 2 surrogate twin of input_sreality_id (stamped by #914), the only
-   * handle for a post-Gate-2 non-sreality subject (input_sreality_id NULL).
-   * Null on rows written before #914 and on unresolved subjects (no matched
-   * listings row at all). Not yet consumed for routing — the existing
-   * input_sreality_id-gated links below are a documented separate cutover. */
+  /* The ad the run estimates, set at submit. Null only on the historic runs that
+   * never had an ad (a pasted URL before 2026-10-20, or a bare spec). */
   input_listing_id: number | null;
+  /* That ad's natural key (a join on input_listing_id): the run lives on
+   * `/listing/{subject_source}/{subject_source_id_native}` (lib/runLinks). */
+  subject_source: string | null;
+  subject_source_id_native: string | null;
   input_spec: TargetSpecIn | null;
   /* Discriminator added in migration 029. Null on legacy rows
    * predating the migration — readers should treat null as 'rent'. */
@@ -363,22 +354,6 @@ export interface EstimationRun {
   error_message: string | null;
   parent_run_id: number | null;
   rerun_reason: string | null;
-  /* Estimation-4 audit fields (added in migration 020). All null for
-   * runs created before estimation-4 shipped, all null for spec-mode
-   * runs (no URL parse happened), and parse_confidence_per_field is
-   * also null for sreality runs (the deterministic parser doesn't
-   * track per-field confidences). source_html is the raw page bytes
-   * (LLM path only) and is large — GET /estimations list rows omit it;
-   * only GET /estimations/:id returns it. */
-  source_kind: SourceKind | null;
-  parse_confidence: Confidence | null;
-  parse_confidence_per_field: Record<string, Confidence> | null;
-  source_html?: string | null;
-  /* Migration 138 — typed subject attributes (mirroring listings_public field
-   * names) for a parsed subject with no resolved listings row, so the UI can
-   * render its facts grid. NULL when input_sreality_id is set (read the
-   * listings row instead). */
-  subject_attributes: Record<string, unknown> | null;
   /* Sum of llm_calls.cost_usd rows linked to this run via
    * estimation_run_id. The backend uses COALESCE(..., 0) so the
    * value is never null in practice, but the type tolerates it for
@@ -412,10 +387,9 @@ export interface EstimationRun {
    * created before a rent-map revision was ingested. Read-only — never
    * overrides the comparables-based primary estimate. */
   reference_rent: ReferenceRent | null;
-  /* Server-derived display string emitted only by GET /estimations:
-   * the resolved town (listing_location.obec_name) for sreality runs, else the latest
-   * parsed_url_cache extraction.locality.value for the run's input_url.
-   * Null when neither path resolves. Not returned by GET /estimations/:id. */
+  /* Server-derived display string emitted only by GET /estimations: the
+   * resolved town (listing_location.obec_name) of the run's ad. Null for a run
+   * with no ad or an ad with no town. Not returned by GET /estimations/:id. */
   locality_display?: string | null;
 }
 
@@ -513,11 +487,13 @@ export interface CreateEstimationIn extends Partial<EstimationFilters> {
   skill?: string;
   lifecycle?: Lifecycle;
   estimate_kind?: 'rent' | 'sale';
-  url?: string;
-  spec?: TargetSpecIn;
-  /* Estimate an already-scraped listing by internal id (the Browse cards'
-   * on-card estimate). Exactly one of url / spec / sreality_id is set. */
+  /* The ad to estimate (listings.id). Exactly one of listing_id / sreality_id /
+   * spec is set; sreality_id is the legacy handle of the same ad (the Browse
+   * cards' on-card estimate). A pasted link becomes an ad first (POST
+   * /listings/ingest); there is no URL arm. */
+  listing_id?: number;
   sreality_id?: number;
+  spec?: TargetSpecIn;
   spec_overrides?: Partial<TargetSpecIn>;
   purchase_price_czk?: number | null;
   expected_monthly_rent_czk?: number | null;
@@ -540,7 +516,6 @@ export interface EstimationListParams {
    * "no filter". Never send the legacy sreality_id here — it is NULL for every
    * non-sreality listing. */
   listing_ids?: string;
-  source_kind?: SourceKind;
   limit?: number;
   offset?: number;
   /* Keyset cursor (the prior page's next_cursor). Newest-first feed paged
@@ -555,59 +530,6 @@ export interface EstimationListResponse {
   limit: number;
   offset: number;
   next_cursor: string | null;
-}
-
-/* POST /estimations/preview response (estimation-4). Routes any URL
- * through the source-kind dispatcher: sreality fast-path or LLM-driven
- * per-source parser. The `spec` block is the same TargetSpecIn shape
- * that gets POSTed back to /estimations. The `listing` block is the
- * informational sidecar. Provenance fields document where the data
- * came from and how confident the parser was. */
-export interface ParseListing {
-  price_czk: number | null;
-  price_unit: string | null;
-  category_main: string | null;
-  category_type: string | null;
-  locality: string | null;
-  district: string | null;
-  total_floors: number | null;
-  has_balcony: boolean | null;
-  has_lift: boolean | null;
-  has_parking: boolean | null;
-  building_type: string | null;
-  condition: string | null;
-  energy_rating: string | null;
-  /* Migration 022 — same fields as PreviewListing. The LLM-driven
-   * per-source parsers don't yet extract these, so they're null for
-   * non-sreality URLs until the per-source prompts learn them. */
-  estate_area: number | null;
-  usable_area: number | null;
-  garden_area: number | null;
-  category_sub_cb: number | null;
-  furnished: Furnished | null;
-  terrace: boolean | null;
-  cellar: boolean | null;
-  garage: boolean | null;
-  parking_lots: number | null;
-  ownership: Ownership | null;
-}
-
-export interface ParseResult {
-  spec: TargetSpecIn;
-  listing: ParseListing;
-  source_kind: SourceKind;
-  source_url: string;
-  /* ISO-8601 timestamp. For sreality, this is when the API was queried;
-   * for LLM-parsed sources, this is the cache row's parsed_at on a hit
-   * or "now" on a fresh parse. May be null for sreality if the upstream
-   * scraper didn't record a fetched_at. */
-  fetched_at: string | null;
-  parse_confidence: Confidence;
-  parse_confidence_per_field: Record<string, Confidence> | null;
-  warnings: string[];
-  from_cache: boolean;
-  cost_usd: number | null;
-  sreality_id: number | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -936,10 +858,6 @@ export interface BuildingRun {
   input_url: string | null;
   input_sreality_id: number | null;
   input_spec: TargetSpecIn | null;
-  source_kind: SourceKind | null;
-  parse_confidence: Confidence | null;
-  parse_confidence_per_field: Record<string, Confidence> | null;
-  source_html: string | null;
   /* Building-flow display payload ({ source_url, fields, building }) — a
    * different shape from the (removed) estimation subject summary; the
    * BuildingDetail SubjectBlock casts it to the fields it reads. */
@@ -986,14 +904,6 @@ export interface BuildingAttachment {
 export interface CreateBuildingIn {
   source: EstimationSource;
   input_url?: string | null;
-}
-
-export interface CreateBuildingFromUrlIn {
-  source: EstimationSource;
-  url: string;
-  force_refresh?: boolean;
-  special_instructions?: string | null;
-  contextual_text?: string | null;
 }
 
 export interface UpdateBuildingInputsIn {

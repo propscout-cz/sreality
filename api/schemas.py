@@ -244,29 +244,15 @@ class CompareListingImagesIn(BaseModel):
     force_refresh: bool = False
 
 
-class PreviewEstimationIn(BaseModel):
-    """POST /estimations/preview body.
-
-    Resolves the URL through the source-kind dispatcher and returns the
-    parsed spec + provenance fields without creating an estimation_runs
-    row. Used by the UI to show "what we extracted" before the user
-    commits to running the full estimate.
-    """
-    url: str
-    spec_overrides: dict[str, Any] | None = None
-    force_refresh: bool = False
-
-
 class CreateEstimationIn(BaseModel):
     """POST /estimations request body.
 
-    Exactly one of `url`, `spec`, or `sreality_id` must be set. When `url`
-    is set, the URL is parsed via scraper.url_parser and the resulting spec
-    is used as the target; `spec_overrides` (a partial dict) is merged on
-    top to let the caller adjust individual fields. When `spec` is set
-    directly, it is used verbatim. When `sreality_id` is set, the target is
-    built from the already-scraped `listings` row by id (no URL parse, no
-    LLM) — the path the Browse cards' on-card estimate uses.
+    Exactly one of `listing_id`, `sreality_id` or `spec` must be set. An
+    estimation is of an ad we hold: `listing_id` names it, and the legacy
+    `sreality_id` (the Browse cards' on-card estimate) resolves to the same
+    ad; its target is built from the stored row, `spec_overrides` (a partial
+    dict) merged on top. A `spec` is used verbatim. A pasted link becomes an
+    ad through POST /listings/ingest first.
 
     `estimate_kind` selects rent vs sale. When omitted, defaults to
     'rent' for backwards compatibility with callers built before
@@ -299,9 +285,9 @@ class CreateEstimationIn(BaseModel):
     # applies no filter.
     lifecycle: Literal["active", "delisted", "all"] | None = None
 
-    url: str | None = None
-    spec: TargetIn | None = None
+    listing_id: int | None = None
     sreality_id: int | None = None
+    spec: TargetIn | None = None
     spec_overrides: dict[str, Any] | None = None
 
     purchase_price_czk: int | None = None
@@ -345,12 +331,24 @@ class CreateEstimationIn(BaseModel):
     special_instructions: str | None = Field(default=None, max_length=10_000)
     contextual_text: str | None = Field(default=None, max_length=20_000)
 
+    # Pydantic drops unknown keys, so without this a pre-2026-10-20 extension's
+    # {url, listing_id} would run with its url silently ignored.
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_url(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("url") is not None:
+            raise ValueError(
+                "POST /estimations no longer takes a url: add the ad through "
+                "POST /listings/ingest (update the extension), then estimate its listing_id"
+            )
+        return data
+
     @model_validator(mode="after")
     def _apply_kind_defaults(self) -> "CreateEstimationIn":
-        targets = (self.url, self.spec, self.sreality_id)
+        targets = (self.listing_id, self.sreality_id, self.spec)
         if sum(t is not None for t in targets) != 1:
             raise ValueError(
-                "Provide exactly one of 'url', 'spec', or 'sreality_id'"
+                "Provide exactly one of 'listing_id', 'sreality_id' or 'spec'"
             )
         if self.category_type is None:
             self.category_type = (
@@ -669,31 +667,9 @@ class BuildingUnit(BaseModel):
 
 
 class CreateBuildingIn(BaseModel):
-    """Minimal building-row creation for B0.
-
-    Inserts a `status='pending'` shell so the read endpoints can be
-    exercised end-to-end. B1 replaces this with `POST /buildings/from_url`
-    that parses the URL, fills `input_*`/`source_*`, and kicks off the
-    extractor synchronously.
-    """
+    """Minimal building-row creation: inserts a `status='pending'` shell."""
     source: Literal["ui", "api", "clickup"] = "api"
     input_url: str | None = None
-
-
-class CreateBuildingFromUrlIn(BaseModel):
-    """Phase B1 paste-a-building entry.
-
-    Routes the URL through scraper.source_dispatcher (the existing
-    per-source parser fleet), rejects category_main='byt' (apartments
-    don't decompose), then runs the building-unit extractor
-    synchronously and persists the row in `status='awaiting_input'`.
-    """
-    source: Literal["ui", "api", "clickup"] = "api"
-    url: str = Field(min_length=1)
-    force_refresh: bool = False
-
-    special_instructions: str | None = Field(default=None, max_length=10_000)
-    contextual_text: str | None = Field(default=None, max_length=20_000)
 
 
 class UpdateBuildingInputsIn(BaseModel):

@@ -78,7 +78,7 @@ SELECT
     req.source,
     req.source_id,
     (l.source_id_native IS NOT NULL) AS found,
-    l.sreality_id, l.id AS listing_id, l.property_id, l.source_url,
+    l.sreality_id, l.id AS listing_id, l.property_id,
     l.category_main, l.category_type, l.area_m2, l.price_czk, l.disposition, l.subtype,
     -- ONE place string (migration 503), the same one Browse, the map and the
     -- notifications print. The panel used to fall back `district ?? locality`
@@ -121,7 +121,7 @@ LEFT JOIN listing_location ll ON ll.listing_id = l.id
 # property_pipeline_public cannot diverge (the 2026-07-23 regression was a second
 # definition — an explicit bound account — silently binding NULL).
 _ACCOUNT_SQL = """
-WITH tgt(listing_id, property_id, source_url) AS (VALUES {values})
+WITH tgt(listing_id, property_id) AS (VALUES {values})
 SELECT
     tgt.listing_id,
     e.id AS estimation_id, e.estimate_kind AS estimation_kind,
@@ -157,18 +157,9 @@ LEFT JOIN LATERAL (
     SELECT er.id, er.estimate_kind, er.gross_yield_pct
     FROM estimation_runs er
     WHERE er.status = 'success'
-      -- Match on the SURROGATE for every source (R2). input_listing_id is
-      -- dual-written for any already-scraped listing. The URL string-equality
-      -- arm stays a demoted fallback for an estimation created BEFORE its
-      -- listing was scraped (input_listing_id still NULL) — note the
-      -- discriminator had to move too: keyed on input_sreality_id it would,
-      -- post-Gate-2, route every successfully-resolved non-sreality listing
-      -- into the fragile URL arm, where any URL-normalisation difference
-      -- silently drops the estimation.
-      AND (
-        er.input_listing_id = tgt.listing_id
-        OR (er.input_listing_id IS NULL AND er.input_url = tgt.source_url)
-      )
+      -- Match on the SURROGATE for every source (R2): every run of an ad is
+      -- stamped with its listings.id at submit.
+      AND er.input_listing_id = tgt.listing_id
     ORDER BY er.created_at DESC
     LIMIT 1
 ) e ON true
@@ -243,10 +234,10 @@ def lookup_portal_listings(
     found_rows = [r for r in rows if r["found"] and r["listing_id"] is not None]
     account_by_listing: dict[int, dict[str, Any]] = {}
     if found_rows:
-        tgt_sql = ", ".join(["(%s::bigint, %s::bigint, %s::text)"] * len(found_rows))
+        tgt_sql = ", ".join(["(%s::bigint, %s::bigint)"] * len(found_rows))
         tgt_params: list[Any] = []
         for r in found_rows:
-            tgt_params.extend([r["listing_id"], r["property_id"], r["source_url"]])
+            tgt_params.extend([r["listing_id"], r["property_id"]])
         with tenant_conn.cursor(row_factory=dict_row) as cur:
             cur.execute(_ACCOUNT_SQL.format(values=tgt_sql), tgt_params)
             for arow in cur.fetchall():

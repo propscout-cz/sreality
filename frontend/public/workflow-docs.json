@@ -1910,65 +1910,6 @@
       "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/export_raw_pages_archive.yml"
     },
     {
-      "filename": "fetch-fixtures.yml",
-      "name": "Fixtures: source HTML (anonymized)",
-      "description": "Manual trigger only. Fetches each listing URL, runs the anonymization in scripts/fetch_and_anonymize_fixtures.py, and commits the resulting fixtures to the current branch. Operator runs this once per source refresh; tests then read the saved files instead of hitting the internet.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "bezrealitky_url",
-          "description": "bezrealitky.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://www.bezrealitky.cz/nemovitosti-byty-domy/547214-nabidka-pronajem-bytu-pod-harfou-hlavni-mesto-praha",
-          "options": null
-        },
-        {
-          "name": "idnes_url",
-          "description": "reality.idnes.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://reality.idnes.cz/detail/pronajem/byt/brno-veveri/69f8c898e58c5ab7d70f3505/",
-          "options": null
-        },
-        {
-          "name": "remax_url",
-          "description": "remax-czech.cz listing URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://www.remax-czech.cz/reality/detail/438735/pronajem-bytu-1-kk-v-osobnim-vlastnictvi-31-m2-praha-8-liben",
-          "options": null
-        },
-        {
-          "name": "bazos_index_url",
-          "description": "reality.bazos.cz search/index URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "https://reality.bazos.cz/prodam/byt/",
-          "options": null
-        },
-        {
-          "name": "bazos_detail_url",
-          "description": "reality.bazos.cz single-listing detail URL (leave blank to skip)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [],
-      "concurrencyGroup": null,
-      "cancelInProgress": null,
-      "timeoutMinutes": 5,
-      "permissions": "contents: write",
-      "runsUrl": "https://github.com/waiff/sreality/actions/workflows/fetch-fixtures.yml",
-      "sourceUrl": "https://github.com/waiff/sreality/blob/main/.github/workflows/fetch-fixtures.yml"
-    },
-    {
       "filename": "fetch_rent_map.yml",
       "name": "Jobs: fetch MF rent map (monthly)",
       "description": "Auto-grab the Ministry of Finance \"Cenová mapa nájemného\" (rent price map) from the MF infografika page, parse it, and append a new rent_map revision — unless the file's sha256 already exists (then it's a no-op). The MF data updates 4×/year (published within 45 days of each quarter end), so a monthly cron mostly no-ops and catches the new release within ~30 days. The same data also lands via manual upload from the Settings page; both share api.rent_map.ingest_bytes, so the latest revision always wins. Every run then re-renders the map's rent choropleth (the `rent_map` reference overlay).",

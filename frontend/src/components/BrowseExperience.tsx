@@ -429,11 +429,16 @@ export default function BrowseExperience({
   const [estimates, setEstimates] = useState<Record<number, ListingEstimate>>(
     {},
   );
+  /* A submit the API refused (a 422 for an ad it cannot place) creates no run,
+   * so nothing in `estimates` would say it failed — the API's sentence is kept
+   * per card instead, until the next attempt. */
+  const [estimateRefusals, setEstimateRefusals] = useState<Record<number, string>>({});
   const requestedEstIdsRef = useRef<Set<number>>(new Set());
   const estimatesEnabled = tab === 'map' && isApiConfigured();
 
   useEffect(() => {
     setEstimates({});
+    setEstimateRefusals({});
     requestedEstIdsRef.current = new Set();
   }, [cardsRestorationKey]);
 
@@ -483,6 +488,18 @@ export default function BrowseExperience({
       }),
     onMutate: (srealityId) => {
       setEstimatingIds((prev) => new Set(prev).add(srealityId));
+      setEstimateRefusals((prev) => {
+        if (!(srealityId in prev)) return prev;
+        const next = { ...prev };
+        delete next[srealityId];
+        return next;
+      });
+    },
+    onError: (err, srealityId) => {
+      setEstimateRefusals((prev) => ({
+        ...prev,
+        [srealityId]: err instanceof Error ? err.message : 'Odhad se nepodařilo spustit',
+      }));
     },
     onSuccess: (run, srealityId) => {
       setEstimates((prev) => ({
@@ -741,6 +758,7 @@ export default function BrowseExperience({
                 merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
+                estimateRefusals={estimateRefusals}
                 onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
               />
               </CardHydrationProvider>
@@ -820,7 +838,10 @@ export default function BrowseExperience({
         {tab === 'stats' && (
           <div className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}>
             <Suspense fallback={<Skeleton height={320} className="my-8" />}>
-              <StatsDashboard filters={filters} />
+              <StatsDashboard
+                filters={filters}
+                onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
+              />
             </Suspense>
           </div>
         )}

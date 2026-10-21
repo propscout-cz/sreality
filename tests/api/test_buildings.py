@@ -55,8 +55,6 @@ def _patch_persistence(monkeypatch) -> _State:
                 for k in (
                     "source", "status",
                     "input_url", "input_sreality_id", "input_spec",
-                    "source_kind", "parse_confidence",
-                    "parse_confidence_per_field", "source_html",
                     "subject_summary",
                     "units_proposal", "units",
                     "total_rent_p25_czk", "total_rent_p50_czk",
