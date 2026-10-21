@@ -65,6 +65,8 @@
 
 ## Wave 3 — Watchdogs & notifications
 
+> **Delivery superseded 2026-10-21** by [notifications-push/PROGRAM.md](./notifications-push/PROGRAM.md): W1 deleted the outbox, `channel_sends` writers, the Resend/Telegram transports, the webhook and unsubscribe; delivery is per-account iPhone push (W4), email later to each account's own address.
+
 **Detection is broken for a public product on three axes today** and the fix is mostly architectural. (1) The matcher runs as an asyncio task **inside every FastAPI replica** (`api/main.py:144-147`) — N replicas fan out N× duplicated matching with no single-runner guard. (2) `match_once` window-scans `properties_public` on `l.published_at` with **no btree index** on `properties.published_at` (the column exists since migration 273; only a partial gate-expression index was ever built) — O(subs × ~53k) per pass. (3) Subscriptions have no owner.
 
 **The corrected detection design (review pruned the over-engineering):**

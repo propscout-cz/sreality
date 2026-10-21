@@ -7,6 +7,19 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-NOTIFY-PUSH: Notifications push program (approved 2026-10-21)
+
+Program `docs/design/notifications-push/PROGRAM.md` (audit `AUDIT.md`, F1–F28; eleven rulings taken 2026-10-21). North
+star: one real-world change becomes one immutable row, owned by one account, shown in one feed and pushed to that
+account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, email (kept, inactive); Telegram is out.
+- [ ] **W1 (built 2026-10-21; done when merged)** — subtract the dead and the dangerous: Estimate rent and "Run matcher
+      now" (R10); the Email/Telegram picker, Settings › Delivery, Telegram, the outbox, ChannelClient, the Resend
+      transport, webhook and unsubscribe (R1, R5); the duplicate /watchdog feed and the System tab (R3); system alerts
+      leave the bell for Health + the canary e-mail (R2b, R9a; migration 651).
+- [ ] **Next:** W2 one clock in the worker (the notifications lane; R6) · W3 one event identity (the unique index
+      replaces the dedupe key) · W4 push plumbing, dark (VAPID, the push ledger, /push routes; R7, R11) · W5 the phone
+      bell, badge and switch (R4) · W6 the one destructive prune, backup first (R8).
+
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 
 Spec `docs/design/new-property-from-link.md` (PR #1913, approved 2026-10-20, six rulings in). North star: a
@@ -152,7 +165,8 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
     `tests/test_curation_account_stamping.py`, then `tests/api/test_auth.py` gives 15 × 503 "Auth is
     not configured"; each file passes alone and CI's path order (tests/api first) never hits it —
     find the fixture that leaks the auth state.
-  - Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).
+  - ~~Share notifications are in-app only: no per-recipient email delivery is built (ruling 5e).~~ Superseded
+    2026-10-21: shares are pushed to the recipient's iPhone from W4 (Phase U-NOTIFY-PUSH; ruling 5(e) superseded).
 
 ### Phase U-PIPE-SIGNUP: Every account starts on the default board (done, 2026-10-16)
 - **Done:** migration 612 — one signup path (account, owner membership, the 10-stage default board with codes from
@@ -160,8 +174,9 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   account-qualified. Own PRs, same sprint (merge separately): #1828 the SPA draws an empty board's columns, #1830
   migration 611 (tenant serial ids → identity; apply it BEFORE 612), #1831 the extension resets its caches on an
   identity change; migration 613 drops `legacy_backfill_claim` (operator ruling 2026-10-17).
-- **Next (unscheduled):** `notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
-  browser-writable); the 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
+- **Next (unscheduled):** ~~`notification_dispatches` needs a column-level UPDATE grant (its global `dedupe_key` is
+  browser-writable)~~ stale: 619 narrowed the browser's UPDATE to columns and 651 to `seen_at` alone; the global
+  `dedupe_key` itself is replaced in W3 (Phase U-NOTIFY-PUSH). The 60 pre-299 public sequences still grant `authenticated` setval (one revoke migration + a
   census arm).
 
 ### Phase U-LINK: Artifact link on the property (done, 2026-10-14)
@@ -853,7 +868,9 @@ surfaces the yield once it lands. Email / SMS / push remain deferred
 (see open questions below). Cron cadence is still nightly; the
 operator can call `POST /notifications/matcher/run` from the UI's
 "Run matcher now" button to trigger an immediate evaluation against
-any newly-scraped listings.
+any newly-scraped listings *(superseded 2026-10-21: that button, the
+route and the per-row estimation kickoff were deleted in W1 of
+Phase U-NOTIFY-PUSH, ruling R10)*.
 
 **What shipped**
 
@@ -914,7 +931,9 @@ any newly-scraped listings.
   CHECK-bounded to `'in_app'` only; a future migration adds the new
   enum values and the dispatch worker grows a fan-out branch
   *(superseded: email + Telegram deliver through the `channel_sends`
-  ledger, migration 207, not a widened `channel` — rule #16)*.
+  ledger, migration 207, not a widened `channel` — rule #16; superseded
+  again 2026-10-21: Telegram is out, email inactive, iPhone push from W4
+  of Phase U-NOTIFY-PUSH)*.
 - 5-minute scrape cadence (Shape A from the original proposal).
   Today's nightly cron still applies; the matcher loop honestly
   surfaces "no fresh listings" between scrapes. A new

@@ -336,13 +336,14 @@ _Avoid_: outage, issue, ticket, problem (for the record)
 
 **System alert**:
 A notice about the platform's own health: an incident has started, is still open, or has recovered.
-It appears among the app's notifications; a watchdog's notice about properties is not one.
+Since 2026-10-21 it reaches no notification feed: the Health page shows the incident, and the canary's
+failure email tells an unacknowledged alarm; a watchdog's notice about properties is not one.
 _Avoid_: alarm (that is the check), alert (alone), health notification
 
 **Acknowledge**:
 An admin's deliberate act, on the Health page, of marking a check's open incidents as known, which
-stops their reminders; each still closes only on a measured recovery. Reading a system alert among
-the notifications does not acknowledge it.
+stops their reminders and the canary's failure email about them; each still closes only on a measured
+recovery.
 _Avoid_: dismiss, mute, snooze, resolve, mark read
 
 **Not measured**:
@@ -362,8 +363,8 @@ _Avoid_: monitor, meta-check, dead-man switch, heartbeat check
 The one monitoring workflow on GitHub, an hourly cron that GitHub delivers about five times a day:
 it records the production runs of the other workflows (those run on schedule or by a push to the main branch, each failure
 with its reason line), measures the checks hosted on GitHub, then asserts that the database answers, that the watcher is running and its Problems have incidents, and
-that no alarm's system alert has gone unread and undelivered while its incident is open and
-unacknowledged. A failing check never fails its run; the assertions do (so does a crash of the
+that no alarm's incident has stood open and unacknowledged for 15 minutes to 12 hours since its onset or
+latest reminder. A failing check never fails its run; the assertions do (so does a crash of the
 poller or the harness, or the harness step overrunning its 6 minutes), so GitHub's failure email is the one path to
 the operator that needs neither the database's scheduler nor Railway.
 _Avoid_: monitoring lane, acute lane, health workflow, smoke test

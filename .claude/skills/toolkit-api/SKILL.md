@@ -1,6 +1,6 @@
 ---
 name: toolkit-api
-description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, notification delivery, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/RESEND/TELEGRAM/STRIPE keys, CORS.
+description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/STRIPE keys, CORS.
 ---
 
 # Toolkit & API
@@ -435,36 +435,15 @@ API service:
   startup sweep of stuck estimation/building runs, and the background watchdog matcher loop (with
   the system-alerts loop beside it), respectively. Default: both enabled.
 
-Notification delivery (Sprint N — `channel_sends` ledger + `api/transports/` + the outbox loop,
-rule #16; all OPTIONAL, dark until set):
-- `RESEND_API_KEY` + `EMAIL_FROM` — the Resend email transport (`api/transports/email_resend.py`).
-  Both required for `is_configured()`; transactional/self-notification scope only (Resend AUP
-  forbids cold outreach — outreach gets a separate EU vendor). Railway API env.
-- `TELEGRAM_BOT_TOKEN` — the Telegram Bot API transport (`api/transports/telegram.py`). Railway
-  API env. The recipient `chat_id` lives in `app_settings.notification_telegram_chat_id`.
-- `SPA_BASE_URL` — SPA origin for notification deep links (`{SPA_BASE_URL}/listing/{id}`; a `system_health` send links `/health#<key>`, the key read off its `sys:<key>:` dedupe key, else `/health`, and carries no link while it is unset).
-- `RESEND_WEBHOOK_SECRET` (Wave 3, migration 367) — Svix signing secret for `POST /webhooks/resend`.
-  Railway API env. Unset = the webhook 503s (fail closed); the handler verifies the Svix HMAC over
-  the raw body with the stdlib (no dependency, same auth class as the Stripe webhook), dedups by
-  `svix-id` (`resend_webhook_events`), advances `channel_sends.status`
-  (`delivered`/`bounced`/`complained`), and inserts a GLOBAL, address-level `notification_suppression`
-  row (survives tenant deletion) on bounce/complaint — the outbox hard-skips suppressed addresses.
-- `NOTIFICATION_UNSUB_SECRET` + `API_PUBLIC_URL` (Wave 3) — one-click unsubscribe (RFC 8058).
-  `make_unsub_token`/`verify_unsub_token` (`api/unsubscribe.py`) HMAC-sign `channel:address` with
-  the secret; the Resend transport adds `List-Unsubscribe`/`List-Unsubscribe-Post` headers pointing
-  at `{API_PUBLIC_URL}/u/{token}` (the unauthenticated `GET`/`POST /u/{token}` route, HMAC = auth,
-  renders for logged-out users, POST inserts a `source='unsubscribe'` suppression). BOTH env vars
-  optional: unset → the header is omitted (email still sends) and the token can authenticate no one.
+Notification delivery: none until W4 of `docs/design/notifications-push/PROGRAM.md`. W1 (2026-10-21) deleted the Resend
+email + Telegram transports, the outbox loop, `ChannelClient`, `POST /webhooks/resend` and `/u/{token}` (rule #16), so
+`RESEND_API_KEY`, `EMAIL_FROM`, `RESEND_WEBHOOK_SECRET`, `NOTIFICATION_UNSUB_SECRET`, `API_PUBLIC_URL`, `TELEGRAM_BOT_TOKEN`,
+`SPA_BASE_URL` and `OUTBOX_DRAIN_DISABLED` are read by nothing (safe to remove from Railway). Producers write facts only (no
+channel, status or target); W4 pushes to the event account's registered iPhones and adds `VAPID_PRIVATE_KEY` (API + worker).
+- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting): it keeps the `ops_incidents` ladder (onset, reminders by rung, recovery, acknowledgement on Health) and writes no `notification_dispatches` row (ruling R2b, 2026-10-21, superseding Q1's "bell only"); the external alarm is the health canary's GitHub e-mail (scraper-ops skill).
 - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret (Dashboard → Developers →
   Webhooks). Railway API env. Unset = `POST /billing/webhook` 503s (fail closed); the
   handler verifies the `Stripe-Signature` HMAC with the stdlib (no stripe SDK).
-- `OUTBOX_DRAIN_DISABLED` (flag) — force-off the delivery outbox loop. The loop ALSO only starts
-  when ≥1 transport `is_configured()`, so it's a true no-op until a key above is set + redeploy.
-- The system-alerts loop (`api/system_alerts_loop.py`, beside the matcher, off under `NOTIFICATIONS_MATCHER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting); its `system_health` dispatches carry `system_health_channels` and reach the outbox like any other, which sends each with the message as body and as subject its text before the first ` — ` (else its first 120 characters; "System alert" when empty). As of Health wave 7 (2026-10-19) the list is `[]`, bell only by ruling Q1 (2026-10-18), and both transports are ready: switching on is three steps (a key on the API service and a deploy, the recipient in Settings › Delivery, a migration with a test system alert), click by click in the scraper-ops skill's `references/pipeline-verification.md` § Delivery readiness.
-- Operator destinations are `app_settings` rows (operator-editable, history-tracked):
-  `notification_email_to`, `notification_telegram_chat_id` (empty = that channel skipped);
-  `notifications_outbox_interval_seconds` paces the loop. A watchdog opts in via
-  `notification_subscriptions.channels`, a collection via `collections.notify_channels`.
 
 Scraper orchestration:
 - `SREALITY_COUNTRY_ID` (optional, default `112` = Czech Republic).

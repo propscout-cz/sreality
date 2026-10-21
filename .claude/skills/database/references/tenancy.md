@@ -61,9 +61,9 @@ RLS-filtered parent lookup (the trigger runs as the invoking role) — or the OW
 the parent is merely shared with it (migration 610) — and `WITH CHECK` refuses either, so the
 insert **fails closed** — a `with check (true)` here would instead silently write invisible orphan rows.
 Service-role writers bypass RLS entirely but still get correctly-stamped rows because
-their parent lookups see every row. Since migration 619, `authenticated` may UPDATE only `seen_at`
-and `estimation_run_id` on `notification_dispatches`, and a platform admin may update SYSTEM-account
-rows (`notification_dispatches_admin_update`).
+their parent lookups see every row. Since migration 651 (notifications W1), `authenticated` may UPDATE only `seen_at`
+on `notification_dispatches` (619 also granted `estimation_run_id`), and no account reads or updates SYSTEM-account
+rows: 651 dropped `notification_dispatches_tenant_read`'s platform-admin SYSTEM arm and `notification_dispatches_admin_update`.
 
 **Migration 294 — pipeline tables**: `property_pipeline`, `pipeline_stages`,
 `property_pipeline_events`, plus the signup trigger:
@@ -122,7 +122,8 @@ uuid)`) answers **whom the caller acts FOR on curation**. Exactly eleven policie
 `USING` and `WITH CHECK` (switched by `ALTER POLICY`; the three pipeline tables pass `true`): `collections`, `tags`, `property_notes`,
 `collection_properties`, `property_tags`, `property_note_attachments`, `property_artifact_links`,
 `property_dismissals`, `property_pipeline`, `pipeline_stages`, `property_pipeline_events`. **Every
-other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications,
+other table keeps `current_account_ids()`** — billing, estimations, watchdog, presets, notifications (their routes never act
+as another account; the push delivery tables arrive admin-only in W4 of `docs/design/notifications-push/PROGRAM.md`),
 the three share tables, `share_party_emails()` — so a delegate never reads, writes or spends as the owner
 there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 `test_exactly_the_eleven_curation_policies_act`).
@@ -161,7 +162,8 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
 - **One notification kind.** `notification_dispatches.source_kind = 'share'` for every kind
   (`collection_id` set for a collection share, NULL for a pipeline or dashboard share); 641 renamed
   `collection_share` (and its keys to `share:collection:<collection>:<recipient>`); `api/shares.py`
-  writes all three (`share:dashboard:<dashboard>:<recipient>`, 647).
+  writes all three (`share:dashboard:<dashboard>:<recipient>`, 647). In-app now, also pushed from W4 (collection-sharing ruling
+  5(e) superseded 2026-10-21).
 - **The API declares, per write route, which account it writes.** `tenant_conn` carries the header
   and the method into the transaction (`tenant_pool.tenant_transaction(claims, act_as=, method=)`,
   both required); `require_acting_account_id` (curation writes: own account, or the owner the

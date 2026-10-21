@@ -51,7 +51,7 @@ truth enforced only in production, and N identical emails for one cause.
 | W0.5 the second week's fires | (a) ceskereality contract v4 + contract-immutability lockfile rail in `test.yml` — un-wedges the intake lane, closes the merged≠enforced gap for portal contracts; (b) `llm_liveness` recalibrated 4h → 13h to the real (post-dedup) producer cadence | 🟡 in progress (2026-08-31, shipped as hotfix PRs ahead of wave order — the lane was down) |
 | W1 survivable write path | Non-transient errors at `_flush_drain_batch` become a bounded, loud quarantine (per-item replay → existing `_drain_record_failure` → `given_up` at 5) behind a circuit breaker; `write_rejects` counter + a `drain_write_rejects` check (`ingest_freshness` largely covered in parallel by the walk sprint's `acquisition_lag` + `walk_coverage` checks, rebuilt in the Health dashboard sprint's wave 4 as the `scraping` and `publishing` checks and the `coverage` gauge) | ⚪ proposed — needs operator sign-off |
 | W2 migration file as contract | `-- apply:` / `-- assert:` header tokens above a watermark (≥ 444), asserts executed inside `migrations.yml`'s existing per-file apply loop and *validated as able to fail*, plus schema-vocabulary parity and the hot-DDL doctrine rails. **W2.3's live-catalog drift check shipped in parallel as PR #1204 (`check_migration_drift`)** — remaining W2.3 scope is hardening it, not building it | ⚪ proposed — needs operator sign-off (part shipped in parallel) |
-| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue: external alert routing (`system_health_channels` / `notification_email_to`) stays off — bell only by ruling Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7; enabling = the three steps. W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
+| W3 one alert, one place, cause attached | Failure signatures produced in-process at the write chokepoint (`checkviolation\|listings_area_basis_check` on all six portals), an `ops_incidents` table that exits through the **existing** `system_health` spine (no parallel channel), and the re-escalation ladder placed in `toolkit/system_alerts` where all 19 checks inherit it | 🟢 shipped 2026-08-31 — W3.1–W3.3 (migs 462+463, PR #1247) + W3.4's ladder, flap cooldown and weekly heartbeat (PR #1246); one residue, closed 2026-10-21: external alert routing (`system_health_channels` / `notification_email_to`) is deleted, and system alerts live on Health with the canary e-mail as the external alarm (ruling R2b, notifications push W1). W3.4's ladder was replaced 2026-10-18 by the Health dashboard sprint's wave 1, and the signature engine retired 2026-10-19 in its wave 3 (migration 621) |
 | W4 apply becomes a job | Hot-table DDL applied out-of-band by a tested, extracted lock primitive (`attempts=1`, fail fast, escalate to a window — the retry-loop pattern is retired, not tuned); the existing PK-swap applier generalised into a dispatchable maintenance window | ⚪ proposed — needs operator sign-off + one human step (`REALTIME_WORKER_ENABLED`) |
 | W5 constraint-only catalog diff | Named successor: diff CI's replayed schema against the live catalog. Catches 438 exactly, plus the ~241 migrations with no ledger row and no assert, plus the reverse drift direction W2 structurally cannot see — with zero per-migration convention | ⚪ named only, not built (open question 8) |
 
@@ -123,10 +123,10 @@ onset was **2026-08-24 23:09 UTC**, ~45 h earlier than the doc states. Migration
 `consecutive_failures`/`is_chronic` are computed over GitHub workflow runs, not
 `pipeline_check_results`, so W3.4's ladder cannot consume them.
 
-**Not flipped, on purpose:** `system_health_channels` is still `[]`. Incidents ring the
-in-app bell only, by ruling Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7;
-enabling = the three steps (the scraper-ops skill's `references/pipeline-verification.md` §
-Delivery readiness).
+**Not flipped, on purpose:** `system_health_channels` was still `[]`: incidents rang the
+in-app bell only, by ruling Q1 2026-10-18. *Superseded 2026-10-21 by ruling R2b (notifications
+push W1, `docs/design/notifications-push/PROGRAM.md`): system alerts leave the bell, the readiness
+is deleted, and Health + the canary e-mail are the only paths.*
 
 ## Open questions blocking W1–W4
 
@@ -199,7 +199,7 @@ Next:
 - ~~`verify_pipeline`: a timed-out warn counts as "not failing", closes the incident and sends a false "Recovered" (`text_extraction_lag` did it 6 times since 10-02); a timeout must keep the incident open.~~ Done 2026-10-18 (Health dashboard sprint wave 1: a timeout is `unknown`).
 - ~~`llm_errors` rate arm: `currently_failing` still reads the newest call of ANY provider; for ~24 h after a top-up a stray error can turn the check red again. → Health dashboard sprint wave 3 (the llm check).~~ Done 2026-10-19 (wave 3: the `llm` check judges the error share per provider).
 - ~~`worker_lane_stall` reports `failed_passes` but never alarms on it. → wave 3 (the jobs check's lane cells).~~ Done 2026-10-19 (wave 3: a lane cell judges failing spells and flapping).
-- Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; readiness documented in Health dashboard sprint wave 7 (2026-10-19); enabling = the three steps, at the operator's word.
+- Delivery: `system_health_channels` is `[]` and no transport is configured, so no system alert has ever left the app (operator: email key + recipient + channel). → Q1 ruled 2026-10-18: bell only for now; readiness documented in Health dashboard sprint wave 7 (2026-10-19); enabling = the three steps, at the operator's word. *Superseded 2026-10-21 (R2b): Health + the canary e-mail only, the readiness deleted.*
 
 ## 2026-10-18 — Health dashboard sprint, wave 1 (shipped with this PR)
 
@@ -214,7 +214,7 @@ The ten waves: (1) one vocabulary, one registry, one ladder; (2) watchers — a 
 check and one hourly GitHub canary; (3) platform checks and the worker's health lane, retiring the
 signature engine; (4) portal checks: scraping, publishing, delisting and coverage; (5) the dedup
 check; (6) the parsing alarm and the quality gauges; (7) delivery, now readiness and docs only,
-because the bell stays the one channel for now (Q1); (8) the new Health page; (9) dropping the old
+because the bell stays the one channel for now (Q1; *since 2026-10-21, R2b: no bell, Health + the canary e-mail*); (8) the new Health page; (9) dropping the old
 health layer — destructive, after a backup and 48 h with no reads (Q5); (10) shared admin page
 parts.
 
@@ -259,7 +259,7 @@ Owed items this absorbs:
   "Recovered" is fixed (a timeout is `unknown`), and the ladder no longer re-derives incidents from
   30 days of results. The `llm_errors` any-provider rate arm and `worker_lane_stall`'s unalarmed
   `failed_passes` move to wave 3 (the llm and jobs checks); delivery follows Q1 (bell only by ruling
-  Q1 2026-10-18; readiness documented in Health dashboard sprint wave 7; enabling = the three steps).
+  Q1 2026-10-18; superseded 2026-10-21 by R2b: Health + the canary e-mail only).
 
 ~~**Next:** wave 2 — `health_liveness()` on pg_cron every 5 minutes and one hourly GitHub canary
 (migration 620).~~ Done 2026-10-18 (wave 2, below).
@@ -287,7 +287,7 @@ What wave 2 changed:
   15 min while its incident is open and unacknowledged. A failing check never reds the run; the assertions do (and a crash of the poller or the harness, or
   the harness step overrunning its 21 minutes), so with
   the bell the only channel (Q1) an unread alarm reaches the operator as GitHub's failure email at
-  the next canary run. `llm_health.yml` and the 6-hourly lane are gone, and with them
+  the next canary run (*since 2026-10-21, R2b: it asserts an open, unacknowledged alarm's latest rung instead*). `llm_health.yml` and the 6-hourly lane are gone, and with them
   `--exit-nonzero-on-fail`: a failing check no longer reds a run.
 - **A real time budget per check.** The harness's `run_due` measures a host's due checks, alarms
   first, and each statement's timeout is now the check's remaining budget, so a check of several
@@ -341,7 +341,7 @@ What wave 3 changed:
   reason line, and per workflow its state, whether its file is on `main` and its recent scheduled
   starts.
 - **System alerts are ready for delivery**: subject from the message, link to `/health#<check>`
-  (the bell stays the one channel, Q1).
+  (the bell stays the one channel, Q1). *Deleted 2026-10-21 (R2b, notifications push W1).*
 - **Migration 621** adds the poller's columns and closes the signature engine's open incidents;
   the engine's code (`toolkit/ops_incidents.py`, the crash-path and lane writers, the poller's
   incident pass) and its signature tiers are deleted.
@@ -638,6 +638,9 @@ dashboard sprint wave 7, below).
 
 ## 2026-10-19 — Health dashboard sprint, wave 7 (shipped with this PR)
 
+*Superseded 2026-10-21 (ruling R2b, notifications push W1): this readiness was deleted; system alerts
+live on Health, and the canary e-mail is the external alarm.*
+
 Delivery readiness, docs only: by ruling Q1 (2026-10-18) the bell stays the one channel for now, and
 the system is kept ready for Telegram and email. Plan:
 [`docs/design/health-dashboard.md`](../docs/design/health-dashboard.md) § 6, wave 7, and its "As
@@ -666,7 +669,7 @@ What Health dashboard sprint wave 7 changed:
   canary's channel-status pins are added (sent and delivered count as handled; queued, failed, bounced
   and suppressed do not).
 
-Owed: the enabling migration, at your word (the three steps). GitHub's failure email stays either
+~~Owed: the enabling migration, at your word (the three steps).~~ Moot since 2026-10-21 (R2b). GitHub's failure email stays either
 way: it is the path that needs neither Supabase's scheduler nor Railway.
 
 To check after the merge: nothing changes in production; `system_health_channels` still reads `[]`
@@ -703,7 +706,7 @@ What Health dashboard sprint wave 8 changed:
   workflow catalogue).
 
 Owed and stated (also in the design's "As built" note):
-- "Alerts reach" and the delivery facts wait for delivery's enabling migration (wave 7's three steps):
+- ~~"Alerts reach" and the delivery facts wait for delivery's enabling migration (wave 7's three steps)~~ moot since 2026-10-21 (R2b):
   the watcher writes no delivery facts, so the strip has five tiles, not six.
 - The legacy `outbound_url_conformance` row has no cells until its next weekly run (~10-25).
 - The phone reflow is pinned by class strings only (jsdom cannot evaluate a media query); the browser

@@ -42,8 +42,8 @@ path is `unknown` with its reason in `details` (`timed_out`, `errored`, `skipped
 run's budget never reached gets no row at all and stays due. No "verified nothing" path reads `warn`
 any more: the last, `ppm2_median_shift`'s "compared NOTHING", went with that key in Health dashboard sprint
 wave 6, whose median-shift arm reads Not measured until 6 days of its own history exist. The harness
-writes no system alert: results reach the bell through the ladder below, the notification
-system's third producer, `system_health` (`docs/architecture.md` rule #16). Since wave 2 the
+writes no system alert: results become incidents through the ladder below, shown on Health and told
+outside the app only by the canary's GitHub e-mail (no bell since 2026-10-21, ruling R2b). Since wave 2 the
 pg_cron watcher `health_liveness()` (migration 620) judges whether the worker, the API, the
 ladder and every alarm are alive, and the canary checks the watcher and the ladder from GitHub
 ("Hosts, the watcher and the canary" below). The harness exists because the pipeline
@@ -466,13 +466,13 @@ are gone; the harness only measures.
 **Where it runs.** `toolkit/system_alerts.reconcile(conn)` is called every 60 s by the API's
 system-alerts loop (`api/system_alerts_loop.py`; `SYSTEM_ALERTS_INTERVAL_SECONDS = 60`, a
 constant), started in `api/main.py`'s lifespan beside the watchdog matcher and off under the same
-`NOTIFICATIONS_MATCHER_DISABLED` guard: telling lives in the process that serves the bell, whose
-outbox delivers the rows once a transport is configured. A pass is one transaction under
+`NOTIFICATIONS_MATCHER_DISABLED` guard: the ladder stays off the worker, so a dead worker cannot
+silence its own alarms. A pass is one transaction under
 `pg_try_advisory_xact_lock(hashtext('health_reconcile'))` — a second caller returns zeros and
-writes nothing — and returns `{opened, reminded, recovered, closed_silently, notices}`, logged
+writes nothing — and returns its counts (opened, reminded, recovered, closed silently), logged
 when any is non-zero. Its values are module constants in `toolkit/system_alerts`, spelled once
 (`ALARM_RUNGS_H`, `ALARM_WEEKLY_H`, `GAUGE_RUNG_H`, `DUE_SLACK_MAX_S`, `RECOVERY_HOLD_MIN_S`,
-`UNMEASURED_CLOSE_DAYS`, `MESSAGE_MAX_CHARS`); no setting overrides them. The harness's due
+`UNMEASURED_CLOSE_DAYS`); no setting overrides them. The harness's due
 selection imports `due_after_s` from it, so the due slack and the hold built on it cannot drift.
 
 **What it reads.** The registry (`health_checks`: key, class, cadence, staleness budget, label,
@@ -503,61 +503,43 @@ measured `ok` starts `ok_since` at the first OK, and the incident resolves
 (`resolve_reason = 'measured ok'`) only on an OK measured across the hold, two cadences less the
 due slack, never under 30 min (`max(2 × due_after_s(cadence), 30 min)`: a lane measures a check
 up to the slack early, so two measured intervals can sum to under two cadences): the newest OK's
-`run_at` must be at least the hold after the first OK; one lone OK never recovers. Two closes send
-nothing: an incident whose key left the registry (`retired`), and a cell unmeasured for max(7 d,
+`run_at` must be at least the hold after the first OK; one lone OK never recovers. Two closes are
+silent: an incident whose key left the registry (`retired`), and a cell unmeasured for max(7 d,
 2 × cadence) — its `last_seen_at` older than that and its cell in no measured row inside it
 written since the key's `declared_at` — which closes silently (`unmeasured 7d`; two weeks for the
 weekly URL probe). Not measured never opens, recovers or ages an incident.
 
-**What it tells.** Each notice is one `notification_dispatches` row written by
-`emit_system_alert(conn, check_key, message, *, dedupe_key)`, which stamps `target_channels` from
-`system_health_channels` (`[]` today: the bell only, Q1). Per check and pass at most one notice
-of each kind, grouped across that check's cells. The reminder and recovery keys also carry the
-incidents they tell (`{lowest id}x{count}`), so two groups of one check told in different passes
-never share a key; an onset is keyed by its result's `run_at`, because one result opens all its
-cells in one pass:
+**What it records.** Since W1 of the notifications push program (2026-10-21, ruling R2b;
+`docs/design/notifications-push/PROGRAM.md` § 3.8) the ladder writes no `notification_dispatches`
+row and composes no message: the rhythm lives on the incident itself. Rungs count from
+`first_seen_at`: an alarm reminds at 6 h, 24 h and 72 h, then weekly (R9a keeps this rhythm); a
+gauge every 24 h, the operator's Q2 ruling: "ring when first read, then once a day". A rung is due
+when `alerted_at` predates `first_seen_at + rung`, and only the highest due rung counts, never a
+backlog. An onset sets `alert_count = 1, alerted_at = now()`; a reminder adds one to `alert_count`
+and moves `alerted_at`; a measured recovery resolves the incident. Health shows the incidents and
+their stamps, and the canary's `alarms_acknowledged` reads `alerted_at` (below). Until W1 each
+onset, reminder and recovery was also a `system_health` row in the bell, keyed
+`sys:{key}:{kind}:…`; migration 651 hides those 902 rows (the SYSTEM read arm and the admin update
+policy dropped) and W6 deletes them after a backup.
 
-| kind | when | dedupe key |
-| --- | --- | --- |
-| onset | incidents opened this pass | `sys:{key}:onset:{run_at}` |
-| reminder | open, not acknowledged, not recovering (`ok_since` null), a rung due | `sys:{key}:reminder:{rung}:{oldest first_seen_at}:{lowest id}x{count}` |
-| recovery | incidents a measured OK closed this pass | `sys:{key}:recovery:{oldest first_seen_at}:{lowest id}x{count}` |
+**Told on Health and by the canary, nowhere else.** No system alert reaches a bell, a phone or an
+inbox: wave 7's delivery readiness (the outbox and its two transports, below) was deleted
+in W1, and the program's push never carries a system alert. Health's check rows carry `id=<key>` and
+their cells `id=<key>:<subject>` (the subject percent-encoded; since wave 8), and because they render
+after their fetch, the page scrolls to the decoded `location.hash` once its rows exist, opening the
+row that hides a targeted cell, so `/health#<key>` lands on the check.
 
-Rungs count from `first_seen_at`: an alarm reminds at 6 h, 24 h and 72 h, then weekly (rungs
-`6h`, `24h`, `72h`, `w…`); a gauge every 24 h (`d…`), the operator's Q2 ruling: "ring when first
-read, then once a day". A rung is due when `alerted_at` predates `first_seen_at + rung`, and only
-the highest due rung fires, never a backlog. Messages are plain text whose first line names the
-check and its state: onset `<label>: Problem — <subject>: <cell message>; …` (at most 1,500
-characters), reminder `<label>: still Problem|Watch for N h — <subjects>`, recovery
-`✓ <label>: <subjects> recovered after N h`. An onset sets `alert_count = 1, alerted_at = now()`;
-a reminder adds one to `alert_count` and moves `alerted_at`.
-
-**Delivery.** `system_health_channels` is `[]` by ruling Q1 (2026-10-18), so notices ring the in-app
-bell only; switching on is three steps (a transport key on the API service and a deploy, the
-recipient, a migration with a test system alert: § Delivery readiness, below). Ready since wave 3: the
-outbox's `compose_message` sends a `system_health` row
-with its message as the body, as subject the text before the first ` — ` (the messages above are
-one line of up to 1,500 characters) or else its first 120 characters ("System alert" when
-empty), and the link `{SPA_BASE_URL}/health#<key>` when the dedupe key starts `sys:<key>:`, else
-`{SPA_BASE_URL}/health`. Health's check rows carry `id=<key>` and their cells `id=<key>:<subject>`
-(the subject percent-encoded; since wave 8), and because they render after their fetch (so the
-browser's own jump finds nothing), the page scrolls to the decoded `location.hash` once its rows
-exist, opening the row that hides a targeted cell: the link lands on the check. It replaced the
-fixed Czech subject and the `/notifications` link. Since wave 8 the bell links the same way: each
-system row carries an "Open Health" link to `/health#<check_key>`, the feed's `check_key` read off
-the `sys:<key>:` dedupe key; following it marks the row read, as pressing its text does.
-
-**Read is not acknowledged.** Reading a notice in the bell sets
-`notification_dispatches.seen_at`, which platform admins can do on SYSTEM rows since migration
-619; it never acknowledges. The Acknowledge button on Health (on a check's row, shown while one
-of its open incidents is unacknowledged) calls
-`POST /admin/health/acknowledge {"key": …}`, which sets `ops_incidents.acknowledged_at` on that
-key's open cell incidents, and only that stops their reminders; the recovery is still told.
+**Only acknowledgement silences.** The Acknowledge button on Health (on a check's row, shown while
+one of its open incidents is unacknowledged) calls `POST /admin/health/acknowledge {"key": …}`,
+which sets `ops_incidents.acknowledged_at` on that key's open cell incidents; only that stops their
+reminders and the canary's e-mail, and the recovery is still recorded. Until W1 a bell read of the
+notice (`notification_dispatches.seen_at`) also satisfied the canary, so "Mark all read" muted it
+(audit F5).
 
 **Idempotent by construction.** The loop re-reads the same newest rows every minute, so each step
-is a no-op on repetition: `ON CONFLICT` on the open signature and on `dedupe_key`, `coalesce` on
+is a no-op on repetition: `ON CONFLICT` on the open signature, `coalesce` on
 `ok_since`, the `alerted_at` rung guard. `tests/toolkit/test_system_alerts.py` pins a second pass
-over one state emitting nothing.
+over one state changing nothing.
 
 **Replay rail.** `tests/toolkit/test_system_alerts_replay.py` feeds 14 days of real results
 (run-length-encoded aggregates in `tests/fixtures/health_replay_14d.csv`, no ids or URLs: the repo
@@ -573,14 +555,14 @@ twelve checks have input replays of their own (below).
 **Cutover.** After the deploy the ladder sends one grouped onset per currently failing check,
 alarm or gauge (today three gauges: `location_town_coverage`, `ppm2_basis_floor_share`,
 `text_extraction_lag`), once, each on its first pass after the new harness has measured it. The
-861 old system alerts can now be cleared with "Mark all read".
+861 old system alerts could then be cleared with "Mark all read" (since W1 no system row is visible).
 
 **Wave 3's cutover.** The canary's first projection from main after the merge deletes the eight
 retired keys' registry rows, so the ladder closes their open cell incidents silently as `retired`
 (the `llm_errors` incident open at merge included), and the new `llm` check, measured within
 minutes of the worker's deploy, opens a fresh onset for an outage still under way (the two can be
-open together for up to one canary gap). Legacy `sys:ops_incident:*` notices stay in the bell as
-they are.
+open together for up to one canary gap). Legacy `sys:ops_incident:*` notices stayed in the bell
+until W1 hid every system row.
 
 **Wave 4's cutover.** The worker projects the four portal keys on its first health pass after the
 deploy, but the seven retired GitHub keys leave `health_checks` only at the canary's next run from
@@ -709,16 +691,15 @@ assertion fails, 0 otherwise:
 | `db_answers` | `select 1` cannot connect or answer within 10 s (exit 2, the error printed) | every other assertion reads the database |
 | `liveness_fresh` | the newest `liveness` row is 30 min old (`LIVENESS_STALE_MIN`), or there is still none 30 min after the key was registered ("pg_cron has never written a liveness row"); skipped with a `CANARY SKIP` note while `health_checks` has no `liveness` key, so the canary can merge before migration 620 is applied | the watcher runs every 5 min: 30 min is six missed ticks |
 | `failing_cells_have_incidents` | a liveness cell that has failed in every row for 15 min or more (`TELLER_GRACE_MIN`; the cells read by the ladder's own rule) has no open `cell:liveness:<subject>` incident | the ladder, the API's 60 s loop, is not running, so nothing the watcher finds reaches anyone; 15 min outlasts an API deploy |
-| `alarm_notices_handled` | an alarm's `system_health` notice keyed `sys:<key>:onset:…` or `sys:<key>:reminder:…`, dispatched in the last 12 h (`NOTICE_WINDOW_H`) and at least 15 min ago (`NOTICE_GRACE_MIN`), is unhandled: not seen, not delivered (no `channel_sends` row `sent` or `delivered` for it), and its key still has an open, unacknowledged cell incident; the line names the key, the notice's age and its kind | with the bell the only channel (Q1), this is how an alarm nobody read reaches the operator |
+| `alarms_acknowledged` | an alarm-class cell incident is open and unacknowledged and its latest rung (`ops_incidents.alerted_at`: the onset, or the 6 h, 24 h, 72 h or weekly reminder) is at least 15 min and at most 12 h old; the line names the key and the rung's age | system alerts reach no bell or phone (ruling R2b, 2026-10-21), so this red run's e-mail is how an alarm reaches the operator |
 
-The fourth assertion matches the dedupe-key prefixes only (a grouped key carries its incident ids
-as a tail) and never looks at a recovery or a `sys:ops_incident:*` notice. Gauge notices are never
-asserted: the operator ruled that a gauge rings in the bell once a day, and the email path is for
-alarms. The 15 min grace covers the outbox's 120 s interval and its first retry once a channel is
-configured. So an alarm nobody reads reddens every canary run from 15 min to 12 h after each of its
-notices, and GitHub emails a red scheduled run to whoever last changed its cron line: at the first
-canary run after the onset, and again after each reminder (6 h, 24 h, 72 h, then weekly), until
-the notice is read or delivered, the incident acknowledged, or the cell recovered. This replaces
+Since W1 (2026-10-21) the fourth assertion reads `ops_incidents` and the registry's class only: no
+`channel_sends`, no `seen_at`, no dedupe key. Gauges are never asserted: a gauge's rungs show on Health once a day (Q2),
+and the e-mail path is for alarms. So an unacknowledged alarm reddens every canary run from 15 min
+to 12 h after its onset and after each reminder rung, and GitHub emails a red scheduled run to
+whoever last changed its cron line: at the first canary run after the onset, and again after each
+reminder (6 h, 24 h, 72 h, then weekly), until the incident is acknowledged on Health or the cell
+recovers. This replaces
 `--exit-nonzero-on-fail`, deleted with `llm_health.yml` and the 6-hourly lane: those lanes
 reddened a run whenever it measured a failing alarm, read or not, and could never speak for a
 check measured elsewhere — the watcher's, or the worker's.
@@ -726,11 +707,11 @@ check measured elsewhere — the watcher's, or the worker's.
 **Who watches whom.**
 - **pg_cron** (the watcher) watches the worker (its heartbeat), the API (the matcher's lease), the
   ladder (`unalerted`) and every alarm's freshness, the canary's GitHub-hosted keys included: a
-  canary that stops running is told in the bell once its hourly keys pass cadence + 18 h.
-- **The API** (the ladder) tells what the watcher and the checks find, and keeps reminding about a
-  dead worker because it does not run in the worker.
+  canary that stops running opens a `stale:<key>` incident on Health once its hourly keys pass cadence + 18 h.
+- **The API** (the ladder) turns what the watcher and the checks find into incidents and rungs, and
+  keeps doing so for a dead worker because it does not run in the worker.
 - **GitHub** (the canary) watches pg_cron (`liveness_fresh`), the ladder
-  (`failing_cells_have_incidents`) and whether anyone heard (`alarm_notices_handled`); its failure
+  (`failing_cells_have_incidents`) and whether an alarm stands unacknowledged (`alarms_acknowledged`); its failure
   email needs neither Supabase's scheduler nor Railway.
 - **The worker** (its health lane, since wave 3) runs the platform checks: `jobs` watches every
   production GitHub workflow (through the canary's poller, whose cursor is its `gh/poller` cell),
@@ -744,127 +725,16 @@ that is every deploy's normal state until the new process's first pass claims th
 that stops cleanly and never comes back is therefore no liveness Problem by itself; it shows only
 once a liveness cell fails and finds no incident, which the canary's third assertion then emails.
 
-## Delivery readiness — the bell only, ready for Telegram and email (Health dashboard sprint wave 7, 2026-10-19)
+## Delivery readiness — deleted (notifications push program W1, 2026-10-21)
 
-**Today: the bell only, by ruling Q1 (2026-10-18).** Every system alert (a Health notice: onset,
-reminder or recovery) rings the in-app bell and goes nowhere else: `system_health_channels` is
-`[]`, the API service holds no transport key (the secret that lets it send through Telegram, or
-email through Resend), both recipients are empty, and `channel_sends`, the ledger of every message
-sent out of the app, has never held a row (10-19). The one way out is GitHub's failure email: the
-canary reds its run while an alarm's onset or reminder sits unread and unsent, its incident open and
-unacknowledged, 15 min to 12 h after it was written (`alarm_notices_handled`, above), so an alarm
-nobody read reaches you at the next canary run (median gap ~4.9 h). That email needs neither Supabase's
-scheduler nor Railway, so it stays once delivery is on: it is the path left when the database or the
-API is down.
-
-**Ready, and switched off:**
-- Two transports: `api/transports/telegram.py` (`TELEGRAM_BOT_TOKEN`) and
-  `api/transports/email_resend.py` (`RESEND_API_KEY` and `EMAIL_FROM`, both needed), registered in
-  `api/dependencies._build_transports`.
-- The outbox, `api/notification_outbox.py`. `api/main.py` starts it when the API boots, and only
-  when a transport `is_configured()` and `OUTBOX_DRAIN_DISABLED` is unset, so a new key works from
-  the next deploy, never before. Every `notifications_outbox_interval_seconds` (120 s) it sends each
-  notice of the last 7 days that is addressed to a configured channel with a recipient, once
-  (`channel_sends` keyed `notif:<dispatch id>:<channel>`), and retries a failed send until 5
-  attempts. A system alert's message is its text, its head the email subject, with a link to the
-  check's row on Health (the ladder's **Delivery** paragraph, above); with `SPA_BASE_URL` unset it
-  carries no link.
-- Addressed when written: the ladder's `emit_system_alert` copies `system_health_channels` into
-  each system alert's `target_channels` as it writes it, so switching on reaches system alerts
-  written from then on and never sends the bell's old ones. Watchdogs and collections choose their
-  own channels; on 10-19 none had chosen email or Telegram and no notice of the last 7 days was
-  addressed to either, so the first deploy with a key sends nothing old.
-- Recipients: `app_settings.notification_email_to` and `notification_telegram_chat_id`, edited in
-  the app (step 2) and shared with the watchdogs and collections that choose email or Telegram.
-- The canary: since wave 2 `alarm_notices_handled` counts an alarm's notice as handled when a
-  `channel_sends` row for it reads `sent` (or `delivered`, the Resend webhook's later state), as it
-  counts one read in the bell (`tests/scripts/test_health_canary.py`). Once delivery is on, GitHub
-  emails about an alarm only when its system alert's send failed or never happened, so a broken
-  transport still reaches you.
-
-**What Q1 holds back:** the channel list, and with it the key and the recipient that make it work.
-No code is missing.
-
-**Switching it on: three steps, when you decide** (the design recommends Telegram). Before step 3,
-acknowledge on Health what you already know about: a gauge left unacknowledged reminds once a day
-(Q2), and from step 3 its reminders reach your phone or inbox too.
-
-1. **The key, on the Railway API service.**
-   - *Telegram:* in the Telegram app search `@BotFather` (the one with the blue check mark), open it
-     and tap **Start**. Send `/newbot`, then a display name (e.g. "Health alerts"), then a username
-     ending in `bot` (e.g. `my_health_alerts_bot`). BotFather answers with a token like
-     `123456789:AAH…`: copy it and keep it like a password. Open the new bot (the `t.me/…` link in
-     that answer) and send it any message: a bot can write only to someone who wrote to it first.
-   - *Email:* on resend.com, **Domains** → **Add Domain**; add the DNS records it lists at your
-     domain's registrar and wait until the domain reads Verified. Then **API Keys** → **Create API
-     Key** with Sending access, and copy the key (it starts `re_`). The sender is an address on that
-     domain, e.g. `Health alerts <alerts@your-domain>`.
-   - On railway.com, in the `sreality_scraper` workspace, open the **API** project (not `vite`, not
-     `realtime-worker`) → its one service, `sreality` → the **Variables** tab → **New Variable**: name
-     `TELEGRAM_BOT_TOKEN`, value
-     the token → **Add**. For email, two variables: `RESEND_API_KEY` (the `re_` key) and
-     `EMAIL_FROM` (the sender).
-   - In the same list, `SPA_BASE_URL` must hold the app's address: what your browser shows while the
-     app is open, starting `https://` (the address bar hides it) and ending `.up.railway.app`, with no
-     `/` at the end. Add it if it is
-     missing, or system alerts arrive without their link to Health. If `OUTBOX_DRAIN_DISABLED` is
-     listed, delete it: it keeps the outbox off whatever else is set. Email only, optional:
-     `NOTIFICATION_UNSUB_SECRET` plus `API_PUBLIC_URL` (the API's address) add a one-click
-     unsubscribe link; without them the email still sends.
-   - A banner at the top counts the staged changes: click **Deploy**, a plain click (holding Alt
-     saves without a restart, and the outbox starts only when the API restarts), and wait until the
-     new deployment is Active. Its log line `notification outbox started (a transport is configured)`
-     never shows: the API's root logger drops INFO lines (API root logging, named in
-     `docs/design/health-dashboard.md` § 10, no issue yet), so step 3's test system alert is the check.
-2. **The recipient, in the app.** The top bar's **Admin** menu → under Settings, **General
-   Settings** → section 3, **Delivery** (click its heading if it is folded).
-   - *Telegram:* open `https://api.telegram.org/bot<token>/getUpdates` in your browser, with your
-     token in place of `<token>` (the address holds the secret: never share it). The number after
-     `"chat":{"id":` is your chat ID, e.g. `123456789`; if the page shows `"result":[]`, send the
-     bot another message and reload. Paste it into **Telegram chat ID**.
-   - *Email:* your address in **Email recipient**.
-   - Click **Save** beside the field; "Saved." appears.
-3. **The channel list and a test system alert, by migration.** On your word, an agent writes a migration
-   (a numbered SQL file that changes the database once) with the next free number that day
-   (`ls migrations/ | tail -5`; the database skill), applies it through `apply_migration.yml` before
-   its PR merges and verifies it with a SELECT. For Telegram it holds (`'["email"]'` and
-   `array['email']` for email, both names for both):
-
-   ```sql
-   update app_settings set value = '["telegram"]'::jsonb where key = 'system_health_channels';
-   insert into notification_dispatches
-     (source_kind, change_kind, channel, status, message, dedupe_key, target_channels)
-   values ('system_health', 'system_alert', 'in_app', 'sent',
-           'Delivery test: Health alerts now reach you here',
-           'sys:delivery_test:<YYYY-MM-DD>', array['telegram'])
-   on conflict (dedupe_key) do nothing;
-   ```
-
-   Within about two minutes (the outbox's 120 s) the test system alert reaches your phone or inbox,
-   as well as the bell; its link opens Health at the top (no check is named `delivery_test`, and the
-   canary never asserts it). Confirm it arrived. Its send should read `sent`:
-
-   ```sql
-   select cs.status, cs.error_message
-     from channel_sends cs join notification_dispatches d on d.id = cs.notification_id
-    where d.dedupe_key = 'sys:delivery_test:<YYYY-MM-DD>';
-   ```
-
-   A `failed` row's `error_message` names the cause (a wrong token, a chat ID the bot never heard from, an
-   unverified sender); no row means the outbox is not running (step 1's deploy) or the recipient is
-   empty (step 2). It is a migration, not an edit of the key in Settings › App settings, because it
-   also writes the test system alert, in the same step.
-
-From then on every system alert reaches the bell and your channel; the bell stays the log (reading
-there marks a notice read, and only Acknowledge on Health stops reminders). To switch off:
-`system_health_channels` back to `[]` (a migration again), or delete the key on Railway and click
-**Deploy**.
-
-**No migration in wave 7.** The design's `623_health_delivery.sql` is written at enabling time, not
-now: merged under Q1 it would sit on main unapplied, against apply-before-merge, and its two
-statements, data only, declare nothing `migration_drift` can probe, so that check would read it
-"unverifiable" and nothing would show it was never applied. The number 623 is moot too: main
-reached 634 while the sprint ran.
+Health dashboard sprint wave 7 (2026-10-19) kept system alerts in the bell (ruling Q1, 2026-10-18)
+with two transports (a chat bot and Resend email), the outbox and a three-step switch-on ready. Ruling
+R2b (2026-10-21, `docs/design/notifications-push/PROGRAM.md` § 3.8 and § 6) reversed Q1: system
+alerts leave the bell, and W1 deleted the transports, the outbox, Settings › Delivery's recipient
+fields and the switch-on steps (git history keeps them); nothing is left to switch on. The ladder's
+incidents show on Health, and the one external path is the canary's red run, which GitHub e-mails
+(`alarms_acknowledged`, above) and which needs neither Supabase's scheduler nor Railway. The
+program's iPhone push (W4) carries watchdog, collection-monitor and share events only.
 
 ## The health lane — the worker measures its own checks (wave 3, 2026-10-19)
 
@@ -905,8 +775,8 @@ above) tells a stopped lane, and the lane is a `lane/health` job cell like any o
 `check_jobs` (`scripts/checks/platform.py`; platform alarm on the worker, cadence 600 s, label
 "Jobs", unit "cells") gives one job cell per scheduled machine on every runtime, with the subjects
 `gh/<workflow file stem>`, `gh/poller`, `cron/<jobname>`, `lane/<lane>`, `lane/<lane>/<portal>` (its
-`portal` field set) and `artifact/<name>`, so the ladder opens one incident per failing job and one
-grouped notice per pass lists every newly failing job with its reason. It replaces
+`portal` field set) and `artifact/<name>`, so the ladder opens one incident per failing job, each
+shown on Health with its reason. It replaces
 `worker_lane_stall`, `workflow_poller_liveness`, `broker_resolution_freshness` and
 `db_saturation`'s failure-rate arm (above).
 
@@ -1795,7 +1665,7 @@ last resolved more than 7 d ago), 0 with no row and 0 address-grain rows with no
 with the served predicate's hidden count (0.62 s without it), against the whole-corpus statement's 6.5 s. The
 registry: `ruian:2026-09-30`, loaded 10-01, 19 d old, nothing staged, so a missed November load reads Problem
 from 11-10 (41 d; the line is strict). Problem, not Watch: a stalled load is a failure the `jobs` check cannot
-see (a superseded run is cancelled, not failed), and a gauge's Watch sends no notice. The per-portal series
+see (a superseded run is cancelled, not failed), and a gauge's Watch opens no incident. The per-portal series
 changes meaning at this deploy, as it did on 2026-09-14.
 
 Known limits: a gauge already reading Problem cannot announce a resolver regression (the 2026-09-14 sweep that

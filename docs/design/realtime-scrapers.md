@@ -99,7 +99,8 @@ photo-sharing cross-portal merge ≤ 60 min · delisting ≤ 6 h market-wide / �
 notification ≤ 2 min after the property row exists. `published_at` (migration 266) and the
 `detail_queue_completions` ledger (migration 265) are the measurement substrate; health
 checks move from fixed batch-era thresholds to cadence/SLO-scaled ones, with reds pushed
-through the existing notification outbox.
+through the existing notification outbox (*superseded: the outbox was deleted 2026-10-21; system
+alerts live on Health and the canary e-mail, ruling R2b*).
 
 ## Costs & constraints
 

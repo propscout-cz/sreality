@@ -211,7 +211,7 @@ Release-job PR, merged only after the store credentials exist (W5):
 
 ### W6 — Decommission
 
-Re-point any Stripe or Resend webhook registered on the old API host. Remove the old app origin
+Re-point the Stripe webhook registered on the old API host (the Resend webhook was deleted 2026-10-21, notifications push W1). Remove the old app origin
 from CORS and Supabase, the old extension ID from Supabase and CORS, the unused redirect entry
 from the Google client, and finally the two `*.up.railway.app` domains (irreversible).
 
