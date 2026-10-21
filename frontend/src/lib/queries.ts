@@ -135,6 +135,9 @@ const CARD_COLS =
    * browse_list (migrations 276/343/363) and simply never selected — they
    * existed only as filter inputs, never as anything displayed. */
   'mf_gross_yield_pct,total_price_change_pct,price_change_count,' +
+  /* The lot the card names after the floor area and the Lot area sort orders by:
+   * THE plot measure (migration 534) and never the bare estate_area column. */
+  'plot_area_m2,' +
   /* The portal badge (MS19, migration 590): the portals with an active ad, else every portal. */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
@@ -806,6 +809,9 @@ export interface CardRow {
   /* MF gross rental yield % (migration 133). Non-null only on sale
    * apartments that resolved to an MF territory. */
   mf_gross_yield_pct: number | null;
+  /* THE plot measure (migration 534): a house's parcel, a pozemek's own area
+   * (area_m2 already shows it), NULL when the ad states no lot. */
+  plot_area_m2: number | null;
   /* Signed percent across the representative listing's own price series, and
    * the per-child change count. NULL pct = fewer than two observed prices,
    * which <PriceDelta> renders as nothing rather than as "unchanged". */

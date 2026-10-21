@@ -31,6 +31,12 @@ toolkit work.
   gains "Plocha: od nejmenší / od největší" + "Naposledy viděno" (one direction; an ascending
   last-seen link reads descending); the sort fields without a control and `estate_area` deleted,
   a stored or linked one reads as the default). An old `?tab=table` link opens the Properties tab.
+- **Done: Lot area sort 2026-10-21** (operator request; no migration). The cards menu (desktop + phone
+  Řazení) gains "Pozemek: od nejmenšího / od největšího" on THE plot measure `plot_area_m2` (the Lot
+  area filter's column; a flat has none and sorts last), and every card with a lot names it after the
+  floor area ("180 m² · 850 m² pozemku"; a pozemek's area already is its plot). Same plan and cost as
+  the price sort (~90 ms, houses for sale). Owed: the phone property page's line has no lot until
+  `properties_public` carries the measure.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,

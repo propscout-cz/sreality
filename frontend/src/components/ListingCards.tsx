@@ -36,7 +36,7 @@ import {
   fmtArea, fmtCzk, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
-import { ppm2BasisFromToken } from '@/lib/measure';
+import { plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
 import { listingTypeLabel } from '@/lib/enums';
 import { portalLabel, portalShort } from '@/lib/portals';
 import type { ListingEstimate } from '@/lib/types';
@@ -693,6 +693,8 @@ function formatTitle(r: CardRow): string {
   const parts = [`${kind} ${deal}`];
   if (r.disposition) parts.push(r.disposition);
   if (r.area_m2 != null) parts.push(fmtArea(r.area_m2));
+  const plot = plotBesideArea(r);
+  if (plot != null) parts.push(fmtArea(plot, 'plot'));
   return parts.join(' · ');
 }
 
