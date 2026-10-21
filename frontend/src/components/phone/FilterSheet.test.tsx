@@ -174,7 +174,7 @@ const FILLED: ListingFilters = {
   estateAreaMax: 900,
   usableAreaMin: 40,
   usableAreaMax: 120,
-  conditionMatch: ['novostavba'],
+  conditionMatch: ['novostavba', '__unknown__'],
   buildingMaterial: ['cihla'],
   buildingConditionLevelMin: 2,
   buildingConditionLevelMax: 4,
@@ -276,6 +276,18 @@ describe('the footer', () => {
     await user.click(within(sheet()).getByRole('button', { name: 'Price: low → high' }));
     await user.click(await within(sheet()).findByRole('button', { name: /^Zobrazit/ }));
     expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'price_czk', direction: 'asc' });
+  });
+
+  /* One menu on every surface: the Řazení row is CARD_SORTS. */
+  it('offers area both ways and last seen, and applies the one picked', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    await user.click(within(sheet()).getByRole('button', { name: /^Řazení/ }));
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od nejmenší' })).toBeInTheDocument();
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od největší' })).toBeInTheDocument();
+    await user.click(within(sheet()).getByRole('button', { name: 'Naposledy viděno' }));
+    await user.click(await within(sheet()).findByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'last_seen_at', direction: 'desc' });
   });
 
   it("Vymazat returns the draft to the scope's own filters", async () => {

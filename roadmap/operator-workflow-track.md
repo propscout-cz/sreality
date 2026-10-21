@@ -7,6 +7,33 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
+
+Spec `docs/design/new-property-from-link.md` (PR #1913, approved 2026-10-20, six rulings in). North star: a
+pasted link is an ordinary ad — one identity rule, one fetch path (the drain), one write, one birth; the sites
+we do not crawl are the tenth portal `web`.
+- [ ] **W1 `feature/link-ingest`** — `scraper/portal_identity.py` (the one URL→(source, native id) canon; the
+      seven parsers import it; `tests/fixtures/portal_url_probes.json` pins Python and `portalIds.ts` alike),
+      `POST/GET /listings/ingest` (admin; enqueue, never fetch), the maintenance lane at 30 s + births inside the
+      daily sweep, `NewPropertyDialog` on Pipeline, Browse and the Odkaz tab, the extension's "Přidat do databáze".
+- [ ] **W2 `cleanup/estimation-four`** — estimation = add the ad, then estimate it (`listing_id` in, `url` out);
+      the LLM URL parser, both previews, `url_parser`, the orphan machinery and the sreality-only late-binder go.
+- [ ] **W3 `feature/web-portal`** — the tenth portal (deterministic parser, text-lane reading, `indexless`
+      presence seam, daily walk, contract, broker row, chip "Web"); after #1910.
+- [ ] **W4 `cleanup/estimation-four-schema`** — drop `parsed_url_cache`, nine parse columns, two settings, the
+      `idnes_reality` portals row (destructive, backup + OK given 2026-10-20; after 643).
+### Phase U-MERGE-LETTERS: merge mode as one statement of letters (built 2026-10-21; merges in the window)
+- **Done (PR #1926, no migration):** Browse's merge mode marks cards with letters — a letter key marks the focused
+  card (the pointer focuses the card it is over; Tab / Shift+Tab move card to card; ← → page the photos),
+  a click writes the active letter (A at first, so click-click-merge still makes one group), the same
+  letter again clears, Backspace / Delete clear — and ONE click merges every letter in ONE transaction:
+  `POST /properties/merge {letters: {property_id: "A"}}`, the split's statement shape and codec, over
+  `toolkit.property_identity.merge_letters` (shared with the split's join; every property locked up front
+  in id order, each letter its own group; a refusal names the letter and writes nothing); one receipt per
+  letter; no ruling crosses letters; the Rulings page merges a pair as a one-letter statement. Rulings
+  D1–D6 and the as-built record: `docs/design/merge-letters/PROGRAM.md`.
+- **Owed:** the first real multi-letter merge in production (a read-only browser check of the keys).
+
 ### Phase U-MERGE-FEEDBACK: what Browse shows after a big merge (reported 2026-10-19, investigated 2026-10-20)
 
 The operator merged 26 inactive ads of one flat (Lužická 1681/17, Praha; byt 2+1, 50 m², 10.87 M Kč;
@@ -29,9 +56,20 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   `VALUO_SANDBOX_API_TOKEN`), `api/http_json.py` folding the two `_http_get_json` copies (the Mapy key no longer reaches
   logs), the admin-claim copies folded into `deps.is_admin`, the server label dicts into `filter_registry.label_cs`,
   and the phone Poloha no longer calls a district point a town. Rationale: `docs/architecture.md` § rule 12.
-- **Next:** W3, the section (desktop editor + phone read-only card); the sandbox probe through the live API after the
-  deploy (flat sale and lease, a house with `lot_area`, land, a negative floor) decides the lease basis and whether a
-  house's plot is sent; a per-plan monthly quota counted from the rows before the production token.
+- **Done (W3, the section, on Valuo v3):** `<section id="valuo">` after Odhady on the property page for every signed-in
+  user (`components/listing-detail/ValuoSection.tsx` over `lib/valuo.ts`): the editor flips in place and is drawn from
+  the API's `fields` alone — exactly each type's v3 request schema (`api.valuo.com/v1/market-value/{type}`, commercial
+  included), the place editable — each value tagged with its provenance (`z inzerátu` / `odvozeno` / `předpoklad` /
+  `chybí` / `upraveno`), Valuo's refused parameters under their fields; the result card reads Valuo's confidence band
+  (`range_price`) on the ruler against the asking price, our latest run and MF, a reliability line (comparables, reach,
+  match; no grade) and the comparables with their photos (one `advert/detail` call, migration 646); a sandbox answer
+  is stored `sandbox` whatever the token's name; the history is the estimations' `RunHistory`, generalised; the phone
+  shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
+- **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
+  exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
+  confirms the lease basis (a lease reads as monthly: `ValuoSection` `Price`) and whether a house's plot is sent; a per-plan monthly
+  quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`).
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
@@ -487,7 +525,8 @@ from Browse, not just from the board.
   `stageAccent`/`stageBadge` replace the per-surface copies — the board fell back
   to grey for an uncoloured stage while the listing header fell back to copper.
   `PipelineFunnelButton` now serves the Browse cards AND the Table (which had no
-  pipeline affordance at all, quietly breaking rule #22's "every surface"), and
+  pipeline affordance at all, quietly breaking rule #22's "every surface"; the Table
+  tab itself was removed 2026-10-20), and
   `usePipelineCard` is the single add/remove/move hook + invalidation policy.
   The Chrome-extension panel mirrors the badge and tints its pill by stage, with
   the tag palette added to its by-value mirror of the SPA tokens.
@@ -512,8 +551,9 @@ from Browse, not just from the board.
   already supported — see architecture rule 21b — and which incidentally fixes
   a control that lied: clicking the selected deal-type pill wrote `deal=null`
   and silently snapped back to `pronajem`.
-- Next: nothing queued here; per-stage columns on the Table and a "days in stage"
-  signal are the obvious follow-ups if the scope gets heavy use.
+- Next: nothing queued here; a "days in stage" signal is the obvious follow-up if
+  the scope gets heavy use. (Per-stage columns on the Table: moot, the Table tab was
+  removed 2026-10-20.)
 
 ### Phase U-PIPE Phase 3i: The funnel opens a stage menu (done)
 The funnel was a toggle: clicking it on a property already in the pipeline
@@ -529,8 +569,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   `property_pipeline.note` is a separate column with no writer.)
 - **One menu, three surfaces.** `PipelineStageMenu` (stage list badged from
   `code`, current stage checked, terminal stages under their own divider, then
-  a two-step remove) is opened by the Browse cards, the Browse table rows AND
-  the listing header — which drops its own `<select>` + bare ✕. Adding stays
+  a two-step remove) is opened by the Browse cards, the Browse table rows (gone
+  with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
   keeps its `<select>` and gains the same confirm on ✕ via a generic

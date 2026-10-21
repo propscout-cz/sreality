@@ -297,6 +297,9 @@ CONDITION_OPTIONS: tuple[EnumOption, ...] = (
     EnumOption("spatny", "Špatný", "Poor"),
     EnumOption("k_demolici", "K demolici", "For demolition"),
 )
+# The filter's chips, not the canon: `condition` stays CONDITION_OPTIONS everywhere a value is
+# stored, keyed or pivoted; only the condition_match filter adds the "Neuvedeno" chip.
+CONDITION_FILTER_OPTIONS: tuple[EnumOption, ...] = (*CONDITION_OPTIONS, _UNKNOWN_OPTION)
 
 # No `unassessed` member: measured over all nine censuses, NO portal marks its `G` as the
 # statutory placeholder for an unassessed building. Every one of them states it as the
@@ -1123,12 +1126,15 @@ def _build_registry() -> dict[str, FilterDef]:
                 "this list. Czech values without diacritics, best to "
                 "worst: projekt, ve_vystavbe, novostavba, "
                 "po_rekonstrukci, velmi_dobry, dobry, udrzovany, "
-                "v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici."
+                "v_rekonstrukci, pred_rekonstrukci, spatny, k_demolici. "
+                "The special `__unknown__` value matches listings whose "
+                "condition is not specified (NULL) or stored under a "
+                "non-canonical label. Empty list / null = no constraint."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
             agendas=_ALL_AGENDAS,
-            enum_values=CONDITION_OPTIONS,
+            enum_values=CONDITION_FILTER_OPTIONS,
         ),
         FilterDef(
             id="building_type_match",
@@ -2266,6 +2272,7 @@ __all__ = [
     "BUILDING_MATERIAL_OPTIONS",
     "BUILDING_TYPE_OPTIONS",
     "CONDITION_OPTIONS",
+    "CONDITION_FILTER_OPTIONS",
     "ENERGY_RATING_OPTIONS",
     "DISPOSITION_OPTIONS",
     "PRICE_UNIT_OPTIONS",

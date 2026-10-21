@@ -186,6 +186,10 @@ vi.mock('@/components/NewEstimationModal', () => ({
 vi.mock('@/components/ExploreAreaModal', () => ({
   useExploreAreaModal: () => ({ open: vi.fn() }),
 }));
+const openNewProperty = vi.hoisted(() => vi.fn());
+vi.mock('@/components/NewPropertyProvider', () => ({
+  useNewPropertyDialog: () => ({ open: openNewProperty }),
+}));
 
 /* The property as properties_public answers it: its canonical advert is 105054
    (sreality), and every advert field is that advert's. */
@@ -254,6 +258,19 @@ function renderAt(path: string) {
           <Route path="listing/:sreality_id" element={<AdvertRedirect />} />
         </Routes>
         <Where />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function renderAtState(pathname: string, state: unknown) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[{ pathname, state }]}>
+        <Routes>
+          <Route path="listing/:source/:nativeId" element={<AdvertRedirect />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -422,10 +439,47 @@ describe('<AdvertRedirect> old advert addresses', () => {
     expect(queries.fetchAdvertProperty).not.toHaveBeenCalled();
   });
 
-  it('says not found for an advert nobody has', async () => {
+  it('says in Czech that we lack the advert, and offers to add it with the pasted URL', async () => {
     vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
+    openNewProperty.mockClear();
+    const url = 'https://reality.bazos.cz/inzerat/196123456/byt.php';
+    renderAtState('/listing/bazos/196123456', { pastedUrl: url });
+    expect(await screen.findByRole('heading', { name: 'Tento inzerát v databázi nemáme.' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Otevřít na portálu Bazoš/ })).toHaveAttribute('href', url);
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat do databáze' }));
+    expect(openNewProperty).toHaveBeenCalledWith({ url });
+  });
+
+  it('opens the dialog empty when the address carried no URL', async () => {
+    vi.mocked(queries.fetchAdvertProperty).mockResolvedValue(null);
+    openNewProperty.mockClear();
     renderAt('/listing/bazos/nope');
-    expect(await screen.findByText('Not found')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Přidat do databáze' }));
+    expect(openNewProperty).toHaveBeenCalledWith({});
+    expect(screen.queryByRole('link', { name: /Otevřít na portálu/ })).toBeNull();
+  });
+
+  it('waits for an advert we hold whose property is not born yet, then lands', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      vi.mocked(queries.fetchAdvertProperty)
+        .mockResolvedValueOnce({ id: 105053, property_id: null })
+        .mockResolvedValueOnce({ id: 105053, property_id: null })
+        .mockResolvedValue({ id: 105053, property_id: 774 });
+      renderAt('/listing/idnes/6a147cfde222cf687509e018');
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByRole('status')).toHaveTextContent('Zakládám nemovitost…');
+      expect(screen.queryByText('Tento inzerát v databázi nemáme.')).toBeNull();
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      expect(queries.fetchAdvertProperty).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('status')).toHaveTextContent('Zakládám nemovitost…');
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      expect(queries.fetchAdvertProperty).toHaveBeenCalledTimes(3);
+      expect(where()).toBe('/property/774?advert=105053');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

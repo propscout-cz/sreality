@@ -39,14 +39,14 @@ describe('<BoxTable> — THE box primitive', () => {
     expect(parseFloat(whisker.style.width)).toBeCloseTo(pct(300) - pct(220));
   });
 
-  it('lists the five numbers it draws as columns, with n and the unit', () => {
+  it('lists the mean and the five numbers it draws as columns, with n and the unit', () => {
     render(<BoxTable pivot={pivot} />);
     expect(screen.getByText(/Doba na trhu · dní/)).toBeInTheDocument();
     const heads = screen.getAllByRole('columnheader').map((h) => h.textContent);
-    expect(heads.slice(3)).toEqual(['p10', 'p25', 'medián', 'p75', 'p90']);
+    expect(heads.slice(3)).toEqual(['průměr', 'p10', 'p25', 'medián', 'p75', 'p90']);
     const row = screen.getByRole('rowheader', { name: '1+kk' }).closest('tr')!;
     expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent))).toEqual([
-      '40', '', '120', '140', '160', '180', '200',
+      '40', '', '160', '120', '140', '160', '180', '200',
     ]);
   });
 

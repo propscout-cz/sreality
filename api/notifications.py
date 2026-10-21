@@ -145,8 +145,8 @@ class WatchdogFilterSpec(BaseModel):
     cellar: bool | None = None
     garage: bool | None = None
 
-    # Enumerated columns. furnished/ownership are multi-select; each may carry
-    # the `__unknown__` sentinel (NULL or a non-canonical value).
+    # Enumerated columns. furnished/ownership/condition_match are multi-select;
+    # each may carry the `__unknown__` sentinel (NULL or a non-canonical value).
     furnished: list[str] | None = None
     ownership: list[str] | None = None
     # The portal rule's two sides (MS19 + migration 597), compiled by toolkit/filter_compiler.

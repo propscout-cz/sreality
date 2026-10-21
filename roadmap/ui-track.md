@@ -7,6 +7,14 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Condition filter: the "Neuvedeno" chip (2026-10-20, migration 644)
+- **Built:** Browse's "Condition (Stav objektu)" filter offers "Neuvedeno" as furnished and ownership
+  do: a property whose condition is NULL or off the canon. One meaning on every surface (rule 16):
+  the list, count and pins (`queries.ts`), Stats and the map cells (644 restates both RPCs with the
+  furnished shape, md5-gated on 640), the Watchdog and every estimation cohort (`filter_compiler`),
+  the phone sheet. The canon itself (`CONDITION_OPTIONS`: stored values, Stats keys, the scraper's
+  vocabulary) never gains the sentinel; only the filter's chips do (`CONDITION_FILTER_OPTIONS`).
+
 ### Browse filter layout (2026-10-20, no migration)
 - **Shipped: the sidebar the operator arranged** (drag-and-drop draft, 2026-10-20). Four bands —
   Essentials, Curation, Velocity & price activity, Advanced — with one heading level (the group
@@ -15,6 +23,10 @@ toolkit work.
   "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
   defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
   own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+- **Done: Table tab removed 2026-10-20** (operator ruling; ~470 lines net; the cards sort menu
+  gains "Plocha: od nejmenší / od největší" + "Naposledy viděno" (one direction; an ascending
+  last-seen link reads descending); the sort fields without a control and `estate_area` deleted,
+  a stored or linked one reads as the default). An old `?tab=table` link opens the Properties tab.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
   entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
@@ -259,7 +271,7 @@ oxidised-copper accent, Fraunces / Inter / JetBrains Mono, tabular
 numerals, Czech locale formatting).
 - **Browse**: filter sidebar (district typeahead, disposition multi-toggle,
   dual-handle price + area sliders, tri-state status, last-seen-within,
-  has-balcony/lift/parking) → Map / Table / Stats tabs. Filter and
+  has-balcony/lift/parking) → Map / Stats tabs (the Table tab went 2026-10-20). Filter and
   sort state in URL params; bookmarkable, refresh-survives.
 - **Listing detail** (`/listing/:sreality_id`): hero, mini-map, key
   facts, snapshot timeline strip (the product's signature visual

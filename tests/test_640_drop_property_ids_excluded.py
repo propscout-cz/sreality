@@ -110,8 +110,9 @@ def test_the_revert_restores_the_sources_verbatim() -> None:
 
 
 def test_these_are_the_latest_definitions() -> None:
+    # 644 restated both with one conjunct swapped (tests/test_644_condition_unknown_filter.py).
     for fn in FNS:
-        assert latest_definition(fn).name == NAME, fn
+        assert latest_definition(fn).name == "644_condition_unknown_filter.sql", fn
 
 
 def test_the_receipt_probes_the_two_functions() -> None:

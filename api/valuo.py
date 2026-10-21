@@ -14,136 +14,130 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import psycopg
 from fastapi import HTTPException
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from api import valuo_client
 from api.routes.property_location import load_location
-from toolkit.filter_registry import DISPOSITION_OPTIONS, SUBTYPE_OPTIONS, label_cs, type_label_cs
+from toolkit.filter_registry import CATEGORY_MAIN_NOUN_CS, DISPOSITION_OPTIONS, label_cs, type_label_cs
 from toolkit.measures import ppm2_basis
 
 LOG = logging.getLogger(__name__)
 
-FLAT, HOUSE, LAND = "flat", "house", "land"
-ALL = (FLAT, HOUSE, LAND)
-BUILT = (FLAT, HOUSE)
+FLAT, HOUSE, LAND, COMMERCIAL = "flat", "house", "land", "commercial"
+ALL = (FLAT, HOUSE, LAND, COMMERCIAL)
+BUILT = (FLAT, HOUSE, COMMERCIAL)
 
-# Where a value came from. `ignored` is not stored: it is read off Valuo's own `ignored_ids`.
 AD, PROPERTY, INFERRED, ASSUMED, MISSING, USER = "ad", "property", "inferred", "assumed", "missing", "user"
 
 _PRAGUE = ZoneInfo("Europe/Prague")
 _HISTORY_LIMIT = 50
 _STALE_PENDING = "2 minutes"
+_TEXT_MAX = 200
 
 
 @dataclass(frozen=True)
 class Field:
-    """One Valuo parameter. `required`/`recommended` name the property types Valuo's docs ask it of;
-    `fixed` = decided by the property itself, never by the user."""
+    """One Valuo parameter. `applies` = the endpoints whose v3 schema takes it (Valuo silently drops any other);
+    `required`/`recommended` name the types Valuo's docs ask it of; `fixed` = decided by the property itself."""
 
     name: str
     label: str
-    type: str  # enum | number | integer | boolean | date | text
+    type: str  # enum | number (every v3 number is an area, m²) | integer | boolean | date | text
     options: tuple[tuple[str, str], ...] = ()
-    applies: tuple[str, ...] = BUILT
+    applies: tuple[str, ...] = ALL
     required: tuple[str, ...] = ()
     recommended: tuple[str, ...] = ()
-    unit: str | None = None
     minimum: int = 0
     fixed: bool = False
 
     def spec(self, ptype: str) -> dict[str, Any]:
         return {
-            "name": self.name, "label": self.label, "type": self.type, "unit": self.unit,
+            "name": self.name, "label": self.label, "type": self.type, "unit": "m²" if self.type == "number" else None,
             "options": [{"value": v, "label": lab} for v, lab in self.options],
             "required": ptype in self.required,
             "group": "basic" if ptype in self.required or ptype in self.recommended else "more",
             "fixed": self.fixed,
+            "max_length": _TEXT_MAX if self.type == "text" else None,
         }
 
 
-def _area(name: str, label: str, applies: tuple[str, ...] = BUILT, **kw: Any) -> Field:
-    return Field(name, label, "number", applies=applies, unit="m²", **kw)
+# The production engine rejects any other local_type (the sandbox accepts anything, so only the docs say so).
+LOCAL_TYPES = ("1+0", "1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1", "6+kk", "6+1",
+               "7+kk", "7+1")
 
-
-def _count(name: str, label: str, minimum: int = 0) -> Field:
-    return Field(name, label, "integer", minimum=minimum)
-
-
-DISPOSITIONS = ("1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1")
-
+# Editor order; commercial_type (it matters most) after the two-track place: 3 columns close a row (operator, 10-20).
 FIELDS: tuple[Field, ...] = (
-    Field("property_type", "Nemovitost", "enum", (("flat", "Byt"), ("house", "Dům"), ("land", "Pozemek")),
-          applies=ALL, required=ALL, fixed=True),
-    Field("place", "Poloha", "text", applies=ALL, required=ALL, fixed=True),
-    Field("kind", "Typ obchodu", "enum", (("sale", "Prodej"), ("lease", "Pronájem")), applies=ALL, required=ALL),
-    _area("floor_area", "Plocha", required=BUILT),
-    _area("lot_area", "Plocha pozemku", applies=(HOUSE, LAND), required=(LAND,)),
+    Field("property_type", "Nemovitost", "enum", (
+        (FLAT, "Byt"), (HOUSE, "Dům"), (LAND, "Pozemek"), (COMMERCIAL, "Komerční prostor"),
+    ), required=ALL, fixed=True),
+    Field("place", "Poloha (adresa nebo souřadnice)", "text", required=ALL),
+    Field("commercial_type", "Typ prostoru", "enum", (
+        ("office", "Kancelář"), ("storage", "Sklad"), ("retail", "Obchodní prostor"), ("production", "Výroba"),
+        ("restaurant", "Restaurace"), ("accommodation", "Ubytování"), ("agriculture", "Zemědělský objekt"),
+        ("apartment_building", "Činžovní dům"), ("apartment", "Apartmán"), ("medical_office", "Ordinace"),
+        ("other", "Jiný"),
+    ), applies=(COMMERCIAL,), recommended=(COMMERCIAL,)),
+    Field("kind", "Typ obchodu", "enum", (("sale", "Prodej"), ("lease", "Pronájem")), required=ALL),
+    Field("floor_area", "Plocha", "number", applies=BUILT, required=BUILT),
+    Field("lot_area", "Plocha pozemku", "number", applies=(HOUSE, LAND, COMMERCIAL), required=(LAND,)),
     Field("rating", "Stav", "enum", (
         ("bad", "Neobyvatelný"), ("nothing_much", "Před rekonstrukcí"), ("good", "Průměrný"),
-        ("very_good", "Po kompletní rekonstrukci"), ("new", "Novostavba"), ("excellent", "Luxusní"),
-    ), required=BUILT),
+        ("very_good", "Velmi dobrý"), ("excellent", "Luxusní"),
+    ), required=ALL),
+    Field("new_building", "Novostavba", "boolean", applies=(FLAT, HOUSE), recommended=(FLAT, HOUSE)),
     Field("land_type", "Druh pozemku", "enum", (
         ("building", "Stavební"), ("field", "Pole"), ("garden", "Zahrada"), ("meadow", "Louka"),
-        ("forest", "Les"), ("other", "Jiný"),
+        ("forest", "Les"), ("commercial", "Komerční"), ("other", "Jiný"),
     ), applies=(LAND,), required=(LAND,)),
-    Field("as_of", "Ke dni", "date", applies=ALL, recommended=ALL),
+    Field("as_of", "Ke dni", "date", recommended=ALL),
     Field("house_type", "Typ domu", "enum", (
         ("family_house", "Rodinný dům"), ("villa", "Vila"), ("cottage", "Chalupa"), ("hut", "Chata"),
         ("other", "Jiný"),
     ), applies=(HOUSE,), recommended=(HOUSE,)),
-    Field("local_type", "Dispozice", "enum", tuple((d, d) for d in DISPOSITIONS) + (("jiné", "Jiná"),),
+    Field("local_type", "Dispozice", "enum", tuple((d, d) for d in LOCAL_TYPES) + (("jiné", "Jiná"),),
           applies=(FLAT,)),
     Field("ownership", "Vlastnictví", "enum", (
         ("private", "Osobní"), ("cooperative", "Družstevní"), ("council", "Obecní/státní"), ("other", "Jiné"),
-    ), applies=ALL),
+    ), applies=(FLAT,)),
     Field("construction", "Konstrukce", "enum", (
         ("brick", "Cihlová"), ("panel", "Panelová"), ("mixed", "Smíšená"), ("wood", "Dřevěná"),
         ("stone", "Kamenná"), ("montage", "Montovaná"), ("low_energy", "Nízkoenergetická"), ("other", "Jiná"),
-    )),
-    _count("floor", "Podlaží", minimum=-3),  # scraper/floor.py's own bound; the ad's underground floor waits
-    _count("total_floors", "Počet podlaží", minimum=1),
-    Field("energy_performance", "Energetická třída", "enum", tuple((c, c) for c in "ABCDEFG")),
-    Field("elevator", "Výtah", "boolean"),
-    Field("equipment", "Vybavení", "boolean"),
-    Field("easy_access", "Bezbariérový přístup", "boolean"),
-    _area("balcony_area", "Balkon"),
-    _area("loggia_area", "Lodžie"),
-    _area("terrace_area", "Terasa"),
-    _area("cellar_area", "Sklep"),
-    _area("attic_area", "Půda"),
-    _area("garden_area", "Zahrada"),
-    _area("built_up_area", "Zastavěná plocha"),
-    _area("other_area", "Další plochy"),
-    _count("rooms", "Pokoje"),
-    _count("bedrooms", "Ložnice"),
-    _count("bathrooms", "Koupelny"),
-    _count("kitchens", "Kuchyně"),
-    _count("garages", "Garáže"),
-    _count("parking_spaces", "Parkovací místa"),
+    ), applies=(FLAT, HOUSE)),
+    Field("floor", "Podlaží", "integer", applies=(FLAT,), minimum=-3),  # scraper/floor.py's bound; a basement waits
+    Field("total_floors", "Počet podlaží", "integer", applies=(FLAT,), minimum=1),
+    Field("energy_performance", "Energetická třída", "enum", tuple((c, c) for c in "ABCDEFG"), applies=(HOUSE,)),
+    Field("balcony_area", "Balkon", "number", applies=(FLAT,)),
+    Field("cellar_area", "Sklep", "number", applies=(FLAT, HOUSE)),
+    Field("garden_area", "Zahrada", "number", applies=(FLAT,)),
+    Field("garages", "Garáže", "integer", applies=(FLAT, HOUSE)),
+    Field("parking_spaces", "Parkovací místa", "integer", applies=(FLAT, HOUSE)),
 )
 _BY_NAME: dict[str, Field] = {f.name: f for f in FIELDS}
 
-# Our stored value -> (Valuo's value, how it maps), per `listings` column. "direct" takes the column's own
+# Our stored value -> (Valuo's value, how it maps), per `listings` column, sent as the parameter its type takes
+# ({type: parameter} where the column answers a different one per type). "direct" takes the column's own
 # provenance class (_SOURCE); None = not sent. Every canonical member of a mapped column is a key — the
 # census in tests/api/test_valuo.py reds a new vocabulary member until someone rules on it.
 _DIRECT = "direct"
-MAPS: dict[str, tuple[str, dict[str, tuple[Any, str]]]] = {
+MAPS: dict[str, tuple[str | dict[str, str], dict[str, tuple[Any, str]]]] = {
     "category_main": ("property_type", {
         "byt": (FLAT, _DIRECT), "dum": (HOUSE, _DIRECT), "pozemek": (LAND, _DIRECT),
-        "komercni": (None, MISSING), "ostatni": (None, MISSING),  # Valuo has no such type: refused
+        "komercni": (COMMERCIAL, _DIRECT), "ostatni": (None, MISSING),  # Valuo's `other` is unproven: refused
     }),
     "category_type": ("kind", {
         "prodej": ("sale", _DIRECT), "pronajem": ("lease", _DIRECT),
         "drazba": ("sale", ASSUMED), "podil": ("sale", ASSUMED),
     }),
     "condition": ("rating", {
-        "novostavba": ("new", _DIRECT), "po_rekonstrukci": ("very_good", _DIRECT), "dobry": ("good", _DIRECT),
+        # v3 has no "new" rating: a new building is rated very good and says so in `new_building` (below)
+        "novostavba": ("very_good", ASSUMED), "po_rekonstrukci": ("very_good", _DIRECT),
+        "velmi_dobry": ("very_good", _DIRECT), "dobry": ("good", _DIRECT),
         "pred_rekonstrukci": ("nothing_much", _DIRECT), "k_demolici": ("bad", _DIRECT),
-        "projekt": ("new", INFERRED), "ve_vystavbe": ("new", INFERRED), "udrzovany": ("good", INFERRED),
+        "projekt": ("very_good", INFERRED), "ve_vystavbe": ("very_good", INFERRED), "udrzovany": ("good", INFERRED),
         "v_rekonstrukci": ("nothing_much", INFERRED), "spatny": ("nothing_much", INFERRED),
-        "velmi_dobry": ("good", ASSUMED),  # operator ruling 2026-10-19: careful, not very_good
     }),
     "building_type": ("construction", {
         "cihla": ("brick", _DIRECT), "panel": ("panel", _DIRECT), "smisena": ("mixed", _DIRECT),
@@ -152,18 +146,20 @@ MAPS: dict[str, tuple[str, dict[str, tuple[Any, str]]]] = {
         "roubena": ("wood", INFERRED), "modularni": ("montage", INFERRED),
         "skelet": ("other", INFERRED), "ocelova": ("other", INFERRED),
     }),
-    "subtype": ("house_type", {
+    "subtype": ({HOUSE: "house_type", COMMERCIAL: "commercial_type"}, {
         "rodinny_dum": ("family_house", _DIRECT), "vila": ("villa", _DIRECT), "chalupa": ("cottage", _DIRECT),
         "chata": ("hut", _DIRECT), "vicegeneracni_dum": ("family_house", INFERRED),
         "na_klic": ("family_house", INFERRED), "zemedelska_usedlost": ("other", INFERRED),
         "pamatka_jine": ("other", INFERRED),
-        # commercial subtypes: komercni is refused before anything is mapped
-        **{o.value: (None, MISSING) for o in SUBTYPE_OPTIONS if o.group == "komercni"},
+        "kancelar": ("office", _DIRECT), "sklad": ("storage", _DIRECT), "obchodni_prostor": ("retail", _DIRECT),
+        "vyroba": ("production", _DIRECT), "restaurace": ("restaurant", _DIRECT),
+        "ubytovani": ("accommodation", _DIRECT), "zemedelsky": ("agriculture", _DIRECT),
+        "cinzovni_dum": ("apartment_building", _DIRECT), "apartmany": ("apartment", _DIRECT),
+        "ordinace": ("medical_office", _DIRECT), "ostatni": ("other", _DIRECT),
+        "virtualni_kancelar": (None, MISSING),  # an address service, not premises Valuo could compare
     }),
-    "disposition": ("local_type", {
-        **{o.value: (o.value, _DIRECT) if o.value in DISPOSITIONS else ("jiné", INFERRED)
-           for o in DISPOSITION_OPTIONS},
-    }),
+    "disposition": ("local_type", {o.value: (o.value, _DIRECT) if o.value in LOCAL_TYPES else ("jiné", INFERRED)
+                                   for o in DISPOSITION_OPTIONS}),
     "ownership": ("ownership", {
         "osobni": ("private", _DIRECT), "druzstevni": ("cooperative", _DIRECT),
         "statni": ("council", _DIRECT), "jine": ("other", _DIRECT),
@@ -172,34 +168,41 @@ MAPS: dict[str, tuple[str, dict[str, tuple[Any, str]]]] = {
         **{c: (c, _DIRECT) for c in "ABCDEF"},
         "G": (None, ASSUMED),  # operator ruling 2026-10-19: an ad without a PENB certificate must say G too
     }),
-    "furnished": ("equipment", {"ano": (True, INFERRED), "ne": (False, INFERRED), "castecne": (None, MISSING)}),
 }
+# The condition also answers Valuo's `new_building`, with this class; every other condition sends nothing.
+NEW_BUILDING: dict[str, str] = {"novostavba": AD, "projekt": INFERRED, "ve_vystavbe": INFERRED}
 _SOURCE: dict[str, str] = {
     "category_main": AD, "category_type": AD, "condition": AD, "subtype": AD, "disposition": AD,
     "building_type": PROPERTY, "ownership": PROPERTY, "energy_rating": PROPERTY,
 }
 # Columns sent as they stand, through the gate a user's value passes: one Valuo cannot take is not sent.
 _COPIED = (("total_floors", "total_floors", AD), ("garden_area", "garden_area", PROPERTY),
-           ("has_lift", "elevator", PROPERTY), ("parking_lots", "parking_spaces", PROPERTY))
-_NOT_SENT_NOTES: dict[tuple[str, str], str] = {
-    ("energy_rating", "G"): "Třídu G uvádějí i inzeráty bez průkazu PENB, proto se neposílá.",
-    ("furnished", "castecne"): "Částečné vybavení se neposílá.",
-}
+           ("parking_lots", "parking_spaces", PROPERTY))
+_NOT_SENT_NOTES = {("energy_rating", "G"): "Třídu G uvádějí i inzeráty bez průkazu PENB, proto se neposílá."}
+LAND_RATING_NOTE = "Valuo vyžaduje stav i u pozemku."
 _PTYPE_CATEGORY = {v[0]: k for k, v in MAPS["category_main"][1].items() if v[0]}
 _KIND_CATEGORY = {"sale": "prodej", "lease": "pronajem"}
 
 REFUSALS: dict[str, str] = {
     "unconfigured": valuo_client.ERRORS["unconfigured"],
-    "unsupported_type": "Valuo oceňuje jen byty, domy a pozemky.",
+    "unsupported_type": "Valuo oceňuje jen byty, domy, pozemky a komerční nemovitosti.",
     "no_location": "Bez polohy nemovitost ocenit nelze.",
     "not_cz": "Valuo oceňuje jen nemovitosti v Česku.",
     "country_unverified": "Není ověřeno, že nemovitost leží v Česku.",  # foreign is a finding, never a default
     "too_coarse": "Poloha je známa jen hruběji než obec — Valuo potřebuje alespoň obec.",
 }
 ABANDONED = {"code": "abandoned", "http_status": None, "message": "Ocenění se nedokončilo."}
+DUPLICATE = {"code": "duplicate", "http_status": None, "message": "Stejné ocenění už je uložené."}
 
-RESULT_KEYS = ("avg_price", "min_price", "max_price", "avg_price_m2", "min_price_m2", "max_price_m2",
-               "std_price_m2", "calc_area", "distance", "flags")
+RESULT_KEYS = ("avg_price", "range_price", "avg_price_m2", "range_price_m2", "std_price_m2", "calc_area",
+               "distance", "flags")  # range_price = Valuo's confidence band; min/max_price are not it
+RECORD_KEYS = ("id", "place", "lat", "lon", "local_type", "calc_area", "lot_area", "floor", "total_floors", "rating",
+               "new_building", "kind", "property_type", "price", "price_m2", "sale_price", "adjusted_price",
+               "adjusted_price_m2", "distance", "score_prct", "days", "first_seen_at", "last_seen_at")
+SUMMARY_KEYS = ("avg_distance", "avg_age", "avg_duration", "avg_score", "distance", "age")
+ADVERT_LIMIT = 10  # comparables whose photos are asked for, in Valuo's order: one advert/detail call per valuation
+PHOTO_LIMIT = 12
+PHOTO_URL = "https://pics.valuo.cz/{size}/{path}"  # pt = 450 px, p = 1200 px; public, no token
 
 
 class OverrideError(ValueError):
@@ -233,9 +236,12 @@ def _source(column: str, value: Any) -> dict[str, Any]:
     return {"column": column, "value": _plain(value)}
 
 
+def _word(column: str, raw: str) -> str:
+    """Our Czech word for a stored value; a category by its noun (Byt), not the filter's plural (Byty)."""
+    return (CATEGORY_MAIN_NOUN_CS.get(raw) if column == "category_main" else label_cs(column, raw)) or raw
+
+
 def _option_label(param: str, value: Any) -> str:
-    if isinstance(value, bool):
-        return "ano" if value else "ne"
     return dict(_BY_NAME[param].options).get(value, str(value))
 
 
@@ -254,37 +260,48 @@ def build_request(
             values[param] = value
             prov[param] = {"class": cls, "from": source, "note": note}
 
-    for column, (param, table) in MAPS.items():
+    for column, (params, table) in MAPS.items():
+        param = params if isinstance(params, str) else params.get(ptype)
         raw = subject.get(column)
-        if raw is None:
+        if raw is None or param is None:
             continue
         value, rule = table.get(raw, (None, MISSING))
-        if rule == _DIRECT:
-            put(param, value, _SOURCE[column], _source(column, raw))
+        if value is not None and value not in dict(_BY_NAME[param].options):  # another type's subtype
+            value, rule = None, MISSING
+        ours, theirs = _word(column, raw), _option_label(param, value)
+        step = f"{ours} → {theirs}"
+        if rule == _DIRECT:  # named only where Valuo words it otherwise: Dobrý → Průměrný, never 2+kk → 2+kk
+            put(param, value, _SOURCE[column], _source(column, raw), None if ours == theirs else step)
         elif value is None:
             note = _NOT_SENT_NOTES.get((column, raw)) or (None if raw in table else "Hodnota mimo slovník.")
             put(param, None, rule, _source(column, raw), note)
         else:
-            ours = label_cs(column, raw) or raw
-            put(param, value, rule, _source(column, raw), f"{ours} → {_option_label(param, value)}")
+            put(param, value, rule, _source(column, raw), step)
+    condition = subject.get("condition")
+    if condition in NEW_BUILDING:
+        cls = NEW_BUILDING[condition]
+        put("new_building", True, cls, _source("condition", condition),
+            None if cls == AD else f"{_word('condition', condition)} → {_BY_NAME['new_building'].label}")
+
+    if ptype == LAND and values.get("rating") is None:
+        put("rating", "good", ASSUMED, None, LAND_RATING_NOTE)
 
     place = f"{location['lat']:.6f}, {location['lon']:.6f}"
     put("place", place, AD if location["precision"] == "street" else INFERRED,
-        _source("listing_location.geom", place), location["note"])
+        _source("listing_location.geom", place), " · ".join(p for p in (location["label"], location["note"]) if p))
     area = _plain(subject.get("area_m2"))
     if area and area > 0:
         put("lot_area" if ptype == LAND else "floor_area", area, AD, _source("area_m2", area))
     estate = _plain(subject.get("estate_area"))
-    if ptype == HOUSE and estate:
+    if ptype in (HOUSE, COMMERCIAL) and estate:
         put("lot_area", None, MISSING, _source("estate_area", estate),
-            "Plochu pozemku domu zatím neposíláme, než ji Valuo ověřeně započítá.")
+            "Plochu pozemku zatím neposíláme, než ji Valuo ověřeně započítá.")
     for column, param, cls in _COPIED:
         raw = _plain(subject.get(column))
         if raw is not None:
             with contextlib.suppress(OverrideError):
                 put(param, _coerce(_BY_NAME[param], raw), cls, _source(column, raw))
-    for flag, param, noun in (("has_balcony", "balcony_area", "balkon"), ("terrace", "terrace_area", "terasu"),
-                              ("cellar", "cellar_area", "sklep")):
+    for flag, param, noun in (("has_balcony", "balcony_area", "balkon"), ("cellar", "cellar_area", "sklep")):
         if subject.get(flag):
             put(param, None, MISSING, _source(flag, True), f"Inzerát uvádí {noun}, ne plochu.")
     floor = subject.get("floor")
@@ -293,10 +310,11 @@ def build_request(
             put("floor", int(floor), AD, _source("floor", floor))
         else:  # Valuo's reading of a basement is unproven: the user sends it, the ad does not
             put("floor", None, MISSING, _source("floor", floor), "Podzemní podlaží se samo neposílá.")
-    if subject.get("garage") is not None:
-        garages = 1 if subject["garage"] else 0
-        put("garages", garages, INFERRED, _source("garage", subject["garage"]),
-            f"Garáž: {'ano' if garages else 'ne'} → {garages}")
+    garage = subject.get("garage")
+    if garage:
+        put("garages", 1, INFERRED, _source("garage", True), "Garáž: ano → 1")
+    elif garage is False:  # a no is not evidence: sreality's garage is never NULL, "not mentioned" reads as no
+        put("garages", None, MISSING, _source("garage", False), "Inzerát garáž neuvádí jako ano — neposílá se.")
     put("as_of", datetime.now(_PRAGUE).date().isoformat(), ASSUMED, None, "Dnešní datum.")
 
     for param, value in overrides.items():
@@ -308,6 +326,7 @@ def build_request(
         prov.setdefault(f.name, {"class": MISSING, "from": None, "note": None})
 
     request = {f.name: values[f.name] for f in FIELDS if values.get(f.name) is not None}
+    request["country_code"] = valuo_client.COUNTRY_CODE
     return request, {f.name: prov[f.name] for f in FIELDS if f.name in prov}
 
 
@@ -319,6 +338,8 @@ def _coerce(field: Field, value: Any) -> Any:
         return value
     if field.type == "boolean" and isinstance(value, bool):
         return value
+    if field.type == "text" and isinstance(value, str) and 0 < len(value.strip()) <= _TEXT_MAX:
+        return value.strip()
     if field.type == "integer" and number and value == int(value) and value >= field.minimum:
         return int(value)
     if field.type == "number" and number and value > 0:
@@ -346,12 +367,12 @@ def result_basis(request: dict[str, Any]) -> str | None:
 
 _SUBJECT_SQL = """
 select listing_id, category_main, category_type, subtype, disposition, area_m2, estate_area, garden_area,
-       floor, total_floors, condition, building_type, ownership, energy_rating, furnished,
-       has_lift, has_balcony, terrace, cellar, garage, parking_lots
+       floor, total_floors, condition, building_type, ownership, energy_rating, has_balcony, cellar, garage,
+       parking_lots
   from properties_public
  where property_id = %s
 """
-_COLUMNS = "id, created_at, listing_id, environment, status, request, provenance, response, error"
+_COLUMNS = "id, created_at, listing_id, environment, status, request, provenance, response, error, adverts"
 _HISTORY_SQL = f"""
 select {_COLUMNS} from valuo_valuations
  where account_id = %s and listing_id in (select l.id from listings l where l.property_id = %s)
@@ -377,7 +398,7 @@ select {_COLUMNS} from valuo_valuations
  limit 1
 """
 _FINISH_SQL = f"""
-update valuo_valuations set status = %s, response = %s, error = %s
+update valuo_valuations set status = %s, response = %s, error = %s, adverts = %s, environment = %s
  where id = %s and status = 'pending'
 returning {_COLUMNS}
 """
@@ -402,17 +423,52 @@ def _load(conn: Any, property_id: int) -> tuple[dict[str, Any], dict[str, Any] |
     return subject, location
 
 
+def _photos(advert: dict[str, Any]) -> list[dict[str, str]]:
+    """An advert's photos from its storage paths; [] when Valuo sent only `hashed_images` (no entitlement)."""
+    images = advert.get("images")
+    paths = [p.lstrip("/") for p in images if isinstance(p, str) and p.strip("/")] if isinstance(images, list) else []
+    return [{"thumb": PHOTO_URL.format(size="pt", path=p), "full": PHOTO_URL.format(size="p", path=p)}
+            for p in paths[:PHOTO_LIMIT]]
+
+
+def _records(result: dict[str, Any], adverts: Any) -> list[dict[str, Any]]:
+    """Valuo's comparables in its own order, each cut to what the page shows, with its advert's photos."""
+    records = result.get("records")
+    by_id = {str(a.get("id")): a for a in adverts if isinstance(a, dict)} if isinstance(adverts, list) else {}
+    pairs = ([(r, by_id.get(str(r.get("id")), {})) for r in records if isinstance(r, dict)]
+             if isinstance(records, list) else [])
+    return [{**{k: r.get(k) for k in RECORD_KEYS}, "photos": _photos(a), "advert_url": a.get("advert_url"),
+             "address": a.get("address")} for r, a in pairs]
+
+
+def _summary(response: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    """What the answer rests on, for the reader to judge: Valuo grades nothing, so neither do we."""
+    keep, flags = response.get("keep_ids"), result.get("flags")
+    return {"count": len(keep) if isinstance(keep, list) else None, **{k: result.get(k) for k in SUMMARY_KEYS},
+            "not_enough": isinstance(flags, list) and "NOT_ENOUGH_PROPERTIES" in flags}
+
+
+def _error(error: dict[str, Any], response: Any) -> dict[str, Any]:
+    out = {"code": error["code"], "message": error["message"]}
+    if error["code"] == "form_errors":
+        out["form_errors"] = valuo_client.form_issues(response)
+    return out
+
+
 def present(row: dict[str, Any]) -> dict[str, Any]:
+    """A row as the page reads it. Valuo's `ignored_ids` stays in the stored answer only: v3 always sends []."""
     response = row["response"] if isinstance(row["response"], dict) else {}
     result = response.get("result") if row["status"] == "success" else None
-    error = row["error"]
+    result = result if isinstance(result, dict) else None
     return {
         "id": row["id"], "created_at": row["created_at"], "listing_id": row["listing_id"],
         "environment": row["environment"], "status": row["status"],
         "request": row["request"], "provenance": row["provenance"],
-        "result": {k: result.get(k) for k in RESULT_KEYS} if isinstance(result, dict) else None,
-        "ignored_ids": response.get("ignored_ids") or [],
-        "error": {"code": error["code"], "message": error["message"]} if error else None,
+        "result": {k: result.get(k) for k in RESULT_KEYS} if result else None,
+        "records": _records(result, row.get("adverts")) if result else [],
+        "summary": _summary(response, result) if result else None,
+        "kind_label": _option_label("kind", row["request"].get("kind")),
+        "error": _error(row["error"], response) if row["error"] else None,
         "ppm2_basis": result_basis(row["request"]),
     }
 
@@ -428,9 +484,7 @@ def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
         "environment": cred.environment if cred else None,
         "refusal": refused or (None if cred else {"code": "unconfigured", "message": REFUSALS["unconfigured"]}),
         "subject": {
-            "listing_id": subject["listing_id"],
-            "category_main": subject["category_main"],
-            "category_type": subject["category_type"],
+            **{k: subject[k] for k in ("listing_id", "category_main", "category_type")},
             "label": " · ".join(p for p in (type_label_cs(subject["category_main"], subject["subtype"]),
                                             subject["disposition"]) if p),
             "location": None if location is None else {
@@ -478,14 +532,31 @@ def run(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: u
             return {"reused": True, "valuation": present(twin)}
         raise _refuse(409, "in_progress", "Stejný dotaz právě běží.")
 
+    adverts = None
     try:
         response, error = valuo_client.calculate(cred, request), None
     except valuo_client.ValuoError as exc:
         response = exc.response
-        error = {"code": exc.code, "http_status": exc.http_status, "message": exc.message}
-    status = "failed" if error else "success"
-    [done] = _rows(conn, _FINISH_SQL, (status, None if response is None else Jsonb(response),
-                                       None if error is None else Jsonb(error), row["id"])) or [None]
+        error = {"code": exc.code, "http_status": exc.http_status, "message": exc.message, "detail": exc.detail}
+    ids = [] if error else [r["id"] for r in _records(response["result"], None) if r["id"] is not None][:ADVERT_LIMIT]
+    if ids:  # the photos are a garnish: their failure never fails the valuation it would decorate
+        try:
+            adverts = valuo_client.advert_details(cred, ids)
+        except valuo_client.ValuoError as exc:
+            LOG.warning("VALUO adverts not fetched row=%s code=%s", row["id"], exc.code)
+    status, environment = "failed" if error else "success", valuo_client.answered_by(cred, response)
+    answer = None if response is None else Jsonb(response)
+    try:
+        with conn.transaction():
+            [done] = _rows(conn, _FINISH_SQL, (status, answer, None if error is None else Jsonb(error),
+                                               None if adverts is None else Jsonb(adverts), environment,
+                                               row["id"])) or [None]
+    except psycopg.errors.UniqueViolation:  # a sandbox token named production met its own stored sandbox answer
+        _rows(conn, _FINISH_SQL, ("failed", answer, Jsonb(DUPLICATE), None, environment, row["id"]))
+        [twin] = _rows(conn, _TWIN_SQL, (account_id, environment, subject["listing_id"], Jsonb(request))) or [None]
+        if twin is not None:
+            return {"reused": True, "valuation": present(twin)}
+        done = row | {"status": "failed", "error": DUPLICATE}
     if done is None:  # the sweep abandoned it mid-call: a paid answer with no row to land on
         LOG.warning("VALUO answer lost row=%s status=%s", row["id"], status)
         done = row | {"status": "failed", "error": ABANDONED}

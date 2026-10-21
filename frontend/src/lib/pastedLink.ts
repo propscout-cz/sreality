@@ -5,13 +5,14 @@
  * portals' own "Sdílet" wrap it in words ("Koukni na tohle https://… 2+kk").
  * So the FIRST URL is pulled out of the text — `https?://…` or a bare `www.…` —
  * and only then handed to the shared portal-id rules (`lib/portalIds.ts`, the
- * extension's own copy), which say which portal and which native id. The SPA's
- * `/listing/:source/:nativeId` alias does the rest.
+ * extension's own copy), which say which portal and which native id — the
+ * phone's instant check and quick path. The server stays authoritative: the
+ * "Nová nemovitost" flow sends the pasted text itself (POST /listings/ingest).
  *
  * The last five links resolved are kept per device (localStorage): a roll under
  * the field, so a link opened at a viewing is one tap away on the way home. */
 
-import { PORTALS, parsePortalUrl, portalForUrl } from './portalIds';
+import { parsePortalUrl, portalForUrl } from './portalIds';
 
 /* A URL in running text: a scheme or a bare `www.`, up to the next whitespace
  * or a character no URL carries unescaped. */
@@ -51,7 +52,7 @@ export type PastedLink =
   | { kind: 'listing'; url: string; source: string; nativeId: string }
   /* A portal we read, but not one of its listing pages (a search, the home page). */
   | { kind: 'portal-page'; url: string; source: string }
-  /* A URL on no portal we read. */
+  /* A URL on no portal we read: the server decides (POST /listings/ingest). */
   | { kind: 'other'; url: string }
   | { kind: 'no-url' };
 
@@ -63,12 +64,8 @@ export function readPastedLink(text: string): PastedLink {
   const hit = parsePortalUrl(url);
   if (hit) return { kind: 'listing', url: withScheme(url), ...hit };
   const portal = portalForUrl(withScheme(url));
-  return portal ? { kind: 'portal-page', url, source: portal.source } : { kind: 'other', url };
+  return portal ? { kind: 'portal-page', url, source: portal.source } : { kind: 'other', url: withScheme(url) };
 }
-
-/* Every portal the platform reads, in the rules' order — the list the "not a
- * portal we read" message names. */
-export const READ_PORTALS: ReadonlyArray<string> = PORTALS.map((p) => p.source);
 
 /* -------------------------------------------------------------------------- */
 /* The per-device roll of the last links                                      */

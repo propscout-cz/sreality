@@ -20,13 +20,13 @@ import { useQuery } from '@tanstack/react-query';
 import ErrorBanner from '@/components/ErrorBanner';
 import Spinner from '@/components/Spinner';
 import MemberGrid from '@/components/autodedup/MemberGrid';
-import { UNIT_LETTERS } from '@/components/autodedup/UnitSplit';
 import {
+  LETTERS,
   getProposedSplits,
   type AutodedupMember,
   type ProposedSplit,
   type ProposedSplitAdvert,
-  type SplitLetters,
+  type Letters,
 } from '@/lib/api';
 import { fmtCount } from '@/lib/format';
 import { inzeratu, splitPath } from '@/lib/mergedAdverts';
@@ -58,10 +58,10 @@ function groupsOf(item: ProposedSplit): Group[] {
 }
 
 /* The engine's groups as letters, group n → the n-th letter (the 26th and on → Z). */
-function proposalLetters(item: ProposedSplit): SplitLetters {
-  const letters: SplitLetters = {};
+function proposalLetters(item: ProposedSplit): Letters {
+  const letters: Letters = {};
   for (const g of groupsOf(item)) {
-    for (const a of g.adverts) letters[a.listing_id] = UNIT_LETTERS[Math.min(g.n, 26) - 1];
+    for (const a of g.adverts) letters[a.listing_id] = LETTERS[Math.min(g.n, 26) - 1];
   }
   return letters;
 }
@@ -195,7 +195,7 @@ function ProposalCard({
           <section key={g.key}>
             <p className="mb-1.5 text-[0.7rem] uppercase tracking-[0.12em] text-[var(--color-ink-3)]">
               {g.unseen ? `Skupina ${g.n} · engine neviděl` : `Skupina ${g.n}`} ·{' '}
-              {UNIT_LETTERS[Math.min(g.n, 26) - 1]}
+              {LETTERS[Math.min(g.n, 26) - 1]}
             </p>
             <MemberGrid members={g.adverts.map(member)} />
           </section>

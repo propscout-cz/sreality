@@ -11,7 +11,7 @@ Two layers:
     `.executemany()`. No import side effects, no optional-dep fragility.
   * import-resolve (opt-in): imports the handful of modules that build a
     `*_SQL`/`*_QUERY` constant by `.replace()`/f-string/concatenation — which AST
-    cannot evaluate statically (e.g. `recompute_property_stats._RECOMPUTE_ONE_SQL`)
+    cannot evaluate statically (e.g. `recompute_property_stats._RECOMPUTE_SCOPED_SQL`)
     — and reads its RESOLVED value; a tuple/list of strings counts each element
     (`property_carriers.CARRIER_SQL`, the f-string carrier statements). The test suite already imports these modules,
     so this is safe under CI; a module that fails to import is reported by the

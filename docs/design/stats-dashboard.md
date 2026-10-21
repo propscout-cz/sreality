@@ -160,8 +160,8 @@ byty-only dimension) and the first save persists the whole list. A board holds a
   a column's statistics together, named `column · statistic` when more than one is picked: copper first,
   ink tints after, at most `MAX_SERIES` (each colour solid, then dashed) or a one-sentence refusal; the SVG is
   hidden from assistive tech and a screen-reader table carries the same numbers), `views/BoxTable.tsx` (THE box primitive: one shared axis from every row's p10–p90, nested
-  rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers are
-  columns of the same table).
+  rows indented, n per row, a dashed placeholder for a cell under `min_n`; no tooltips — the numbers, and the
+  mean ahead of them, are columns of the same table).
 - Refusals render as one sentence in the card body; the ledger still shows the counts.
 - `BrowseExperience.tsx`: the stats tab renders `<StatsDashboard filters={filters} />`; `statsQuery`, the
   annotations query, `BrowseStatsView` and their props are gone.

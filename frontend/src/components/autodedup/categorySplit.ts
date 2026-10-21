@@ -7,8 +7,9 @@
  * open the property page's split dialog (MS18) through the page's own
  * `splitPlan`, every ad lettered. */
 
+import { LETTERS } from '@/lib/api';
 import type { CategorySplit, CategorySplitAdvert, CategorySplitSide } from '@/lib/api';
-import { UNIT_LETTERS, type UnitMap } from '@/components/autodedup/UnitSplit';
+import type { UnitMap } from '@/components/autodedup/UnitSplit';
 import { categoryMainLabel, categoryTypeLabel } from '@/lib/enums';
 import { splitPlan, type SplitPlan } from '@/lib/mergedAdverts';
 
@@ -52,7 +53,7 @@ export const rides = (a: CategorySplitAdvert): boolean => a.empty || a.unknown;
 export function defaultLetters(item: CategorySplit): UnitMap {
   const units: UnitMap = {};
   item.groups.forEach((g, i) => {
-    for (const a of g.adverts) if (!rides(a)) units[a.listing_id] = UNIT_LETTERS[i] ?? 'A';
+    for (const a of g.adverts) if (!rides(a)) units[a.listing_id] = LETTERS[i] ?? 'A';
   });
   return units;
 }

@@ -5,6 +5,7 @@
  * `null` is rendered as a blank "any" option at the top.
  */
 
+import type { AriaAttributes } from 'react';
 import type { EnumOptionLite } from './types';
 
 export function SingleSelectDropdown<T extends string | number>({
@@ -13,6 +14,7 @@ export function SingleSelectDropdown<T extends string | number>({
   options,
   onChange,
   placeholder = 'any',
+  aria,
 }: {
   /* REQUIRED. `placeholder` only renders as the blank option's text — an
    * option's text is a VALUE, never the select's name. */
@@ -21,10 +23,12 @@ export function SingleSelectDropdown<T extends string | number>({
   options: ReadonlyArray<EnumOptionLite<T>>;
   onChange: (v: T | null) => void;
   placeholder?: string;
+  aria?: AriaAttributes;
 }) {
   return (
     <select
       aria-label={label}
+      {...aria}
       value={value == null ? '' : String(value)}
       onChange={(e) => {
         const raw = e.target.value;
