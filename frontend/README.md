@@ -181,8 +181,9 @@ an `h-14` header (never taller — the Browse and Pipeline panes pin to
 five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
 `/link`) and an account sheet (the theme, this iPhone's push switch
 "Oznámení na tomto iPhonu" — `src/components/phone/PushSwitch.tsx` over
-`src/lib/usePush.ts`, its subscription bound to the signed-in user by
-`src/lib/auth.tsx` and `src/lib/push.ts` — the desktop view, sign-out).
+`src/lib/usePush.ts`, offered on an iPhone or iPad only, its subscription
+bound to the signed-in user by `src/lib/auth.tsx` and `src/lib/push.ts`
+and riding the bell's plan gate — the desktop view, sign-out).
 A tapped push lands on `/n/:dispatchId` (`src/pages/NotificationOpen.tsx`),
 which marks it read and replaces itself with what it is about. One unread observer
 (`src/lib/unreadCount.tsx`, mounted by `Shell`) feeds the bell, the

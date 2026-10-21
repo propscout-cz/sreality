@@ -793,26 +793,37 @@ rules. Identify which one a task belongs to before you start.
   belongs to no tab and has no phone fork: one `max-md:` pass), hidden where the plan's agenda hides
   notifications. Its number comes from the ONE unread observer `Shell` mounts above both frames
   (`lib/unreadCount.tsx`: the agenda gate and the 60 s poll the TopBar used to own), which the desktop
-  badge and the Notifications page read too, and which alone writes the installed app's icon badge
-  (`navigator.setAppBadge`, only when `isInstalledApp()`; cleared at zero and when `Shell` unmounts on
-  sign-out; every failure swallowed — iOS shows it only once notifications are allowed). The account
+  badge and the Notifications page read too. The installed app's icon badge
+  (`lib/appBadge.ts`, `navigator.setAppBadge`, only when `isInstalledApp()`; every failure swallowed —
+  iOS shows it only once notifications are allowed) has three writers: the observer sets the count
+  (cleared at zero and when `Shell` unmounts on sign-out), `sw.js` sets a push's `app_badge`, and an
+  identity change (or a signed-out launch) clears it. The account
   sheet keeps its admin Health row: system alerts never reach the bell (R2b).
-  The sheet's first row is this iPhone's push switch, "Oznámení na tomto iPhonu" (W5b; a lazy
-  chunk, `components/phone/PushSwitch.tsx` over `lib/usePush.ts`, hidden where the bell is). Its
-  state is read, never assumed: not installed (a Safari tab has no `PushManager`, so this is
-  checked first and says "Přidejte aplikaci na plochu"), unsupported, denied, unavailable (the
-  server gave no key; a 503 never ends a subscription), off, on (a subscription exists here),
-  busy. Opening the sheet runs `registration.update()` and fetches `GET /push/key` (no `VITE_`
-  key), so the tap only calls `Notification.requestPermission()` inside the click and, on
-  `granted`, `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription`
-  (a failed PUT unsubscribes again). **Binding follows identity, not a button** (AUDIT F18,
-  `lib/auth.tsx`'s identity-transition effect over `lib/push.ts`): any change of user, sign-out
-  included, and a launch with nobody signed in end this device's subscription locally (no JWT
-  needed; the server's row ends "gone" at its next push) and clear the badge; the explicit
-  sign-out first sends `DELETE /push/subscription` (`signed_out`, ≤ 3 s). Identity becoming a
-  user and the hourly resume check re-send the subscription (`resyncPush`; iOS never fires
-  `pushsubscriptionchange`) unless another account switched it on here (a per-device owner in
-  `localStorage`), in which case it is ended instead. A tapped push lands on `/n/:dispatchId`
+  The sheet's first row is this iPhone's push switch, "Oznámení na tomto iPhonu" (W5b;
+  `components/phone/PushSwitch.tsx` over `lib/usePush.ts`, imported eagerly so a sheet opened
+  offline cannot hit the last-resort boundary, hidden where the bell is). Its state is read, never
+  assumed: unsupported first for anything but an iPhone or iPad (by UA or `navigator.standalone`;
+  an Android phone is never prompted, and the server takes Apple's push service only), then not
+  installed (a Safari tab has no `PushManager`: "Přidejte aplikaci na plochu"), unsupported (an
+  installed app without Web Push), denied, unavailable (the server gave no key; a 503 never ends a
+  subscription), off, on (a subscription exists here), busy. Opening the sheet runs
+  `registration.update()` and fetches `GET /push/key` (no `VITE_` key), so the tap only calls
+  `Notification.requestPermission()` inside the click and, on `granted`,
+  `pushManager.subscribe({userVisibleOnly: true, …})`, then `PUT /push/subscription` (a failed PUT
+  unsubscribes again). **Binding follows identity, not a button** (AUDIT F18, `lib/auth.tsx`'s
+  identity-transition effect over `lib/push.ts`): any change of user, sign-out included, and a launch
+  with CERTAINLY nobody signed in end this device's subscription locally (no JWT needed; the
+  server's row ends "gone" at its next push) and clear the badge — a launch whose token refresh
+  failed in transit (`isAuthRetryableFetchError`: offline, a captive Wi-Fi, an Auth 5xx) ends
+  nothing, since supabase-js keeps the stored session for the next try; the explicit sign-out first
+  sends `DELETE /push/subscription` (`signed_out`, ≤ 3 s). Push rides the bell's gate
+  (`notificationsVisible` in `lib/auth.tsx`, handed to `lib/push` `setPushGate` once the plan is
+  read): opening it (a launch, a sign-in) re-sends the subscription, shutting it (a plan without
+  notifications) ends it here, and while it is not open nothing is re-sent. The re-send
+  (`resyncPush`, also on the hourly resume check; iOS never fires `pushsubscriptionchange`) ends the
+  subscription instead when another account switched it on here (a per-device owner in
+  `localStorage`) or when `GET /push/key` answers a key other than the one it was made with (a
+  rotated VAPID key; a failed read is no verdict). A tapped push lands on `/n/:dispatchId`
   (`pages/NotificationOpen.tsx`, lazy): mark-seen under RLS, then `dispatchTarget(row)` by
   replace (404 → `/notifications`); `?d=` there and on the coalesced `/notifications?d=` is
   reported once to `POST /push/opened`, never awaited.
