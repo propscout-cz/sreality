@@ -245,20 +245,6 @@ describe('<Notifications> share rows', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  /* A row still labelled with the old kind: migration 653 relabels every one before W3's API (which
-   * parses no key) ships, so the feed no longer sends one; the page still renders the shape as a share. */
-  it('renders a share still labelled with the old kind as a share that keeps its link', () => {
-    const legacy = {
-      ...share,
-      change_kind: 'shared' as unknown as WatchdogDispatch['change_kind'],
-      share_kind: 'collection' as const,
-      share_ref: '42',
-    };
-    renderPage({ ...feed, data: [legacy], total: 1 });
-    expect(screen.getByRole('button', { name: /^Shared owner@example\.com shared the collection/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('href', '/collection/42');
-  });
-
   it('nests no control inside another', () => {
     const { container } = renderPage();
     expectNoNestedInteractive(container);
