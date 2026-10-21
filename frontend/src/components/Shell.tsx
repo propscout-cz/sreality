@@ -108,8 +108,8 @@ const autodedupItems: ReadonlyArray<MenuItem> = [
 // than vanishing — a surface that exists and is switched off is a different
 // fact from one that was removed.
 const adminItems: ReadonlyArray<MenuItem> = [
-  // First: where the operator starts when something is wrong, and where the
-  // bell's system alerts open.
+  // First: where the operator starts when something is wrong, and the one place
+  // system alerts are told (the bell shows none since ruling R2b, 2026-10-21).
   { to: ROUTES.health.build(), label: 'Health' },
   // The merge-review queue is a real admin surface (routes.tsx wraps it in
   // AdminPage) that was only reachable from a conditional chip on /brokers —

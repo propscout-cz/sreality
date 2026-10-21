@@ -250,7 +250,7 @@ function NewCollectionSheet({ existing, onClose }: { existing: string[]; onClose
           {create.isPending ? 'Zakládám…' : 'Založit sbírku'}
         </button>
         <p className="mt-1 text-[12px] text-[var(--color-ink-3)]">
-          Sledování změn a kanály upozornění zapnete na počítači.
+          Sledování změn zapnete na počítači.
         </p>
       </form>
     </BottomSheet>

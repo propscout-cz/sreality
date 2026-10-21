@@ -133,7 +133,8 @@ is deleted, and Health + the canary e-mail are the only paths.*
 Eight in the design doc; question 1 (OpenAI top-up) is **resolved**. Still load-bearing
 for sequencing: **branch protection — `main` is currently not protected, so every CI
 rail W2 adds AND the new W0.5a contract lockfile rail are advisory until that changes**,
-alert routing + volume tolerance (W3), the two-human-step Railway procedure (W4), and
+volume tolerance (W3; alert routing was closed 2026-10-21 by ruling R2b: no routing, Health +
+the canary e-mail), the two-human-step Railway procedure (W4), and
 the disposition of migrations 433 and 434.
 
 ## W3.4 — shipped 2026-08-31

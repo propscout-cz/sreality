@@ -11,9 +11,10 @@ name: "Monitoring: health canary (hourly)"
 #   2. pg_cron's liveness watcher (every 5 min) wrote a result in the last 30 min;
 #   3. every liveness cell failing for 15 min has an open incident, else the API's teller
 #      (toolkit/system_alerts.reconcile) is not running;
-#   4. every system alert an alarm sent (onset or reminder) in the last 12 h was, 15 min on,
-#      read in the bell, delivered, or its incidents were closed or acknowledged. A gauge's
-#      alerts are not asserted: they ring once a day in the bell.
+#   4. no open, unacknowledged alarm incident has its latest rung (ops_incidents.alerted_at:
+#      onset, 6 h, 24 h, 72 h, then weekly) between 15 min and 12 h old; acknowledging on
+#      Health is the one answer (ruling R2b, 2026-10-21). Gauges are never asserted: their
+#      rungs show on Health.
 # pg_cron watches the worker; this canary watches pg_cron and the teller. A poller or harness
 # crash reds the run too (the canary did not complete); a failing check never does, because
 # the teller tells it from the stored result.

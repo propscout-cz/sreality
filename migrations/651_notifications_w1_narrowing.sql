@@ -23,7 +23,7 @@
 -- do estimation_run_id and the other dead columns (W6). The account trigger's SYSTEM else-branch (364, 641) stays
 -- until W6.
 --
--- APPLY through apply_migration.yml (--ref feature/notifications-w1-backend) before merging W1. Safe in either
+-- APPLY through apply_migration.yml (--ref feature/notifications-w1) before merging W1. Safe in either
 -- order against the deployed code: no browser code writes estimation_run_id (the deleted route wrote it on the
 -- service role, which this does not touch), and before the deploy only a platform admin's bell loses the system
 -- rows it showed, which is this wave's purpose.
