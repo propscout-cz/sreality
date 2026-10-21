@@ -168,13 +168,13 @@ Deletions made whatever the rulings pay for every addition: Telegram (~200), out
 
 Migration numbers are claimed at merge (648 is #1938's). Additive ones run through `apply_migration.yml` before their PR merges; W6's only after every reader is gone. Each PR carries its roadmap bookkeeping; CLAUDE.md edits replace text in place (299/300).
 
-**W1: subtract the dead and the dangerous (four PRs).**
+**W1: subtract the dead and the dangerous (ONE PR, #1944, with the four parts as commits: merge slots are one per window, so the plan's four PRs became four commits; this program PR #1942 merges first, or W1 carries its two files).**
 - **W1a (R10):** delete Estimate rent (route, kickoff, join, column) and "Run matcher now"; revoke the browser's UPDATE on `estimation_run_id`.
 - **W1b (R1, R5):** delete the picker, Settings › Delivery, Telegram, outbox, ChannelClient, transports, webhook, unsubscribe; producers stop writing channel, status, target_channels, sreality_id; the route contract loses the outbox emitters, the route-coverage allowlist /webhooks/resend and /u/{token}.
 - **W1c (R3):** /watchdog lists watchdogs; Notifications gains "Load more"; rows link via `dispatchTarget`; one dismissal form.
 - **W1d (R2, R9):** §3.8.
 - **Docs:** CLAUDE.md 157-158, 188-191, 285, 288; toolkit-api; scraper-ops SKILL.md:427-428 and pipeline-verification.md; tenancy.md:63-66; architecture.md:2672-2680; roadmap item 11. Superseded rulings are marked superseded, not erased.
-- **Gate:** CI green; `git grep -i telegram` = 0 in live code, config, skills, CLAUDE.md; Railway API + vite success; read-only, a non-sreality row opens `/property/:id`; the canary's 7-day red share ≤ today's 14/24, only on rung hours.
+- **Gate:** CI green; `git grep -i telegram` = 0 in live code and config (CLAUDE.md and the skills may name the retired channel once, as history, so a future session does not rebuild it); Railway API + vite success; read-only, a non-sreality row opens `/property/:id`; the canary's 7-day red share ≤ today's 14/24, only on rung hours.
 - **You:** R1–R3, R5, R9, R10; acknowledge the open alarms; green-light the merge window.
 
 **W2: one clock in the worker, in two steps (new fields beside old).**
