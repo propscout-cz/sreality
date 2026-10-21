@@ -300,9 +300,9 @@ def _onsets(ladder: _Ladder, key: str) -> list[tuple[str, _dt.datetime, _dt.date
     return [(i["subject"], i["first_seen_at"], i["resolved_at"]) for i in _incidents(ladder, key)]
 
 
-def _notices(ladder: _Ladder, key: str, kind: str) -> list[str]:
-    """The dedupe keys of one kind of notice (onset, reminder, recovery) sent for `key`."""
-    return [dedupe for _, dedupe, _ in ladder.dispatches if dedupe.startswith(f"sys:{key}:{kind}:")]
+def _notices(ladder: _Ladder, key: str, kind: str) -> list[_dt.datetime]:
+    """When the ladder told `key` one kind of rung (onset, reminder, recovery)."""
+    return [t.at for t in ladder.told if (t.key, t.kind) == (key, kind)]
 
 
 # --- a check's own history, as pipeline_check_results answers it ----------------------------------
@@ -872,8 +872,8 @@ def test_in_28_days_parsing_opens_only_the_idnes_repricing_waves() -> None:
     assert _onsets(ladder, "parsing") == [
         ("idnes/churn", _utc("2026-09-24T18:00:00Z"), _utc("2026-09-26T12:00:00Z")),
         ("idnes/churn", _utc("2026-10-01T12:00:00Z"), _utc("2026-10-04T06:00:00Z"))]
-    assert _notices(ladder, "parsing", "onset") == ["sys:parsing:onset:2026-09-24T18:00:00Z",
-                                                    "sys:parsing:onset:2026-10-01T12:00:00Z"]
+    assert _notices(ladder, "parsing", "onset") == [_utc("2026-09-24T18:00:00Z"),
+                                                    _utc("2026-10-01T12:00:00Z")]
     assert len(_notices(ladder, "parsing", "recovery")) == 2
 
 
@@ -1045,7 +1045,7 @@ def test_the_09_17_heals_read_as_one_grouped_onset_once_the_arm_has_six_days() -
         "remax/median/pozemek-prodej": 3.161}
     assert first["bazos/median/pozemek-prodej"]["message"].startswith(
         "median 117 Kč/m² pozemku against 800 Kč/m² pozemku 6.2 d ago (6.86×")
-    assert _notices(ladder, "parsing", "onset")[0] == "sys:parsing:onset:2026-09-22T06:00:00Z"
+    assert _notices(ladder, "parsing", "onset")[0] == _utc("2026-09-22T06:00:00Z")
     dip = max((c for at, r in results for s, c in _cells(r).items()
                if s == healed[0] and at > recovered), key=lambda c: c["value"])
     assert (dip["status"], dip["value"]) == ("ok", 1.486)
@@ -1062,11 +1062,9 @@ def test_data_quality_rings_once_on_the_realitymix_floor_and_reminds_once_a_day(
     # pronajem) are never told.
     ladder, results = _quality()
     assert _onsets(ladder, "data_quality") == [("floor/realitymix/komercni-pronajem", _START, None)]
-    assert _notices(ladder, "data_quality", "onset") == [
-        "sys:data_quality:onset:2026-09-22T00:00:00Z"]
+    assert _notices(ladder, "data_quality", "onset") == [_utc("2026-09-22T00:00:00Z")]
     reminders = _notices(ladder, "data_quality", "reminder")
-    assert reminders == [f"sys:data_quality:reminder:d{k}:2026-09-22T00:00:00Z:1x1"
-                         for k in range(1, 28)]
+    assert reminders == [_utc("2026-09-22T00:00:00Z") + k * _DAY for k in range(1, 28)]
     flagged = {(s, status) for _, s, status in _flagged(results)}
     assert flagged == {("floor/realitymix/komercni-pronajem", "fail"),
                        ("floor/bazos/komercni-pronajem", "warn"),
@@ -1158,10 +1156,10 @@ def test_the_location_gauge_rings_the_43_ads_once_and_recovers_on_a_synthetic_ze
     assert _onsets(ladder, "location_town_coverage") == [
         (subject, _LOCATION_AT, recovered)
         for subject in ("ceskereality/town", "mmreality/town", "realitymix/town")]
-    assert [dedupe for _, dedupe, _ in ladder.dispatches] == [
-        "sys:location_town_coverage:onset:2026-10-19T14:22:01Z",
-        "sys:location_town_coverage:reminder:d1:2026-10-19T14:22:01Z:1x3",
-        "sys:location_town_coverage:recovery:2026-10-19T14:22:01Z:1x3"]
+    three = ("ceskereality/town", "mmreality/town", "realitymix/town")
+    assert [(t.kind, t.subjects, t.at) for t in ladder.told] == [
+        ("onset", three, _LOCATION_AT), ("reminder", three, _LOCATION_AT + _DAY),
+        ("recovery", three, recovered)]
     assert [(r["status"], r["value"]) for at, r in results if at < zero] == [("fail", 3)] * 5
     assert {(r["status"], r["value"]) for at, r in results if at >= zero} == {("ok", 0)}
     red = _cells(results[0][1])["ceskereality/town"]
@@ -1257,5 +1255,5 @@ def test_the_retiring_keys_measured_history_through_todays_ladder() -> None:
                                             _utc("2026-09-26T05:07:11Z"))]
     lag = opened["text_extraction_lag"]
     assert lag[-1][1] is None and lag[-1][0] < _utc("2026-10-02T06:57:00Z")
-    assert len(ladder.dispatches) == 68
+    assert len(ladder.told) == 68
     assert statuses["ppm2_basis_floor_share"].count("fail") == 92

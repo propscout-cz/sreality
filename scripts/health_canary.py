@@ -4,11 +4,12 @@
 alarm path that needs neither pg_cron nor Railway (only SUPABASE_DB_URL). Four assertions, one
 bounded read each: `db_answers`; `liveness_fresh` (pg_cron's watcher wrote a result in the last
 30 min); `failing_cells_have_incidents` (a liveness cell failing for 15 min has an open incident,
-else the API's teller is not running); `alarm_notices_handled` (an alarm's onset or reminder
-system alert of the last 12 h was, 15 min on, read in the bell, or its key has no open
-unacknowledged incident left; a gauge's system alerts ring in the bell only). A failure prints `CANARY
-FAIL <name>: <reason>` as a GitHub error annotation and reds the run, so GitHub emails the
-operator: exit 2 when the database does not answer, 1 when an assertion fails.
+else the API's teller is not running); `alarms_acknowledged` (no open, unacknowledged incident of
+an alarm check had its latest rung, the onset or a reminder the teller stamps as `alerted_at`,
+15 min to 12 h ago; a gauge's rungs show on Health only). A failure prints `CANARY FAIL <name>:
+<reason>` as a GitHub error annotation and reds the run, so GitHub emails the operator: exit 2
+when the database does not answer, 1 when an assertion fails. It reads no notification: system
+alerts left the bell (ruling R2, notifications W1), so acknowledging on Health is the one answer.
 """
 
 from __future__ import annotations
@@ -25,8 +26,8 @@ from toolkit.system_alerts import CELL_PREFIX, _cells
 
 LIVENESS_STALE_MIN = 30  # the watcher writes every 5 min: six missed ticks, never one late tick
 TELLER_GRACE_MIN = 15  # the teller passes every 60 s; 15 min of failing outlasts an API deploy
-NOTICE_WINDOW_H = 12  # a notice is asserted for 12 h; the alarm's next reminder re-arms it
-NOTICE_GRACE_MIN = 15  # a notice this young is not asserted yet
+NOTICE_WINDOW_H = 12  # a rung is asserted for 12 h; the alarm's next reminder re-arms it
+NOTICE_GRACE_MIN = 15  # a rung this young is not asserted yet: room to acknowledge it first
 STATEMENT_TIMEOUT = "10s"  # Postgres cancels a read past this: a wedged DB does not answer
 
 _LIVENESS_SQL = """
@@ -44,17 +45,16 @@ select r.run_at, r.status, r.details -> 'cells',
  order by r.run_at desc
 """
 
-# starts_with, not LIKE: every check key holds `_`.
-_NOTICES_SQL = """
-select d.dedupe_key, d.dispatched_at, d.seen_at is not null,
-       hc.class,
-       exists (select 1 from ops_incidents i
-                where i.resolved_at is null and i.acknowledged_at is null
-                  and starts_with(i.signature, 'cell:' || hc.key || ':'))
-  from notification_dispatches d
-  left join health_checks hc on hc.key = split_part(d.dedupe_key, ':', 2)
- where d.source_kind = 'system_health' and d.dispatched_at > %(since)s
- order by d.dispatched_at
+# The latest rung of every open, unacknowledged alarm incident told inside the window
+# (toolkit.system_alerts stamps alerted_at at the onset and at each reminder). starts_with, not
+# LIKE: every check key holds `_`.
+_RUNGS_SQL = """
+select hc.key, i.signature, i.alerted_at
+  from ops_incidents i
+  join health_checks hc on starts_with(i.signature, 'cell:' || hc.key || ':')
+ where i.resolved_at is null and i.acknowledged_at is null
+   and hc.class = 'alarm' and i.alerted_at > %(since)s
+ order by i.alerted_at, i.signature
 """
 
 
@@ -96,18 +96,17 @@ def failing_cells_have_incidents(rows: Sequence[tuple[datetime, str, Any]],
     return reasons
 
 
-def alarm_notices_handled(notices: Iterable[Sequence[Any]], now: datetime) -> list[str]:
-    """Every alarm onset or reminder of the window, past its grace, was seen or answered."""
-    reasons = []
-    for dedupe_key, dispatched_at, seen, cls, open_unacked in notices:
-        _, key, kind, *_ = (dedupe_key or "").split(":") + ["", "", ""]
-        age = now - dispatched_at
-        if (cls == "alarm" and kind in ("onset", "reminder")
-                and timedelta(minutes=NOTICE_GRACE_MIN) <= age <= timedelta(hours=NOTICE_WINDOW_H)
-                and not seen and open_unacked):
-            reasons.append(f"the {key} {kind} system alert sent {_age(age)} ago was not read "
-                           "in the bell, and its incident is open and unacknowledged")
-    return reasons
+def alarms_acknowledged(rungs: Iterable[Sequence[Any]], now: datetime) -> list[str]:
+    """No alarm rung of the window, past its grace, sits on an open, unacknowledged incident;
+    one reason per check and rung (a rung stamps all the cells it tells at once)."""
+    told: dict[tuple[str, datetime], list[str]] = {}
+    for key, signature, alerted_at in rungs:
+        if timedelta(minutes=NOTICE_GRACE_MIN) <= now - alerted_at <= timedelta(hours=NOTICE_WINDOW_H):
+            told.setdefault((key, alerted_at), []).append(
+                signature.removeprefix(f"{CELL_PREFIX}{key}:"))
+    return [f"the {key} alarm told {_age(now - at)} ago ({', '.join(sorted(subjects))}) is open "
+            "and unacknowledged: acknowledge it on Health or fix it"
+            for (key, at), subjects in told.items()]
 
 
 def _read(conn: Any, sql: str, params: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
@@ -126,7 +125,7 @@ def main() -> int:
             _read(conn, "select 1")
             ((newest, declared_at),) = _read(conn, _LIVENESS_SQL)
             rows = _read(conn, _CELLS_SQL, {"since": now - timedelta(minutes=LIVENESS_STALE_MIN)})
-            notices = _read(conn, _NOTICES_SQL, {"since": now - timedelta(hours=NOTICE_WINDOW_H)})
+            rungs = _read(conn, _RUNGS_SQL, {"since": now - timedelta(hours=NOTICE_WINDOW_H)})
     except (psycopg.Error, RuntimeError) as exc:  # RuntimeError: SUPABASE_DB_URL is not set
         print(f"::error::CANARY FAIL db_answers: {' '.join(str(exc).split()) or repr(exc)}")
         return 2
@@ -135,11 +134,11 @@ def main() -> int:
     failures = [("liveness_fresh", r) for r in liveness_fresh(newest, declared_at, now)]
     failures += [("failing_cells_have_incidents", r) for r in failing_cells_have_incidents(
         [row[:3] for row in rows], set(rows[0][3] or ()) if rows else set(), now)]
-    failures += [("alarm_notices_handled", r) for r in alarm_notices_handled(notices, now)]
+    failures += [("alarms_acknowledged", r) for r in alarms_acknowledged(rungs, now)]
     for name, reason in failures:  # an annotation each, listed on the run's summary page
         print(f"::error::CANARY FAIL {name}: {reason}")
     if not failures:
-        print("CANARY OK: the database answers, the watchers are alive, every alarm's system alert handled")
+        print("CANARY OK: the database answers, the watchers are alive, every alarm acknowledged")
     return 1 if failures else 0
 
 

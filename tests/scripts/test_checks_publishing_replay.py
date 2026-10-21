@@ -105,7 +105,7 @@ from scripts.checks import publishing as pub
 from scripts.verify_pipeline import THRESHOLDS
 from tests.scripts.test_checks_platform import _Conn
 from tests.scripts.test_checks_platform_replay import _fixture, _incidents, _ticks, _told, _utc
-from tests.toolkit.test_system_alerts import _FakeConn as _Ladder
+from tests.toolkit.test_system_alerts import Told, _FakeConn as _Ladder
 
 _MINUTE, _HOUR = _dt.timedelta(minutes=1), _dt.timedelta(hours=1)
 PORTALS = sorted(SOURCES)
@@ -127,8 +127,14 @@ def _cell(result: dict[str, Any], subject: str) -> dict[str, Any]:
     return next(c for c in result["details"]["cells"] if c["subject"] == subject)
 
 
-def _onsets(ladder: _Ladder) -> list[str]:
-    return [message for message, dedupe, _ in ladder.dispatches if ":onset:" in dedupe]
+def _onsets(ladder: _Ladder) -> list[Told]:
+    return [t for t in ladder.told if t.kind == "onset"]
+
+
+def _named(results: list[tuple[_dt.datetime, dict[str, Any]]], onset: Told) -> str:
+    """What an onset names: each subject with its cell's message at the onset's pass."""
+    result = dict(results)[onset.at]
+    return "; ".join(f"{s}: {_cell(result, s)['message']}" for s in onset.subjects)
 
 
 # --- ingest and changes: the detail queue's seven days ---------------------------------------
@@ -213,7 +219,8 @@ def test_six_portals_raising_together_open_six_cells_told_in_one_notice() -> Non
     assert sorted(i["subject"] for i in opened) == sorted(f"{p}/ingest" for p in six)
     assert {i["first_seen_at"] for i in opened} == {t0 + 6 * _HOUR + 10 * _MINUTE}
     onsets = _onsets(ladder)
-    assert len(onsets) == 1 and all(f"{p}/ingest: the oldest new ad" in onsets[0] for p in six)
+    assert len(onsets) == 1 and onsets[0].subjects == tuple(sorted(f"{p}/ingest" for p in six))
+    assert all(f"{p}/ingest: the oldest new ad" in _named(results, onsets[0]) for p in six)
 
 
 # --- visible: the property stage over 28 days ----------------------------------------------
@@ -299,8 +306,10 @@ def test_the_browse_drop_of_09_14_fails_the_stock_arm_from_its_first_rebuild() -
     assert {i["first_seen_at"] for i in opened} == {drop}
     assert {i["resolve_reason"] for i in opened} == {"measured ok"}
     onsets = _onsets(ladder)
-    assert len(onsets) == 1 and "fleet/stock: 304,190 of 350,000 active properties" in onsets[0]
-    assert "304,190 location not served" in onsets[0]
+    assert len(onsets) == 1
+    named = _named(results, onsets[0])
+    assert "fleet/stock: 304,190 of 350,000 active properties" in named
+    assert "304,190 location not served" in named
 
 
 def test_the_location_loss_of_09_17_fails_that_portals_stock_and_the_fleet_only() -> None:

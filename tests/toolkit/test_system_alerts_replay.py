@@ -57,7 +57,8 @@ _Rows = list[tuple[_dt.datetime, str]]
 
 @dataclass(frozen=True)
 class _Told:
-    """One notice the replay emitted, with the key's newest status when it went out."""
+    """One rung the replay told, with the key's newest status when it was told; a reminder's
+    rung is the rung table below read at its incident's age."""
 
     at: _dt.datetime
     key: str
@@ -118,12 +119,16 @@ def _replay() -> tuple[dict[str, _Rows], list[_dt.datetime], _FakeConn, list[_To
                 # No cells given: the fake writes the one cell the key names (the header).
                 conn.result(key, *rows[fed[key]])
                 fed[key] += 1
-        before = len(conn.dispatches)
+        before = len(conn.told)
         reconcile(conn, now=at)
-        for _message, dedupe_key, _channels in conn.dispatches[before:]:
-            _sys, key, kind, rest = dedupe_key.split(":", 3)
-            rung = rest.split(":", 1)[0] if kind == "reminder" else ""
-            told.append(_Told(at, key, kind, rung, conn.newest_status(key)))
+        for t in conn.told[before:]:
+            rung = ""
+            if t.kind == "reminder":
+                # Each row is the key's own cell, so its open incident is signed by the key.
+                opened = max(i["first_seen_at"] for i in conn.incidents
+                             if i["signature"] == f"cell:{t.key}:{t.key}" and i["first_seen_at"] <= at)
+                rung = _rung(_REGISTRY[t.key][0], (at - opened).total_seconds() / 3600) or ""
+            told.append(_Told(at, t.key, t.kind, rung, conn.newest_status(t.key)))
     return history, passes, conn, told
 
 
