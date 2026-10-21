@@ -1,12 +1,6 @@
 """The phone's Poloha: where a property is, as JSON and as a Mapy static map image.
 
-GET /properties/{id}/location answers the location ad's point from `listing_location`
-(rule 25's one store), its granularity, the place label the property page prints
-(`location_display_label`, as `properties_public` composes it) and the zoom the phone opens
-at. The location ad is `properties.location_listing_ref_id`, the `location_rank` 1 of
-`property_canonical_listings` as the rollup stored it, so this is the place the page, Browse
-and the map show. A detail-by-id read: no served-location predicate (rule 25 keeps those
-reachable).
+GET /properties/{id}/location answers `api/property_location.load_location`, the location ad's point.
 
 GET /properties/{id}/static-map.png streams Mapy's static map of that point through us on
 every view. Mapy's terms allow showing the image online but never storing or caching it
@@ -28,9 +22,9 @@ from typing import Any
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from psycopg.rows import dict_row
 
 from api import dependencies as deps
+from api.property_location import NoLocation, load_location
 from scraper.geocoding import KEY_LEVEL_STATUS, MapyKeyRefused, mapy_api_keys, with_mapy_key_failover
 
 LOG = logging.getLogger(__name__)
@@ -60,86 +54,21 @@ _CACHE_CONTROL = "private, max-age=3600"
 # caller that cannot get a slot within the timeout gets the 502 like any other failure.
 _FETCH_SLOTS = threading.BoundedSemaphore(4)
 
-NOTE_OBEC = "Poloha jen na úrovni obce"
-NOTE_QUARTER = "Poloha jen na úrovni části obce"
-NOTE_COARSE = "Poloha jen přibližná, hrubší než obec"
-
-# How finely a point is known, finest first, and the zoom + note each opens with. A point coarser
-# than a town (okres, kraj, country) is never labelled as one.
-PRECISIONS: dict[str, tuple[int, str | None]] = {
-    "street": (16, None),
-    "quarter": (14, NOTE_QUARTER),
-    "town": (12, NOTE_OBEC),
-    "coarse": (10, NOTE_COARSE),
-}
-
-# Granularity is compared through location_granularity_rank.rank, never enum order: the row
-# carries its own rank and the ranks of the three thresholds the precision steps at.
-_LOCATION_SQL = """
-select st_y(ll.geom) as lat,
-       st_x(ll.geom) as lon,
-       ll.granularity::text as granularity,
-       r.rank as granularity_rank,
-       (select t.rank from location_granularity_rank t
-         where t.granularity = 'street') as street_rank,
-       (select t.rank from location_granularity_rank t
-         where t.granularity = 'cast_obce_or_quarter') as quarter_rank,
-       (select t.rank from location_granularity_rank t
-         where t.granularity = 'obec') as obec_rank,
-       ll.country_status::text as country_status,
-       ll.uncertainty_radius_m,
-       location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
-                              ll.obec_name, ll.cast_obce_name, ll.country_code,
-                              ll.country_status) as label
-  from properties p
-  left join listing_location ll on ll.listing_id = p.location_listing_ref_id
-  left join location_granularity_rank r on r.granularity = ll.granularity
- where p.id = %s and p.status = 'active'
-"""
-
 
 def _refuse(status: int, reason: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"reason": reason, "message": message})
 
 
-def precision(rank: int | None, street_rank: int, quarter_rank: int, obec_rank: int) -> str:
-    """The PRECISIONS key a point's granularity rank falls in."""
-    r = rank if rank is not None else 0
-    if r >= street_rank:
-        return "street"
-    if r >= quarter_rank:
-        return "quarter"
-    return "town" if r >= obec_rank else "coarse"
-
-
-def load_location(conn: Any, property_id: int) -> dict[str, Any]:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(_LOCATION_SQL, (property_id,))
-        row = cur.fetchone()
-    if row is None:
-        raise _refuse(404, "not_found", "Nemovitost nenalezena")
-    if row["lat"] is None or row["lon"] is None:
-        raise _refuse(404, "no_location", "Bez polohy")
-    level = precision(row["granularity_rank"], row["street_rank"], row["quarter_rank"], row["obec_rank"])
-    zoom, note = PRECISIONS[level]
-    radius = row["uncertainty_radius_m"]
-    return {
-        "lat": float(row["lat"]),
-        "lon": float(row["lon"]),
-        "granularity": row["granularity"],
-        "granularity_rank": row["granularity_rank"],
-        "precision": level,
-        "country_status": row["country_status"],
-        "uncertainty_radius_m": None if radius is None else float(radius),
-        "label": row["label"],
-        "zoom": zoom,
-        "note": note,
-    }
+def _located(conn: Any, property_id: int) -> dict[str, Any]:
+    try:
+        return load_location(conn, property_id)
+    except NoLocation as exc:
+        raise _refuse(404, *exc.args) from None
 
 
 @router.get("/properties/{property_id}/location")
 def get_property_location(property_id: int, conn: Any = Depends(deps.get_db_conn)) -> dict[str, Any]:
-    return load_location(conn, property_id)
+    return _located(conn, property_id)
 
 
 def static_maps_enabled() -> bool:
@@ -201,7 +130,7 @@ def get_property_static_map(
         raise _refuse(404, "disabled", "Mapa je vypnutá")
     if w not in STATIC_WIDTHS:
         raise _refuse(404, "unsupported_width", "Nepodporovaná šířka mapy")
-    loc = load_location(conn, property_id)
+    loc = _located(conn, property_id)
     params = static_map_params(loc["lat"], loc["lon"], loc["zoom"], w)
     started = time.monotonic()
     if not _FETCH_SLOTS.acquire(timeout=_TIMEOUT_S):

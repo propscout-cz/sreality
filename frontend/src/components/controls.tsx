@@ -1,4 +1,4 @@
-import type { AriaAttributes, ChangeEvent, ReactNode } from 'react';
+import type { AriaAttributes, ChangeEvent, InputHTMLAttributes, ReactNode } from 'react';
 import { useId, useState } from 'react';
 
 export type TriValue = 'any' | 'yes' | 'no';
@@ -262,6 +262,7 @@ export function Segmented<T extends string | number | null>({
   variant = 'soft',
   label,
   aria,
+  box,
 }: {
   options: ReadonlyArray<{ value: T; label: string }>;
   value: T;
@@ -270,15 +271,18 @@ export function Segmented<T extends string | number | null>({
   /* Names the choice when no Field caption does. */
   label?: string;
   aria?: AriaAttributes;
+  box?: FormBox;
 }) {
+  const invalid = box ? ' [&[aria-invalid=true]>button]:border-[var(--color-brick)]' : ''; // the group carries aria-invalid
   return (
-    <div className="flex flex-wrap gap-1" role={label ? 'group' : undefined} aria-label={label} {...aria}>
+    <div className={`flex flex-wrap gap-1${invalid}`} role={label ? 'group' : undefined} aria-label={label} {...aria}>
       {options.map((o) => (
         <PickButton
           key={String(o.value)}
           on={o.value === value}
           onClick={() => onChange(o.value)}
           variant={variant}
+          className={formBox(box)}
         >
           {o.label}
         </PickButton>
@@ -392,11 +396,25 @@ export function Switch({
   );
 }
 
+/* The form box: a form grid's controls (the Valuo editor) as ONE box, the inset text box's 34 px (a select draws 1 px
+ * short of it, a pick 4 px), dashed while `absent` (nothing is sent: dashed = absent, system.md), brick while
+ * aria-invalid. A control without `box` keeps its own size and every class it had. */
+export type FormBox = 'present' | 'absent';
+export const formBox = (box?: FormBox) =>
+  box ? `h-[2.125rem] aria-[invalid=true]:border-[var(--color-brick)]${box === 'absent' ? ' border-dashed' : ''}` : '';
+
 /* -------------------------------------------------------------------------- */
 /* NumberCell — paired-input cell used inside RangeFilter and any standalone  */
 /* numeric input slot. Inset background + tabular monospace so values align   */
 /* vertically across rows.                                                    */
 /* -------------------------------------------------------------------------- */
+
+const INSET = 'w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]';
+
+/* A form box's text or date input: NumberCell's box; `label` is its accessible name. */
+export const TextBox = ({ label, box, ...input }: InputHTMLAttributes<HTMLInputElement> & { label: string; box: FormBox }) => (
+  <input aria-label={label} {...input} className={`${INSET} ${formBox(box)}`} />
+);
 
 export function NumberCell({
   value,
@@ -422,7 +440,7 @@ export function NumberCell({
       onChange={onChange}
       onBlur={onBlur}
       aria-label={ariaLabel}
-      className="w-full min-w-0 px-2 py-1.5 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
+      className={INSET}
     />
   );
 }
@@ -435,14 +453,14 @@ export function NumberCell({
  * change of `value` shows the value again, with a decimal comma. `cell` draws
  * it as the filter forms' NumberCell box and keeps their display as it was
  * (the value as String(v), no reset on blur). `label` is the input's
- * accessible name; the visible caption is the caller's. */
+ * accessible name; the visible caption is the caller's. A `box` draws the form
+ * box, its unit inside it. */
 const decimalText = (v: number | null) => (v == null ? '' : String(v).replace('.', ','));
 
 export function DecimalField({
   label,
   value,
   onChange,
-  step,
   placeholder,
   suffix,
   readOnly,
@@ -450,11 +468,11 @@ export function DecimalField({
   cell,
   className = '',
   aria,
+  box,
 }: {
   label: string;
   value: number | null;
   onChange: (v: number | null) => void;
-  step?: string;
   placeholder?: string;
   suffix?: string;
   readOnly?: boolean;
@@ -463,6 +481,7 @@ export function DecimalField({
   className?: string;
   /* The boxed input only; `cell` has no use for it yet. */
   aria?: AriaAttributes;
+  box?: FormBox;
 }) {
   const shown = (v: number | null) => (cell ? (v == null ? '' : String(v)) : decimalText(v));
   const [buf, setBuf] = useState({ text: shown(value), value });
@@ -484,7 +503,7 @@ export function DecimalField({
     );
   }
   return (
-    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ')}>
+    <div className={['flex items-stretch gap-2 min-w-0', className].join(' ') + (box ? ' relative' : '')}>
       <input
         type="text"
         aria-label={label}
@@ -493,18 +512,18 @@ export function DecimalField({
         readOnly={readOnly}
         value={buf.text}
         placeholder={placeholder}
-        step={step}
         onChange={onType}
         onBlur={() => setBuf({ text: decimalText(value), value })}
         className={[
-          'flex-1 min-w-0 px-3 py-2 text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]',
+          `flex-1 min-w-0 ${box ? 'pl-2 pr-8 py-1.5' : 'px-3 py-2'} text-sm font-mono tabular-nums rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]`,
           readOnly
             ? 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] cursor-default'
             : 'bg-[var(--color-inset)]',
-        ].join(' ')}
+          formBox(box),
+        ].join(' ').trim()}
       />
       {suffix && (
-        <span className="self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]">
+        <span className={`${box ? 'absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none ' : ''}self-center text-[0.78rem] tracking-wide text-[var(--color-ink-3)]`}>
           {suffix}
         </span>
       )}

@@ -5,11 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { ApiError, apiGet, apiPost } from '@/lib/api';
+import { ApiError, apiGet, apiPost, listEstimations } from '@/lib/api';
 import {
   fmtArea, fmtCount, fmtCzk, fmtDateSlash, fmtDistanceM, fmtMeasuredPricePerM2, fmtPct, fmtTime24, fmtTomDays,
 } from '@/lib/format';
-import { estimationKeys, fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
+import { estimationKeys, type PropertyPublic } from '@/lib/queries';
 import type { EstimationRun } from '@/lib/types';
 import type { Valuation, ValuoField, ValuoPage, ValuoRecord } from '@/lib/valuo';
 
@@ -17,10 +17,7 @@ vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
-}));
-vi.mock('@/lib/queries', async (orig) => ({
-  ...(await orig<typeof import('@/lib/queries')>()),
-  fetchEstimationsForListings: vi.fn(),
+  listEstimations: vi.fn(),
 }));
 vi.mock('@/components/estimation/RunPanel', () => ({
   RunStatusChip: ({ status }: { status: string }) => <span>{status}</span>,
@@ -161,7 +158,7 @@ const placeBox = () => screen.getByRole('textbox', { name: 'Poloha (adresa nebo 
 beforeEach(() => {
   vi.mocked(apiGet).mockReset();
   vi.mocked(apiPost).mockReset();
-  vi.mocked(fetchEstimationsForListings).mockReset();
+  vi.mocked(listEstimations).mockReset().mockResolvedValue({ data: [], total: 0, limit: 100, offset: 0, next_cursor: null });
 });
 
 describe('<ValuoSection> editor', () => {
@@ -185,6 +182,20 @@ describe('<ValuoSection> editor', () => {
     openMore();
     expect(screen.getByRole('textbox', { name: 'Podlaží' })).toHaveValue('3');
     expect(screen.getByRole('combobox', { name: 'Energetická třída' })).toBeInTheDocument();
+  });
+
+  /* One form box for every control (controls.tsx `formBox`): 34 px, dashed while nothing is sent, the unit inside. */
+  it('draws every control as the form box, dashed where nothing is sent, the unit inside its box', async () => {
+    renderSection(page({ defaults: { ...DEFAULTS, new_building: null } }));
+    const area = await screen.findByRole('textbox', { name: 'Plocha' });
+    expect(area).toHaveClass('h-[2.125rem]', 'pr-8');
+    expect(area).not.toHaveClass('border-dashed');
+    expect(screen.getByText('m²')).toHaveClass('absolute', 'right-2');
+    expect(placeBox()).toHaveClass('h-[2.125rem]');
+    const rating = screen.getByRole('combobox', { name: 'Stav' }); // no default: nothing is sent
+    expect(rating).toHaveClass('h-[2.125rem]', 'border-dashed');
+    for (const b of param('Novostavba').getAllByRole('button')) expect(b).toHaveClass('h-[2.125rem]', 'border-dashed');
+    expect(screen.getByRole('button', { name: 'Prodej' })).not.toHaveClass('border-dashed');
   });
 
   it('tags every value with where it came from, and counts the folded group', async () => {
@@ -375,9 +386,15 @@ describe('<ValuoSection> states', () => {
     expect(screen.getByText('Odhad ceny · Valuo')).toBeInTheDocument();
   });
 
+  it('says in Czech that the section failed to load, and offers the retry', async () => {
+    renderSection(new ApiError('HTTP 502', 502, null));
+    expect((await screen.findByRole('alert')).textContent).toBe('Ocenění se nepodařilo načíst: HTTP 502Zkusit znovu');
+  });
+
   it('reads a caller with no account as a sentence, not a retryable error', async () => {
-    renderSection(new ApiError('Přihlášený uživatel nemá účet, ocenění nelze uložit.', 400, { detail: { code: 'no_account' } }));
-    expect(await screen.findByText('Přihlášený uživatel nemá účet, ocenění nelze uložit.')).toBeInTheDocument();
+    // The app-wide no-account 400 (api/tenant_pool.require_account_id), English until the one translation pass.
+    renderSection(new ApiError('no account for caller', 400, { detail: 'no account for caller' }));
+    expect(await screen.findByText('no account for caller')).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
@@ -392,7 +409,7 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText('Sandbox')).not.toBeInTheDocument();
   });
 
-  it('shows the latest answer on the ruler with the asking price and our run, from cache only', async () => {
+  it("shows the latest answer on the ruler with the asking price and our run, off the estimations block's query", async () => {
     const ours = { id: 9, status: 'success', estimate_kind: 'sale', estimated_sale_price_czk: 5_900_000 } as EstimationRun;
     renderSection(page({ history: [SALE] }), { runs: [ours] });
     // Rounded to 10 000 Kč as shown, the exact figure in its title.
@@ -425,7 +442,7 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText(/nenašlo dost/)).not.toBeInTheDocument();
     // The point sent was coordinates; the card says which place they stand for.
     expect(within(screen.getByText('Poloha').parentElement!).getByText('Vinohradská 12, Praha')).toBeInTheDocument();
-    expect(fetchEstimationsForListings).not.toHaveBeenCalled();
+    expect(listEstimations).not.toHaveBeenCalled(); // the block's cached runs: no second fetch
   });
 
   it('reads a lease monthly on its own basis, against MF, never against a sale ask', async () => {
@@ -495,7 +512,9 @@ describe('<ValuoSection> states', () => {
       error: { code: 'calculation', message: 'Valuo nemovitost neocenilo: Place could not be resolved' },
     };
     renderSection(page({ history: [refused] }));
-    expect((await screen.findByRole('alert')).textContent?.trim()).toBe('Valuo nemovitost neocenilo.');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('Valuo nemovitost neocenilo.'); // the sentence says what failed: no title
+    expect(alert.querySelector('strong')).toBeNull();
     expect(screen.getByText('Valuo: „Place could not be resolved“')).toBeInTheDocument();
     expect(screen.getByText(PLACE).parentElement).toHaveTextContent(`Odeslaná poloha: ${PLACE}`);
   });

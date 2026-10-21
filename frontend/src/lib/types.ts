@@ -177,14 +177,6 @@ export const bareImage = (id: number, storage_path: string | null, sreality_url 
   clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
 });
 
-/* Distributional shape — drawn by components/estimation/RangeStrip. */
-
-export interface PercentileTriple {
-  p25: number;
-  p50: number;
-  p75: number;
-}
-
 /* -------------------------------------------------------------------------- */
 /* Estimations (U2). Wire shapes mirror api/schemas.py and api/estimation_runs */
 /* — backend is authoritative.                                                */

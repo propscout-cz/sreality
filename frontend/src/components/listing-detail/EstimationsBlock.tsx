@@ -9,21 +9,16 @@
  * property's child listings. ?run=ID selects a run (deep-links from the
  * estimations list and /estimation/:id redirects land here); the latest run
  * is the default. */
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  estimationKeys,
-  fetchEstimationsForListings,
-  submitEstimation,
-} from '@/lib/queries';
-import { sortedIds } from '@/lib/hydration/keys';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { estimationKeys, submitEstimation, useEstimationRuns } from '@/lib/queries';
 import { ApiError } from '@/lib/api';
 import { buildRerunPayload, type RerunInput } from '@/lib/rerun';
 import { fmtCzk, fmtPct, fmtRelative } from '@/lib/format';
 import EstimateCard, { PerMonth } from '@/components/estimation/EstimateCard';
 import { MfReferenceCard, YieldFigure } from '@/components/estimation/MfReferenceCard';
-import RunHistory, { type HistoryColumn } from '@/components/estimation/RunHistory';
+import RunHistory from '@/components/estimation/RunHistory';
 import { mfShape } from '@/lib/mfReference';
 import {
   ConfidencePill,
@@ -35,8 +30,9 @@ import {
   type NewEstimationPrefill,
 } from '@/components/NewEstimationModal';
 import type { PropertyPublic } from '@/lib/queries';
-import type { EstimationListResponse, EstimationRun } from '@/lib/types';
+import type { EstimationRun } from '@/lib/types';
 import { Hairline, SectionLabel } from '@/components/section';
+import type { Column } from '@/components/table';
 
 export default function EstimationsBlock({
   listing,
@@ -63,25 +59,7 @@ export default function EstimationsBlock({
   bare?: boolean;
   label?: string;
 }) {
-  const ids = useMemo(() => sortedIds(listingIds), [listingIds]);
-
-  const runsQ = useQuery<EstimationListResponse, Error>({
-    queryKey: estimationKeys.byListing(ids),
-    queryFn: () => fetchEstimationsForListings(ids),
-    /* Number.isFinite screens null/undefined/NaN: a non-empty array of junk
-     * ids must never reach the wire, where it would serialize to an empty
-     * value rather than a filter. */
-    enabled: ids.length > 0 && ids.every((n) => Number.isFinite(n)),
-    staleTime: 15_000,
-    refetchInterval: (q) => {
-      const rows = q.state.data?.data ?? [];
-      return rows.some(
-        (r) => r.status === 'pending' || r.status === 'running',
-      )
-        ? 3000
-        : false;
-    },
-  });
+  const runsQ = useEstimationRuns(listingIds);
 
   const [params] = useSearchParams();
   const location = useLocation();
@@ -189,13 +167,8 @@ export default function EstimationsBlock({
         )}
 
         {runs.length > 1 && (
-          <RunHistory
-            title="All runs"
-            rows={runs}
-            columns={RUN_COLUMNS}
-            selectedId={selected?.id ?? null}
-            onPick={selectRun}
-          />
+          <RunHistory title="All runs" rows={runs} columns={RUN_COLUMNS}
+            selectedId={selected?.id ?? null} onPick={selectRun} when="When" viewing="viewing" />
         )}
       </section>
     </>
@@ -287,17 +260,17 @@ function NoRunsCard({
 }
 
 /* The runs' ledger columns, after its "when". */
-const RUN_COLUMNS: ReadonlyArray<HistoryColumn<EstimationRun>> = [
+const RUN_COLUMNS: ReadonlyArray<Column<EstimationRun>> = [
   { header: 'Mode', className: 'text-[0.8rem] text-[var(--color-ink-3)]', cell: (r) => `${r.mode}${r.estimate_kind === 'sale' ? ' · sale' : ''}` },
   {
-    header: 'Estimate', right: true, className: 'font-mono tabular-nums text-[var(--color-ink)]',
+    header: 'Estimate', align: 'right', className: 'font-mono tabular-nums text-[var(--color-ink)]',
     cell: (r) => {
       const isSale = r.estimate_kind === 'sale';
       const value = isSale ? r.estimated_sale_price_czk : r.estimated_monthly_rent_czk;
       if (value == null) return <span className="text-[var(--color-ink-4)]">—</span>;
-      return <>{fmtCzk(value)}{!isSale && <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/mo</span>}</>;
+      return <>{fmtCzk(value)}{!isSale && <PerMonth unit="/mo" />}</>;
     },
   },
-  { header: 'Yield', right: true, className: 'font-mono tabular-nums text-[var(--color-ink-2)]', cell: (r) => fmtPct(r.gross_yield_pct, { digits: 2 }) },
+  { header: 'Yield', align: 'right', className: 'font-mono tabular-nums text-[var(--color-ink-2)]', cell: (r) => fmtPct(r.gross_yield_pct, { digits: 2 }) },
   { header: 'Status', cell: (r) => <RunStatusChip status={r.status} /> },
 ];

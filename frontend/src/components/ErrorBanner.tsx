@@ -4,7 +4,8 @@
  * stuck page must offer a way forward, not just a verdict); writes keep their own retry
  * semantics. The retry word follows the page's language: Czech by default, `retryLabel` for
  * an English admin page. role="alert": a failure is announced as it appears. `flush` trades
- * mt-6 for mt-0 where the banner stands in for the content it failed to load (Settings). */
+ * mt-6 for mt-0 where the banner stands in for the content it failed to load (Settings). A null
+ * `title` is a message that says itself what failed (the Valuo failure card). */
 export default function ErrorBanner({
   message,
   title = 'Failed:',
@@ -13,7 +14,7 @@ export default function ErrorBanner({
   flush = false,
 }: {
   message: string;
-  title?: string;
+  title?: string | null;
   onRetry?: () => void;
   retryLabel?: string;
   flush?: boolean;
@@ -23,7 +24,7 @@ export default function ErrorBanner({
       role="alert"
       className={`${flush ? 'mt-0' : 'mt-6'} p-3 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-sm text-[var(--color-brick)]`}
     >
-      <strong className="font-medium">{title}</strong> {message}
+      {title != null && <><strong className="font-medium">{title}</strong> </>}{message}
       {onRetry && (
         <button
           type="button"

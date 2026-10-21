@@ -342,8 +342,7 @@ app.include_router(property_download_router)
 # granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
 # terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
 app.include_router(property_location_router)
-# /properties/{id}/valuo — the Valuo section: the editor's defaults + the caller's own valuations (GET), one paid
-# Valuo call saved before it is made (POST). Any signed-in user (verify_jwt); rows scoped to the caller's account.
+# /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
 app.include_router(valuo_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
 # flood zones, kraje): the layer registry and tiles pre-rendered at ingest, read by primary key and

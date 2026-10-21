@@ -75,12 +75,12 @@ def _rows(cur: Any, account: Any) -> list[tuple[Any, ...]]:
     return cur.fetchall()
 
 
-def _run(flat: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    return valuo.run(flat["conn"], flat["pid"], overrides or {}, account_id=flat["account"], cred=CRED)
+def _value(flat: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    return valuo.new_valuation(flat["conn"], flat["pid"], overrides or {}, account_id=flat["account"], cred=CRED)
 
 
 def test_the_row_is_saved_before_the_call_and_finished_once(cur, flat, fake_valuo):
-    out = _run(flat)
+    out = _value(flat)
     assert out["reused"] is False and out["valuation"]["status"] == "success"
     assert fake_valuo.pending_at_call == [1], "the pending row must exist when Valuo is called"
     [(status, env, sha, request, response, error)] = _rows(cur, flat["account"])
@@ -92,8 +92,8 @@ def test_the_row_is_saved_before_the_call_and_finished_once(cur, flat, fake_valu
 
 
 def test_an_identical_request_is_reused_not_paid_again(cur, flat, fake_valuo):
-    first = _run(flat)["valuation"]
-    again = _run(flat)
+    first = _value(flat)["valuation"]
+    again = _value(flat)
     assert again["reused"] is True and again["valuation"]["id"] == first["id"]
     assert len(fake_valuo.pending_at_call) == 1 and len(_rows(cur, flat["account"])) == 1
 
@@ -105,7 +105,7 @@ def test_a_double_submit_meets_its_running_twin_and_pays_once(cur, flat, fake_va
                                                             CRED.token_sha, Jsonb(request), Jsonb(provenance)))
     assert twin["status"] == "pending"
     with pytest.raises(HTTPException) as err:
-        _run(flat)
+        _value(flat)
     assert err.value.status_code == 409
     assert fake_valuo.pending_at_call == [] and len(_rows(cur, flat["account"])) == 1
 
@@ -116,7 +116,7 @@ def test_a_stale_pending_row_is_abandoned_before_the_insert(cur, flat, fake_valu
     cur.execute("INSERT INTO valuo_valuations (account_id, listing_id, environment, token_sha, request, "
                 "provenance, created_at) VALUES (%s, %s, 'sandbox', 'x', %s, %s, now() - interval '3 minutes')",
                 (flat["account"], flat["lid"], Jsonb(request), Jsonb(provenance)))
-    assert _run(flat)["valuation"]["status"] == "success"
+    assert _value(flat)["valuation"]["status"] == "success"
     statuses = [(r[0], (r[5] or {}).get("code")) for r in _rows(cur, flat["account"])]
     assert statuses == [("failed", "abandoned"), ("success", None)]
 
@@ -132,12 +132,12 @@ def test_the_page_settles_a_call_the_api_died_during(cur, flat):
 def test_another_propertys_identical_request_is_its_own_row(cur, flat, fake_valuo):
     """The ad is in the dedupe key: a byte-identical request (same pin, area, rating) for a second property
     is paid and stored for it, never answered with a row its own history cannot show."""
-    _run(flat)
+    _value(flat)
     pid = _property(cur)
     lid = _advert(cur, pid, source="idnes", condition="dobry")
     _located(cur, lid)
     _recompute(cur, pid)
-    out = valuo.run(flat["conn"], pid, {}, account_id=flat["account"], cred=CRED)
+    out = valuo.new_valuation(flat["conn"], pid, {}, account_id=flat["account"], cred=CRED)
     assert out["reused"] is False and out["valuation"]["listing_id"] == lid
     assert len(fake_valuo.pending_at_call) == 2 and len(_rows(cur, flat["account"])) == 2
     assert [r[3] for r in _rows(cur, flat["account"])][0] == out["valuation"]["request"]
@@ -146,7 +146,7 @@ def test_another_propertys_identical_request_is_its_own_row(cur, flat, fake_valu
 def test_a_valuo_failure_is_a_failed_row_with_valuos_answer(cur, flat, fake_valuo):
     body = {"success": False, "errors": ["Adresa nenalezena"], "form_errors": []}
     fake_valuo.answer = valuo_client.ValuoError("no_price", 200, body)
-    out = _run(flat)
+    out = _value(flat)
     assert out["valuation"]["status"] == "failed"
     assert out["valuation"]["error"] == {"code": "no_price", "message": "Valuo cenu nevrátilo."}
     [(status, _env, _sha, _req, response, error)] = _rows(cur, flat["account"])
@@ -156,7 +156,7 @@ def test_a_valuo_failure_is_a_failed_row_with_valuos_answer(cur, flat, fake_valu
 def test_the_comparables_photos_land_beside_the_answer(cur, flat, fake_valuo):
     fake_valuo.answer = PRICED | {"result": PRICED["result"] | {"records": [{"id": 7, "price": 1}]}}
     fake_valuo.adverts = [{"id": 7, "images": ["a/b.jpg"]}]
-    [record] = _run(flat)["valuation"]["records"]
+    [record] = _value(flat)["valuation"]["records"]
     assert record["photos"] == [{"thumb": "https://pics.valuo.cz/pt/a/b.jpg",
                                  "full": "https://pics.valuo.cz/p/a/b.jpg"}]
     cur.execute("SELECT adverts FROM valuo_valuations WHERE account_id = %s", (flat["account"],))
@@ -165,10 +165,10 @@ def test_the_comparables_photos_land_beside_the_answer(cur, flat, fake_valuo):
 
 def test_a_sandbox_answer_is_sandbox_whatever_the_tokens_name(cur, flat, fake_valuo):
     fake_valuo.answer = PRICED | {"ver": "3.0.0-sandbox"}
-    first = _run(flat)["valuation"]
+    first = _value(flat)["valuation"]
     assert first["environment"] == "sandbox"
     named = valuo_client.Credential("production", "live-test-token")
-    again = valuo.run(flat["conn"], flat["pid"], {}, account_id=flat["account"], cred=named)
+    again = valuo.new_valuation(flat["conn"], flat["pid"], {}, account_id=flat["account"], cred=named)
     assert again["reused"] is True and again["valuation"]["id"] == first["id"]
     assert [(r[0], r[1], (r[5] or {}).get("code")) for r in _rows(cur, flat["account"])] == [
         ("success", "sandbox", None), ("failed", "sandbox", "duplicate")]
@@ -178,7 +178,7 @@ def test_a_refusal_writes_no_row(cur, flat, fake_valuo):
     cur.execute("UPDATE listings SET category_main = 'ostatni' WHERE id = %s", (flat["lid"],))
     _recompute(cur, flat["pid"])
     with pytest.raises(HTTPException) as err:
-        _run(flat)
+        _value(flat)
     assert err.value.status_code == 422 and err.value.detail["code"] == "unsupported_type"
     assert _rows(cur, flat["account"]) == [] and fake_valuo.pending_at_call == []
 
@@ -200,7 +200,7 @@ def test_the_checks_refuse_an_incoherent_row(cur, flat, status, response, error,
 def test_history_is_the_callers_own_across_every_ad(cur, flat, fake_valuo):
     other_ad = _advert(cur, flat["pid"], source="sreality", condition="dobry")
     other_account = _account(cur)
-    _run(flat)
+    _value(flat)
     for account, lid in ((flat["account"], other_ad), (other_account, flat["lid"])):
         cur.execute("INSERT INTO valuo_valuations (account_id, listing_id, environment, token_sha, request, "
                     "provenance, status, error) VALUES (%s, %s, 'sandbox', 'x', %s, '{}', 'failed', %s)",
