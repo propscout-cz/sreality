@@ -63,35 +63,37 @@ function renderHost(count = 1) {
   );
 }
 
-const renderModals = (count = 1) => {
+const renderModals = async (count = 1) => {
   const utils = renderHost(count);
   screen.getAllByRole('button', { name: 'Open estimation' }).forEach((b) => fireEvent.click(b));
+  /* The body is a lazy chunk (first-visit budget): wait for every dialog to mount. */
+  await screen.findAllByRole('dialog');
   return utils;
 };
 
 describe('<NewEstimationModal>', () => {
-  it('names the URL field and the dialog', () => {
-    renderModals();
+  it('names the URL field and the dialog', async () => {
+    await renderModals();
     expect(screen.getByRole('textbox', { name: 'Listing URL' })).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Where is the listing?');
   });
 
-  it('names the operator-context textareas', () => {
-    renderModals();
+  it('names the operator-context textareas', async () => {
+    await renderModals();
     expect(screen.getByRole('textbox', { name: 'Special instructions' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Property context' })).toBeInTheDocument();
   });
 
-  it('names the building attachments picker by its visible caption', () => {
-    renderModals();
+  it('names the building attachments picker by its visible caption', async () => {
+    await renderModals();
     fireEvent.click(screen.getByRole('radio', { name: /Building/ }));
     expect(
       screen.getByLabelText('Attachments — floor plans, photos, drawings'),
     ).toHaveAttribute('type', 'file');
   });
 
-  it('gives two mounted modals distinct ids, so neither steals the other label', () => {
-    renderModals(2);
+  it('gives two mounted modals distinct ids, so neither steals the other label', async () => {
+    await renderModals(2);
     const [a, b] = screen.getAllByRole('textbox', { name: 'Listing URL' });
     expect(a.id).not.toBe('');
     expect(a.id).not.toBe(b.id);
@@ -103,27 +105,27 @@ describe('<NewEstimationModal>', () => {
 });
 
 describe('<NewEstimationModal> dialog contract', () => {
-  it('names itself, traps focus, closes one layer on Escape and gives focus back', () => {
+  it('names itself, traps focus, closes one layer on Escape and gives focus back', async () => {
     renderHost();
     const trigger = screen.getByRole('button', { name: 'Open estimation' });
     expectDialogContract({ trigger, open: () => fireEvent.click(trigger) });
   });
 
-  it('puts initial focus on the URL field, not on the close glyph in front of it', () => {
-    renderModals();
+  it('puts initial focus on the URL field, not on the close glyph in front of it', async () => {
+    await renderModals();
     expect(document.activeElement).toBe(
       screen.getByRole('textbox', { name: 'Listing URL' }),
     );
   });
 
-  it('opens on the primary action when the URL is prefilled and its field is not rendered', () => {
+  it('opens on the primary action when the URL is prefilled and its field is not rendered', async () => {
     renderHost();
     fireEvent.click(screen.getByRole('button', { name: 'Open prefilled' }));
     expect(screen.queryByRole('textbox', { name: 'Listing URL' })).not.toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Estimate' }));
   });
 
-  it('leaves no scroll lock behind when the page underneath navigates away', () => {
+  it('leaves no scroll lock behind when the page underneath navigates away', async () => {
     renderHost();
     const trigger = screen.getByRole('button', { name: 'Open estimation' });
     trigger.focus();
@@ -146,7 +148,7 @@ describe('<NewEstimationModal> in-flight guard', () => {
    * guarded onClose, so all three are asserted against that one place. */
   async function submitAndHang() {
     previewListingUrl.mockReturnValue(new Promise(() => {}));
-    renderModals();
+    await renderModals();
     fireEvent.change(screen.getByRole('textbox', { name: 'Listing URL' }), {
       target: { value: 'https://www.sreality.cz/detail/pronajem/byt/1' },
     });
