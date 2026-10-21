@@ -2,18 +2,20 @@
 
 Hermetic: the tenant connection is a scripted fake that records every statement, the JWT is
 overridden, and the account resolver returns a distinctive sentinel (never None — tenancy.md's
-#917 rule), so the tests can assert the sentinel ARRIVES at the read and the upsert. Validation
+#917 rule), so the tests can assert the sentinel ARRIVES at the upsert. Validation
 runs unmodified through the route: the board passes `toolkit.stats_registry.validate_board` (the
 `Charts` type), and a refusal is a 422 that names the chart and the registry's reason without
 touching the table. Since 647 the working board is the account's ONE unnamed row, so the upsert
-infers the partial unique index and the read names the same account the write does.
+infers the partial unique index and the read, RLS alone (tenancy shape 1), finds that row.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -52,7 +54,7 @@ def conn() -> ScriptConn:
 
 
 @pytest.fixture()
-def client(monkeypatch, conn: ScriptConn):
+def client(monkeypatch: pytest.MonkeyPatch, conn: ScriptConn) -> Iterator[Any]:
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: conn
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
     monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda c, claims: _ACCT)
@@ -141,25 +143,29 @@ def test_a_full_board_is_accepted(client, conn: ScriptConn) -> None:
     assert len(res.json()["charts"]) == sr.MAX_CHARTS
 
 
-def test_a_caller_without_an_account_is_400_and_reads_or_writes_nothing(client, conn, monkeypatch) -> None:
+def test_a_caller_without_an_account_writes_nothing_and_reads_no_board(client, conn, monkeypatch) -> None:
     monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda c, claims: None)
     res = client.put("/stats/dashboard", json={"charts": [_CHART]})
     assert res.status_code == 400
     assert res.json()["detail"] == "no account for caller"
-    res = client.get("/stats/dashboard")
-    assert res.status_code == 400
     assert conn.executed == []
+    # The read resolves no account: RLS finds no row of an account-less caller.
+    conn.script = []
+    res = client.get("/stats/dashboard")
+    assert res.status_code == 200 and res.json() is None
+    assert [q for q, _ in conn.executed] == [sd._WORKING_BOARD_SQL]
 
 
-def test_the_read_answers_the_working_board_of_the_account_the_write_names(client, conn) -> None:
+def test_the_read_is_scoped_by_rls_alone(client, conn) -> None:
     conn.script = [(_read, [(_BOARD, [_CHART], _AT)])]
     res = client.get("/stats/dashboard")
     assert res.status_code == 200, res.text
     assert res.json() == {"id": str(_BOARD), "charts": [_CHART], "updated_at": _AT.isoformat()}
     [(sql, params)] = conn.executed
-    # The same account the upsert names (require_account_id), and never a named dashboard.
-    assert sql == "SELECT id, charts, updated_at FROM stats_dashboards WHERE account_id = %s AND name IS NULL"
-    assert str(params[0]) == _ACCT
+    # Tenancy shape 1: no account argument, no account predicate, and never a named dashboard.
+    assert sql == ("SELECT id, charts, updated_at FROM stats_dashboards WHERE name IS NULL "
+                   "ORDER BY updated_at DESC LIMIT 1")
+    assert params is None
 
 
 def test_no_working_board_yet_reads_null(client, conn) -> None:
@@ -169,17 +175,27 @@ def test_no_working_board_yet_reads_null(client, conn) -> None:
     assert res.json() is None
 
 
-def test_the_working_board_never_acts_for_another_account(client, conn) -> None:
-    """A delegate under X-Act-As reads and writes no board of the owner's (pipeline-sharing §3.7)."""
+def test_the_working_board_write_never_acts_for_another_account(client, conn) -> None:
     acting = {"X-Act-As": "22222222-2222-2222-2222-222222222222"}
-    for res in (client.get("/stats/dashboard", headers=acting),
-                client.put("/stats/dashboard", json={"charts": [_CHART]}, headers=acting)):
-        assert res.status_code == 403
-        assert res.json()["detail"] == "this route does not act for another account"
+    res = client.put("/stats/dashboard", json={"charts": [_CHART]}, headers=acting)
+    assert res.status_code == 403
+    assert res.json()["detail"] == "this route does not act for another account"
     assert conn.executed == []
 
 
-def test_both_routes_ride_the_tenant_connection_and_name_their_account() -> None:
+def test_the_working_board_read_under_x_act_as_is_the_callers_own(client, conn) -> None:
+    """stats_dashboards is identity-scoped (pipeline-sharing §3.7): its policy reads current_account_ids(), so
+    under the header the read answers the delegate's OWN board, never the owner's, and is no 403."""
+    conn.script = [(_read, [(_BOARD, [_CHART], _AT)])]
+    res = client.get("/stats/dashboard", headers={"X-Act-As": "22222222-2222-2222-2222-222222222222"})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"id": str(_BOARD), "charts": [_CHART], "updated_at": _AT.isoformat()}
+    [(sql, params)] = conn.executed
+    assert sql == sd._WORKING_BOARD_SQL and params is None
+    assert "acting_account_ids" not in sql
+
+
+def test_both_routes_ride_the_tenant_connection_and_only_the_write_names_its_account() -> None:
     routes = {(m, r.path): r for r in api_main.app.routes if isinstance(r, APIRoute)
               for m in r.methods if r.path == "/stats/dashboard"}
     if not routes:  # FastAPI >= 0.13x wraps an included router
@@ -195,13 +211,15 @@ def test_both_routes_ride_the_tenant_connection_and_name_their_account() -> None
             if d.call is not None:
                 calls.add(d.call)
             stack.extend(d.dependencies)
-        assert tenant_pool.tenant_conn in calls and tenant_pool.require_account_id in calls
+        assert tenant_pool.tenant_conn in calls
+        assert (tenant_pool.require_account_id in calls) == (route.methods == {"PUT"})
         assert deps.get_db_conn not in calls and deps.require_token not in calls
 
 
-def test_the_board_helpers_require_their_account() -> None:
-    """No default: a dropped account is a TypeError, not a NULL owner or a read of no one's board (#917)."""
+def test_the_write_helper_requires_its_account_and_the_read_takes_none() -> None:
+    """No default on the write: a dropped account is a TypeError, not a NULL owner (#917)."""
+    import inspect
+
     with pytest.raises(TypeError):
         sd.save_working_board(ScriptConn([]), [])  # type: ignore[call-arg]
-    with pytest.raises(TypeError):
-        sd.working_board(ScriptConn([]))  # type: ignore[call-arg]
+    assert list(inspect.signature(sd.working_board).parameters) == ["conn"]

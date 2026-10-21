@@ -272,7 +272,7 @@ def client(monkeypatch):
     monkeypatch.setattr(
         api_shares, "revoke_dashboard", lambda conn, dashboard_id, recipient: {"deleted": True},
     )
-    monkeypatch.setattr(api_stats_dashboards, "working_board", lambda conn, *, account_id: None)
+    monkeypatch.setattr(api_stats_dashboards, "working_board", lambda conn: None)
     monkeypatch.setattr(
         api_stats_dashboards, "save_working_board",
         lambda conn, charts, *, account_id: {"charts": charts, "updated_at": "t"},

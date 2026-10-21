@@ -174,6 +174,11 @@ to view the board only, or to edit the board and the curation. The owner revokes
 the owner shares their own pipeline.
 _Avoid_: board share, team board, membership, delegation (alone)
 
+**Saved set**:
+A named row an account owns, lists, loads, updates and reorders. Its two kinds are the filter preset
+and the dashboard; only a dashboard may be shared, read-only.
+_Avoid_: saved item, saved view, favourite
+
 **Dashboard**:
 A named set of Stats charts an account saved, optionally with the Browse filter it was built on. Loading
 one copies it into the working board; it changes only when its owner saves changes. It may be shared

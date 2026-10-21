@@ -37,8 +37,9 @@ trigger-derived): `collections`, `tags`, `property_notes`, `filter_presets`,
 (536), `property_artifact_links` (599, one URL per `(account_id, property_id)` composite key,
 caller-supplied account, API-only reads and writes) and `stats_dashboards` (626; 647 re-keyed it on
 `id`: named dashboards, the saved-set CRUD of `/stats/dashboards`, plus ONE unnamed working board per account
-by partial unique index, read and written by `GET`/`PUT /stats/dashboard` with the account `require_account_id`
-resolves: there the account is the row's KEY, RLS still the scope). The column was added nullable (the tables
+by partial unique index: `PUT /stats/dashboard` upserts it under the account `require_account_id` resolves, the
+row's KEY; `GET /stats/dashboard` reads it by RLS alone, shape 1, and under `X-Act-As` that is the caller's own,
+the table being identity-scoped). The column was added nullable (the tables
 already held rows); it is NOT NULL on four of the five since `notification_subscriptions` 364,
 `filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
 about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row).
@@ -324,7 +325,8 @@ The route-scope census excludes it structurally (it reaches `verify_jwt`, not `t
 service-role write.** Browser roles hold no INSERT on `collection_shares` (uuids are learnable)
 or on `notification_dispatches`, so the share row and the recipient's notification are written
 on the service-role connection. The order is fixed: the tenant `UPDATE collections SET
-updated_at = now()` is the ownership gate (shape 1, rowcount 0 → 404) BEFORE the service-role
+updated_at = now()` is the ownership gate (shape 1, rowcount 0 → 404; `shares.owner_gate`, which the
+dashboard share route runs too) BEFORE the service-role
 connection even opens (`deps.open_background_conn` in the handler, never a dependency; pinned by
 `test_the_share_route_opens_the_service_role_only_after_its_gate`); the email resolves on the
 service role (`tenant_pool.account_for_email`); the share and its dispatch are one service-role

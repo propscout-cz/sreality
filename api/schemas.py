@@ -658,14 +658,11 @@ def _coded_chips(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _valid_board(charts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The board as the stats registry normalises it: the only specs the pivot accepts.
-
-    A refusal is an HTTPException, not a ValueError: pydantic re-raises it unwrapped, so the
-    422's detail is the registry's reason naming the chart, as PUT /stats/dashboard has always
-    answered."""
+    """The board as the stats registry normalises it: the only specs the pivot accepts."""
     try:
         return sr.validate_board(charts)
     except sr.SpecError as exc:
+        # Not a ValueError: pydantic re-raises an HTTPException unwrapped, so the 422 names the chart.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 

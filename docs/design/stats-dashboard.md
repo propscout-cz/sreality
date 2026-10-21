@@ -100,14 +100,15 @@ payload still carries the counts and the cohort facts; `cells` and `places` are 
 cohort is read: `{refused, reason, cells: []}`.) `places` is read from the view on the ≤ 2,000 result cells only; `name` is
 null when the register has no live name for the code.
 
-### Saved board — the working board in `public.stats_dashboards` (626, re-keyed by 647)
+### Working board and dashboards — `public.stats_dashboards` (626, re-keyed by 647)
 
 Since migration 647 the table holds saved sets (`docs/design/saved-dashboards.md`): `id` is the key, every NAMED
 row is a dashboard the account lists, loads, reorders and may share read-only (`/stats/dashboards`), and the
-account's ONE unnamed row is its working board, the charts the Stats tab shows. `GET /stats/dashboard` reads it
-(`{id, charts, updated_at}` or null) and `PUT /stats/dashboard {charts: [...]}` replaces it whole
-(`ON CONFLICT (account_id) WHERE name IS NULL`), both on `require_account_id`, so the read and the write name the
-same account. A chart is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics,
+account's ONE unnamed row is its working board, the charts the Stats tab shows. `PUT /stats/dashboard {charts:
+[...]}` replaces it whole (`ON CONFLICT (account_id) WHERE name IS NULL`, the account `require_account_id`
+resolves); `GET /stats/dashboard` reads it (`{id, charts, updated_at}` or null) by RLS alone, a tenant read
+(one membership per user makes it the PUT's row; a second membership would need the write's account resolution
+there). A chart is `{id, view, rows, cols, measure, stats}`; `stats` (one or more of the chart statistics,
 in the order the user picked them, the first leading; default `['median']`) is read by line, bar and a table with
 a column dimension; the title is derived, never stored. (Migration 628 rewrote the first shape's single `stat`
 into `stats: [stat]`; a chart with no usable `stats` reads as the default alone.) No row ⇒ the SPA shows
