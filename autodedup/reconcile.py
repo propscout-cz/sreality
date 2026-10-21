@@ -70,8 +70,8 @@ RUN_PREFIX: str = "rt:"
 # the store holds ~34k groups and the sweep is the only way a group no feed touches reaches the
 # hand-on (E973: the discovery sets the pace), so at 200 the list ran dry (E975, 2026-10-21:
 # 524 groups to 24 in two hours, merges to a third). 2,000 finds ~240 stale groups a pass at the
-# measured 12 % share, ~76 of them with an active advert, which is what the re-claim
-# (`STALE_FLOOR`) takes a pass, and a cycle is ~17 passes; the swept groups are planned in bulk
+# measured 12 % share, three times what the re-claim (`STALE_FLOOR`, ~70 groups) takes a pass,
+# so the list stays full, and a cycle is ~17 passes; the swept groups are planned in bulk
 # (~36 s for 2,000) before the time-bound apply loop, so a late find is still handed on.
 SWEEP_SLICE: int = 2000
 # A group is started only while this much of the pass's time is left: one group is a handful
