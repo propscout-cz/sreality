@@ -1427,7 +1427,21 @@ renumber.** Navigate by area:
     not-yet-scraped case above and turn a working degraded path into a 500 on submit.
 
     **A paid outside valuation is not our estimate (Valuo, operator ruling 2026-10-19).** The
-    property page's Valuo section buys a valuation from valuo.cz; each call is one row in
+    property page's Valuo section buys a valuation from Valuo's API v3 (docs.valuo.com; `POST
+    https://api.valuo.com/v1/market-value/{flat|house|land|commercial}`, one endpoint per type, the
+    one host for both tokens; the retired `api.valuo.cz/v1/calculation` 401s them). Each type is offered
+    EXACTLY its endpoint's request schema (`api/valuo.py` FIELDS; Valuo silently drops any other field, so
+    no lift, furnishing, rooms or terrace is sent; house's `garage_area`/`other_area` wait for a column of
+    ours), `rating` is required even for land (`good`, `assumed`), and `local_type` is only ever one of
+    Valuo's listed dispositions or `jiné`. v3 has NO parameter to exclude or add comparables (`ignored_ids`
+    is an engine echo, always [], kept in the stored answer and never shown); the band shown is
+    `range_price`, not `min/max_price`. After a success with comparables ONE `POST /v1/advert/detail`
+    for the first ten stores their photos verbatim in `adverts` (migration 646; a failure leaves it
+    NULL and never fails the valuation), shown from `pics.valuo.cz`. `environment` is the environment
+    that ANSWERED: a body whose `ver` ends `-sandbox` is stored `sandbox` whatever the token's variable
+    is named. A sandbox token saved as production therefore repeats an identical request's call (the
+    dedupe looks under the variable's environment) before the row settles `failed`/`duplicate` and the
+    stored sandbox answer is shown: sandbox volume only, accepted for a misconfiguration. Each call is one row in
     `valuo_valuations` (migration 637), written only by `api/valuo.py`, never an `estimation_runs`
     row. Three reasons, each sufficient: browser roles hold INSERT/UPDATE on `estimation_runs`
     (291), so anyone could forge a "production" Valuo row; a row with no account falls back to
@@ -1445,14 +1459,21 @@ renumber.** Navigate by area:
     reuse is always a row this property's history shows), and there is no automatic retry. A
     pending row older than two minutes is settled `failed`/`abandoned` by the next GET or POST of
     its account. A Valuo-side failure is a stored `failed` row answered with HTTP 200, as for our
-    runs; a refusal (komerční/ostatní, no point, a point coarser than a town, a country that is not
+    runs (an issue list in `message` on any 4xx/5xx — HTTP 500 today — is `form_errors`, each issue shown
+    under its parameter; a 400 is the engine's own refusal, `calculation`, shown with Valuo's reason); a refusal (ostatní, no point, a point coarser than a town, a country that is not
     determined `cz`, a missing required parameter) is a 4xx and writes nothing. Every signed-in user may run one (`verify_jwt`); reads and history are the
     caller's own account. The operator's careful defaults: a missing condition blocks the button,
-    `velmi_dobry` is sent as Valuo's `good` (`assumed`), energy class G is not sent (`assumed` —
-    Czech ads without a PENB certificate must state G too).
+    `velmi_dobry` is Valuo's `very_good` "Velmi dobrý" (operator ruling 2026-10-20, superseding `good`),
+    `novostavba` is `very_good` (`assumed`; v3 has no "new" rating) plus `new_building: true`, a house's
+    energy class G is not sent (`assumed` —
+    Czech ads without a PENB certificate must state G too), and a yes/no attribute is sent only
+    when the ad says yes — portals store "not mentioned" as no (sreality's garage, bezrealitky's
+    lift), so a no stays `missing` with its reason.
 
     Calibration — how a Valuo number is judged — reads production rows only, drops every row that
-    leaned on an assumption for a required parameter (a success never lacks one: the POST refuses)
+    leaned on an assumption for a required parameter (a success never lacks one: the POST refuses;
+    so a new build, sent `very_good` assumed, is never calibrated, while land's assumed `good` is
+    exempt — the same constant on every land row, Valuo's demand rather than a guess about the plot)
     or was sent from a point coarser than a street, and judges each row by what was SENT — the
     request's point, area and type, never the ad or its pin as they read today — setting Valuo's
     `avg_price` against the registered sales in the same building around `as_of` and against our
@@ -1467,7 +1488,7 @@ renumber.** Navigate by area:
                                        split_part(v.request->>'place', ',', 1)::float8), 4326)::geography as pt,
                coalesce(v.request->>'floor_area', v.request->>'lot_area')::numeric as area,
                case v.request->>'property_type' when 'flat' then 'byt' when 'house' then 'dum'
-                    else 'pozemek' end as category_main) q
+                    when 'commercial' then 'komercni' else 'pozemek' end as category_main) q
       left join lateral (                      -- same building, same kind of unit, +-90 days of as_of
         select percentile_cont(0.5) within group (order by s.price_czk) as median_czk, count(*) as n
           from sold_transactions s
@@ -1482,10 +1503,11 @@ renumber.** Navigate by area:
            and er.estimate_kind = case v.request->>'kind' when 'lease' then 'rent' else 'sale' end
          order by er.created_at desc limit 1) ours on true
      where v.environment = 'production' and v.status = 'success'
-       and v.provenance->'place'->>'class' = 'ad'     -- `ad` = street precision or finer when sent
+       and v.provenance->'place'->>'class' = 'ad'     -- street precision or finer; a typed place is `user`
        and not exists (select 1 from jsonb_each(v.provenance) p
                         where p.key in ('kind', 'floor_area', 'lot_area', 'rating', 'land_type')
-                          and p.value->>'class' = 'assumed');
+                          and p.value->>'class' = 'assumed'
+                          and not (p.key = 'rating' and v.request->>'property_type' = 'land'));
     ```
 13. **`building_runs` is the parent grouping for the paste-a-building workflow.** One row
     per pasted house listing (typically `category_main='dum'`). Children are normal
