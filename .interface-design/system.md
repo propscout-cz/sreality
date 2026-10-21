@@ -64,6 +64,13 @@ above for status and adds no token.
   status hues are too close for colour-blind readers (sage and brick for deuteranopia).
 - **Hollow ring = Not measured**: a 1.5 px `--color-ink-3` ring with no fill, never a green or a filled
   `ink-4` dot, so a check nobody measured can never look healthy. Stale reads the same.
+- **Browse map pins** (`ListingMap` `PIN_COLOR`, operator 2026-10-21): magenta `#b2067e`, a map literal (the
+  basemap is not themed), not a token. Chosen as the one hue nothing else on that map wears: the OpenFreeMap
+  liberty basemap, every overlay colour in `map_overlay_layers` (reds, orange, yellow, greens, blues,
+  purples) and the ochre hover are all at least 46 CIE76 away; 3.7:1 on the worst basemap fill, 3.2:1 on the
+  black exact-position contour. Red was rejected (the metro C and flood overlays are red), teal green (the old
+  `#3c6e63`) sat in the woods' hue. The estimation `ComparablesMap` and `DetailMap` keep copper: there green
+  is "comparable" against the orange subject.
 - **Shared admin primitives**: `Panel` (paper-2, rule border, small-caps title) is the card of Health, Costs,
   LocationQuality, LocationPinAudit and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
   dot; never a coloured number) the tile of Health, Costs, LocationQuality and AutodedupProgress; `StatusDot`;

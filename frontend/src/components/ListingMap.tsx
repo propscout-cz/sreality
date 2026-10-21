@@ -124,14 +124,18 @@ const formatPriceLabel = (r: MapRow, metric: PriceMetric): string => {
 /* `pin_exact` picks the pin's black outer contour (lib/uncertaintyCircle.isPinExact):
  * present for a pin placed on a building, absent for anything coarser. Baked per
  * feature so the rule stays in TypeScript, where it is tested, and the paint
- * expression only reads a boolean. `is_active` picks the fill: green, or white and
+ * expression only reads a boolean. `is_active` picks the fill: the pin colour, or white and
  * transparent. */
 type MapFeatureProps = MapRow & { price_label: string; pin_exact: boolean };
 type FC = GeoJSON.FeatureCollection<GeoJSON.Point, MapFeatureProps>;
 
 /* The pin's paint, shared with the legend swatches so the two cannot drift. The
- * basemap is not themed, so these are the map's literals, not theme tokens. */
-const PIN_COLOR = '#3c6e63';
+ * basemap is not themed, so these are the map's literals, not theme tokens.
+ * PIN_COLOR is magenta because it is the one hue nothing else on this map wears: the
+ * liberty basemap (cream, green, blue, yellow roads), every overlay colour (reds,
+ * orange, yellow, greens, blues, purples) and the ochre hover ring are all >= 46 CIE76
+ * away. 3.7:1 on the worst basemap fill, 3.2:1 against the black contour. */
+const PIN_COLOR = '#b2067e';
 const PIN_WHITE = '#ffffff';
 const PIN_CONTOUR = '#000000';
 /* An inactive pin keeps its shape and fades: white transparent fill, dimmed contours. */
@@ -740,7 +744,7 @@ export default function ListingMap({
       });
 
       /* The black outer contour of an exact pin (building / address). A layer of
-       * its own because a circle has ONE stroke, and the white (active) or green
+       * its own because a circle has ONE stroke, and the white (active) or pin-coloured
        * (inactive) one is taken. A stroke is drawn OUTSIDE the radius, so this
        * circle's radius is the pin's radius plus that stroke's width. Added before
        * `point` so the pin sits on top; never a hit target. */
@@ -772,8 +776,8 @@ export default function ListingMap({
         paint: {
           /* feature-state.hovered drives the bumped radius / ochre
            * stroke — the highlight reads as "selected", not "different
-           * kind of pin". The kind is `is_active`: a green dot with a white
-           * contour, or a white transparent one with a green contour. */
+           * kind of pin". The kind is `is_active`: a pin-coloured dot with a white
+           * contour, or a white transparent one with a pin-coloured contour. */
           'circle-radius': [
             'case',
             ['boolean', ['feature-state', 'hovered'], false], PIN_RADIUS_HOVER,
@@ -1038,7 +1042,7 @@ export default function ListingMap({
        * dedup, no id-matching needed). Reuses the estimation ComparablesMap
        * subject recipe (#b6612d copper, halo + white-stroked pin) so the
        * "highlighted landmark" idiom is one vocabulary app-wide; slightly
-       * larger so it reads as "the one you came from" against the green
+       * larger so it reads as "the one you came from" against the pin-coloured
        * cohort. The pin dims for an inactive origin, the listings convention.
        * Style-only: no hover-sync, no click handler (a deliberate non-entry
        * into the map's interaction surface — it's a fixed "you are here"). */
@@ -1865,7 +1869,7 @@ function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx
       className="pointer-events-auto inline-flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] shadow-[0_2px_6px_rgba(0,0,0,0.04)] tabular-nums cursor-help"
       title={
         'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
-        + '(ulice, část obce, obec…). Zelený bod je aktivní nabídka, průhledný bílý se zeleným '
+        + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
         + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
         + 'nemovitost leží, a popisek řekne, jak je velký.'
       }
