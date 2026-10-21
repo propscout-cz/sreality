@@ -120,7 +120,7 @@ export default function Settings() {
         eyebrow="Tuning"
         title="App settings"
         infoExpanded={infoExpanded}
-        description="Operator-tunable prompts and model names used outside the agent (URL parser, listing summary, image comparison)."
+        description="Operator-tunable prompts and model names used outside the agent (listing summary, image comparison)."
       >
         <AppSettingsSection infoExpanded={infoExpanded} />
       </CollapsibleSection>

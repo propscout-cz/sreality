@@ -182,11 +182,12 @@ export default function PropertyDetail() {
     };
   }, [property, detailsQ.data, detailsQ.isError, sources, canonical]);
 
-  // Bind the page's "New estimation" CTA to the canonical advert's stored portal
-  // URL (migration 494; never reconstructed). MUST stay above the early returns
-  // below — a hook after a conditional return is the React #310 trap.
+  // Bind the page's "New estimation" CTA to the canonical advert (`id`, its
+  // listings.id) — any portal's, so a property without a sreality advert is
+  // estimable too. MUST stay above the early returns below — a hook after a
+  // conditional return is the React #310 trap.
   const newEstimationPrefill = useMemo<NewEstimationPrefill | undefined>(() => {
-    if (!property || !canonical?.source_url) return undefined;
+    if (!property) return undefined;
     const categoryMain =
       property.category_main === 'byt'
       || property.category_main === 'dum'
@@ -194,11 +195,11 @@ export default function PropertyDetail() {
         ? property.category_main
         : undefined;
     return {
-      url: canonical.source_url,
+      listingId: property.id,
       categoryMain,
       estimateKind: property.category_type === 'pronajem' ? 'rent' : 'sale',
     };
-  }, [property, canonical]);
+  }, [property]);
 
   // Tab title = "type · disposition · place" (the ONE place label the header
   // shows, migration 503). MUST stay above the early returns — same #310 trap.
@@ -631,6 +632,7 @@ function Crumb() {
 
 function NewEstimationButton({ prefill }: { prefill?: NewEstimationPrefill }) {
   const { open } = useNewEstimationModal();
+  if (!prefill) return null;
   return (
     <button
       type="button"

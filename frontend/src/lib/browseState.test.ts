@@ -12,6 +12,7 @@ import {
   browseFiltersForBroker,
   browseUrlFromState,
   parsePinLimit,
+  parseTab,
   useMemoryBrowseState,
   useUrlBrowseState,
   type ExploreAreaSeed,
@@ -245,6 +246,27 @@ describe('pin limit and price labels on the map overlay', () => {
     const withKnobs = fromSearchParams(new URLSearchParams('pins=500&labels=0'));
     const without = fromSearchParams(new URLSearchParams(''));
     expect(withKnobs).toEqual(without);
+  });
+});
+
+/* `?tab=` names the stats tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
+describe('the tab in the URL', () => {
+  const tabOf = (initial: string) =>
+    renderHook(() => useUrlBrowseState(), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    }).result.current.tab;
+
+  it('reads stats as stats, and anything else as the map', () => {
+    expect(parseTab('stats')).toBe('stats');
+    expect(parseTab(null)).toBe('map');
+    expect(parseTab('table')).toBe('map');
+    expect(parseTab('nonsense')).toBe('map');
+  });
+
+  it('opens an old table link on the map', () => {
+    expect(tabOf('/browse?tab=table')).toBe('map');
+    expect(tabOf('/browse?tab=stats')).toBe('stats');
   });
 });
 

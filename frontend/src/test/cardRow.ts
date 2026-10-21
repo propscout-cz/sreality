@@ -22,6 +22,7 @@ export const cardRow = (id: number, extra: Partial<CardRow> = {}): CardRow => ({
   source: 'sreality',
   source_id_native: String(id),
   mf_gross_yield_pct: null,
+  plot_area_m2: null,
   total_price_change_pct: null,
   price_change_count: 0,
   all_sources: ['sreality'],

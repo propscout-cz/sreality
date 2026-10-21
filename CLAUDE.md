@@ -157,7 +157,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 12. **`estimation_runs` is the single source of truth for every estimation; every run must be created through `create_estimation_run`** (owed forks:
     the Watchdog kickoff, `scripts/smoke_agent.py`). The row is INSERTed at submit (`pending`/`running`; `failed` if setup fails), then the executor
     UPDATEs its terminal `status` in place; failed runs still persist a row (HTTP 200 + `status='failed'`); re-runs INSERT with `parent_run_id`; a
-    run's RESULT is immutable (its yield `scenario` and late-bound `input_listing_id` are not). Sources: `ui`/`api`/`clickup`/`extension`.
+    run's RESULT is immutable (its yield `scenario` is not; `input_listing_id` is set at submit, never late-bound; an ad we do not hold or cannot place is a 422 before any row). Sources: `ui`/`api`/`clickup`/`extension`.
     A paid outside valuation (Valuo) is not our estimate: one row per call in `valuo_valuations`, written only by `api/valuo.py`.
 13. **`building_runs` is the paste-a-building parent.** Children are `estimation_runs` linked via
     `building_run_id` + `building_unit_id`; the unit list is operator-curated JSONB. Status:
@@ -218,7 +218,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 22. **The deal pipeline is single-valued, property-grain operator state** (migration 205): `property_pipeline` holds ≤1 card per property per account at one
     `pipeline_stages` stage (a TABLE, not an enum); "bookmark" == presence of a row at the entry stage. It has its OWN carrier in `PROPERTY_CARRIERS` (over
     `toolkit/pipeline_identity.py`; TERMINAL-AWARE — a live stage always beats a closed one); the losing card is folded into the carry record (rule #18).
-    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards/rows, listing header, kanban drag + trash) is ONE hook,
+    Writes go through the JWT-gated API (`tenant_conn`); every SPA card write (Browse cards, listing header, kanban drag + trash) is ONE hook,
     `lib/usePipelineCard` (id per call), over ONE write policy, `lib/useOptimisticWrite` (`lib/pipelineCache`: patches + re-read list). `<PipelineMark>` +
     `<PipelineStageMenu>` serve Browse + the listing header; the kanban (no mark; drag, own trash and confirm) and the extension (glyph, stage `<select>`) keep
     their own shapes; owed: the board's grey `stageColor`, the extension's copied `stageBadge`/`stageAccent` (`roadmap/operator-workflow-track.md`). All MEAN
@@ -291,7 +291,7 @@ nor are the email/Telegram channels (rule #16). Don't start out-of-scope work wi
 | --- | --- |
 | SQL, migrations, connection modes, Supabase MCP, schema conventions | `.claude/skills/database` |
 | Toolkit tools, FastAPI, auth, versioned trace, env-vars & secrets | `.claude/skills/toolkit-api` |
-| LLM URL parsing, cached vision/text tools, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
+| Cached vision/text tools, the text lane, vision tiers, MF rent map | `.claude/skills/llm-pipelines` |
 | Running / debugging scrapers, adding a field, fixtures, reading logs | `.claude/skills/scraper-ops` |
 | Dashboards, admin panels, apps, tools — interface/UI design craft | `.claude/skills/interface-design` |
 | Full rule rationale, per-portal data sources, territory deep-dives | `docs/architecture.md` |

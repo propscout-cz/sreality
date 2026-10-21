@@ -1,4 +1,4 @@
-/* The Browse "experience": the filter sidebar + Map/Table/Stats tabs + the
+/* The Browse "experience": the filter sidebar + Map/Stats tabs + the
  * map-overlay layers, with all data fetching and transient view-state (hover
  * sync, growth pickers, resizable columns, merge mode, on-card estimates).
  *
@@ -33,7 +33,6 @@ import {
 } from '@/lib/browseLayout';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
 import { FilterSidebar, FilterSidebarRail } from '@/components/Filters';
-import ListingTable from '@/components/ListingTable';
 import ListingCards from '@/components/ListingCards';
 /* The Stats tab (the chart builder, dnd-kit, recharts) is its own chunk: it is a
  * secondary tab, and the first-visit bundle has a budget (scripts/bundle-budget.mjs). */
@@ -76,12 +75,10 @@ import {
   fetchCuratedCityPolygons,
   fetchListingsForCards,
   fetchListingsForMap,
-  fetchListingsForTable,
   fetchBrowseCount,
   orderPortal,
   sortToParam,
   CARD_PAGE_SIZE,
-  TABLE_PAGE_SIZE,
   type CardRow,
   type CityIndexDefinition,
   type CityIndexValue,
@@ -89,8 +86,6 @@ import {
   type CuratedCity,
   type MapResult,
   type SortDirection,
-  type SortField,
-  type TableRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { CardHydrationProvider } from '@/lib/hydration';
@@ -172,14 +167,6 @@ export default function BrowseExperience({
   );
   const [growthChartOnHover, setGrowthChartOnHover] = useState(false);
 
-  const setSortByField = (field: SortField) => {
-    const next =
-      sort.field === field
-        ? { field, direction: (sort.direction === 'asc' ? 'desc' : 'asc') as 'asc' | 'desc' }
-        : { field, direction: defaultDirectionFor(field) };
-    view.setSort(next);
-  };
-
   /* Map flyTo command. Set when the operator picks a place in the District
    * typeahead; ListingMap animates to the new centre. */
   const [mapFlyTo, setMapFlyTo] = useState<MapFlyToCommand | null>(null);
@@ -198,7 +185,7 @@ export default function BrowseExperience({
     });
   }, []);
 
-  /* Hover-sync between cards / table / map. Ephemeral component state. */
+  /* Hover-sync between cards / map. Ephemeral component state. */
   const [hoverState, setHoverState] = useState<{
     ids: ReadonlySet<number>;
     origin: 'map' | 'list' | null;
@@ -400,7 +387,7 @@ export default function BrowseExperience({
   );
 
   /* The ONE canonical cohort total — consumed by the header, the tab badge,
-   * the cards/table "of N" labels, and (as the denominator of its mappable
+   * the cards' "of N" label, and (as the denominator of its mappable
    * subset) the map pill. Enabled on EVERY tab so the number never changes
    * just by switching tabs, and never goes stale-until-refresh because a tab
    * gate suppressed its refetch. Its fetch/error state is surfaced in the
@@ -442,11 +429,16 @@ export default function BrowseExperience({
   const [estimates, setEstimates] = useState<Record<number, ListingEstimate>>(
     {},
   );
+  /* A submit the API refused (a 422 for an ad it cannot place) creates no run,
+   * so nothing in `estimates` would say it failed — the API's sentence is kept
+   * per card instead, until the next attempt. */
+  const [estimateRefusals, setEstimateRefusals] = useState<Record<number, string>>({});
   const requestedEstIdsRef = useRef<Set<number>>(new Set());
   const estimatesEnabled = tab === 'map' && isApiConfigured();
 
   useEffect(() => {
     setEstimates({});
+    setEstimateRefusals({});
     requestedEstIdsRef.current = new Set();
   }, [cardsRestorationKey]);
 
@@ -496,6 +488,18 @@ export default function BrowseExperience({
       }),
     onMutate: (srealityId) => {
       setEstimatingIds((prev) => new Set(prev).add(srealityId));
+      setEstimateRefusals((prev) => {
+        if (!(srealityId in prev)) return prev;
+        const next = { ...prev };
+        delete next[srealityId];
+        return next;
+      });
+    },
+    onError: (err, srealityId) => {
+      setEstimateRefusals((prev) => ({
+        ...prev,
+        [srealityId]: err instanceof Error ? err.message : 'Odhad se nepodařilo spustit',
+      }));
     },
     onSuccess: (run, srealityId) => {
       setEstimates((prev) => ({
@@ -518,16 +522,6 @@ export default function BrowseExperience({
         return next;
       });
     },
-  });
-
-  const table = useInfiniteList<TableRow>({
-    queryKey: browseKeys.table(filters, sort),
-    queryFn: (cursor, signal) =>
-      fetchListingsForTable(filters, sort, cursor as KeysetCursor | null, { signal }),
-    pageSize: TABLE_PAGE_SIZE,
-    getRowId: (r) => r.property_id,
-    enabled: tab === 'table',
-    gcTime: 10 * 60_000,
   });
 
   /* The Stats tab is the account's chart board (components/stats); each card reads
@@ -600,7 +594,6 @@ export default function BrowseExperience({
 
   const tabs: ReadonlyArray<Tab<TabKey>> = [
     { key: 'map', label: 'Properties', badge: cohortTotal?.toLocaleString('cs-CZ') },
-    { key: 'table', label: 'Table' },
     ...(f.stats ? [{ key: 'stats', label: 'Stats' } as Tab<TabKey>] : []),
   ];
 
@@ -608,13 +601,9 @@ export default function BrowseExperience({
    * cards list (cards.error) — a MAP-query failure is surfaced locally over the
    * map (mapError below), never blanking the listings: the two are independent
    * surfaces. */
-  const activeError =
-    tab === 'map' ? cards.error :
-    tab === 'table' ? table.error :
-    null;
+  const activeError = tab === 'map' ? cards.error : null;
   const retryActive = () => {
     if (tab === 'map') cards.refetch();
-    else if (tab === 'table') table.refetch();
   };
   const mapError = mapVisible ? mapQuery.error : null;
 
@@ -673,7 +662,6 @@ export default function BrowseExperience({
             showTitle={f.title}
             loading={
               tab === 'map' ? mapQuery.isLoading || cards.isLoading :
-              tab === 'table' ? table.isLoading :
               tab === 'stats' ? statsFetching > 0 :
               false
             }
@@ -770,6 +758,7 @@ export default function BrowseExperience({
                 merge={mergeMode.active ? mergeMode : null}
                 estimates={estimates}
                 estimatingIds={estimatingIds}
+                estimateRefusals={estimateRefusals}
                 onEstimate={(srealityId) => estimateMut.mutate(srealityId)}
               />
               </CardHydrationProvider>
@@ -846,30 +835,14 @@ export default function BrowseExperience({
           </div>
         )}
 
-        {tab !== 'map' && (
+        {tab === 'stats' && (
           <div className={`px-6 pt-5 pb-8${isModal ? ' flex-1 min-h-0 overflow-y-auto' : ''}`}>
-            {tab === 'table' && (
-              <ListingTable
-                rows={table.isLoading ? null : table.rows}
-                total={cohortTotal}
-                sort={sort}
-                isLoading={table.isLoading}
-                isError={table.isError}
-                isFetchingNextPage={table.isFetchingNextPage}
-                hasNextPage={table.hasNextPage}
-                onReachEnd={table.fetchNextPage}
-                hasFilters={!isDefault(filters)}
-                hoveredIds={hoveredIds}
-                onHover={setHoveredFromList}
-                onSort={setSortByField}
-                onClearFilters={() => view.setFilters(DEFAULT_FILTERS)}
+            <Suspense fallback={<Skeleton height={320} className="my-8" />}>
+              <StatsDashboard
+                filters={filters}
+                onIncludeDismissed={() => view.setFilters({ ...filters, showDismissed: true })}
               />
-            )}
-            {tab === 'stats' && (
-              <Suspense fallback={<Skeleton height={320} className="my-8" />}>
-                <StatsDashboard filters={filters} />
-              </Suspense>
-            )}
+            </Suspense>
           </div>
         )}
 
@@ -905,16 +878,6 @@ function zoomForSuggestionType(type: string): number {
   if (type === 'regional.region') return 8;
   if (type === 'regional.country') return 6;
   return 13;
-}
-
-function defaultDirectionFor(field: SortField): 'asc' | 'desc' {
-  if (
-    field === 'price_czk' ||
-    field === 'area_m2' ||
-    field === 'last_seen_at' ||
-    field === 'first_seen_at'
-  ) return 'desc';
-  return 'asc';
 }
 
 /* One portal's "Newest first" / "Oldest first" (MS19, queries.ts orderPortal), named in

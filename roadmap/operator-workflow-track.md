@@ -525,7 +525,8 @@ from Browse, not just from the board.
   `stageAccent`/`stageBadge` replace the per-surface copies — the board fell back
   to grey for an uncoloured stage while the listing header fell back to copper.
   `PipelineFunnelButton` now serves the Browse cards AND the Table (which had no
-  pipeline affordance at all, quietly breaking rule #22's "every surface"), and
+  pipeline affordance at all, quietly breaking rule #22's "every surface"; the Table
+  tab itself was removed 2026-10-20), and
   `usePipelineCard` is the single add/remove/move hook + invalidation policy.
   The Chrome-extension panel mirrors the badge and tints its pill by stage, with
   the tag palette added to its by-value mirror of the SPA tokens.
@@ -550,8 +551,9 @@ from Browse, not just from the board.
   already supported — see architecture rule 21b — and which incidentally fixes
   a control that lied: clicking the selected deal-type pill wrote `deal=null`
   and silently snapped back to `pronajem`.
-- Next: nothing queued here; per-stage columns on the Table and a "days in stage"
-  signal are the obvious follow-ups if the scope gets heavy use.
+- Next: nothing queued here; a "days in stage" signal is the obvious follow-up if
+  the scope gets heavy use. (Per-stage columns on the Table: moot, the Table tab was
+  removed 2026-10-20.)
 
 ### Phase U-PIPE Phase 3i: The funnel opens a stage menu (done)
 The funnel was a toggle: clicking it on a property already in the pipeline
@@ -567,8 +569,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   `property_pipeline.note` is a separate column with no writer.)
 - **One menu, three surfaces.** `PipelineStageMenu` (stage list badged from
   `code`, current stage checked, terminal stages under their own divider, then
-  a two-step remove) is opened by the Browse cards, the Browse table rows AND
-  the listing header — which drops its own `<select>` + bare ✕. Adding stays
+  a two-step remove) is opened by the Browse cards, the Browse table rows (gone
+  with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
   keeps its `<select>` and gains the same confirm on ✕ via a generic

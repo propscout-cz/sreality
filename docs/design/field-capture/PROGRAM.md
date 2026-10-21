@@ -160,7 +160,8 @@ mention "m²"). The investigation (26 agents, critic-checked) found what is actu
   Sb.)", a bare letter on maxima / remax / bezrealitky — the same shape it gives A–F. There is nothing to split on,
   so `energy_rating` stays A–G and the 67 % G share stays what W1 made it: a measure-validity fact the fill matrix
   reports.)* The on-demand URL parser is kept
-  and brought onto the generated vocabulary. `LLM_DAILY_COST_WARN_USD` moves to $15 with the lane.
+  and brought onto the generated vocabulary *(superseded 2026-10-20 by ruling 3 of
+  `docs/design/new-property-from-link.md` — the parser is deleted)*. `LLM_DAILY_COST_WARN_USD` moves to $15 with the lane.
   *(W5 correction: ownership `jine` is the last clause's first real customer. The brief called it "semantically
   absent → NULL"; it is the portals' own "other" bucket — idnes states it three ways ("jiné", "s.r.o.",
   "podílové"), mmreality as "Jiné", bezrealitky as "OSTATNI" — and four of the five used to drop it while realitymix

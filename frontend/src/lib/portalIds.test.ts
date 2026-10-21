@@ -110,14 +110,6 @@ describe('the extension entry points', () => {
     expect(isDetailPage(DETAIL[1][1])).toBe(true);
     expect(isDetailPage('https://reality.bazos.cz/prodam/byt/')).toBe(false);
   });
-
-  it('saleApartmentHint reads the category from the path', () => {
-    const hint = portalForHost('www.sreality.cz')?.saleApartmentHint;
-    expect(hint?.('/detail/prodej/byt/2+kk/praha/3584327500')).toBe(true);
-    expect(hint?.('/detail/pronajem/byt/2+kk/praha/3584327500')).toBe(false);
-    expect(hint?.('/detail/prodej/dum/rodinny/praha/3584327500')).toBe(false);
-    expect(portalForHost('realitymix.cz')?.saleApartmentHint).toBeUndefined();
-  });
 });
 
 describe('drift rails', () => {

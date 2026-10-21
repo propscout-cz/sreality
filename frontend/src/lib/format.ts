@@ -188,17 +188,6 @@ export const fmtRelative = (iso: string | null | undefined): string => {
   return `${Math.round(days / 365)}${THIN_SPACE}yr ago`;
 };
 
-/* Migration 022 fields: the registry's Czech label, '—' for nulls. */
-
-import { enumLabel } from './enums';
-import type { Furnished, Ownership } from './types';
-
-export const fmtFurnished = (f: Furnished | null | undefined): string =>
-  enumLabel('furnished', f) ?? '—';
-
-export const fmtOwnership = (o: Ownership | null | undefined): string =>
-  enumLabel('ownership', o) ?? '—';
-
 export const fmtParkingLots = (n: number | null | undefined): string =>
   n == null ? '—' : `${czNumber.format(n)}${NBSP}${n === 1 ? 'místo' : 'místa'}`;
 

@@ -112,10 +112,6 @@ const RUN = {
   error_message: null,
   parent_run_id: null,
   rerun_reason: null,
-  source_kind: null,
-  parse_confidence: null,
-  parse_confidence_per_field: null,
-  subject_attributes: null,
   cost_usd_total: null,
 } as unknown as EstimationRun;
 

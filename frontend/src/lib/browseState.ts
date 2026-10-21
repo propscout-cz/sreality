@@ -1,6 +1,6 @@
 /* The Browse "view state" contract + its two adapters.
  *
- * `<BrowseExperience>` (the filter sidebar + Map/Table/Stats + map overlays)
+ * `<BrowseExperience>` (the filter sidebar + Map/Stats + map overlays)
  * is driven by this contract instead of reading the URL directly, so the SAME
  * experience powers both the Browse page (URL-backed, shareable links) and the
  * "Explore area" modal (in-memory, seeded from a listing). The two adapters are
@@ -41,7 +41,10 @@ import {
 } from '@/lib/mapOverlays';
 import type { Disposition, FilterPreset, ListingPublic } from '@/lib/types';
 
-export type TabKey = 'map' | 'table' | 'stats';
+export type TabKey = 'map' | 'stats';
+
+/* `?tab=` as a TabKey; anything else (an old `?tab=table` link) opens the map, never a blank page. */
+export const parseTab = (raw: string | null): TabKey => (raw === 'stats' ? 'stats' : 'map');
 
 /* Map-overlay UI knobs. NOT part of the cohort filter spec — they paint
  * layers (city pins, the price-growth choropleth, reference overlays).
@@ -139,7 +142,7 @@ export function useUrlBrowseState(): BrowseViewState {
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = useMemo(() => fromSearchParams(searchParams), [searchParams]);
   const sort = useMemo(() => parseSort(searchParams.get('sort')), [searchParams]);
-  const tab = (searchParams.get('tab') ?? 'map') as TabKey;
+  const tab = parseTab(searchParams.get('tab'));
   /* The live remembered selection: a bare /browse shows what the operator last
    * chose on any map, and this page's own writes survive a navigation that drops
    * the `layers` key. */
@@ -242,9 +245,8 @@ export function useUrlBrowseState(): BrowseViewState {
     (p: FilterPreset) => {
       const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
       const sp = preserveExtras(toSearchParams(pf));
-      const presetSort = ps ?? sortToParam(DEFAULT_SORT);
-      if (presetSort === sortToParam(DEFAULT_SORT)) sp.delete('sort');
-      else sp.set('sort', presetSort);
+      if (ps === sortToParam(DEFAULT_SORT)) sp.delete('sort');
+      else sp.set('sort', ps);
       sp.set('preset', p.id);
       setSearchParams(sp, { replace: false });
     },
@@ -300,7 +302,7 @@ export function useMemoryBrowseState(init: {
       loadPreset: (p) => {
         const { filters: pf, sort: ps } = readPresetSpec(p.filter_spec);
         setFiltersState(pf);
-        if (ps) setSortState(parseSort(ps));
+        setSortState(parseSort(ps));
       },
       loadPipelineView: () => {
         setFiltersState(pipelineViewFilters());

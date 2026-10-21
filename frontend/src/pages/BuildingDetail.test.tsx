@@ -24,10 +24,6 @@ const building: BuildingRun = {
     lat: 50.08, lng: 14.42, area_m2: null, disposition: null,
     floor: null,
   },
-  source_kind: 'sreality',
-  parse_confidence: 'high',
-  parse_confidence_per_field: null,
-  source_html: null,
   subject_summary: { fields: { locality: 'Praha 5', lat: 50.08, lng: 14.42 } } as never,
   units_proposal: null,
   units: [

@@ -121,13 +121,13 @@ describe('the registry walk', () => {
     const rows = sheetBands(HOUSES_FOR_SALE).map((b) => [b.title, b.groups.flatMap((g) => g.rows.map((r) => r.key))]);
     expect(rows).toEqual([
       ['Essentials', [
-        'category_type', 'status', 'tom_observed_only', 'category_main_in', 'subtype', 'districts',
+        'category_type', 'status', 'tom_observed_only', 'show_dismissed', 'category_main_in', 'subtype', 'districts',
         'min_price_czk', 'min_price_per_m2', 'recently_added_days', 'recently_changed_days', 'ownership',
         'include_no_price', 'dispositions', 'min_area_m2', 'min_estate_area', 'min_usable_area',
         'condition_match', 'building_material', 'furnished',
         'has_balcony', 'has_lift', 'has_parking', 'terrace', 'cellar', 'garage', 'min_parking_lots',
       ]],
-      ['Curation', ['show_dismissed', 'pipeline', 'collections', 'tags', 'portals', 'with_estimates']],
+      ['Curation', ['pipeline', 'collections', 'tags', 'portals', 'with_estimates']],
       ['Velocity & price activity', [
         'price_change_count_min', 'price_change_window_days', 'total_price_change_pct',
         'first_seen_min_days', 'last_seen_min_days', 'tom_days_min',
@@ -276,6 +276,18 @@ describe('the footer', () => {
     await user.click(within(sheet()).getByRole('button', { name: 'Price: low → high' }));
     await user.click(await within(sheet()).findByRole('button', { name: /^Zobrazit/ }));
     expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'price_czk', direction: 'asc' });
+  });
+
+  /* One menu on every surface: the Řazení row is CARD_SORTS. */
+  it('offers area both ways and last seen, and applies the one picked', async () => {
+    const user = userEvent.setup();
+    const { onApply } = renderSheet();
+    await user.click(within(sheet()).getByRole('button', { name: /^Řazení/ }));
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od nejmenší' })).toBeInTheDocument();
+    expect(within(sheet()).getByRole('button', { name: 'Plocha: od největší' })).toBeInTheDocument();
+    await user.click(within(sheet()).getByRole('button', { name: 'Naposledy viděno' }));
+    await user.click(await within(sheet()).findByRole('button', { name: /^Zobrazit/ }));
+    expect(onApply.mock.calls[0][0].sort).toEqual({ field: 'last_seen_at', direction: 'desc' });
   });
 
   it("Vymazat returns the draft to the scope's own filters", async () => {

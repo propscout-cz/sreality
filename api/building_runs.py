@@ -1,11 +1,8 @@
 """Persistence + orchestration for /buildings endpoints.
 
 B0 shipped schemas + read endpoints + a minimal POST that inserts a
-`status='pending'` shell. B1 adds the operator-facing
-`POST /buildings/from_url` (which routes the URL through the
-dispatcher, runs the extractor synchronously, lands in
-`awaiting_input`), `POST /buildings/{id}/confirm_units` (the
-human-in-the-loop gate that promotes the row to `estimating`), and
+`status='pending'` shell. B1 adds `POST /buildings/{id}/confirm_units`
+(the human-in-the-loop gate that promotes the row to `estimating`) and
 `POST /buildings/{id}/re_extract` (force-refresh while in
 `awaiting_input`).
 
@@ -29,7 +26,6 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from api import schemas as s
-from scraper import source_dispatcher
 from toolkit import building_extraction
 from toolkit.building_extraction import BuildingExtractionError
 
@@ -41,17 +37,10 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
-# Building flow accepts these category_main values. Apartments
-# ('byt') don't decompose — those go through /estimations instead.
-_BUILDING_CATEGORIES = frozenset({"dum", "komercni"})
-
-
 _BUILDING_COLUMNS: tuple[str, ...] = (
     "id", "created_at",
     "source", "status",
     "input_url", "input_sreality_id", "input_spec",
-    "source_kind", "parse_confidence", "parse_confidence_per_field",
-    "source_html",
     "subject_summary",
     "units_proposal", "units",
     "total_rent_p25_czk", "total_rent_p50_czk", "total_rent_p75_czk",
@@ -71,7 +60,7 @@ _INSERT_COLUMNS: tuple[str, ...] = tuple(
 )
 
 _JSONB_COLUMNS: tuple[str, ...] = (
-    "input_spec", "parse_confidence_per_field",
+    "input_spec",
     "subject_summary",
     "units_proposal", "units",
     "business_case",
@@ -89,11 +78,7 @@ _CHILD_COLUMNS: tuple[str, ...] = (
 def create_building_run(
     conn: "psycopg.Connection", body: s.CreateBuildingIn,
 ) -> dict[str, Any]:
-    """B0 minimal: insert a 'pending' shell, return the row.
-
-    Kept for backwards-compat with existing API consumers. B1's
-    operator-facing entry is `create_building_run_from_url`.
-    """
+    """B0 minimal: insert a 'pending' shell, return the row."""
     building_id = _insert_building(
         conn,
         source=body.source,
@@ -101,10 +86,6 @@ def create_building_run(
         input_url=body.input_url,
         input_sreality_id=None,
         input_spec=None,
-        source_kind=None,
-        parse_confidence=None,
-        parse_confidence_per_field=None,
-        source_html=None,
         subject_summary=None,
         units_proposal=None,
         units=None,
@@ -121,246 +102,6 @@ def create_building_run(
         contextual_text=None,
     )
     return _fetch_building(conn, building_id) or {}
-
-
-def create_building_run_from_url(
-    conn: "psycopg.Connection",
-    sreality_client: "SrealityClient",
-    llm_client: "LLMClient",
-    body: s.CreateBuildingFromUrlIn,
-    background_tasks: Any | None = None,
-) -> dict[str, Any]:
-    """B1: parse the URL, INSERT a 'pending' row, schedule extraction as
-    a BackgroundTask, return the row immediately.
-
-    Status transitions:
-      INSERT pending  →  extracting  →  awaiting_input  (success)
-                                    →  failed           (any error)
-
-    The handler returns in ~1 s. The browser navigates to the building
-    detail page, which polls until status reaches awaiting_input / failed.
-
-    Apartment URLs (category_main='byt') are rejected with HTTP 400
-    BEFORE the row is INSERTed — those go through /estimations.
-
-    When `background_tasks` is None, extraction runs inline (preserves
-    behaviour for tests and any caller that wants the row populated
-    before reading it back).
-    """
-    try:
-        result = source_dispatcher.parse_listing_url(
-            body.url,
-            sreality_client=sreality_client,
-            llm_client=llm_client,
-            conn=conn,
-            force_refresh=body.force_refresh,
-        )
-    except source_dispatcher.ParseError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"could not parse {body.url!r}: {exc}",
-        )
-
-    spec = dict(result.spec)
-    category_main = spec.get("category_main")
-    if category_main == "byt":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "this URL parses as an apartment (category_main='byt'); "
-                "use POST /estimations instead — the building flow only "
-                "decomposes houses ('dum') and commercial buildings ('komercni')"
-            ),
-        )
-    if category_main not in _BUILDING_CATEGORIES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"unsupported category_main={category_main!r} for the "
-                f"building flow; expected one of {sorted(_BUILDING_CATEGORIES)}"
-            ),
-        )
-
-    subject_summary = _subject_summary_from_parse(result, spec)
-
-    building_id = _insert_building(
-        conn,
-        source=body.source,
-        status="pending",
-        input_url=body.url,
-        input_sreality_id=result.sreality_id,
-        input_spec=spec,
-        source_kind=result.source_kind,
-        parse_confidence=result.parse_confidence,
-        parse_confidence_per_field=result.parse_confidence_per_field,
-        source_html=result.source_html,
-        subject_summary=subject_summary,
-        units_proposal=None,
-        units=None,
-        total_rent_p25_czk=None,
-        total_rent_p50_czk=None,
-        total_rent_p75_czk=None,
-        total_sale_p25_czk=None,
-        total_sale_p50_czk=None,
-        total_sale_p75_czk=None,
-        business_case=None,
-        warnings=list(result.warnings) or None,
-        error_message=None,
-        special_instructions=body.special_instructions,
-        contextual_text=body.contextual_text,
-    )
-
-    if result.sreality_id is None:
-        _update_building_fields(
-            conn, building_id,
-            status="failed",
-            error_message=(
-                "building-flow URL did not yield a sreality_id; B1 "
-                "extractor needs a persisted listing snapshot to read"
-            ),
-        )
-        return _fetch_building(conn, building_id) or {}
-
-    if background_tasks is not None:
-        background_tasks.add_task(
-            _execute_building_extraction_background,
-            building_id=building_id,
-            sreality_id=int(result.sreality_id),
-            parse_warnings=list(result.warnings),
-            subject_summary=subject_summary,
-            special_instructions=body.special_instructions,
-            contextual_text=body.contextual_text,
-        )
-        return _fetch_building(conn, building_id) or {}
-
-    _execute_building_extraction(
-        conn, llm_client,
-        building_id=building_id,
-        sreality_id=int(result.sreality_id),
-        parse_warnings=list(result.warnings),
-        subject_summary=subject_summary,
-        special_instructions=body.special_instructions,
-        contextual_text=body.contextual_text,
-    )
-    return _fetch_building(conn, building_id) or {}
-
-
-def _execute_building_extraction_background(
-    *,
-    building_id: int,
-    sreality_id: int,
-    parse_warnings: list[str],
-    subject_summary: dict[str, Any] | None,
-    special_instructions: str | None,
-    contextual_text: str | None,
-) -> None:
-    """Background-task entry: open a fresh connection + LLM client and
-    run the extractor. Any uncaught exception flips the row to 'failed'.
-    """
-    from api import dependencies as deps
-
-    try:
-        with deps.open_background_conn() as conn:
-            from api.llm_client import LLMClient
-            llm_client = LLMClient(conn, providers=deps.get_providers())
-            _execute_building_extraction(
-                conn, llm_client,
-                building_id=building_id,
-                sreality_id=sreality_id,
-                parse_warnings=parse_warnings,
-                subject_summary=subject_summary,
-                special_instructions=special_instructions,
-                contextual_text=contextual_text,
-            )
-    except Exception as exc:
-        LOG.exception(
-            "background building extraction %s crashed", building_id,
-        )
-        try:
-            with deps.open_background_conn() as conn:
-                _update_building_fields(
-                    conn, building_id,
-                    status="failed",
-                    error_message=(
-                        f"background crash: {type(exc).__name__}: {exc}"
-                    )[:1000],
-                )
-        except Exception:
-            LOG.exception(
-                "failed to mark building %s failed after background crash",
-                building_id,
-            )
-
-
-def _execute_building_extraction(
-    conn: "psycopg.Connection",
-    llm_client: "LLMClient",
-    *,
-    building_id: int,
-    sreality_id: int,
-    parse_warnings: list[str],
-    subject_summary: dict[str, Any] | None,
-    special_instructions: str | None,
-    contextual_text: str | None,
-) -> None:
-    """Run the extractor for an already-INSERTed pending row."""
-    _update_building_fields(conn, building_id, status="extracting")
-    attachments = _fetch_attachments(conn, building_id)
-
-    try:
-        envelope = building_extraction.extract_building_units(
-            conn,
-            llm_client,
-            sreality_id=sreality_id,
-            special_instructions=special_instructions,
-            contextual_text=contextual_text,
-            attachments=attachments or None,
-        )
-    except BuildingExtractionError as exc:
-        LOG.warning(
-            "building_runs[%s] extraction failed: %s", building_id, exc,
-        )
-        _update_building_fields(
-            conn, building_id,
-            status="failed",
-            error_message=f"extraction failed: {exc}",
-        )
-        return
-    except Exception as exc:  # noqa: BLE001
-        LOG.exception(
-            "building_runs[%s] unexpected extractor error", building_id,
-        )
-        _update_building_fields(
-            conn, building_id,
-            status="failed",
-            error_message=f"unexpected extractor error: {exc}",
-        )
-        return
-
-    payload = envelope["data"]
-    proposal = {
-        "units": payload["units"],
-        "building": payload["building"],
-        "confidence": payload["confidence"],
-        "warnings": payload["warnings"],
-        "n_images": payload["n_images"],
-        "model": payload["model"],
-        "cost_usd": payload["cost_usd"],
-        "snapshot_id": payload["snapshot_id"],
-    }
-    merged_subject_summary = {
-        **(subject_summary or {}),
-        "building": payload["building"],
-    }
-    merged_warnings = list(parse_warnings) + list(payload.get("warnings") or [])
-
-    _update_building_fields(
-        conn, building_id,
-        status="awaiting_input",
-        units_proposal=proposal,
-        subject_summary=merged_subject_summary,
-        warnings=merged_warnings or None,
-    )
 
 
 # --- B2 orchestrator: per-unit fan-out + rollup ----------------------------
@@ -487,9 +228,9 @@ def _run_building_estimations(
 def _building_latlng(
     row: dict[str, Any],
 ) -> tuple[float | None, float | None]:
-    """Pull the subject coordinates from the parse output. Prefer the
-    compact subject_summary.fields (what the UI shows); fall back to the
-    full input_spec.
+    """Pull the subject coordinates: prefer the compact
+    subject_summary.fields (what the UI shows); fall back to the full
+    input_spec.
     """
     def _coord(d: dict[str, Any] | None, key: str) -> float | None:
         if not isinstance(d, dict):
@@ -900,41 +641,6 @@ def list_building_runs(
         "total": total,
         "limit": limit,
         "offset": offset,
-    }
-
-
-def _subject_summary_from_parse(
-    result: "source_dispatcher.ParseResult",
-    spec: dict[str, Any],
-) -> dict[str, Any]:
-    """Compact display summary stored on building_runs.subject_summary.
-
-    Mirrors estimation_runs' subject_summary shape — the data the UI
-    renders at the top of the detail page when the operator first
-    sees the building. Keep it lean; full parse data lives in
-    `input_spec` and `source_html`.
-    """
-    fields_of_interest = (
-        "category_main", "category_type", "locality", "district",
-        "lat", "lng", "area_m2", "estate_area", "usable_area",
-        "building_type", "condition", "energy_rating", "ownership",
-        "price_czk", "price_unit",
-    )
-    parsed_fields: dict[str, Any] = {}
-    fx = result.full_extraction
-    for key in fields_of_interest:
-        if key in spec and spec.get(key) is not None:
-            parsed_fields[key] = spec[key]
-            continue
-        if fx is not None and key in fx:
-            env = fx[key]
-            if isinstance(env, dict) and "value" in env:
-                parsed_fields[key] = env["value"]
-    return {
-        "source_url": result.source_url,
-        "source_kind": result.source_kind,
-        "sreality_id": result.sreality_id,
-        "fields": parsed_fields,
     }
 
 
