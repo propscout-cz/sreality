@@ -83,13 +83,13 @@ def _sigterm_to_systemexit(signum: int, frame: Any) -> None:
 
 
 # One attach handles at most this many births (a pass, or one turn of the full sweep's loop):
-# all nine portals land new rows NULL, so a backlog after a worker freeze must not birth,
+# every portal lands new rows NULL, so a backlog after a worker freeze must not birth,
 # recompute and browse-sync everything in one transaction. No ORDER BY, so the planner keeps
 # listings_property_id_idx; NEW_SINGLETONS_SQL sorts the ids anyway.
 STRAGGLER_BATCH = 2000
 _STRAGGLERS_SQL = "SELECT id FROM listings WHERE property_id IS NULL LIMIT %(limit)s"
 
-# MS19: one date per portal Browse offers (`PORTAL_OPTIONS`; migration 588 holds the columns), the
+# MS19: one date per portal Browse offers (`PORTAL_OPTIONS`; migrations 588 and 648 hold the columns), the
 # first sighting of the property's newest advert there, active or not. A portal added to the
 # registry fails tests/test_recompute_property_stats.py until a migration gives it its column.
 # The statement below is an f-string that splices these in: a literal brace in it is doubled.

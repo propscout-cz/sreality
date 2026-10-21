@@ -24,10 +24,40 @@ export const PORTAL_SHORT_LABEL: Record<string, string> = {
   sreality: 'Sreality',
   bazos: 'Bazoš',
   idnes: 'iDNES',
+  web: 'web',
 };
 
 export function portalShort(source: string): string {
   return PORTAL_SHORT_LABEL[source] ?? portalLabel(source) ?? source;
+}
+
+/* The portals whose adverts live on many sites (`web`: any other site, one pasted
+ * advert at a time). Their tag on an advert names the advert's own host, read off its
+ * stored `source_url`, so the operator still sees which site it is. */
+const HOST_LABELLED: ReadonlySet<string> = new Set(['web']);
+
+/* The host an advert's stored URL names, without `www.`; null when there is none. */
+export function advertHost(sourceUrl: string | null | undefined): string | null {
+  if (!sourceUrl) return null;
+  try {
+    return new URL(sourceUrl).hostname.replace(/^www\./, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+/* THE tag of one advert on a card or a row: its portal's name, or the advert's host for
+ * a portal whose adverts live on many sites. `form` keeps each surface's register —
+ * 'short' for compact chrome (portalShort), 'long' for the registry label. A portal
+ * code with no advert behind it (a filter chip, a health row) keeps portalShort. */
+export function portalBadge(
+  source: string,
+  sourceUrl?: string | null,
+  form: 'short' | 'long' = 'short',
+): string {
+  const host = HOST_LABELLED.has(source) ? advertHost(sourceUrl) : null;
+  if (host) return host;
+  return form === 'short' ? portalShort(source) : (portalLabel(source) ?? source);
 }
 
 /* The portal filter's three values (MS19 + migration 597): the portals a property

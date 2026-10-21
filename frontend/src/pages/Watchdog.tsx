@@ -25,7 +25,7 @@ import {
   fmtCzk,
   fmtRelative,
 } from '@/lib/format';
-import { portalShort } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import { listingKindLabel } from '@/lib/enums';
 import { listingPath } from '@/lib/listingUrl';
 import type {
@@ -553,7 +553,7 @@ function PortalCell({
   if (!dispatch.source) {
     return <span className="text-[var(--color-ink-4)]">—</span>;
   }
-  const label = portalShort(dispatch.source);
+  const label = portalBadge(dispatch.source, dispatch.source_url);
   const onClick = () => {
     if (unread) onMarkSeen(dispatch.id);
   };

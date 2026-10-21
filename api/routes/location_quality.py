@@ -27,16 +27,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api import dependencies as deps
+from location_data.claims_common import SOURCES
 from toolkit import location_quality
 
 router = APIRouter(
     prefix="/location", tags=["location"], dependencies=[Depends(deps.require_admin)]
 )
 
-_KNOWN_SOURCES = frozenset({
-    "sreality", "bazos", "bezrealitky", "idnes", "mmreality", "remax",
-    "ceskereality", "realitymix", "maxima",
-})
+# The location program's wanted sources, spelled once (the SPA's picker lists the same set).
+_KNOWN_SOURCES = frozenset(SOURCES)
 
 
 def _check_source(source: str) -> str:

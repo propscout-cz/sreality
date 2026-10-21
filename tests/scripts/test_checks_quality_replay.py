@@ -246,6 +246,7 @@ import statistics
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
+from unittest import mock
 
 from location_data.claims_common import SOURCES
 from scraper import field_census
@@ -370,14 +371,25 @@ def _pass() -> Iterator[None]:
         clock.PASS.reset()
 
 
+@functools.cache
+def _fleet() -> tuple[str, ...]:
+    """The portals the recorded window held. Every portal onboarded since is absent from these
+    fixtures, so the replay judges the fleet it recorded, never a later portal as one gone dark."""
+    fleet = tuple(sorted({row["source"] for row in _fixture("health_quality_measure_view_now.csv")}))
+    assert set(fleet) <= set(SOURCES)
+    return fleet
+
+
 def _replay(ticks: list[_dt.datetime], check: Callable[..., dict[str, Any]],
             answers: Callable[[_dt.datetime, _History], dict[str, Any]]) -> list[_Result]:
     """`check` at each tick on its rows, each result stored before the next tick reads it."""
     history = _History()
-    for at in ticks:
-        with _pass():
-            result = check(_Conn({**history.answers(), **answers(at, history)}, now=at), THRESHOLDS)
-        history.store(at, result)
+    with mock.patch.object(qu, "SOURCES", _fleet()):
+        for at in ticks:
+            with _pass():
+                result = check(_Conn({**history.answers(), **answers(at, history)}, now=at),
+                               THRESHOLDS)
+            history.store(at, result)
     return history.results
 
 
@@ -573,7 +585,7 @@ def _url_rows() -> list[tuple[Any, ...]]:
     active: dict[str, int] = {}
     for row in _view_now():
         active[row["source"]] = active.get(row["source"], 0) + row["n_active"]
-    return [(s, active[s], 11 if s == "sreality" else 0, 0) for s in sorted(SOURCES)]
+    return [(s, active[s], 11 if s == "sreality" else 0, 0) for s in _fleet()]
 
 
 def _quality_view(at: _dt.datetime) -> list[tuple[Any, ...]]:

@@ -10,9 +10,10 @@ from scraper.image_storage import R2_ENV_VARS, image_key, is_configured
 class _StreamResp:
     """Minimal stand-in for a streamed requests.Response (context manager)."""
 
-    def __init__(self, content: bytes, headers: dict | None = None) -> None:
+    def __init__(self, content: bytes, headers: dict | None = None, status: int = 200) -> None:
         self._content = content
         self.headers = headers or {}
+        self.status_code = status
 
     def __enter__(self) -> "_StreamResp":
         return self
@@ -32,7 +33,9 @@ def _patch_get(monkeypatch, captured: list, resp: _StreamResp) -> None:
     import scraper.image_storage as image_storage
 
     class _Session:
-        def get(self, url, timeout=15.0, stream=False):
+        # scraper.egress sends every direct fetch as a non-following streamed request.
+        def request(self, method, url, *, headers, timeout, stream, allow_redirects):
+            assert (method, stream, allow_redirects) == ("GET", True, False)
             captured.append(url)
             return resp
 
@@ -302,7 +305,11 @@ def _patch_session(monkeypatch, calls: list, hop: _Hop, resp: _StreamResp):
     class _Session:
         def get(self, url, timeout=15.0, stream=False, allow_redirects=True, proxies=None):
             calls.append((url, allow_redirects, proxies))
-            return hop if proxies else resp
+            return hop
+
+        def request(self, method, url, *, headers, timeout, stream, allow_redirects):
+            calls.append((url, allow_redirects, None))
+            return resp
 
     monkeypatch.setattr(image_storage, "_session", lambda: _Session())
 
@@ -319,7 +326,7 @@ def test_a_proxied_redirector_is_resolved_through_the_proxy_and_the_file_fetched
     proxies = {"http": "http://proxy.example", "https": "http://proxy.example"}
     url = "https://reality.idnes.cz/file/thumbnail/6ac5?profile=front_detail_article_big_fit"
     assert image_storage.download_image(url, proxies=proxies) == b"jpegbytes"
-    assert calls == [(url, False, proxies), (static, True, None)]
+    assert calls == [(url, False, proxies), (static, False, None)]
 
 
 def test_a_proxied_site_that_serves_the_bytes_itself_is_read_through_the_proxy(monkeypatch):
@@ -341,3 +348,59 @@ def test_a_proxied_hop_raises_its_status_like_any_fetch(monkeypatch):
     _patch_session(monkeypatch, calls, _Hop(403), _StreamResp(b""))
     with pytest.raises(requests.HTTPError):
         image_storage.download_image("https://www.portal.cz/img/1.jpg", proxies={"https": "http://p"})
+
+
+def test_the_image_session_is_the_egress_one() -> None:
+    """Image URLs are page-supplied and their bytes reach the open /images proxy: every
+    direct connection is resolved, checked and pinned (scraper.egress)."""
+    import scraper.image_storage as image_storage
+    from scraper import egress
+
+    image_storage._SESSION = None
+    session = image_storage._session()
+    assert isinstance(session.get_adapter("https://cdn.example/x.jpg"), egress._PinnedAdapter)
+    assert session.trust_env is False
+    image_storage._SESSION = None
+
+
+def test_an_image_url_on_a_private_address_is_never_fetched(monkeypatch) -> None:
+    import scraper.image_storage as image_storage
+    from scraper import egress
+
+    calls: list = []
+    _patch_get(monkeypatch, calls, _StreamResp(b"secret"))
+    with pytest.raises(egress.EgressRefused):
+        image_storage.download_image("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(egress.EgressRefused):
+        image_storage.download_image("http://169.254.169.254/x.jpg", proxies={"http": "http://p"})
+    assert calls == []
+
+
+def test_a_redirect_to_a_private_address_is_refused_at_the_hop(monkeypatch) -> None:
+    import scraper.image_storage as image_storage
+    from scraper import egress
+
+    calls: list = []
+    _patch_get(monkeypatch, calls, _StreamResp(b"", headers={"Location": "http://10.0.0.7/x.jpg"}, status=302))
+    with pytest.raises(egress.EgressRefused):
+        image_storage.download_image("https://cdn.example/x.jpg")
+    assert calls == ["https://cdn.example/x.jpg"]
+
+
+@pytest.mark.parametrize("status, gone, dead", [(404, True, False), (410, True, False),
+                                               (400, False, True), (415, False, True),
+                                               (403, False, False), (503, False, False)])
+def test_an_error_status_raises_like_raise_for_status(monkeypatch, status, gone, dead) -> None:
+    """The HTTPError carries a response with the status: the image phase reads it to tell an
+    expired URL (gone) and a dead one (permanent) from a throttle or an outage (transient)."""
+    import requests
+
+    import scraper.image_storage as image_storage
+    from scraper.main import _is_dead_url_image_error, _is_gone_image_error
+
+    _patch_get(monkeypatch, [], _StreamResp(b"", status=status))
+    with pytest.raises(requests.HTTPError) as exc:
+        image_storage.download_image("https://cdn.example/x.jpg")
+    assert exc.value.response is not None and exc.value.response.status_code == status
+    assert _is_gone_image_error(exc.value) is gone
+    assert _is_dead_url_image_error(exc.value) is dead

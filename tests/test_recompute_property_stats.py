@@ -1425,10 +1425,9 @@ def test_one_newest_ad_date_per_offered_portal_and_the_two_portal_lists():
 
 def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
     """MS19 (migration 590): a PORTAL_OPTIONS code is a portal Browse can order by only when
-    the latest browse_projection projects its date (after the two lists and the ad count, in
-    PORTAL_OPTIONS order) and the latest rebuild_browse_list builds and renames its partial
-    index. With the properties column above, a tenth portal needs all three before it can be
-    offered."""
+    the latest browse_projection projects its date and the latest rebuild_browse_list builds
+    and renames its partial index. With the properties column above, a portal needs all three
+    before it can be offered — the tenth (`web`) got them from migration 648."""
     from tests.migration_defs import latest_definition
     from tests.test_browse_read_path_guardrail import _latest_migration_defining
     from tests.test_location_w3_projection import _columns, _sql
@@ -1437,12 +1436,21 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
     codes = [o.value for o in PORTAL_OPTIONS]
     view = _latest_migration_defining("browse_projection").name
     columns = _columns(_sql(view), "browse_projection")
-    # One contiguous block, in PORTAL_OPTIONS order; later columns may follow it (584's recipe
-    # appends every new projection column LAST, so the block cannot be pinned to the end).
+    # 590's nine are one contiguous block after the two lists and the ad count. Every portal
+    # since is appended LAST (584's recipe: browse_list can only grow at its end, and
+    # sync_browse_list's insert is positional), so each later date follows the block, in
+    # PORTAL_OPTIONS order, with other appended columns allowed between.
+    first, later = codes[:9], codes[9:]
     at = columns.index("all_sources")
-    assert columns[at:at + len(codes) + 3] == [
-        "all_sources", "active_sources", "source_count", *(f"newest_ad_at_{c}" for c in codes)]
-    rebuild = " ".join(latest_definition("rebuild_browse_list").read_text(encoding="utf-8").split())
+    assert columns[at:at + len(first) + 3] == [
+        "all_sources", "active_sources", "source_count", *(f"newest_ad_at_{c}" for c in first)]
+    after = columns[at + len(first) + 3:]
+    assert [c for c in after if c.startswith("newest_ad_at_")] == [
+        f"newest_ad_at_{c}" for c in later]
+    # The function's own body: a migration's gates may name the index too (648's do).
+    text = " ".join(latest_definition("rebuild_browse_list").read_text(encoding="utf-8").split())
+    at = text.lower().index("create or replace function public.rebuild_browse_list(")
+    rebuild = text[at:text.index("$function$;", at)]
     for c in codes:
         assert (f"create index browse_list_next_newest_ad_at_{c}_idx on browse_list_next "
                 f"(category_main, category_type, newest_ad_at_{c} desc, property_id desc) "
