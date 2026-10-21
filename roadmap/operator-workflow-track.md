@@ -44,6 +44,13 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
 - [ ] **Next:** W2b the API matcher goes (lease, readers, gates; Migration B) · W5 the phone bell, badge and switch (R4)
       and the on-device proof (your iPhone, a second account) · W6 the one destructive prune, backup first (R8; drops
       `dedupe_key`, its UNIQUE and `trigger_snapshot_id`).
+- [ ] **W5a (built 2026-10-21, stacked on W1; done when merged)** — the phone surfaces that need no push plumbing
+      (R4, F9): one unread observer in Shell for both frames and the page (`lib/unreadCount`), the app-icon badge
+      from it, the phone header's bell beside Účet, and /notifications at phone width (one page, `max-md:`).
+- [ ] **Next:** W2 one clock in the worker (the notifications lane; R6) · W3 one event identity (the unique index
+      replaces the dedupe key) · W4 push plumbing, dark (VAPID, the push ledger, /push routes; R7, R11) · W5b the
+      account sheet's switch, usePush and the identity binding (after W4) · W6 the one destructive prune, backup
+      first (R8).
 
 ### Phase U-NEW-PROPERTY: a property from a pasted ad link (in progress, 2026-10-20)
 

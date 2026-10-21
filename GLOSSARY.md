@@ -403,6 +403,15 @@ _Avoid_: connector, extension, integration
 The platform's web app installed on a phone's home screen: the same app in a phone-sized shell.
 _Avoid_: PWA (in prose), mobile app, native app, companion app
 
+**Bell**:
+The way into a user's notifications, with the count of their unread ones: the Notifications entry
+in the desktop top bar, the bell in the phone app's header.
+_Avoid_: inbox, notification centre
+
+**App badge**:
+The number on the phone app's home-screen icon: the same unread count the bell shows.
+_Avoid_: icon badge, push badge
+
 **Reference overlay**:
 A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF
 rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never

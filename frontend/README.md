@@ -171,8 +171,12 @@ cross-origin rule.
 Under 768 px wide, `Shell.tsx` renders the routes inside the phone frame
 (`src/components/phone/PhoneShell.tsx`) instead of the desktop top bar:
 an `h-14` header (never taller — the Browse and Pipeline panes pin to
-3.5 rem), a five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
-`/link`) and an account sheet. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
+3.5 rem) with a bell (the unread count, opening `/notifications`), a
+five-tab bar (Nové `/feed`, Pipeline, Sbírky, Makléři, Odkaz
+`/link`) and an account sheet. One unread observer
+(`src/lib/unreadCount.tsx`, mounted by `Shell`) feeds the bell, the
+desktop nav badge, the Notifications page and the installed app's icon
+badge. `usePhoneShell()` (`src/lib/phoneShell.ts`) decides; the
 account sheet's "Desktopová verze" sets a per-device override
 (`localStorage` `sreality.phone.desktopView`) and the desktop account menu's
 "Mobilní verze" clears it. Pages are not forked: a route without a phone
