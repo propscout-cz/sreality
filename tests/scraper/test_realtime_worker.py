@@ -1031,14 +1031,14 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
 
 @pytest.mark.parametrize(("invalid", "failed", "error"), [
     (1, 0, None),
-    (2, 0, "every watchdog's spec was refused (2)"),
+    (2, 0, None),
     (1, 1, "1 of 2 watchdogs failed"),
     (0, 0, None),
 ], ids=["one-refused", "all-refused", "a-statement-failed", "healthy"])
-def test_a_refused_spec_reddens_no_step_unless_every_watchdog_is_refused(
+def test_a_refused_spec_never_reddens_a_step(
         producers: dict[str, Any], invalid: int, failed: int, error: str | None) -> None:
-    """A stored spec the matcher refuses is one account's legacy row (the write routes refuse one
-    since W2a): counted in `last`, never a cell. Every watchdog refused is the compiler's fault."""
+    """A step is red iff a statement raised. A stored spec the matcher refuses is the user's row
+    (the write routes 422 it), counted in `last`, never a cell, even when every watchdog is refused."""
     producers["stats"]["match_once"].update(subscriptions_invalid=invalid,
                                             subscriptions_failed=failed)
     state = rw._new_state()

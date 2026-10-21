@@ -854,8 +854,8 @@ failing rule; the other lanes' `last.errors` count per-item failures inside comp
 A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
 `portal_errors`, and so does a step failing inside the notifications lane (notifications W2a:
 `portal_errors` keyed by step, `watchdog_new` / `price` / `monitor`, so the cell is
-`lane/notifications/<step>` with the step as its `portal`; a statement failure reddens it, a stored
-spec the matcher refuses does not unless every watchdog was refused): Problem once its
+`lane/notifications/<step>` with the step as its `portal`; red iff a statement raised, never for a
+stored spec the matcher refuses, which `last` counts as `subscriptions_invalid`): Problem once its
 `failing_since` is older than max(3 × the lane's interval, 15 min), Watch before. Basis: the lane bounds rest on 7 days of Railway logs read at build; the only
 stored episode is autodedup's 10-02 stall, when the lane showed `failed_passes` 6 while
 `worker_lane_stall` read OK.

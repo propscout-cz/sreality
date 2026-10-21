@@ -2788,17 +2788,13 @@ def _notifications_step(producer: Callable[[Any], dict[str, int]]) -> dict[str, 
 
 
 def _notifications_step_error(stats: dict[str, int]) -> str | None:
-    """The step's cell text, or None while it is healthy. A statement that failed reddens it; a
-    stored spec the matcher refuses does not (the write routes refuse one since W2a, so a stored
-    one is one account's legacy row, counted in `last`), unless every watchdog was refused, which
-    is the compiler's fault, not a spec's."""
-    evaluated = stats.get("subscriptions_evaluated", 0)
+    """The step's cell text, or None while it is healthy: red iff a statement raised. A stored spec
+    the matcher refuses never reddens it, even when every watchdog is refused: it is the user's row
+    (the write routes 422 it, and a compiler regression would 422 every new watchdog, which users
+    see first), counted in `last` as `subscriptions_invalid`, never an ops fact."""
     failed = stats.get("subscriptions_failed", 0)
-    invalid = stats.get("subscriptions_invalid", 0)
     if failed:
-        return f"{failed} of {evaluated} watchdogs failed"
-    if evaluated and invalid == evaluated:
-        return f"every watchdog's spec was refused ({invalid})"
+        return f"{failed} of {stats.get('subscriptions_evaluated', 0)} watchdogs failed"
     return None
 
 
