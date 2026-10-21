@@ -412,6 +412,16 @@ _Avoid_: inbox, notification centre
 The number on the phone app's home-screen icon: the same unread count the bell shows.
 _Avoid_: icon badge, push badge
 
+**Push device**:
+One phone app that can receive a user's notifications as pushes: its push subscription, bound to
+the user signed in on it, ended when that user signs out or another signs in.
+_Avoid_: device token, subscriber, push subscription (in prose)
+
+**Switch**:
+"Oznámení na tomto iPhonu" in the phone app's account sheet: turns this phone into a push device
+for the signed-in user, or stops it being one. There is no other push setting.
+_Avoid_: push preference, channel picker, opt-in
+
 **Reference overlay**:
 A map layer drawn from an outside public dataset — metro routes, flood zones, kraj borders, the MF
 rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never
