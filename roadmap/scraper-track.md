@@ -5,6 +5,30 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
+- **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
+  not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
+  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the four
+  scripts, the six dispatch-only workflows, `listing_condition_scores`, the two
+  `listings.*_condition_level` columns, their data, the Settings per-kraj toggle (a toggle alone
+  runs nothing) and the engine's tests. Retired from every surface: the four
+  `*_condition_level_min/_max` registry filters (Browse sidebar + URL `bld_cond_*`/`apt_cond_*`,
+  Browse RPC args, Watchdog spec + labels + summary chips, comparables, the API request models,
+  the agent's tunables and tool schema; a stored Watchdog spec still deserialises and any value
+  raises via `filter_compiler.RETIRED_FILTERS`), the agent's `target.*_condition_level` facts
+  (`target.condition` stays), and the estimator prompt's level guidance (migration 645, applied
+  BEFORE the code deploy). Saved state changed: none (0 watchdogs, 0 of 7 presets carried them).
+- **Owed:** drop the four dead level parameters from `browse_stats_properties` /
+  `browse_map_cells` after this deploys (597's order: the SPA stopped sending them first).
+- **Done by #1924 (2026-10-21):** `_load_subject_condition` reads the subject by `listings.id`, so a
+  subject from any portal reaches the agent with its `target.condition`.
+- **Resume blockers** (an operator ruling first: which surface may read the levels again): the
+  engine keys on `sreality_id` (cache, selector, propagation), builds its text input from
+  sreality's `raw_json` shape (`text` / `items`, `_build_text_payload`), runs on Anthropic only
+  (`build_batch_request_params`), selects by a full scan of
+  unscored active listings, and every stored level is from 2026-06-18 or earlier (stale against
+  today's snapshots).
+
 ### Health wave 4 — portal checks on the worker; the coverage gate and two slice writers retired (2026-10-19, done)
 - **Done:** the portal alarms move from GitHub to the worker as the `scraping`, `publishing` and
   `delisting` checks and the `coverage` gauge (`docs/design/health-dashboard.md` § 6, wave 4;

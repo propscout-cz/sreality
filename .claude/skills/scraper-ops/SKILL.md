@@ -1,6 +1,6 @@
 ---
 name: scraper-ops
-description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (currently unscheduled) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
+description: Use when running, debugging, or extending the scrapers — triggering the per-portal index-walk/detail-drain workflows, adding a new scraper field without breaking data, refreshing portal HTML fixtures, reading the pipeline logs (INDEX/ENQUEUE/VERIFY/DRAIN/IMAGES line shapes), the always-on real-time worker (probe/drain/images/count-probe/property-maintenance/broker-maintenance/estimation/location-resolve/location-intake-fast/location-refetch/sold-comps/text-extract/health/autodedup/heartbeat lanes), the visual-signal producer jobs (image pHash, CLIP tagging/retag, DINOv3 corpus embedding on RunPod), or the pipeline verification/alerting harness. Also covers condition-scoring (parked) and image-download workflow cadence. Triggers on: index_walk, detail_drain, gh workflow run, delist_policy, presence check, scrape_runs, fixtures, RUN done, a new listings column, onboarding a portal, reading a scrape log, realtime_worker, sold_comps, clip_tag, dinov3_embed_backfill, compute_image_phash, verify_pipeline, health_canary, health_liveness, health lane, job cell, reason line.
 ---
 
 # Scraper operations
@@ -255,24 +255,22 @@ nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip
 walk ONLY above its 2,000-active-row floor (`VERIFY DEFERRED`, in `delist_flip_refusals`); the page must be the row's OWN (a `detail_ref`
 naming another id is dropped). Stop-reason vocabulary: `references/coverage-and-delisting.md`.
 
-**Condition scoring is currently UNSCHEDULED — an intentional pause, not a bug** (PR #730,
-confirmed operator-intentional 2026-07-09; ~56k byt rows unscored is accepted). Don't
-re-enable or backfill without explicit direction. The machinery is otherwise unchanged and
-**batch-driven** when it does run: `condition_score_batches.yml` is the driver (Anthropic
-Message Batches API, 50% cost) — `submit` (previously every 3h) puts the next slice of
-unscored listings in a batch, `ingest` hourly (`35 * * * *`, still live for any in-flight
-batch) polls + persists; one workflow, mode chosen by `github.event.schedule`. The
-synchronous `condition_scores.yml` is a **dispatch-only fallback** — don't schedule both,
-they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
-The scoring model is `app_settings.llm_condition_model` (Haiku today), so batch+Haiku ≈ 25%
-of the original Sonnet-sync cost. The scrape has no scoring phase (its runner left `scraper.main` in C2-2).
-Scoring is **kraj-scoped and reuse-first** (migration 174):
-the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
-`app_settings.condition_scoring_enabled_region_ids` (operator-edited via the Settings page
-"Hodnocení stavu — kraje" toggles; empty = paused; an unresolved listing is parked), and
-`propagate_condition_levels` copies a property's genuine score to its cross-portal siblings
-(`listings.condition_levels_propagated_from` records provenance) before every submit/backfill,
-so a duplicate never re-bills the LLM. `check_llm_health` mirrors the same scope.
+**Condition scoring is PARKED — an intentional pause, not a bug** (crons off since PR #730,
+2026-07-09; last level written 2026-06-18; operator ruling 2026-10-20: "keep the scoring engine
+for now, but make sure it does not impact anything"). Don't re-enable, schedule or backfill
+without explicit direction. Code, tables, the `listings.*_condition_level` columns and their data
+stay; NO surface reads the levels (no filter, agent fact or estimate — rule #14; the four level
+filters are `filter_compiler.RETIRED_FILTERS`). All six condition workflows are dispatch-only:
+`condition_score_batches.yml` (Anthropic Message Batches API, 50% cost; `submit` / `ingest` modes,
+both crons commented out) and the synchronous `condition_scores.yml` fallback — never run both at
+once, they select the same pending listings and the sync scorer doesn't skip in-flight batch rows.
+The scoring model is `app_settings.llm_condition_model` (Haiku). The scrape has no scoring phase
+(its runner left `scraper.main` in C2-2). Scoring is **kraj-scoped and reuse-first** (migration
+174): the selector targets only listings whose resolved kraj (`listing_location.kraj_kod`) is in
+`app_settings.condition_scoring_enabled_region_ids` (the Settings page "Hodnocení stavu — kraje"
+toggles; empty = none; a toggle alone runs nothing), and `propagate_condition_levels` copies a
+property's genuine score to its cross-portal siblings (`listings.condition_levels_propagated_from`
+records provenance) before every submit/backfill. Resume blockers: `roadmap/scraper-track.md`.
 
 **Images** stay decoupled across four workflows (the scrape split has no image phase; the drain only
 records image-URL rows — bytes land in R2 via these jobs). sreality comes through their `SQUARE_1800_JPG` template

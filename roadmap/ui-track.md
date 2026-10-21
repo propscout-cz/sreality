@@ -22,7 +22,7 @@ toolkit work.
   header (Reset, fold arrow) pinned while the filters scroll. Status and "Seen at birth" (was
   "Newly listed only") share one line of buttons; Listing for has no "Vše" pill and Browse
   defaults to Prodej (a link without `deal=` opens on sale; Watchdog and estimation keep their
-  own default). The 1–5 condition scores left both surfaces (scoring is being discontinued).
+  own default). The 1–5 condition scores left both surfaces (scoring is parked, operator 2026-10-20).
 - **Shipped (2026-10-21 follow-up):** Status, "All ads | Seen at birth" and "Show dismissed | Hide
   dismissed" are one block of segmented controls (`SegmentedBar`, the amenities' any/yes/no look,
   now shared); the dismissed switch moved there from Curation. Browse › Stats warns above the
@@ -39,8 +39,8 @@ toolkit work.
   `properties_public` carries the measure.
 - **Next (operator placed them in Advanced, not built):** Energy rating (A–G, needs the Browse read
   model), Has a floor plan (from the image tagger's floor-plan tag), a Broker control (the scope is
-  entry-only today). Owed: removing the condition-scoring program itself (registry ids, columns,
-  rule 14).
+  entry-only today). Condition scoring is PARKED, not removed (operator 2026-10-20: keep the engine,
+  nothing may read its levels): the registry ids retired with migration 645's PR; engine, columns and rule 14 stay.
 
 ### Pipeline sharing surfaces (2026-10-20, migration 641; PR #1908)
 - **Built (merges with W1 #1906 in the window):** the Pipeline tab switches between my board and

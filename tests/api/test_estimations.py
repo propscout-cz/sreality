@@ -1416,13 +1416,10 @@ def test_resolve_input_overrides_a_copy_of_the_ads_spec(monkeypatch):
 
 
 def test_load_subject_condition_keys_on_the_listing_id():
-    conn = _FakeConn(results=[("po_rekonstrukci", 4, 3)])
+    conn = _FakeConn(results=[("po_rekonstrukci",)])
     out = er._load_subject_condition(conn, 777)
     sql, params = conn.executions[0]
     assert "WHERE id = %s" in sql and params == (777,)
-    assert out == {
-        "condition": "po_rekonstrukci",
-        "apartment_condition_level": 4,
-        "building_condition_level": 3,
-    }
+    assert "condition_level" not in sql  # condition scoring is parked (rule 14)
+    assert out == {"condition": "po_rekonstrukci"}
     assert er._load_subject_condition(_FakeConn(), None) is None

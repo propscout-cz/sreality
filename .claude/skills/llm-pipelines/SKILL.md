@@ -51,7 +51,8 @@ calls an LLM must do the same.
   kompletní rekonstrukci") to feed the condition-scoring marker dictionary.
 - `score_listing_condition` (`toolkit/condition_scoring.py`, migration 072, cache
   `listing_condition_scores`) — two-axis building/apartment condition levels (1..5) from the
-  curated rubric + marker dictionary. See architectural rule #14.
+  curated rubric + marker dictionary. PARKED (rule #14): dispatch-only, and no filter, agent fact
+  or estimate reads the levels.
 - `enrich_listing_description` — the post-publication text lane (`toolkit/description_extraction.py`),
   rebuilt by field-capture W7 on the **realtime worker** (lane `text_extract`, constant 300 s, no
   flag / setting / env var). **A field is in scope only once its `Cell.gate.passed` is true** (R7,

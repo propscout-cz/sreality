@@ -47,10 +47,6 @@ const NOT_ON_SHEET: Record<string, string> = {
   category_sub_cb: 'dropped from the sidebar in #300: the registry entry has no options',
   min_garden_area: 'not placed on the desktop sidebar either',
   max_garden_area: 'not placed on the desktop sidebar either',
-  building_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  building_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  apartment_condition_level_min: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
-  apartment_condition_level_max: 'condition scoring discontinued (operator, 2026-10-20): off both surfaces',
 };
 
 /* Every cohort-conditional group open: a house cohort shows Subtype, Prodej shows Yield. */
@@ -176,10 +172,6 @@ const FILLED: ListingFilters = {
   usableAreaMax: 120,
   conditionMatch: ['novostavba', '__unknown__'],
   buildingMaterial: ['cihla'],
-  buildingConditionLevelMin: 2,
-  buildingConditionLevelMax: 4,
-  apartmentConditionLevelMin: 1,
-  apartmentConditionLevelMax: 3,
   priceMin: 2_000_000,
   priceMax: 9_000_000,
   includeNoPrice: true,

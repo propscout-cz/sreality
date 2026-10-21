@@ -79,6 +79,17 @@ RETIRED_FILTERS: Mapping[str, str] = MappingProxyType({
         "~33 s EXTRAPOLATED, CPU-bound ST_DWithin on scalars no index can serve). "
         "Use the migration-142 near_*_min columns."
     ),
+    **{
+        fid: (
+            f"{fid} is retired (operator ruling 2026-10-20, rule 14): condition scoring is "
+            "parked, its 1-5 levels were last written 2026-06-18 for ~4% of properties, and no "
+            "surface filters on them. Use condition_match."
+        )
+        for fid in (
+            "building_condition_level_min", "building_condition_level_max",
+            "apartment_condition_level_min", "apartment_condition_level_max",
+        )
+    },
 })
 
 # One template per sql_kind; `enum_or_unknown` is `_enum_or_unknown_clause`. Pinned to

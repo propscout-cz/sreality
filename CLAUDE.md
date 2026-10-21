@@ -163,11 +163,11 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `building_run_id` + `building_unit_id`; the unit list is operator-curated JSONB. Status:
     `pending → extracting → awaiting_input → estimating → success|failed`; `awaiting_input` is the
     human-in-the-loop gate; `units_proposal` (agent) vs `units` (confirmed) are kept separate.
-14. **Condition scoring is two-axis (building + apartment).** Raw `listings.condition` stays the source;
-    the two derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the
-    `listing_condition_scores` cache (keyed `(sreality_id, snapshot_id)`) are written together by
-    `score_listing_condition` in one latest-wins transaction. Filter on the derived columns, not the
-    coarse `condition_assessment`.
+14. **Condition scoring is two-axis (building + apartment) and PARKED** (last level 2026-06-18; operator ruling 2026-10-20: code,
+    tables, columns, data kept, workflows dispatch-only, and NO surface reads the levels — no filter, agent fact or estimate; resuming
+    is a ruling, blockers on `roadmap/scraper-track.md`). Raw `listings.condition` (11-value canon) is the source and `condition_match`
+    the condition filter; the derived `listings.{building,apartment}_condition_level` (1..5, NULL unscored) + the `listing_condition_scores`
+    cache (keyed `(sreality_id, snapshot_id)`) are written together by `score_listing_condition` in one latest-wins transaction.
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091); grouping is out-of-band, never inline at insert (new rows land
     `property_id` NULL; straggler-attach births a singleton — the worker lane every 30 s, and inside the daily sweep's loop).** Every merge, operator or engine, goes through the **link mechanics**: `toolkit/property_identity.py` is the single merge chokepoint,
     two public writers (`merge_property_set` → a private `_merge_pair` per retired property; `detach_listings`, set-shaped) — it re-points `listings.property_id`,

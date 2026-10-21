@@ -141,13 +141,9 @@ describe('URL round-trip', () => {
       .toEqual(['sreality']);
   });
 
-  it('round-trips the condition-level bounds and price-change filters', () => {
+  it('round-trips the price-change filters', () => {
     const f: ListingFilters = {
       ...DEFAULT_FILTERS,
-      buildingConditionLevelMin: 2,
-      buildingConditionLevelMax: 4,
-      apartmentConditionLevelMin: 3,
-      apartmentConditionLevelMax: 5,
       priceChangeCountMin: 2,
       priceChangeWindowDays: 90,
       totalPriceChangePct: -10,
@@ -165,6 +161,13 @@ describe('URL round-trip', () => {
     // the default state rather than throwing.
     const legacy = new URLSearchParams('drops_min=2&sites_min=2&drop_pct_min=10');
     expect(fromSearchParams(legacy)).toEqual(DEFAULT_FILTERS);
+  });
+
+  it('the retired condition-level bounds degrade silently (condition scoring parked)', () => {
+    const url = new URLSearchParams('bld_cond_min=3&bld_cond_max=5&apt_cond_min=2&apt_cond_max=4');
+    expect(fromSearchParams(url)).toEqual(DEFAULT_FILTERS);
+    const stored = { ...DEFAULT_FILTERS, buildingConditionLevelMin: 3, apartmentConditionLevelMax: 4 };
+    expect(readPresetSpec(stored as ListingFilters).filters).toEqual(DEFAULT_FILTERS);
   });
 
   it('round-trips the subtype multi-select', () => {

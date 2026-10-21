@@ -1514,22 +1514,38 @@ renumber.** Navigate by area:
     creates only a `pending` shell, and `confirm_units` / `re_extract` need `awaiting_input` — so no
     route leaves `pending` until an operator ruling gives the subsystem a new entry or retires it
     (`roadmap/building-decomposition-track.md`).
-14. **Condition scoring is two-axis (building + apartment).** `listings.condition` (the raw
-    sreality "Stav objektu" enum, ~11 Czech text values) stays as the source field — it's
-    what `listings_public` exposes and what the legacy filter binds against. The two derived
-    columns `listings.building_condition_level` and `apartment_condition_level` (integers
-    1..5, NULL if not yet scored) live alongside it, computed by
+14. **Condition scoring is two-axis (building + apartment), and PARKED.** `listings.condition`
+    is the source field: the multi-portal 11-value canon (`scraper/vocabulary.py`
+    `CANON["condition"]`: projekt … k_demolici), what `listings_public` exposes and what the
+    `condition_match` filter binds against. The two derived columns
+    `listings.building_condition_level` and `apartment_condition_level` (integers 1..5, NULL
+    if not yet scored) live alongside it, computed by
     `toolkit.condition_scoring.score_listing_condition`. The score cache lives in
     `listing_condition_scores`, keyed on `(sreality_id, snapshot_id)` — same
     auto-invalidation pattern as `listing_summaries` / `listing_marker_extractions`. The
     scorer writes the cache row AND updates the two `listings` columns in one transaction
-    with a latest-wins guard so a stale-snapshot scorer can't overwrite a fresher score. The
-    coarse `condition_assessment` produced by `summarize_listing` is for cohort skimming,
-    not authoritative filtering — use the new columns for that. The 5-level rubric lives in
-    `data/condition_rubric_v1.json` (committed) and is loaded into
+    with a latest-wins guard so a stale-snapshot scorer can't overwrite a fresher score;
+    `propagate_condition_levels` copies a genuine score onto same-property siblings. The
+    5-level rubric lives in `data/condition_rubric_v1.json` (committed) and is loaded into
     `app_settings.llm_condition_rubric` by `scripts/seed_condition_settings.py`; the curated
     marker dictionary follows the same pattern via `data/condition_markers_curated.json` →
     `app_settings.llm_condition_marker_dictionary`.
+    **PARKED (operator ruling 2026-10-20: "keep the scoring engine for now, but make sure it
+    does not impact anything").** The crons were paused 2026-07-09 and the last level was
+    written 2026-06-18 (~4% of properties). Code, tables, columns, data and the six
+    dispatch-only workflows are kept, and the Settings per-kraj toggle only scopes a manual
+    run. NO surface reads the levels: the four `*_condition_level_min/_max` filters left the
+    registry (and so Browse, its URL, the Watchdog, every estimation cohort and the agent's
+    tool schema; a saved Watchdog spec still deserialises them, and any value raises via
+    `toolkit/filter_compiler.RETIRED_FILTERS` rather than widening), the agent's first
+    message carries `target.condition` only, and migration 645 took the level guidance out of
+    the estimator prompt. The property rollup still copies the levels into `properties` /
+    `browse_list` (storage; nothing reads them), and the two Browse aggregate RPCs still
+    carry four DEFAULTed level parameters nobody sends (dropped in a later migration, 597's
+    order). Resuming means re-ruling which surface may read the levels; the blockers are
+    owed on `roadmap/scraper-track.md`. Until then `condition_match` is the condition filter,
+    and the coarse `condition_assessment` produced by `summarize_listing` is for cohort
+    skimming, not filtering.
 15. **Multi-portal listings sit behind a thin `properties` parent (migration 091).** Each
     `listings` row carries `(source, source_id_native)` (unique together) plus `source_url`,
     and an FK `property_id` to a `properties` row that groups observations of the same
@@ -1558,8 +1574,8 @@ renumber.** Navigate by area:
     Both seen keys are fixed for the adverts they rank (561's "most recently seen" swapped two
     live adverts on every index sighting and restamped `repr_since`). ONE RULE PER FIELD
     (`docs/design/merge-sprint/PROGRAM.md` MS11): every advert field (price, area with no
-    fallback, layout, category, subtype, source, condition with both derived levels -- rule #14
-    --, furnished) is the canonical advert's, and `repr_listing_ref_id` names it for every read
+    fallback, layout, category, subtype, source, condition with both derived levels -- rule #14,
+    parked: stored, unread --, furnished) is the canonical advert's, and `repr_listing_ref_id` names it for every read
     model (`properties_public.listing_id` IS it). The same statement stores the LOCATION advert,
     `location_listing_ref_id`, rank 1 of the function's `location_rank` (migration 635: a map
     point, then determined foreign, then the finest `location_granularity_rank` rung whatever
@@ -4478,7 +4494,8 @@ entirely for 3.5 h with no run row and no log line. A starved job looks exactly 
   original name, rebuild each matview beside itself and swap it in under a 5s `lock_timeout` — so
   neither the detail read nor the Health dashboard is ever without a relation. The 17 that went had
   no reader anywhere: four typed-NULL placeholders, the ten legacy place columns `display_label`
-  replaced, `broker_name`, and the two condition levels Browse reads off `browse_list`.
+  replaced, `broker_name`, and the two condition levels (Browse read them off `browse_list`
+  until condition scoring was parked, rule #14).
   `portal_listing_counts` stays 8 wide and that is the census result, not a deferral: all eight are
   read by `portal_health_mv`, so it is already minimal.
 * `ScrapedListing` keeps `locality`, `district`, `street`, `house_number`, `zip`, `lat`, `lon` —

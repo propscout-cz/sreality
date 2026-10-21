@@ -59,7 +59,7 @@ it (`api/`). They do not apply to the scraper.
    - `discover_condition_markers`, which writes a structured list of Czech "condition
      markers" to `listing_marker_extractions` (keyed on `(sreality_id, snapshot_id)`) on
      cache miss — feeds the condition-scoring marker dictionary.
-   - `score_listing_condition`, which writes per-listing building/apartment condition levels
+   - `score_listing_condition` (PARKED, rule #14: dispatch-only; nothing reads its levels), which writes per-listing building/apartment condition levels
      (1..5) + matched marker_ids + per-axis confidence to `listing_condition_scores` (keyed
      on `(sreality_id, snapshot_id)`) AND updates the two derived columns on `listings`
      (`building_condition_level`, `apartment_condition_level`) in one transaction, guarded by
