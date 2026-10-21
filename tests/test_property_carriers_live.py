@@ -337,6 +337,20 @@ def test_dispatches_move_and_the_survivors_twin_is_marked_never_deleted(cur, acc
     assert _dispatches(cur, seed["colls"]) == kept
 
 
+def test_a_tap_on_a_merged_duplicate_lands_on_the_survivors_alert(cur, accounts):
+    """mark-seen resolves an id a merge marked a duplicate to the row it duplicates and stamps
+    THAT row: the push for R's 'new' opens S's, read; R's own row stays unseen and hidden."""
+    from api.notifications import mark_dispatch_seen
+
+    seed = _seed_dispatches(cur, accounts)
+    _merged(cur, seed["s"], seed["r"])
+    row = mark_dispatch_seen(cur.connection, str(seed["r_new"]))
+    assert row is not None and row["id"] == str(seed["s_new"]) and row["property_id"] == seed["s"]
+    cur.execute("SELECT id, seen_at IS NOT NULL FROM notification_dispatches WHERE id = ANY(%s)",
+                ([seed["s_new"], seed["r_new"]],))
+    assert dict(cur.fetchall()) == {seed["s_new"]: True, seed["r_new"]: False}
+
+
 def test_a_second_new_after_two_fresh_properties_merge_never_fires(cur, accounts):
     """A watchdog alerted 'new' on R only (S matched later, or never). After the merge R's row
     holds S's 'new' identity, so the producer's next pass over S, the survivor and still fresh,

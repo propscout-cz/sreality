@@ -1063,10 +1063,12 @@ def test_every_in_app_read_count_and_update_carries_visible() -> None:
     badge-vs-list divergence migrations 351/378 exist to close, and a bell that counts a merge's
     marked repeat or a retired watchdog's alert would count an alert the feed never shows."""
     from api.notifications import (
-        VISIBLE_SQL, get_subscription, list_dispatches, list_subscriptions, mark_dispatch_seen,
+        _RESOLVE_DISPATCH_SQL, VISIBLE_SQL, get_subscription, list_dispatches, list_subscriptions,
+        mark_dispatch_seen,
     )
 
-    conn = _FakeConn([])
+    resolve = " ".join(_RESOLVE_DISPATCH_SQL.split())
+    conn = _FakeConn([(lambda s: s == resolve, [("d-1",)], 1)])
     get_unread_count(conn)  # type: ignore[arg-type]
     mark_all_seen(conn)  # type: ignore[arg-type]
     mark_all_seen(conn, source_kind="watchdog")  # type: ignore[arg-type]
@@ -1075,7 +1077,9 @@ def test_every_in_app_read_count_and_update_carries_visible() -> None:
     get_subscription(conn, "s-1")  # type: ignore[arg-type]
     list_subscriptions(conn)  # type: ignore[arg-type]
     mark_dispatch_seen(conn, "d-1")  # type: ignore[arg-type]
-    reads = [s for s, _ in conn.executed if "notification_dispatches" in s]
+    # mark-seen's first statement only resolves the id it was handed (to the row a merge marked it
+    # a duplicate of); the row it stamps and returns is VISIBLE-checked like every other.
+    reads = [s for s, _ in conn.executed if "notification_dispatches" in s and s != resolve]
     assert len(reads) == 11
     for sql in reads:
         assert VISIBLE_SQL in sql, sql
@@ -1095,9 +1099,12 @@ def test_a_hidden_dispatch_is_a_404_on_mark_seen(monkeypatch: pytest.MonkeyPatch
     from api.main import app
     from api.notifications import VISIBLE_SQL, mark_dispatch_seen
 
-    conn = _FakeConn([(lambda s: s.startswith("UPDATE notification_dispatches d"), [], 0)])
+    conn = _FakeConn([
+        (lambda s: s.startswith("SELECT coalesce(d.duplicate_of, d.id)"), [("d-1",)], 1),
+        (lambda s: s.startswith("UPDATE notification_dispatches d"), [], 0),
+    ])
     assert mark_dispatch_seen(conn, "d-1") is None  # type: ignore[arg-type]
-    update, fetch = (s for s, _ in conn.executed)
+    _resolve, update, fetch = (s for s, _ in conn.executed)
     assert update == ("UPDATE notification_dispatches d SET seen_at = now() "
                       f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}")
     assert fetch.endswith(f"WHERE d.id = %s AND {VISIBLE_SQL}")
@@ -1108,6 +1115,29 @@ def test_a_hidden_dispatch_is_a_404_on_mark_seen(monkeypatch: pytest.MonkeyPatch
     finally:
         app.dependency_overrides.pop(tenant_pool.tenant_conn, None)
     assert res.status_code == 404 and res.json() == {"detail": "dispatch not found"}
+
+
+def test_mark_seen_follows_a_duplicate_to_the_row_it_duplicates() -> None:
+    """A push tapped for an alert a merge later marked a duplicate lands on the survivor's alert:
+    the id resolves to coalesce(duplicate_of, id) first, and THAT row is stamped and returned; an
+    id that resolves to nothing (another account's, under RLS) is the route's 404."""
+    from api.notifications import _RESOLVE_DISPATCH_SQL, mark_dispatch_seen
+
+    kept = "22222222-2222-2222-2222-222222222222"
+    conn = _FakeConn([
+        (lambda s: s.startswith("SELECT coalesce(d.duplicate_of, d.id)"), [(UUID(kept),)], 1),
+        (lambda s: s.startswith("UPDATE notification_dispatches d"), [], 1),
+    ])
+    mark_dispatch_seen(conn, "11111111-1111-1111-1111-111111111111")  # type: ignore[arg-type]
+    (resolve, asked), (_update, stamped), (_fetch, read) = conn.executed
+    assert resolve == ("SELECT coalesce(d.duplicate_of, d.id) FROM notification_dispatches d "
+                       "WHERE d.id = %s") == " ".join(_RESOLVE_DISPATCH_SQL.split())
+    assert asked == ("11111111-1111-1111-1111-111111111111",)
+    assert stamped == read == (kept,)
+
+    nothing = _FakeConn([])
+    assert mark_dispatch_seen(nothing, "foreign") is None  # type: ignore[arg-type]
+    assert len(nothing.executed) == 1, "nothing is stamped for an id that resolves to nothing"
 
 
 def test_detection_never_consults_dismissals() -> None:

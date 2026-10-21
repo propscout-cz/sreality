@@ -617,17 +617,33 @@ def _dispatch_row_to_dict(cols: list[str], row: tuple[Any, ...]) -> dict[str, An
     return out
 
 
+# The row a tap on `dispatch_id` stands for: itself, or, for a row a merge marked a duplicate, the
+# row it duplicates (the survivor's, which the carrier keeps flat: one hop). Under RLS a foreign id
+# resolves to nothing.
+_RESOLVE_DISPATCH_SQL = (
+    "SELECT coalesce(d.duplicate_of, d.id) FROM notification_dispatches d WHERE d.id = %s"
+)
+
+
 def mark_dispatch_seen(
     conn: "psycopg.Connection", dispatch_id: str,
 ) -> dict[str, Any] | None:
-    """Mark one visible dispatch seen and return it; None (the route's 404) for a hidden one."""
+    """Mark one visible dispatch seen and return it. An id a merge later marked a duplicate
+    resolves to the row it duplicates first, which is the one stamped and returned, so a tap on an
+    old push lands on the survivor's alert; None (the route's 404) when the resolved row is missing
+    or hidden (VISIBLE_SQL)."""
     with conn.cursor() as cur:
+        cur.execute(_RESOLVE_DISPATCH_SQL, (dispatch_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        target = str(row[0])
         cur.execute(
             "UPDATE notification_dispatches d SET seen_at = now() "
             f"WHERE d.id = %s AND d.seen_at IS NULL AND {VISIBLE_SQL}",
-            (dispatch_id,),
+            (target,),
         )
-    return _fetch_dispatch(conn, dispatch_id)
+    return _fetch_dispatch(conn, target)
 
 
 def _fetch_dispatch(
