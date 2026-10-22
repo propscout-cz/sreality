@@ -7,6 +7,20 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Property page: a header and tabs (2026-10-23, no migration)
+- **Done.** The operator picked design A from four proposals (artifact "Property page redesign") and
+  asked for the brokers' contact on the first tab and the description above "Je cena v pořádku?". The
+  page was thirteen stacked blocks with the photos eighth, under the whole estimation chapter. Now:
+  a header (photo mosaic, identity, map), a "Moje" line (tags, latest note, artifact link), then tabs
+  Přehled · Fotky · Cena a hodnota · Trh v okolí · Inzeráty · Moje · Audit. Přehled answers each
+  question in one card, read from the same query as its tab; the ask sits on the valuation ruler
+  against our estimate's p25–p75 (or Valuo's band). `?tab=` keeps the tab; the old deep links
+  (`?run=`, `#estimations`, `?advert=`, `?letters=`) land on their section's tab. Detail:
+  `docs/architecture.md` § decision 11.
+- **Next (offered, not built):** Czech labels inside the sections that still read English (Estimates'
+  inner headings, Price history's stats, Registered sales, Freshness); photos grouped by room on the
+  Fotky tab.
+
 ### Pipeline compact bar (2026-10-22, no migration)
 - **Done.** The operator picked variant A from a measured comparison (artifact "Hlavička Pipeline", built on the
   live board: 170 cards, 10 stages, 8 collections, 6 tags). One title row (24 px title, the board switcher inline,
