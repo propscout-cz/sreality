@@ -16,7 +16,7 @@ export default function EstimateCard({ eyebrow, aside, tone = 'plain', className
   className?: string;
   children: ReactNode;
 }) {
-  const label = <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-4)]">{eyebrow}</p>;
+  const label = <p className="text-[0.6rem] tracking-[0.16em] uppercase text-[var(--color-ink-3)]">{eyebrow}</p>;
   return (
     <div className={`border ${TONE[tone]} rounded-[var(--radius-sm)] p-3 ${className}`.trim()}>
       {aside ? <div className="flex items-baseline justify-between gap-3">{label}{aside}</div> : label}
@@ -25,8 +25,8 @@ export default function EstimateCard({ eyebrow, aside, tone = 'plain', className
   );
 }
 
-/* A monthly figure's unit, muted after its number. */
-export const PerMonth = () => <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">/měs</span>;
+/* A monthly figure's unit, muted after its number; the runs' English ledger says "/mo" until the one translation pass. */
+export const PerMonth = ({ unit = '/měs' }: { unit?: string }) => <span className="ml-1 text-[0.7rem] text-[var(--color-ink-3)]">{unit}</span>;
 
 /* One label/value line of a card's breakdown; `strong` is its total, over a rule. */
 export function CardRow({ label, strong = false, children }: { label: string; strong?: boolean; children: ReactNode }) {

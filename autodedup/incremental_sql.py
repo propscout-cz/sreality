@@ -826,26 +826,22 @@ update autodedup.rt_fp f
 # refreshed longer ago than `fresh_s`, before the engine the lane runs now (`engine_since`; NULL:
 # no bound), or not at all (no row: fail closed). `updated_at` moves only on a refresh:
 # `RT_FP_DD_SQL` leaves it alone. The row's categories place its group in the re-claim's order
-# (E972: `reconcile.CLAIM_ORDER`), and whether its cluster holds an active advert ranks it above
-# that (E973): over the WHOLE cluster, since a group's only active advert may sit on the property
-# it merges onto, so it is not among the adverts asked (29 of 575 such groups on 2026-10-20).
+# (E972: `reconcile.CLAIM_ORDER`), and its region ranks above them (E974): its live
+# `listing_location` town, which `reconcile.refreshed` places against the scope's town codes its
+# caller hands it (the scope has ONE reader, `reconcile.read_scope`). An advert with no location
+# row has no town: the rest. Whether its cluster holds an active advert is not read: active and
+# inactive groups go together (E974, the operator's ruling of 2026-10-21).
 RT_STALE_SQL = """
 select w.listing_id, f.updated_at,
        (f.listing_id is null
         or f.updated_at < now() - make_interval(secs => %(fresh_s)s::double precision)
         or f.updated_at < coalesce(%(engine_since)s::timestamptz, '-infinity'::timestamptz))
            as stale,
-       f.category_main, f.category_type,
-       exists (select 1
-                 from autodedup.cluster_members m
-                 join autodedup.cluster_members o
-                   on o.generation = m.generation and o.cluster_key = m.cluster_key
-                 join public.listings l on l.id = o.listing_id
-                where m.generation = %(generation)s::text and m.listing_id = w.listing_id
-                  and l.is_active) as active
+       f.category_main, f.category_type, ll.obec_kod
   from unnest(%(listing_ids)s::bigint[]) as w(listing_id)
   left join autodedup.rt_fp f
          on f.generation = %(generation)s::text and f.listing_id = w.listing_id
+  left join public.listing_location ll on ll.listing_id = w.listing_id
  order by w.listing_id
 """
 

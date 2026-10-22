@@ -37,4 +37,10 @@ describe('<ErrorBanner>', () => {
     const rest = 'p-3 rounded-[var(--radius-sm)] border border-[var(--color-brick)]/30 bg-[var(--color-brick-soft)] text-sm text-[var(--color-brick)]';
     expect(screen.getAllByRole('alert').map((el) => el.className)).toEqual([`mt-6 ${rest}`, `mt-0 ${rest}`]);
   });
+
+  it('draws no title when the message says itself what failed', () => {
+    render(<ErrorBanner title={null} message="Valuo neodpovědělo do 20 sekund." />);
+    expect(screen.getByRole('alert').textContent).toBe('Valuo neodpovědělo do 20 sekund.');
+    expect(screen.getByRole('alert').querySelector('strong')).toBeNull();
+  });
 });

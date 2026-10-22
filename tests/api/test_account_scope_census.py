@@ -117,12 +117,6 @@ _HANDROLLED_RESOLVER_ALLOWLIST: dict[str, str] = {
         "291's three-arm policy, so an unresolvable account narrows to `[SYSTEM]` rather "
         "than failing — it never widens, and it never returns empty"
     ),
-    "api/routes/valuo.py::_account": (
-        "both Valuo routes run on the SERVICE-ROLE connection on purpose: the POST holds it across a "
-        "paid call of up to 25 s, and require_account_id's tenant transaction would stay open for all "
-        "of it. `valuo_valuations` is RLS-on with zero policies, so the account predicate is the sole "
-        "gate (tenancy shape 3) — and a None is never carried: this helper 400s on it"
-    ),
 }
 
 

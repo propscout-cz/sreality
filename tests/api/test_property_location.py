@@ -17,6 +17,7 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 from api import dependencies as deps
 from api import main as api_main
+from api import property_location as location
 from api.routes import property_location as pl
 from tests.api._jwt import mint
 
@@ -154,11 +155,11 @@ def test_location_reads_the_location_ad_and_compares_by_rank(client, conn):
 
 def test_precision_steps_follow_the_rank_table_not_fixed_numbers():
     ranks = {"street_rank": 70, "quarter_rank": 55, "obec_rank": 45}
-    assert pl.precision(70, **ranks) == "street"
-    assert pl.precision(60, **ranks) == "quarter"
-    assert pl.precision(45, **ranks) == "town"
-    assert pl.precision(44, **ranks) == "coarse"
-    assert pl.precision(None, **ranks) == "coarse"
+    assert location.precision(70, **ranks) == "street"
+    assert location.precision(60, **ranks) == "quarter"
+    assert location.precision(45, **ranks) == "town"
+    assert location.precision(44, **ranks) == "coarse"
+    assert location.precision(None, **ranks) == "coarse"
 
 
 def test_location_without_coordinates_is_404_no_location(client, conn):

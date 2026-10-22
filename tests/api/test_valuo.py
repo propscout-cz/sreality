@@ -83,7 +83,7 @@ def test_every_canonical_value_of_a_mapped_column_is_ruled():
 
 
 # Valuo's v3 request schema per endpoint (docs.valuo.com 2026-10-20 + sandbox probes): a field outside it is
-# silently dropped, so none is offered. house's garage_area / other_area are left out: no column of ours feeds them.
+# silently dropped, so none is offered; every field in it is offered (requirement 1: the user sets all of them).
 V3_SCHEMA = {
     "flat": {"floor_area", "rating", "local_type", "ownership", "construction", "floor", "total_floors",
              "balcony_area", "cellar_area", "garden_area", "garages", "parking_spaces", "new_building", "as_of"},
@@ -92,13 +92,12 @@ V3_SCHEMA = {
     "commercial": {"floor_area", "lot_area", "rating", "commercial_type", "as_of"},
     "land": {"lot_area", "land_type", "rating", "as_of"},
 }
-NO_SOURCE = {"garage_area", "other_area"}
 
 
 @pytest.mark.parametrize("ptype", sorted(V3_SCHEMA))
 def test_each_type_offers_exactly_its_v3_schema(ptype):
     names = {f.name for f in valuo.fields_for(ptype)}
-    assert names == (V3_SCHEMA[ptype] - NO_SOURCE) | {"property_type", "place", "kind"}
+    assert names == V3_SCHEMA[ptype] | {"property_type", "place", "kind"}
 
 
 def test_a_commercial_space_type_leads_its_editor():
@@ -277,6 +276,38 @@ def test_a_house_sends_its_type_and_withholds_its_plot_until_valuo_proves_it_cou
     assert prov["lot_area"]["from"] == {"column": "estate_area", "value": 800}
     assert "local_type" not in prov
     assert valuo.blocking(request) == []
+
+
+def test_a_houses_garage_and_other_areas_are_the_users_to_set():
+    """No column of ours holds either area: never a default; a yes garage says so, as balcony and cellar do."""
+    request, prov = _build(HOUSE | {"garage": True})
+    assert "garage_area" not in request and "other_area" not in request
+    assert prov["garage_area"] == {"class": "missing", "from": {"column": "garage", "value": True},
+                                   "note": "Inzerát uvádí garáž, ne plochu."}
+    assert prov["other_area"] == {"class": "missing", "from": None, "note": None}
+    assert request["garages"] == 1
+    specs = {f.name: f.spec("house") for f in valuo.fields_for("house")}
+    assert {n: (specs[n]["type"], specs[n]["unit"], specs[n]["group"]) for n in ("garage_area", "other_area")} == {
+        "garage_area": ("number", "m²", "more"), "other_area": ("number", "m²", "more")}
+    request, prov = _build(HOUSE, overrides={"garage_area": 18, "other_area": 12.5})
+    assert (request["garage_area"], request["other_area"]) == (18.0, 12.5)
+    assert prov["garage_area"]["class"] == prov["other_area"]["class"] == "user"
+    with pytest.raises(valuo.OverrideError):
+        _build(FLAT, overrides={"garage_area": 18})  # house-only in v3
+
+
+def test_a_property_without_a_point_loads_as_a_refusal_and_an_unknown_one_is_404(monkeypatch):
+    """`load_location`'s domain error never leaves api/valuo.py: no point is the `no_location` refusal."""
+    def no_point(conn, pid):
+        raise valuo.NoLocation("no_location", "Bez polohy")
+    monkeypatch.setattr(valuo, "_rows", lambda conn, sql, params: [dict(FLAT)])
+    monkeypatch.setattr(valuo, "load_location", no_point)
+    subject, location = valuo._load(None, 7)
+    assert location is None and valuo.refusal(subject, location)["code"] == "no_location"
+    monkeypatch.setattr(valuo, "_rows", lambda conn, sql, params: [])
+    with pytest.raises(fastapi.HTTPException) as err:
+        valuo._load(None, 7)
+    assert (err.value.status_code, err.value.detail["code"]) == (404, "not_found")
 
 
 def test_land_sends_its_plot_and_waits_for_the_land_type():
@@ -545,7 +576,7 @@ def test_unconfigured_get_answers_200_with_a_sentence_never_503(client, world):
 def test_unconfigured_post_is_503_and_writes_nothing(client, world, store):
     res = _post(client)
     assert res.status_code == 503
-    assert res.json()["detail"]["code"] == "valuo_unconfigured"
+    assert res.json()["detail"] == {"code": "unconfigured", "message": "Valuo zatím není nastaveno."}
     assert store.rows == [] and world["calls"] == []
 
 
@@ -768,11 +799,11 @@ def test_the_engines_refusal_is_stored_with_valuos_reason(client, world, store, 
     assert world["advert_calls"] == []
 
 
-def test_a_caller_without_an_account_is_400(client, world, store, monkeypatch):
+def test_a_caller_without_an_account_is_the_one_no_account_400(client, world, store, monkeypatch):
     _configure(monkeypatch)
     world["account"] = None
     for res in (client.get("/properties/7/valuo", headers=AUTH), _post(client)):
-        assert res.status_code == 400 and res.json()["detail"]["code"] == "no_account"
+        assert res.status_code == 400 and res.json()["detail"] == "no account for caller"
     assert store.rows == []
 
 

@@ -1472,8 +1472,9 @@ class SqlWork:
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
         # E960: the groups a merge waits on, re-claimed WHOLE in `reconcile._rank`'s order
-        # (E973: an active advert first; E972: flats for sale, flats for rent, the rest; the
-        # oldest wait first within each), so their pairs are re-decided on facts read now and
+        # (E974: Praha, the scope's towns, the rest; E972, E974: flats for sale, flats for rent,
+        # houses and commercial for sale, the rest; the oldest wait first within each; active and
+        # inactive groups together), so their pairs are re-decided on facts read now and
         # the group merges in this pass's reconcile — on the pass's first claim only.
         self.attempt += 1
         if self.stale_claims or self.stale_waiting:
@@ -2502,8 +2503,9 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
                   handed: Sequence[Sequence[int]], bootstrap: bool, store: "SqlStore",
                   engine_since: str, cap: int) -> tuple[list[int], int, int, dict[str, str]]:
     """What this pass re-claims for the groups the reconcile handed on (E960) in
-    `reconcile._rank`'s order — groups with an active advert first (E973), then flats for sale,
-    flats for rent, the rest (E972: `reconcile.CLAIM_ORDER`) — chosen BEFORE the pass, and the
+    `reconcile._rank`'s order — Praha, the scope's towns, the rest (E974), then flats for sale,
+    flats for rent, houses and commercial for sale, the rest (E972, E974:
+    `reconcile.CLAIM_ORDER`), active and inactive groups together — chosen BEFORE the pass, and the
     back-off map with their groups stamped tried, which `run_incremental` writes
     (`rt_redecide_tried`) once the pass ends on its own terms (E973). None while no reconcile
     follows the pass (the build, a seed of another version, a closed apply scope) or while the
@@ -2524,11 +2526,12 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
         return [], 0, budget, {}
     if not handed or bootstrap or not seed_current(control, generation):
         return [], 0, budget, {}
-    if reconcile.read_scope(conn)[0] is None or not store.ledger_keyed():
+    scope = reconcile.read_scope(conn)[0]
+    if scope is None or not store.ledger_keyed():
         return [], 0, budget, {}
     ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
                                fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=engine_since)
+                               engine_since=engine_since, towns=reconcile.scope_towns(scope))
     tried = control.get(reconcile.tried_key(generation))
     taken, stamps = reconcile.select_claims(handed, ages,
                                             tried if isinstance(tried, Mapping) else {},

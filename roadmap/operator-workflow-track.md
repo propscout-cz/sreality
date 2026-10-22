@@ -66,11 +66,24 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   match; no grade) and the comparables with their photos (one `advert/detail` call, migration 646); a sandbox answer
   is stored `sandbox` whatever the token's name; the history is the estimations' `RunHistory`, generalised; the phone
   shows the latest answer only. The estimate card frame is one `EstimateCard`. Patterns: `.interface-design/system.md`.
+- **Settled (production call 2026-10-21, property 1012847):** Valuo's lease figures are MONTHLY (≈50 m² flats at
+  17 500–20 000 Kč, avg 18 850 Kč, 377 Kč/m²), so a lease shows `/měs` and the rent basis.
+- **Done (review fixes):** Valuo is a named shape-3 site in `tenancy.md` on the one no-account 400; its per-m² figures
+  are rule 23's named outside exception (`REGISTERED_SITES`); one error shape (`code`, one `unconfigured`), the location
+  reader out of the route module (`api/property_location.py`); a house's `garage_area` / `other_area` are user-set. SPA:
+  the editor's controls are `controls.tsx`'s form box (`box=`: one 34 px height, dashed absent, brick refused, the unit
+  inside), no local patches; one `useEstimationRuns` query for Odhady and the Valuo mark; both ledgers are `table.tsx`
+  `Column`s under `SectionLabel`/`Th`, their data ink-3; Valuo's failures in Czech.
 - **Next:** W5, our own recalculation over the comparables the user keeps (operator ruling 2026-10-20: v3 cannot
   exclude any; Valuo's adjusted price/m² weighted by similarity, labelled ours) — plan first; one production call
-  confirms the lease basis (a lease reads as monthly: `ValuoSection` `Price`) and whether a house's plot is sent; a per-plan monthly
+  confirms whether a house's plot is sent; a per-plan monthly
   quota counted from the rows before the production token; Valuo's own field messages still show as bare English under
-  a Czech caption (quote them as the failure card does: `Valuo: „…“`).
+  a Czech caption (quote them as the failure card does: `Valuo: „…“`); ONE app-wide Czech translation pass (operator
+  ruling): the run ledger's `SUCCESS`/`FAILED` chips, the estimation block's English copy (`ESTIMATES`, the runs ledger's
+  `When` / `viewing` / `/mo` — `RunHistory`'s `when`/`viewing` and `PerMonth`'s `unit` go with it) stay English until
+  it. **Ruled 2026-10-21 (operator OK):** the Valuo routes answer a caller without an account with the one shared 400,
+  English `no account for caller` (it was „Přihlášený uživatel nemá účet, ocenění nelze uložit.“; no one reaches it:
+  signup seeds an account, 0 of 5 users lack one), and the sentence joins the app-wide translation pass above.
 
 ### Phase U-CURATED-SCOPE: curated-set scope (done, 2026-10-19)
 - **Done:** tags, collections and pipeline stages became ONE kind of filter (brief + rulings:
@@ -870,13 +883,21 @@ any newly-scraped listings.
   merge f2d7b359; `extra='ignore'`); `ComparableFilters` gains the garden pair; both models
   now EQUAL their agendas by test; Browse reads the generated `BUILDING_MATERIAL_BUCKETS`
   (fix/watchdog-dropped-filters, C4 PR 2).
+- ✅ M3 + watchdog map area (2026-10-21, feature/watchdog-map-area): the map box is the ONE
+  spatial shape — `WatchdogFilterSpec.bounds` (Browse's `MapBounds`) replaces `lat`/`lng`/
+  `radius_m` and the matcher's ST_DWithin circle; `api/location_filter.bounds_where` renders
+  the lat/lng band the list and both stats RPCs apply; `filtersToWatchdogSpec` reads the one
+  `effectiveBbox` (moved to `lib/filters.ts`, over the one `bboxAround` formula), so a
+  centre+radius pick saves as the square Browse filtered on and the viewport box rides along
+  through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
+  `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
+  `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
 
 **Next (filter definition, tracked from C4)**
 
 - M2: the agent advertises 10 COMPARABLES ids that `_FCR_OVERRIDE_FIELDS` drops — changes
   agent cohorts, needs an operator ruling, own PR.
 - The agent's null `category_type` path (`api/agent.py`) — same posture as M2.
-- M3: center+radius is a circle in Python and a bounding square in Browse.
 - M4: `tom_days` reaches Stats but not the Browse list.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated

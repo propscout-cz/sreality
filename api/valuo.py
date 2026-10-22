@@ -20,7 +20,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from api import valuo_client
-from api.routes.property_location import load_location
+from api.property_location import NoLocation, load_location
 from toolkit.filter_registry import CATEGORY_MAIN_NOUN_CS, DISPOSITION_OPTIONS, label_cs, type_label_cs
 from toolkit.measures import ppm2_basis
 
@@ -111,6 +111,8 @@ FIELDS: tuple[Field, ...] = (
     Field("energy_performance", "Energetická třída", "enum", tuple((c, c) for c in "ABCDEFG"), applies=(HOUSE,)),
     Field("balcony_area", "Balkon", "number", applies=(FLAT,)),
     Field("cellar_area", "Sklep", "number", applies=(FLAT, HOUSE)),
+    Field("garage_area", "Plocha garáže", "number", applies=(HOUSE,)),
+    Field("other_area", "Ostatní plocha", "number", applies=(HOUSE,)),
     Field("garden_area", "Zahrada", "number", applies=(FLAT,)),
     Field("garages", "Garáže", "integer", applies=(FLAT, HOUSE)),
     Field("parking_spaces", "Parkovací místa", "integer", applies=(FLAT, HOUSE)),
@@ -301,7 +303,8 @@ def build_request(
         if raw is not None:
             with contextlib.suppress(OverrideError):
                 put(param, _coerce(_BY_NAME[param], raw), cls, _source(column, raw))
-    for flag, param, noun in (("has_balcony", "balcony_area", "balkon"), ("cellar", "cellar_area", "sklep")):
+    for flag, param, noun in (("has_balcony", "balcony_area", "balkon"), ("cellar", "cellar_area", "sklep"),
+                              ("garage", "garage_area", "garáž")):
         if subject.get(flag):
             put(param, None, MISSING, _source(flag, True), f"Inzerát uvádí {noun}, ne plochu.")
     floor = subject.get("floor")
@@ -359,7 +362,7 @@ def blocking(request: dict[str, Any]) -> list[str]:
 
 
 def result_basis(request: dict[str, Any]) -> str | None:
-    """Rule 23: the per-m² basis of the REQUEST's type and kind — a flipped deal type cannot misplace the unit."""
+    """Rule 23: the REQUEST's basis labels Valuo's own Kč/m² figures; a lease's are monthly, Kč/m²/měs (verified)."""
     return ppm2_basis(_PTYPE_CATEGORY.get(request.get("property_type")), _KIND_CATEGORY.get(request.get("kind")))
 
 
@@ -410,17 +413,18 @@ def _rows(conn: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         return cur.fetchall()
 
 
+def _refuse(status: int, code: str, message: str, **extra: Any) -> HTTPException:
+    return HTTPException(status_code=status, detail={"code": code, "message": message, **extra})
+
+
 def _load(conn: Any, property_id: int) -> tuple[dict[str, Any], dict[str, Any] | None]:
     [subject] = _rows(conn, _SUBJECT_SQL, (property_id,)) or [None]
     if subject is None:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Nemovitost nenalezena"})
+        raise _refuse(404, "not_found", "Nemovitost nenalezena")
     try:
-        location = load_location(conn, property_id)
-    except HTTPException as exc:
-        if exc.status_code == 404 and exc.detail.get("reason") == "no_location":
-            return subject, None
-        raise
-    return subject, location
+        return subject, load_location(conn, property_id)
+    except NoLocation:  # no point (or merged away since the read above): `refusal` says so, nothing raises
+        return subject, None
 
 
 def _photos(advert: dict[str, Any]) -> list[dict[str, str]]:
@@ -501,13 +505,11 @@ def page(conn: Any, property_id: int, *, account_id: uuid.UUID,
     return out
 
 
-def _refuse(status: int, code: str, message: str, **extra: Any) -> HTTPException:
-    return HTTPException(status_code=status, detail={"code": code, "message": message, **extra})
-
-
-def run(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: uuid.UUID,
-        cred: valuo_client.Credential) -> dict[str, Any]:
-    """POST /properties/{id}/valuo: refuse (4xx, no row), or save the row, pay for one call, record its answer."""
+def new_valuation(conn: Any, property_id: int, overrides: dict[str, Any], *, account_id: uuid.UUID,
+                  cred: valuo_client.Credential | None) -> dict[str, Any]:
+    """POST /properties/{id}/valuo: refuse (4xx/503, no row), or save the row, pay for one call, record its answer."""
+    if cred is None:
+        raise _refuse(503, "unconfigured", REFUSALS["unconfigured"])
     subject, location = _load(conn, property_id)
     refused = refusal(subject, location)
     if refused:

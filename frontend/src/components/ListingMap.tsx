@@ -294,7 +294,7 @@ interface Props {
    * sidebar) the map renders a dashed copper circle around the
    * point so the cohort's geographic scope is visible. The circle
    * is purely visual — the cohort filtering happens client-side
-   * via an approximate bbox in queries.effectiveBbox. */
+   * via the circumscribed square in filters.effectiveBbox. */
   centerCircle: CenterRadius | null;
   /* Latest "fly to this place" command from outside (e.g. a District
    * typeahead pick). The map watches the prop's identity and animates

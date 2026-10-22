@@ -9,9 +9,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReferenceRent } from '@/lib/mfReference';
 import type { EstimationRun } from '@/lib/types';
 
-vi.mock('@/lib/queries', async (orig) => ({
-  ...(await orig<typeof import('@/lib/queries')>()),
-  fetchEstimationsForListings: vi.fn(),
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
+  listEstimations: vi.fn(),
 }));
 vi.mock('@/components/estimation/RunPanel', () => ({
   RunBody: () => <div data-testid="run-body" />,
@@ -23,10 +23,11 @@ vi.mock('@/components/NewEstimationModal', () => ({
   useNewEstimationModal: () => ({ open: openEstimation }),
 }));
 
-import { fetchEstimationsForListings, type PropertyPublic } from '@/lib/queries';
+import { listEstimations } from '@/lib/api';
+import type { PropertyPublic } from '@/lib/queries';
 import EstimationsBlock from './EstimationsBlock';
 
-const fetchRuns = vi.mocked(fetchEstimationsForListings);
+const fetchRuns = vi.mocked(listEstimations);
 
 const MF_LABEL = 'Odhad nájmu · cenová mapa MF';
 

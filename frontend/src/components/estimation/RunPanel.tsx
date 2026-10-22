@@ -642,7 +642,6 @@ function YieldBlock({
         <NumField
           label="Monthly rent"
           value={rent}
-          step="100"
           suffix="Kč"
           onChange={setRentTouching}
           hint={defaultRent != null ? 'Default: median estimate' : 'No estimate — set manually'}
@@ -650,7 +649,6 @@ function YieldBlock({
         <NumField
           label="Fond oprav + SVJ"
           value={costPerM2}
-          step="1"
           /* A fond is levied per m² per MONTH — the yield formula one card up
              subtracts it from the monthly rent before annualising. The bare
              capital `Kč/m²` this carried misnamed it by a factor of twelve, and
@@ -670,7 +668,6 @@ function YieldBlock({
         <NumField
           label="Area"
           value={areaM2}
-          step="0.1"
           suffix="m²"
           onChange={() => undefined}
           readOnly
@@ -679,7 +676,6 @@ function YieldBlock({
         <NumField
           label="Listing price"
           value={price}
-          step="100000"
           suffix="Kč"
           onChange={setPrice}
           hint={priceHint}
@@ -687,7 +683,6 @@ function YieldBlock({
         <NumField
           label="Renovation"
           value={renovation}
-          step="50000"
           suffix="Kč"
           onChange={setRenovation}
           hint={
@@ -1531,7 +1526,6 @@ function AdjustPanel({
           label="Latitude"
           required
           value={state.lat}
-          step="0.000001"
           placeholder="50,0875"
           onChange={(v) => set('lat', v)}
         />
@@ -1539,7 +1533,6 @@ function AdjustPanel({
           label="Longitude"
           required
           value={state.lng}
-          step="0.000001"
           placeholder="14,4205"
           onChange={(v) => set('lng', v)}
         />
@@ -1550,7 +1543,6 @@ function AdjustPanel({
           label="Area"
           required
           value={state.area_m2}
-          step="0.1"
           placeholder="50"
           suffix="m²"
           onChange={(v) => set('area_m2', v)}
@@ -1558,7 +1550,6 @@ function AdjustPanel({
         <NumField
           label="Floor"
           value={state.floor}
-          step="1"
           placeholder="—"
           hint="Přízemí = 0, 1. patro = 1, suterén = −1 — the same scale listings.floor is on."
           onChange={(v) => set('floor', v != null ? Math.round(v) : null)}
@@ -1628,7 +1619,6 @@ function AdjustPanel({
         <NumField
           label="Purchase price"
           value={state.purchase_price_czk}
-          step="100000"
           placeholder="—"
           suffix="Kč"
           onChange={(v) =>
@@ -1640,7 +1630,6 @@ function AdjustPanel({
         <NumField
           label="Expected monthly rent"
           value={state.expected_monthly_rent_czk}
-          step="500"
           placeholder="—"
           suffix="Kč/mo"
           onChange={(v) =>

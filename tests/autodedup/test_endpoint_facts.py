@@ -456,7 +456,7 @@ def test_the_re_claim_has_its_own_floor_whatever_the_share(
     assert out["feeds"].get("stale") == len(ids) == out["evidence"]["stale_claimed"]
     assert out["claim_bound"]["stale"] == len(ids), "on top of the limit (E971)"
     assert reconcile.claims([[4007], [4005], [4006]], {
-        i: reconcile.Refresh(at, True, 0, True) for i, at in ((4005, 1), (4006, 2), (4007, 3))
+        i: reconcile.Refresh(at, True, 0, 0) for i, at in ((4005, 1), (4006, 2), (4007, 3))
     }, 2) == [4005, 4006], (
         "oldest wait first, whole groups, up to the budget")
 
@@ -466,17 +466,17 @@ def test_the_claim_cap_a_death_halves_bounds_the_re_claims_too(
     """The E971 review: the re-claims are most of a pass (200 beside the feeds' ~30), so the cap
     a death halves (E948) bounds them as it bounds the feeds' limit. Else every death walked
     only the feeds' share down to the floor while the 200 that grew the pass stayed, and the
-    lane died every third pass. Whole groups in `reconcile._rank`'s order (here the three whose
-    cluster holds an active advert, E973); only those are stamped tried."""
+    lane died every third pass. Whole groups in `reconcile._rank`'s order; only those are
+    stamped tried."""
     from autodedup import incremental_lane, reconcile
 
     world = _seeded_reject_world_for_floor(tmp_path)
     _open_scope(monkeypatch)
     ids = _queued_one_advert_groups(world)
     ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=None)
+                               engine_since=None, towns=())
     first = reconcile.claims([[i] for i in ids], ages, 3)
-    assert len(first) == 3 and all(ages[i].active for i in first)
+    assert len(first) == 3
     monkeypatch.setattr(incremental_lane, "CLAIM_CAP_FLOOR", 1)
     world.settings[incremental_lane.claim_cap_key(GEN)] = {"cap": 3, "reason": "test"}
     out = incremental_lane.run_incremental(lambda: world)
@@ -614,7 +614,7 @@ def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
     world.settings[reconcile.redecide_key(GEN)] = [[i] for i in ids]
     world.settings[reconcile.budget_key(GEN)] = {"budget": 4}
     ages = reconcile.refreshed(world, GEN, ids, fresh_hours=reconcile.FRESH_DECISION_HOURS,
-                               engine_since=None)
+                               engine_since=None, towns=())
     taken = reconcile.claims([[i] for i in ids], ages, 4)
     assert len(taken) == 4
     real = incremental_lane.run_pass_bounded

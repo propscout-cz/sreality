@@ -322,6 +322,7 @@ def test_compiled_param_keys_are_disjoint_from_every_caller_key() -> None:
         "cursor", "upper", "window_size", "image_lookback_minutes", "subscription_id",
         "target_channels", "drop_pids", "drop_sids", "drop_prices", "drop_prevs",
         "transport_types", "anchor_radius_m", "corridor_m", "lat", "lng", "disposition",
+        "bbox_west", "bbox_south", "bbox_east", "bbox_north",
         "disposition_loose", "area_min", "area_max", "floor_min", "floor_max",
         "exclude_listing_ids",
     }

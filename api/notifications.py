@@ -22,8 +22,8 @@ Three responsibilities:
 `WatchdogFilterSpec` is intentionally a separate model from
 `ComparableFilters`: the watchdog matcher does NOT require a target
 lat/lng (district / disposition / price filters alone are useful), but
-DOES accept a spatial center + radius for "alert me about anything
-near X", and it carries the city-quality filters rule 17 keeps off the
+DOES accept the map box Browse filters on ("alert me about anything in
+this area"), and it carries the city-quality filters rule 17 keeps off the
 cohort model. `_build_match_clauses` renders it over `properties_public`
 through the one filter compiler (`toolkit/filter_compiler.compile_filter_where`)
 that also renders every estimation cohort, so the matcher and the cohort
@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 from pydantic import BaseModel, field_validator, model_validator
 
 from api.cursor import decode_cursor, encode_cursor
-from api.location_filter import DistrictChip, district_where
+from api.location_filter import DistrictChip, MapBounds, bounds_where, district_where
 from location_data.claims_common import SUBJECT_LOCATION_JOIN, served_location_predicate
 from scraper import db as scraper_db
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
@@ -75,9 +75,10 @@ class WatchdogFilterSpec(BaseModel):
     narrow ("furnished 3+kk in Praha 2 under 30 000 Kč near these
     coordinates") as the operator wants.
 
-    Spatial filter is optional. When `lat` / `lng` / `radius_m` are all
-    set the matcher restricts to a circle around the point; missing any
-    of the three drops the spatial clause entirely.
+    The map box is optional and the ONE spatial shape: `bounds` is what
+    Browse filters on (its viewport, or the square around a centre+radius
+    pick), so a watchdog saved from Browse watches the rows Browse showed.
+    Place chips are an independent AND; null everywhere = no restriction.
     """
 
     # Category. `category_type` (deal type) stays single-valued — rent and
@@ -97,10 +98,8 @@ class WatchdogFilterSpec(BaseModel):
     # Disposition (multi-select; matches any).
     dispositions: list[str] | None = None
 
-    # Spatial (all three required to apply).
-    lat: float | None = None
-    lng: float | None = None
-    radius_m: int | None = None
+    # The map box (rule 16): the lat/lng band Browse's list and both stats RPCs apply.
+    bounds: MapBounds | None = None
 
     # Place. Each chip is a `DistrictChip` — a LEVEL plus a RÚIAN CODE
     # (`api/location_filter.py`), the one predicate Browse, Stats, the map and
@@ -226,16 +225,6 @@ class WatchdogFilterSpec(BaseModel):
                 }
         return data
 
-    @model_validator(mode="after")
-    def _spatial_all_or_none(self) -> "WatchdogFilterSpec":
-        spatial = [self.lat, self.lng, self.radius_m]
-        set_count = sum(1 for v in spatial if v is not None)
-        if set_count not in (0, 3):
-            raise ValueError(
-                "lat / lng / radius_m must be all set or all None"
-            )
-        return self
-
 
 def _build_match_clauses(
     spec: WatchdogFilterSpec,
@@ -245,7 +234,7 @@ def _build_match_clauses(
     The matcher prepends a watermark / window clause; this helper owns
     the spec-derived part only. Spec-derived clauses come from
     `compile_filter_where(…, PROPERTIES_GRAIN)`; only the served predicate,
-    circle and place chips are rendered here.
+    the map box and the place chips are rendered here.
     """
     # THE CONSUMER RULE (W5, operator ruling 2026-09-13), unconditional and first.
     # Browse inherits it from `browse_projection` (migration 512); the matcher cannot,
@@ -258,25 +247,11 @@ def _build_match_clauses(
     where: list[str] = [served_location_predicate("l.location_listing_ref_id")]
     params: dict[str, Any] = {}
 
-    if (
-        spec.lat is not None
-        and spec.lng is not None
-        and spec.radius_m is not None
-    ):
-        # properties_public projects lat/lng (ST_Y/ST_X of the geom); it does
-        # not expose the raw geom column, so build the target point from
-        # lat/lng rather than referencing l.geom.
-        where.append("l.lat IS NOT NULL")
-        where.append("l.lng IS NOT NULL")
-        where.append(
-            "ST_DWithin("
-            "ST_SetSRID(ST_MakePoint(l.lng, l.lat), 4326)::geography, "
-            "ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography, "
-            "%(radius_m)s)"
-        )
-        params["lat"] = spec.lat
-        params["lng"] = spec.lng
-        params["radius_m"] = spec.radius_m
+    # The map box, on the lat/lng properties_public projects off the location ad's
+    # point: the band Browse's list and both stats RPCs apply (rule 16).
+    b_where, b_params = bounds_where(spec.bounds, alias="l")
+    where.extend(b_where)
+    params.update(b_params)
 
     if spec.districts:
         # Delegates to the shared builder (`api.location_filter`) so Browse,
