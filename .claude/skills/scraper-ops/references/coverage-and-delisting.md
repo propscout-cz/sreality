@@ -397,8 +397,10 @@ the count must never veto:
   served and advances by what arrived.
 
 **What to read in a log.** Nomination itself is unchanged:
-`VERIFY cm=… ct=… subtype=… candidates=… queued=… deferred=… active=…`. Two
-lines changed shape:
+`VERIFY cm=… ct=… subtype=… candidates=… queued=… deferred=… active=…`, once per
+scope; since 2026-10-22 a walk whose every unit reached the end adds
+`VERIFY orphans candidates=… queued=… deferred=… active=…` for the active ads in no
+walked scope (a NULL label, an auction type no unit walks). Two lines changed shape:
 
 - `COVERAGE cm=… ct=…: the walk reached the portal's end but collected N of M
   (coverage=…) -- the gap is nominated, the page decides (rule #3)` — a WARNING

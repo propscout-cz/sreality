@@ -1168,14 +1168,26 @@ renumber.** Navigate by area:
    wrong — it costs one fetch — so the rail and the cross-check are gone, `supports_complete_walk`
    no longer gates anything, and `delist_flip_cap` throttles how many checks one walk may
    queue (oldest-unseen first, the rest deferred and recorded in `delist_flip_refusals`).
-   Nomination is the shared default (`db.presence_candidates`, keyed on `source_id_native` or,
-   via `seen_key`, on `sreality_id`); a portal whose index sections do not map 1:1 onto a
-   category overrides `presence_candidates` (bazos: subtype scope; ceskereality/realitymix:
-   sibling-slice union; remax/maxima: agenda grain). A portal with NO index declares
-   `indexless = True` (`web`, the tenth portal, since 2026-10-21): its walk sees nothing by
-   construction, so `_queue_presence_checks` skips the empty-seen refusal for it alone and
-   nominates through its own `presence_candidates` (every active `web` ad with no queue row and
-   no completion within `RECHECK_THROTTLE`, NULL categories included). What a finished walk still means: a
+   Nomination is by SCOPE (`db.presence_candidates(conn, source, scope, seen)`, keyed on
+   `source_id_native` or, via `seen_key`, on `sreality_id`): a unit's scope is its two labels
+   unless the portal declares `presence_scope` (bazos narrows to the section's subtype,
+   remax/maxima widen to the agenda's `category_type`), and units sharing a scope (realitymix's
+   `domy` + `chaty` slices, an agenda's descriptors) nominate ONCE, on the last of them, with
+   the union of their ids — the runner holds that buffer; the two per-portal copies are gone.
+   **Since 2026-10-22 nomination is TOTAL** (Health green wave 2, issue #1853): a sighting is
+   label-blind but a unit's nomination is not, so an active ad whose label lies in no walked
+   scope (ceskereality's `/drazby/` auctions, realitymix's chaty with a truncated breadcrumb:
+   703 NULL-label ads, 430 unclosable since June) was never checked once it left the index.
+   A walk whose EVERY unit reached the end, over the portal's whole agenda (a bazos dispatch
+   narrowed to one section says `narrowed`), now also nominates those ORPHANS
+   (`db.orphan_candidates`: the complement of the walked scopes, NULL labels included) against
+   every id the walk saw, at the same priority under the same flip cap and dwell (descriptor:
+   no category). A portal with NO index declares `indexless = True` (`web`, the tenth portal,
+   since 2026-10-21): its one unit has no labels, so no scope, and its walk sees nothing by
+   construction — every active `web` ad is an orphan, nominated with no seen set (the
+   empty-seen refusal stays for every other portal). The rail:
+   `tests/test_nomination_scope_rail_live.py` (every active ad in exactly one scope, on the
+   replayed schema). What a finished walk still means: a
    partial walk (`--limit N`, `--max-pages`, a deadline) cannot know which rows it never
    reached, so it nominates nothing.
 
@@ -3111,7 +3123,8 @@ renumber.** Navigate by area:
     default seams on `PortalDefaults` (`connect_index`, `connect_drain`, `make_client`,
     `active_count`, and the HTML portals' `write_details` / `record_failure`), the
     entrypoints' `load_config` / `configure_logging`, the `COVERAGE` warning, end-gated
-    presence nomination (`_queue_presence_checks`), category-drift recording, the probe driver,
+    presence nomination per scope and of the orphans in none (`_queue_presence_checks`,
+    `_queue_orphan_checks`), category-drift recording, the probe driver,
     the whole drain (queue claim/complete/fail, the fetch pool, batch flush, the gone flip through
     `db.mark_listing_inactive`, the gone-rate breaker from `delist_policy`) and the `scrape_runs` lifecycle (`run_phase`). **Per-portal:** the client (a
     `BasePortalClient` subclass — URL building, body markers, egress such as `USE_PROXY`; the
@@ -3143,11 +3156,12 @@ renumber.** Navigate by area:
     redirects to an sreality ad queues that ad at NEW and records its own row's gone verdict —
     one identity per ad, never a copy of the hysteresis). The drain's dry-run
     count is `db.claimable_counts`, not a seam. Optional (the runner reads them via `getattr`):
-    `seen_key` (sreality — integer ids); `presence_candidates` (bazos, ceskereality, realitymix,
-    remax, maxima — index sections that don't map 1:1 onto `(category_main, category_type)`;
-    web — no index at all); `indexless` (web — its walk sees nothing BY CONSTRUCTION, so the
-    runner skips the empty-seen refusal for it and requires its own `presence_candidates`);
-    `note_empty_slice` (ceskereality, realitymix — slice-buffering nominators);
+    `seen_key` (sreality — integer ids); `presence_scope` (bazos — the section's subtype;
+    remax, maxima — the agenda's `category_type`); `presence_candidates` (remax, maxima — the
+    whole agenda walk's ids, not the title-derived slices'); `narrowed` (bazos — a one-section
+    dispatch proves no orphan); `indexless` (web — its walk sees nothing BY CONSTRUCTION, its
+    unit has no scope, so its ads are all orphans nominated with no seen set; since 2026-10-22
+    the slice buffers of ceskereality and realitymix and web's own query are the runner's);
     `coverage_denominator_is_upper_bound` (ceskereality — its declared total is national, wider
     than its kraj slices); `total_is_count` (remax, maxima — the "total" they report is the
     count of what they saw; `False` on `PortalDefaults`), both written into every

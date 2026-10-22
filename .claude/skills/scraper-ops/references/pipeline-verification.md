@@ -1218,9 +1218,9 @@ bound ~15.5 %), so its precision cell may open Problem on 10-20/21: the blink ta
 rule (#1858) addresses, told truthfully, not suppressed.
 
 Known limits: the stuck limit uses the portal-level walk gap, which understates portals whose units
-rotate (idnes walks stalest-first; ceskereality and realitymix nominate per slice group; remax and
-maxima per agenda); deferrals are judged per portal, because an agenda portal files an agenda's
-deferrals on its first descriptor and a sibling-buffer portal on a group's last, and a walk counts
+rotate (idnes walks stalest-first; units sharing a scope nominate once per walk: realitymix's
+slices, remax's and maxima's agendas); deferrals are judged per portal, because a shared scope files
+its deferrals on its last unit and the orphans (rule 3, 2026-10-22) on no unit, and a walk counts
 there when any unit reached the end (coverage's portal-level walk needs every unit to: each answers
 its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
 weeks' timing than the alignment absorbs can still read as a dip; location-refetch rows share the
@@ -1243,7 +1243,7 @@ condition, told once when it first reads Problem and then once a day.
 
 Residual needs D ≥ 500 (`coverage_residual_min_declared`), and an entry whose `total_is_count` is
 true or absent is Not measured with its reason, the one cell that says so. Unnominated is the walks' own predicate
-(`db.NOMINABLE_PREDICATE`, `presence_candidates` and `web`) judged at that walk's start, so an ad the walk's
+(`db.NOMINABLE_PREDICATE`, `presence_candidates` and `orphan_candidates`) judged at that walk's start, so an ad the walk's
 throttle skipped is not stuck: until 2026-10-22 the check excused only checks after the last sighting and
 read sreality 52, bazos 43 and idnes 63 ads the walks had rightly skipped (all 0 under one predicate). Each
 cell's facts carry `trend` and `worse_7d`, the shared

@@ -859,3 +859,40 @@ the three `unnominated` cells OK at the next coverage pass; the ghost incident r
 healed); W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers (14 of
 the 38 town gaps); W5, the rulings Q1–Q3 applied; W6, the legacy layer (migration 643, on or after
 2026-10-23 13:00Z).
+
+## 2026-10-22 — Health green sprint, wave 2 (shipped with this PR)
+
+Rule 3 made total (issue #1853). A sighting is label-blind (`reconcile_sightings` touches by id) but a
+unit's nomination was label-bound, so an active ad whose label no walked unit covers was never
+page-checked once it left the index: 703 NULL-label ads on 2026-10-22, 430 of them unclosable since June
+(ceskereality's 129 `/drazby/` auctions, realitymix's 301 ads whose breadcrumb is truncated, 277 of them
+"Prodej chaty/rekreačního objektu"). Health read them as `ceskereality/unnominated` 94 and
+`realitymix/unnominated` 157.
+
+What wave 2 changed:
+- **The parsers emit the canonical label.** ceskereality maps `/drazby/` to `drazba` (sreality's and
+  mmreality's word) and its parser reads the category off its own URL, so `scripts/reparse.py`
+  re-derives it; realitymix reads the family from the structured h1 before the broker-written slug
+  when the breadcrumb is truncated; remax labels a "prostor" title komercni when nothing above names it
+  (the 273 "Komerční prostory" warehouses: nominable already, invisible to every category filter).
+- **The runner owns nomination scopes.** A unit's scope is its two labels unless the portal declares
+  `presence_scope` (bazos: the section's subtype; remax, maxima: the agenda); units sharing a scope
+  nominate once, on the last of them, with their union. Deleted: the two slice-buffer copies
+  (ceskereality, realitymix) and `note_empty_slice`, bazos's override, `web`'s own query and remax's
+  and maxima's once-per-agenda guards.
+- **Orphans are nominated.** A walk whose every unit reached the end, over the portal's whole agenda,
+  also nominates the active ads in no walked scope (`db.orphan_candidates`, NULL labels included)
+  against every id it saw, under the same flip cap and dwell (`VERIFY orphans …`). `web`'s whole
+  agenda is that scope. A bazos dispatch narrowed to one section is `narrowed` and proves no orphan.
+- **A rail:** `tests/test_nomination_scope_rail_live.py` (CI migrations lane) builds every portal from
+  its replayed `portals` row, seeds one active ad per label and requires each to come back from exactly
+  one nomination query.
+
+To check: the next ceskereality and realitymix walks whose units all reached the end log
+`VERIFY orphans candidates=N`; after the reparse heal (the PR body's runbook, after the Prague read) and
+two gone verdicts at least 24 h apart, `coverage ceskereality/unnominated` and `realitymix/unnominated`
+read 0 within ~2 days and their `no_walked_category` 0. Not here: the multi-ad properties the heal
+leaves holding prodej beside drazba (a clash checked only at merge) — the operator splits them.
+
+**Next:** W3, producers (idnes's daily EUR churn, the per-m² masquerade); W4, location producers; W5, the
+rulings Q1–Q3 applied; W6, the legacy layer (migration 643).
