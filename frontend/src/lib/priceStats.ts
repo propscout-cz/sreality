@@ -24,51 +24,6 @@ export interface PriceStatDataset {
   max_population?: number | null;
 }
 
-export interface PriceStatCityMetric {
-  dataset_id: number;
-  entity_type: string;
-  entity_id: number;
-  locality_name: string;
-  obec_id: number | null;
-  window_years: number;
-  sale_latest_price: number | null;
-  sale_latest_ym: string | null;
-  sale_cagr_pct: number | null;
-  sale_months: number | null;
-  sale_min_active: number | null;
-  rent_latest_price: number | null;
-  rent_latest_ym: string | null;
-  rent_cagr_pct: number | null;
-  rent_months: number | null;
-  rent_min_active: number | null;
-  gross_yield_pct: number | null;
-  computed_at: string;
-}
-
-export interface PriceStatPolygon {
-  dataset_id: number;
-  obec_id: number;
-  obec_name: string;
-  geojson: string;
-  sale_cagr_pct: number | null;
-  rent_cagr_pct: number | null;
-  gross_yield_pct: number | null;
-  sale_latest_price: number | null;
-  rent_latest_price: number | null;
-  sale_min_active: number | null;
-  rent_min_active: number | null;
-}
-
-export interface PriceStatObservation {
-  category_type_cb: number; // 1 prodej, 2 pronajem
-  year: number;
-  month: number;
-  price: number | null;
-  active_count: number | null;
-  new_count: number | null;
-  deleted_count: number | null;
-}
-
 export interface PriceStatRun {
   dataset_id: number;
   run_id: number;
@@ -99,16 +54,12 @@ export const fetchLatestRun = async (
 export const priceStatsKeys = {
   datasets: ['price_stat_datasets'] as const,
   latestRun: (id: number) => ['price_stat_latest_run', id] as const,
-  cityMetrics: (id: number) => ['price_stat_city_metrics', id] as const,
-  choropleth: (id: number) => ['price_stat_choropleth', id] as const,
   growth: (id: number, from: string | null, to: string | null) =>
     ['price_stat_growth', id, from, to] as const,
   growthShapes: (id: number) => ['price_stat_growth_shapes', id] as const,
   obecTree: ['price_stat_obce_tree'] as const,
   noData: (id: number) => ['price_stat_no_data', id] as const,
   noDataCount: (id: number) => ['price_stat_no_data_count', id] as const,
-  series: (id: number, t: string, e: number) =>
-    ['price_stat_series', id, t, e] as const,
   obecSeries: (id: number, from: string | null, to: string | null) =>
     ['price_stat_obec_series', id, from, to] as const,
 };
@@ -121,50 +72,6 @@ export const fetchDatasets = async (
     { signal },
   );
   return data ?? [];
-};
-
-export const fetchCityMetrics = async (
-  datasetId: number,
-  { signal }: PgReadOptions = {},
-): Promise<PriceStatCityMetric[]> => {
-  /* 4,044 rows on the obec-grain datasets — exhaustive by contract (a missing
-   * obec is a wrong table/choropleth, not a shorter one). locality_name leads
-   * for the display order but is not unique (same-name obce), hence the
-   * entity tiebreaks. */
-  return await fetchAllRows<PriceStatCityMetric>({
-    relation: 'price_stat_city_metrics_public',
-    build: () =>
-      supabase
-        .from('price_stat_city_metrics_public')
-        .select('*', { count: 'exact' })
-        .eq('dataset_id', datasetId),
-    orderBy: [
-      { column: 'locality_name' },
-      { column: 'entity_type' },
-      { column: 'entity_id' },
-    ],
-    key: ['entity_type', 'entity_id'],
-    expectMax: 100_000,
-    signal,
-  });
-};
-
-export const fetchChoropleth = async (
-  datasetId: number,
-  { signal }: PgReadOptions = {},
-): Promise<PriceStatPolygon[]> => {
-  return await fetchAllRows<PriceStatPolygon>({
-    relation: 'price_stat_choropleth_public',
-    build: () =>
-      supabase
-        .from('price_stat_choropleth_public')
-        .select('*', { count: 'exact' })
-        .eq('dataset_id', datasetId),
-    orderBy: [{ column: 'obec_id' }],
-    key: ['obec_id'],
-    expectMax: 100_000,
-    signal,
-  });
 };
 
 /* Live per-obec growth for any [from,to] window via the price_stat_growth RPC
@@ -349,31 +256,4 @@ export const fetchNoDataCount = async (
     { signal },
   );
   return count ?? 0;
-};
-
-export const fetchCitySeries = async (
-  datasetId: number,
-  entityType: string,
-  entityId: number,
-  { signal }: PgReadOptions = {},
-): Promise<PriceStatObservation[]> => {
-  /* Consumers rely on year,month ascending; category_type_cb only tiebreaks
-   * within a month, completing the total order paging needs. */
-  return await fetchAllRows<PriceStatObservation>({
-    relation: 'price_stat_observations_public',
-    build: () =>
-      supabase
-        .from('price_stat_observations_public')
-        .select(
-          'category_type_cb,year,month,price,active_count,new_count,deleted_count',
-          { count: 'exact' },
-        )
-        .eq('dataset_id', datasetId)
-        .eq('entity_type', entityType)
-        .eq('entity_id', entityId),
-    orderBy: [{ column: 'year' }, { column: 'month' }, { column: 'category_type_cb' }],
-    key: ['year', 'month', 'category_type_cb'],
-    expectMax: 100_000,
-    signal,
-  });
 };

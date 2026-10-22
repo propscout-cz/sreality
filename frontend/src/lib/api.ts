@@ -937,7 +937,6 @@ export const TAG_STATES: readonly TagState[] = ['positive', 'negative', 'exclude
  * excluded from the ambiguity rate's numerator AND denominator, so pruning can
  * never dilute the signal. */
 export type TagExcludedReason = 'ambiguous' | 'pruned';
-export const TAG_EXCLUDED_REASONS: readonly TagExcludedReason[] = ['ambiguous', 'pruned'];
 
 /* Who or what decided a cell. 'human_confirmed' (machine proposed, human
  * affirmed) is deliberately NOT the same evidence as 'machine' (nobody checked).
