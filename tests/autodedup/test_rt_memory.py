@@ -100,6 +100,8 @@ def _all_empty() -> bool:
 
 def test_a_pass_reports_its_memos_and_then_leaves_them_empty(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Read before the pass: `tokens` folds its text through the memo the pass must leave empty.
+    distinct_tokens = len(set(normalize.tokens(BODIES[0])))
     world = _seeded(tmp_path)
     _reads_then(monkeypatch, incremental_lane.run_pass_bounded)
     at_clear = _spy_on_the_clear(monkeypatch)
@@ -112,7 +114,7 @@ def test_a_pass_reports_its_memos_and_then_leaves_them_empty(
     assert out["memo_entries"]["shingles"] == len(BODIES)
     assert out["memo_entries"]["body_align"] >= len(BODIES)
     assert out["memo_entries"]["text_facts"] >= len(BODIES)
-    assert out["memo_entries"]["tokens"] >= len(set(normalize.tokens(BODIES[0])))
+    assert out["memo_entries"]["tokens"] >= distinct_tokens
     assert out["memo_entries"]["folds"] >= len(BODIES)
     assert _all_empty()
 
