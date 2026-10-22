@@ -3470,7 +3470,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         # build (E964): what a half-built store is missing is held back BLOCK by block — a
         # group with an advert in a block the build has not read whole waits
         # (`block_not_fully_read`), so a widening's new blocks pause only their own groups and
-        # every block the store already held keeps merging. A whole-corpus scope has no block
+        # every block the store already held keeps merging; in a block whose walk is complete,
+        # only the groups whose own adverts are unread (E977). A whole-corpus scope has no block
         # for that rail to wait on (it walks none), so its build still holds the reconcile.
         if stopped:
             summary["reconcile"] = {"skipped": f"pass_{stopped}"}

@@ -222,7 +222,8 @@ def test_the_new_block_builds_while_an_old_blocks_arrival_is_claimed(tmp_path: P
 def test_the_reconcile_runs_in_a_widening_build_and_waits_only_on_the_unread_block(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A9 amended: the reconcile runs during the build; `_unread` (the per-block rail) names
-    only the adverts of the block the build has not read whole — never the old block's."""
+    only the adverts of the block the build has not read whole — never the old block's — and,
+    the new block's walk being complete, only those of them the build has not read (E977)."""
     conn = _built_town(tmp_path)
     _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
     _arrival(conn)
@@ -245,7 +246,9 @@ def test_the_reconcile_runs_in_a_widening_build_and_waits_only_on_the_unread_blo
     (call,) = seen
     assert call["building"] is True, "the reconcile ran inside the build"
     assert set(call["blocks"]) == {f"obec:{TOWN}", f"obec:{OTHER_TOWN}"}
-    assert call["unread"] == set(NEW_IDS), "only the new block waits; the old one merges"
+    built = {i for (g, i) in conn.rt_fp if g == GEN}
+    assert set() < call["unread"] < set(NEW_IDS), "the build pass read some of the new block"
+    assert call["unread"] == set(NEW_IDS) - built, "only its unread adverts wait; the old merges"
     for _ in range(4):
         run_incremental(lambda: conn)
     assert conn.settings[bootstrap_key(GEN)] is False and seen[-1]["unread"] == set()

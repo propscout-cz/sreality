@@ -188,23 +188,31 @@ def read_scope(conn: Any) -> tuple[A.Scope | None, str | None]:
 
 def _unread(conn: Any, generation: str, adverts: Sequence[A.Member],
             blocks: Sequence[str], *, building: bool = False,
-            unread_blocks: set[str] | None = None, riders: Iterable[int] = (),
+            reads: tuple[set[str], set[str]] | None = None, riders: Iterable[int] = (),
             scope: A.Scope | None = None) -> set[int]:
     """The adverts among `adverts` whose scope block the lane has not fully read — a block never
     walked, inside its first cycle of pages, or whose snapshot still holds an advert with no
     fingerprint. An advert's block is the snapshot's; one the snapshot does not hold yet (a
     forward-feed arrival its block's walk has not reached, E964 review F3) is placed by its LIVE
     location in the scope block that holds it, and during a build one that no scope block holds
-    either reads as unread (fail closed). `unread_blocks` is `apply.rt_unread_blocks`' answer when
-    the caller has it.
+    either reads as unread (fail closed). `reads` is `apply.rt_block_reads`' answer when the
+    caller has it.
+
+    During a build (E977) a block whose walk is complete — read to its end, so its snapshot is
+    whole — holds only its own unread adverts: an advert the snapshot places there and in no
+    block still mid-walk is unread while it has no fingerprint, whatever else the block still
+    owes. A block never walked or mid-walk holds every advert it places (its snapshot may lack
+    some), an advert the snapshot does not place keeps F3's block rule, and outside a build the
+    block rule stands for every block.
 
     `riders` are the adverts a merge would CARRY along, not members (E964 review R2): one this
     generation has never fingerprinted is unread whatever its block's state — it may have moved
     into a block after that block's last walk — when a scope block holds it or the apply `scope`
     admits it (an apply-scope block outside `rt_scope` lets in no advert the lane never read);
     one neither holds is the plan's refusal (`carries_out_of_scope`)."""
-    unread = (A.rt_unread_blocks(conn, generation, blocks) if unread_blocks is None
-              else unread_blocks)
+    unwalked, unfingerprinted = (A.rt_block_reads(conn, generation, blocks) if reads is None
+                                 else reads)
+    unread = unwalked | unfingerprinted
     riders = {int(i) for i in riders}
     if not adverts or not (unread or building or riders):
         return set()
@@ -213,8 +221,15 @@ def _unread(conn: Any, generation: str, adverts: Sequence[A.Member],
             "generation": generation,
             "listing_ids": sorted({advert.listing_id for advert in adverts})}):
         placed.setdefault(int(lid), set()).add(str(block))
+    # E977: the adverts judged by their own fingerprint — placed by the snapshot in a complete
+    # block that still owes adverts, and in no block that is not complete.
+    own = ({advert.listing_id for advert in adverts
+            if placed.get(advert.listing_id)
+            and not placed[advert.listing_id] & unwalked
+            and placed[advert.listing_id] & unfingerprinted} if building else set())
+    asked = riders | own
     known = ({int(row[0]) for row in _rows(conn, RT_KNOWN_SQL, {
-        "generation": generation, "ids": sorted(riders)})} if riders else set())
+        "generation": generation, "ids": sorted(asked)})} if asked else set())
     keys = set(blocks)
     out: set[int] = set()
     for advert in adverts:
@@ -224,6 +239,9 @@ def _unread(conn: Any, generation: str, adverts: Sequence[A.Member],
         if advert.listing_id in riders and advert.listing_id not in known and (
                 held or (scope is not None and scope.outside(advert) is None)):
             out.add(advert.listing_id)
+        elif advert.listing_id in own:
+            if advert.listing_id not in known:
+                out.add(advert.listing_id)
         elif (held & unread) if held else building:
             out.add(advert.listing_id)
     return out
@@ -423,7 +441,8 @@ def run(
     the worker's heartbeat carry; writes only through `apply.apply_group` and the ledger.
 
     `building` says the generation is in its build phase (E964): an advert the snapshot does
-    not place and no scope block holds by its live location then holds its group back.
+    not place and no scope block holds by its live location then holds its group back, and a
+    block whose walk is complete holds back only the groups of its own unread adverts (E977).
 
     `fence` (E941) is the lane's lease check, run last inside every group's transaction: a
     lease that ended under the reconcile — the worker's shutdown, a `release_lease=` dispatch —
@@ -469,14 +488,15 @@ def run(
     # A group waits while any advert a merge would move — a member, or any advert of a property
     # a member sits on (E964 review F2: an unbuilt advert carried along is compared with nothing)
     # — sits in a block the lane has not fully read, or is carried along and was never
-    # fingerprinted (R2).
-    unread_blocks = A.rt_unread_blocks(conn, generation, blocks)
+    # fingerprinted (R2); during a build, in a block whose walk is complete, only while that
+    # advert itself has no fingerprint (E977).
+    reads = A.rt_block_reads(conn, generation, blocks)
     carried = _carried(conn, members_by)
     adverts = {m.listing_id: m for ms in members_by.values() for m in ms}
     riders = {c.listing_id for cs in carried.values() for c in cs} - set(adverts)
     adverts.update((c.listing_id, c) for cs in carried.values() for c in cs)
     unread = _unread(conn, generation, list(adverts.values()), blocks, building=building,
-                     unread_blocks=unread_blocks, riders=riders, scope=scope)
+                     reads=reads, riders=riders, scope=scope)
     if unread:
         waiting = {key for key, ms in members_by.items()
                    if any(m.listing_id in unread

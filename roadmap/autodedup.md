@@ -207,6 +207,13 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   `rt_fp` anti-join advances it); outside a build nothing changes. Praha's 11,864 live unread adverts are
   read in ~22 h instead of last, ~3 days in. Cost: one `listings_pkey` probe an unread advert, 337 ms a
   build pass measured. No decision module, digest unchanged. Alone it merges nothing earlier (E977).
+- **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
+  complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
+  every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the
+  steady state keep the block rule. Measured: of Praha's 1,719 groups on 2+ properties, 433 (203 with an
+  active advert) reach the plan at once instead of after the whole 37,910-advert build. Risk: a group merged
+  early may be one the complete graph groups differently (a split proposal; the engine never splits); every
+  merge still passes the cluster invariants. No decision module, digest unchanged.
 - **Next:** three live days and checkpoint C2, then the last commit deletes the batch
   `apply`/`unapply` modes; `legacy_retire` runs per area under the live generation since W8 (E953, 2026-10-14). Widening the scope is the operator's call.
 - **Open (operator decision, before the C2 deletion):** the undo path once `mode=unapply` is gone.
