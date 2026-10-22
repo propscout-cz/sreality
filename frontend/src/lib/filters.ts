@@ -1092,8 +1092,8 @@ export const pipelineViewFilters = (): ListingFilters => ({
  * itself into the saved filters. A preset click resets every one of them and
  * applies what the preset stores (operator ruling 2026-10-19).
  *
- * `bounds` is deliberately NOT here: it is opt-in per save (the "include map
- * area" toggle), which is a different rule, expressed below. */
+ * `bounds` is deliberately NOT here: it is a choice per save (the "include map
+ * area" toggle, ticked for a new preset), which is a different rule, expressed below. */
 const PRESET_EXCLUDED_KEYS = [
   'tags', 'collections', 'pipeline', 'brokerId', 'showDismissed',
 ] as const satisfies ReadonlyArray<keyof ListingFilters>;
@@ -1107,7 +1107,7 @@ const stripPresetExcluded = (f: ListingFilters): ListingFilters => {
 };
 
 /** Build the spec to persist. The transient map viewport (`bounds`) is
- *  dropped unless the operator opts to include the current map area, so a
+ *  dropped when the operator unticks the current map area, so a
  *  criteria-only preset doesn't pin a stale bounding box; the
  *  PRESET_EXCLUDED_KEYS lenses are always dropped. */
 export const filtersForPreset = (
