@@ -3,6 +3,7 @@
  * CORS header, so the browser can't read the photo bytes itself. */
 import { useState } from 'react';
 import { fetchPropertyDownload } from '@/lib/api';
+import { saveBlob } from '@/lib/shareFiles';
 import type { ImagePublic } from '@/lib/types';
 
 export default function DownloadPropertyButton({
@@ -25,16 +26,7 @@ export default function DownloadPropertyButton({
     setBusy(true);
     setError(null);
     try {
-      const blob = await fetchPropertyDownload(propertyId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `property-${propertyId}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // Firefox starts the save asynchronously; revoking at once can cancel it.
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      saveBlob(await fetchPropertyDownload(propertyId), `property-${propertyId}.zip`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Stažení selhalo');
     } finally {
