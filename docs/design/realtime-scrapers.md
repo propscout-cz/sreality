@@ -464,8 +464,8 @@ nothing else.
   instead predecessor_kept, the lease the cap's floor left to its TTL), peak_rss_mb (E941) +
   rss_mb + memory_limit_mb (the container's cgroup limit, read each pass; E948, E948b; on every
   path, a skip's included, since E944),
-  memo_entries (the body readers by module, the shingle sets and the tokens, before the pass's end
-  empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
+  memo_entries (the body readers by module, the shingle sets, the tokens and the folded texts, before
+  the pass's end empties them) + rss_at_start_mb and rss_after_trim_mb (the RSS once freed memory went back,
   before the pass and at its end; E949: on every path but `previous_pass_running`, and a raised
   pass writes no `last`, so the heartbeat keeps the previous pass's until the next pass's
   rss_at_start_mb shows what the raised one left), chunks + chunk_rss_mb + chunk_vectored (E950:

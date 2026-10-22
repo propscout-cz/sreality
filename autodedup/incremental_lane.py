@@ -50,7 +50,7 @@ try:
 except ImportError:  # pragma: no cover — no getrusage outside Unix
     resource = None  # type: ignore[assignment]
 
-from autodedup import indistinguishable, normalize, reconcile, rt_lease
+from autodedup import indistinguishable, normalize, reconcile, rt_lease, text_facts
 from autodedup.dataset import Image, Listing
 from autodedup.export import (
     DEFAULT_CLIP_MODEL,
@@ -2661,9 +2661,11 @@ def peak_rss_mb() -> float | None:
 
 def memo_entries() -> dict[str, int]:
     """The entries the engine's process-level memos of what it read hold now (E949): the readers
-    cached on a body, by module, E282's shingle sets, and the token hashes and SimHash lanes."""
+    cached on a body, by module, E282's shingle sets, the token hashes and SimHash lanes, and the
+    folded texts (R1)."""
     return {**body_cache_entries(), "shingles": len(indistinguishable._SHINGLE_MEMO),
-            "tokens": len(normalize._token_hashes) + len(normalize._token_lanes)}
+            "tokens": len(normalize._token_hashes) + len(normalize._token_lanes),
+            "folds": len(normalize._folds) + len(text_facts._folds)}
 
 
 def forget_bodies() -> None:
@@ -2674,6 +2676,8 @@ def forget_bodies() -> None:
     indistinguishable._SHINGLE_MEMO.clear()
     normalize._token_hashes.clear()
     normalize._token_lanes.clear()
+    normalize._folds.clear()
+    text_facts._folds.clear()
 
 
 def pass_memory() -> dict[str, Any]:

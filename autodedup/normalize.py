@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from typing import Iterable
+from typing import Callable, Iterable
 
 try:  # the location program already owns the canonical deaccent
     from location_data.resolver.normalize import deaccent as _deaccent
@@ -61,9 +61,8 @@ _token_lanes: dict[str, int] = {}
 
 # R1: the fold of a text, memoised so a body is deaccented once a pass rather than once per reader
 # and per pair (fold was ~25 % of a profiled pass). Not a functools cache: E949's census admits
-# none outside the body registry. `text_facts.clear_body_caches` empties it when the lane's pass
-# ends; a pass that folds more distinct texts than the cap starts it over, which re-folds a text
-# to the same string.
+# none outside the body registry. The lane counts it and empties it when its pass ends
+# (`incremental_lane.forget_bodies`); past the cap the least recently folded text goes first.
 FOLD_MEMO_CAP: int = 1 << 15
 _folds: dict[str, str] = {}
 
@@ -75,19 +74,23 @@ def deaccent(value: str) -> str:
 
 def fold(s: str | None) -> str:
     """lower(deaccent(s)) — the one expensive step both normalisations start from, once a text."""
-    if not s:
-        return ""
-    folded = _folds.get(s)
+    return remembered_fold(_folds, s, _fold_now) if s else ""
+
+
+def _fold_now(s: str) -> str:
+    return deaccent(s).lower()
+
+
+def remembered_fold(memo: dict[str, str], text: str, fold_now: Callable[[str], str]) -> str:
+    """`fold_now(text)` through `memo`, an LRU of FOLD_MEMO_CAP texts: a fold depends on its text
+    alone, so a text folded again after it was evicted or emptied is the same string."""
+    folded = memo.pop(text, None)
     if folded is None:
-        if len(_folds) >= FOLD_MEMO_CAP:
-            _folds.clear()
-        folded = _folds[s] = deaccent(s).lower()
+        if len(memo) >= FOLD_MEMO_CAP:
+            del memo[next(iter(memo))]
+        folded = fold_now(text)
+    memo[text] = folded
     return folded
-
-
-def forget_folds() -> None:
-    """Empty the fold memo: a fold depends on its text alone, so a re-fold is the same string."""
-    _folds.clear()
 
 
 def normalize_text(s: str | None) -> str:
