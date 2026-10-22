@@ -32,10 +32,10 @@ _LIMITS = {"fill_drop_warn_pp": 0.10, "fill_drop_fail_pp": 0.20, "fill_drop_min_
 
 
 def test_every_portal_has_a_census() -> None:
-    """9/9 today. Stated as "every census is a real portal AND the two goldens agree",
-    not as equality with the factory table: onboarding a tenth portal must not red a
-    branch that cannot re-bless (re-blessing needs the production DB — the operator has
-    it, a session's shell does not)."""
+    """9/10 today: `web` (the tenth) waits for its first bless after a week of pastes. Stated
+    as "every census is a real portal AND the two goldens agree", not as equality with the
+    factory table: onboarding a portal must not red a branch that cannot re-bless
+    (re-blessing needs the production DB — the operator has it, a session's shell does not)."""
     blessed = {c["portal"] for c in fc.load_censuses()}
     assert blessed <= set(PORTAL_CLASSES)
     assert blessed == {key.split("/", 1)[0] for key in fc.load_baseline()["cells"]}
@@ -68,7 +68,7 @@ def test_baseline_covers_every_portal_and_attribute_field() -> None:
     assert set(cells) <= {
         fc.cell_key(p, f) for p in PORTAL_CLASSES for f in fc.ATTRIBUTE_FIELDS
     }
-    assert {key.split("/", 1)[0] for key in cells} == set(PORTAL_CLASSES)
+    assert {key.split("/", 1)[0] for key in cells} <= set(PORTAL_CLASSES)
     # The cohort is stamped in the file, because it is what makes the file comparable
     # to a later run at all — a sampled baseline would be a different measurement.
     assert baseline["cohort"] == fc.MATRIX_COHORT
@@ -202,6 +202,21 @@ def _compare(live: dict, base: dict, **kw: object) -> tuple[list[str], list[str]
 def test_live_equal_to_blessed_is_green() -> None:
     blessed = fc.load_baseline()
     assert fc.compare_to_baseline(blessed, blessed, **_LIMITS) == []
+
+
+def test_a_portal_no_bless_has_measured_arrives_green_and_a_blessed_one_leaving_fails() -> None:
+    """The coverage arm reads the BASELINE's portals, never the factory table: a portal
+    onboarded since the last bless (`web`, until its first week of pastes is blessed) is
+    measured live and judged from the next bless on, with no finding and no flag; the parsing
+    check's cell says "not in the blessed baseline yet". A blessed portal whose ads all leave
+    the measurement still fails, which is the arm's whole point."""
+    base = _baseline(**{"idnes/condition": {"fill": 0.88, "filled": 880, "n": 1000}})
+    live = _baseline(**{"idnes/condition": {"fill": 0.88, "filled": 880, "n": 1000},
+                        "web/price_czk": {"fill": 0.0, "filled": 0, "n": 4}})
+    assert fc.compare_to_baseline(live, base, **_LIMITS) == []
+    gone = fc.compare_to_baseline(_baseline(**{"web/price_czk": {"fill": 1.0, "filled": 4,
+                                                                 "n": 4}}), base, **_LIMITS)
+    assert [(f.key, f.status) for f in gone] == [("idnes/condition", "fail")]
 
 
 def test_a_fill_collapse_fails_and_a_smaller_slip_warns() -> None:

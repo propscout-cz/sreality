@@ -337,17 +337,19 @@
   },
   {
     "input": "https://www.example.com/inzerat/225346441/byt.php",
-    "source": null,
-    "native": null,
-    "note": "unknown host with a bazos-shaped path",
-    "kind": "unknown"
+    "source": "web",
+    "native": "https://www.example.com/inzerat/225346441/byt.php",
+    "note": "any other site is the tenth portal, web: a bazos-shaped path on it is just a path",
+    "kind": "web",
+    "browser": null
   },
   {
     "input": "https://www.facebook.com/marketplace/item/123456789/",
-    "source": null,
-    "native": null,
-    "note": "facebook itself is not a wrapper",
-    "kind": "unknown"
+    "source": "web",
+    "native": "https://www.facebook.com/marketplace/item/123456789",
+    "note": "facebook itself is not a wrapper: a web ad, trailing slash stripped",
+    "kind": "web",
+    "browser": null
   },
   {
     "input": "https://auto.bazos.cz/inzerat/187654321/skoda-octavia.php",
@@ -368,6 +370,51 @@
     "source": null,
     "native": null,
     "note": "backslash host on idnes",
+    "kind": "unknown"
+  },
+  {
+    "input": "http://User:pw@Reality-XY.cz:80/nabidka/byt-2kk/?utm_source=fb&id=42&fbclid=IwAR0&b=2#foto",
+    "source": "web",
+    "native": "https://reality-xy.cz/nabidka/byt-2kk?b=2&id=42",
+    "note": "web canonical: https, host lowercased, userinfo + default port + fragment + tracking dropped, query sorted and kept, trailing slash stripped",
+    "kind": "web",
+    "browser": null
+  },
+  {
+    "input": "https://www.rk-novak.cz/detail?ref=hp&src=fb&id=7",
+    "source": "web",
+    "native": "https://www.rk-novak.cz/detail?id=7&ref=hp&src=fb",
+    "note": "web: ref and src are ids on some sites, kept",
+    "kind": "web",
+    "browser": null
+  },
+  {
+    "input": "https://www.google.com/url?q=https%3A%2F%2Fwww.rk-novak.cz%2Fbyty%2F15%2F",
+    "source": "web",
+    "native": "https://www.rk-novak.cz/byty/15",
+    "note": "a wrapper around a web ad is unwrapped first",
+    "kind": "wrapper",
+    "browser": null
+  },
+  {
+    "input": "http://192.168.1.10/admin",
+    "source": null,
+    "native": null,
+    "note": "an address literal is no web ad (the egress refuses its fetch too)",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://api.railway.internal/listings",
+    "source": null,
+    "native": null,
+    "note": "a private-network name is no web ad",
+    "kind": "unknown"
+  },
+  {
+    "input": "https://m.sreality.cz/detail/prodej/byt/2+kk/praha/12345678",
+    "source": null,
+    "native": null,
+    "note": "a portal's sibling host is refused, never a second identity as web",
     "kind": "unknown"
   },
   {

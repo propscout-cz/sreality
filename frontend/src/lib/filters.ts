@@ -1191,6 +1191,12 @@ export const readPresetSpec = (
   return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
+/* The area a saved filter puts in the map frame when it is loaded: the box it
+ * filters on (effectiveBbox — a saved map area, or the square around a saved
+ * centre+radius); null when it saved no area, and the camera stays put. */
+export const savedMapArea = (spec: PresetSpec | ListingFilters): MapBounds | null =>
+  effectiveBbox(readPresetSpec(spec).filters);
+
 const canonicalParams = (sp: URLSearchParams): string =>
   [...sp.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
