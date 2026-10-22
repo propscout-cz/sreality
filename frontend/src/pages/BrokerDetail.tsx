@@ -10,7 +10,7 @@ import {
   type BrokerMembership,
 } from '../lib/brokers';
 import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
-import { portalShort } from '../lib/portals';
+import { portalBadge } from '../lib/portals';
 import { PickButton } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
@@ -429,9 +429,9 @@ function Inventory({
                         rel="noopener noreferrer"
                         className="hover:text-[var(--color-copper)] transition-colors"
                       >
-                        {portalShort(l.source)}
+                        {portalBadge(l.source, l.source_url)}
                       </a>
-                    ) : portalShort(l.source)}
+                    ) : portalBadge(l.source)}
                   </td>
                   <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
                     {fmtRelative(l.last_seen_at)}

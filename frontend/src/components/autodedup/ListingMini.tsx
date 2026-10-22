@@ -29,7 +29,7 @@ import type { AutodedupMember } from '@/lib/api';
 import ImageCarousel from '@/components/ImageCarousel';
 import { imageSrc } from '@/lib/imageUrl';
 import { advertPath } from '@/lib/listingUrl';
-import { portalLabel } from '@/lib/portals';
+import { portalBadge, portalLabel } from '@/lib/portals';
 import { categoryMainLabel, categoryTypeLabel } from '@/lib/enums';
 import { fmtArea, fmtCzk, fmtFloor, fmtShortDate } from '@/lib/format';
 import { type RoutePath } from '@/lib/routes';
@@ -199,7 +199,7 @@ export default function ListingMini({
       <div className={`px-2.5 py-2 space-y-1 ${dense ? 'min-w-0 flex-1' : ''}`}>
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-1.5 py-0.5 text-[0.6rem] tracking-[0.08em] uppercase text-[var(--color-ink-2)]">
-            {portalLabel(member.source) ?? member.source}
+            {portalBadge(member.source, member.source_url, 'long')}
           </span>
           <span
             className={`inline-block h-1.5 w-1.5 rounded-full ${

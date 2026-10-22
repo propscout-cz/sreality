@@ -25,7 +25,8 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 NAME = "590_read_model_portal_rule.sql"
 SQL = (MIGRATIONS / NAME).read_text(encoding="utf-8")
 CODE = re.sub(r"--[^\n]*", "", SQL)
-PORTALS = [o.value for o in PORTAL_OPTIONS]
+# 590 shipped the nine portals of its day; PORTAL_OPTIONS is append-only, so they are its first nine.
+PORTALS = [o.value for o in PORTAL_OPTIONS[:9]]
 # browse_projection's appended tail: the two portal lists, the ad count, one date per portal.
 TAIL = 3 + len(PORTALS)
 

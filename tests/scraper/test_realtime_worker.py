@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 from psycopg.types.json import Jsonb
 
+from scraper import portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
 
@@ -256,13 +257,13 @@ def test_probe_pass_filters_disabled_and_proxied(monkeypatch):
     asyncio.run(scenario())
     # ceskereality and mmreality are proxied (USE_PROXY, proxy REQUIRED) and
     # SCRAPER_PROXY_URL is unset. sreality (Phase 4 of portal-order-fidelity) is
-    # neither disabled nor proxied, so it runs too.
-    assert ran == ["bezrealitky", "idnes", "maxima", "realitymix", "sreality"]
+    # neither disabled nor proxied, so it runs too; so does `web`, first.
+    assert ran == ["web", "bezrealitky", "idnes", "maxima", "realitymix", "sreality"]
     probe = state["lanes"]["probe"]
     assert probe["passes"] == 1
-    assert probe["last"]["portals"] == 5
+    assert probe["last"]["portals"] == 6
     assert probe["last"]["skipped"] == 4      # bazos + remax disabled, ceskereality + mmreality proxied
-    assert probe["last"]["enqueued"] == 10
+    assert probe["last"]["enqueued"] == 12
 
 
 def test_probe_pass_includes_proxied_portal_when_env_set(monkeypatch):
@@ -1081,6 +1082,13 @@ def test_a_stopping_worker_starts_no_further_step(producers: dict[str, Any]) -> 
 def test_registry_is_internally_consistent():
     assert set(rw.REALTIME_SOURCES) == set(rw._CLIENT_CLASSES)
     assert set(rw._PORTAL_CLASSES) == set(rw.REALTIME_SOURCES) - {"bazos"}
+
+
+def test_pasted_sites_drain_first():
+    """The drain lane takes sources one after another with a budget each: `web` first, so a
+    paste waits for the drain interval, never for nine other portals' budgets."""
+    assert rw.REALTIME_SOURCES[0] == "web"
+    assert set(rw.REALTIME_SOURCES) == set(portal_factory.PORTAL_CLASSES)
 
 
 @pytest.mark.parametrize("source", rw.REALTIME_SOURCES)
@@ -2815,7 +2823,8 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        assert ran == ["bazos", "bezrealitky", "ceskereality"]  # no second thread started
+        # no second thread started: the abandoned pass got as far as the blocked portal
+        assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()
         abandoned.join(5)

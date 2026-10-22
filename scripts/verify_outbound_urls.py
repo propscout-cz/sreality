@@ -15,7 +15,10 @@ request can run past it, and the job's 180 s headroom absorbs that. The URLs it 
 are reported as `unprobed`, never as failures.
 Status-code HEAD only — never follow a redirect, never read a body, never authenticate,
 never reuse this as an ingest surface (sreality's SSR page 302s into a login.seznam.cz
-chain; the scraper reaches sreality by id through /api/v1/estates).
+chain; the scraper reaches sreality by id through /api/v1/estates). The HEADs go out on
+scraper.egress's session: a stored URL is a page's (the tenth portal's are any site's), so
+each connection is resolved, checked and pinned to a public address, and a URL on a private
+one is a link that does not open, never a request into our own network.
 
 Rule 21 (no portal name in shared check code) does not apply here: its rail scans
 scripts/checks/, and this module sits outside it on purpose, keeping sreality's codebook
@@ -58,7 +61,7 @@ from urllib.parse import urljoin
 import requests
 
 from location_data.claims_common import SOURCES
-from scraper import sreality_url
+from scraper import egress, sreality_url
 from scraper.sreality_url import critical_segments
 from scripts.checks.clock import fetchall
 from scripts.checks.common import cell, result, wilson_lower
@@ -246,7 +249,7 @@ def draw_samples(conn: Any, week: int) -> list[Sample]:
 def probe_all(samples: list[Sample], budget_s: float) -> list[tuple[Sample, str]]:
     """HEAD each sample's stored URL until `budget_s` is spent: each sample probed, in order,
     with what its HEAD said (OPENS, BROKEN or REFUSED)."""
-    session = requests.Session()
+    session = egress.safe_session()
     deadline = time.monotonic() + budget_s
     results: list[tuple[Sample, str]] = []
     for i, s in enumerate(samples):
@@ -257,8 +260,11 @@ def probe_all(samples: list[Sample], budget_s: float) -> list[tuple[Sample, str]
             break
         timeout = min(_REQUEST_TIMEOUT_S, remaining)
         try:
-            resp = session.head(s.source_url, headers=_PROBE_HEADERS,
-                                allow_redirects=False, timeout=timeout)
+            # One wall-clock deadline per HEAD, header read included (egress's watchdog): a
+            # server dripping its status line cannot hold the check past its budget.
+            resp = egress.fetch(s.source_url, method="HEAD", follow_redirects=False,
+                                headers=_PROBE_HEADERS, session=session, deadline_s=timeout,
+                                read_timeout_s=timeout)
         except requests.Timeout as exc:
             # Cut short by our own deadline, the request judged nothing: it joins the
             # unprobed rest instead of counting as a URL that does not resolve.
@@ -266,15 +272,15 @@ def probe_all(samples: list[Sample], budget_s: float) -> list[tuple[Sample, str]
                 break
             LOG.warning("CONFORMANCE %s id=%s error=%s", s.source, s.id, exc)
             said = BROKEN
-        except requests.RequestException as exc:
+        except (requests.RequestException, egress.EgressRefused) as exc:
             LOG.warning("CONFORMANCE %s id=%s error=%s", s.source, s.id, exc)
             said = BROKEN
         else:
             location = resp.headers.get("Location")
-            said = outcome(s.source, resp.status_code, location, s.source_url)
+            said = outcome(s.source, resp.status, location, s.source_url)
             if said != OPENS:
                 LOG.warning("CONFORMANCE %s id=%s cb=%s status=%s location=%s url=%s outcome=%s",
-                            s.source, s.id, s.category_sub_cb, resp.status_code, location,
+                            s.source, s.id, s.category_sub_cb, resp.status, location,
                             s.source_url, said)
         results.append((s, said))
     if len(results) < len(samples):

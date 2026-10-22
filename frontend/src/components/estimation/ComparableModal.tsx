@@ -13,7 +13,7 @@ import type { ImagePublic, ListingPublic, ListingSummaryBody } from '@/lib/types
 import { listingKindLabel, priceUnitLabel } from '@/lib/enums';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import { portalShort } from '@/lib/portals';
+import { portalBadge } from '@/lib/portals';
 import { listingPath } from '@/lib/listingUrl';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import { Hairline, SectionLabel } from '@/components/section';
@@ -365,7 +365,7 @@ function Footer({ listing }: { listing: ListingPublic }) {
           rel="noopener noreferrer"
           className="text-[0.78rem] text-[var(--color-ink-3)] hover:text-[var(--color-copper)]"
         >
-          {`Open on ${portalShort(listing.source)}`}
+          {`Open on ${portalBadge(listing.source, external)}`}
         </a>
       )}
     </div>

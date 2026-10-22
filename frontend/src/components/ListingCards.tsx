@@ -371,7 +371,8 @@ function Card({
     }
   }, [hovered, scrollOnHover]);
   const hydration = useCardHydration();
-  const title = formatTitle(r, hydration.floorFor(r.listing_id));
+  const title = formatTitle(r);
+  const storeyTag = storeyTagOf(r, hydration.floorFor(r.listing_id));
   /* The card's letter in merge mode, the stretched button that holds it (the
    * card's one focus stop there: the pointer focuses it, Tab moves on) and the
    * carousel ← → page through. */
@@ -594,10 +595,23 @@ function Card({
             </Link>
           )}
         </h3>
-        {place && (
-          <p className="mt-0.5 text-[0.68rem] text-[var(--color-ink-3)] truncate">
-            {place}
-          </p>
+        {(place || storeyTag) && (
+          <div className="mt-0.5 flex items-center justify-between gap-1.5">
+            {place && (
+              <p className="min-w-0 text-[0.68rem] text-[var(--color-ink-3)] truncate">
+                {place}
+              </p>
+            )}
+            {storeyTag && (
+              /* `card-tip` keeps the tooltip hit-testable under the stretched link. */
+              <span
+                title={storeyTag.full}
+                className="card-tip ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule)] text-[var(--color-ink-3)]"
+              >
+                {storeyTag.text}
+              </span>
+            )}
+          </div>
         )}
         <div className="mt-1 flex items-baseline justify-between gap-1">
           <p className={`flex items-baseline gap-1 text-[0.78rem] tabular-nums ${priceStyle}`}>
@@ -695,7 +709,25 @@ function focusFromPointer(button: HTMLButtonElement | null): void {
  * ("přízemí" on a house reads as a claim) and a plot has none. */
 const STOREY_CATEGORIES: ReadonlySet<string | null> = new Set(['byt', 'komercni']);
 
-function formatTitle(r: CardRow, storey: ListingFloor | null): string {
+/* The small tag beside the place, never part of the headline: "2. patro z 5",
+ * the tooltip carrying fmtFloor's full wording. The scale is listings.floor's
+ * (ground = 0), so a bare "2/5" would read as the second of five podlaží when it
+ * is the third: the ordinal stays spelled and the count stays behind "z". */
+function storeyTagOf(
+  r: CardRow,
+  storey: ListingFloor | null,
+): { text: string; full: string } | null {
+  if (storey == null || !STOREY_CATEGORIES.has(r.category_main)) return null;
+  const full = fmtFloor(storey.floor, storey.total_floors);
+  if (full == null) return null;
+  const storeyOnly = fmtFloor(storey.floor) ?? full;
+  return {
+    text: storey.total_floors == null ? storeyOnly : `${storeyOnly} z ${storey.total_floors}`,
+    full,
+  };
+}
+
+function formatTitle(r: CardRow): string {
   // The specific subtype is the noun for commercial/houses ("Ubytování",
   // "Činžovní dům"); apartments + subtype-less rows fall back to the generic
   // category word ("Byt", "Komerční prostor"). disposition still appends for
@@ -705,11 +737,6 @@ function formatTitle(r: CardRow, storey: ListingFloor | null): string {
   const parts = [`${kind} ${deal}`];
   if (r.disposition) parts.push(r.disposition);
   if (r.area_m2 != null) parts.push(fmtArea(r.area_m2));
-  const floor =
-    storey != null && STOREY_CATEGORIES.has(r.category_main)
-      ? fmtFloor(storey.floor, storey.total_floors)
-      : null;
-  if (floor != null) parts.push(floor);
   const plot = plotBesideArea(r);
   if (plot != null) parts.push(fmtArea(plot, 'plot'));
   return parts.join(' · ');

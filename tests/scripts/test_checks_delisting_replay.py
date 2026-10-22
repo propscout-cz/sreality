@@ -101,6 +101,7 @@ import datetime as _dt
 import functools
 import itertools
 from typing import Any
+from unittest import mock
 
 from scripts.checks import delisting as dl
 from scripts.verify_pipeline import THRESHOLDS
@@ -133,10 +134,21 @@ def _sum(prefix: list[int], base: _dt.datetime, start: _dt.datetime, end: _dt.da
     return prefix[j] - prefix[i]
 
 
+@functools.cache
+def _fleet() -> tuple[str, ...]:
+    """The portals the recorded window held. A portal onboarded since is absent from every
+    fixture here, so the replay judges the fleet it recorded, never a later portal as unknown."""
+    fleet = tuple(sorted({r["source"] for r in _fixture("health_delisting_walks_40d.csv")}))
+    assert set(fleet) <= set(dl.SOURCES)
+    return fleet
+
+
 def _replay(ticks: list[_dt.datetime], answers: Any,
             thresholds: dict[str, Any] = THRESHOLDS) -> tuple[Any, list[tuple[Any, Any]]]:
     """check_delisting at each tick on `answers(at)`, told through the ladder."""
-    results = [(at, dl.check_delisting(_Conn(answers(at), now=at), thresholds)) for at in ticks]
+    with mock.patch.object(dl, "SOURCES", _fleet()):
+        results = [(at, dl.check_delisting(_Conn(answers(at), now=at), thresholds))
+                   for at in ticks]
     return _told(_KEY, 600, results), results
 
 

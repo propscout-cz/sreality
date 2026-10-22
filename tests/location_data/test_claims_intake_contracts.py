@@ -1,6 +1,6 @@
 """The contract layer — format validation and the deploy-time projection (02 §2.1).
 
-The nine YAML files in `contracts/portals/` are the store of record; `portal_contracts` +
+The ten YAML files in `contracts/portals/` are the store of record; `portal_contracts` +
 `portal_contract_entries` are their projection. These tests are the CI half of §2.1.8's
 lifecycle: a contract that would write nonsense into an append-only table must fail here,
 not at INSERT time, and never at resolution time.
@@ -154,11 +154,11 @@ def _appetite_of(fn: ast.FunctionDef, tree: ast.Module) -> set[str]:
     return keys
 
 
-# ------------------------------------------------------------------ the nine contracts
+# ------------------------------------------------------------------ the ten contracts
 
 def test_every_portal_has_exactly_one_contract_file():
     assert set(_all()) == set(SOURCES)
-    assert len(list((Path(contracts.CONTRACT_DIR)).glob("*.yaml"))) == 9
+    assert len(list((Path(contracts.CONTRACT_DIR)).glob("*.yaml"))) == 10
 
 
 def test_extractor_id_prefixes_are_portal_unique_and_permanent():
@@ -166,7 +166,7 @@ def test_extractor_id_prefixes_are_portal_unique_and_permanent():
     provenance of a GraphQL portal and an HTML portal on ids that may never be renamed."""
     assert EXTRACTOR_PREFIXES["bezrealitky"] == "bzr."
     assert EXTRACTOR_PREFIXES["bazos"] == "bzs."
-    assert len(set(EXTRACTOR_PREFIXES.values())) == 9
+    assert len(set(EXTRACTOR_PREFIXES.values())) == 10
     for source, contract in _all().items():
         for entry in contract.entries:
             assert entry.entry_id.startswith(EXTRACTOR_PREFIXES[source])
@@ -908,7 +908,7 @@ def test_every_jsonb_column_param_is_bound_as_jsonb():
     exactly this: portal_contract_entries.transform (list[str]) reached jsonb unwrapped
     (run 31428625090, Token "psc_normalise"). Assert every param bound to a jsonb column
     is a psycopg Jsonb wrapper, and every text[] column gets a plain list, across _all()
-    nine real contracts."""
+    ten real contracts."""
     import psycopg.types.json
 
     types = _column_types_from_382()

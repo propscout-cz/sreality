@@ -680,6 +680,24 @@ _DEFAULTS: dict[str, PortalConfig] = {
             max_detail_per_run=2000,
         ),
     ),
+    "web": PortalConfig(
+        source="web",
+        # The tenth portal: any site an operator pastes (scraper.web_main). It has no
+        # index, so ONE agenda-wide descriptor stands for the whole portal: the walk sees
+        # nothing by construction, reaches its end (declared total 0: coverage reads
+        # `complete`) and nominates through the adapter's own presence_candidates (the
+        # `indexless` seam, rule 3).
+        supports_complete_walk=True,
+        categories=[{"agenda": "all"}],
+        split_threshold=None,
+        # shared_rate_limiter: the drain's deadline binds inside a chunk only through the
+        # ledger, and a foreign site must never hold the worker's drain lane past it. Two
+        # workers; the per-HOST pacing (one page load per 10 s) lives in web_client.
+        limits=PortalLimits(
+            index_rate=1.0, detail_workers=2, detail_rate=1.0,
+            shared_rate_limiter=True,
+        ),
+    ),
 }
 
 

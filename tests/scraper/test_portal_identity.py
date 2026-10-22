@@ -3,9 +3,11 @@
 tests/fixtures/portal_url_probes.json is read by BOTH languages: this file runs it through
 `native_id` + `resolve_url`, frontend/src/lib/portalIds.test.ts through `parsePortalUrl`, so
 the walk's identity and the browser's cannot drift apart. Each row's `kind` says which arms
-apply: a `wrapper` names its ad only once unwrapped, `too-long` is refused by the cap, and an
+apply: a `wrapper` names its ad only once unwrapped, `too-long` is refused by the cap, an
 `ambiguous` path reads as an id to the walk's rule but is refused as a paste (the fetch would
-rewrite it into another ad's page).
+rewrite it into another ad's page), and a `web` row is any other site: the tenth portal, keyed
+by its canonical URL. The browser does not learn `web` (`"browser": null` on those rows: the
+SPA leaves every host outside the nine to the server).
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from scraper.portal_identity import Refused, Resolved, native_id, resolve_url
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "portal_url_probes.json"
 ROWS = json.loads(FIXTURE.read_text(encoding="utf-8"))
-KINDS = {"detail", "relative", "wrapper", "not-ad", "unknown", "too-long", "ambiguous"}
+KINDS = {"detail", "relative", "wrapper", "not-ad", "unknown", "too-long", "ambiguous", "web"}
 PORTAL_IDS_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "portalIds.ts"
 
 
@@ -33,7 +35,10 @@ def test_fixture_rows_are_well_formed() -> None:
     for row in ROWS:
         assert {"input", "source", "native", "note", "kind"} <= set(row), row
         assert row["kind"] in KINDS, row
-        assert row["source"] is None or row["source"] in pi.PORTALS, row
+        assert row["source"] is None or row["source"] in pi.SOURCES, row
+        assert row["kind"] != "web" or row["source"] == pi.WEB, row
+        assert row["source"] != pi.WEB or row["kind"] in ("web", "wrapper"), row
+        assert row["source"] != pi.WEB or row.get("browser", "missing") is None, row
 
 
 def test_fixture_covers_every_portal_and_every_kind() -> None:
@@ -152,8 +157,11 @@ def test_tracking_keys_are_dropped_and_every_other_parameter_kept() -> None:
 
 
 def test_a_lookalike_host_is_not_the_portal() -> None:
-    assert resolve_url("https://notsreality.cz/detail/prodej/byt/x/12345678") == Refused(pi.UNKNOWN_HOST_CS)
-    assert resolve_url("https://sreality.cz.evil.com/detail/prodej/byt/x/12345678") == Refused(pi.UNKNOWN_HOST_CS)
+    """Another site, so the tenth portal's: never sreality's id, never a fetch by sreality's client."""
+    for url in ("https://notsreality.cz/detail/prodej/byt/x/12345678",
+                "https://sreality.cz.evil.com/detail/prodej/byt/x/12345678"):
+        got = resolve_url(url)
+        assert isinstance(got, Resolved) and (got.source, got.native_id) == (pi.WEB, url)
 
 
 def test_a_wrapper_without_a_target_is_just_its_own_host() -> None:
@@ -191,3 +199,45 @@ def test_the_walk_reads_identity_from_the_canon_only(module: str) -> None:
     assert mod.native_id is native_id
     copies = {"_ID_RE", "_REF_ID_RE", "_id_from_href", "_id_from_url"} & set(vars(mod))
     assert not copies, f"scraper.{module} grew a private identity rule again: {sorted(copies)}"
+
+
+# --- the tenth portal: any other site --------------------------------------------------------
+
+
+def test_any_other_site_is_a_web_ad_keyed_by_its_canonical_url() -> None:
+    got = resolve_url("Mrkni: http://www.RK-Novak.cz/byty/15/?utm_campaign=x&b=1&a=2#foto")
+    assert got == Resolved(
+        pi.WEB, "https://www.rk-novak.cz/byty/15?a=2&b=1", "http://www.rk-novak.cz/byty/15/?b=1&a=2")
+
+
+def test_the_canonical_url_is_idempotent_and_its_own_native_id() -> None:
+    for row in (r for r in ROWS if r["source"] == pi.WEB):
+        canon = pi.canonical_url(row["native"])
+        assert canon == row["native"] and native_id(pi.WEB, canon) == canon
+
+
+def test_a_web_ad_and_its_query_variants_collapse_only_on_order_and_tracking() -> None:
+    a = resolve_url("https://www.rk-novak.cz/detail?id=7&lang=cs")
+    b = resolve_url("https://www.rk-novak.cz/detail?lang=cs&id=7&gclid=z")
+    c = resolve_url("https://www.rk-novak.cz/detail?id=8&lang=cs")
+    assert isinstance(a, Resolved) and isinstance(b, Resolved) and isinstance(c, Resolved)
+    assert a.native_id == b.native_id != c.native_id
+
+
+@pytest.mark.parametrize("url", [
+    "http://10.0.0.5/inzerat/1", "http://[::1]/x", "http://localhost/x", "https://intranet/x",
+    "https://metadata.google.internal/computeMetadata/v1/", "https://nas.local/x",
+    "http://2130706433/x", "https://www.bazos.cz/inzerat/1/x.php", "https://zpravy.idnes.cz/clanek",
+])
+def test_a_host_that_is_no_web_ad_is_refused(url: str) -> None:
+    assert resolve_url(url) == Refused(pi.UNKNOWN_HOST_CS)
+
+
+def test_a_web_path_the_fetch_would_rewrite_names_no_ad() -> None:
+    assert resolve_url("https://www.rk-novak.cz/byty/1/../2") == Refused(pi.NOT_ONE_AD_CS)
+
+
+def test_canonical_url_refuses_what_is_no_absolute_http_url() -> None:
+    assert pi.canonical_url("/relative/path") is None
+    assert pi.canonical_url("ftp://example.cz/x") is None
+    assert pi.canonical_url("https://example.cz/" + "a" * 600) is None
