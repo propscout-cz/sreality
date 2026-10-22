@@ -68,6 +68,7 @@ toolkit work.
 - **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
   existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
   (the explore-broker modal still opens a broker's whole book) and stays outside presets.
+- **Moved (2026-10-22):** Source portal sits last in Essentials (was in Curation; operator).
 - **Not built, by ruling:** Has a floor plan (operator 2026-10-21; CLIP-only signal, ~2 h lag).
   Condition scoring stays PARKED, not removed (operator 2026-10-20, re-confirmed 2026-10-21: keep the
   engine and data, nothing may read its levels; registry ids retired with 645).
